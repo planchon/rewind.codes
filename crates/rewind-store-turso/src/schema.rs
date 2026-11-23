@@ -6,9 +6,10 @@
 //! workflows; version 5 the namespaces; version 6 the tests and the suites of workflow versions;
 //! version 7 people's connections and the OAuth clients and codes; version 8 the namespaces'
 //! display names; version 9 named secrets, their reads, the signing keys and the master key of
-//! each data key; version 11 each namespace's partition, the partition map, and `legacy_runs`).
-//! The tables of runs those versions also hold are what `rewind server migrate-runs` reads
-//! (`archi/08-decisions.md`, "Taken while writing the object-storage spec"); nothing else does.
+//! each data key; version 11 each namespace's partition, the partition map, and `legacy_runs`;
+//! version 12 set the tables of runs those versions also hold aside, as `legacy_*`, which
+//! `rewind server migrate-runs` reads and drops (`archi/08-decisions.md`, "Taken while writing
+//! the object-storage spec"); nothing else reads them).
 //!
 //! The tables of the control plane are those of `archi/06-storage-and-scale.md`, with these
 //! differences:
@@ -38,13 +39,14 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
+    [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -792,6 +794,38 @@ CREATE TABLE legacy_runs (
     tenant TEXT NOT NULL,
     partition INTEGER NOT NULL
 ) STRICT;
+"#;
+
+/// The tables of runs set aside (`archi/08-decisions.md`, "Taken while writing the object-storage
+/// spec": the migration): runs live in the partition of the run plane and in the archive, and the
+/// database holds the control plane only. The tables the runs of the previous design were kept
+/// in take the prefix `legacy_`, their indexes with them (`runs` becomes `legacy_journal_runs`:
+/// `legacy_runs` is the control plane's table of the runs moved): the runs, their histories, inboxes,
+/// signal keys, timers, tool tasks, webhook tokens and watchers, the payloads and their
+/// references, the feed, the read model's tables, and the namespaces' use per day, quota alerts
+/// and script counts. `rewind server migrate-runs` reads them, moves each run into the partition
+/// or the archive, and drops them once every run moved.
+const V12: &str = r#"
+ALTER TABLE runs RENAME TO legacy_journal_runs;
+ALTER TABLE history RENAME TO legacy_history;
+ALTER TABLE inbox RENAME TO legacy_inbox;
+ALTER TABLE signal_keys RENAME TO legacy_signal_keys;
+ALTER TABLE timers RENAME TO legacy_timers;
+ALTER TABLE tool_tasks RENAME TO legacy_tool_tasks;
+ALTER TABLE webhook_tokens RENAME TO legacy_webhook_tokens;
+ALTER TABLE run_watchers RENAME TO legacy_run_watchers;
+ALTER TABLE payloads RENAME TO legacy_payloads;
+ALTER TABLE payload_refs RENAME TO legacy_payload_refs;
+ALTER TABLE feed RENAME TO legacy_feed;
+ALTER TABLE run_summaries RENAME TO legacy_run_summaries;
+ALTER TABLE run_labels RENAME TO legacy_run_labels;
+ALTER TABLE run_waits RENAME TO legacy_run_waits;
+ALTER TABLE run_texts RENAME TO legacy_run_texts;
+ALTER TABLE run_quarantine RENAME TO legacy_run_quarantine;
+ALTER TABLE tool_calls RENAME TO legacy_tool_calls;
+ALTER TABLE usage RENAME TO legacy_usage;
+ALTER TABLE quota_alerts RENAME TO legacy_quota_alerts;
+ALTER TABLE namespace_scripts RENAME TO legacy_namespace_scripts;
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.

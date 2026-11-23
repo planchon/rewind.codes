@@ -584,10 +584,11 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
     assert_eq!(
         postgres.psql(
             &database,
-            "SELECT secrets::text FROM runs WHERE id = '00000000-0000-0000-0000-000000000001'"
+            "SELECT secrets::text FROM legacy.runs \
+             WHERE id = '00000000-0000-0000-0000-000000000001'"
         ),
         "{}",
-        "the run is kept, and attaches nothing"
+        "the run is kept, set aside for migrate-runs, and attaches nothing"
     );
     let (tenant, secret) = secret_of("acme", "a-1");
     store.put(&tenant, &secret, T0).await.expect("put");
