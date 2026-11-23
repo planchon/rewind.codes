@@ -26,6 +26,7 @@ rewind-otel = { path = "crates/rewind-otel" }
 rewind-runtime = { path = "crates/rewind-runtime" }
 rewind-server = { path = "crates/rewind-server" }
 rewind-store-postgres = { path = "crates/rewind-store-postgres" }
+rewind-store-slatedb = { path = "crates/rewind-store-slatedb" }
 rewind-store-turso = { path = "crates/rewind-store-turso" }
 rewind-workos = { path = "crates/rewind-workos" }
 rewind-cli = { path = "crates/rewind-cli" }
@@ -94,6 +95,10 @@ serde_html_form = "0.2"
 # a value going through JS and Rust could change by one ULP, and its digest with it.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
+# The partitions of the run plane (archi/08-decisions.md, C10), in rewind-store-slatedb. No default
+# features: S3 through object_store's client (`aws`), a block cache on moka (foyer, the default,
+# also builds a hybrid disk cache the store does not use), objects compressed with lz4 (pure Rust).
+slatedb = { version = "0.18.1", default-features = false, features = ["aws", "moka", "lz4"] }
 # The path parameters of API calls, percent-encoded (the crate url already builds).
 percent-encoding = "2"
 # The production store (rewind-store-postgres): Postgres through sqlx, without its macros (queries are

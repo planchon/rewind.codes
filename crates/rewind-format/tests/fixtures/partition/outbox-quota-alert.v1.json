@@ -1,0 +1,1 @@
+{"v":1,"id":3,"tenant":"acme","projection":{"type":"quota_alert","alert":{"tenant":"acme","namespace":"alice","quota":"cpu_per_month","year":2026,"month":1,"threshold":"near","used":80,"limit":100,"raised_at":1767225600000,"sent_at":1767225600010}}}

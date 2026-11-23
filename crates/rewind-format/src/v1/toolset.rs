@@ -278,7 +278,7 @@ struct SchemasV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PolicyV1 {
+pub(crate) struct PolicyV1 {
     on_interruption: InterruptionV1,
     approval: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -684,16 +684,34 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
             input: tool.input_schema.clone(),
             output: tool.output_schema.clone(),
         },
-        policy: PolicyV1 {
-            on_interruption: match policy.on_interruption {
-                Interruption::Retry => InterruptionV1::Retry,
-                Interruption::AtMostOnce => InterruptionV1::AtMostOnce,
-            },
-            approval: policy.approval,
-            execution_timeout_ms: policy.execution_timeout.map(millis),
-            heartbeat_timeout_ms: millis(policy.heartbeat_timeout),
-            concurrency: policy.concurrency,
+        policy: policy_dto(policy),
+    }
+}
+
+/// A tool's policy as the toolset document and a tool task write it.
+pub(crate) fn policy_dto(policy: &ToolPolicy) -> PolicyV1 {
+    PolicyV1 {
+        on_interruption: match policy.on_interruption {
+            Interruption::Retry => InterruptionV1::Retry,
+            Interruption::AtMostOnce => InterruptionV1::AtMostOnce,
         },
+        approval: policy.approval,
+        execution_timeout_ms: policy.execution_timeout.map(millis),
+        heartbeat_timeout_ms: millis(policy.heartbeat_timeout),
+        concurrency: policy.concurrency,
+    }
+}
+
+pub(crate) fn policy_from_dto(policy: PolicyV1) -> ToolPolicy {
+    ToolPolicy {
+        on_interruption: match policy.on_interruption {
+            InterruptionV1::Retry => Interruption::Retry,
+            InterruptionV1::AtMostOnce => Interruption::AtMostOnce,
+        },
+        approval: policy.approval,
+        execution_timeout: policy.execution_timeout_ms.map(Duration::from_millis),
+        heartbeat_timeout: Duration::from_millis(policy.heartbeat_timeout_ms),
+        concurrency: policy.concurrency,
     }
 }
 
@@ -729,7 +747,6 @@ fn tool_from_dto(dto: ToolV1) -> Result<Tool, String> {
             ));
         }
     };
-    let policy = dto.policy;
     Ok(Tool {
         name: dto.name,
         route,
@@ -737,16 +754,7 @@ fn tool_from_dto(dto: ToolV1) -> Result<Tool, String> {
         description: dto.description,
         input_schema: dto.schemas.input,
         output_schema: dto.schemas.output,
-        policy: ToolPolicy {
-            on_interruption: match policy.on_interruption {
-                InterruptionV1::Retry => Interruption::Retry,
-                InterruptionV1::AtMostOnce => Interruption::AtMostOnce,
-            },
-            approval: policy.approval,
-            execution_timeout: policy.execution_timeout_ms.map(Duration::from_millis),
-            heartbeat_timeout: Duration::from_millis(policy.heartbeat_timeout_ms),
-            concurrency: policy.concurrency,
-        },
+        policy: policy_from_dto(dto.policy),
     })
 }
 

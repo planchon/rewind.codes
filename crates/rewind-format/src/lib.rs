@@ -6,7 +6,7 @@
 //! converted to versioned DTOs at the edge, and a stored v1 journal must always decode.
 //! A future v2 gets its own module and an explicit migration from v1.
 //!
-//! Six documents are defined (`archi/02-journal.md`, "Stored format v1"):
+//! Seven documents are defined (`archi/02-journal.md`, "Stored format v1"):
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
@@ -26,7 +26,9 @@
 //!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
 //!   when it attaches secrets, in its canonical form, so that its bytes hash to the version;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
-//!   its canonical form, so that its bytes hash to the test's digest.
+//!   its canonical form, so that its bytes hash to the test's digest;
+//! - the **partition records** ([`partition`]): one record per kind of thing a partition holds
+//!   about its runs, `{"v":1,…}`, under keys that belong to `rewind-store-slatedb`.
 //!
 //! In events, payloads are written `{"value": …}` or `{"digest": "<sha-256 hex>"}`; in
 //! cassettes, as plain values. Seeds and digests are lowercase hex, times and durations are
@@ -34,6 +36,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod partition;
 mod v1;
 
 use rewind_core::{
@@ -70,6 +73,11 @@ pub enum FormatError {
     InvalidWorkflow(String),
     #[error("invalid test: {0}")]
     InvalidTest(String),
+    #[error("invalid partition record ({record}): {message}")]
+    InvalidRecord {
+        record: &'static str,
+        message: String,
+    },
 }
 
 /// One event, as stored in a row: `{"v":1,"type":…,…}`.

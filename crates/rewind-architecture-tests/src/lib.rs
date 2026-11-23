@@ -43,6 +43,7 @@ pub fn layer(name: &str) -> Option<Layer> {
         "rewind-runtime"
         | "rewind-store-turso"
         | "rewind-store-postgres"
+        | "rewind-store-slatedb"
         | "rewind-blob"
         | "rewind-workos"
         | "rewind-mcp"
@@ -323,6 +324,15 @@ mod tests {
                 vec![dependency("rewind-format", None), dependency("sqlx", None)],
             ),
             (
+                "rewind-store-slatedb",
+                vec![
+                    dependency("rewind-core", None),
+                    dependency("rewind-engine", None),
+                    dependency("rewind-format", None),
+                    dependency("slatedb", None),
+                ],
+            ),
+            (
                 "rewind-e2e",
                 vec![
                     dependency("rewind-runtime", None),
@@ -422,6 +432,11 @@ mod tests {
             (
                 "rewind-store-postgres",
                 vec![dependency("rewind-store-turso", None)],
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
+            ),
+            (
+                "rewind-store-slatedb",
+                vec![dependency("rewind-blob", None)],
                 "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (

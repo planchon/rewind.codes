@@ -1,0 +1,1 @@
+{"v":1,"shape":{"object":{"a":{"optional":true,"shape":"number"},"b":{"optional":true,"shape":"string"},"list":{"optional":false,"shape":{"array":"boolean"}}}}}

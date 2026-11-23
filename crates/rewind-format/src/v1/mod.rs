@@ -3,6 +3,7 @@
 
 mod cassette;
 mod events;
+pub(crate) mod partition;
 mod test;
 mod toolset;
 

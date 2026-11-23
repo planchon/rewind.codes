@@ -1,0 +1,31 @@
+[package]
+name = "rewind-store-slatedb"
+description = "PartitionStore of Rewind on SlateDB over object storage: R2 or any S3-compatible service, local files, memory."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+rewind-core.workspace = true
+rewind-engine.workspace = true
+rewind-format.workspace = true
+# The local-file backend of the embedded partition, beside the workspace's S3 one.
+object_store = { workspace = true, features = ["fs"] }
+slatedb.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+rewind-engine = { workspace = true, features = ["conformance"] }
+# The benchmark's object store that counts its requests: object_store's trait is an async_trait.
+async-trait = "0.1"
+futures-util = { workspace = true, features = ["alloc"] }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+
+[lints]
+workspace = true
