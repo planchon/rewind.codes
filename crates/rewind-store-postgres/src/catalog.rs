@@ -3,15 +3,17 @@
 //! `MemoryCatalog` of `rewind-engine` is the reference of every behavior here; both pass the same
 //! conformance suite.
 //!
-//! The catalog keeps the tables the journal store writes (scripts, toolsets, workflows, tests,
-//! workflow_tests, tenants, namespaces, subscriptions), with each namespace's `partition`. Every
-//! write is one transaction that sends what it changed with `NOTIFY` (`crate::changes`); a write
-//! that changes nothing sends nothing. Test rows are locked by tenant and digest, as the journal
-//! store locks them: a new version locks the rows of its suite (`FOR SHARE`) until it has
-//! written its references, and the cleanup marks only rows it holds (`FOR UPDATE SKIP LOCKED`).
+//! The catalog keeps scripts, toolsets, workflows, tests, workflow_tests, tenants, namespaces
+//! with each one's `partition`, and subscriptions. Every write is one transaction that sends what
+//! it changed with `NOTIFY` (`crate::changes`); a write that changes nothing sends nothing. Test
+//! rows are locked by tenant and digest: a new version locks the rows of its suite (`FOR SHARE`)
+//! until it has written its references, and the cleanup marks only rows it holds
+//! (`FOR UPDATE SKIP LOCKED`).
 //!
-//! `ensure_namespace` reads first and writes only a namespace it creates, or one the journal
-//! store created without a partition, which it places: starting a run writes nothing here.
+//! `ensure_namespace` reads first and writes only a namespace it creates, or a row without a
+//! partition, which it places: starting a run writes nothing here. Rows without a partition are
+//! those created before the column; [`PostgresCatalog::place_namespaces`] places them all once
+//! (`archi/08-decisions.md`, "Taken while building the control plane of the run plane").
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -192,7 +194,7 @@ fn namespace_from_row(row: &PgRow) -> Result<Namespace, Error> {
     let name = name_of(row.text(1)?)?;
     let partition = row.opt_i64(13)?.ok_or_else(|| {
         Error::Corrupt(format!(
-            "namespace {name} has no partition: the journal store created it, and \
+            "namespace {name} has no partition: \
              PostgresCatalog::place_namespaces has not placed it yet"
         ))
     })?;
@@ -229,9 +231,8 @@ async fn find_namespace(
     row.map(|row| namespace_from_row(&row)).transpose()
 }
 
-/// The namespace, created at `now` in its partition if it does not exist, or placed in it if the
-/// journal store created it without one, its row locked for the transaction; whether it was
-/// created or placed.
+/// The namespace, created at `now` in its partition if it does not exist, or placed in it if its
+/// row has none, its row locked for the transaction; whether it was created or placed.
 async fn ensure_locked(
     conn: &mut PgConnection,
     tenant_id: &TenantId,
@@ -272,9 +273,10 @@ fn written(namespace: Namespace) -> NamespaceWrite {
 }
 
 impl PostgresCatalog {
-    /// Places in its partition, `hash(tenant, name) mod partitions`, every namespace the journal
-    /// store created without one; returns how many. Run once, with the deployment's number of
-    /// partitions, before the catalog serves: a namespace without a partition cannot be read.
+    /// Places in its partition, `hash(tenant, name) mod partitions`, every namespace whose row
+    /// has none; returns how many. Run once, with the deployment's number of partitions, before
+    /// the catalog serves (`rewind server migrate-runs` runs it first): a namespace without a
+    /// partition cannot be read.
     pub async fn place_namespaces(&self, partitions: NonZeroU16) -> Result<u64, CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let rows = sqlx::query(

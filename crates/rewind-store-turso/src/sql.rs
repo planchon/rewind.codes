@@ -9,7 +9,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use rewind_core::{Digest, RunId, Timestamp};
-use rewind_engine::ports::{TenantId, TenantScope};
+use rewind_engine::ports::TenantId;
 use turso::{Connection, Row, Value};
 
 use crate::Error;
@@ -66,16 +66,6 @@ pub(crate) async fn execute(
     Ok(statement.execute(params).await?)
 }
 
-/// [`execute`] for a statement whose text varies.
-pub(crate) async fn execute_dynamic(
-    connection: &Connection,
-    sql: &str,
-    params: Params,
-) -> Result<u64, Error> {
-    let mut statement = connection.prepare(sql).await?;
-    Ok(statement.execute(params).await?)
-}
-
 /// Runs `body` in a write transaction: committed if it succeeds, rolled back if it fails. If
 /// the caller drops the future half-way, the next call rolls the transaction back
 /// (`TursoStore::connection`).
@@ -107,21 +97,6 @@ async fn rollback(connection: &Connection) {
         // The next call rolls the transaction back before it starts.
         tracing::warn!(error = %err, "rolling back a failed transaction failed");
     }
-}
-
-/// `column IN (…)` or `column NOT IN (…)` for the tenants of a scope.
-pub(crate) fn scope_clause(column: &str, scope: &TenantScope, params: &mut Vec<Value>) -> String {
-    let (negated, tenants) = match scope {
-        TenantScope::All => return "1 = 1".to_owned(),
-        TenantScope::Only(tenants) => (false, tenants),
-        TenantScope::Except(tenants) => (true, tenants),
-    };
-    if tenants.is_empty() {
-        return if negated { "1 = 1" } else { "0 = 1" }.to_owned();
-    }
-    params.extend(tenants.iter().map(tenant));
-    let not = if negated { "NOT " } else { "" };
-    format!("{column} {not}IN ({})", placeholders(tenants.len()))
 }
 
 /// `?, ?, ?` for `count` values.
@@ -177,10 +152,6 @@ pub(crate) fn tenant(tenant: &TenantId) -> Value {
     Value::Text(tenant.as_str().to_owned())
 }
 
-pub(crate) fn boolean(value: bool) -> Value {
-    Value::Integer(i64::from(value))
-}
-
 /// `limit` for a `LIMIT` clause.
 pub(crate) fn limit(limit: usize) -> Value {
     Value::Integer(i64::try_from(limit).unwrap_or(i64::MAX))
@@ -226,11 +197,6 @@ pub(crate) trait Columns {
         self.opt_u64(index)?.ok_or_else(|| null(index))
     }
 
-    fn u32(&self, index: usize) -> Result<u32, Error> {
-        let value = self.u64(index)?;
-        u32::try_from(value).map_err(|_| Error::Corrupt(format!("{value} is out of range")))
-    }
-
     fn opt_u32(&self, index: usize) -> Result<Option<u32>, Error> {
         self.opt_u64(index)?
             .map(|value| {
@@ -273,10 +239,6 @@ pub(crate) trait Columns {
         self.opt_text(index)?
             .map(|hex| parse_digest(&hex))
             .transpose()
-    }
-
-    fn run_id(&self, index: usize) -> Result<RunId, Error> {
-        parse_run_id(&self.text(index)?)
     }
 
     fn opt_run_id(&self, index: usize) -> Result<Option<RunId>, Error> {

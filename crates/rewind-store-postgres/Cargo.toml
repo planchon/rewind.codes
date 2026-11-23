@@ -1,6 +1,6 @@
 [package]
 name = "rewind-store-postgres"
-description = "Production store of Rewind on Postgres: the control plane (CatalogStore, Cluster, AccessStore, SecretStore), and JournalStore and ReadModel."
+description = "Production control plane of Rewind on Postgres: CatalogStore, Cluster, AccessStore and SecretStore."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

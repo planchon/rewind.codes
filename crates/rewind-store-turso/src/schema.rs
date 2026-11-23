@@ -1,71 +1,36 @@
-//! The schema of `journal.db`, versioned: migrations are embedded in the binary, applied in
-//! order when the database is opened, each in its own transaction with the new version. A
-//! database whose version is above [`SCHEMA_VERSION`] was written by a newer build, and is
-//! refused rather than misread. A migration is never edited once released: a change is a new
-//! migration (version 2 moved access to grants and roles; version 3 added the workflows, the
-//! watchers, and the runs' workflow, starter and scope; version 4 the workflow and starter of
-//! the read model's runs; version 5 the namespaces; version 6 the tests and the suites of
-//! workflow versions; version 7 people's connections and the OAuth clients and codes; version 8
-//! the namespaces' display names; version 9 named secrets, their reads, the signing keys, the
-//! master key of each data key and the runs' attachments; version 10 when each run's summary last
-//! changed; version 11 what the control plane keeps of the run plane: each namespace's
-//! partition, the partition map, and the runs moved from the journal store's tables).
+//! The schema of the embedded control plane's database, versioned: migrations are embedded in
+//! the binary, applied in order when the database is opened, each in its own transaction with the
+//! new version. A database whose version is above [`SCHEMA_VERSION`] was written by a newer
+//! build, and is refused rather than misread. A migration is never edited once released: a
+//! change is a new migration (version 2 moved access to grants and roles; version 3 added the
+//! workflows; version 5 the namespaces; version 6 the tests and the suites of workflow versions;
+//! version 7 people's connections and the OAuth clients and codes; version 8 the namespaces'
+//! display names; version 9 named secrets, their reads, the signing keys and the master key of
+//! each data key; version 11 each namespace's partition, the partition map, and `legacy_runs`).
+//! The tables of runs those versions also hold are what `rewind server migrate-runs` reads
+//! (`archi/08-decisions.md`, "Taken while writing the object-storage spec"); nothing else does.
 //!
-//! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
+//! The tables of the control plane are those of `archi/06-storage-and-scale.md`, with these
+//! differences:
 //!
-//! - every key starts with the tenant, except where a run id is enough: run ids are unique
-//!   across tenants, so `runs` is keyed by `id` (and indexed by tenant), and `run_watchers` by
-//!   the run and its watcher (and indexed by watcher);
-//! - composite values are spread over columns (a run's quarantine, lease, trace context, fork
-//!   parent, workflow and starter; a task's route, policy and state), so that the store can
-//!   query them. A run's `scope`, like its `labels`, is a JSON object;
+//! - every key starts with the tenant;
 //! - `workflows.stored_order` numbers each workflow's versions (by tenant and name) in the
 //!   order they were stored, which breaks the ties of `created_at` when they are listed newest
-//!   first; `workflows.number` is the version's number among them, as people name it
-//!   (`triage v12`), unique by tenant and name;
-//! - `runs.suffix_len` is how many characters the suffix of the run's handle has: the handle is
-//!   `<namespace>/<origin>/<suffix>`, its suffix read from the run's id;
-//! - a run keeps its oldest inbox item (`inbox_head`, received at `runnable_at`), and a task
-//!   when it can be claimed (`due_at`): the picks of `acquire_runnable` and `claim_tool_tasks`
-//!   read an index instead of grouping the inbox or scanning the tasks;
+//!   first;
 //! - `data_keys` holds each tenant's data key, encrypted by a master key whose id `master_key`
 //!   records, apart from `tenants`: a tenant without settings (the embedded `local`) still has
 //!   secrets;
 //! - `signing_keys.public_key` holds the 32 bytes of an Ed25519 public key, which the API writes
-//!   as a JWK; a run's `secrets`, like its `labels`, is a JSON object;
-//! - `tool_calls.result_shape` holds the shape of a result whose value was projected, which
-//!   `observed_shapes` merges per tool;
+//!   as a JWK;
 //! - `roles.permissions` holds a role's permissions as a JSON array of strings, sorted, and
 //!   `grants.principal` and `grants.granted_by` a principal's text (`user:…`, `key:…`,
-//!   `invitation:…`), whose order is the order of principals.
+//!   `invitation:…`), whose order is the order of principals;
 //! - a tenant's ceiling and its namespaces' defaults, and a namespace's exceptions, are a column
-//!   per quota (`*_ms` for the durations; the ceiling's `active_runs` is `active_run_quota`);
-//!   `usage` and `quota_alerts` hold the tenant's own rows under the namespace `*`, a day as days
-//!   since the Unix epoch, a period as `2026-11` and a threshold as its percent; the permissions
-//!   of `tokens` and `token_keys` are JSON arrays, as a role's;
+//!   per quota (`*_ms` for the durations; the ceiling's `active_runs` is `active_run_quota`); the
+//!   permissions of `tokens` and `token_keys` are JSON arrays, as a role's;
 //! - an OAuth client's `redirect_uris` is a JSON array of strings, a code's `organizations` a
 //!   JSON object from tenant to access (`read`, `run`) and its `labels` a JSON object; a
 //!   connection's `expires_at` is when its latest refresh token lapses, which its purge reads.
-//!
-//! The read model's tables, written only through `ReadModel`:
-//!
-//! - `run_summaries` keeps what the entries give (status, start and end, counts, history
-//!   length), the metadata of the latest `apply` (headline, labels as JSON, parent, the
-//!   workflow's name, `started_by`, the origin and suffix length of the run's handle), and the
-//!   kept snapshot's columns: its length (`snapshot_len`), mode and ending, the ending's
-//!   `fingerprint` among them. `wakes_at` is the earliest `until` of its waits while the run is
-//!   active, kept for the `wakes` order;
-//!   `changed_at` when a write last changed the summary, in milliseconds of the system clock,
-//!   for the change stream (0 for the summaries of version 9, which no stream reads again);
-//! - `run_labels` holds one row per label, for equality, prefix and presence;
-//! - `run_waits` holds the kept snapshot's waits by `position`, the snapshot's order, without
-//!   task states;
-//! - `run_texts` holds what free text is searched in, lowercase, one row per field (the run's
-//!   id, the headline, each label's value, the ending's error and message): a field matches on
-//!   its own, whatever characters a quoted query holds;
-//! - `tool_calls.task_attempt` and `task_phase` hold the furthest state recorded for a call's
-//!   task, and `run_quarantine` the latest quarantine record (`kind` null: a release), each by
-//!   run id alone: both may be recorded before the run is projected.
 
 use turso::Connection;
 
@@ -457,7 +422,7 @@ CREATE TABLE run_watchers (
 CREATE INDEX run_watchers_by_watcher ON run_watchers (watcher, attached);
 "#;
 
-/// The read model's runs by workflow and by the run that started them
+/// The run summaries by workflow and by the run that started them
 /// (`archi/05-testing-and-observability.md`, "Query language": `workflow:`, `started_by:`): a
 /// summary keeps the workflow's name and its starter, null for a run of neither, like `parent`.
 /// No index: a query's terms are `CASE` expressions, which an index does not serve.
@@ -808,7 +773,7 @@ CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 
 /// What the control plane keeps of the run plane (`archi/06-storage-and-scale.md`, "The control
 /// plane"): the partition of each namespace, chosen when the catalog creates it (null for a
-/// namespace the journal store created, which the catalog places at its next use or with
+/// namespace created before the column, which the catalog places at its next use or with
 /// `TursoCatalog::place_namespaces`); the partition map, each partition's owner and the epoch of
 /// its last move; the runs `migrate-runs` moved into a partition. The members of an embedded
 /// cluster live in its process: no table holds them.
@@ -920,11 +885,8 @@ pub(crate) fn check_setting_name(name: &str) -> Result<(), Error> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use rewind_core::{Digest, RunId, RunStatus, Seq, Timestamp};
-    use rewind_engine::ports::{
-        AccessStore, ApiKey, Grant, JournalStore, Predicate, Principal, ProjectedRun, ReadModel,
-        RunMetadata, RunOrder, RunQuery, RunRef, RunSnapshot, TenantId, TextMatch, Watched,
-    };
+    use rewind_core::{Digest, Timestamp};
+    use rewind_engine::ports::{AccessStore, ApiKey, Grant, Principal, TenantId};
 
     use super::*;
     use crate::codec::encode_labels;
@@ -987,7 +949,7 @@ mod tests {
             },
         ];
         let dir = tempfile::TempDir::new().expect("temporary directory");
-        let path = dir.path().join("journal.db");
+        let path = dir.path().join("control.db");
         {
             let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
                 .build()
@@ -1067,201 +1029,6 @@ mod tests {
         );
     }
 
-    /// A run as version 2 kept it: before namespaces.
-    async fn run_of_version_2(
-        connection: &turso::Connection,
-        n: u128,
-        tenant: &str,
-        script: &[u8],
-        key: Option<&str>,
-        created_at: Timestamp,
-    ) {
-        sql::execute(
-            connection,
-            "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
-             expires_at, expiry_enqueued, failures, attempts, fence, labels, idempotency_key, \
-             created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 'completed', 1, 0, ?, 0, 0, 0, 0, '{}', ?, ?, ?)",
-            vec![
-                text(rewind_core::RunId::from_u128(n).to_string()),
-                text(tenant),
-                digest(Digest::of(script)),
-                digest(Digest::of(b"toolset")),
-                ts(at(86_400 * 30)),
-                crate::sql::opt_text(key),
-                ts(created_at),
-                ts(created_at),
-            ],
-        )
-        .await
-        .expect("a run of version 2");
-    }
-
-    #[tokio::test]
-    async fn runs_of_version_2_belong_to_the_namespace_migrated() {
-        use rewind_engine::ports::{
-            CreateRun, Day, JournalStore, Month, NamespaceName, NewRun, RunMetadata, RunRef,
-            UsageOf,
-        };
-
-        let dir = tempfile::TempDir::new().expect("temporary directory");
-        let path = dir.path().join("journal.db");
-        {
-            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
-                .build()
-                .await
-                .expect("open the file");
-            let connection = database.connect().expect("connect");
-            migrate_to(&connection, 2).await.expect("version 2");
-            run_of_version_2(&connection, 1, "acme", b"a", Some("k"), T0).await;
-            run_of_version_2(&connection, 2, "acme", b"a", None, at(1)).await;
-            run_of_version_2(&connection, 3, "acme", b"b", None, at(86_400)).await;
-            run_of_version_2(&connection, 4, "beta", b"a", None, at(2)).await;
-        }
-
-        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
-            .await
-            .expect("migrate to the current version");
-        let acme = tenant_id("acme");
-        let migrated = NamespaceName::migrated();
-        let run = RunRef::new(acme.clone(), rewind_core::RunId::from_u128(1));
-        assert_eq!(
-            store
-                .get_run(&run)
-                .await
-                .expect("get_run")
-                .expect("run")
-                .namespace,
-            migrated
-        );
-        let namespace = store
-            .get_namespace(&acme, &migrated)
-            .await
-            .expect("get_namespace")
-            .expect("the namespace of the runs before namespaces");
-        assert_eq!(
-            (namespace.created_at, namespace.last_active_at),
-            (T0, at(86_400))
-        );
-        assert_eq!(
-            namespace.display_name, None,
-            "version 8 adds no display name"
-        );
-        assert!(
-            store
-                .namespace_has_script(&acme, &migrated, Digest::of(b"b"))
-                .await
-                .expect("namespace_has_script")
-        );
-        let month = Month::of(T0);
-        let usage = store
-            .namespace_usage(&acme, &UsageOf::Namespace(migrated.clone()), month)
-            .await
-            .expect("namespace_usage");
-        assert_eq!((usage.runs_started, usage.scripts), (3, 2));
-        assert_eq!(
-            usage
-                .days
-                .iter()
-                .map(|(day, used)| (*day, used.runs_started))
-                .collect::<Vec<_>>(),
-            [(Day::of(T0), 2), (Day::of(at(86_400)), 1)]
-        );
-        let tenant = store
-            .namespace_usage(&acme, &UsageOf::Tenant, month)
-            .await
-            .expect("namespace_usage");
-        assert_eq!(tenant.runs_started, 3);
-
-        // Idempotency keys are unique per namespace now: `k` is free in another one.
-        let started = rewind_core::RunStarted {
-            script: Digest::of(b"a"),
-            toolset: Digest::of(b"toolset"),
-            input: serde_json::json!(null).into(),
-            seed: rewind_core::Seed::from_bytes([0; 32]),
-            epoch: rewind_core::Epoch(1),
-            expires_at: at(86_400 * 30),
-            mode: rewind_core::RunMode::Live,
-        };
-        let new_run = |n: u128, namespace: NamespaceName| NewRun {
-            run: RunRef::new(acme.clone(), rewind_core::RunId::from_u128(n)),
-            namespace,
-            origin: "script".into(),
-            started: started.clone(),
-            metadata: RunMetadata::default(),
-            created_at: at(3),
-        };
-        let again = store
-            .create_run(new_run(5, migrated.clone()), Some("k".into()))
-            .await
-            .expect("create_run");
-        assert!(matches!(again, CreateRun::Created(ref c) if !c.created && c.run == run));
-        let other = store
-            .create_run(
-                new_run(6, NamespaceName::new("alice").expect("valid")),
-                Some("k".into()),
-            )
-            .await
-            .expect("create_run");
-        assert!(matches!(other, CreateRun::Created(ref c) if c.created));
-    }
-
-    #[tokio::test]
-    async fn a_database_of_version_2_is_migrated_with_its_runs() {
-        let dir = tempfile::TempDir::new().expect("temporary directory");
-        let path = dir.path().join("journal.db");
-        let run = RunRef::new(TenantId::local(), RunId::from_u128(1));
-        {
-            // The database as a build of version 2 left it, with a run.
-            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
-                .build()
-                .await
-                .expect("create the file");
-            let connection = database.connect().expect("connect");
-            migrate_to(&connection, 2).await.expect("version 2");
-            sql::execute(
-                &connection,
-                "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
-                 expires_at, expiry_enqueued, failures, attempts, fence, labels, created_at, \
-                 updated_at) VALUES (?, ?, ?, ?, 'pending', 1, 0, 2, 0, 0, 0, 0, \
-                 '{\"agent\":\"triage\"}', 1, 1)",
-                vec![
-                    sql::run_id(run.id),
-                    sql::tenant(&run.tenant),
-                    sql::digest(Digest::of(b"script")),
-                    sql::digest(Digest::of(b"toolset")),
-                ],
-            )
-            .await
-            .expect("a run");
-        }
-
-        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
-            .await
-            .expect("open and migrate");
-        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
-        let record = store
-            .get_run(&run)
-            .await
-            .expect("get_run")
-            .expect("the run is kept");
-        assert_eq!(
-            record.metadata,
-            RunMetadata {
-                labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
-                ..RunMetadata::default()
-            },
-            "no workflow, no starter, an empty scope"
-        );
-        assert_eq!(
-            store
-                .watch_run(&run, RunId::from_u128(2), Seq(1))
-                .await
-                .expect("watch_run"),
-            Some(Watched { ended: false })
-        );
-    }
-
     #[tokio::test]
     async fn the_credentials_of_version_8_are_dropped() {
         use rewind_core::SecretName;
@@ -1270,7 +1037,7 @@ mod tests {
         };
 
         let dir = tempfile::TempDir::new().expect("temporary directory");
-        let path = dir.path().join("journal.db");
+        let path = dir.path().join("control.db");
         let tenant = TenantId::local();
         {
             // The database as a build of version 8 left it, with a credential and its data key.
@@ -1321,365 +1088,5 @@ mod tests {
         };
         store.put(&tenant, &secret, T0).await.expect("put");
         assert_eq!(store.master_keys_in_use().await, Ok(vec![key.id()]));
-    }
-
-    #[tokio::test]
-    async fn a_database_of_version_3_is_migrated_with_its_summaries() {
-        let dir = tempfile::TempDir::new().expect("temporary directory");
-        let path = dir.path().join("journal.db");
-        let tenant = TenantId::local();
-        let (starter, started) = (RunId::from_u128(1), RunId::from_u128(2));
-        {
-            // The database as a build of version 3 left it, with a run projected.
-            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
-                .build()
-                .await
-                .expect("create the file");
-            let connection = database.connect().expect("connect");
-            migrate_to(&connection, 3).await.expect("version 3");
-            sql::execute(
-                &connection,
-                "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
-                 labels, last_activity_at, tool_calls, errors, history_len, snapshot_len) \
-                 VALUES (?, ?, ?, 'a run', ?, 'active', '{}', 5, 0, 0, 1, 1)",
-                vec![
-                    sql::run_id(starter),
-                    sql::tenant(&tenant),
-                    sql::digest(Digest::of(b"script")),
-                    sql::digest(Digest::of(b"toolset")),
-                ],
-            )
-            .await
-            .expect("a summary");
-        }
-
-        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
-            .await
-            .expect("open and migrate");
-        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
-        let kept = store
-            .search_runs(&RunQuery::new(tenant.clone()), RunOrder::Started, None, 10)
-            .await
-            .expect("search_runs");
-        assert_eq!(
-            kept.iter()
-                .map(|summary| (
-                    summary.run.id,
-                    summary.workflow.as_deref(),
-                    summary.started_by
-                ))
-                .collect::<Vec<_>>(),
-            [(starter, None, None)],
-            "the summary is kept, of no workflow, started by no run"
-        );
-
-        // A run of a workflow, started by the migrated one.
-        store
-            .apply(
-                &ProjectedRun {
-                    run: RunRef::new(tenant.clone(), started),
-                    namespace: rewind_engine::ports::NamespaceName::migrated(),
-                    origin: "script".into(),
-                    suffix_len: 12,
-                    script: Digest::of(b"script"),
-                    headline: "a run".into(),
-                    toolset: Digest::of(b"toolset"),
-                    labels: BTreeMap::new(),
-                    parent: None,
-                    workflow: Some("triage".into()),
-                    started_by: Some(starter),
-                },
-                &[],
-                &RunSnapshot {
-                    history_len: 0,
-                    status: RunStatus::Active,
-                    mode: None,
-                    waits: Vec::new(),
-                    ending: None,
-                },
-            )
-            .await
-            .expect("apply");
-        let found = |query: RunQuery| {
-            let store = &store;
-            async move {
-                let runs = store
-                    .search_runs(&query, RunOrder::Started, None, 10)
-                    .await
-                    .expect("search_runs");
-                runs.iter()
-                    .map(|summary| summary.run.id)
-                    .collect::<Vec<_>>()
-            }
-        };
-        let any_workflow = || Predicate::Workflow(vec![TextMatch::Any]);
-        assert_eq!(
-            found(RunQuery::new(tenant.clone()).with(any_workflow())).await,
-            [started]
-        );
-        assert_eq!(
-            found(RunQuery::new(tenant.clone()).without(any_workflow())).await,
-            [starter]
-        );
-        assert_eq!(
-            found(RunQuery::new(tenant.clone()).with(Predicate::StartedBy(starter))).await,
-            [started]
-        );
-    }
-
-    /// A run as version 10 kept it: before handles.
-    async fn run_of_version_10(
-        connection: &turso::Connection,
-        id: RunId,
-        tenant: &str,
-        workflow: Option<&str>,
-    ) {
-        sql::execute(
-            connection,
-            "INSERT INTO runs (id, tenant, namespace, script, toolset, status, epoch, history_len, \
-             expires_at, expiry_enqueued, failures, attempts, fence, labels, created_at, \
-             updated_at, workflow, workflow_version) \
-             VALUES (?, ?, 'migrated', ?, ?, 'completed', 1, 0, ?, 0, 0, 0, 0, '{}', ?, ?, ?, ?)",
-            vec![
-                sql::run_id(id),
-                text(tenant),
-                digest(Digest::of(b"script")),
-                digest(Digest::of(b"toolset")),
-                ts(at(86_400 * 30)),
-                ts(T0),
-                ts(T0),
-                opt_text(workflow),
-                workflow.map_or(turso::Value::Null, |name| {
-                    digest(Digest::of(name.as_bytes()))
-                }),
-            ],
-        )
-        .await
-        .expect("a run of version 10");
-    }
-
-    /// A run's summary as version 10 kept it.
-    async fn summary_of_version_10(
-        connection: &turso::Connection,
-        id: RunId,
-        tenant: &str,
-        workflow: Option<&str>,
-    ) {
-        sql::execute(
-            connection,
-            "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
-             labels, last_activity_at, tool_calls, errors, history_len, snapshot_len, workflow) \
-             VALUES (?, ?, ?, 'a run', ?, 'completed', '{}', 5, 0, 0, 1, 1, ?)",
-            vec![
-                sql::run_id(id),
-                text(tenant),
-                digest(Digest::of(b"script")),
-                digest(Digest::of(b"toolset")),
-                opt_text(workflow),
-            ],
-        )
-        .await
-        .expect("a summary of version 10");
-    }
-
-    /// A workflow version as version 10 kept it: without its number.
-    async fn version_of_version_10(
-        connection: &turso::Connection,
-        tenant: &str,
-        workflow: &rewind_core::Workflow,
-        created_at: Timestamp,
-        stored_order: u64,
-    ) {
-        sql::execute(
-            connection,
-            "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
-             stored_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            vec![
-                text(tenant),
-                digest(workflow.version()),
-                text(workflow.name()),
-                text(rewind_format::encode_workflow(workflow)),
-                text(encode_labels(workflow.labels())),
-                ts(created_at),
-                sql::int(stored_order),
-            ],
-        )
-        .await
-        .expect("a workflow version of version 10");
-    }
-
-    fn workflow(name: &str, script: &str) -> rewind_core::Workflow {
-        rewind_core::Workflow::new(
-            name,
-            None,
-            Digest::of(script.as_bytes()),
-            Digest::of(b"toolset"),
-            rewind_core::WorkflowSchemas {
-                input: serde_json::json!({ "type": "object" }),
-                output: serde_json::json!({}),
-                signals: BTreeMap::new(),
-            },
-        )
-        .expect("a valid workflow")
-    }
-
-    #[tokio::test]
-    async fn runs_and_versions_of_version_10_get_handles_and_numbers() {
-        use rewind_core::{RunHandle, SUFFIX_LEN, run_suffix, suffix_range};
-
-        let ms = 1_795_383_896_000;
-        // Two runs of `acme` whose first 64 bits are the same, a third apart from them, and a run
-        // of `beta` with the same first bits as the pair.
-        let (triage, plain) = (
-            RunId::from_v7_parts(ms, 0x0c5, 1),
-            RunId::from_v7_parts(ms, 0x0c5, 2),
-        );
-        let apart = RunId::from_v7_parts(ms + 1, 0x0c5, 1);
-        let theirs = RunId::from_v7_parts(ms, 0x0c5, 3);
-        assert_eq!(
-            run_suffix(triage, SUFFIX_LEN),
-            run_suffix(plain, SUFFIX_LEN),
-            "the short suffix does not tell the pair apart"
-        );
-        // Two summaries of runs the journal no longer holds, with the same first 64 bits.
-        let (gone, gone_twin) = (
-            RunId::from_v7_parts(ms + 2, 7, 1),
-            RunId::from_v7_parts(ms + 2, 7, 2),
-        );
-        // Versions created out of the order they were stored in, two of them at the same time.
-        let (late, early, tied) = (
-            workflow("triage", "v1"),
-            workflow("triage", "v2"),
-            workflow("triage", "v3"),
-        );
-        let dir = tempfile::TempDir::new().expect("temporary directory");
-        let path = dir.path().join("journal.db");
-        {
-            // The database as a build of version 10 left it.
-            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
-                .build()
-                .await
-                .expect("create the file");
-            let connection = database.connect().expect("connect");
-            migrate_to(&connection, 10).await.expect("version 10");
-            run_of_version_10(&connection, triage, "acme", Some("triage")).await;
-            run_of_version_10(&connection, plain, "acme", None).await;
-            run_of_version_10(&connection, apart, "acme", None).await;
-            run_of_version_10(&connection, theirs, "beta", None).await;
-            summary_of_version_10(&connection, triage, "acme", Some("triage")).await;
-            summary_of_version_10(&connection, apart, "acme", None).await;
-            summary_of_version_10(&connection, gone, "acme", Some("digest")).await;
-            summary_of_version_10(&connection, gone_twin, "acme", None).await;
-            version_of_version_10(&connection, "acme", &late, at(5), 1).await;
-            version_of_version_10(&connection, "acme", &early, at(2), 2).await;
-            version_of_version_10(&connection, "acme", &tied, at(5), 3).await;
-            version_of_version_10(&connection, "acme", &workflow("digest", "d1"), at(1), 1).await;
-            version_of_version_10(&connection, "beta", &workflow("triage", "x"), at(1), 1).await;
-        }
-
-        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
-            .await
-            .expect("open and migrate");
-        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
-        let (acme, beta) = (tenant_id("acme"), tenant_id("beta"));
-        let record = |tenant: &TenantId, id: RunId| {
-            let (store, run) = (&store, RunRef::new(tenant.clone(), id));
-            async move {
-                store
-                    .get_run(&run)
-                    .await
-                    .expect("get_run")
-                    .expect("the run is kept")
-            }
-        };
-        let handle =
-            |record: &rewind_engine::ports::RunRecord| (record.origin.clone(), record.suffix_len);
-        let (first, second) = (record(&acme, triage).await, record(&acme, plain).await);
-        assert_eq!(
-            handle(&first),
-            ("triage".to_owned(), 25),
-            "the workflow's name"
-        );
-        assert_eq!(handle(&second), ("script".to_owned(), 25));
-        assert_eq!(
-            handle(&record(&acme, apart).await),
-            ("script".to_owned(), 12)
-        );
-        assert_eq!(
-            handle(&record(&beta, theirs).await),
-            ("script".to_owned(), 12),
-            "another tenant's run does not lengthen a suffix"
-        );
-        // Each of the pair's full suffixes names it alone.
-        for record in [&first, &second] {
-            let RunHandle { suffix, .. } = record.handle();
-            let (low, high) = suffix_range(&suffix).expect("a range");
-            let named: Vec<RunId> = store
-                .runs_in_range(&acme, low, high, 10)
-                .await
-                .expect("runs_in_range")
-                .iter()
-                .map(|named| named.run.id)
-                .collect();
-            assert_eq!(named, [record.run.id]);
-        }
-
-        let summaries: BTreeMap<RunId, (String, u8)> = store
-            .search_runs(&RunQuery::new(acme.clone()), RunOrder::Started, None, 10)
-            .await
-            .expect("search_runs")
-            .into_iter()
-            .map(|summary| (summary.run.id, (summary.origin, summary.suffix_len)))
-            .collect();
-        assert_eq!(
-            summaries,
-            BTreeMap::from([
-                (triage, ("triage".to_owned(), 25)),
-                (apart, ("script".to_owned(), 12)),
-                (gone, ("digest".to_owned(), 25)),
-                (gone_twin, ("script".to_owned(), 25)),
-            ]),
-            "a summary takes its run's, or follows the rules among the summaries"
-        );
-
-        let none = BTreeMap::new();
-        let numbered: Vec<(Digest, u32)> = store
-            .workflow_versions(&acme, "triage", &none)
-            .await
-            .expect("workflow_versions")
-            .iter()
-            .map(|stored| (stored.workflow.version(), stored.number))
-            .collect();
-        assert_eq!(
-            numbered,
-            [
-                (tied.version(), 3),
-                (late.version(), 2),
-                (early.version(), 1)
-            ],
-            "numbered by creation, ties in the order they were stored"
-        );
-        let number = |tenant: &TenantId, name: &str| {
-            let (store, tenant, name) = (&store, tenant.clone(), name.to_owned());
-            async move {
-                store
-                    .workflow_number(&tenant, &name, 1)
-                    .await
-                    .expect("workflow_number")
-                    .map(|stored| stored.workflow.name().to_owned())
-            }
-        };
-        assert_eq!(number(&acme, "digest").await.as_deref(), Some("digest"));
-        assert_eq!(number(&beta, "triage").await.as_deref(), Some("triage"));
-        let next = store
-            .put_workflow(&acme, &workflow("triage", "v4"), at(6))
-            .await
-            .expect("put_workflow");
-        assert_eq!(next.number, 4, "a new version takes the next number");
-        let again = store
-            .put_workflow(&acme, &late, at(7))
-            .await
-            .expect("put_workflow");
-        assert_eq!(again.number, 2, "a version put again keeps its number");
     }
 }

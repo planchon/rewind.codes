@@ -8,38 +8,25 @@
 //! `NOTIFY` in its transaction; the payloads name what changed, never a value
 //! (`crate::changes`).
 //!
-//! [`PostgresStore`] implements four ports of `rewind-engine` on one database:
+//! [`PostgresStore`] implements, on the same database:
 //!
-//! - `JournalStore`: scripts and their titles, toolsets, numbered workflow versions, runs with
-//!   their handles and the runs that watch their end, histories, inboxes, timers, tool tasks,
-//!   leases and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants,
-//!   namespaces with their quotas, use and alerts, payload rows and references, retention. The
-//!   starts of a tenant and the writes of its use take a transaction-scoped advisory lock on the
-//!   tenant: two starts never take the same last place of a quota, nor the same handle; a new
-//!   version of a workflow takes one on the workflow, for its number;
 //! - `AccessStore`: API keys, the tenants' own roles, grants and default roles, end users'
-//!   tokens and token keys. The writes of a tenant's grants and roles take a transaction-scoped
-//!   advisory lock on the tenant: the kept role's last holder and a role in use are decided
-//!   against concurrent writers;
-//! - `ReadModel`: the projections behind the dashboard's searches, statistics and failure
-//!   groups: run summaries with their labels, waits, search text and quarantine, tool calls with
-//!   their tasks' states;
+//!   tokens and token keys, the connections of Rewind's MCP server and their OAuth clients and
+//!   codes. The writes of a tenant's grants and roles take a transaction-scoped advisory lock on
+//!   the tenant: the kept role's last holder and a role in use are decided against concurrent
+//!   writers;
 //! - `SecretStore`: named secrets of the organization and of each namespace, their reads per
 //!   day, and each tenant's Ed25519 signing keys; values and private keys encrypted with a data
 //!   key per tenant, itself encrypted by one of the deployment's [`MasterKeys`], whose id it
 //!   records.
 //!
-//! Many workers, schedulers and projectors share one database. Each port method is one short
-//! transaction at `READ COMMITTED`, and the rows they compete for are taken with
-//! `FOR UPDATE SKIP LOCKED` (runnable runs, due tool tasks, feed items, quota alerts,
-//! quarantined runs) or
-//! locked in a fixed order: a run's row first, then the rows it owns, payload rows by digest.
-//! A deadlock or a serialization failure, should one happen anyway, is retried.
+//! The nodes of a deployment and its edges share one database. Each port method is one short
+//! transaction at `READ COMMITTED`, and the rows it competes for are locked in a fixed order; a
+//! deadlock or a serialization failure, should one happen anyway, is retried.
 //!
-//! History and inbox rows hold the `rewind-format` v1 JSON of their event. The schema is versioned:
-//! its migrations are embedded in the binary and applied when the store connects, under an
-//! advisory lock so that servers starting together migrate once; a database migrated by a newer
-//! build is refused ([`Error::NewerSchema`]).
+//! The schema is versioned: its migrations are embedded in the binary and applied when the store
+//! connects, under an advisory lock so that servers starting together migrate once; a database
+//! migrated by a newer build is refused ([`Error::NewerSchema`]).
 
 #![forbid(unsafe_code)]
 
@@ -49,10 +36,7 @@ mod changes;
 mod cluster;
 mod codec;
 mod connections;
-
-mod journal;
 mod namespaces;
-mod read_model;
 mod schema;
 mod secrets;
 mod sql;
@@ -170,8 +154,10 @@ impl std::fmt::Debug for Config {
     }
 }
 
-/// The store of a production deployment: `JournalStore`, `AccessStore`, `ReadModel` and
-/// `SecretStore` on one Postgres database. Cloning it is cheap, and the clones share its pool of connections.
+/// The control plane of a production deployment on one Postgres database: `AccessStore` and
+/// `SecretStore`, its catalog ([`PostgresStore::catalog`]) and its cluster
+/// ([`PostgresCluster::open`]). Cloning it is cheap, and the clones share its pool of
+/// connections.
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: PgPool,

@@ -1,19 +1,15 @@
 //! What the conformance suites cannot see: the database file itself. Its schema version and
 //! migrations, what survives a restart, the settings in `meta`, secrets at rest and the master key
-//! replaced, and claims that read several pages of due tasks.
+//! replaced.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU16;
 use std::path::Path;
 
-use rewind_core::SecretName;
-use rewind_core::{
-    Digest, Epoch, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunStarted, RunStatus, Seed,
-    Seq, Timestamp, ToolPolicy, ToolRoute,
-};
+use rewind_core::{RunId, Script, SecretName, Timestamp, Toolset, Workflow, WorkflowSchemas};
 use rewind_engine::ports::{
-    Activation, CreateRun, JournalStore, NamespaceName, NewRun, NewSecret, NewToolTask,
-    RunMetadata, RunRef, Secret, SecretError, SecretId, SecretReader, SecretStore, TaskFilter,
-    TenantId,
+    CatalogStore, CompiledScript, NamespaceName, NamespaceWrite, NewSecret, Secret, SecretError,
+    SecretId, SecretReader, SecretStore, Tenant, TenantId, ToolDeclarations,
 };
 use rewind_store_turso::{Error, MasterKey, MasterKeys, SCHEMA_VERSION, TursoStore};
 use serde_json::json;
@@ -23,25 +19,6 @@ const T0: Timestamp = Timestamp(1_767_225_600_000);
 
 fn key() -> MasterKey {
     MasterKey::from_bytes([3; 32])
-}
-
-fn run() -> RunRef {
-    RunRef::new(
-        TenantId::local(),
-        RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0000_0001),
-    )
-}
-
-fn started() -> RunStarted {
-    RunStarted {
-        script: Digest::of(b"script"),
-        toolset: Digest::of(b"toolset"),
-        input: json!({ "issue": 42 }).into(),
-        seed: Seed::from_bytes([5; 32]),
-        epoch: Epoch(1),
-        expires_at: Timestamp(T0.0 + 86_400_000),
-        mode: RunMode::Live,
-    }
 }
 
 async fn open(path: &Path) -> TursoStore {
@@ -67,7 +44,7 @@ async fn write_schema_version(path: &Path, version: u32) {
 #[tokio::test]
 async fn a_new_database_gets_the_current_schema() {
     let dir = TempDir::new().expect("temporary directory");
-    let store = open(&dir.path().join("journal.db")).await;
+    let store = open(&dir.path().join("control.db")).await;
     assert_eq!(
         store.schema_version().await.expect("version"),
         SCHEMA_VERSION
@@ -77,7 +54,7 @@ async fn a_new_database_gets_the_current_schema() {
 #[tokio::test]
 async fn a_newer_schema_is_refused() {
     let dir = TempDir::new().expect("temporary directory");
-    let path = dir.path().join("journal.db");
+    let path = dir.path().join("control.db");
     drop(open(&path).await);
     write_schema_version(&path, SCHEMA_VERSION + 1).await;
     let refused = TursoStore::open(&path, key()).await.map(|_| ());
@@ -90,92 +67,102 @@ async fn a_newer_schema_is_refused() {
     );
 }
 
+/// The catalog of an embedded server is the same once it opens the file again: its tenant, its
+/// namespace in its partition, its script, toolset and workflow.
 #[tokio::test]
-async fn runs_survive_a_restart() {
+async fn the_catalog_survives_a_restart() {
     let dir = TempDir::new().expect("temporary directory");
-    let path = dir.path().join("journal.db");
-    let entry = HistoryEntry {
-        index: 0,
-        recorded_at: T0,
-        event: Event::Lifecycle(Lifecycle::RunStarted(started())),
-    };
-    {
-        let store = open(&path).await;
-        let new_run = NewRun {
-            run: run(),
-            namespace: rewind_engine::ports::NamespaceName::migrated(),
-            origin: "script".into(),
-            started: started(),
-            metadata: RunMetadata {
-                labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
-                ..RunMetadata::default()
-            },
-            created_at: T0,
+    let path = dir.path().join("control.db");
+    let tenant = TenantId::local();
+    let alice = NamespaceName::new("alice").expect("namespace");
+    let partitions = NonZeroU16::MIN;
+    let script = Script::new("export default async () => 1;");
+    let toolset = Toolset::default();
+    let workflow = Workflow::new(
+        "triage",
+        None,
+        script.digest(),
+        toolset.digest(),
+        WorkflowSchemas {
+            input: json!({ "type": "object" }),
+            output: json!({}),
+            signals: BTreeMap::new(),
+        },
+    )
+    .expect("a valid workflow");
+    let placed = {
+        let catalog = open(&path).await.catalog();
+        catalog
+            .put_tenant(&Tenant::new(tenant.clone()))
+            .await
+            .expect("put_tenant");
+        let NamespaceWrite::Written(placed) = catalog
+            .ensure_namespace(&tenant, &alice, partitions, T0)
+            .await
+            .expect("ensure_namespace")
+        else {
+            panic!("alice is not being erased");
         };
-        let created = store
-            .create_run(new_run, Some("call-1".into()))
+        let compiled = CompiledScript {
+            javascript: script.source().into(),
+            source_map: String::new(),
+        };
+        catalog
+            .put_script(&tenant, &script, &compiled)
             .await
-            .expect("create_run");
-        assert!(matches!(created, CreateRun::Created(ref c) if c.created));
-        let lease = store
-            .acquire_run(&run(), "worker", T0, std::time::Duration::from_secs(30))
+            .expect("put_script");
+        catalog
+            .put_toolset(&tenant, &toolset, &ToolDeclarations::default())
             .await
-            .expect("acquire_run")
-            .expect("leasable");
-        let consumed = store
-            .take_inbox(&lease)
+            .expect("put_toolset");
+        catalog
+            .put_workflow(&tenant, &workflow, T0)
             .await
-            .expect("take_inbox")
-            .iter()
-            .map(|item| item.id)
-            .collect();
-        store
-            .commit_activation(
-                &lease,
-                Activation::new(vec![entry.clone()], consumed, RunStatus::Active),
-                T0,
-            )
-            .await
-            .expect("commit");
-    }
+            .expect("put_workflow");
+        placed
+    };
 
-    let store = open(&path).await;
+    let catalog = open(&path).await.catalog();
     assert_eq!(
-        store.load_history(&run(), 0).await.expect("load_history"),
-        [entry]
+        catalog.get_tenant(&tenant).await.expect("get_tenant"),
+        Some(Tenant::new(tenant.clone()))
     );
-    let record = store
-        .get_run(&run())
-        .await
-        .expect("get_run")
-        .expect("the run is still there");
-    assert_eq!(record.status, RunStatus::Active);
-    assert_eq!(record.metadata.labels["agent"], "triage");
-    assert_eq!(record.sticky_worker.as_deref(), Some("worker"));
-    let retried = store
-        .create_run(
-            NewRun {
-                run: RunRef::new(TenantId::local(), RunId::from_u128(2)),
-                namespace: rewind_engine::ports::NamespaceName::migrated(),
-                origin: "script".into(),
-                started: started(),
-                metadata: RunMetadata::default(),
-                created_at: T0,
-            },
-            Some("call-1".into()),
-        )
-        .await
-        .expect("create_run");
+    assert_eq!(
+        catalog
+            .get_namespace(&tenant, &alice)
+            .await
+            .expect("get_namespace"),
+        Some(placed)
+    );
+    assert_eq!(
+        catalog
+            .get_script(&tenant, script.digest())
+            .await
+            .expect("get_script")
+            .map(|stored| stored.script),
+        Some(script)
+    );
     assert!(
-        matches!(retried, CreateRun::Created(ref c) if !c.created && c.run == run()),
-        "idempotency keys survive too"
+        catalog
+            .get_toolset(&tenant, toolset.digest())
+            .await
+            .expect("get_toolset")
+            .is_some()
+    );
+    assert_eq!(
+        catalog
+            .get_workflow(&tenant, workflow.version())
+            .await
+            .expect("get_workflow")
+            .map(|stored| stored.workflow),
+        Some(workflow)
     );
 }
 
 #[tokio::test]
 async fn settings_live_in_meta() {
     let dir = TempDir::new().expect("temporary directory");
-    let path = dir.path().join("journal.db");
+    let path = dir.path().join("control.db");
     {
         let store = open(&path).await;
         assert_eq!(store.virtual_time().await.expect("virtual_time"), None);
@@ -225,14 +212,14 @@ fn github_token() -> NewSecret {
 fn reader() -> SecretReader {
     SecretReader::Run {
         run: RunId::from_u128(1),
-        namespace: NamespaceName::migrated(),
+        namespace: NamespaceName::new("alice").expect("valid"),
     }
 }
 
 #[tokio::test]
 async fn secrets_are_encrypted_at_rest() {
     let dir = TempDir::new().expect("temporary directory");
-    let path = dir.path().join("journal.db");
+    let path = dir.path().join("control.db");
     let secret = github_token();
     let signing = {
         let store = open(&path).await;
@@ -313,7 +300,7 @@ async fn value_of(store: &TursoStore, (tenant, secret): &(TenantId, NewSecret)) 
 #[tokio::test]
 async fn the_master_key_is_replaced_by_a_rewrap() {
     let dir = TempDir::new().expect("temporary directory");
-    let path = dir.path().join("journal.db");
+    let path = dir.path().join("control.db");
     let (old, new) = (
         MasterKey::from_bytes([1; 32]),
         MasterKey::from_bytes([2; 32]),
@@ -373,61 +360,4 @@ fn master_keys_are_generated_at_random() {
     let second = MasterKey::generate().expect("generate");
     assert_ne!(first, second);
     assert_eq!(MasterKey::from_bytes(first.to_bytes()), first);
-}
-
-#[tokio::test]
-async fn a_claim_reads_past_tasks_without_a_free_slot() {
-    let dir = TempDir::new().expect("temporary directory");
-    let store = open(&dir.path().join("journal.db")).await;
-    let new_run = NewRun {
-        run: run(),
-        namespace: rewind_engine::ports::NamespaceName::migrated(),
-        origin: "script".into(),
-        started: started(),
-        metadata: RunMetadata::default(),
-        created_at: T0,
-    };
-    store.create_run(new_run, None).await.expect("create_run");
-    let lease = store
-        .acquire_run(&run(), "worker", T0, std::time::Duration::from_secs(30))
-        .await
-        .expect("acquire_run")
-        .expect("leasable");
-    // Forty calls of a tool limited to one call in flight, then one call of another tool: the
-    // second task to hand out is past the first page of due tasks.
-    let task = |seq: u32, tool: &str, concurrency: u32| {
-        let route = ToolRoute::Host { group: None };
-        let mut policy = ToolPolicy::default_for(&route);
-        policy.concurrency = concurrency;
-        NewToolTask {
-            seq: Seq(seq),
-            tool: tool.into(),
-            args: json!({ "seq": seq }).into(),
-            policy,
-            route,
-            server_concurrency: None,
-        }
-    };
-    let mut activation = Activation::new(Vec::new(), Vec::new(), RunStatus::Active);
-    activation.tool_calls = (1..=40).map(|seq| task(seq, "ask_user", 1)).collect();
-    activation.tool_calls.push(task(41, "notify", 16));
-    store
-        .commit_activation(&lease, activation, T0)
-        .await
-        .expect("commit");
-
-    let claimed = store
-        .claim_tool_tasks("worker", &TaskFilter::All, T0, 2)
-        .await
-        .expect("claim_tool_tasks");
-    let seqs: Vec<u32> = claimed.iter().map(|task| task.task.task.seq.0).collect();
-    assert_eq!(seqs, [1, 41]);
-    assert!(
-        store
-            .claim_tool_tasks("worker", &TaskFilter::All, T0, 10)
-            .await
-            .expect("claim_tool_tasks")
-            .is_empty(),
-        "every slot is taken"
-    );
 }

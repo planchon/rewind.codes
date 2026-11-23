@@ -33,6 +33,28 @@ use crate::{Error, PostgresStore};
 
 type Fail = Failure<StoreError>;
 
+impl From<StoreError> for Fail {
+    fn from(err: StoreError) -> Self {
+        Failure::Port(err)
+    }
+}
+
+impl From<Fail> for StoreError {
+    fn from(failure: Fail) -> Self {
+        match failure {
+            Failure::Port(err) => err,
+            Failure::Db(err) if err.is_unique_violation() => StoreError::Conflict(err.to_string()),
+            Failure::Db(err) => StoreError::Backend(err.to_string()),
+        }
+    }
+}
+
+impl From<Error> for StoreError {
+    fn from(err: Error) -> Self {
+        StoreError::from(Fail::Db(err))
+    }
+}
+
 /// The columns of an [`ApiKey`], read by [`key_from_row`].
 const KEY_COLUMNS: &str = "hash, tenant, name, created_by, created_at, revoked_at";
 
@@ -532,7 +554,7 @@ impl AccessStore for PostgresStore {
     }
 
     async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
-        // Workers purge at the same time: each skips the rows another is deleting.
+        // Servers purge at the same time: each skips the rows another is deleting.
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let purged = sqlx::query(
             "DELETE FROM tokens WHERE hash IN (\

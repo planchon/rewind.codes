@@ -1,5 +1,6 @@
-//! The embedded store passes the conformance suites of `JournalStore`, `AccessStore`,
-//! `ReadModel` and `SecretStore`, each check on a new database file.
+//! The embedded store passes the conformance suites of `AccessStore` and `SecretStore`, each
+//! check on a new database file. Those of `CatalogStore` and `Cluster` run in
+//! `tests/control_plane.rs`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,7 +14,7 @@ fn stores(dir: &TempDir) -> impl Fn() -> TursoStore + '_ {
     let next = AtomicUsize::new(0);
     move || {
         let path: PathBuf = dir.path().join(format!(
-            "journal-{}.db",
+            "control-{}.db",
             next.fetch_add(1, Ordering::SeqCst)
         ));
         // The suites create stores synchronously; opening one awaits its first I/O.
@@ -26,22 +27,9 @@ fn stores(dir: &TempDir) -> impl Fn() -> TursoStore + '_ {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_journal_conforms() {
-    let dir = TempDir::new().expect("temporary directory");
-    let new_store = stores(&dir);
-    conformance::journal::run_all(&new_store).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_access_store_conforms() {
     let dir = TempDir::new().expect("temporary directory");
     conformance::access::run_all(stores(&dir)).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_read_model_conforms() {
-    let dir = TempDir::new().expect("temporary directory");
-    conformance::read_model::run_all(stores(&dir)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

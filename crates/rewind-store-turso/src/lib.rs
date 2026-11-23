@@ -7,26 +7,17 @@
 //! secrets sends what it changed once it committed, through a broadcast inside the process
 //! ([`TursoStore::changes`]).
 //!
-//! [`TursoStore`] implements four ports of `rewind-engine` on one database file, `journal.db`:
+//! [`TursoStore`] implements, on the same database file:
 //!
-//! - `JournalStore`: scripts and their titles, toolsets, workflow versions and their numbers,
-//!   runs with their handles and their watchers, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, namespaces
-//!   with their quotas, use and alerts, payload rows and references, test rows and the suites of
-//!   workflow versions, retention;
 //! - `AccessStore`: API keys, the tenants' own roles, grants and default roles, end users'
-//!   tokens and token keys;
-//! - `ReadModel`: the projections behind the dashboard and the query language
-//!   (`run_summaries` with each run's snapshot, `run_labels`, `run_waits`, `run_texts`,
-//!   `tool_calls`), with the task states and quarantine recorded by whoever changes them
-//!   (`tool_calls.task_*`, `run_quarantine`);
+//!   tokens and token keys, the connections of Rewind's MCP server and their OAuth clients and
+//!   codes;
 //! - `SecretStore`: named secrets of the organization and of each namespace, their reads per
 //!   day, and each tenant's Ed25519 signing keys; values and private keys encrypted with a data
 //!   key per tenant, itself encrypted by one of the deployment's [`MasterKeys`], whose id it
 //!   records.
 //!
-//! History and inbox rows hold the `rewind-format` v1 JSON of their event. The `meta` table holds
-//! the schema version and the server's settings, such as virtual time.
+//! The `meta` table holds the schema version and the server's settings, such as virtual time.
 //!
 //! Only the embedded server opens the database (07): Turso stays in its single-process mode.
 //! Inside that process every call goes through one connection, one call at a time, so each
@@ -44,9 +35,7 @@ mod catalog;
 mod cluster;
 mod codec;
 mod connections;
-mod journal;
 mod namespaces;
-mod read_model;
 mod schema;
 mod secrets;
 mod sql;
@@ -98,8 +87,9 @@ impl From<turso::Error> for Error {
     }
 }
 
-/// The store of an embedded server: `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore`
-/// on one Turso database. Cloning it is cheap, and the clones share the database.
+/// The control plane of an embedded server on one Turso database: `AccessStore` and
+/// `SecretStore`, its catalog ([`TursoStore::catalog`]) and its cluster ([`TursoCluster`]).
+/// Cloning it is cheap, and the clones share the database.
 #[derive(Clone)]
 pub struct TursoStore {
     inner: Arc<Inner>,
@@ -230,7 +220,7 @@ mod tests {
     async fn a_transaction_left_open_by_a_dropped_call_is_rolled_back() {
         let dir = tempfile::TempDir::new().expect("temporary directory");
         let store = TursoStore::open(
-            dir.path().join("journal.db"),
+            dir.path().join("control.db"),
             MasterKey::from_bytes([1; 32]),
         )
         .await

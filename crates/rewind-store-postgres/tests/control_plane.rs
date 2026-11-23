@@ -1,7 +1,7 @@
 //! The control plane on Postgres in Docker: the conformance suites of `CatalogStore` and
 //! `Cluster`, each check on a new database; a node's liveness across connections and processes
 //! (a lock freed by a killed process wakes its watcher at once); the changes that access and
-//! secrets send; payloads above Postgres' limit; namespaces the journal store created.
+//! secrets send; payloads above Postgres' limit; namespaces whose rows have no partition.
 
 mod support;
 
@@ -17,8 +17,8 @@ use rewind_engine::conformance::{self, T0, tenant};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
     AccessStore, ApiKey, CatalogStore, Cluster, ClusterError, ControlPlaneChange, Departed, Grant,
-    JournalStore, NamespaceName, NamespaceWrite, NewSecret, NodeId, NodeInfo, Principal, Role,
-    Secret, SecretId, SecretStore, Token, TokenKey, namespace_partition,
+    NamespaceName, NamespaceWrite, NewSecret, NodeId, NodeInfo, Principal, Role, Secret, SecretId,
+    SecretStore, Token, TokenKey, namespace_partition,
 };
 use rewind_store_postgres::{PostgresCluster, PostgresMembership, PostgresStore};
 use support::Postgres;
@@ -371,12 +371,15 @@ async fn access_and_secrets_send_their_changes() {
     );
 }
 
+/// Rows created before `namespaces.partition` have none: `ensure_namespace` places the one it
+/// is asked for, `place_namespaces` every other one, once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn namespaces_of_the_journal_store_are_placed_in_their_partition() {
+async fn namespaces_without_a_partition_are_placed_in_theirs() {
     let Some(postgres) = Postgres::start("placement") else {
         return;
     };
-    let store = postgres.store().await;
+    let database = postgres.create_database();
+    let store = postgres.connect(&database).await;
     let catalog = store.catalog();
     let acme = tenant("acme");
     let (alice, bob) = (
@@ -384,9 +387,14 @@ async fn namespaces_of_the_journal_store_are_placed_in_their_partition() {
         NamespaceName::new("bob").expect("namespace"),
     );
     for name in [&alice, &bob] {
-        JournalStore::put_namespace(&store, &acme, name, None, T0)
-            .await
-            .expect("the journal store creates it");
+        postgres.psql(
+            &database,
+            &format!(
+                "INSERT INTO namespaces (tenant, name, created_at, last_active_at) \
+                 VALUES ('acme', '{name}', {at}, {at})",
+                at = T0.0
+            ),
+        );
     }
     assert!(
         catalog.get_namespace(&acme, &alice).await.is_err(),

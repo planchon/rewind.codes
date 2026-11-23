@@ -1,6 +1,6 @@
 [package]
 name = "rewind-store-turso"
-description = "Embedded store of Rewind on Turso Database: the control plane (CatalogStore, a Cluster of one process, AccessStore, SecretStore), and JournalStore and ReadModel."
+description = "Embedded control plane of Rewind on Turso Database: CatalogStore, a Cluster of one process, AccessStore and SecretStore."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

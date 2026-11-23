@@ -10,7 +10,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use rewind_core::{Digest, RunId, Timestamp};
-use rewind_engine::ports::{TenantId, TenantScope};
+use rewind_engine::ports::TenantId;
 use sqlx::Row as _;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
@@ -56,27 +56,6 @@ where
             outcome => return outcome,
         }
     }
-}
-
-/// `AND column = ANY($n)` or `AND NOT (column = ANY($n))` for the tenants of a scope, with the
-/// tenants to bind as `$n`; nothing for every tenant.
-pub(crate) fn scope_clause(
-    column: &str,
-    scope: &TenantScope,
-    n: usize,
-) -> (String, Option<Vec<String>>) {
-    let (negated, tenants) = match scope {
-        TenantScope::All => return (String::new(), None),
-        TenantScope::Only(tenants) => (false, tenants),
-        TenantScope::Except(tenants) => (true, tenants),
-    };
-    let tenants: Vec<String> = tenants.iter().map(|t| t.as_str().to_owned()).collect();
-    let clause = if negated {
-        format!(" AND NOT ({column} = ANY(${n}))")
-    } else {
-        format!(" AND {column} = ANY(${n})")
-    };
-    (clause, Some(tenants))
 }
 
 // -------------------------------------------------------------------------------------------
@@ -165,10 +144,6 @@ pub(crate) trait Columns {
         unsigned(self.i64(index)?)
     }
 
-    fn u32(&self, index: usize) -> Result<u32, Error> {
-        narrow(self.u64(index)?)
-    }
-
     fn opt_u32(&self, index: usize) -> Result<Option<u32>, Error> {
         self.opt_u64(index)?.map(narrow).transpose()
     }
@@ -197,10 +172,6 @@ pub(crate) trait Columns {
         self.opt_bytes(index)?
             .map(|bytes| parse_digest(&bytes))
             .transpose()
-    }
-
-    fn run_id(&self, index: usize) -> Result<RunId, Error> {
-        self.opt_run_id(index)?.ok_or_else(|| null(index))
     }
 
     fn opt_run_id(&self, index: usize) -> Result<Option<RunId>, Error> {

@@ -1,6 +1,6 @@
 //! The embedded control plane: the conformance suites of `CatalogStore` and `Cluster`, each check
-//! on a new database file; the changes that access and secrets send; namespaces the journal store
-//! created; the partition map kept across a restart.
+//! on a new database file; the changes that access and secrets send; namespaces whose rows have
+//! no partition; the partition map kept across a restart.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -13,9 +13,9 @@ use rewind_engine::adapters::ChangeStream;
 use rewind_engine::conformance::{self, T0, tenant};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    AccessStore, ApiKey, CatalogStore, Cluster, ControlPlaneChange, Grant, JournalStore, Moves,
-    NamespaceName, NamespaceWrite, NewSecret, NodeId, NodeInfo, PartitionEpoch, Principal, Secret,
-    SecretId, SecretStore, Token, namespace_partition,
+    AccessStore, ApiKey, CatalogStore, Cluster, ControlPlaneChange, Grant, Moves, NamespaceName,
+    NamespaceWrite, NewSecret, NodeId, NodeInfo, PartitionEpoch, Principal, Secret, SecretId,
+    SecretStore, Token, namespace_partition,
 };
 use rewind_store_turso::{MasterKey, TursoCluster, TursoStore};
 use tempfile::TempDir;
@@ -211,21 +211,40 @@ async fn access_and_secrets_send_their_changes() {
     );
 }
 
+/// Rows created before `namespaces.partition` have none: `ensure_namespace` places the one it
+/// is asked for, `place_namespaces` every other one, once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn namespaces_of_the_journal_store_are_placed_in_their_partition() {
+async fn namespaces_without_a_partition_are_placed_in_theirs() {
     let dir = TempDir::new().expect("temporary directory");
-    let store = open(&dir.path().join("control.db")).await;
+    let path = dir.path().join("control.db");
+    drop(open(&path).await);
+    {
+        let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+            .build()
+            .await
+            .expect("open the file");
+        let connection = database.connect().expect("connect");
+        for name in ["alice", "bob"] {
+            connection
+                .execute(
+                    &format!(
+                        "INSERT INTO namespaces (tenant, name, created_at, last_active_at) \
+                         VALUES ('acme', '{name}', {at}, {at})",
+                        at = T0.0
+                    ),
+                    (),
+                )
+                .await
+                .expect("a namespace without a partition");
+        }
+    }
+    let store = open(&path).await;
     let catalog = store.catalog();
     let acme = tenant("acme");
     let (alice, bob) = (
         NamespaceName::new("alice").expect("namespace"),
         NamespaceName::new("bob").expect("namespace"),
     );
-    for name in [&alice, &bob] {
-        JournalStore::put_namespace(&store, &acme, name, None, T0)
-            .await
-            .expect("the journal store creates it");
-    }
     assert!(catalog.get_namespace(&acme, &alice).await.is_err());
     let placed = catalog
         .ensure_namespace(&acme, &alice, partitions(64), T0)

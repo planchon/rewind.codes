@@ -1,11 +1,7 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
-//! migrations, the keys of version 1 becoming keys and grants, the runs of version 2 moving to the
-//! namespace `migrated`, servers starting together, what a call dropped half-way leaves, secrets
-//! at rest, the master key replaced and the credentials of version 9 dropped, the handles and
-//! numbers given to what version 12 stored, the byte order of tenants, claims that read several
-//! pages of due tasks, owners demoting each other at once, starts and workflow versions taking
-//! handles and numbers at once, projectors applying the same runs at once, and the percentiles of
-//! Postgres.
+//! migrations, the keys of version 1 becoming keys and grants, servers starting together, what a
+//! call dropped half-way leaves, secrets at rest, the master key replaced and the credentials of
+//! version 9 dropped, the byte order of tenants, and owners demoting each other at once.
 //!
 //! The checks share one Postgres container, each on a new database.
 
@@ -16,52 +12,17 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use rewind_core::{
-    Annotation, Command, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, RunId, RunMode,
-    RunStarted, RunStatus, SecretName, Seed, Seq, Timestamp, ToolPolicy, ToolRoute, Workflow,
-    WorkflowSchemas,
+    Digest, RunId, SecretName, Suite, SuiteTest, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::ports::{
-    AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Grant, GrantDeletion, GrantWrite,
-    JournalStore, NamespaceName, NewRun, NewSecret, NewToolTask, Predicate, Principal,
-    ProjectedRun, QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder, RunQuery,
-    RunRef, RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretId, SecretReader, SecretStore,
-    TaskFilter, TaskPhase, TaskProgress, Tenant, TenantId, TenantScope, Wait, WaitKind,
+    AccessStore, ApiKey, CatalogStore, Grant, GrantDeletion, GrantWrite, NamespaceName, NewSecret,
+    Principal, Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
+    TestRecord,
 };
 use rewind_store_postgres::{Config, Error, MasterKey, MasterKeys, PostgresStore, SCHEMA_VERSION};
-use serde_json::json;
 use support::Postgres;
 
 const T0: Timestamp = Timestamp(1_767_225_600_000);
-
-fn run() -> RunRef {
-    RunRef::new(
-        TenantId::local(),
-        RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0000_0001),
-    )
-}
-
-fn started() -> RunStarted {
-    RunStarted {
-        script: Digest::of(b"script"),
-        toolset: Digest::of(b"toolset"),
-        input: json!({ "issue": 42 }).into(),
-        seed: Seed::from_bytes([5; 32]),
-        epoch: Epoch(1),
-        expires_at: Timestamp(T0.0 + 86_400_000),
-        mode: RunMode::Live,
-    }
-}
-
-fn new_run(run: RunRef) -> NewRun {
-    NewRun {
-        run,
-        namespace: rewind_engine::ports::NamespaceName::migrated(),
-        origin: "script".into(),
-        started: started(),
-        metadata: RunMetadata::default(),
-        created_at: T0,
-    }
-}
 
 async fn connect(
     postgres: &Postgres,
@@ -90,55 +51,14 @@ async fn the_database_behind_the_store() {
     check!(a_newer_schema_is_refused);
     check!(a_changed_migration_is_refused);
     check!(keys_of_version_1_become_keys_and_grants);
-    check!(runs_of_version_2_belong_to_the_namespace_migrated);
     check!(servers_starting_together_migrate_once);
-    check!(runs_survive_a_restart);
     check!(a_call_dropped_half_way_writes_nothing);
     check!(tenants_are_in_byte_order);
-    check!(a_claim_reads_past_tasks_without_a_free_slot);
-    check!(a_drawn_tenant_whose_runs_are_all_taken_yields_to_the_next);
-    check!(concurrent_claims_keep_to_a_servers_limit);
-    check!(concurrent_claims_keep_to_a_tools_limit);
     check!(owners_demoting_each_other_at_once_leave_one_owner);
-    check!(concurrent_starts_never_take_the_same_last_place);
-    check!(concurrent_starts_and_versions_take_distinct_handles_and_numbers);
-    check!(projectors_applying_together_keep_the_longest_snapshot);
-    check!(percentiles_are_nearest_rank);
     check!(secrets_are_encrypted_at_rest);
     check!(the_master_key_is_replaced_by_a_rewrap);
     check!(two_rewraps_at_once_change_each_data_key_once);
     check!(the_credentials_of_version_9_are_dropped);
-    check!(runs_and_workflows_of_version_12_get_handles_and_numbers);
-    check!(a_changed_run_that_cannot_be_read_is_left_out);
-}
-
-/// `changed_runs` leaves out a summary it cannot read, and lists the others.
-async fn a_changed_run_that_cannot_be_read_is_left_out(postgres: &Postgres) {
-    let database = postgres.create_database();
-    let store = postgres.connect_with(&database, 2).await;
-    for n in 0..3 {
-        store
-            .apply(
-                &projected_run(n),
-                &[projected_entry(0)],
-                &projected_snapshot(1),
-            )
-            .await
-            .expect("apply");
-    }
-    let bad = projected_run(1).run.id;
-    postgres.psql(
-        &database,
-        &format!("UPDATE run_summaries SET namespace = 'Not a namespace!' WHERE run_id = '{bad}'"),
-    );
-    let listed: Vec<RunId> = store
-        .changed_runs(&[TenantId::local()], 0, 10)
-        .await
-        .expect("changed_runs")
-        .into_iter()
-        .map(|change| change.summary.run.id)
-        .collect();
-    assert_eq!(listed, [projected_run(0).run.id, projected_run(2).run.id]);
 }
 
 async fn a_new_database_gets_the_current_schema(postgres: &Postgres) {
@@ -182,151 +102,6 @@ async fn a_changed_migration_is_refused(postgres: &Postgres) {
 /// Only migration 1: a database as a build of schema version 1 left it.
 #[derive(Debug)]
 struct Version1;
-
-/// Migrations 1 and 2: a database as a build of schema version 2 left it, before namespaces.
-#[derive(Debug)]
-struct Version2;
-
-impl<'s> sqlx::migrate::MigrationSource<'s> for Version2 {
-    fn resolve(
-        self,
-    ) -> futures_util::future::BoxFuture<
-        's,
-        Result<Vec<sqlx::migrate::Migration>, sqlx::error::BoxDynError>,
-    > {
-        Box::pin(async {
-            let migration = |version, description: &str, sql: &str| {
-                sqlx::migrate::Migration::new(
-                    version,
-                    description.to_owned().into(),
-                    sqlx::migrate::MigrationType::Simple,
-                    sql.to_owned().into(),
-                    false,
-                )
-            };
-            Ok(vec![
-                migration(1, "schema", include_str!("../migrations/0001_schema.sql")),
-                migration(2, "access", include_str!("../migrations/0002_access.sql")),
-            ])
-        })
-    }
-}
-
-/// The runs of a server of schema version 2 belong to the namespace `migrated` once the store is
-/// upgraded, with their script counts and their runs per day; idempotency keys become unique per
-/// namespace.
-async fn runs_of_version_2_belong_to_the_namespace_migrated(postgres: &Postgres) {
-    use rewind_engine::ports::{Day, Month, NamespaceName, UsageOf};
-
-    let database = postgres.create_database();
-    let pool = sqlx::PgPool::connect(&postgres.url(&database))
-        .await
-        .expect("connect");
-    sqlx::migrate::Migrator::new(Version2)
-        .await
-        .expect("migrations 1 and 2")
-        .run(&pool)
-        .await
-        .expect("apply migrations 1 and 2");
-    let at = |seconds: u64| Timestamp(T0.0 + seconds * 1_000);
-    let millis = |at: Timestamp| i64::try_from(at.0).expect("in range");
-    let runs = [
-        (1u128, "acme", b"a".as_slice(), Some("k"), T0),
-        (2, "acme", b"a".as_slice(), None, at(1)),
-        (3, "acme", b"b".as_slice(), None, at(86_400)),
-        (4, "beta", b"a".as_slice(), None, at(2)),
-    ];
-    for (n, tenant, script, key, created_at) in runs {
-        sqlx::query(
-            "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
-             idempotency_key, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, 'completed', 1, $5, '{}'::jsonb, $6, $7, $7)",
-        )
-        .bind(tenant)
-        .bind(RunId::from_u128(n).as_uuid())
-        .bind(Digest::of(script).as_bytes().to_vec())
-        .bind(Digest::of(b"toolset").as_bytes().to_vec())
-        .bind(millis(at(86_400 * 30)))
-        .bind(key)
-        .bind(millis(created_at))
-        .execute(&pool)
-        .await
-        .expect("a run of version 2");
-    }
-    pool.close().await;
-
-    let store = postgres.connect(&database).await;
-    assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
-    let acme = TenantId::new("acme").expect("tenant");
-    let migrated = NamespaceName::migrated();
-    let first = RunRef::new(acme.clone(), RunId::from_u128(1));
-    assert_eq!(
-        store
-            .get_run(&first)
-            .await
-            .expect("get_run")
-            .expect("run")
-            .namespace,
-        migrated
-    );
-    let namespace = store
-        .get_namespace(&acme, &migrated)
-        .await
-        .expect("get_namespace")
-        .expect("the namespace of the runs before namespaces");
-    assert_eq!(
-        (namespace.created_at, namespace.last_active_at),
-        (T0, at(86_400))
-    );
-    assert!(
-        store
-            .namespace_has_script(&acme, &migrated, Digest::of(b"b"))
-            .await
-            .expect("namespace_has_script")
-    );
-    let month = Month::of(T0);
-    let usage = store
-        .namespace_usage(&acme, &UsageOf::Namespace(migrated.clone()), month)
-        .await
-        .expect("namespace_usage");
-    assert_eq!((usage.runs_started, usage.scripts), (3, 2));
-    assert_eq!(
-        usage
-            .days
-            .iter()
-            .map(|(day, used)| (*day, used.runs_started))
-            .collect::<Vec<_>>(),
-        [(Day::of(T0), 2), (Day::of(at(86_400)), 1)]
-    );
-    assert_eq!(
-        store
-            .namespace_usage(&acme, &UsageOf::Tenant, month)
-            .await
-            .expect("namespace_usage")
-            .runs_started,
-        3
-    );
-
-    // Idempotency keys are unique per namespace now: `k` is free in another one.
-    let in_namespace = |n: u128, namespace: NamespaceName| NewRun {
-        run: RunRef::new(acme.clone(), RunId::from_u128(n)),
-        namespace,
-        ..new_run(first.clone())
-    };
-    let again = store
-        .create_run(in_namespace(5, migrated.clone()), Some("k".into()))
-        .await
-        .expect("create_run");
-    assert!(matches!(again, CreateRun::Created(ref c) if !c.created && c.run == first));
-    let other = store
-        .create_run(
-            in_namespace(6, NamespaceName::new("alice").expect("valid")),
-            Some("k".into()),
-        )
-        .await
-        .expect("create_run");
-    assert!(matches!(other, CreateRun::Created(ref c) if c.created));
-}
 
 impl<'s> sqlx::migrate::MigrationSource<'s> for Version1 {
     fn resolve(
@@ -483,132 +258,6 @@ async fn servers_starting_together_migrate_once(postgres: &Postgres) {
     );
 }
 
-async fn runs_survive_a_restart(postgres: &Postgres) {
-    let database = postgres.create_database();
-    let entry = HistoryEntry {
-        index: 0,
-        recorded_at: T0,
-        event: Event::Lifecycle(Lifecycle::RunStarted(started())),
-    };
-    {
-        let store = postgres.connect(&database).await;
-        let mut created = new_run(run());
-        created.metadata.labels = BTreeMap::from([("agent".to_owned(), "triage".to_owned())]);
-        let created = store
-            .create_run(created, Some("call-1".into()))
-            .await
-            .expect("create_run");
-        assert!(matches!(created, CreateRun::Created(ref c) if c.created));
-        let lease = store
-            .acquire_run(&run(), "worker", T0, Duration::from_secs(30))
-            .await
-            .expect("acquire_run")
-            .expect("leasable");
-        let consumed = store
-            .take_inbox(&lease)
-            .await
-            .expect("take_inbox")
-            .iter()
-            .map(|item| item.id)
-            .collect();
-        store
-            .commit_activation(
-                &lease,
-                Activation::new(vec![entry.clone()], consumed, RunStatus::Active),
-                T0,
-            )
-            .await
-            .expect("commit");
-        store.close().await;
-    }
-
-    let store = postgres.connect(&database).await;
-    assert_eq!(
-        store.load_history(&run(), 0).await.expect("load_history"),
-        [entry]
-    );
-    let record = store
-        .get_run(&run())
-        .await
-        .expect("get_run")
-        .expect("the run is still there");
-    assert_eq!(record.status, RunStatus::Active);
-    assert_eq!(record.metadata.labels["agent"], "triage");
-    assert_eq!(record.sticky_worker.as_deref(), Some("worker"));
-    let retried = store
-        .create_run(
-            new_run(RunRef::new(TenantId::local(), RunId::from_u128(2))),
-            Some("call-1".into()),
-        )
-        .await
-        .expect("create_run");
-    assert!(
-        matches!(retried, CreateRun::Created(ref c) if !c.created && c.run == run()),
-        "idempotency keys survive too"
-    );
-}
-
-/// A commit cancelled at any point (the caller timed out, its task was aborted) leaves the run
-/// as it was, or committed whole; and the store keeps working.
-async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
-    let store = postgres.store().await;
-    store
-        .create_run(new_run(run()), None)
-        .await
-        .expect("create");
-    let lease = store
-        .acquire_run(&run(), "worker", T0, Duration::from_secs(30))
-        .await
-        .expect("acquire")
-        .expect("leasable");
-    let consumed: Vec<u64> = store
-        .take_inbox(&lease)
-        .await
-        .expect("take_inbox")
-        .iter()
-        .map(|item| item.id)
-        .collect();
-    let entries = vec![
-        HistoryEntry {
-            index: 0,
-            recorded_at: T0,
-            event: Event::Lifecycle(Lifecycle::RunStarted(started())),
-        },
-        HistoryEntry {
-            index: 1,
-            recorded_at: T0,
-            event: Event::Command(Command::CompleteRun {
-                output: json!("done").into(),
-            }),
-        },
-    ];
-    let mut committed = false;
-    for step in 0..400u64 {
-        let activation = Activation::new(entries.clone(), consumed.clone(), RunStatus::Completed);
-        let commit = store.commit_activation(&lease, activation, T0);
-        let outcome = tokio::time::timeout(Duration::from_micros(step * 25), commit).await;
-        let history = store.load_history(&run(), 0).await.expect("load_history");
-        let record = store.get_run(&run()).await.expect("get").expect("the run");
-        match history.len() {
-            0 => {
-                assert_eq!(record.status, RunStatus::Pending);
-                assert_eq!(record.history_len, 0);
-            }
-            2 => {
-                assert_eq!(record.status, RunStatus::Completed);
-                assert_eq!(record.history_len, 2);
-                if let Ok(result) = outcome {
-                    result.expect("a commit that returned succeeded");
-                }
-                committed = true;
-                break;
-            }
-            other => panic!("a commit left {other} entries"),
-        }
-    }
-    assert!(committed, "a commit with enough time succeeds");
-}
-
 fn github_token(name: &str) -> NewSecret {
     NewSecret {
         id: SecretId::organization(SecretName::new(name).expect("valid")),
@@ -621,7 +270,7 @@ fn github_token(name: &str) -> NewSecret {
 fn reader() -> SecretReader {
     SecretReader::Run {
         run: RunId::from_u128(1),
-        namespace: NamespaceName::migrated(),
+        namespace: NamespaceName::new("alice").expect("valid"),
     }
 }
 
@@ -932,12 +581,14 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
             .await,
         Ok(Vec::new())
     );
-    let run = store
-        .get_run(&RunRef::new(acme.clone(), RunId::from_u128(1)))
-        .await
-        .expect("get_run")
-        .expect("the run is kept");
-    assert!(run.metadata.secrets.is_empty());
+    assert_eq!(
+        postgres.psql(
+            &database,
+            "SELECT secrets::text FROM runs WHERE id = '00000000-0000-0000-0000-000000000001'"
+        ),
+        "{}",
+        "the run is kept, and attaches nothing"
+    );
     let (tenant, secret) = secret_of("acme", "a-1");
     store.put(&tenant, &secret, T0).await.expect("put");
     assert_eq!(store.master_keys_in_use().await, Ok(vec![key().id()]));
@@ -1181,18 +832,18 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
 }
 
 /// Tenants are ordered by their bytes, as the domain orders them, whatever the database's
-/// collation: the draw of `acquire_runnable` indexes them in that order.
+/// collation.
 async fn tenants_are_in_byte_order(postgres: &Postgres) {
-    let store = postgres.store().await;
+    let catalog = postgres.store().await.catalog();
     let mut names = vec!["b", "B", "a_b", "a-b", "aB", "A", "_z", "-z", "0"];
     for name in &names {
-        store
+        catalog
             .put_tenant(&Tenant::new(TenantId::new(*name).expect("tenant")))
             .await
             .expect("put_tenant");
     }
     names.sort_unstable();
-    let listed: Vec<String> = store
+    let listed: Vec<String> = catalog
         .list_tenants()
         .await
         .expect("list_tenants")
@@ -1202,328 +853,91 @@ async fn tenants_are_in_byte_order(postgres: &Postgres) {
     assert_eq!(listed, names);
 }
 
-async fn a_claim_reads_past_tasks_without_a_free_slot(postgres: &Postgres) {
-    let store = postgres.store().await;
-    store
-        .create_run(new_run(run()), None)
-        .await
-        .expect("create_run");
-    let lease = store
-        .acquire_run(&run(), "worker", T0, Duration::from_secs(30))
-        .await
-        .expect("acquire_run")
-        .expect("leasable");
-    // Forty calls of a tool limited to one call in flight, then one call of another tool: the
-    // second task to hand out is past the first page of due tasks.
-    let task = |seq: u32, tool: &str, concurrency: u32| {
-        let route = ToolRoute::Host { group: None };
-        let mut policy = ToolPolicy::default_for(&route);
-        policy.concurrency = concurrency;
-        NewToolTask {
-            seq: Seq(seq),
-            tool: tool.into(),
-            args: json!({ "seq": seq }).into(),
-            policy,
-            route,
-            server_concurrency: None,
-        }
-    };
-    let mut activation = Activation::new(Vec::new(), Vec::new(), RunStatus::Active);
-    activation.tool_calls = (1..=40).map(|seq| task(seq, "ask_user", 1)).collect();
-    activation.tool_calls.push(task(41, "notify", 16));
-    store
-        .commit_activation(&lease, activation, T0)
-        .await
-        .expect("commit");
-
-    let claimed = store
-        .claim_tool_tasks("worker", &TaskFilter::All, T0, 2)
-        .await
-        .expect("claim_tool_tasks");
-    let seqs: Vec<u32> = claimed.iter().map(|task| task.task.task.seq.0).collect();
-    assert_eq!(seqs, [1, 41]);
-    assert!(
-        store
-            .claim_tool_tasks("worker", &TaskFilter::All, T0, 10)
-            .await
-            .expect("claim_tool_tasks")
-            .is_empty(),
-        "every slot is taken"
-    );
-}
-
-/// When another worker holds every runnable run of the drawn tenant, the worker takes the next
-/// tenant's oldest run rather than nothing.
-async fn a_drawn_tenant_whose_runs_are_all_taken_yields_to_the_next(postgres: &Postgres) {
-    let database = postgres.create_database();
-    let store = postgres.connect(&database).await;
-    let acme = RunRef::new(TenantId::new("acme").expect("tenant"), RunId::from_u128(1));
-    let globex = RunRef::new(
-        TenantId::new("globex").expect("tenant"),
-        RunId::from_u128(2),
-    );
-    for run in [&acme, &globex] {
-        store
-            .create_run(new_run(run.clone()), None)
-            .await
-            .expect("create");
-    }
-    let request = |draw| AcquireRunnable {
-        owner: "worker",
-        epochs: &[Epoch(1)],
-        tenants: &TenantScope::All,
-        now: T0,
-        lease_duration: Duration::from_secs(30),
-        sticky_grace: STICKY_GRACE,
-        draw,
-    };
-
-    // Another worker is in the middle of taking acme's run: its row is locked.
-    let pool = sqlx::PgPool::connect(&postgres.url(&database))
-        .await
-        .expect("connect");
-    let mut other = pool.begin().await.expect("begin");
-    sqlx::query("SELECT 1 FROM runs WHERE id = $1 FOR UPDATE")
-        .bind(acme.id.as_uuid())
-        .execute(&mut *other)
-        .await
-        .expect("lock acme's run");
-    let lease = store
-        .acquire_runnable(&request(0))
-        .await
-        .expect("acquire")
-        .expect("a run of another tenant");
-    assert_eq!(
-        lease.run, globex,
-        "acme is drawn, its run is taken: globex's"
-    );
-    other.rollback().await.expect("rollback");
-
-    let lease = store
-        .acquire_runnable(&request(0))
-        .await
-        .expect("acquire")
-        .expect("acme's run, free again");
-    assert_eq!(lease.run, acme);
-}
-
-/// Creates run `n` with these tool tasks, all due at `T0`.
-async fn run_with_tasks(store: &PostgresStore, n: u128, tasks: Vec<NewToolTask>) {
-    let run = RunRef::new(TenantId::local(), RunId::from_u128(n));
-    store
-        .create_run(new_run(run.clone()), None)
-        .await
-        .expect("create");
-    let lease = store
-        .acquire_run(&run, "engine", T0, Duration::from_secs(30))
-        .await
-        .expect("acquire")
-        .expect("leasable");
-    let mut activation = Activation::new(Vec::new(), Vec::new(), RunStatus::Active);
-    activation.tool_calls = tasks;
-    store
-        .commit_activation(&lease, activation, T0)
-        .await
-        .expect("commit");
-}
-
-/// Claims one task for each owner, all at once, then one at a time until nothing comes.
-/// Returns how many the claims at once got, and how many in all. Each claim locks its own page
-/// of due tasks: claims at once read different pages.
-async fn claim_together(store: &PostgresStore, owners: &[String]) -> (usize, usize) {
-    let claim = |owner: &str| {
-        let owner = owner.to_owned();
-        async move {
-            store
-                .claim_tool_tasks(&owner, &TaskFilter::All, T0, 1)
-                .await
-                .expect("claim")
-                .len()
-        }
-    };
-    let together: usize = join_all(owners.iter().map(|owner| claim(owner)))
-        .await
-        .into_iter()
-        .sum();
-    let mut all = together;
-    loop {
-        let more = claim(&owners[0]).await;
-        if more == 0 {
-            return (together, all);
-        }
-        all += more;
-    }
-}
-
-/// Claims of one worker running at once never exceed an MCP server's limit together.
-async fn concurrent_claims_keep_to_a_servers_limit(postgres: &Postgres) {
-    let store = postgres.connect_with(&postgres.create_database(), 8).await;
-    for round in 1..=4 {
-        let tasks = (1..=48)
-            .map(|seq| {
-                let route = ToolRoute::Mcp {
-                    server: "github".into(),
-                };
-                let mut policy = ToolPolicy::default_for(&route);
-                policy.concurrency = 64;
-                NewToolTask {
-                    seq: Seq(seq),
-                    tool: "github.get_issue".into(),
-                    args: json!({ "number": seq }).into(),
-                    policy,
-                    route,
-                    server_concurrency: Some(2),
-                }
-            })
-            .collect();
-        run_with_tasks(&store, round, tasks).await;
-        // A new worker each round: the limit is per worker.
-        let owners = vec![format!("dispatcher-{round}"); 6];
-        let (together, all) = claim_together(&store, &owners).await;
-        assert!(
-            together <= 2,
-            "{together} calls in flight to a server limited to 2"
-        );
-        assert_eq!(
-            all, 2,
-            "two calls in flight to the server under this worker"
-        );
-    }
-}
-
-/// Claims running at once never exceed a tool's limit in a run together, whatever the worker.
-async fn concurrent_claims_keep_to_a_tools_limit(postgres: &Postgres) {
-    let store = postgres.connect_with(&postgres.create_database(), 8).await;
-    for round in 1..=4 {
-        let tasks = (1..=48)
-            .map(|seq| {
-                let route = ToolRoute::Host { group: None };
-                let mut policy = ToolPolicy::default_for(&route);
-                policy.concurrency = 2;
-                NewToolTask {
-                    seq: Seq(seq),
-                    tool: "desk.ask".into(),
-                    args: json!({ "question": seq }).into(),
-                    policy,
-                    route,
-                    server_concurrency: None,
-                }
-            })
-            .collect();
-        // The runs of earlier rounds have their two calls in flight: only this one's are due.
-        run_with_tasks(&store, round, tasks).await;
-        let owners: Vec<String> = (0..6).map(|n| format!("worker-{round}-{n}")).collect();
-        let (together, all) = claim_together(&store, &owners).await;
-        assert!(
-            together <= 2,
-            "{together} calls of a tool limited to 2 in flight"
-        );
-        assert_eq!(all, 2, "two calls of the tool in flight in the run");
-    }
-}
-
-// -------------------------------------------------------------------------------------------
-// The read model
-
-const PROJECTED_RUNS: u128 = 12;
-/// The entries of each projected run, each applied alone with the snapshot up to it.
-const PROJECTED_ENTRIES: u64 = 12;
-
-fn projected_run(n: u128) -> ProjectedRun {
-    ProjectedRun {
-        run: RunRef::new(
-            TenantId::local(),
-            RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0001_0000 | n),
-        ),
-        namespace: rewind_engine::ports::NamespaceName::migrated(),
-        origin: "script".into(),
-        suffix_len: 12,
-        script: Digest::of(b"script"),
-        headline: format!("// Run {n}"),
-        toolset: Digest::of(b"toolset"),
-        labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
+/// A version of the workflow `triage` whose suite is `tests`.
+fn version_with_tests(tests: &[TestRecord]) -> Workflow {
+    Workflow::new(
+        "triage",
+        None,
+        Digest::of(b"script"),
+        Digest::of(b"toolset"),
+        WorkflowSchemas {
+            input: serde_json::json!({ "type": "object" }),
+            output: serde_json::json!({}),
+            signals: BTreeMap::new(),
+        },
+    )
+    .expect("a valid workflow")
+    .with_suite(Suite {
         parent: None,
-        workflow: None,
-        started_by: None,
-    }
+        tests: tests
+            .iter()
+            .enumerate()
+            .map(|(n, test)| SuiteTest {
+                name: format!("test {n}"),
+                test: test.digest,
+            })
+            .collect(),
+        retired: Vec::new(),
+        updated: Vec::new(),
+    })
+    .expect("a valid suite")
 }
 
-/// The entry at `index`: `run_started`, then logs.
-fn projected_entry(index: u64) -> HistoryEntry {
-    let event = if index == 0 {
-        Event::Lifecycle(Lifecycle::RunStarted(started()))
-    } else {
-        Event::Annotation(Annotation::Log {
-            level: LogLevel::Info,
-            message: format!("tick {index}"),
-            callsite: None,
+/// A version written with its suite, cancelled at any point (the caller timed out, its task was
+/// aborted), is written whole or not at all; and the store keeps working.
+async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let catalog = postgres.connect(&database).await.catalog();
+    let tenant = TenantId::new("acme").expect("tenant");
+    let tests: Vec<TestRecord> = (0..8)
+        .map(|n| TestRecord {
+            digest: Digest::of(format!("test {n}").as_bytes()),
+            namespace: None,
+            size: 100,
         })
+        .collect();
+    catalog
+        .reserve_tests(&tenant, &tests, T0)
+        .await
+        .expect("reserve_tests");
+    let version = version_with_tests(&tests);
+    let references = || {
+        postgres.psql(
+            &database,
+            &format!(
+                "SELECT count(*) FROM workflow_tests WHERE version = '\\x{}'",
+                version.version()
+            ),
+        )
     };
-    HistoryEntry {
-        index,
-        recorded_at: Timestamp(T0.0 + index * 10),
-        event,
-    }
-}
-
-/// The snapshot of the first `len` entries: a call, and timers that name the snapshot, more or
-/// fewer of them.
-fn projected_snapshot(len: u64) -> RunSnapshot {
-    let call = Wait {
-        kind: WaitKind::Call,
-        seq: Some(Seq(1)),
-        name: Some("ask_user".into()),
-        since: T0,
-        until: None,
-        callsite: None,
-        task: None,
-    };
-    let timers = (0..len % 3).map(|n| Wait {
-        kind: WaitKind::Timer,
-        seq: Some(Seq(u32::try_from(len * 10 + n).expect("a seq"))),
-        name: None,
-        since: T0,
-        until: Some(Timestamp(T0.0 + 100_000 - len * 1_000 + n)),
-        callsite: None,
-        task: None,
-    });
-    RunSnapshot {
-        history_len: len,
-        status: RunStatus::Active,
-        mode: Some(RunMode::Live),
-        waits: std::iter::once(call).chain(timers).collect(),
-        ending: None,
-    }
-}
-
-fn quarantine_at(at: u64) -> QuarantineNote {
-    QuarantineNote {
-        kind: QuarantineKind::Failures,
-        reason: format!("recorded at {at}"),
-        since: Timestamp(T0.0 + at),
-    }
-}
-
-/// Some items in the order of `order`: as given, backwards, or the odd ones first.
-fn reorder<T: Clone>(items: &[T], order: usize) -> Vec<T> {
-    let mut items = items.to_vec();
-    match order % 3 {
-        0 => {}
-        1 => items.reverse(),
-        _ => {
-            let (odd, even): (Vec<_>, Vec<_>) =
-                items.into_iter().enumerate().partition(|(n, _)| n % 2 == 1);
-            items = odd.into_iter().chain(even).map(|(_, item)| item).collect();
+    let mut written = false;
+    for step in 0..400u64 {
+        let put = catalog.put_workflow(&tenant, &version, T0);
+        let outcome = tokio::time::timeout(Duration::from_micros(step * 25), put).await;
+        let found = catalog
+            .get_workflow(&tenant, version.version())
+            .await
+            .expect("get_workflow");
+        match found {
+            None => assert_eq!(
+                references(),
+                "0",
+                "a version not written references nothing"
+            ),
+            Some(stored) => {
+                assert_eq!(stored.workflow, version);
+                assert_eq!(references(), tests.len().to_string());
+                if let Ok(result) = outcome {
+                    result.expect("a write that returned succeeded");
+                }
+                written = true;
+                break;
+            }
         }
     }
-    items
+    assert!(written, "a write with enough time succeeds");
 }
 
-/// Projectors on three servers apply the entries of the same runs at once, each entry with its
-/// snapshot, each server in its own order; services record the tasks' states and the
-/// quarantines at once, in their own orders. Every run keeps the snapshot of its whole history
-/// and nothing of the shorter ones, the furthest state of its task, its latest quarantine, and
-/// one row of labels and of search text.
 fn member_grant(tenant: &TenantId, user: &str, role: &str) -> Grant {
     Grant {
         tenant: tenant.clone(),
@@ -1599,116 +1013,6 @@ async fn owners_demoting_each_other_at_once_leave_one_owner(postgres: &Postgres)
     }
 }
 
-async fn projectors_applying_together_keep_the_longest_snapshot(postgres: &Postgres) {
-    let database = postgres.create_database();
-    let stores = join_all((0..3).map(|_| postgres.connect_with(&database, 4))).await;
-    let lengths: Vec<u64> = (1..=PROJECTED_ENTRIES).collect();
-    let tasks: Vec<TaskProgress> = [
-        (0, TaskPhase::Approval),
-        (0, TaskPhase::Ready),
-        (1, TaskPhase::Claimed),
-        (1, TaskPhase::Parked),
-        (1, TaskPhase::Ready),
-        (2, TaskPhase::Claimed),
-        (2, TaskPhase::Deferred),
-    ]
-    .into_iter()
-    .map(|(attempt, phase)| TaskProgress {
-        seq: Seq(1),
-        attempt,
-        phase,
-    })
-    .collect();
-    // Released at even times, quarantined at odd ones, and both at the last.
-    let quarantines: Vec<(Option<QuarantineNote>, u64)> = (1..=6)
-        .map(|at| ((at % 2 == 1).then(|| quarantine_at(at)), at))
-        .chain([(Some(quarantine_at(6)), 6)])
-        .collect();
-    let work = stores.iter().enumerate().flat_map(|(server, store)| {
-        let (lengths, tasks, quarantines) = (&lengths, &tasks, &quarantines);
-        (0..PROJECTED_RUNS).map(move |n| async move {
-            let order = server + usize::try_from(n).expect("small");
-            let run = projected_run(n);
-            for len in reorder(lengths, order) {
-                let entries = [projected_entry(len - 1)];
-                let snapshot = projected_snapshot(len);
-                store.apply(&run, &entries, &snapshot).await.expect("apply");
-            }
-            for task in reorder(tasks, order + 1) {
-                store
-                    .record_tasks(&run.run, &[task])
-                    .await
-                    .expect("record_tasks");
-            }
-            for (note, at) in reorder(quarantines, order + 2) {
-                let at = Timestamp(T0.0 + at);
-                store
-                    .record_quarantine(&run.run, note.as_ref(), at)
-                    .await
-                    .expect("record_quarantine");
-            }
-        })
-    });
-    join_all(work).await;
-
-    let store = &stores[0];
-    for n in 0..PROJECTED_RUNS {
-        let run = projected_run(n);
-        let query =
-            RunQuery::new(TenantId::local()).with(Predicate::Id(vec![run.run.id.to_string()]));
-        let found = store
-            .search_runs(&query, RunOrder::Started, None, 10)
-            .await
-            .expect("search_runs");
-        assert_eq!(found.len(), 1, "run {n} is projected once");
-        let summary = &found[0];
-        let mut waits = projected_snapshot(PROJECTED_ENTRIES).waits;
-        waits[0].task = Some(TaskPhase::Deferred);
-        assert_eq!(
-            summary.waits, waits,
-            "run {n}: the waits of the longest snapshot, and only them"
-        );
-        assert_eq!(
-            summary.wakes_at,
-            waits.iter().filter_map(|wait| wait.until).min()
-        );
-        assert_eq!(
-            (summary.history_len, summary.last_activity_at),
-            (
-                PROJECTED_ENTRIES,
-                Timestamp(T0.0 + (PROJECTED_ENTRIES - 1) * 10)
-            )
-        );
-        assert_eq!(summary.quarantine, Some(quarantine_at(6)), "run {n}");
-        assert_eq!(
-            store.attempts(&run.run).await,
-            Ok(BTreeMap::from([(Seq(1), 2)])),
-            "run {n}: the highest attempt"
-        );
-    }
-    for table in ["run_summaries", "run_labels", "run_search"] {
-        assert_eq!(
-            postgres.psql(&database, &format!("SELECT count(*) FROM {table}")),
-            PROJECTED_RUNS.to_string(),
-            "one row of {table} per run"
-        );
-    }
-}
-
-/// `percentile_disc`, which the statistics use, is the nearest-rank percentile of `Latency`:
-/// the value at position `ceil(p × n / 100)`, counting from 1.
-async fn percentiles_are_nearest_rank(postgres: &Postgres) {
-    let database = postgres.create_database();
-    let mismatches = postgres.psql(
-        &database,
-        "SELECT count(*) FROM generate_series(1, 500) AS n, \
-             (VALUES (50, 0.5), (95, 0.95), (99, 0.99)) AS p(p, fraction) \
-         WHERE (SELECT percentile_disc(p.fraction) WITHIN GROUP (ORDER BY v) \
-                FROM generate_series(1, n) AS v) <> (p.p * n + 99) / 100",
-    );
-    assert_eq!(mismatches, "0", "percentiles that are not nearest-rank");
-}
-
 #[test]
 fn master_keys_are_generated_at_random() {
     let first = MasterKey::generate().expect("generate");
@@ -1722,123 +1026,4 @@ fn configurations_never_print_the_connection_string() {
     let config = Config::new("postgres://rewind:hunter2@db.internal/rewind");
     let printed = format!("{config:?}");
     assert!(!printed.contains("hunter2"), "{printed}");
-}
-
-/// Starts at once, in several namespaces of a tenant, on several connections: each namespace
-/// keeps to its active runs, the tenant to its ceiling, and each refusal says which.
-async fn concurrent_starts_never_take_the_same_last_place(postgres: &Postgres) {
-    use rewind_engine::ports::{NamespaceName, QuotaScope, Quotas};
-
-    let database = postgres.create_database();
-    let store = postgres.connect_with(&database, 8).await;
-    let tenant = TenantId::new("acme").expect("tenant");
-    let mut record = Tenant::new(tenant.clone());
-    record.namespace_defaults = Quotas {
-        active_runs: Some(2),
-        ..Quotas::default()
-    };
-    record.quotas = Quotas {
-        active_runs: Some(5),
-        ..Quotas::default()
-    };
-    store.put_tenant(&record).await.expect("put_tenant");
-    let outcomes = join_all((0..40u128).map(|n| {
-        let store = store.clone();
-        let tenant = tenant.clone();
-        async move {
-            let namespace = NamespaceName::new(format!("user-{}", n % 4)).expect("valid");
-            store
-                .create_run(
-                    NewRun {
-                        run: RunRef::new(
-                            tenant,
-                            RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0002_0000 | n),
-                        ),
-                        namespace,
-                        ..new_run(run())
-                    },
-                    None,
-                )
-                .await
-                .expect("create_run")
-        }
-    }))
-    .await;
-    let created = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, CreateRun::Created(c) if c.created))
-        .count();
-    assert_eq!(created, 5, "the tenant's ceiling");
-    for outcome in &outcomes {
-        if let CreateRun::QuotaExceeded(exceeded) = outcome {
-            match exceeded.scope {
-                QuotaScope::Namespace => assert_eq!((exceeded.limit, exceeded.used), (2, 2)),
-                QuotaScope::Tenant => assert_eq!((exceeded.limit, exceeded.used), (5, 5)),
-            }
-        }
-    }
-    let mut per_namespace = BTreeMap::new();
-    for record in store
-        .list_runs(&rewind_engine::ports::RunFilter::new(tenant.clone()))
-        .await
-        .expect("list_runs")
-    {
-        *per_namespace.entry(record.namespace).or_insert(0) += 1;
-    }
-    assert!(
-        per_namespace.values().all(|runs| *runs <= 2),
-        "{per_namespace:?}"
-    );
-}
-
-/// Starts of a tenant whose ids share their first 64 bits, all at once, take handles that differ:
-/// each start chooses its suffix under the tenant's lock, among the runs started before it. New
-/// versions of a workflow put at once take the numbers 1 to n, each once.
-async fn concurrent_starts_and_versions_take_distinct_handles_and_numbers(postgres: &Postgres) {
-    let database = postgres.create_database();
-    let store = postgres.connect_with(&database, 8).await;
-    let tenant = TenantId::new("acme").expect("tenant");
-    let starts = join_all((0..20u64).map(|n| {
-        let store = store.clone();
-        let tenant = tenant.clone();
-        async move {
-            let id = RunId::from_v7_parts(1_795_383_896_000, 0x0c5, n);
-            let outcome = store
-                .create_run(
-                    NewRun {
-                        run: RunRef::new(tenant.clone(), id),
-                        ..new_run(run())
-                    },
-                    None,
-                )
-                .await
-                .expect("create_run");
-            assert!(matches!(outcome, CreateRun::Created(ref c) if c.created));
-            store
-                .get_run(&RunRef::new(tenant, id))
-                .await
-                .expect("get_run")
-                .expect("the run")
-                .handle()
-        }
-    }))
-    .await;
-    let handles: std::collections::BTreeSet<_> = starts.iter().map(ToString::to_string).collect();
-    assert_eq!(handles.len(), starts.len(), "{handles:?}");
-
-    let puts = join_all((0..20).map(|n| {
-        let store = store.clone();
-        let tenant = tenant.clone();
-        async move {
-            store
-                .put_workflow(&tenant, &workflow("triage", &format!("v{n}")), T0)
-                .await
-                .expect("put_workflow")
-                .number
-        }
-    }))
-    .await;
-    let mut numbers = puts.clone();
-    numbers.sort_unstable();
-    assert_eq!(numbers, (1..=20).collect::<Vec<u32>>(), "{puts:?}");
 }

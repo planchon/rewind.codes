@@ -28,6 +28,12 @@ use crate::codec::{
 use crate::sql::{self, Columns, digest, opt_text, opt_ts, tenant, text, transaction, ts};
 use crate::{Error, TursoStore};
 
+impl From<Error> for StoreError {
+    fn from(err: Error) -> Self {
+        StoreError::Backend(err.to_string())
+    }
+}
+
 /// The columns of an [`ApiKey`], read by [`key_from_row`].
 const KEY_COLUMNS: &str = "hash, tenant, name, created_by, created_at, revoked_at";
 

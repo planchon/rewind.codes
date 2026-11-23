@@ -3,11 +3,13 @@
 //! control plane"). The in-memory `MemoryCatalog` of `rewind-engine` is the reference of every
 //! behavior here; both pass the same conformance suite.
 //!
-//! The catalog keeps the tables the journal store writes (scripts, toolsets, workflows, tests,
-//! workflow_tests, tenants, namespaces, subscriptions), with each namespace's `partition`. Every
-//! call holds the store's one connection; a write that changes something sends its change once
-//! it committed, while it still holds the connection, so changes leave in commit order
-//! ([`TursoStore::changes`]). A write that changes nothing sends nothing.
+//! The catalog keeps scripts, toolsets, workflows, tests, workflow_tests, tenants, namespaces
+//! with each one's `partition`, and subscriptions. Every call holds the store's one connection;
+//! a write that changes something sends its change once it committed, while it still holds the
+//! connection, so changes leave in commit order ([`TursoStore::changes`]). A write that changes
+//! nothing sends nothing. Rows of namespaces created before the `partition` column have none:
+//! `ensure_namespace` places the one it is asked for, [`TursoCatalog::place_namespaces`] all of
+//! them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -141,7 +143,7 @@ fn namespace_from_row(row: &Row) -> Result<Namespace, Error> {
     let name = name_of(row.text(1)?)?;
     let partition = row.opt_int(13)?.ok_or_else(|| {
         Error::Corrupt(format!(
-            "namespace {name} has no partition: the journal store created it, and \
+            "namespace {name} has no partition: \
              TursoCatalog::place_namespaces has not placed it yet"
         ))
     })?;
@@ -188,8 +190,8 @@ async fn find_namespace(
         .transpose()
 }
 
-/// The namespace, created at `now` in its partition if it does not exist, or placed in it if the
-/// journal store created it without one; whether it was created or placed.
+/// The namespace, created at `now` in its partition if it does not exist, or placed in it if its
+/// row has none; whether it was created or placed.
 async fn ensure(
     connection: &Connection,
     tenant_id: &TenantId,
@@ -245,9 +247,9 @@ impl TursoCatalog {
         self.store.send(changes);
     }
 
-    /// Places in its partition, `hash(tenant, name) mod partitions`, every namespace the journal
-    /// store created without one; returns how many. Run once, with the deployment's number of
-    /// partitions, before the catalog serves: a namespace without a partition cannot be read.
+    /// Places in its partition, `hash(tenant, name) mod partitions`, every namespace whose row
+    /// has none; returns how many. Run once, with the deployment's number of partitions, before
+    /// the catalog serves: a namespace without a partition cannot be read.
     pub async fn place_namespaces(&self, partitions: NonZeroU16) -> Result<u64, CatalogError> {
         let connection = self.store.connection().await?;
         let connection = &*connection;
