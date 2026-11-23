@@ -32,7 +32,9 @@ struct State {
 
 /// `SecretStore` in memory, for engine tests, mock mode and the embedded server without a
 /// database. Nothing is at rest, so nothing is encrypted and no master key is in use. It passes
-/// the conformance suite.
+/// the conformance suite. A secret put or deleted, and each secret a namespace's erasure
+/// deletes, sends its `ControlPlaneChange::Secret` through the changes it was given; reads and
+/// signing keys send nothing.
 #[derive(Debug, Default)]
 pub struct MemorySecrets {
     state: Mutex<State>,
@@ -232,12 +234,19 @@ impl SecretStore for MemorySecrets {
         namespace: &NamespaceName,
     ) -> Result<usize, SecretError> {
         let mut state = self.lock()?;
-        let before = state.secrets.len();
+        let mut deleted = Vec::new();
         state.secrets.retain(|(of, id), _| {
-            !(of == tenant
-                && matches!(&id.namespace, SecretNamespace::Namespace(name) if name == namespace))
+            let erased = of == tenant
+                && matches!(&id.namespace, SecretNamespace::Namespace(name) if name == namespace);
+            if erased {
+                deleted.push(id.clone());
+            }
+            !erased
         });
-        Ok(before - state.secrets.len())
+        for secret in &deleted {
+            self.changed(tenant, secret);
+        }
+        Ok(deleted.len())
     }
 
     async fn signing_key(

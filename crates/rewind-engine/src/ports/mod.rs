@@ -8,10 +8,11 @@
 //!
 //! | Port | Adapters |
 //! | --- | --- |
-//! | [`CatalogStore`] | memory |
-//! | [`PartitionStore`] / [`PartitionLog`] | memory |
-//! | [`RunArchive`] | memory |
-//! | [`Cluster`] / [`cluster::Membership`] | memory |
+//! | [`CatalogStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
+//! | [`PartitionStore`] / [`PartitionLog`] | memory, `rewind-store-slatedb` (R2 or S3, local files, memory) |
+//! | [`RunArchive`] | memory, `rewind-blob` (files, S3, and a cache in front of either) |
+//! | [`Cluster`] / [`cluster::Membership`] | memory, `rewind-store-turso` (one node), `rewind-store-postgres` |
+//! | [`NodeLink`] | in process ([`LocalLink`](crate::adapters::LocalLink)), HTTP/2 (`rewind-server`) |
 //! | [`JournalStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`AccessStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |

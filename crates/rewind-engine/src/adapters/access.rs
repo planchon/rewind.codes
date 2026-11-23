@@ -3,18 +3,35 @@ use std::sync::{Mutex, MutexGuard};
 
 use rewind_core::{Digest, Timestamp};
 
+use crate::adapters::ControlPlaneChanges;
 use crate::ports::{
     AccessStore, ApiKey, ClientKind, CodeRedemption, Connection, ConnectionToken,
-    ConnectionTokenKind, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName,
-    NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal, Role,
-    RoleDeletion, Rotation, StoreError, TenantId, Token, TokenKey, UserId,
+    ConnectionTokenKind, ControlPlaneChange, Grant, GrantClaim, GrantDeletion, GrantWrite,
+    NamespaceName, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal,
+    Role, RoleDeletion, Rotation, StoreError, TenantId, Token, TokenKey, UserId,
 };
 
 /// `AccessStore` in memory, for engine and server tests. It passes the conformance suite: the
-/// reference implementation of the contract.
+/// reference implementation of the contract. Every write that changes something sends its
+/// `ControlPlaneChange` through the [`ControlPlaneChanges`] it was given, under the lock of the
+/// write, as the stores of the control plane do in their transaction: a key, a token, a token
+/// key, a grant, a role, a tenant's default role (`Tenant`), a connection. Usage stamps (a
+/// connection's last use, an OAuth client's) and OAuth codes send nothing.
 #[derive(Debug, Default)]
 pub struct MemoryAccess {
     state: Mutex<State>,
+    changes: ControlPlaneChanges,
+}
+
+fn grant_changed(tenant: &TenantId, principal: &Principal) -> ControlPlaneChange {
+    ControlPlaneChange::Grant {
+        tenant: tenant.clone(),
+        principal: principal.clone(),
+    }
+}
+
+fn connection_changed(id: &str) -> ControlPlaneChange {
+    ControlPlaneChange::Connection { id: id.to_owned() }
 }
 
 #[derive(Debug, Default)]
@@ -54,16 +71,30 @@ impl State {
             .map(|(_, grant)| grant)
     }
 
+    /// Deletes the grants of `principal`, with the change of each.
+    fn delete_grants(&mut self, principal: &Principal, changes: &mut Vec<ControlPlaneChange>) {
+        self.grants.retain(|(tenant, of), _| {
+            if of == principal {
+                changes.push(grant_changed(tenant, principal));
+                return false;
+            }
+            true
+        });
+    }
+
     /// Replaces the grants of `connection` with one per organization, given by its person.
     fn open(
         &mut self,
         connection: &Connection,
         organizations: &[OpenedOrganization],
         now: Timestamp,
+        changes: &mut Vec<ControlPlaneChange>,
     ) {
         let principal = connection.principal();
-        self.grants.retain(|(_, of), _| *of != principal);
+        self.delete_grants(&principal, changes);
+        changes.push(connection_changed(&connection.id));
         for opened in organizations {
+            changes.push(grant_changed(&opened.tenant, &principal));
             self.grants.insert(
                 (opened.tenant.clone(), principal.clone()),
                 Grant {
@@ -79,7 +110,7 @@ impl State {
     }
 
     /// Revokes a live connection: its grants and its tokens go.
-    fn revoke(&mut self, id: &str, now: Timestamp) -> bool {
+    fn revoke(&mut self, id: &str, now: Timestamp, changes: &mut Vec<ControlPlaneChange>) -> bool {
         let Some(connection) = self
             .connections
             .get_mut(id)
@@ -88,14 +119,14 @@ impl State {
             return false;
         };
         connection.revoked_at = Some(now);
-        self.forget(id);
+        self.forget(id, changes);
         true
     }
 
     /// Deletes the grants and the tokens of a connection.
-    fn forget(&mut self, id: &str) {
-        let principal = Principal::Connection(id.to_owned());
-        self.grants.retain(|(_, of), _| *of != principal);
+    fn forget(&mut self, id: &str, changes: &mut Vec<ControlPlaneChange>) {
+        changes.push(connection_changed(id));
+        self.delete_grants(&Principal::Connection(id.to_owned()), changes);
         self.connection_tokens
             .retain(|_, token| token.connection != id);
     }
@@ -135,8 +166,25 @@ impl State {
 }
 
 impl MemoryAccess {
+    /// A store whose changes reach nobody.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A store that sends its changes through `changes`: a clone of a
+    /// [`MemoryCluster`](crate::adapters::MemoryCluster)'s, for its members to receive them.
+    pub fn with_changes(changes: ControlPlaneChanges) -> Self {
+        Self {
+            state: Mutex::default(),
+            changes,
+        }
+    }
+
+    /// Sends what a write changed; called under the lock of the write.
+    fn send(&self, changes: impl IntoIterator<Item = ControlPlaneChange>) {
+        for change in changes {
+            self.changes.send(change);
+        }
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, State>, StoreError> {
@@ -156,6 +204,10 @@ impl AccessStore for MemoryAccess {
             )));
         }
         state.keys.insert(key.hash, key.clone());
+        self.send([ControlPlaneChange::Key {
+            tenant: key.tenant.clone(),
+            hash: key.hash,
+        }]);
         Ok(())
     }
 
@@ -180,6 +232,10 @@ impl AccessStore for MemoryAccess {
         match state.keys.get_mut(&hash) {
             Some(key) if key.revoked_at.is_none() => {
                 key.revoked_at = Some(now);
+                self.send([ControlPlaneChange::Key {
+                    tenant: key.tenant.clone(),
+                    hash,
+                }]);
                 Ok(true)
             }
             _ => Ok(false),
@@ -195,6 +251,10 @@ impl AccessStore for MemoryAccess {
             )));
         }
         state.tokens.insert(token.hash, token.clone());
+        self.send([ControlPlaneChange::Token {
+            tenant: token.tenant.clone(),
+            hash: token.hash,
+        }]);
         Ok(())
     }
 
@@ -212,6 +272,10 @@ impl AccessStore for MemoryAccess {
         match state.tokens.get_mut(&hash) {
             Some(token) if token.tenant == *tenant && token.revoked_at.is_none() => {
                 token.revoked_at = Some(now);
+                self.send([ControlPlaneChange::Token {
+                    tenant: tenant.clone(),
+                    hash,
+                }]);
                 Ok(true)
             }
             _ => Ok(false),
@@ -225,17 +289,22 @@ impl AccessStore for MemoryAccess {
         now: Timestamp,
     ) -> Result<u64, StoreError> {
         let mut state = self.lock()?;
-        let mut revoked = 0;
+        let mut revoked = Vec::new();
         for token in state.tokens.values_mut() {
             if token.tenant == *tenant
                 && token.namespace == *namespace
                 && token.revoked_at.is_none()
             {
                 token.revoked_at = Some(now);
-                revoked += 1;
+                revoked.push(ControlPlaneChange::Token {
+                    tenant: tenant.clone(),
+                    hash: token.hash,
+                });
             }
         }
-        Ok(revoked)
+        let count = revoked.len() as u64;
+        self.send(revoked);
+        Ok(count)
     }
 
     async fn count_tokens(
@@ -266,7 +335,12 @@ impl AccessStore for MemoryAccess {
             .take(limit)
             .collect();
         for hash in &ended {
-            state.tokens.remove(hash);
+            if let Some(token) = state.tokens.remove(hash) {
+                self.send([ControlPlaneChange::Token {
+                    tenant: token.tenant,
+                    hash: *hash,
+                }]);
+            }
         }
         Ok(ended.len() as u64)
     }
@@ -280,6 +354,10 @@ impl AccessStore for MemoryAccess {
             )));
         }
         state.token_keys.insert(key.kid.clone(), key.clone());
+        self.send([ControlPlaneChange::TokenKey {
+            tenant: key.tenant.clone(),
+            kid: key.kid.clone(),
+        }]);
         Ok(())
     }
 
@@ -307,6 +385,10 @@ impl AccessStore for MemoryAccess {
             .is_some_and(|key| key.tenant == *tenant)
         {
             state.token_keys.remove(kid);
+            self.send([ControlPlaneChange::TokenKey {
+                tenant: tenant.clone(),
+                kid: kid.to_owned(),
+            }]);
             return Ok(true);
         }
         Ok(false)
@@ -319,6 +401,10 @@ impl AccessStore for MemoryAccess {
         if let Some(existing) = state.roles.get(&key) {
             role.created_at = existing.created_at;
         }
+        self.send([ControlPlaneChange::Role {
+            tenant: role.tenant.clone(),
+            name: role.name.clone(),
+        }]);
         state.roles.insert(key, role);
         Ok(())
     }
@@ -351,6 +437,10 @@ impl AccessStore for MemoryAccess {
             return Ok(RoleDeletion::InUse);
         }
         state.roles.remove(&key);
+        self.send([ControlPlaneChange::Role {
+            tenant: tenant.clone(),
+            name: name.to_owned(),
+        }]);
         Ok(RoleDeletion::Deleted)
     }
 
@@ -366,6 +456,7 @@ impl AccessStore for MemoryAccess {
             (grant.tenant.clone(), grant.principal.clone()),
             grant.clone(),
         );
+        self.send([grant_changed(&grant.tenant, &grant.principal)]);
         Ok(GrantWrite::Written)
     }
 
@@ -400,6 +491,7 @@ impl AccessStore for MemoryAccess {
             return Ok(GrantDeletion::LastHolder);
         }
         state.grants.remove(&key);
+        self.send([grant_changed(tenant, principal)]);
         Ok(GrantDeletion::Deleted)
     }
 
@@ -411,6 +503,9 @@ impl AccessStore for MemoryAccess {
     ) -> Result<GrantClaim, StoreError> {
         let mut state = self.lock()?;
         let pending = state.grants.remove(&(tenant.clone(), invitation.clone()));
+        if pending.is_some() {
+            self.send([grant_changed(tenant, invitation)]);
+        }
         let user_key = (tenant.clone(), user.clone());
         if let Some(existing) = state.grants.get(&user_key) {
             return Ok(GrantClaim::AlreadyGranted(existing.clone()));
@@ -420,13 +515,17 @@ impl AccessStore for MemoryAccess {
         };
         grant.principal = user.clone();
         state.grants.insert(user_key, grant.clone());
+        self.send([grant_changed(tenant, user)]);
         Ok(GrantClaim::Claimed(grant))
     }
 
     async fn set_default_role(&self, tenant: &TenantId, role: &str) -> Result<(), StoreError> {
-        self.lock()?
-            .default_roles
-            .insert(tenant.clone(), role.to_owned());
+        let mut state = self.lock()?;
+        state.default_roles.insert(tenant.clone(), role.to_owned());
+        // The default role is a setting of the tenant.
+        self.send([ControlPlaneChange::Tenant {
+            tenant: tenant.clone(),
+        }]);
         Ok(())
     }
 
@@ -516,9 +615,11 @@ impl AccessStore for MemoryAccess {
             return Ok(CodeRedemption::Unknown);
         };
         if code.used_at.is_some() {
+            let mut changes = Vec::new();
             if let Some(id) = &code.connection {
-                state.revoke(id, now);
+                state.revoke(id, now, &mut changes);
             }
+            self.send(changes);
             return Ok(CodeRedemption::Used);
         }
         let kept = state
@@ -556,7 +657,9 @@ impl AccessStore for MemoryAccess {
         state
             .connections
             .insert(connection.id.clone(), connection.clone());
-        state.open(&connection, &new.organizations, now);
+        let mut changes = Vec::new();
+        state.open(&connection, &new.organizations, now, &mut changes);
+        self.send(changes);
         if let Some(code) = state.codes.get_mut(&hash) {
             code.used_at = Some(now);
             code.connection = Some(connection.id.clone());
@@ -624,7 +727,9 @@ impl AccessStore for MemoryAccess {
         else {
             return Ok(false);
         };
-        state.open(&connection, organizations, now);
+        let mut changes = Vec::new();
+        state.open(&connection, organizations, now, &mut changes);
+        self.send(changes);
         Ok(true)
     }
 
@@ -636,7 +741,11 @@ impl AccessStore for MemoryAccess {
     }
 
     async fn revoke_connection(&self, id: &str, now: Timestamp) -> Result<bool, StoreError> {
-        Ok(self.lock()?.revoke(id, now))
+        let mut state = self.lock()?;
+        let mut changes = Vec::new();
+        let revoked = state.revoke(id, now, &mut changes);
+        self.send(changes);
+        Ok(revoked)
     }
 
     async fn purge_connections(
@@ -656,10 +765,12 @@ impl AccessStore for MemoryAccess {
             .map(|connection| connection.id.clone())
             .take(limit)
             .collect();
+        let mut changes = Vec::new();
         for id in &ended {
             state.connections.remove(id);
-            state.forget(id);
+            state.forget(id, &mut changes);
         }
+        self.send(changes);
         Ok(ended.len() as u64)
     }
 
@@ -692,7 +803,9 @@ impl AccessStore for MemoryAccess {
             return Ok(Rotation::Unknown);
         };
         if token.used_at.is_some() {
-            state.revoke(&connection.id, now);
+            let mut changes = Vec::new();
+            state.revoke(&connection.id, now, &mut changes);
+            self.send(changes);
             return Ok(Rotation::Used);
         }
         if token.expires_at <= now {
@@ -716,6 +829,7 @@ impl AccessStore for MemoryAccess {
         state
             .connections
             .insert(connection.id.clone(), connection.clone());
+        self.send([connection_changed(&connection.id)]);
         Ok(Rotation::Rotated(connection))
     }
 
@@ -732,9 +846,13 @@ impl AccessStore for MemoryAccess {
             .map(|token| token.hash)
             .take(limit)
             .collect();
+        let mut connections = std::collections::BTreeSet::new();
         for hash in &ended {
-            state.connection_tokens.remove(hash);
+            if let Some(token) = state.connection_tokens.remove(hash) {
+                connections.insert(token.connection);
+            }
         }
+        self.send(connections.iter().map(|id| connection_changed(id)));
         Ok(ended.len() as u64)
     }
 }
