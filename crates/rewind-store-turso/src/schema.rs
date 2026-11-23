@@ -8,8 +8,8 @@
 //! workflow versions; version 7 people's connections and the OAuth clients and codes; version 8
 //! the namespaces' display names; version 9 named secrets, their reads, the signing keys, the
 //! master key of each data key and the runs' attachments; version 10 when each run's summary last
-//! changed; version 11 the runs' origins and handle suffixes, the scripts' titles and the numbers
-//! of workflow versions).
+//! changed; version 11 what the control plane keeps of the run plane: each namespace's
+//! partition, the partition map, and the runs moved from the journal store's tables).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -806,70 +806,27 @@ ALTER TABLE run_summaries ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 "#;
 
-/// Run handles, script titles and the numbers of workflow versions
-/// (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script titles"). A run
-/// keeps its origin, the middle of its handle, and the characters of its handle's suffix. A run
-/// stored before handles takes its workflow's name, or `script`, and the short suffix, unless
-/// another run of its tenant shares the first 64 bits of its id (the first 18 characters of its
-/// text, `xxxxxxxx-xxxx-xxxx`): every run of such a group then takes the full suffix, which tells
-/// distinct ids apart. A summary takes its run's; a summary whose run the journal no longer holds
-/// follows the same rules among the summaries of its tenant. The versions of each workflow are
-/// numbered from 1 in the order they were created, ties in the order they were stored.
-///
-/// `+twin.tenant` keeps the planner from searching the twins by tenant (`runs_by_tenant`, a scan
-/// of the tenant's runs for each run) rather than by the range of their ids.
+/// What the control plane keeps of the run plane (`archi/06-storage-and-scale.md`, "The control
+/// plane"): the partition of each namespace, chosen when the catalog creates it (null for a
+/// namespace the journal store created, which the catalog places at its next use or with
+/// `TursoCatalog::place_namespaces`); the partition map, each partition's owner and the epoch of
+/// its last move; the runs `migrate-runs` moved into a partition. The members of an embedded
+/// cluster live in its process: no table holds them.
 const V11: &str = r#"
-ALTER TABLE runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'script';
-ALTER TABLE runs ADD COLUMN suffix_len INTEGER NOT NULL DEFAULT 12;
-UPDATE runs SET origin = workflow WHERE workflow IS NOT NULL;
-UPDATE runs SET suffix_len = 25 WHERE EXISTS (
-    SELECT 1 FROM runs twin
-    WHERE twin.id BETWEEN substr(runs.id, 1, 18) || '-0000-000000000000'
-                      AND substr(runs.id, 1, 18) || '-ffff-ffffffffffff'
-      AND +twin.tenant = runs.tenant AND twin.id <> runs.id
-);
+ALTER TABLE namespaces ADD COLUMN partition INTEGER;
 
-ALTER TABLE run_summaries ADD COLUMN origin TEXT NOT NULL DEFAULT 'script';
-ALTER TABLE run_summaries ADD COLUMN suffix_len INTEGER NOT NULL DEFAULT 12;
-UPDATE run_summaries SET origin = workflow WHERE workflow IS NOT NULL;
-UPDATE run_summaries SET suffix_len = 25 WHERE EXISTS (
-    SELECT 1 FROM run_summaries twin
-    WHERE twin.run_id BETWEEN substr(run_summaries.run_id, 1, 18) || '-0000-000000000000'
-                          AND substr(run_summaries.run_id, 1, 18) || '-ffff-ffffffffffff'
-      AND twin.tenant = run_summaries.tenant AND twin.run_id <> run_summaries.run_id
-);
-UPDATE run_summaries SET
-    origin = (SELECT runs.origin FROM runs WHERE runs.id = run_summaries.run_id),
-    suffix_len = (SELECT runs.suffix_len FROM runs WHERE runs.id = run_summaries.run_id)
-WHERE run_id IN (SELECT id FROM runs);
-
-CREATE TABLE script_titles (
-    tenant TEXT NOT NULL,
-    digest TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT,
-    updated_by TEXT NOT NULL,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (tenant, digest)
+CREATE TABLE partitions (
+    id INTEGER PRIMARY KEY,
+    pool TEXT,
+    node TEXT,
+    epoch INTEGER NOT NULL
 ) STRICT;
 
-ALTER TABLE workflows ADD COLUMN number INTEGER NOT NULL DEFAULT 0;
-CREATE TABLE workflow_numbers (
+CREATE TABLE legacy_runs (
+    id TEXT PRIMARY KEY,
     tenant TEXT NOT NULL,
-    version TEXT NOT NULL,
-    number INTEGER NOT NULL,
-    PRIMARY KEY (tenant, version)
+    partition INTEGER NOT NULL
 ) STRICT;
-INSERT INTO workflow_numbers (tenant, version, number)
-SELECT tenant, version,
-       row_number() OVER (PARTITION BY tenant, name ORDER BY created_at, stored_order)
-FROM workflows;
-UPDATE workflows SET number = (
-    SELECT n.number FROM workflow_numbers n
-    WHERE n.tenant = workflows.tenant AND n.version = workflows.version
-);
-DROP TABLE workflow_numbers;
-CREATE UNIQUE INDEX workflows_by_number ON workflows (tenant, name, number);
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.

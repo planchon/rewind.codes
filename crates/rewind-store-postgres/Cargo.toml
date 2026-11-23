@@ -1,6 +1,6 @@
 [package]
 name = "rewind-store-postgres"
-description = "Production store of Rewind on Postgres: JournalStore, AccessStore, ReadModel and SecretStore."
+description = "Production store of Rewind on Postgres: the control plane (CatalogStore, Cluster, AccessStore, SecretStore), and JournalStore and ReadModel."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,10 +13,14 @@ rewind-engine.workspace = true
 rewind-format.workspace = true
 aws-lc-rs.workspace = true
 chacha20poly1305 = "0.11"
+futures-util = { workspace = true, features = ["alloc"] }
 getrandom.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+# The holder of a node's lock, its watches and its listeners (`crate::cluster`).
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 tracing.workspace = true
 uuid.workspace = true
 

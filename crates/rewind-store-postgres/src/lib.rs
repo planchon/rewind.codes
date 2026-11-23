@@ -1,6 +1,13 @@
 //! The production store of Rewind on Postgres (`archi/06-storage-and-scale.md`, "Backends";
 //! `archi/07-code-architecture.md`, "Ports").
 //!
+//! The control plane: [`PostgresCatalog`] (`CatalogStore`, [`PostgresStore::catalog`]) and
+//! [`PostgresCluster`] (`Cluster`: the nodes, their session advisory locks and the ring they
+//! watch, the partition map, the changes of the control plane through `LISTEN`), with access and
+//! secrets below. Every write of the catalog, of access and of secrets sends what it changed with
+//! `NOTIFY` in its transaction; the payloads name what changed, never a value
+//! (`crate::changes`).
+//!
 //! [`PostgresStore`] implements four ports of `rewind-engine` on one database:
 //!
 //! - `JournalStore`: scripts and their titles, toolsets, numbered workflow versions, runs with
@@ -37,6 +44,9 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod catalog;
+mod changes;
+mod cluster;
 mod codec;
 mod connections;
 
@@ -54,6 +64,8 @@ use sqlx::ConnectOptions as _;
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
+pub use catalog::PostgresCatalog;
+pub use cluster::{PostgresChanges, PostgresCluster, PostgresMembership};
 pub use schema::SCHEMA_VERSION;
 pub use secrets::{MasterKey, MasterKeys};
 
@@ -85,10 +97,24 @@ pub enum Error {
         code: Option<String>,
         message: String,
     },
+    /// Postgres cannot be reached: the connection failed or was lost, or the pool had no
+    /// connection to give in time. The call may be tried again.
+    #[error("Postgres cannot be reached: {0}")]
+    Unreachable(String),
 }
 
 impl From<sqlx::Error> for Error {
     fn from(err: sqlx::Error) -> Self {
+        if matches!(
+            err,
+            sqlx::Error::Io(_)
+                | sqlx::Error::Tls(_)
+                | sqlx::Error::PoolTimedOut
+                | sqlx::Error::PoolClosed
+                | sqlx::Error::WorkerCrashed
+        ) {
+            return Error::Unreachable(err.to_string());
+        }
         let code = err
             .as_database_error()
             .and_then(|db| db.code())

@@ -1,6 +1,6 @@
 [package]
 name = "rewind-store-turso"
-description = "Embedded store of Rewind on Turso Database: JournalStore, AccessStore, ReadModel and SecretStore."
+description = "Embedded store of Rewind on Turso Database: the control plane (CatalogStore, a Cluster of one process, AccessStore, SecretStore), and JournalStore and ReadModel."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,7 @@ tracing.workspace = true
 turso = { version = "=0.8.3", default-features = false }
 
 [dev-dependencies]
+futures-util.workspace = true
 rewind-engine = { workspace = true, features = ["conformance"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync"] }

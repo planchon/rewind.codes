@@ -23,6 +23,10 @@
 //! encrypt with it. A tenant's signing keys are written under a transaction-scoped advisory lock
 //! of the tenant, and a partial unique index keeps one current key per tenant. A read takes the
 //! secret's row lock while it counts: a deletion waits for it, and leaves no read behind.
+//!
+//! `put` and the deletions send each secret they wrote or deleted as a change, in their
+//! transaction (`crate::changes`): the owners resume the calls parked for it. A read only counts,
+//! and the signing keys have no change: they send nothing.
 
 use std::collections::BTreeMap;
 
@@ -31,13 +35,14 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rewind_core::{SecretName, Timestamp};
 use rewind_engine::ports::{
-    DailyReads, Day, LastRead, MasterKeyId, NamespaceName, NewSecret, PrivateKey, PublicKey,
-    PutSecret, RETIRED_KEY_PUBLISHED, Secret, SecretError, SecretId, SecretMeta, SecretNamespace,
-    SecretReader, SecretStore, SigningKey, TenantId,
+    ControlPlaneChange, DailyReads, Day, LastRead, MasterKeyId, NamespaceName, NewSecret,
+    PrivateKey, PublicKey, PutSecret, RETIRED_KEY_PUBLISHED, Secret, SecretError, SecretId,
+    SecretMeta, SecretNamespace, SecretReader, SecretStore, SigningKey, TenantId,
 };
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
 
+use crate::changes::notify;
 use crate::codec::{decode_labels, encode_labels};
 use crate::sql::{Columns, Failure, ms, retrying, tenant, ts, uuid};
 use crate::{Error, PostgresStore};
@@ -591,6 +596,11 @@ impl PostgresStore {
         .bind(ts(now))
         .fetch_one(&mut *tx)
         .await?;
+        let change = ControlPlaneChange::Secret {
+            tenant: tenant_id.clone(),
+            secret: secret.id.clone(),
+        };
+        notify(&mut tx, &[change]).await?;
         tx.commit().await?;
         Ok(if created {
             PutSecret::Created
@@ -661,14 +671,14 @@ impl PostgresStore {
         name: Option<&str>,
     ) -> Result<u64, Fail> {
         let mut tx = self.pool.begin().await?;
-        let deleted = sqlx::query(
+        let deleted: Vec<String> = sqlx::query_scalar(
             "DELETE FROM secrets WHERE tenant = $1 AND namespace = $2 \
-             AND ($3::text IS NULL OR name = $3)",
+             AND ($3::text IS NULL OR name = $3) RETURNING name",
         )
         .bind(tenant(tenant_id))
         .bind(namespace)
         .bind(name)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
         sqlx::query(
             "DELETE FROM secret_reads WHERE tenant = $1 AND namespace = $2 \
@@ -679,8 +689,30 @@ impl PostgresStore {
         .bind(name)
         .execute(&mut *tx)
         .await?;
+        let owner = if namespace == SecretNamespace::ORGANIZATION {
+            SecretNamespace::Organization
+        } else {
+            SecretNamespace::Namespace(
+                NamespaceName::new(namespace)
+                    .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
+            )
+        };
+        let changes = deleted
+            .iter()
+            .map(|name| {
+                Ok(ControlPlaneChange::Secret {
+                    tenant: tenant_id.clone(),
+                    secret: SecretId {
+                        namespace: owner.clone(),
+                        name: SecretName::new(name.clone())
+                            .map_err(|err| Error::Corrupt(err.to_string()))?,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        notify(&mut tx, &changes).await?;
         tx.commit().await?;
-        Ok(deleted.rows_affected())
+        Ok(deleted.len() as u64)
     }
 
     async fn signing_key_once(

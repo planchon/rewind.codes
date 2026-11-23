@@ -1,6 +1,12 @@
 //! The embedded store of Rewind on Turso Database (`archi/06-storage-and-scale.md`, "Backends";
 //! `archi/07-code-architecture.md`, "Embedded server and CLI").
 //!
+//! The embedded control plane: [`TursoCatalog`] (`CatalogStore`, [`TursoStore::catalog`]) and
+//! [`TursoCluster`] (`Cluster`: its members live in the process, its partition map in the
+//! database), with access and secrets below. Every write of the catalog, of access and of
+//! secrets sends what it changed once it committed, through a broadcast inside the process
+//! ([`TursoStore::changes`]).
+//!
 //! [`TursoStore`] implements four ports of `rewind-engine` on one database file, `journal.db`:
 //!
 //! - `JournalStore`: scripts and their titles, toolsets, workflow versions and their numbers,
@@ -34,6 +40,8 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod catalog;
+mod cluster;
 mod codec;
 mod connections;
 mod journal;
@@ -48,9 +56,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::Timestamp;
+use rewind_engine::adapters::ControlPlaneChanges;
+use rewind_engine::ports::ControlPlaneChange;
 use tokio::sync::{Mutex, MutexGuard};
 use turso::Connection;
 
+pub use catalog::TursoCatalog;
+pub use cluster::{TursoCluster, TursoMembership};
 pub use schema::SCHEMA_VERSION;
 pub use secrets::{MasterKey, MasterKeys};
 
@@ -100,6 +112,8 @@ struct Inner {
     /// inside a transaction.
     connection: Mutex<Connection>,
     master_keys: MasterKeys,
+    /// Where every write of the control plane sends what it changed.
+    changes: ControlPlaneChanges,
 }
 
 impl std::fmt::Debug for TursoStore {
@@ -138,6 +152,7 @@ impl TursoStore {
                 _database: database,
                 connection: Mutex::new(connection),
                 master_keys: master_keys.into(),
+                changes: ControlPlaneChanges::new(),
             }),
         })
     }
@@ -179,6 +194,21 @@ impl TursoStore {
     pub async fn set_virtual_time(&self, at: Option<Timestamp>) -> Result<(), Error> {
         let value = at.map(|at| at.as_millis().to_string());
         self.set_setting(VIRTUAL_TIME, value.as_deref()).await
+    }
+
+    /// The changes of the control plane this store sends: the catalog's, access's and secrets',
+    /// and the partition map's of its [`TursoCluster`]. Every member of that cluster streams
+    /// them.
+    pub fn changes(&self) -> &ControlPlaneChanges {
+        &self.inner.changes
+    }
+
+    /// Sends what a write changed, once it committed. The caller still holds the connection,
+    /// so changes leave in the order their writes committed.
+    fn send(&self, changes: impl IntoIterator<Item = ControlPlaneChange>) {
+        for change in changes {
+            self.inner.changes.send(change);
+        }
     }
 
     /// The connection, for one call. A transaction left open by a call that was dropped

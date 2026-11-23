@@ -9,19 +9,24 @@
 //! grants does: two owners demoting each other at once are decided one after the other, and the
 //! second finds itself the last holder. Grant writes are rare, so one lock per tenant costs
 //! nothing that matters.
+//!
+//! Every write sends what it changed in its transaction (`crate::changes`): a key, a token or
+//! token key, a role, a grant, a connection, and the tenant for its default role. What only
+//! records a use (a connection used, an OAuth client or code) sends nothing: no change names it.
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
-    AccessStore, ApiKey, ClientKind, CodeRedemption, Connection, ConnectionToken, Grant,
-    GrantClaim, GrantDeletion, GrantWrite, NamespaceName, NewConnection, NewToken, OAuthClient,
-    OAuthCode, OpenedOrganization, Principal, Role, RoleDeletion, Rotation, StoreError, TenantId,
-    Token, TokenKey, UserId,
+    AccessStore, ApiKey, ClientKind, CodeRedemption, Connection, ConnectionToken,
+    ControlPlaneChange, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, NewConnection,
+    NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal, Role, RoleDeletion, Rotation,
+    StoreError, TenantId, Token, TokenKey, UserId,
 };
 
 use sqlx::PgConnection;
 use sqlx::Row as _;
 use sqlx::postgres::PgRow;
 
+use crate::changes::notify;
 use crate::codec::{decode_labels, encode_labels};
 use crate::sql::{Columns, Failure, bytes, opt_ts, retrying, tenant, ts};
 use crate::{Error, PostgresStore};
@@ -189,6 +194,34 @@ async fn holds_last(
     Ok(!other)
 }
 
+pub(crate) fn grant_changed(tenant_id: &TenantId, principal: &Principal) -> ControlPlaneChange {
+    ControlPlaneChange::Grant {
+        tenant: tenant_id.clone(),
+        principal: principal.clone(),
+    }
+}
+
+fn role_changed(tenant_id: &TenantId, name: &str) -> ControlPlaneChange {
+    ControlPlaneChange::Role {
+        tenant: tenant_id.clone(),
+        name: name.to_owned(),
+    }
+}
+
+fn token_changed(tenant_id: TenantId, hash: Digest) -> ControlPlaneChange {
+    ControlPlaneChange::Token {
+        tenant: tenant_id,
+        hash,
+    }
+}
+
+/// The tokens a statement changed, from its `RETURNING tenant, hash`.
+fn tokens_changed(rows: &[PgRow]) -> Result<Vec<ControlPlaneChange>, Error> {
+    rows.iter()
+        .map(|row| Ok(token_changed(row.tenant(0)?, row.digest(1)?)))
+        .collect()
+}
+
 impl PostgresStore {
     async fn delete_role_once(
         &self,
@@ -222,6 +255,7 @@ impl PostgresStore {
             .bind(name)
             .execute(&mut *tx)
             .await?;
+        notify(&mut tx, &[role_changed(tenant_id, name)]).await?;
         tx.commit().await?;
         Ok(RoleDeletion::Deleted)
     }
@@ -236,6 +270,7 @@ impl PostgresStore {
             return Ok(GrantWrite::LastHolder);
         }
         write_grant(&mut tx, grant).await?;
+        notify(&mut tx, &[grant_changed(&grant.tenant, &grant.principal)]).await?;
         tx.commit().await?;
         Ok(GrantWrite::Written)
     }
@@ -261,6 +296,7 @@ impl PostgresStore {
             .bind(principal.to_string())
             .execute(&mut *tx)
             .await?;
+        notify(&mut tx, &[grant_changed(tenant_id, principal)]).await?;
         tx.commit().await?;
         Ok(GrantDeletion::Deleted)
     }
@@ -282,6 +318,10 @@ impl PostgresStore {
         .await?
         .map(|row| grant_from_row(&row))
         .transpose()?;
+        let mut changes = Vec::new();
+        if pending.is_some() {
+            changes.push(grant_changed(tenant_id, invitation));
+        }
         let claim = if let Some(existing) = find_grant(&mut tx, tenant_id, user).await? {
             GrantClaim::AlreadyGranted(existing)
         } else if let Some(pending) = pending {
@@ -290,10 +330,12 @@ impl PostgresStore {
                 ..pending
             };
             write_grant(&mut tx, &claimed).await?;
+            changes.push(grant_changed(tenant_id, user));
             GrantClaim::Claimed(claimed)
         } else {
             GrantClaim::NoGrant
         };
+        notify(&mut tx, &changes).await?;
         tx.commit().await?;
         Ok(claim)
     }
@@ -301,6 +343,7 @@ impl PostgresStore {
 
 impl AccessStore for PostgresStore {
     async fn put_key(&self, key: &ApiKey) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let inserted = sqlx::query(
             "INSERT INTO api_keys (hash, tenant, name, created_by, created_at, revoked_at) \
              VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (hash) DO NOTHING",
@@ -311,7 +354,7 @@ impl AccessStore for PostgresStore {
         .bind(key.created_by.as_ref().map(ToString::to_string))
         .bind(ts(key.created_at))
         .bind(opt_ts(key.revoked_at))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
         if inserted.rows_affected() == 0 {
@@ -320,6 +363,12 @@ impl AccessStore for PostgresStore {
                 key.hash.short()
             )));
         }
+        let change = ControlPlaneChange::Key {
+            tenant: key.tenant.clone(),
+            hash: key.hash,
+        };
+        notify(&mut tx, &[change]).await?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(())
     }
 
@@ -349,21 +398,34 @@ impl AccessStore for PostgresStore {
     }
 
     async fn revoke_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
-        let revoked = sqlx::query(
-            "UPDATE api_keys SET revoked_at = $2 WHERE hash = $1 AND revoked_at IS NULL",
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
+        let revoked: Option<String> = sqlx::query_scalar(
+            "UPDATE api_keys SET revoked_at = $2 WHERE hash = $1 AND revoked_at IS NULL \
+             RETURNING tenant",
         )
         .bind(bytes(hash))
         .bind(ts(now))
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(Error::from)?;
-        Ok(revoked.rows_affected() > 0)
+        let Some(tenant_id) = revoked else {
+            return Ok(false);
+        };
+        let tenant_id = TenantId::new(tenant_id).map_err(|err| Error::Corrupt(err.to_string()))?;
+        let change = ControlPlaneChange::Key {
+            tenant: tenant_id,
+            hash,
+        };
+        notify(&mut tx, &[change]).await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(true)
     }
 
     // End users' tokens and token keys
 
     async fn put_token(&self, token: &Token) -> Result<(), StoreError> {
         let permissions: Vec<&str> = token.permissions.iter().map(String::as_str).collect();
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let inserted = sqlx::query(
             "INSERT INTO tokens (hash, tenant, namespace, permissions, labels, expires_at, \
              created_by, created_at, revoked_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9) \
@@ -378,7 +440,7 @@ impl AccessStore for PostgresStore {
         .bind(token.created_by.to_string())
         .bind(ts(token.created_at))
         .bind(opt_ts(token.revoked_at))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
         if inserted.rows_affected() == 0 {
@@ -387,6 +449,8 @@ impl AccessStore for PostgresStore {
                 token.hash.short()
             )));
         }
+        notify(&mut tx, &[token_changed(token.tenant.clone(), token.hash)]).await?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(())
     }
 
@@ -407,6 +471,7 @@ impl AccessStore for PostgresStore {
         hash: Digest,
         now: Timestamp,
     ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let revoked = sqlx::query(
             "UPDATE tokens SET revoked_at = $3 \
              WHERE hash = $1 AND tenant = $2 AND revoked_at IS NULL",
@@ -414,10 +479,15 @@ impl AccessStore for PostgresStore {
         .bind(bytes(hash))
         .bind(tenant(tenant_id))
         .bind(ts(now))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
-        Ok(revoked.rows_affected() > 0)
+        if revoked.rows_affected() == 0 {
+            return Ok(false);
+        }
+        notify(&mut tx, &[token_changed(tenant_id.clone(), hash)]).await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(true)
     }
 
     async fn revoke_tokens(
@@ -426,17 +496,20 @@ impl AccessStore for PostgresStore {
         namespace: &NamespaceName,
         now: Timestamp,
     ) -> Result<u64, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let revoked = sqlx::query(
             "UPDATE tokens SET revoked_at = $3 \
-             WHERE tenant = $1 AND namespace = $2 AND revoked_at IS NULL",
+             WHERE tenant = $1 AND namespace = $2 AND revoked_at IS NULL RETURNING tenant, hash",
         )
         .bind(tenant(tenant_id))
         .bind(namespace.as_str())
         .bind(ts(now))
-        .execute(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(Error::from)?;
-        Ok(revoked.rows_affected())
+        notify(&mut tx, &tokens_changed(&revoked)?).await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(revoked.len() as u64)
     }
 
     async fn count_tokens(
@@ -460,21 +533,25 @@ impl AccessStore for PostgresStore {
 
     async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
         // Workers purge at the same time: each skips the rows another is deleting.
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let purged = sqlx::query(
             "DELETE FROM tokens WHERE hash IN (\
                  SELECT hash FROM tokens WHERE expires_at < $1 OR revoked_at < $1 \
-                 LIMIT $2 FOR UPDATE SKIP LOCKED)",
+                 LIMIT $2 FOR UPDATE SKIP LOCKED) RETURNING tenant, hash",
         )
         .bind(ts(before))
         .bind(crate::sql::limit(limit))
-        .execute(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(Error::from)?;
-        Ok(purged.rows_affected())
+        notify(&mut tx, &tokens_changed(&purged)?).await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(purged.len() as u64)
     }
 
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
         let permissions: Vec<&str> = key.permissions.iter().map(String::as_str).collect();
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let inserted = sqlx::query(
             "INSERT INTO token_keys (kid, tenant, name, jwk, permissions, created_by, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (kid) DO NOTHING",
@@ -486,7 +563,7 @@ impl AccessStore for PostgresStore {
         .bind(permissions)
         .bind(key.created_by.to_string())
         .bind(ts(key.created_at))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
         if inserted.rows_affected() == 0 {
@@ -495,6 +572,12 @@ impl AccessStore for PostgresStore {
                 key.kid
             )));
         }
+        let change = ControlPlaneChange::TokenKey {
+            tenant: key.tenant.clone(),
+            kid: key.kid.clone(),
+        };
+        notify(&mut tx, &[change]).await?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(())
     }
 
@@ -524,17 +607,28 @@ impl AccessStore for PostgresStore {
     }
 
     async fn delete_token_key(&self, tenant_id: &TenantId, kid: &str) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let deleted = sqlx::query("DELETE FROM token_keys WHERE kid = $1 AND tenant = $2")
             .bind(kid)
             .bind(tenant(tenant_id))
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(Error::from)?;
-        Ok(deleted.rows_affected() > 0)
+        if deleted.rows_affected() == 0 {
+            return Ok(false);
+        }
+        let change = ControlPlaneChange::TokenKey {
+            tenant: tenant_id.clone(),
+            kid: kid.to_owned(),
+        };
+        notify(&mut tx, &[change]).await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(true)
     }
 
     async fn put_role(&self, role: &Role) -> Result<(), StoreError> {
         let permissions: Vec<&str> = role.permissions.iter().map(String::as_str).collect();
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         sqlx::query(
             "INSERT INTO roles (tenant, name, description, permissions, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
@@ -547,9 +641,11 @@ impl AccessStore for PostgresStore {
         .bind(permissions)
         .bind(ts(role.created_at))
         .bind(ts(role.updated_at))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
+        notify(&mut tx, &[role_changed(&role.tenant, &role.name)]).await?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(())
     }
 
@@ -633,15 +729,22 @@ impl AccessStore for PostgresStore {
     }
 
     async fn set_default_role(&self, tenant_id: &TenantId, role: &str) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
         sqlx::query(
             "INSERT INTO access_settings (tenant, default_role) VALUES ($1, $2) \
              ON CONFLICT (tenant) DO UPDATE SET default_role = EXCLUDED.default_role",
         )
         .bind(tenant(tenant_id))
         .bind(role)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
+        // The default role is a setting of the tenant.
+        let change = ControlPlaneChange::Tenant {
+            tenant: tenant_id.clone(),
+        };
+        notify(&mut tx, &[change]).await?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(())
     }
 

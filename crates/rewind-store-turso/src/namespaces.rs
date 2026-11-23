@@ -31,7 +31,7 @@ pub(crate) const TENANT: &str = "*";
 const TERMINAL: &str = "('completed', 'failed', 'cancelled', 'aborted')";
 
 /// The six columns of a [`Quotas`], in this order, prefixed (`default_` for the defaults).
-fn quota_columns(prefix: &str) -> String {
+pub(crate) fn quota_columns(prefix: &str) -> String {
     [
         "cpu_per_month_ms",
         "active_runs",
@@ -44,7 +44,7 @@ fn quota_columns(prefix: &str) -> String {
     .join(", ")
 }
 
-fn quotas_from_row(row: &Row, first: usize) -> Result<Quotas, Error> {
+pub(crate) fn quotas_from_row(row: &Row, first: usize) -> Result<Quotas, Error> {
     Ok(Quotas {
         cpu_per_month: row.opt_duration(first)?,
         active_runs: row.opt_u32(first + 1)?,
@@ -55,7 +55,7 @@ fn quotas_from_row(row: &Row, first: usize) -> Result<Quotas, Error> {
     })
 }
 
-fn quota_values(quotas: &Quotas) -> [Value; 6] {
+pub(crate) fn quota_values(quotas: &Quotas) -> [Value; 6] {
     let count = |value: Option<u64>| value.map_or(Value::Null, int);
     [
         quotas.cpu_per_month.map_or(Value::Null, ms),
@@ -159,7 +159,7 @@ fn namespace_columns() -> String {
     )
 }
 
-fn display_name_of(text: String) -> Result<DisplayName, Error> {
+pub(crate) fn display_name_of(text: String) -> Result<DisplayName, Error> {
     DisplayName::new(text.clone())
         .map_err(|_| Error::Corrupt(format!("invalid display name {text:?}")))
 }

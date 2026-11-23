@@ -5,21 +5,53 @@
 //! The writes that read before they write (a code exchanged, a refresh token rotated, a
 //! connection revoked or changed) are one transaction on the store's one connection: the check
 //! and the write are atomic.
+//!
+//! A write of a connection, of its tokens or of its grants sends, once it committed, the
+//! connection's change and the change of each grant it wrote or deleted.
 
 use std::collections::BTreeMap;
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
     self, Access, ClientAuthMethod, ClientKind, CodeRedemption, ConnectionToken,
-    ConnectionTokenKind, Grant, NewConnection, NewToken, OAuthClient, OAuthCode,
-    OpenedOrganization, Principal, Rotation, StoreError, TenantId, UserId,
+    ConnectionTokenKind, ControlPlaneChange, Grant, NewConnection, NewToken, OAuthClient,
+    OAuthCode, OpenedOrganization, Principal, Rotation, StoreError, TenantId, UserId,
 };
 use serde_json::Value;
 use turso::{Connection as Db, Row};
 
+use crate::access::grant_changed;
 use crate::codec::{decode_labels, decode_value, encode_labels};
 use crate::sql::{self, Columns, digest, opt_text, opt_ts, tenant, text, transaction, ts};
 use crate::{Error, TursoStore};
+
+fn connection_changed(id: &str) -> ControlPlaneChange {
+    ControlPlaneChange::Connection { id: id.to_owned() }
+}
+
+/// Deletes the grants of a connection's principal, adding the change of each to `changes`.
+async fn delete_grants(
+    db: &Db,
+    principal: &Principal,
+    changes: &mut Vec<ControlPlaneChange>,
+) -> Result<(), Error> {
+    let rows = sql::query(
+        db,
+        "SELECT tenant FROM grants WHERE principal = ?",
+        vec![text(principal.to_string())],
+    )
+    .await?;
+    for row in &rows {
+        changes.push(grant_changed(&row.tenant(0)?, principal));
+    }
+    sql::execute(
+        db,
+        "DELETE FROM grants WHERE principal = ?",
+        vec![text(principal.to_string())],
+    )
+    .await?;
+    Ok(())
+}
 
 const CLIENT_COLUMNS: &str = "id, kind, name, uri, logo_uri, redirect_uris, auth_method, \
      secret_hash, fetched_at, expires_at, created_at, last_used_at";
@@ -169,15 +201,14 @@ async fn open(
     connection: &ports::Connection,
     organizations: &[OpenedOrganization],
     now: Timestamp,
+    changes: &mut Vec<ControlPlaneChange>,
 ) -> Result<(), Error> {
-    let principal = connection.principal().to_string();
-    sql::execute(
-        db,
-        "DELETE FROM grants WHERE principal = ?",
-        vec![text(principal.as_str())],
-    )
-    .await?;
+    let grantee = connection.principal();
+    delete_grants(db, &grantee, changes).await?;
+    changes.push(connection_changed(&connection.id));
+    let principal = grantee.to_string();
     for opened in organizations {
+        changes.push(grant_changed(&opened.tenant, &grantee));
         sql::execute(
             db,
             "INSERT OR REPLACE INTO grants (tenant, principal, role, allowed_labels, granted_by, \
@@ -197,13 +228,9 @@ async fn open(
 }
 
 /// Deletes the grants and the tokens of a connection.
-async fn forget(db: &Db, id: &str) -> Result<(), Error> {
-    sql::execute(
-        db,
-        "DELETE FROM grants WHERE principal = ?",
-        vec![text(Principal::Connection(id.to_owned()).to_string())],
-    )
-    .await?;
+async fn forget(db: &Db, id: &str, changes: &mut Vec<ControlPlaneChange>) -> Result<(), Error> {
+    changes.push(connection_changed(id));
+    delete_grants(db, &Principal::Connection(id.to_owned()), changes).await?;
     sql::execute(
         db,
         "DELETE FROM connection_tokens WHERE connection_id = ?",
@@ -214,7 +241,12 @@ async fn forget(db: &Db, id: &str) -> Result<(), Error> {
 }
 
 /// Revokes a live connection: its grants and tokens go. `false` when it is unknown or revoked.
-async fn revoke(db: &Db, id: &str, now: Timestamp) -> Result<bool, Error> {
+async fn revoke(
+    db: &Db,
+    id: &str,
+    now: Timestamp,
+    changes: &mut Vec<ControlPlaneChange>,
+) -> Result<bool, Error> {
     let revoked = sql::execute(
         db,
         "UPDATE connections SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
@@ -224,7 +256,7 @@ async fn revoke(db: &Db, id: &str, now: Timestamp) -> Result<bool, Error> {
     if revoked == 0 {
         return Ok(false);
     }
-    forget(db, id).await?;
+    forget(db, id, changes).await?;
     Ok(true)
 }
 
@@ -397,7 +429,8 @@ impl TursoStore {
     ) -> Result<CodeRedemption, StoreError> {
         let db = self.connection().await?;
         let db = &*db;
-        transaction(db, async {
+        let mut changes = Vec::new();
+        let redemption = transaction(db, async {
             let row = sql::query_row(
                 db,
                 &format!("SELECT {CODE_COLUMNS} FROM oauth_codes WHERE hash = ?"),
@@ -410,7 +443,7 @@ impl TursoStore {
             if code.used_at.is_some() {
                 // A replay: its connection is revoked, which this transaction commits.
                 if let Some(id) = &code.connection {
-                    revoke(db, id, now).await?;
+                    revoke(db, id, now, &mut changes).await?;
                 }
                 return Ok(CodeRedemption::Used);
             }
@@ -486,7 +519,7 @@ impl TursoStore {
                 now,
             )
             .await?;
-            open(db, &connection, &new.organizations, now).await?;
+            open(db, &connection, &new.organizations, now, &mut changes).await?;
             sql::execute(
                 db,
                 "UPDATE oauth_codes SET connection_id = ? WHERE hash = ?",
@@ -499,9 +532,11 @@ impl TursoStore {
                 vec![ts(now), text(connection.client_id.as_str())],
             )
             .await?;
-            Ok(CodeRedemption::Redeemed(connection))
+            Ok::<_, StoreError>(CodeRedemption::Redeemed(connection))
         })
-        .await
+        .await?;
+        self.send(changes);
+        Ok(redemption)
     }
 
     pub(crate) async fn purge_oauth_code_rows(
@@ -563,17 +598,20 @@ impl TursoStore {
     ) -> Result<bool, Error> {
         let db = self.connection().await?;
         let db = &*db;
-        transaction(db, async {
+        let mut changes = Vec::new();
+        let opened = transaction(db, async {
             let Some(connection) = find_connection(db, id)
                 .await?
                 .filter(|connection| connection.revoked_at.is_none())
             else {
                 return Ok(false);
             };
-            open(db, &connection, organizations, now).await?;
-            Ok(true)
+            open(db, &connection, organizations, now, &mut changes).await?;
+            Ok::<_, Error>(true)
         })
-        .await
+        .await?;
+        self.send(changes);
+        Ok(opened)
     }
 
     pub(crate) async fn touch_connection_row(&self, id: &str, now: Timestamp) -> Result<(), Error> {
@@ -594,7 +632,10 @@ impl TursoStore {
     ) -> Result<bool, Error> {
         let db = self.connection().await?;
         let db = &*db;
-        transaction(db, revoke(db, id, now)).await
+        let mut changes = Vec::new();
+        let revoked = transaction(db, revoke(db, id, now, &mut changes)).await?;
+        self.send(changes);
+        Ok(revoked)
     }
 
     pub(crate) async fn purge_connection_rows(
@@ -605,7 +646,8 @@ impl TursoStore {
     ) -> Result<u64, Error> {
         let db = self.connection().await?;
         let db = &*db;
-        transaction(db, async {
+        let mut changes = Vec::new();
+        let purged = transaction(db, async {
             let rows = sql::query(
                 db,
                 "SELECT id FROM connections WHERE expires_at < ?1 OR revoked_at < ?2 LIMIT ?3",
@@ -617,7 +659,7 @@ impl TursoStore {
                 .map(|row| row.text(0))
                 .collect::<Result<_, _>>()?;
             for id in &ids {
-                forget(db, id).await?;
+                forget(db, id, &mut changes).await?;
                 sql::execute(
                     db,
                     "DELETE FROM connections WHERE id = ?",
@@ -625,9 +667,11 @@ impl TursoStore {
                 )
                 .await?;
             }
-            Ok(ids.len() as u64)
+            Ok::<_, Error>(ids.len() as u64)
         })
-        .await
+        .await?;
+        self.send(changes);
+        Ok(purged)
     }
 
     pub(crate) async fn connection_token_row(
@@ -653,7 +697,8 @@ impl TursoStore {
     ) -> Result<Rotation, StoreError> {
         let db = self.connection().await?;
         let db = &*db;
-        transaction(db, async {
+        let mut changes = Vec::new();
+        let rotation = transaction(db, async {
             let row = sql::query_row(
                 db,
                 &format!(
@@ -672,7 +717,7 @@ impl TursoStore {
                 return Ok(Rotation::Unknown);
             };
             if token.used_at.is_some() {
-                revoke(db, &connection.id, now).await?;
+                revoke(db, &connection.id, now, &mut changes).await?;
                 return Ok(Rotation::Used);
             }
             if token.expires_at <= now {
@@ -700,12 +745,15 @@ impl TursoStore {
                 vec![ts(refresh.expires_at), text(connection.id.as_str())],
             )
             .await?;
-            Ok(Rotation::Rotated(ports::Connection {
+            changes.push(connection_changed(&connection.id));
+            Ok::<_, StoreError>(Rotation::Rotated(ports::Connection {
                 expires_at: refresh.expires_at,
                 ..connection
             }))
         })
-        .await
+        .await?;
+        self.send(changes);
+        Ok(rotation)
     }
 
     pub(crate) async fn purge_connection_token_rows(
@@ -714,12 +762,30 @@ impl TursoStore {
         limit: usize,
     ) -> Result<u64, Error> {
         let db = self.connection().await?;
-        sql::execute(
-            &db,
-            "DELETE FROM connection_tokens WHERE hash IN \
-             (SELECT hash FROM connection_tokens WHERE expires_at < ?1 LIMIT ?2)",
-            vec![ts(before), sql::limit(limit)],
-        )
-        .await
+        let db = &*db;
+        let purged = transaction(db, async {
+            let rows = sql::query(
+                db,
+                "SELECT hash, connection_id FROM connection_tokens WHERE expires_at < ?1 \
+                 LIMIT ?2",
+                vec![ts(before), sql::limit(limit)],
+            )
+            .await?;
+            let mut connections = std::collections::BTreeSet::new();
+            for row in &rows {
+                sql::execute(
+                    db,
+                    "DELETE FROM connection_tokens WHERE hash = ?",
+                    vec![digest(row.digest(0)?)],
+                )
+                .await?;
+                connections.insert(row.text(1)?);
+            }
+            Ok::<_, Error>((rows.len() as u64, connections))
+        })
+        .await?;
+        let (count, connections) = purged;
+        self.send(connections.iter().map(|id| connection_changed(id)));
+        Ok(count)
     }
 }

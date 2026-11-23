@@ -19,6 +19,10 @@
 //! key is made with its first secret or signing key, under the current master key. Replacing the
 //! master key encrypts the data keys again, one tenant per transaction (`rewrap_data_keys`); the
 //! values and private keys are not touched. Every call runs alone on the store's one connection.
+//!
+//! `put` and the deletions send each secret they wrote or deleted as a change once they
+//! committed: the owners resume the calls parked for it. A read only counts, and the signing keys
+//! have no change: they send nothing.
 
 use std::collections::BTreeMap;
 
@@ -27,9 +31,9 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rewind_core::{SecretName, Timestamp};
 use rewind_engine::ports::{
-    DailyReads, Day, LastRead, MasterKeyId, NamespaceName, NewSecret, PrivateKey, PublicKey,
-    PutSecret, RETIRED_KEY_PUBLISHED, Secret, SecretError, SecretId, SecretMeta, SecretNamespace,
-    SecretReader, SecretStore, SigningKey, TenantId,
+    ControlPlaneChange, DailyReads, Day, LastRead, MasterKeyId, NamespaceName, NewSecret,
+    PrivateKey, PublicKey, PutSecret, RETIRED_KEY_PUBLISHED, Secret, SecretError, SecretId,
+    SecretMeta, SecretNamespace, SecretReader, SecretStore, SigningKey, TenantId,
 };
 use turso::{Connection, Row, Value};
 
@@ -533,7 +537,7 @@ impl SecretStore for TursoStore {
         let connection = self.connection().await?;
         let connection = &*connection;
         let keys = &self.inner.master_keys;
-        transaction(connection, async {
+        let put = transaction(connection, async {
             let key = data_key(connection, keys, tenant_id, true)
                 .await?
                 .ok_or_else(|| SecretError::Crypto("no data key".into()))?;
@@ -584,9 +588,14 @@ impl SecretStore for TursoStore {
                 params,
             )
             .await?;
-            Ok(PutSecret::Created)
+            Ok::<_, SecretError>(PutSecret::Created)
         })
-        .await
+        .await?;
+        self.send([ControlPlaneChange::Secret {
+            tenant: tenant_id.clone(),
+            secret: secret.id.clone(),
+        }]);
+        Ok(put)
     }
 
     async fn list(
@@ -693,7 +702,7 @@ impl SecretStore for TursoStore {
     async fn delete(&self, tenant_id: &TenantId, secret: &SecretId) -> Result<bool, SecretError> {
         let connection = self.connection().await?;
         let connection = &*connection;
-        transaction(connection, async {
+        let deleted = transaction(connection, async {
             let deleted = sql::execute(
                 connection,
                 "DELETE FROM secrets WHERE tenant = ? AND namespace = ? AND name = ?",
@@ -706,9 +715,16 @@ impl SecretStore for TursoStore {
                 secret_key(tenant_id, secret),
             )
             .await?;
-            Ok(deleted > 0)
+            Ok::<_, SecretError>(deleted > 0)
         })
-        .await
+        .await?;
+        if deleted {
+            self.send([ControlPlaneChange::Secret {
+                tenant: tenant_id.clone(),
+                secret: secret.clone(),
+            }]);
+        }
+        Ok(deleted)
     }
 
     async fn delete_namespace(
@@ -718,9 +734,18 @@ impl SecretStore for TursoStore {
     ) -> Result<usize, SecretError> {
         let connection = self.connection().await?;
         let connection = &*connection;
-        transaction(connection, async {
+        let deleted = transaction(connection, async {
             let params = || vec![tenant(tenant_id), text(namespace.as_str())];
-            let deleted = sql::execute(
+            let names = sql::query(
+                connection,
+                "SELECT name FROM secrets WHERE tenant = ? AND namespace = ?",
+                params(),
+            )
+            .await?
+            .iter()
+            .map(|row| SecretName::new(row.text(0)?).map_err(|err| Error::Corrupt(err.to_string())))
+            .collect::<Result<Vec<_>, Error>>()?;
+            sql::execute(
                 connection,
                 "DELETE FROM secrets WHERE tenant = ? AND namespace = ?",
                 params(),
@@ -732,9 +757,14 @@ impl SecretStore for TursoStore {
                 params(),
             )
             .await?;
-            Ok(usize::try_from(deleted).unwrap_or(usize::MAX))
+            Ok::<_, SecretError>(names)
         })
-        .await
+        .await?;
+        self.send(deleted.iter().map(|name| ControlPlaneChange::Secret {
+            tenant: tenant_id.clone(),
+            secret: SecretId::of_namespace(namespace.clone(), name.clone()),
+        }));
+        Ok(deleted.len())
     }
 
     async fn signing_key(

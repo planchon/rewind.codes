@@ -70,8 +70,8 @@ const MIGRATIONS: [(i64, &str, &str); SCHEMA_VERSION as usize] = [
     ),
     (
         13,
-        "run handles",
-        include_str!("../migrations/0013_run_handles.sql"),
+        "control plane",
+        include_str!("../migrations/0013_control_plane.sql"),
     ),
 ];
 

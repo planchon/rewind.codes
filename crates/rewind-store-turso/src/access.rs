@@ -6,13 +6,18 @@
 //! Every call holds the one connection for its whole duration, and the calls that read before
 //! they write (the kept role's last holder, a role in use, a claim) are one transaction: the
 //! check and the write are atomic.
+//!
+//! Every write sends what it changed once it committed, while it still holds the connection
+//! (`TursoStore::changes`): a key, a token or token key, a role, a grant, a connection, and the
+//! tenant for its default role. What only records a use (a connection used, an OAuth client or
+//! code) sends nothing: no change names it.
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
     AccessStore, ApiKey, ClientKind, CodeRedemption, Connection as PersonConnection,
-    ConnectionToken, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, NewConnection,
-    NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal, Role, RoleDeletion, Rotation,
-    StoreError, TenantId, Token, TokenKey, UserId,
+    ConnectionToken, ControlPlaneChange, Grant, GrantClaim, GrantDeletion, GrantWrite,
+    NamespaceName, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal,
+    Role, RoleDeletion, Rotation, StoreError, TenantId, Token, TokenKey, UserId,
 };
 
 use turso::{Connection, Row};
@@ -152,6 +157,34 @@ async fn remove_grant(
     Ok(())
 }
 
+pub(crate) fn grant_changed(tenant_id: &TenantId, principal: &Principal) -> ControlPlaneChange {
+    ControlPlaneChange::Grant {
+        tenant: tenant_id.clone(),
+        principal: principal.clone(),
+    }
+}
+
+fn role_changed(tenant_id: &TenantId, name: &str) -> ControlPlaneChange {
+    ControlPlaneChange::Role {
+        tenant: tenant_id.clone(),
+        name: name.to_owned(),
+    }
+}
+
+fn token_changed(tenant_id: &TenantId, hash: Digest) -> ControlPlaneChange {
+    ControlPlaneChange::Token {
+        tenant: tenant_id.clone(),
+        hash,
+    }
+}
+
+/// The tokens a statement selected as `tenant, hash`.
+fn tokens_of(rows: &[Row]) -> Result<Vec<(TenantId, Digest)>, Error> {
+    rows.iter()
+        .map(|row| Ok((row.tenant(0)?, row.digest(1)?)))
+        .collect()
+}
+
 /// Whether taking `principal`'s grant away from the role `keep` would leave the tenant without a
 /// member holding it. Keys and invitations never count.
 async fn holds_last(
@@ -210,9 +243,14 @@ impl AccessStore for TursoStore {
                 ],
             )
             .await?;
-            Ok(())
+            Ok::<_, StoreError>(())
         })
-        .await
+        .await?;
+        self.send([ControlPlaneChange::Key {
+            tenant: key.tenant.clone(),
+            hash: key.hash,
+        }]);
+        Ok(())
     }
 
     async fn find_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
@@ -244,13 +282,34 @@ impl AccessStore for TursoStore {
 
     async fn revoke_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
         let connection = self.connection().await?;
-        let revoked = sql::execute(
-            &connection,
-            "UPDATE api_keys SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL",
-            vec![ts(now), digest(hash)],
-        )
+        let connection = &*connection;
+        let revoked = transaction(connection, async {
+            let row = sql::query_row(
+                connection,
+                "SELECT tenant FROM api_keys WHERE hash = ? AND revoked_at IS NULL",
+                vec![digest(hash)],
+            )
+            .await?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            sql::execute(
+                connection,
+                "UPDATE api_keys SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL",
+                vec![ts(now), digest(hash)],
+            )
+            .await?;
+            Ok::<_, Error>(Some(row.tenant(0)?))
+        })
         .await?;
-        Ok(revoked > 0)
+        let Some(tenant_id) = revoked else {
+            return Ok(false);
+        };
+        self.send([ControlPlaneChange::Key {
+            tenant: tenant_id,
+            hash,
+        }]);
+        Ok(true)
     }
 
     // End users' tokens and token keys
@@ -288,9 +347,11 @@ impl AccessStore for TursoStore {
                 ],
             )
             .await?;
-            Ok(())
+            Ok::<_, StoreError>(())
         })
-        .await
+        .await?;
+        self.send([token_changed(&token.tenant, token.hash)]);
+        Ok(())
     }
 
     async fn find_token(&self, hash: Digest) -> Result<Option<Token>, StoreError> {
@@ -317,7 +378,11 @@ impl AccessStore for TursoStore {
             vec![ts(now), digest(hash), tenant(tenant_id)],
         )
         .await?;
-        Ok(revoked > 0)
+        if revoked == 0 {
+            return Ok(false);
+        }
+        self.send([token_changed(tenant_id, hash)]);
+        Ok(true)
     }
 
     async fn revoke_tokens(
@@ -327,13 +392,31 @@ impl AccessStore for TursoStore {
         now: Timestamp,
     ) -> Result<u64, StoreError> {
         let connection = self.connection().await?;
-        Ok(sql::execute(
-            &connection,
-            "UPDATE tokens SET revoked_at = ? \
-             WHERE tenant = ? AND namespace = ? AND revoked_at IS NULL",
-            vec![ts(now), tenant(tenant_id), text(namespace.as_str())],
-        )
-        .await?)
+        let connection = &*connection;
+        let revoked = transaction(connection, async {
+            let rows = sql::query(
+                connection,
+                "SELECT tenant, hash FROM tokens \
+                 WHERE tenant = ? AND namespace = ? AND revoked_at IS NULL",
+                vec![tenant(tenant_id), text(namespace.as_str())],
+            )
+            .await?;
+            sql::execute(
+                connection,
+                "UPDATE tokens SET revoked_at = ? \
+                 WHERE tenant = ? AND namespace = ? AND revoked_at IS NULL",
+                vec![ts(now), tenant(tenant_id), text(namespace.as_str())],
+            )
+            .await?;
+            tokens_of(&rows)
+        })
+        .await?;
+        self.send(
+            revoked
+                .iter()
+                .map(|(owner, hash)| token_changed(owner, *hash)),
+        );
+        Ok(revoked.len() as u64)
     }
 
     async fn count_tokens(
@@ -355,13 +438,33 @@ impl AccessStore for TursoStore {
 
     async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
         let connection = self.connection().await?;
-        Ok(sql::execute(
-            &connection,
-            "DELETE FROM tokens WHERE hash IN \
-             (SELECT hash FROM tokens WHERE expires_at < ?1 OR revoked_at < ?1 LIMIT ?2)",
-            vec![ts(before), sql::limit(limit)],
-        )
-        .await?)
+        let connection = &*connection;
+        let purged = transaction(connection, async {
+            let rows = sql::query(
+                connection,
+                "SELECT tenant, hash FROM tokens WHERE expires_at < ?1 OR revoked_at < ?1 \
+                 LIMIT ?2",
+                vec![ts(before), sql::limit(limit)],
+            )
+            .await?;
+            let purged = tokens_of(&rows)?;
+            for (_, hash) in &purged {
+                sql::execute(
+                    connection,
+                    "DELETE FROM tokens WHERE hash = ?",
+                    vec![digest(*hash)],
+                )
+                .await?;
+            }
+            Ok::<_, Error>(purged)
+        })
+        .await?;
+        self.send(
+            purged
+                .iter()
+                .map(|(owner, hash)| token_changed(owner, *hash)),
+        );
+        Ok(purged.len() as u64)
     }
 
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
@@ -395,9 +498,14 @@ impl AccessStore for TursoStore {
                 ],
             )
             .await?;
-            Ok(())
+            Ok::<_, StoreError>(())
         })
-        .await
+        .await?;
+        self.send([ControlPlaneChange::TokenKey {
+            tenant: key.tenant.clone(),
+            kid: key.kid.clone(),
+        }]);
+        Ok(())
     }
 
     async fn find_token_key(&self, kid: &str) -> Result<Option<TokenKey>, StoreError> {
@@ -436,7 +544,14 @@ impl AccessStore for TursoStore {
             vec![text(kid), tenant(tenant_id)],
         )
         .await?;
-        Ok(deleted > 0)
+        if deleted == 0 {
+            return Ok(false);
+        }
+        self.send([ControlPlaneChange::TokenKey {
+            tenant: tenant_id.clone(),
+            kid: kid.to_owned(),
+        }]);
+        Ok(true)
     }
 
     async fn put_role(&self, role: &Role) -> Result<(), StoreError> {
@@ -457,6 +572,7 @@ impl AccessStore for TursoStore {
             ],
         )
         .await?;
+        self.send([role_changed(&role.tenant, &role.name)]);
         Ok(())
     }
 
@@ -492,7 +608,7 @@ impl AccessStore for TursoStore {
     ) -> Result<RoleDeletion, StoreError> {
         let connection = self.connection().await?;
         let connection = &*connection;
-        transaction(connection, async {
+        let deletion = transaction(connection, async {
             let exists = sql::query_row(
                 connection,
                 "SELECT 1 FROM roles WHERE tenant = ? AND name = ?",
@@ -519,13 +635,17 @@ impl AccessStore for TursoStore {
             .await?;
             Ok::<_, StoreError>(RoleDeletion::Deleted)
         })
-        .await
+        .await?;
+        if deletion == RoleDeletion::Deleted {
+            self.send([role_changed(tenant_id, name)]);
+        }
+        Ok(deletion)
     }
 
     async fn put_grant(&self, grant: &Grant, keep: Option<&str>) -> Result<GrantWrite, StoreError> {
         let connection = self.connection().await?;
         let connection = &*connection;
-        transaction(connection, async {
+        let written = transaction(connection, async {
             if let Some(keep) = keep
                 && grant.role != keep
                 && holds_last(connection, &grant.tenant, &grant.principal, keep).await?
@@ -535,7 +655,11 @@ impl AccessStore for TursoStore {
             write_grant(connection, grant).await?;
             Ok::<_, StoreError>(GrantWrite::Written)
         })
-        .await
+        .await?;
+        if written == GrantWrite::Written {
+            self.send([grant_changed(&grant.tenant, &grant.principal)]);
+        }
+        Ok(written)
     }
 
     async fn grant(
@@ -569,7 +693,7 @@ impl AccessStore for TursoStore {
     ) -> Result<GrantDeletion, StoreError> {
         let connection = self.connection().await?;
         let connection = &*connection;
-        transaction(connection, async {
+        let deletion = transaction(connection, async {
             if find_grant(connection, tenant_id, principal)
                 .await?
                 .is_none()
@@ -584,7 +708,11 @@ impl AccessStore for TursoStore {
             remove_grant(connection, tenant_id, principal).await?;
             Ok::<_, StoreError>(GrantDeletion::Deleted)
         })
-        .await
+        .await?;
+        if deletion == GrantDeletion::Deleted {
+            self.send([grant_changed(tenant_id, principal)]);
+        }
+        Ok(deletion)
     }
 
     async fn claim_grant(
@@ -595,10 +723,12 @@ impl AccessStore for TursoStore {
     ) -> Result<GrantClaim, StoreError> {
         let connection = self.connection().await?;
         let connection = &*connection;
-        transaction(connection, async {
+        let mut changes = Vec::new();
+        let claim = transaction(connection, async {
             let pending = find_grant(connection, tenant_id, invitation).await?;
             if pending.is_some() {
                 remove_grant(connection, tenant_id, invitation).await?;
+                changes.push(grant_changed(tenant_id, invitation));
             }
             if let Some(existing) = find_grant(connection, tenant_id, user).await? {
                 return Ok(GrantClaim::AlreadyGranted(existing));
@@ -611,9 +741,12 @@ impl AccessStore for TursoStore {
                 ..pending
             };
             write_grant(connection, &claimed).await?;
+            changes.push(grant_changed(tenant_id, user));
             Ok::<_, StoreError>(GrantClaim::Claimed(claimed))
         })
-        .await
+        .await?;
+        self.send(changes);
+        Ok(claim)
     }
 
     async fn set_default_role(&self, tenant_id: &TenantId, role: &str) -> Result<(), StoreError> {
@@ -624,6 +757,10 @@ impl AccessStore for TursoStore {
             vec![tenant(tenant_id), text(role)],
         )
         .await?;
+        // The default role is a setting of the tenant.
+        self.send([ControlPlaneChange::Tenant {
+            tenant: tenant_id.clone(),
+        }]);
         Ok(())
     }
 

@@ -9,25 +9,52 @@
 //! (`connections_live` refuses a second one anyway). A connection's grants carry the built-in
 //! roles `reader` and `harness`, never a tenant's role, and a connection is never an owner: they
 //! take no lock of the tenant's grants.
+//!
+//! A write of a connection, of its tokens or of its grants sends, in its transaction, the
+//! connection's change and the change of each grant it wrote or deleted (`crate::changes`).
 
 use std::collections::BTreeMap;
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
     self, Access, ClientAuthMethod, ClientKind, CodeRedemption, ConnectionToken,
-    ConnectionTokenKind, Grant, NewConnection, NewToken, OAuthClient, OAuthCode,
-    OpenedOrganization, Principal, Rotation, StoreError, TenantId, UserId,
+    ConnectionTokenKind, ControlPlaneChange, Grant, NewConnection, NewToken, OAuthClient,
+    OAuthCode, OpenedOrganization, Principal, Rotation, StoreError, TenantId, UserId,
 };
 use serde_json::Value;
 use sqlx::PgConnection;
 use sqlx::Row as _;
 use sqlx::postgres::PgRow;
 
+use crate::access::grant_changed;
+use crate::changes::notify;
 use crate::codec::{decode_labels, encode_labels};
 use crate::sql::{Columns, Failure, bytes, opt_ts, retrying, tenant, ts};
 use crate::{Error, PostgresStore};
 
 type Fail = Failure<StoreError>;
+
+fn connection_changed(id: &str) -> ControlPlaneChange {
+    ControlPlaneChange::Connection { id: id.to_owned() }
+}
+
+/// Deletes the grants of a connection's principal, adding the change of each to `changes`.
+async fn delete_grants(
+    conn: &mut PgConnection,
+    principal: &Principal,
+    changes: &mut Vec<ControlPlaneChange>,
+) -> Result<(), Error> {
+    let tenants: Vec<String> =
+        sqlx::query_scalar("DELETE FROM grants WHERE principal = $1 RETURNING tenant")
+            .bind(principal.to_string())
+            .fetch_all(&mut *conn)
+            .await?;
+    for tenant_id in tenants {
+        let tenant_id = TenantId::new(tenant_id).map_err(|err| Error::Corrupt(err.to_string()))?;
+        changes.push(grant_changed(&tenant_id, principal));
+    }
+    Ok(())
+}
 
 const CLIENT_COLUMNS: &str = "id, kind, name, uri, logo_uri, redirect_uris, auth_method, \
      secret_hash, fetched_at, expires_at, created_at, last_used_at";
@@ -175,13 +202,14 @@ async fn open(
     connection: &ports::Connection,
     organizations: &[OpenedOrganization],
     now: Timestamp,
+    changes: &mut Vec<ControlPlaneChange>,
 ) -> Result<(), Error> {
-    let principal = connection.principal().to_string();
-    sqlx::query("DELETE FROM grants WHERE principal = $1")
-        .bind(principal.as_str())
-        .execute(&mut *conn)
-        .await?;
+    let grantee = connection.principal();
+    delete_grants(conn, &grantee, changes).await?;
+    changes.push(connection_changed(&connection.id));
+    let principal = grantee.to_string();
     for opened in organizations {
+        changes.push(grant_changed(&opened.tenant, &grantee));
         sqlx::query(
             "INSERT INTO grants (tenant, principal, role, allowed_labels, granted_by, granted_at) \
              VALUES ($1, $2, $3, $4::jsonb, $5, $6)",
@@ -199,11 +227,13 @@ async fn open(
 }
 
 /// Deletes the grants and the tokens of a connection.
-async fn forget(conn: &mut PgConnection, id: &str) -> Result<(), Error> {
-    sqlx::query("DELETE FROM grants WHERE principal = $1")
-        .bind(Principal::Connection(id.to_owned()).to_string())
-        .execute(&mut *conn)
-        .await?;
+async fn forget(
+    conn: &mut PgConnection,
+    id: &str,
+    changes: &mut Vec<ControlPlaneChange>,
+) -> Result<(), Error> {
+    changes.push(connection_changed(id));
+    delete_grants(conn, &Principal::Connection(id.to_owned()), changes).await?;
     sqlx::query("DELETE FROM connection_tokens WHERE connection_id = $1")
         .bind(id)
         .execute(&mut *conn)
@@ -212,7 +242,12 @@ async fn forget(conn: &mut PgConnection, id: &str) -> Result<(), Error> {
 }
 
 /// Revokes a live connection: its grants and tokens go. `false` when it is unknown or revoked.
-async fn revoke(conn: &mut PgConnection, id: &str, now: Timestamp) -> Result<bool, Error> {
+async fn revoke(
+    conn: &mut PgConnection,
+    id: &str,
+    now: Timestamp,
+    changes: &mut Vec<ControlPlaneChange>,
+) -> Result<bool, Error> {
     let revoked =
         sqlx::query("UPDATE connections SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL")
             .bind(id)
@@ -222,7 +257,7 @@ async fn revoke(conn: &mut PgConnection, id: &str, now: Timestamp) -> Result<boo
     if revoked.rows_affected() == 0 {
         return Ok(false);
     }
-    forget(conn, id).await?;
+    forget(conn, id, changes).await?;
     Ok(true)
 }
 
@@ -375,11 +410,13 @@ impl PostgresStore {
         let Some(code) = row.map(|row| code_from_row(&row)).transpose()? else {
             return Ok(CodeRedemption::Unknown);
         };
+        let mut changes = Vec::new();
         if code.used_at.is_some() {
             // A replay: its connection is revoked, and that is committed.
             if let Some(id) = &code.connection {
-                revoke(&mut tx, id, now).await?;
+                revoke(&mut tx, id, now, &mut changes).await?;
             }
+            notify(&mut tx, &changes).await?;
             tx.commit().await?;
             return Ok(CodeRedemption::Used);
         }
@@ -447,7 +484,7 @@ impl PostgresStore {
             now,
         )
         .await?;
-        open(&mut tx, &connection, &new.organizations, now).await?;
+        open(&mut tx, &connection, &new.organizations, now, &mut changes).await?;
         sqlx::query("UPDATE oauth_codes SET used_at = $2, connection_id = $3 WHERE hash = $1")
             .bind(bytes(hash))
             .bind(ts(now))
@@ -459,6 +496,7 @@ impl PostgresStore {
             .bind(ts(now))
             .execute(&mut *tx)
             .await?;
+        notify(&mut tx, &changes).await?;
         tx.commit().await?;
         Ok(CodeRedemption::Redeemed(connection))
     }
@@ -534,7 +572,9 @@ impl PostgresStore {
         else {
             return Ok(false);
         };
-        open(&mut tx, &connection, organizations, now).await?;
+        let mut changes = Vec::new();
+        open(&mut tx, &connection, organizations, now, &mut changes).await?;
+        notify(&mut tx, &changes).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -559,7 +599,9 @@ impl PostgresStore {
 
     async fn revoke_once(&self, id: &str, now: Timestamp) -> Result<bool, Fail> {
         let mut tx = self.pool.begin().await?;
-        let revoked = revoke(&mut tx, id, now).await?;
+        let mut changes = Vec::new();
+        let revoked = revoke(&mut tx, id, now, &mut changes).await?;
+        notify(&mut tx, &changes).await?;
         tx.commit().await?;
         Ok(revoked)
     }
@@ -588,13 +630,15 @@ impl PostgresStore {
         .bind(crate::sql::limit(limit))
         .fetch_all(&mut *tx)
         .await?;
+        let mut changes = Vec::new();
         for id in &ids {
-            forget(&mut tx, id).await?;
+            forget(&mut tx, id, &mut changes).await?;
             sqlx::query("DELETE FROM connections WHERE id = $1")
                 .bind(id.as_str())
                 .execute(&mut *tx)
                 .await?;
         }
+        notify(&mut tx, &changes).await?;
         tx.commit().await?;
         Ok(ids.len() as u64)
     }
@@ -647,7 +691,9 @@ impl PostgresStore {
             return Ok(Rotation::Unknown);
         };
         if token.used_at.is_some() {
-            revoke(&mut tx, &connection.id, now).await?;
+            let mut changes = Vec::new();
+            revoke(&mut tx, &connection.id, now, &mut changes).await?;
+            notify(&mut tx, &changes).await?;
             tx.commit().await?;
             return Ok(Rotation::Used);
         }
@@ -674,6 +720,7 @@ impl PostgresStore {
             .bind(ts(refresh.expires_at))
             .execute(&mut *tx)
             .await?;
+        notify(&mut tx, &[connection_changed(&connection.id)]).await?;
         tx.commit().await?;
         Ok(Rotation::Rotated(ports::Connection {
             expires_at: refresh.expires_at,
@@ -696,15 +743,22 @@ impl PostgresStore {
         before: Timestamp,
         limit: usize,
     ) -> Result<u64, Error> {
-        let purged = sqlx::query(
+        let mut tx = self.pool.begin().await?;
+        let purged: Vec<String> = sqlx::query_scalar(
             "DELETE FROM connection_tokens WHERE hash IN (\
                  SELECT hash FROM connection_tokens WHERE expires_at < $1 \
-                 LIMIT $2 FOR UPDATE SKIP LOCKED)",
+                 LIMIT $2 FOR UPDATE SKIP LOCKED) RETURNING connection_id",
         )
         .bind(ts(before))
         .bind(crate::sql::limit(limit))
-        .execute(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
-        Ok(purged.rows_affected())
+        let connections: std::collections::BTreeSet<&str> =
+            purged.iter().map(String::as_str).collect();
+        let changes: Vec<ControlPlaneChange> =
+            connections.into_iter().map(connection_changed).collect();
+        notify(&mut tx, &changes).await?;
+        tx.commit().await?;
+        Ok(purged.len() as u64)
     }
 }

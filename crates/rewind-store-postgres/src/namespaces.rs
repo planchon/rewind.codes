@@ -50,7 +50,7 @@ pub(crate) async fn lock_tenant(
 }
 
 /// The six columns of a [`Quotas`], in this order, prefixed (`default_` for the defaults).
-fn quota_columns(prefix: &str) -> String {
+pub(crate) fn quota_columns(prefix: &str) -> String {
     [
         "cpu_per_month_ms",
         "active_runs",
@@ -63,7 +63,7 @@ fn quota_columns(prefix: &str) -> String {
     .join(", ")
 }
 
-fn quotas_from_row(row: &PgRow, first: usize) -> Result<Quotas, Error> {
+pub(crate) fn quotas_from_row(row: &PgRow, first: usize) -> Result<Quotas, Error> {
     Ok(Quotas {
         cpu_per_month: row.opt_duration(first)?,
         active_runs: row.opt_u32(first + 1)?,
@@ -75,7 +75,7 @@ fn quotas_from_row(row: &PgRow, first: usize) -> Result<Quotas, Error> {
 }
 
 /// The values of the six columns of a [`Quotas`].
-fn quota_values(quotas: &Quotas) -> [Option<i64>; 6] {
+pub(crate) fn quota_values(quotas: &Quotas) -> [Option<i64>; 6] {
     [
         quotas.cpu_per_month.map(ms),
         quotas.active_runs.map(i64::from),
@@ -90,12 +90,12 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn name_of(text: String) -> Result<NamespaceName, Error> {
+pub(crate) fn name_of(text: String) -> Result<NamespaceName, Error> {
     NamespaceName::new(text.clone())
         .map_err(|_| Error::Corrupt(format!("invalid namespace {text:?}")))
 }
 
-fn display_name_of(text: String) -> Result<DisplayName, Error> {
+pub(crate) fn display_name_of(text: String) -> Result<DisplayName, Error> {
     DisplayName::new(text.clone())
         .map_err(|_| Error::Corrupt(format!("invalid display name {text:?}")))
 }
