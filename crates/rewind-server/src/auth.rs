@@ -510,7 +510,7 @@ pub(crate) fn namespace_header(
     };
     let invalid = || {
         ApiError::invalid(
-            "Rewind-Namespace: expected 1 to 128 ASCII letters, digits, -, _, ., : and @",
+            "Rewind-Namespace: expected 1 to 128 ASCII letters, digits, -, _, ., : and @, not starting with rewind:",
         )
     };
     let text = value.to_str().map_err(|_| invalid())?;

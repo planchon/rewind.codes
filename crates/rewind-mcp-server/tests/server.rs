@@ -618,7 +618,7 @@ async fn checking_testing_and_running_need_a_namespace() {
     assert_eq!(invalid.is_error, Some(true));
     assert_eq!(
         text(&invalid),
-        "check_script: `namespace`: invalid namespace: \"alice smith\": expected 1 to 128 ASCII letters, digits, -, _, ., : and @"
+        "check_script: `namespace`: invalid namespace: \"alice smith\": expected 1 to 128 ASCII letters, digits, -, _, ., : and @, not starting with rewind:"
     );
     assert!(log.lock().unwrap().is_empty());
 
