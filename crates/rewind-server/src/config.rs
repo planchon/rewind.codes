@@ -2,32 +2,34 @@
 //!
 //! ```text
 //! rewind server --embedded [--dir .rewind] [--virtual-time | --real-time] [--idle-timeout 10m]
-//! rewind server --store turso:<path> [--blobs <dir> | s3://<bucket>] [--listen 127.0.0.1:8080]
-//!            [--role api|worker]… [--public-url https://…] …
+//! rewind server --store postgres://… --bucket s3://<bucket> --cluster-secret … [--partitions 64]
+//!            [--listen 0.0.0.0:8080] [--link-listen 0.0.0.0:7070 --link-address <host>:7070]
+//!            [--executors-only] [--pool <name>] [--public-url https://…] …
 //! rewind server --store … --master-key <new> --previous-master-keys <old> --rewrap-data-keys
+//! rewind server migrate-runs --store postgres://… --bucket … [the same options]
 //! ```
 //!
 //! Every option also reads an environment variable (`REWIND_*`), for deployments; WorkOS's four
 //! keep WorkOS's names (`WORKOS_*`, `archi/07-code-architecture.md`, "Sign-in (`/auth`)"). The
-//! secrets (`--master-key`, `--previous-master-keys`, `--admin-key`, S3 keys, WorkOS's API key
-//! and cookie password) are never printed: a master key is named by its id, the first 8 bytes of
-//! its SHA-256 in hex.
+//! secrets (`--master-key`, `--previous-master-keys`, `--admin-key`, `--cluster-secret`, S3 keys,
+//! WorkOS's API key and cookie password) are never printed: a master key is named by its id, the
+//! first 8 bytes of its SHA-256 in hex.
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::net::SocketAddr;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
-use rewind_engine::ports::{MasterKeyId, Quotas, Retention, TenantId, TenantScope};
-use rewind_engine::{CacheConfig, EngineConfig};
+use rewind_engine::CacheConfig;
+use rewind_engine::ports::{MasterKeyId, NodeId, Quotas, Retention, TenantId};
 use rewind_outbound::{InternalAllowList, ToolEgress};
 
-use crate::wiring::blobs::{BlobLocation, S3Options};
-use crate::wiring::store::StoreLocation;
+use crate::wiring::bucket::{BucketLocation, S3Options};
+use crate::wiring::control::StoreLocation;
 
 /// A configuration that cannot be served, with what to change.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,16 +49,22 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// `rewind server`: the engine host. Runs in the foreground until stopped.
+/// The partitions of a deployment, unless `--partitions` says otherwise.
+pub(crate) const PARTITIONS: u16 = 64;
+
+/// `rewind server`: a node of the run plane and its HTTP edge. Runs in the foreground until
+/// stopped.
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "rewind server",
-    about = "Runs the Rewind server in the foreground: the HTTP API /v1, the workers, the dashboard",
+    about = "Runs a Rewind node in the foreground: the HTTP API /v1, the dashboard, the owners of \
+             its partitions and its executors",
     version
 )]
 pub struct ServerArgs {
-    /// The embedded server of a `.rewind/` directory: Turso and local files in the directory, the
-    /// API on its unix socket `server.sock` (no key, tenant `local`), both roles.
+    /// The embedded server of a `.rewind/` directory: one node owning the one partition, SlateDB
+    /// on local files and Turso in the directory, the API on its unix socket `server.sock` (no
+    /// key, tenant `local`).
     #[arg(long)]
     pub embedded: bool,
 
@@ -84,28 +92,41 @@ pub struct ServerArgs {
     #[arg(long, hide = true)]
     pub notify_ready: bool,
 
-    /// The roles of this process: `api` (HTTP API, no script runs) and `worker` (activations,
-    /// tool dispatch, scheduler, projector, retention). Both by default.
-    #[arg(long = "role", value_enum, value_delimiter = ',')]
-    pub roles: Vec<RoleArg>,
+    /// Run activations sent by the owners of other nodes, for the epochs of this build, and own
+    /// no partition: no HTTP route but the node link (`archi/06-storage-and-scale.md`,
+    /// "Sandboxed nodes"). Kept up after an upgrade for the runs of the previous epoch.
+    #[arg(long, env = "REWIND_EXECUTORS_ONLY")]
+    pub executors_only: bool,
+
+    /// The pool of executors this node belongs to: the owners send the activations of the
+    /// tenants of this pool here. The shared pool without it.
+    #[arg(long, env = "REWIND_POOL")]
+    pub pool: Option<String>,
 
     /// Where the HTTP API listens.
     #[arg(long, env = "REWIND_LISTEN", default_value = "127.0.0.1:8080")]
     pub listen: SocketAddr,
 
-    /// The store: `turso:<path>`, or `postgres://…` for a deployment.
+    /// The control plane: `turso:<path>` for a single node, or `postgres://…` for a deployment.
     #[arg(long, env = "REWIND_STORE", hide_env_values = true)]
     pub store: Option<String>,
 
-    /// Large payloads and archives: a directory, or `s3://<bucket>`. Next to a Turso database
-    /// by default.
-    #[arg(long, env = "REWIND_BLOBS")]
-    pub blobs: Option<String>,
+    /// The database of the same Postgres server where the nodes take their liveness locks,
+    /// where nothing else lives (a node waiting on a lock holds back the cleanup of that
+    /// database only).
+    #[arg(long, env = "REWIND_CLUSTER_DATABASE", default_value = "postgres")]
+    pub cluster_database: String,
 
-    /// The endpoint of an S3-compatible service (MinIO, R2…).
+    /// The partitions, the archive and the blobs: a directory, or `s3://<bucket>` (R2 or any
+    /// S3-compatible service, with `--s3-*`). Next to a Turso database by default.
+    #[arg(long, env = "REWIND_BUCKET")]
+    pub bucket: Option<String>,
+
+    /// The endpoint of an S3-compatible service (R2, MinIO…).
     #[arg(long, env = "REWIND_S3_ENDPOINT")]
     pub s3_endpoint: Option<String>,
 
+    /// `auto` for R2.
     #[arg(long, env = "REWIND_S3_REGION")]
     pub s3_region: Option<String>,
 
@@ -118,6 +139,30 @@ pub struct ServerArgs {
 
     #[arg(long, env = "REWIND_S3_SECRET_ACCESS_KEY", hide_env_values = true)]
     pub s3_secret_access_key: Option<String>,
+
+    /// The partitions of the deployment: 64 by default, 1 embedded. Fixed once a deployment
+    /// holds runs: more only serve the namespaces created after them.
+    #[arg(long, env = "REWIND_PARTITIONS")]
+    pub partitions: Option<u16>,
+
+    /// The secret every node of the deployment shares: it authenticates the node link.
+    /// Required with Postgres.
+    #[arg(long, env = "REWIND_CLUSTER_SECRET", hide_env_values = true)]
+    pub cluster_secret: Option<String>,
+
+    /// Where the node link listens, on the private network.
+    #[arg(long, env = "REWIND_LINK_LISTEN", default_value = "0.0.0.0:7070")]
+    pub link_listen: SocketAddr,
+
+    /// Where the other nodes reach this node's link: `host:port` on the private network. The
+    /// host name and the port of `--link-listen` by default.
+    #[arg(long, env = "REWIND_LINK_ADDRESS")]
+    pub link_address: Option<String>,
+
+    /// This node's id: 1 to 64 letters, digits, `-`, `_` and `.`. The host name and the process
+    /// id by default.
+    #[arg(long, env = "REWIND_NODE_ID")]
+    pub node_id: Option<String>,
 
     /// The master key of the secret store: 32 bytes in base64. It encrypts each tenant's data
     /// key. The embedded server keeps its own in `.rewind/master.key`.
@@ -155,26 +200,14 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_PUBLIC_URL")]
     pub public_url: Option<String>,
 
-    /// This worker's name: the owner of its leases and claims. The host name and the process
-    /// id by default.
-    #[arg(long, env = "REWIND_WORKER_NAME")]
-    pub worker_name: Option<String>,
+    /// Activations run at once on this node: its executor threads. The machine's cores by
+    /// default.
+    #[arg(long, env = "REWIND_EXECUTORS")]
+    pub executors: Option<usize>,
 
-    /// Serve only these tenants (a worker pool per tenant). Repeat for several.
-    #[arg(long = "tenant", conflicts_with = "except_tenants")]
-    pub tenants: Vec<String>,
-
-    /// Serve every tenant but these.
-    #[arg(long = "except-tenant")]
-    pub except_tenants: Vec<String>,
-
-    /// Activations run at once.
-    #[arg(long, env = "REWIND_ACTIVATIONS")]
-    pub activations: Option<usize>,
-
-    /// Tool calls dispatched at once.
-    #[arg(long, env = "REWIND_DISPATCHES", default_value_t = 64)]
-    pub dispatches: usize,
+    /// Tool calls sent at once by this node.
+    #[arg(long, env = "REWIND_CALLS", default_value_t = 256)]
+    pub calls: usize,
 
     /// The ceiling of the tenants this server creates (`archi/06-storage-and-scale.md`,
     /// "Quotas"): the runs active at once across their namespaces; one more is refused with 429.
@@ -255,48 +288,33 @@ pub struct ServerArgs {
     pub default_ttl: Option<Duration>,
 
     /// The longest TTL a run may ask for: 365 days by default. After an upgrade that changes the
-    /// determinism epoch, the worker pool of the previous epoch stays up at most this long.
+    /// determinism epoch, the executors of the previous epoch stay up at most this long.
     #[arg(long, env = "REWIND_MAX_TTL", value_parser = parse_duration)]
     pub max_ttl: Option<Duration>,
 
-    /// The script instances a worker keeps in memory after their activation (sticky
+    /// The script instances a node keeps in memory after their activation (sticky
     /// execution): 500 by default. 0 turns the cache off, and every activation replays.
     #[arg(long, env = "REWIND_CACHE_INSTANCES")]
     pub cache_instances: Option<usize>,
 
     /// The memory the cached instances may hold together, as V8 measures their heaps: `4GiB`
-    /// by default, or `512MiB`, or bytes. Keep it well below the worker's memory limit.
+    /// by default, or `512MiB`, or bytes. Keep it well below the node's memory limit.
     #[arg(long, env = "REWIND_CACHE_MEMORY", value_parser = parse_bytes)]
     pub cache_memory: Option<u64>,
 
-    /// For the tenants this server creates: how long a finished run's journal stays in the
-    /// store before it is archived. 30 days by default.
-    #[arg(long, env = "REWIND_JOURNAL_RETENTION", value_parser = parse_duration)]
-    pub journal_retention: Option<Duration>,
-
-    /// For the tenants this server creates: how long an archived journal is kept before the
-    /// run is deleted. 365 days by default.
-    #[arg(long, env = "REWIND_ARCHIVE_RETENTION", value_parser = parse_duration)]
-    pub archive_retention: Option<Duration>,
-
-    /// For the tenants this server creates: how long the read model keeps a finished run.
-    /// 90 days by default.
-    #[arg(long, env = "REWIND_READ_MODEL_RETENTION", value_parser = parse_duration)]
-    pub read_model_retention: Option<Duration>,
-
-    /// For the tenants this server creates: how long a payload no run references any more is
-    /// kept. 24 hours by default.
-    #[arg(long, env = "REWIND_PAYLOAD_GRACE", value_parser = parse_duration)]
-    pub payload_grace: Option<Duration>,
+    /// For the tenants this server creates: how long an ended run (its summary, its sealed
+    /// journals and its payloads) is kept after it ended. 365 days by default.
+    #[arg(long, env = "REWIND_RETENTION", value_parser = parse_duration)]
+    pub retention: Option<Duration>,
 
     /// The WorkOS environment's client, `client_…`: with the three other `WORKOS_*`, the
     /// dashboard's sign-in (`/auth`) and members' access tokens on `/v1`. The four are given
-    /// together or not at all; without them the server accepts only API keys. Used by the api
-    /// role only; the embedded server ignores them.
+    /// together or not at all; without them the server accepts only API keys. Never given to a
+    /// node started with `--executors-only`; the embedded server ignores them.
     #[arg(long, env = "WORKOS_CLIENT_ID")]
     pub workos_client_id: Option<String>,
 
-    /// The WorkOS environment's secret key, `sk_…`. On the api role only, never on a worker.
+    /// The WorkOS environment's secret key, `sk_…`.
     #[arg(long, env = "WORKOS_API_KEY", hide_env_values = true)]
     pub workos_api_key: Option<String>,
 
@@ -310,12 +328,7 @@ pub struct ServerArgs {
     #[arg(long, env = "WORKOS_REDIRECT_URI")]
     pub workos_redirect_uri: Option<String>,
 
-    /// The most runs one pass of the change stream's loop reads (`GET /v1/changes`): more
-    /// changed at once sends `resync`. For the tests.
-    #[arg(long, hide = true, default_value_t = crate::changes::PER_PASS)]
-    pub changes_per_pass: usize,
-
-    /// The store on the engine's in-memory adapters instead of `--store`: set by
+    /// The control plane on the engine's in-memory adapters instead of `--store`: set by
     /// `rewind_server::start_in_memory`, for the server's tests, never from the command line.
     #[arg(skip)]
     pub(crate) in_memory: bool,
@@ -325,12 +338,6 @@ pub struct ServerArgs {
 pub enum OtlpArg {
     Grpc,
     Http,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum RoleArg {
-    Api,
-    Worker,
 }
 
 fn parse_duration(text: &str) -> Result<Duration, String> {
@@ -482,21 +489,48 @@ impl fmt::Debug for MasterKeyRing {
 /// How the server listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Listen {
-    /// The embedded server: the unix socket of its directory.
-    Embedded {
-        dir: PathBuf,
+    /// The embedded server: the unix socket of its directory, the node link in the process.
+    Embedded { dir: PathBuf },
+    /// A deployed node: the HTTP edge on TCP (none with `--executors-only`), and the node link
+    /// on its own port when the deployment has a cluster secret.
+    Tcp {
+        edge: Option<SocketAddr>,
+        link: Option<LinkListen>,
     },
-    Tcp(SocketAddr),
+}
+
+/// The node link of a deployed node (`archi/06-storage-and-scale.md`, "The edge").
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LinkListen {
+    pub(crate) listen: SocketAddr,
+    /// What the other nodes dial: `host:port`.
+    pub(crate) address: String,
+    pub(crate) secret: String,
+}
+
+impl fmt::Debug for LinkListen {
+    /// The secret is never printed.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkListen")
+            .field("listen", &self.listen)
+            .field("address", &self.address)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the command line resolves to.
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) listen: Listen,
-    pub(crate) api: bool,
-    pub(crate) worker: bool,
     pub(crate) store: StoreLocation,
-    pub(crate) blobs: BlobLocation,
+    pub(crate) bucket: BucketLocation,
+    pub(crate) partitions: NonZeroU16,
+    pub(crate) cluster_database: String,
+    pub(crate) node: NodeId,
+    pub(crate) executors_only: bool,
+    pub(crate) pool: Option<String>,
+    pub(crate) executors: usize,
+    pub(crate) calls: usize,
     /// `None` for the embedded server, which keeps its own.
     pub(crate) master_keys: Option<MasterKeyRing>,
     /// `--rewrap-data-keys`: rewrap, print, exit.
@@ -504,10 +538,6 @@ pub(crate) struct Config {
     pub(crate) admin_key: Option<String>,
     pub(crate) admin_tenant: TenantId,
     pub(crate) public_url: Option<String>,
-    pub(crate) worker_name: String,
-    pub(crate) tenants: TenantScope,
-    pub(crate) activations: usize,
-    pub(crate) dispatches: usize,
     /// The ceiling of the tenants this server creates.
     pub(crate) ceiling: Quotas,
     pub(crate) allow_stdio: bool,
@@ -528,15 +558,13 @@ pub(crate) struct Config {
     pub(crate) otlp: Option<rewind_otel::OtlpConfig>,
     pub(crate) default_ttl: Duration,
     pub(crate) max_ttl: Duration,
-    /// The bounds of the workers' sticky instance cache.
+    /// The bounds of the node's sticky instance cache.
     pub(crate) cache: CacheConfig,
     /// The retention of the tenants this server creates.
     pub(crate) retention: Retention,
-    /// The dashboard's sign-in, for the api role: `None` without WorkOS, on a worker alone and
-    /// on the embedded server.
+    /// The dashboard's sign-in: `None` without WorkOS, on an executors-only node and on the
+    /// embedded server.
     pub(crate) workos: Option<WorkOsConfig>,
-    /// The most runs a pass of the change stream's loop reads.
-    pub(crate) changes_per_pass: usize,
 }
 
 impl Config {
@@ -545,37 +573,14 @@ impl Config {
     }
 }
 
+/// A run's TTL without one, and the longest one, by default.
+const DEFAULT_TTL: Duration = Duration::from_secs(30 * 86_400);
+const MAX_TTL: Duration = Duration::from_secs(365 * 86_400);
+
 impl ServerArgs {
     pub(crate) fn resolve(self) -> Result<Config, ConfigError> {
-        let tenant = |id: &String| {
-            TenantId::new(id.clone()).map_err(|error| ConfigError::new(error.to_string()))
-        };
-        let tenants = if !self.tenants.is_empty() {
-            TenantScope::Only(
-                self.tenants
-                    .iter()
-                    .map(tenant)
-                    .collect::<Result<BTreeSet<_>, _>>()?,
-            )
-        } else if !self.except_tenants.is_empty() {
-            TenantScope::Except(
-                self.except_tenants
-                    .iter()
-                    .map(tenant)
-                    .collect::<Result<BTreeSet<_>, _>>()?,
-            )
-        } else {
-            TenantScope::All
-        };
-        let (api, worker) = if self.roles.is_empty() {
-            (true, true)
-        } else {
-            (
-                self.roles.contains(&RoleArg::Api),
-                self.roles.contains(&RoleArg::Worker),
-            )
-        };
         let s3 = S3Options {
+            bucket: String::new(),
             endpoint: self.s3_endpoint.clone(),
             region: self.s3_region.clone(),
             allow_http: self.s3_allow_http,
@@ -589,19 +594,23 @@ impl ServerArgs {
         } else {
             None
         };
-        let worker_name = self.worker_name.clone().unwrap_or_else(default_worker_name);
+        let node = match &self.node_id {
+            Some(id) => NodeId::new(id.clone()).map_err(|error| {
+                ConfigError::new(format!("--node-id (REWIND_NODE_ID): {error}"))
+            })?,
+            None => default_node_id(),
+        };
         let otlp = crate::wiring::telemetry::otlp(&self);
-        let activations = self
-            .activations
+        let executors = self
+            .executors
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, usize::from));
-        if activations == 0 || self.dispatches == 0 {
+        if executors == 0 || self.calls == 0 {
             return Err(ConfigError::new(
-                "--activations and --dispatches must be at least 1",
+                "--executors and --calls must be at least 1",
             ));
         }
-        let engine = EngineConfig::default();
-        let default_ttl = self.default_ttl.unwrap_or(engine.default_ttl);
-        let max_ttl = self.max_ttl.unwrap_or(engine.max_ttl);
+        let default_ttl = self.default_ttl.unwrap_or(DEFAULT_TTL);
+        let max_ttl = self.max_ttl.unwrap_or(MAX_TTL);
         if default_ttl.is_zero() || default_ttl > max_ttl {
             return Err(ConfigError::new(format!(
                 "--default-ttl ({}) must be above zero and at most --max-ttl ({})",
@@ -609,17 +618,18 @@ impl ServerArgs {
                 rewind_api::common::Duration::from(max_ttl),
             )));
         }
+        let defaults = CacheConfig::default();
         let cache = CacheConfig {
-            max_instances: self.cache_instances.unwrap_or(engine.cache.max_instances),
-            max_bytes: self.cache_memory.unwrap_or(engine.cache.max_bytes),
+            max_instances: self.cache_instances.unwrap_or(defaults.max_instances),
+            max_bytes: self.cache_memory.unwrap_or(defaults.max_bytes),
         };
-        let defaults = Retention::default();
-        let retention = Retention {
-            journal: self.journal_retention.unwrap_or(defaults.journal),
-            archive: self.archive_retention.unwrap_or(defaults.archive),
-            read_model: self.read_model_retention.unwrap_or(defaults.read_model),
-            payload_grace: self.payload_grace.unwrap_or(defaults.payload_grace),
-        };
+        let mut retention = Retention::default();
+        if let Some(kept) = self.retention {
+            if kept.is_zero() {
+                return Err(ConfigError::new("--retention must be above zero"));
+            }
+            retention.archive = kept;
+        }
         if let Some(url) = &self.public_url
             && !(url.starts_with("http://") || url.starts_with("https://"))
         {
@@ -627,6 +637,11 @@ impl ServerArgs {
                 "--public-url {url:?}: expected an http:// or https:// URL"
             )));
         }
+        let partitions = |default: u16| {
+            NonZeroU16::new(self.partitions.unwrap_or(default)).ok_or_else(|| {
+                ConfigError::new("--partitions must be at least 1: a deployment has 64")
+            })
+        };
 
         if self.embedded {
             if self.rewrap_data_keys {
@@ -635,15 +650,21 @@ impl ServerArgs {
                      not apply to it",
                 ));
             }
-            if !self.roles.is_empty() {
+            if self.store.is_some() || self.bucket.is_some() {
                 return Err(ConfigError::new(
-                    "the embedded server takes both roles: --role does not apply to it",
+                    "the embedded server keeps everything in --dir: --store and --bucket do not \
+                     apply to it",
                 ));
             }
-            if self.store.is_some() || self.blobs.is_some() {
+            if self.executors_only || self.pool.is_some() {
                 return Err(ConfigError::new(
-                    "the embedded server keeps everything in --dir: --store and --blobs do not \
-                     apply to it",
+                    "the embedded server is one node that owns its partition: --executors-only \
+                     and --pool do not apply to it",
+                ));
+            }
+            if self.partitions.is_some_and(|count| count != 1) {
+                return Err(ConfigError::new(
+                    "the embedded server has one partition: --partitions does not apply to it",
                 ));
             }
             if !self.allow_internal_tools.is_empty() {
@@ -654,11 +675,16 @@ impl ServerArgs {
             }
             let dir = self.dir.clone();
             return Ok(Config {
-                store: StoreLocation::Turso(dir.join("journal.db")),
-                blobs: BlobLocation::Files(dir.join("blobs")),
+                store: StoreLocation::Turso(dir.join("control.db")),
+                bucket: BucketLocation::Files(dir.clone()),
+                partitions: NonZeroU16::MIN,
+                cluster_database: self.cluster_database,
                 listen: Listen::Embedded { dir },
-                api: true,
-                worker: true,
+                node,
+                executors_only: false,
+                pool: None,
+                executors,
+                calls: self.calls,
                 master_keys: None,
                 rewrap_data_keys: false,
                 admin_key: None,
@@ -666,10 +692,6 @@ impl ServerArgs {
                 public_url: self
                     .public_url
                     .map(|url| url.trim_end_matches('/').to_owned()),
-                worker_name,
-                tenants,
-                activations,
-                dispatches: self.dispatches,
                 ceiling: Quotas::default(),
                 allow_stdio: true,
                 tool_egress: ToolEgress::open(),
@@ -686,13 +708,9 @@ impl ServerArgs {
                 // The embedded server's socket takes no token: WorkOS's variables, which a
                 // developer's shell may hold for another project, do not apply to it.
                 workos: None,
-                changes_per_pass: self.changes_per_pass.max(1),
             });
         }
 
-        if !api && !worker {
-            return Err(ConfigError::new("--role takes api, worker, or both"));
-        }
         let internal_tools = InternalAllowList::parse(&self.allow_internal_tools)
             .map_err(|error| ConfigError::new(format!("--allow-internal-tools: {error}")))?;
         let store = if self.in_memory {
@@ -700,38 +718,68 @@ impl ServerArgs {
         } else {
             let store_text = self.store.clone().ok_or_else(|| {
                 ConfigError::new(
-                    "--store is required (turso:<path>), or run the embedded server with \
-                     --embedded",
+                    "--store is required (postgres://… or turso:<path>), or run the embedded \
+                     server with --embedded",
                 )
             })?;
             StoreLocation::parse(&store_text)?
         };
-        let blobs = match &self.blobs {
-            Some(blobs) => BlobLocation::parse(blobs, s3)?,
+        let bucket = match &self.bucket {
+            Some(bucket) => BucketLocation::parse(bucket, s3)?,
             None => match &store {
-                StoreLocation::Turso(path) => BlobLocation::Files(
+                StoreLocation::Turso(path) => BucketLocation::Files(
                     path.parent()
-                        .map_or_else(|| PathBuf::from("blobs"), |dir| dir.join("blobs")),
+                        .map_or_else(|| PathBuf::from("."), PathBuf::from),
                 ),
                 StoreLocation::Postgres(_) => {
                     return Err(ConfigError::new(
-                        "--blobs is required with Postgres: s3://<bucket>, or a directory every \
-                         worker shares",
+                        "--bucket is required with Postgres: s3://<bucket> (R2 or any \
+                         S3-compatible service), where every node reads the partitions",
                     ));
                 }
                 StoreLocation::Memory => {
                     return Err(ConfigError::new(
-                        "--blobs is required with the in-memory store: a directory",
+                        "--bucket is required with the in-memory control plane: a directory",
                     ));
                 }
             },
         };
         if matches!(store, StoreLocation::Postgres(_)) && virtual_time == Some(true) {
             return Err(ConfigError::new(
-                "--virtual-time is for a Turso store: a shared Postgres database runs in real \
-                 time",
+                "--virtual-time is for a single node on Turso: a deployment on Postgres runs in \
+                 real time",
             ));
         }
+        let link = match (&store, self.cluster_secret.as_deref().map(str::trim)) {
+            (_, Some(secret)) if secret.len() < 32 => {
+                return Err(ConfigError::new(
+                    "--cluster-secret must be at least 32 characters: it authenticates the node \
+                     link (openssl rand -hex 32)",
+                ));
+            }
+            (StoreLocation::Postgres(_), None) => {
+                return Err(ConfigError::new(
+                    "--cluster-secret (REWIND_CLUSTER_SECRET) is required with Postgres: the \
+                     nodes of the deployment reach each other through the node link it \
+                     authenticates",
+                ));
+            }
+            (StoreLocation::Postgres(_), Some(secret)) => Some(LinkListen {
+                listen: self.link_listen,
+                address: match &self.link_address {
+                    Some(address) => address.clone(),
+                    None => default_link_address(self.link_listen),
+                },
+                secret: secret.to_owned(),
+            }),
+            _ if self.executors_only || self.pool.is_some() => {
+                return Err(ConfigError::new(
+                    "--executors-only and --pool are for a deployment of several nodes on \
+                     Postgres",
+                ));
+            }
+            _ => None,
+        };
         let master_key = self.master_key.as_deref().ok_or_else(|| {
             ConfigError::new(
                 "--master-key (REWIND_MASTER_KEY) is required: 32 random bytes in base64, which \
@@ -765,18 +813,30 @@ impl ServerArgs {
             ));
         }
         let workos = self.workos()?;
-        if workos.is_some() && !api {
+        if workos.is_some() && self.executors_only {
             tracing::warn!(
-                "the WORKOS_* variables are set on a worker, which accepts only API keys: they \
-                 are not used, and WORKOS_API_KEY belongs on the api role only"
+                "the WORKOS_* variables are set on an executors-only node, which serves no HTTP \
+                 route: they are not used, and WORKOS_API_KEY belongs on the other nodes only"
             );
         }
+        let partitions = partitions(match store {
+            StoreLocation::Turso(_) => 1,
+            _ => PARTITIONS,
+        })?;
         Ok(Config {
-            listen: Listen::Tcp(self.listen),
-            api,
-            worker,
+            listen: Listen::Tcp {
+                edge: (!self.executors_only).then_some(self.listen),
+                link,
+            },
             store,
-            blobs,
+            bucket,
+            partitions,
+            cluster_database: self.cluster_database,
+            node,
+            executors_only: self.executors_only,
+            pool: self.pool,
+            executors,
+            calls: self.calls,
             master_keys: Some(master_keys),
             rewrap_data_keys: self.rewrap_data_keys,
             admin_key: self.admin_key,
@@ -784,10 +844,6 @@ impl ServerArgs {
             public_url: self
                 .public_url
                 .map(|url| url.trim_end_matches('/').to_owned()),
-            worker_name,
-            tenants,
-            activations,
-            dispatches: self.dispatches,
             ceiling: Quotas {
                 cpu_per_month: self.quota_cpu_per_month,
                 active_runs: self.quota_active_runs,
@@ -808,8 +864,7 @@ impl ServerArgs {
             max_ttl,
             cache,
             retention,
-            workos: workos.filter(|_| api),
-            changes_per_pass: self.changes_per_pass.max(1),
+            workos: workos.filter(|_| !self.executors_only),
         })
     }
 }
@@ -827,12 +882,37 @@ pub(crate) fn parse_master_key(text: &str) -> Result<[u8; 32], ConfigError> {
     })
 }
 
-pub(crate) fn default_worker_name() -> String {
-    let host = std::env::var("HOSTNAME")
+/// The host name, the characters a node id refuses replaced, and the process id.
+pub(crate) fn default_node_id() -> NodeId {
+    let host: String = host_name()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect();
+    NodeId::new(format!("{host}-{}", std::process::id()))
+        .unwrap_or_else(|_| NodeId::new(format!("node-{}", std::process::id())).expect("valid"))
+}
+
+fn host_name() -> String {
+    std::env::var("HOSTNAME")
         .ok()
         .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| "worker".into());
-    format!("{host}-{}", std::process::id())
+        .unwrap_or_else(|| "node".into())
+}
+
+/// The host name and the port the link listens on.
+fn default_link_address(listen: SocketAddr) -> String {
+    if listen.ip().is_unspecified() {
+        format!("{}:{}", host_name(), listen.port())
+    } else {
+        listen.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -847,6 +927,8 @@ mod tests {
         args.resolve()
     }
 
+    const SECRET: &str = "0123456789abcdef0123456789abcdef";
+
     #[test]
     fn the_embedded_server_keeps_everything_in_its_directory() {
         let config = parse(&[
@@ -859,58 +941,101 @@ mod tests {
         .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             config.store,
-            StoreLocation::Turso(PathBuf::from("/tmp/x/.rewind/journal.db"))
+            StoreLocation::Turso(PathBuf::from("/tmp/x/.rewind/control.db"))
         );
-        assert!(config.embedded() && config.api && config.worker);
+        assert!(
+            matches!(&config.bucket, BucketLocation::Files(dir) if dir == &PathBuf::from("/tmp/x/.rewind"))
+        );
+        assert_eq!(config.partitions.get(), 1);
+        assert!(config.embedded() && !config.executors_only);
         assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));
-        assert!(parse(&["--embedded", "--role", "api"]).is_err());
+        assert!(parse(&["--embedded", "--executors-only"]).is_err());
         assert!(parse(&["--embedded", "--store", "turso:x.db"]).is_err());
+        assert!(parse(&["--embedded", "--partitions", "4"]).is_err());
     }
 
     #[test]
-    fn a_deployed_server_needs_a_store_and_a_master_key() {
+    fn a_deployed_node_needs_a_store_a_bucket_a_secret_and_a_master_key() {
         assert!(parse(&[]).is_err());
-        assert!(parse(&["--store", "turso:/tmp/j.db"]).is_err());
+        assert!(parse(&["--store", "turso:/tmp/j/control.db"]).is_err());
         let key = BASE64.encode([7u8; 32]);
-        let config = parse(&[
-            "--store",
-            "turso:/tmp/j.db",
-            "--master-key",
-            &key,
-            "--role",
-            "api",
-        ])
-        .unwrap_or_else(|error| panic!("{error}"));
-        assert!(config.api && !config.worker);
-        assert_eq!(config.master_keys, Some(MasterKeyRing::new([7u8; 32])));
-        assert!(!config.rewrap_data_keys);
+        let single = parse(&["--store", "turso:/tmp/j/control.db", "--master-key", &key])
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(single.partitions.get(), 1);
+        assert_eq!(single.master_keys, Some(MasterKeyRing::new([7u8; 32])));
+        assert!(matches!(
+            single.listen,
+            Listen::Tcp {
+                edge: Some(_),
+                link: None
+            }
+        ));
         assert!(
             parse(&["--store", "postgres://x", "--master-key", &key]).is_err(),
-            "Postgres needs --blobs"
+            "Postgres needs --bucket"
         );
-        let postgres = parse(&[
+        let postgres = [
             "--store",
             "postgres://u:p@localhost/rewind",
-            "--blobs",
-            "s3://payloads",
+            "--bucket",
+            "s3://rewind",
             "--master-key",
             &key,
-        ])
-        .unwrap_or_else(|error| panic!("{error}"));
-        assert!(matches!(postgres.store, StoreLocation::Postgres(_)));
+        ];
+        assert!(parse(&postgres).is_err(), "Postgres needs --cluster-secret");
+        let mut linked = postgres.to_vec();
+        linked.extend(["--cluster-secret", SECRET, "--link-address", "node-a:7070"]);
+        let node = parse(&linked).unwrap_or_else(|error| panic!("{error}"));
+        assert!(matches!(node.store, StoreLocation::Postgres(_)));
+        assert_eq!(node.partitions.get(), PARTITIONS);
+        let Listen::Tcp {
+            link: Some(link), ..
+        } = &node.listen
+        else {
+            panic!("a node on Postgres listens on its link");
+        };
+        assert_eq!(link.address, "node-a:7070");
+        assert!(
+            !format!("{node:?}").contains(SECRET),
+            "the secret is not printed"
+        );
+        let mut executors = linked.clone();
+        executors.extend(["--executors-only", "--pool", "acme"]);
+        let executors = parse(&executors).unwrap_or_else(|error| panic!("{error}"));
+        assert!(matches!(
+            executors.listen,
+            Listen::Tcp {
+                edge: None,
+                link: Some(_)
+            }
+        ));
+        assert_eq!(executors.pool.as_deref(), Some("acme"));
+        let mut short = postgres.to_vec();
+        short.extend(["--cluster-secret", "short"]);
+        assert!(parse(&short).is_err());
         assert!(parse(&["--store", "mysql://x", "--master-key", &key]).is_err());
         assert!(parse(&["--store", "turso:/tmp/j.db", "--master-key", "short"]).is_err());
+        assert!(
+            parse(&[
+                "--store",
+                "turso:/tmp/j.db",
+                "--master-key",
+                &key,
+                "--executors-only"
+            ])
+            .is_err(),
+            "a single node owns its partitions"
+        );
     }
 
     #[test]
-    fn ttls_cache_and_retention_default_to_the_engines_and_can_be_set() {
+    fn ttls_cache_and_retention_have_defaults_and_can_be_set() {
         let key = BASE64.encode([7u8; 32]);
         let base = ["--store", "turso:/tmp/j.db", "--master-key", key.as_str()];
         let config = parse(&base).unwrap_or_else(|error| panic!("{error}"));
-        let engine = EngineConfig::default();
-        assert_eq!(config.default_ttl, engine.default_ttl);
-        assert_eq!(config.max_ttl, engine.max_ttl);
-        assert_eq!(config.cache, engine.cache);
+        assert_eq!(config.default_ttl, DEFAULT_TTL);
+        assert_eq!(config.max_ttl, MAX_TTL);
+        assert_eq!(config.cache, CacheConfig::default());
         assert_eq!(config.retention, Retention::default());
 
         let mut args = base.to_vec();
@@ -923,14 +1048,8 @@ mod tests {
             "50",
             "--cache-memory",
             "512MiB",
-            "--journal-retention",
-            "7d",
-            "--archive-retention",
+            "--retention",
             "30d",
-            "--read-model-retention",
-            "14d",
-            "--payload-grace",
-            "1h",
         ]);
         let config = parse(&args).unwrap_or_else(|error| panic!("{error}"));
         const DAY: u64 = 86_400;
@@ -943,15 +1062,7 @@ mod tests {
                 max_bytes: 512 << 20
             }
         );
-        assert_eq!(
-            config.retention,
-            Retention {
-                journal: Duration::from_secs(7 * DAY),
-                archive: Duration::from_secs(30 * DAY),
-                read_model: Duration::from_secs(14 * DAY),
-                payload_grace: Duration::from_secs(3_600),
-            }
-        );
+        assert_eq!(config.retention.archive, Duration::from_secs(30 * DAY));
 
         let mut longer = base.to_vec();
         longer.extend(["--default-ttl", "8d", "--max-ttl", "7d"]);
@@ -971,23 +1082,26 @@ mod tests {
                 "https://app.rewind.codes/auth/callback",
             ),
         ];
-        let deployed = |workos: &[(&str, &str)], role: &str| {
+        let deployed = |workos: &[(&str, &str)], extra: &[&str]| {
             let mut args = vec![
                 "--store",
-                "turso:/tmp/j.db",
+                "postgres://u:p@localhost/rewind",
+                "--bucket",
+                "s3://rewind",
+                "--cluster-secret",
+                SECRET,
                 "--master-key",
                 &key,
-                "--role",
-                role,
             ];
+            args.extend_from_slice(extra);
             for (flag, value) in workos {
                 args.extend([*flag, *value]);
             }
             parse(&args)
         };
-        let none = deployed(&[], "api").unwrap_or_else(|error| panic!("{error}"));
+        let none = deployed(&[], &[]).unwrap_or_else(|error| panic!("{error}"));
         assert!(none.workos.is_none());
-        let configured = deployed(&all, "api").unwrap_or_else(|error| panic!("{error}"));
+        let configured = deployed(&all, &[]).unwrap_or_else(|error| panic!("{error}"));
         let workos = configured.workos.expect("WorkOS is configured");
         assert_eq!(workos.client_id, "client_01JTEST");
         assert!(!format!("{workos:?}").contains("sk_test_secret"));
@@ -998,12 +1112,12 @@ mod tests {
                 .filter(|(at, _)| *at != left_out)
                 .map(|(_, flag)| *flag)
                 .collect();
-            let error = deployed(&some, "api").unwrap_err().to_string();
+            let error = deployed(&some, &[]).unwrap_err().to_string();
             assert!(error.contains("together or not at all"), "{error}");
         }
         let mut short = all;
         short[2].1 = "abcd";
-        let error = deployed(&short, "api").unwrap_err().to_string();
+        let error = deployed(&short, &[]).unwrap_err().to_string();
         assert!(error.contains("WORKOS_COOKIE_PASSWORD"), "{error}");
         assert!(
             !error.contains("abcd"),
@@ -1011,10 +1125,14 @@ mod tests {
         );
         let mut relative = all;
         relative[3].1 = "/auth/callback";
-        assert!(deployed(&relative, "api").is_err());
+        assert!(deployed(&relative, &[]).is_err());
 
-        let worker = deployed(&all, "worker").unwrap_or_else(|error| panic!("{error}"));
-        assert!(worker.workos.is_none(), "a worker accepts only API keys");
+        let executors =
+            deployed(&all, &["--executors-only"]).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            executors.workos.is_none(),
+            "an executors-only node serves no HTTP route"
+        );
         let mut embedded = vec!["--embedded"];
         for (flag, value) in &all[..2] {
             embedded.extend([*flag, *value]);
@@ -1096,6 +1214,24 @@ mod tests {
         assert!(parse_bytes("4GB").is_err());
         assert!(parse_bytes("GiB").is_err());
         assert!(parse_bytes("99999999999999GiB").is_err());
+    }
+
+    #[test]
+    fn node_ids_default_to_the_host_and_the_process() {
+        let id = default_node_id();
+        assert!(id.as_str().ends_with(&format!("-{}", std::process::id())));
+        let key = BASE64.encode([7u8; 32]);
+        assert!(
+            parse(&[
+                "--store",
+                "turso:/tmp/j.db",
+                "--master-key",
+                &key,
+                "--node-id",
+                "a b"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

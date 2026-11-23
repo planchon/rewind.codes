@@ -1,6 +1,6 @@
 [package]
 name = "rewind-server"
-description = "The engine host of Rewind: the HTTP API /v1, the workers, the embedded server, the dashboard."
+description = "A node of Rewind and its HTTP edge: the API /v1, the owners of its partitions, its executors, the node link, the embedded server, the dashboard."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -27,6 +27,7 @@ rewind-outbound.workspace = true
 rewind-otel.workspace = true
 rewind-runtime.workspace = true
 rewind-store-postgres.workspace = true
+rewind-store-slatedb.workspace = true
 rewind-store-turso.workspace = true
 rewind-workos.workspace = true
 axum.workspace = true
@@ -48,6 +49,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
+uuid = { workspace = true, features = ["std", "v7"] }
 
 [dev-dependencies]
 aws-lc-rs.workspace = true

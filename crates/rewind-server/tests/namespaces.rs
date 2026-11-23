@@ -30,7 +30,7 @@ use rewind_api::problem::QuotaReached;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
-use rewind_api::tasks::TaskQuery;
+use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::{Value, json};
@@ -419,32 +419,36 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
         ..CreateToken::default()
     };
     let alice = server.bare(&token(&customer, "alice", &worker).await);
-    let query = TaskQuery {
+    let query = TaskStreamQuery {
         toolset: Some(toolset.id.clone()),
         tools: vec!["ask_user".into()],
-        limit: Some(10),
-        wait: Some("10s".parse().unwrap()),
+        slots: Some(10),
+        ..TaskStreamQuery::default()
     };
-    let batch = alice.claim_tasks(&query).await.unwrap();
-    assert_eq!(batch.tasks.len(), 1, "{batch:?}");
-    assert_eq!(batch.tasks[0].run_id, alices.id);
-    assert_eq!(batch.tasks[0].namespace, ns("alice"));
-    let quick = TaskQuery {
-        wait: Some("200ms".parse().unwrap()),
-        ..query.clone()
-    };
-    assert!(alice.claim_tasks(&quick).await.unwrap().tasks.is_empty());
+    let mut alices_stream = support::TaskWorker::open(&alice, &query).await;
+    let mine = alices_stream.task().await;
+    assert_eq!(mine.run_id, alices.id);
+    assert_eq!(mine.namespace, ns("alice"));
+    assert!(
+        alices_stream.none_within(Duration::from_millis(300)).await,
+        "Bob's task is not handed to Alice's worker"
+    );
 
     // Bob's task is the customer's worker's, whose answer Alice's token cannot give.
     let customers_worker = server.tenant_key("acme", "worker").await;
-    let theirs = customers_worker.claim_tasks(&query).await.unwrap();
-    assert_eq!(theirs.tasks.len(), 1);
-    assert_eq!(theirs.tasks[0].run_id, bobs.id);
+    let theirs = support::TaskWorker::open(&customers_worker, &query)
+        .await
+        .task()
+        .await;
+    assert_eq!(theirs.run_id, bobs.id);
+    let answer = CompleteTask {
+        result: serde_json::json!("ok"),
+    };
     assert_eq!(
-        refused(alice.heartbeat_task(&theirs.tasks[0].token).await),
+        refused(alice.complete_task(&theirs.token, &answer).await),
         (410, Some(ProblemType::TaskGone))
     );
-    alice.heartbeat_task(&batch.tasks[0].token).await.unwrap();
+    alice.complete_task(&mine.token, &answer).await.unwrap();
     server.stop().await;
 }
 

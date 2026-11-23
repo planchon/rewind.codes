@@ -22,7 +22,7 @@ use rewind_api::workflows::{
 };
 use rewind_core::{Digest, Script, Toolset, WorkflowSchemas};
 use rewind_engine::ports::{
-    JournalStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
+    CatalogStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
 };
 use rewind_engine::suites::{SuiteChanges, TestKit, TestRetirement, TestUpdate, UpdateWith};
 use rewind_engine::testing::TestOptions;
@@ -101,29 +101,13 @@ pub(super) async fn create(
             })
             .collect(),
     };
-    // Tests run only on a worker: the suite of the parent, or the tests given.
     let before = app
         .store
         .workflow_versions(&caller.tenant, &request.name, &caller.labels)
         .await?;
-    let inherited = match suite.parent {
-        Some(version) => app
-            .store
-            .get_workflow(&caller.tenant, version)
-            .await?
-            .is_some_and(|stored| !stored.workflow.suite().tests.is_empty()),
-        // The latest version saved under the caller's labels, as the engine takes it.
-        None => before
-            .iter()
-            .find(|stored| stored.labels == caller.labels)
-            .is_some_and(|latest| !latest.workflow.suite().tests.is_empty()),
-    };
-    if inherited || !suite.tests.is_empty() || !suite.update.is_empty() {
-        testing::require_worker(&app, "POST /v1/workflows")?;
-    }
     let loader = TsMockLoader::default();
     let registered = app
-        .engine
+        .edge
         .register_workflow(
             RegisterWorkflow {
                 tenant: caller.tenant.clone(),

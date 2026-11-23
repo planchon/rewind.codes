@@ -1,7 +1,8 @@
-//! Reading across runs, for the dashboard: the scripts executed, tool statistics, payloads
-//! (`archi/05-testing-and-observability.md`, "Read model" and "Dashboard").
+//! Reading for the dashboard: a script's source and what the runs did with it, a payload on
+//! demand (`archi/05-testing-and-observability.md`, "Read model" and "Dashboard"). The lists and
+//! statistics drawn from the counters are in [`super::stats`].
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::Json;
@@ -10,148 +11,23 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
-use rewind_api::common::{RunStatus, Timestamp, timestamp};
-use rewind_api::reading::{Latency, PayloadQuery, ToolStats, ToolStatsFilter, ToolStatsPage};
-use rewind_api::scripts::{
-    RunCounts, Script, ScriptFilter, ScriptPage, ScriptSummary, SetScriptTitle,
+use rewind_api::common::timestamp;
+use rewind_api::reading::PayloadQuery;
+use rewind_api::scripts::{RunCounts, Script};
+use rewind_core::{Digest, canonical_json};
+use rewind_engine::ports::{
+    CatalogStore, Page, Predicate, RunOrder, Scope, SearchCursor, Term, Window,
 };
-use rewind_core::{Digest, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, canonical_json};
-use rewind_engine::ports::{JournalStore, ReadModel, ScriptTitle};
 
 use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
-use crate::extract::{Body, Query};
-use crate::http::refuse_nul_in_filter;
-use crate::http::runs::core_time;
+use crate::extract::Query;
+use crate::http::search;
+use crate::http::stats::run_counts;
 
-const PAGE: u32 = 50;
-const MAX_PAGE: u32 = 500;
-
-/// The read model's filter of scripts, from the API's, within the caller's labels.
-fn filter(
-    caller: &Caller,
-    digest: Option<&str>,
-    labels: &[String],
-    tool: Option<String>,
-) -> Result<Option<rewind_engine::ports::ScriptFilter>, ApiError> {
-    let mut wanted = BTreeMap::new();
-    for label in labels {
-        refuse_nul_in_filter("label", label)?;
-        let (key, value) = label
-            .split_once(':')
-            .ok_or_else(|| ApiError::invalid(format!("label {label:?}: expected key:value")))?;
-        wanted.insert(key.to_owned(), value.to_owned());
-    }
-    if let Some(tool) = &tool {
-        refuse_nul_in_filter("tool", tool)?;
-    }
-    let Ok(labels) = caller.within(wanted) else {
-        return Ok(None);
-    };
-    let digest = match digest {
-        Some(digest) => Some(
-            Digest::from_hex(digest)
-                .map_err(|_| ApiError::invalid(format!("digest {digest:?}: expected a SHA-256")))?,
-        ),
-        None => None,
-    };
-    let mut filter = rewind_engine::ports::ScriptFilter::new(caller.tenant.clone());
-    filter.namespace = caller.namespace.clone();
-    filter.digest = digest;
-    filter.labels = labels;
-    filter.tool = tool;
-    Ok(Some(filter))
-}
-
-fn counts(statuses: &BTreeMap<rewind_core::RunStatus, u64>) -> RunCounts {
-    let mut counts = RunCounts::default();
-    for (status, count) in statuses {
-        let slot = match RunStatus::from(*status) {
-            RunStatus::Pending => &mut counts.pending,
-            RunStatus::Active => &mut counts.active,
-            RunStatus::Completed => &mut counts.completed,
-            RunStatus::Failed => &mut counts.failed,
-            RunStatus::Cancelled => &mut counts.cancelled,
-            RunStatus::Aborted => &mut counts.aborted,
-        };
-        *slot += count;
-    }
-    counts
-}
-
-/// `GET /v1/scripts`: every distinct script, most recently run first.
-pub(super) async fn scripts(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Query(query): Query<ScriptFilter>,
-) -> Result<Json<ScriptPage>, ApiError> {
-    caller.require(Permission::RunsRead)?;
-    let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
-    let Some(filter) = filter(&caller, query.digest.as_deref(), &query.labels, query.tool)? else {
-        return Ok(Json(ScriptPage {
-            scripts: Vec::new(),
-            next_cursor: None,
-        }));
-    };
-    let mut scripts = app.store.scripts(&filter).await?;
-    // Most recently run first; the digest breaks ties. The cursor is the last one sent.
-    let key = |summary: &rewind_engine::ports::ScriptSummary| {
-        (
-            std::cmp::Reverse(summary.last_started_at.map_or(0, |at| at.0)),
-            summary.script,
-        )
-    };
-    scripts.sort_by_key(key);
-    if let Some(cursor) = &query.cursor {
-        let (at, digest) = cursor
-            .split_once('.')
-            .and_then(|(at, digest)| {
-                Some((at.parse::<u64>().ok()?, Digest::from_hex(digest).ok()?))
-            })
-            .ok_or_else(|| ApiError::invalid(format!("cursor {cursor:?} is not valid")))?;
-        let after = (std::cmp::Reverse(at), digest);
-        scripts.retain(|summary| key(summary) > after);
-    }
-    let next_cursor = (scripts.len() > limit).then(|| {
-        let last = &scripts[limit - 1];
-        format!(
-            "{}.{}",
-            last.last_started_at.map_or(0, |at| at.0),
-            last.script.to_hex()
-        )
-    });
-    scripts.truncate(limit);
-    let mut titles = app
-        .titles(&caller.tenant, scripts.iter().map(|summary| summary.script))
-        .await?;
-    let mut page = Vec::with_capacity(scripts.len());
-    for summary in scripts {
-        let title = titles.remove(&summary.script);
-        page.push(ScriptSummary {
-            digest: summary.script.to_hex(),
-            title_source: title.as_ref().map(|title| title.source),
-            description: title.as_ref().and_then(|title| title.description.clone()),
-            title: title.map(|title| title.title),
-            headline: app.headline(&caller.tenant, summary.script).await,
-            first_run_at: summary
-                .first_started_at
-                .map_or(Timestamp::UNIX_EPOCH, timestamp),
-            last_run_at: summary
-                .last_started_at
-                .map_or(Timestamp::UNIX_EPOCH, timestamp),
-            runs: counts(&summary.statuses),
-            tools: summary.tools.into_iter().collect(),
-            labels: summary.labels,
-        });
-    }
-    Ok(Json(ScriptPage {
-        scripts: page,
-        next_cursor,
-    }))
-}
-
-/// `GET /v1/scripts/{digest}`: the source, and what the runs the caller sees did with it.
+/// `GET /v1/scripts/{digest}`: the source, and what the runs the caller sees did with it. A
+/// caller limited to a namespace or to labels reads only the scripts of the runs it sees.
 pub(super) async fn script(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -244,31 +120,52 @@ async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script,
     let missing = || no_script(digest);
     let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
     let stored = app
-        .store
+        .catalog()
         .get_script(&caller.tenant, parsed)
         .await?
         .ok_or_else(missing)?;
-    let summary = match filter(caller, Some(digest), &[], None)? {
-        Some(filter) => app.store.scripts(&filter).await?.into_iter().next(),
-        None => None,
-    };
-    if caller.scoped() && summary.is_none() {
-        // A key limited to labels reads the scripts of the runs it sees, once they are listed.
-        return Err(missing());
-    }
-    if let (Some(_), Some(namespace)) = (&caller.token, &caller.namespace) {
-        // An end user's token reads the scripts its namespace's kept runs ran.
-        if !app
-            .store
-            .namespace_has_script(&caller.tenant, namespace, parsed)
-            .await?
-        {
+    if caller.scoped() || caller.namespace.is_some() {
+        // A run the caller sees ran it: one summary of the index, within the caller's scope.
+        let mut query = search::run_query(&caller, None, None, app.now())?;
+        query.terms.push(Term {
+            negated: false,
+            predicate: Predicate::Script(vec![parsed.to_hex()]),
+        });
+        let found = app
+            .edge
+            .search(
+                &mut app.gateway(),
+                &search::scope_of(&query),
+                &query,
+                RunOrder::Started,
+                &Page {
+                    cursor: None::<SearchCursor>,
+                    limit: 1,
+                    budget: rewind_engine::ports::SCAN_BUDGET,
+                },
+            )
+            .await?;
+        if found.summaries.is_empty() {
             return Err(missing());
         }
-    } else if caller.namespace.is_some() && summary.is_none() {
-        // A key's or a member's read narrowed to a namespace, once its runs are listed.
-        return Err(missing());
     }
+    let counted = if caller.labels.is_empty() {
+        let scope = match &caller.namespace {
+            Some(namespace) => Scope::Namespace {
+                tenant: caller.tenant.clone(),
+                namespace: namespace.clone(),
+            },
+            None => Scope::Tenant(caller.tenant.clone()),
+        };
+        let window = Window::covering(rewind_core::Timestamp(0), app.now());
+        let (counters, _) = app
+            .edge
+            .statistics(&mut app.gateway(), &scope, window)
+            .await?;
+        counters.scripts.get(&parsed).cloned()
+    } else {
+        None
+    };
     let source = stored.script.source().to_owned();
     let title = app.titles(&caller.tenant, [parsed]).await?.remove(&parsed);
     Ok(Script {
@@ -278,100 +175,27 @@ async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script,
         title: title.map(|title| title.title),
         headline: rewind_api::scripts::headline(&source),
         source,
-        runs: summary
+        runs: counted
             .as_ref()
-            .map_or_else(RunCounts::default, |summary| counts(&summary.statuses)),
-        tools: summary
+            .map_or_else(RunCounts::default, |counts| run_counts(&counts.runs)),
+        tools: counted
             .as_ref()
-            .map(|summary| summary.tools.iter().cloned().collect())
-            .unwrap_or_default(),
-        first_run_at: summary
+            .map(|counts| counts.tools.iter().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        first_run_at: counted
             .as_ref()
-            .and_then(|summary| summary.first_started_at)
+            .and_then(|counts| counts.first_started_at)
             .map(timestamp),
-        last_run_at: summary
+        last_run_at: counted
             .as_ref()
-            .and_then(|summary| summary.last_started_at)
+            .and_then(|counts| counts.last_started_at)
             .map(timestamp),
     })
 }
 
-/// `GET /v1/tools/stats`: per tool, over the calls scheduled in the window (the last 24 hours by
-/// default).
-pub(super) async fn tool_stats(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Query(query): Query<ToolStatsFilter>,
-) -> Result<Json<ToolStatsPage>, ApiError> {
-    caller.require(Permission::RunsRead)?;
-    if caller.scoped() {
-        return Err(ApiError::forbidden(format!(
-            "tool statistics span every run of the tenant: {} is limited to labels and cannot \
-             read them",
-            caller.who()
-        )));
-    }
-    let until = query.until.map_or_else(|| app.now(), core_time);
-    let since = query.since.map_or_else(
-        || rewind_core::Timestamp(until.0.saturating_sub(86_400_000)),
-        core_time,
-    );
-    let toolset =
-        match &query.toolset {
-            Some(toolset) => Some(Digest::from_hex(toolset).map_err(|_| {
-                ApiError::invalid(format!("toolset {toolset:?}: expected a digest"))
-            })?),
-            None => None,
-        };
-    let stats = app
-        .store
-        .tool_stats(&rewind_engine::ports::ToolStatsFilter {
-            tenant: caller.tenant.clone(),
-            namespace: caller.namespace.clone(),
-            toolset,
-            since: Some(since),
-            until: Some(until),
-        })
-        .await?;
-    let tools = stats
-        .into_iter()
-        .filter(|stats| query.tool.as_ref().is_none_or(|tool| *tool == stats.tool))
-        .map(|stats| ToolStats {
-            tool: stats.tool,
-            calls: stats.calls,
-            errors: stats.failed,
-            error_kinds: stats
-                .errors_by_kind
-                .into_iter()
-                .map(|(kind, count)| (kind.as_str().to_owned(), count))
-                .collect(),
-            retries: stats.retries,
-            latency_ms: stats.latency.map_or(
-                Latency {
-                    p50: 0,
-                    p95: 0,
-                    p99: 0,
-                    max: 0,
-                },
-                |latency| Latency {
-                    p50: latency.p50_ms,
-                    p95: latency.p95_ms,
-                    p99: latency.p99_ms,
-                    max: latency.max_ms,
-                },
-            ),
-        })
-        .collect();
-    Ok(Json(ToolStatsPage {
-        since: timestamp(since),
-        until: timestamp(until),
-        tools,
-    }))
-}
-
-/// `GET /v1/payloads/{digest}`: the value, as canonical JSON. Through `run` when it is given,
-/// which a key limited to labels and a request bound to a namespace must do: the run must be
-/// one the caller sees, and its journal must hold the payload.
+/// `GET /v1/payloads/{digest}?run=…`: a payload's value, read through the run that holds it.
 pub(super) async fn payload(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -379,43 +203,29 @@ pub(super) async fn payload(
     Query(query): Query<PayloadQuery>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let missing = || ApiError::not_found(format!("no payload {digest} for this tenant"));
-    let parsed = Digest::from_hex(&digest).map_err(|_| missing())?;
-    match &query.run {
-        Some(run) => {
-            let record = app.run(&caller, run).await?;
-            let history = app.views().history(&record).await?;
-            let held = history.iter().any(|entry| {
-                crate::views::payload_of(&entry.event)
-                    .is_some_and(|payload| payload.digest() == parsed)
-            });
-            if !held {
-                return Err(ApiError::not_found(format!(
-                    "no payload {digest} in the journal of run {run}"
-                )));
-            }
-        }
-        None if caller.scoped() => {
+    let parsed = Digest::from_hex(&digest)
+        .map_err(|_| ApiError::not_found(format!("no payload {digest} for this tenant")))?;
+    let Some(run) = &query.run else {
+        if caller.scoped() || caller.namespace.is_some() {
             return Err(ApiError::forbidden(format!(
-                "{} is limited to labels and reads the payloads of the runs it sees: name the \
-                 run (GET /v1/payloads/{digest}?run=<id>)",
+                "{} reads the payloads of the runs it sees: name the run (GET \
+                 /v1/payloads/{digest}?run=<id>)",
                 caller.who()
             )));
         }
-        None if caller.namespace.is_some() => {
-            return Err(ApiError::forbidden(format!(
-                "a request bound to a namespace (an end user's token, or Rewind-Namespace) reads \
-                 the payloads of its namespace's runs: name the run (GET \
-                 /v1/payloads/{digest}?run=<id>)"
-            )));
-        }
-        None => {}
-    }
+        return Err(ApiError::invalid(format!(
+            "run is required: a payload belongs to its run, and is read through it (GET \
+             /v1/payloads/{digest}?run=<id>)"
+        )));
+    };
+    let view = app.run(&caller, run).await?;
     let value = app
         .views()
-        .value(&caller.tenant, parsed)
+        .value(&view.head.run, parsed)
         .await?
-        .ok_or_else(missing)?;
+        .ok_or_else(|| {
+            ApiError::not_found(format!("no payload {digest} in the journal of run {run}"))
+        })?;
     Ok((
         [
             (header::CONTENT_TYPE, "application/json"),

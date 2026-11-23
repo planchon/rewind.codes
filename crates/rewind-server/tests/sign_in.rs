@@ -555,7 +555,7 @@ async fn a_worker_and_a_server_without_workos_accept_only_api_keys() {
     member(&api, &state).whoami().await.unwrap();
 
     let dir = tempfile::tempdir().unwrap();
-    let store = format!("turso:{}", dir.path().join("journal.db").display());
+    let store = format!("turso:{}", dir.path().join("control.db").display());
     let worker = TestServer::start_with(
         tempfile::tempdir().unwrap(),
         &store,
@@ -603,7 +603,7 @@ async fn a_worker_and_a_server_without_workos_accept_only_api_keys() {
 #[tokio::test]
 async fn workos_takes_its_four_variables_together_or_not_at_all() {
     let dir = tempfile::tempdir().unwrap();
-    let store = format!("turso:{}", dir.path().join("journal.db").display());
+    let store = format!("turso:{}", dir.path().join("control.db").display());
     let key = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=";
     for left_out in 0..4 {
         let mut args = vec![

@@ -47,8 +47,7 @@ use crate::secrets::{
     Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
 };
 use crate::tasks::{
-    CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
-    TaskStreamEvent, TaskStreamQuery,
+    CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamEvent, TaskStreamQuery,
 };
 use crate::toolsets::{
     CreateToolset, DeclarationFormat, DeclarationsQuery, DeclarationsText, SearchQuery,
@@ -516,18 +515,6 @@ impl Client {
             .named_events(request, "task stream", TaskStreamEvent::from_sse)
             .await?;
         Ok(TaskStream { inner })
-    }
-
-    /// `GET /v1/tasks`: claims tasks, waiting up to `query.wait` for one.
-    pub async fn claim_tasks(&self, query: &TaskQuery) -> Result<TaskBatch, Error> {
-        let request = self.request_with(Method::GET, routes::TASKS, &[], query)?;
-        self.json(request).await
-    }
-
-    /// `POST /v1/tasks/{token}/heartbeat`.
-    pub async fn heartbeat_task(&self, token: &str) -> Result<HeartbeatAck, Error> {
-        let request = self.request(Method::POST, routes::TASK_HEARTBEAT, &[token])?;
-        self.json(request).await
     }
 
     /// `POST /v1/tasks/{token}/defer`.
@@ -1312,11 +1299,12 @@ mod tests {
         };
         assert_eq!(round_trip(&filter), filter);
 
-        let tasks = TaskQuery {
+        let tasks = TaskStreamQuery {
             toolset: Some("ab".into()),
             tools: vec!["ask_user".into(), "approve".into()],
-            limit: Some(5),
-            wait: Some("30s".parse().unwrap()),
+            slots: Some(5),
+            worker: Some("w-1".into()),
+            ..TaskStreamQuery::default()
         };
         assert_eq!(round_trip(&tasks), tasks);
 

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
-use rewind_api::admin::{ServerInfo, ServerRole};
+use rewind_api::admin::ServerInfo;
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_cli::{Console, Exit};
 use rmcp::ServiceExt as _;
@@ -27,7 +27,9 @@ fn app(seen: Seen) -> Router {
                 axum::Json(ServerInfo {
                     version: rewind_cli::embedded::VERSION.into(),
                     epochs: vec![1],
-                    roles: vec![ServerRole::Api, ServerRole::Worker],
+                    node: "test".into(),
+                    partitions: 1,
+                    nodes: 1,
                     embedded: true,
                     virtual_time: false,
                     mcp_url: None,

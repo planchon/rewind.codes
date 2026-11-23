@@ -8,7 +8,7 @@ use rewind_api::access::Permission;
 use rewind_api::scripts::{CheckRequest, CheckResult, Severity};
 use rewind_core::Script;
 use rewind_engine::StartError;
-use rewind_engine::ports::{JournalStore, Quotas, ScriptExecutor, Tenant, TypeChecker, limits};
+use rewind_engine::ports::{CatalogStore, Quotas, ScriptExecutor, Tenant, TypeChecker, limits};
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -60,7 +60,7 @@ pub(super) async fn check(
     };
     let script = Script::new(request.script);
     check_lines(&script, &bounds)?;
-    if let Err(invalid) = app.engine.executor().compile(&script, &stored.toolset) {
+    if let Err(invalid) = app.plane.executor.compile(&script, &stored.toolset) {
         return Ok(Json(CheckResult {
             ok: false,
             diagnostics: vec![invalid_script_diagnostic(&invalid)],

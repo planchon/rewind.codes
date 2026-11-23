@@ -96,7 +96,7 @@ async fn a_call_in_flight_finishes_and_commits_before_the_server_stops() {
     let slow = Slow::default();
     let url = serve(slow.clone()).await;
     let dir = tempfile::tempdir().unwrap();
-    let store = format!("turso:{}", dir.path().join("journal.db").display());
+    let store = format!("turso:{}", dir.path().join("control.db").display());
     let blobs = dir.path().join("blobs");
 
     // The first server runs on a runtime of its own, dropped once the server has stopped, as

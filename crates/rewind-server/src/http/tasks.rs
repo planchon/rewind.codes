@@ -1,95 +1,171 @@
-//! Host-tool tasks: the harness's SDK worker long-polls them and answers through the claim's
-//! token; the harness approves or rejects the calls that wait for it (`archi/04-tools.md`,
-//! "Tool task lifecycle").
+//! Host-tool tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
+//! they become ready, and answers each through its token; the harness approves or rejects the
+//! calls that wait for it (`archi/04-tools.md`, "Tool task lifecycle").
 //!
-//! A worker reaches the tasks of the runs its caller sees: an end user's token those of its
-//! namespace, a grant limited to labels those of the runs carrying them
+//! ```text
+//!  GET /v1/tasks/stream ── attach_stream ──► organization actor of the tenant (its home owner)
+//!        ▲ task, gone                          hands each task to a stream with a free slot
+//!        └──────────────── this edge ◄──────── EdgeNotice::HandOut (here, or through the link)
+//!  POST /v1/tasks/{token}/… ── the token names its run ──► the owner of the run's partition
+//! ```
+//!
+//! The open stream is the liveness of the tasks handed on it: nothing is written while a task is
+//! in flight. A worker reaches the tasks of the runs its caller sees: an end user's token those
+//! of its namespace, a grant limited to labels those of the runs carrying them
 //! (`archi/06-storage-and-scale.md`, "Tenancy, namespaces, identity and access").
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
 
-use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use futures_util::Stream;
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::tasks::{
-    CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, Task, TaskBatch, TaskQuery,
+    CompleteTask, DeferTask, FailTask, HandedTask, RejectTask, TaskGone, TaskStreamEvent,
+    TaskStreamQuery,
 };
 use rewind_core::canonical_json;
-use rewind_engine::ports::{JournalStore, TaskPhase, TaskProgress, TaskToken};
-use rewind_engine::{HostClaim, HostFailure, HostTask};
+use rewind_engine::ports::TaskToken;
+use rewind_engine::ports::link::{HostFailure, HostTask, StreamAttach, StreamEvent, StreamId};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::app::App;
-use crate::auth::Caller;
+use crate::app::{App, Node};
+use crate::auth::{Caller, TokenExpiry};
 use crate::error::ApiError;
 use crate::extract::{Body, OptionalBody, Query};
 use crate::http::refuse_nul_in_filter;
 use crate::http::runs::check_payload_size;
 use crate::http::toolsets::parse_digest;
+use crate::idle::Busy;
+use crate::streams::Rights;
 use crate::views::{parse_task_id, task_id};
-use crate::wake::{POLL, wait};
 
 /// The most a failure holds: its message and its data as canonical JSON, together. A failure
 /// stays in its journal entry, which never moves a value to the payload tiers: it is bounded by
 /// the largest value a row holds next to a digest (08).
 const FAILURE_LIMIT: usize = 64 * 1024;
 
-/// How long a claim waits for a task by default, and at most.
-const WAIT: Duration = Duration::from_secs(30);
-const MAX_WAIT: Duration = Duration::from_secs(60);
+/// The tasks a stream holds at once, by default and at most.
+const SLOTS: u32 = 1;
+const MAX_SLOTS: u32 = 100;
 
-/// `GET /v1/tasks`: claims up to `limit` ready host-tool tasks of the runs the caller sees,
-/// waiting up to `wait` for one.
-pub(super) async fn claim(
+/// `GET /v1/tasks/stream`: the host-tool tasks handed to this worker as they become ready.
+pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
-    Query(query): Query<TaskQuery>,
-) -> Result<Json<TaskBatch>, ApiError> {
+    TokenExpiry(expiry): TokenExpiry,
+    Query(query): Query<TaskStreamQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     caller.require(Permission::TasksWork)?;
-    let toolset = query.toolset.as_deref().map(parse_digest).transpose()?;
-    for tool in &query.tools {
-        refuse_nul_in_filter("tool", tool)?;
-    }
-    let claim = HostClaim {
-        tenant: caller.tenant.clone(),
-        namespace: caller.namespace.clone(),
-        labels: caller.labels.clone(),
-        toolset,
-        tools: query.tools.into_iter().collect::<BTreeSet<_>>(),
-        limit: usize::try_from(query.limit.unwrap_or(1).clamp(1, 100)).unwrap_or(1),
+    let named = query.namespace.as_ref().map(crate::views::engine_namespace);
+    let namespace = match (&caller.namespace, named) {
+        (Some(bound), Some(named)) if *bound != named => {
+            return Err(ApiError::forbidden(format!(
+                "this request is bound to the namespace {bound}: it receives the tasks of no \
+                 other"
+            )));
+        }
+        (Some(bound), _) => Some(bound.clone()),
+        (None, named) => named,
     };
-    let wait_for = query.wait.map_or(WAIT, |wait| wait.get()).min(MAX_WAIT);
-    let deadline = tokio::time::Instant::now() + wait_for;
-    let mut changes = app.wake.subscribe();
-    loop {
-        let claimed = app.engine.claim_host_tasks(&claim).await?;
-        if !claimed.is_empty() {
-            let mut tasks = Vec::with_capacity(claimed.len());
-            for task in claimed {
-                let claimed = TaskProgress {
-                    seq: task.task.seq,
-                    attempt: task.attempt,
-                    phase: TaskPhase::Claimed,
-                };
-                app.record_progress(&task.task.run, claimed).await;
-                tasks.push(view(task));
+    let toolset = query.toolset.as_deref().map(parse_digest).transpose()?;
+    let mut tools = BTreeSet::new();
+    for tool in query.tools {
+        refuse_nul_in_filter("tools", &tool)?;
+        tools.insert(tool);
+    }
+    let slots = query.slots.unwrap_or(SLOTS);
+    if slots > MAX_SLOTS {
+        return Err(ApiError::invalid(format!(
+            "slots is {slots}: a stream holds at most {MAX_SLOTS} tasks at once"
+        )));
+    }
+    let worker = match query.worker {
+        Some(worker) => {
+            let visible = |c: char| c.is_ascii_graphic();
+            if worker.is_empty() || worker.len() > 128 || !worker.chars().all(visible) {
+                return Err(ApiError::invalid(
+                    "worker: 1 to 128 visible ASCII characters, drawn once by the worker (a \
+                     UUID) and sent again at each reconnection",
+                ));
             }
-            app.wake.bump();
-            return Ok(Json(TaskBatch { tasks }));
+            worker
         }
-        if tokio::time::Instant::now() >= deadline || app.stopping() {
-            return Ok(Json(TaskBatch { tasks: Vec::new() }));
-        }
-        wait(&mut changes, POLL, Some(deadline)).await;
+        None => uuid::Uuid::now_v7().to_string(),
+    };
+    let stream = StreamId(format!("{}/{}", app.node.node(), uuid::Uuid::now_v7()));
+    let tasks = app
+        .node
+        .attach_stream(
+            caller.tenant.clone(),
+            StreamAttach {
+                stream: stream.clone(),
+                worker,
+                node: app.node.node().clone(),
+                namespace,
+                labels: caller.labels.clone(),
+                toolset,
+                tools,
+                slots,
+            },
+        )
+        .map_err(|error| ApiError::unavailable(error.to_string()))?;
+    let held = Held {
+        rights: Rights::new(&app, caller, Permission::TasksWork, expiry),
+        attached: Attached {
+            node: app.node.clone(),
+            stream,
+        },
+        _busy: app.idle.busy(),
+        tasks,
+    };
+    let events = futures_util::stream::unfold(held, |mut held| async move {
+        held.next_event().await.map(|event| (Ok(event), held))
+    });
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
+}
+
+/// A stream attached at this edge: detached when the response it feeds ends.
+struct Attached {
+    node: Node,
+    stream: StreamId,
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        let _ = self.node.detach_stream(self.stream.clone());
     }
 }
 
-fn view(task: HostTask) -> Task {
-    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-    Task {
+/// Where a task stream stands.
+struct Held {
+    rights: Rights,
+    #[allow(dead_code)]
+    attached: Attached,
+    /// A stream held open keeps the embedded server from stopping on idle.
+    _busy: Busy,
+    tasks: UnboundedReceiver<StreamEvent>,
+}
+
+impl Held {
+    async fn next_event(&mut self) -> Option<Event> {
+        tokio::select! {
+            () = self.rights.lost() => None,
+            event = self.tasks.recv() => event.map(|event| match event {
+                StreamEvent::Task(task) => sse(&TaskStreamEvent::Task(Box::new(handed(task)))),
+                StreamEvent::Gone(token) => sse(&TaskStreamEvent::Gone(TaskGone { token: token.0 })),
+            }),
+        }
+    }
+}
+
+/// A task as the SDK worker receives it.
+fn handed(task: HostTask) -> HandedTask {
+    HandedTask {
         token: task.token.0,
         id: task_id(&task.task),
         run_id: task.task.run.id.to_string(),
@@ -99,8 +175,9 @@ fn view(task: HostTask) -> Task {
         args: task.args,
         idempotency_key: task.idempotency_key,
         attempt: task.attempt,
-        heartbeat_timeout_ms: millis(task.heartbeat_timeout),
-        timeout_ms: task.execution_timeout.map(millis),
+        timeout_ms: task
+            .execution_timeout
+            .map(|timeout| u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
         labels: task.labels.into(),
         traceparent: task
             .trace_context
@@ -110,21 +187,13 @@ fn view(task: HostTask) -> Task {
     }
 }
 
-/// `POST /v1/tasks/{token}/heartbeat`.
-pub(super) async fn heartbeat(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Path(token): Path<String>,
-) -> Result<Json<HeartbeatAck>, ApiError> {
-    caller.require(Permission::TasksWork)?;
-    let token = TaskToken(token);
-    held(&app, &caller, &token).await?;
-    let until = app.engine.heartbeat_task(&caller.tenant, &token).await?;
-    // A deferred task's deadline may be far: the worker sends heartbeats it does not need.
-    let left = until.0.saturating_sub(app.now().0);
-    Ok(Json(HeartbeatAck {
-        heartbeat_timeout_ms: left,
-    }))
+fn sse(event: &TaskStreamEvent) -> Event {
+    let data = match event {
+        TaskStreamEvent::Task(task) => serde_json::to_string(task),
+        TaskStreamEvent::Gone(gone) => serde_json::to_string(gone),
+    }
+    .unwrap_or_default();
+    Event::default().event(event.sse_event()).data(data)
 }
 
 /// `POST /v1/tasks/{token}/defer`.
@@ -137,16 +206,14 @@ pub(super) async fn defer(
     caller.require(Permission::TasksWork)?;
     let token = TaskToken(token);
     held(&app, &caller, &token).await?;
-    app.engine
+    app.edge
         .defer_task(
+            &mut app.gateway(),
             &caller.tenant,
             &token,
             request.timeout.map(|timeout| timeout.get()),
         )
         .await?;
-    if let Some(task) = app.store.tool_task(&token).await? {
-        app.record_task(&task).await;
-    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -161,10 +228,9 @@ pub(super) async fn complete(
     check_payload_size(&app, &request.result)?;
     let token = TaskToken(token);
     held(&app, &caller, &token).await?;
-    app.engine
-        .complete_task(&caller.tenant, &token, request.result)
+    app.edge
+        .complete_task(&mut app.gateway(), &caller.tenant, &token, request.result)
         .await?;
-    app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -184,10 +250,9 @@ pub(super) async fn fail(
     };
     let token = TaskToken(token);
     held(&app, &caller, &token).await?;
-    app.engine
-        .fail_task(&caller.tenant, &token, failure)
+    app.edge
+        .fail_task(&mut app.gateway(), &caller.tenant, &token, failure)
         .await?;
-    app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -199,9 +264,7 @@ pub(super) async fn approve(
 ) -> Result<StatusCode, ApiError> {
     caller.require(Permission::TasksApprove)?;
     let task = task(&app, &caller, &id).await?;
-    app.engine.approve_task(&task).await?;
-    app.record_tasks(&task.run).await;
-    app.wake.bump();
+    app.edge.approve_task(&mut app.gateway(), &task).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -217,8 +280,9 @@ pub(super) async fn reject(
         check_failure_size(message, None)?;
     }
     let task = task(&app, &caller, &id).await?;
-    app.engine.reject_task(&task, request.message).await?;
-    app.wake.bump();
+    app.edge
+        .reject_task(&mut app.gateway(), &task, request.message)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -240,22 +304,19 @@ fn check_failure_size(message: &str, data: Option<&serde_json::Value>) -> Result
 
 /// Refuses (410, as a task that no longer exists) the token of a task whose run the caller does
 /// not see: a worker acting for an end user answers its tasks only, and one whose grant is
-/// limited to labels the tasks of the runs carrying them.
+/// limited to labels the tasks of the runs carrying them. The token names its run.
 async fn held(app: &App, caller: &Caller, token: &TaskToken) -> Result<(), ApiError> {
     if caller.namespace.is_none() && !caller.scoped() {
         return Ok(());
     }
-    // A token holding a NUL character is no task's, and never reaches a store: the engine
-    // answers it as gone.
-    if token.0.contains('\0') {
-        return Ok(());
-    }
-    let Some(task) = app.store.tool_task(token).await? else {
-        return Ok(());
+    let gone = || ApiError::from(rewind_engine::ports::link::Refusal::TaskGone);
+    let Ok((run, _)) = app.edge.partition_of_token(&token.0).await else {
+        return Err(gone());
     };
-    match app.store.get_run(&task.task.run).await? {
-        Some(record) if caller.sees_run(&record) => Ok(()),
-        _ => Err(rewind_engine::EngineError::TaskGone.into()),
+    let run = rewind_engine::ports::RunRef::new(caller.tenant.clone(), run);
+    match app.read_run(&run).await? {
+        Some(view) if caller.sees_run(&view.head) => Ok(()),
+        _ => Err(gone()),
     }
 }
 
@@ -271,8 +332,8 @@ async fn task(
         ))
     };
     let task = parse_task_id(&caller.tenant, id).ok_or_else(missing)?;
-    match app.store.get_run(&task.run).await? {
-        Some(record) if caller.sees_run(&record) => Ok(task),
+    match app.read_run(&task.run).await? {
+        Some(view) if caller.sees_run(&view.head) => Ok(task),
         _ => Err(missing()),
     }
 }

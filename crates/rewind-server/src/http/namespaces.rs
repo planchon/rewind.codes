@@ -19,11 +19,10 @@ use rewind_api::namespaces::{
     NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults, QuotaAlertList,
     QuotaAlertQuery,
 };
-use rewind_core::RunStatus;
+use rewind_engine::ports::catalog::NamespaceFilter;
 use rewind_engine::ports::{
-    AccessStore, DeleteNamespace, DisplayName, JournalStore, Month, Namespace, NamespaceCursor,
-    NamespaceFilter, NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, QuotaKind,
-    RunCursor, RunFilter, Tenant, TenantId, Usage, UsageOf, limits,
+    AccessStore, CatalogStore, DeleteNamespace, DisplayName, Month, Namespace, NamespaceName,
+    NamespaceWrite, QuotaKind, Scope, Tenant, TenantId, Usage, limits,
 };
 
 use crate::app::App;
@@ -37,8 +36,17 @@ use crate::views::{self, engine_quotas, quotas};
 const PAGE: u32 = 50;
 const MAX_PAGE: u32 = 500;
 
-/// The runs cancelled at once when a namespace is erased.
-const CANCEL_BATCH: usize = 100;
+/// Namespaces read from the catalog at once, to order them by their use.
+const CATALOG_PAGE: usize = 1_000;
+
+/// How `GET /v1/namespaces` orders them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamespaceOrder {
+    Cpu,
+    Runs,
+    Scripts,
+    Name,
+}
 
 /// A namespace's name from a path: 400 when it is not one.
 pub(crate) fn name(text: &str) -> Result<NamespaceName, ApiError> {
@@ -131,18 +139,8 @@ async fn detail(
     month: Month,
 ) -> Result<NamespaceDetail, ApiError> {
     let tenant = tenant(app, &namespace.tenant).await?;
-    let usage = app
-        .store
-        .namespace_usage(
-            &namespace.tenant,
-            &UsageOf::Namespace(namespace.name.clone()),
-            month,
-        )
-        .await?;
-    let alerts = app
-        .store
-        .quota_alerts(&namespace.tenant, Some(&namespace.name), month)
-        .await?;
+    let usage = crate::usage::by_day(app, &namespace.tenant, &namespace.name, month).await?;
+    let alerts = crate::usage::alerts(app, &namespace.tenant, Some(&namespace.name), month).await?;
     let tokens = app
         .store
         .count_tokens(&namespace.tenant, &namespace.name, app.now())
@@ -176,16 +174,33 @@ fn order_key(order: NamespaceOrder, usage: &Usage) -> u64 {
 }
 
 /// A cursor of `GET /v1/namespaces`: `{key}-{name}`, the last namespace of the page.
-fn encode_cursor(order: NamespaceOrder, last: &NamespaceUsage) -> String {
-    format!("{}-{}", order_key(order, &last.usage), last.namespace.name)
+fn encode_cursor(key: u64, name: &NamespaceName) -> String {
+    format!("{key}-{name}")
 }
 
-fn decode_cursor(text: &str) -> Result<NamespaceCursor, ApiError> {
+fn decode_cursor(text: &str) -> Result<(u64, NamespaceName), ApiError> {
     let invalid = || ApiError::invalid(format!("after {text:?} is not a cursor of this listing"));
     let (key, name) = text.split_once('-').ok_or_else(invalid)?;
-    Ok(NamespaceCursor {
-        key: key.parse().map_err(|_| invalid())?,
-        name: NamespaceName::new(name).map_err(|_| invalid())?,
+    Ok((
+        key.parse().map_err(|_| invalid())?,
+        NamespaceName::new(name).map_err(|_| invalid())?,
+    ))
+}
+
+/// Whether a namespace uses at least `percent` % of one of its limits.
+fn above(usage: &Usage, limits: &rewind_engine::ports::Quotas, percent: u32) -> bool {
+    [
+        QuotaKind::CpuPerMonth,
+        QuotaKind::ActiveRuns,
+        QuotaKind::RunsPerMonth,
+        QuotaKind::Scripts,
+    ]
+    .into_iter()
+    .any(|quota| match (usage.of(quota), limits.limit(quota)) {
+        (Some(used), Some(limit)) => {
+            used.saturating_mul(100) >= limit.saturating_mul(u64::from(percent))
+        }
+        _ => false,
     })
 }
 
@@ -220,33 +235,69 @@ pub(super) async fn list(
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let after = query.after.as_deref().map(decode_cursor).transpose()?;
     let bound = caller.namespace.is_some();
-    let filter = NamespaceFilter {
-        tenant: caller.tenant.clone(),
-        // Bound to one namespace: that one alone, on the first page only.
-        name: caller.namespace.clone(),
-        prefix: query.prefix.clone(),
-        above_percent,
-        order,
-        month,
-        after: if bound { None } else { after },
-        limit,
+    // Every namespace the filter takes, from the catalog by name, then their use of the month
+    // from the counters, ordered by it.
+    let mut matching = Vec::new();
+    let mut from = None;
+    loop {
+        let page = app
+            .catalog()
+            .list_namespaces(&NamespaceFilter {
+                tenant: caller.tenant.clone(),
+                // Bound to one namespace: that one alone, on the first page only.
+                name: caller.namespace.clone(),
+                prefix: query.prefix.clone(),
+                after: from.clone(),
+                limit: CATALOG_PAGE,
+            })
+            .await?;
+        let full = page.namespaces.len() == CATALOG_PAGE;
+        from = page.namespaces.last().map(|last| last.name.clone());
+        matching.extend(page.namespaces);
+        if !full || bound {
+            break;
+        }
+    }
+    let tenant = tenant(&app, &caller.tenant).await?;
+    let scope = match &caller.namespace {
+        Some(namespace) => Scope::Namespace {
+            tenant: caller.tenant.clone(),
+            namespace: namespace.clone(),
+        },
+        None => Scope::Tenant(caller.tenant.clone()),
     };
-    let page = app.store.list_namespaces(&filter).await?;
-    let total = page.total;
-    let found = if bound && query.after.is_some() {
-        Vec::new()
-    } else {
-        page.namespaces
-    };
-    let next = (!bound && found.len() == limit)
-        .then(|| found.last())
-        .flatten()
-        .map(|last| encode_cursor(order, last));
+    let used = crate::usage::of_namespaces(&app, &scope, month, false).await?;
+    let mut listed: Vec<(u64, Namespace, rewind_engine::ports::Quotas, Usage)> = matching
+        .into_iter()
+        .filter_map(|namespace| {
+            let usage = used.get(&namespace.name).cloned().unwrap_or_default();
+            let limits = limits(&tenant, Some(&namespace));
+            if above_percent.is_some_and(|percent| !above(&usage, &limits, percent)) {
+                return None;
+            }
+            Some((order_key(order, &usage), namespace, limits, usage))
+        })
+        .collect();
+    listed.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    let total = listed.len() as u64;
+    if bound && query.after.is_some() {
+        listed.clear();
+    }
+    if let Some((key, name)) = &after
+        && !bound
+    {
+        // Largest use first, then by name: what comes after the cursor.
+        listed.retain(|(at, namespace, ..)| *at < *key || (*at == *key && namespace.name > *name));
+    }
+    let next = (listed.len() > limit)
+        .then(|| &listed[limit - 1])
+        .map(|(key, namespace, ..)| encode_cursor(*key, &namespace.name));
+    listed.truncate(limit);
     Ok(Json(NamespaceList {
         month: month.to_string(),
-        namespaces: found
+        namespaces: listed
             .iter()
-            .map(|listed| view(&listed.namespace, &listed.limits, &listed.usage))
+            .map(|(_, namespace, limits, usage)| view(namespace, limits, usage))
             .collect(),
         total,
         next,
@@ -285,7 +336,13 @@ pub(super) async fn put(
     let exceptions = engine_quotas(&request.exceptions);
     let written = app
         .store
-        .put_namespace(&caller.tenant, &name, Some(&exceptions), app.now())
+        .put_namespace(
+            &caller.tenant,
+            &name,
+            Some(&exceptions),
+            app.config.partitions,
+            app.now(),
+        )
         .await?;
     let NamespaceWrite::Written(namespace) = written else {
         return Err(deleting());
@@ -331,8 +388,9 @@ pub(super) async fn patch(
 }
 
 /// `DELETE /v1/namespaces/{name}`: erases the end user. The namespace takes no run and no token
-/// from now on, its tokens are revoked and its active runs cancelled through the normal path;
-/// the worker role erases its runs, secrets and use in the background.
+/// from now on, and its tokens are revoked. The change reaches the owner of its partition, which
+/// cancels its active runs through the normal path and erases its ended runs; then the control
+/// plane erases its tests, its secrets and the namespace.
 pub(super) async fn delete(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -343,7 +401,7 @@ pub(super) async fn delete(
     reach(&caller, &name)?;
     let now = app.now();
     if app
-        .store
+        .catalog()
         .delete_namespace(&caller.tenant, &name, now)
         .await?
         == DeleteNamespace::NotFound
@@ -351,33 +409,9 @@ pub(super) async fn delete(
         return Err(no_namespace(&name));
     }
     app.store.revoke_tokens(&caller.tenant, &name, now).await?;
-    app.store
+    app.catalog()
         .revoke_namespace_tokens(&caller.tenant, &name, now)
         .await?;
-    for status in [RunStatus::Pending, RunStatus::Active] {
-        let mut filter = RunFilter::new(caller.tenant.clone());
-        filter.namespace = Some(name.clone());
-        filter.status = Some(status);
-        filter.limit = Some(CANCEL_BATCH);
-        loop {
-            let runs = app.store.list_runs(&filter).await?;
-            for record in &runs {
-                app.engine
-                    .cancel(
-                        &record.run,
-                        Some("the end user's namespace is being erased".to_owned()),
-                    )
-                    .await?;
-            }
-            match runs.last() {
-                Some(last) if runs.len() == CANCEL_BATCH => {
-                    filter.after = Some(RunCursor::from(last));
-                }
-                _ => break,
-            }
-        }
-    }
-    app.wake.bump();
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -388,10 +422,7 @@ async fn defaults_of(
     month: Month,
 ) -> Result<NamespaceDefaults, ApiError> {
     let tenant = tenant(app, id).await?;
-    let usage = app
-        .store
-        .namespace_usage(id, &UsageOf::Tenant, month)
-        .await?;
+    let usage = crate::usage::of_scope(app, &Scope::Tenant(id.clone()), month).await?;
     Ok(NamespaceDefaults {
         defaults: quotas(&tenant.namespace_defaults),
         ceiling: quotas(&tenant.quotas),
@@ -467,10 +498,7 @@ pub(super) async fn alerts(
         (Some(bound), _) => Some(bound.clone()),
         (None, asked) => asked,
     };
-    let alerts = app
-        .store
-        .quota_alerts(&caller.tenant, namespace.as_ref(), month)
-        .await?;
+    let alerts = crate::usage::alerts(&app, &caller.tenant, namespace.as_ref(), month).await?;
     Ok(Json(QuotaAlertList {
         month: month.to_string(),
         alerts: alerts.iter().map(views::quota_alert).collect(),

@@ -245,7 +245,7 @@ impl TestServer {
     /// A server with both roles and these extra options, on Turso.
     pub(crate) async fn start(extra: &[&str]) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = format!("turso:{}", dir.path().join("journal.db").display());
+        let store = format!("turso:{}", dir.path().join("control.db").display());
         let blobs = dir.path().join("blobs");
         Self::start_on(dir, &store, &blobs, extra).await
     }
@@ -275,7 +275,7 @@ impl TestServer {
     /// A server with both roles on Turso, whose sign-in's identity provider is `identity`.
     pub(crate) async fn signed_in(identity: &MemoryIdentity, extra: &[&str]) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = format!("turso:{}", dir.path().join("journal.db").display());
+        let store = format!("turso:{}", dir.path().join("control.db").display());
         let blobs = dir.path().join("blobs");
         Self::start_with(dir, &store, &blobs, extra, Some(identity.clone())).await
     }
@@ -288,7 +288,7 @@ impl TestServer {
         let blobs = dir.path().join("blobs").display().to_string();
         let mut args = vec![
             "rewind server",
-            "--blobs",
+            "--bucket",
             &blobs,
             "--master-key",
             &key,
@@ -298,9 +298,9 @@ impl TestServer {
             "acme",
             "--listen",
             "127.0.0.1:0",
-            "--activations",
+            "--executors",
             "2",
-            "--dispatches",
+            "--calls",
             "4",
         ];
         args.extend_from_slice(extra);
@@ -331,7 +331,7 @@ impl TestServer {
             "rewind server",
             "--store",
             store,
-            "--blobs",
+            "--bucket",
             &blobs,
             "--master-key",
             &key,
@@ -341,9 +341,9 @@ impl TestServer {
             "acme",
             "--listen",
             "127.0.0.1:0",
-            "--activations",
+            "--executors",
             "2",
-            "--dispatches",
+            "--calls",
             "4",
         ];
         args.extend_from_slice(extra);
@@ -469,7 +469,7 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     use rewind_api::ProblemType;
     use rewind_api::runs::RunFilter;
     use rewind_api::scripts::ScriptFilter;
-    use rewind_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskQuery};
+    use rewind_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamQuery};
     use serde_json::json;
 
     let harness = server.key(BuiltInRole::Harness, &[]).await;
@@ -507,7 +507,7 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         assert!(detail.contains("NUL character"), "{detail}");
     };
 
-    // Tokens: a webhook's URL, a host-tool task's claim.
+    // Tokens: a webhook's URL, a host-tool task's hand-out.
     not_found(
         harness
             .post_hook("hook\u{0}token", &json!({ "ok": true }), None)
@@ -515,7 +515,6 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
             .unwrap_err(),
     );
     let token = "task\u{0}token";
-    gone(worker.heartbeat_task(token).await.unwrap_err());
     gone(
         worker
             .defer_task(token, &DeferTask::default())
@@ -562,11 +561,6 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
             ..RunFilter::default()
         };
         refused(harness.list_runs(&runs).await.unwrap_err());
-        let scripts = ScriptFilter {
-            labels: vec![label.into()],
-            ..ScriptFilter::default()
-        };
-        refused(harness.list_scripts(&scripts).await.unwrap_err());
     }
     let runs = RunFilter {
         tool: Some("ask\u{0}".into()),
@@ -578,12 +572,59 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         ..ScriptFilter::default()
     };
     refused(harness.list_scripts(&scripts).await.unwrap_err());
-    let claim = TaskQuery {
+    let stream = TaskStreamQuery {
         tools: vec!["ask_user".into(), "ask\u{0}".into()],
-        wait: Some("1s".parse().unwrap()),
-        ..TaskQuery::default()
+        ..TaskStreamQuery::default()
     };
-    refused(worker.claim_tasks(&claim).await.unwrap_err());
+    refused(worker.task_stream(&stream).await.unwrap_err());
+}
+
+/// A worker's task stream, as the SDK's worker holds it open.
+pub(crate) struct TaskWorker {
+    stream: rewind_api::TaskStream,
+}
+
+impl TaskWorker {
+    /// Opens a stream for the tasks `query` names.
+    pub(crate) async fn open(client: &Client, query: &rewind_api::tasks::TaskStreamQuery) -> Self {
+        Self {
+            stream: client.task_stream(query).await.unwrap(),
+        }
+    }
+
+    /// The next event of the stream, `None` when none comes within `wait` or the stream ends.
+    pub(crate) async fn event(
+        &mut self,
+        wait: Duration,
+    ) -> Option<rewind_api::tasks::TaskStreamEvent> {
+        use futures_util::StreamExt as _;
+        match tokio::time::timeout(wait, self.stream.next()).await {
+            Ok(Some(event)) => Some(event.unwrap()),
+            _ => None,
+        }
+    }
+
+    /// The next task handed, within 30 s; `gone` events before it are skipped.
+    pub(crate) async fn task(&mut self) -> rewind_api::tasks::HandedTask {
+        loop {
+            match self.event(Duration::from_secs(30)).await {
+                Some(rewind_api::tasks::TaskStreamEvent::Task(task)) => return *task,
+                Some(rewind_api::tasks::TaskStreamEvent::Gone(_)) => {}
+                None => panic!("no task was handed within 30 s"),
+            }
+        }
+    }
+
+    /// Whether no task is handed within `wait`.
+    pub(crate) async fn none_within(&mut self, wait: Duration) -> bool {
+        loop {
+            match self.event(wait).await {
+                Some(rewind_api::tasks::TaskStreamEvent::Task(_)) => return false,
+                Some(rewind_api::tasks::TaskStreamEvent::Gone(_)) => {}
+                None => return true,
+            }
+        }
+    }
 }
 
 /// The namespace the tests' clients act for: starting a run names one.

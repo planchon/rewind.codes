@@ -1,11 +1,10 @@
-//! The event stream of a run (`GET /v1/runs/{id}/events`): server-sent events tailing its
-//! history by index, woken by commits. Not the feed: a stream of one run needs no projector
-//! (`archi/05-testing-and-observability.md`, "The feed and the projector").
+//! The event stream of a run (`GET /v1/runs/{id}/events`): server-sent events of its history
+//! by index, from `from`, then, with `follow`, of each batch its owner commits, pushed once
+//! durable (`archi/06-storage-and-scale.md`, "Messages after facts").
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -14,23 +13,26 @@ use futures_util::Stream;
 use rewind_api::access::Permission;
 use rewind_api::events::{EventsQuery, StreamEvent};
 use rewind_api::headers::LAST_EVENT_ID;
-use rewind_engine::adapters::SystemClock;
-use rewind_engine::ports::{Clock, JournalStore, RunRef};
-use tokio::sync::watch;
+use rewind_core::{HistoryEntry, RunStatus};
+use rewind_engine::ports::RunRef;
+use rewind_engine::ports::link::{Changed, SubscriptionKey};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::app::App;
-use crate::auth::{self, Caller, TokenExpiry};
+use crate::auth::{Caller, TokenExpiry};
 use crate::error::ApiError;
 use crate::extract::Query;
-use crate::wake::{Busy, POLL, wait};
+use crate::follow;
+use crate::idle::Busy;
+use crate::streams::Rights;
 
 /// `GET /v1/runs/{id}/events?follow=1&from=…`. A stream opened with a member's access token is
 /// closed at the token's expiry: the dashboard resumes it with a new token and `from`. A stream
 /// opened with an end user's token is closed once the token no longer authenticates: revoked,
 /// expired, its key deleted or its namespace erased; one opened by a connection, at its access
-/// token's expiry or once the connection is revoked or no longer opens the organization. Every
-/// second, the caller's rights are read again as the store holds them ([`auth::still_holds`]): a
-/// key revoked, or a grant that no longer gives `runs:read` with the same labels, closes it.
+/// token's expiry or once the connection is revoked or no longer opens the organization. A key
+/// revoked, or a grant that no longer gives `runs:read` with the same labels, closes it too: the
+/// caller's rights are read again at each change of the control plane that concerns it.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -40,31 +42,26 @@ pub(super) async fn stream(
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let record = app.run(&caller, &id).await?;
+    let view = app.run(&caller, &id).await?;
     let resumed = headers
         .get(LAST_EVENT_ID)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(|last| last.saturating_add(1));
-    // Tokens expire in the world's time, whatever the server's clock.
-    let deadline = expiry.map(|expires_at| {
-        let left = expires_at
-            .as_millis()
-            .saturating_sub(SystemClock.now().as_millis());
-        tokio::time::Instant::now() + Duration::from_millis(left)
-    });
+    let follow = query.follow.unwrap_or(false);
+    let run = view.head.run.clone();
+    // Followed from before the first read: nothing committed in between is missed.
+    let changes = follow.then(|| follow::follow(&app, SubscriptionKey::Run(run.clone())));
     let tail = Tail {
-        caller,
-        checked_at: tokio::time::Instant::now(),
-        changes: app.wake.subscribe(),
-        busy: query.follow.unwrap_or(false).then(|| app.activity.busy()),
+        busy: follow.then(|| app.idle.busy()),
+        rights: Rights::new(&app, caller, Permission::RunsRead, expiry),
         app,
-        run: record.run,
+        run,
         next: query.from.or(resumed).unwrap_or(0),
-        follow: query.follow.unwrap_or(false),
+        changes,
         pending: VecDeque::new(),
+        read: false,
         done: false,
-        deadline,
     };
     let events = futures_util::stream::unfold(tail, |mut tail| async move {
         tail.next_event().await.map(|event| (Ok(event), tail))
@@ -72,92 +69,123 @@ pub(super) async fn stream(
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 
-/// How often the caller's rights are read again.
-const RECHECK: Duration = Duration::from_secs(1);
-
 /// Where a stream stands.
 struct Tail {
     app: Arc<App>,
-    /// Who opened the stream, whose rights are checked again every second.
-    caller: Caller,
-    /// When they were last checked.
-    checked_at: tokio::time::Instant,
+    rights: Rights,
     run: RunRef,
     /// The index of the next entry to send.
     next: u64,
-    follow: bool,
+    /// The run's changes, when followed.
+    changes: Option<UnboundedReceiver<Changed>>,
     pending: VecDeque<Event>,
+    /// The history was read once.
+    read: bool,
     done: bool,
-    changes: watch::Receiver<u64>,
     /// A followed stream keeps the embedded server from stopping on idle.
     #[allow(dead_code)]
     busy: Option<Busy>,
-    /// The expiry of the access token that opened the stream, which ends it.
-    deadline: Option<tokio::time::Instant>,
 }
 
 impl Tail {
     async fn next_event(&mut self) -> Option<Event> {
         loop {
-            if self
-                .deadline
-                .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
-            {
-                return None;
-            }
             if let Some(event) = self.pending.pop_front() {
                 return Some(event);
             }
-            if self.done || self.app.stopping() {
+            if self.done {
                 return None;
             }
-            match self.read().await {
-                Ok(true) => {}
-                Ok(false) => wait(&mut self.changes, POLL, self.deadline).await,
-                Err(error) => {
+            if !self.read {
+                self.read = true;
+                if let Err(error) = self.catch_up().await {
                     tracing::warn!(run = %self.run, detail = %error.0.detail, "the event stream stops");
                     return None;
+                }
+                continue;
+            }
+            let Some(changes) = self.changes.as_mut() else {
+                return None;
+            };
+            tokio::select! {
+                () = self.rights.lost() => return None,
+                changed = changes.recv() => {
+                    let Some(changed) = changed else {
+                        return None;
+                    };
+                    if let Err(error) = self.changed(changed).await {
+                        tracing::warn!(run = %self.run, detail = %error.0.detail, "the event stream stops");
+                        return None;
+                    }
                 }
             }
         }
     }
 
-    /// Reads what was committed since the last read. Returns whether there is something to
-    /// send.
-    async fn read(&mut self) -> Result<bool, ApiError> {
-        if self.checked_at.elapsed() >= RECHECK {
-            self.checked_at = tokio::time::Instant::now();
-            if !auth::still_holds(&self.app, &self.caller, Permission::RunsRead).await {
-                self.done = true;
-                return Ok(false);
-            }
-        }
-        let Some(record) = self.app.store.get_run(&self.run).await? else {
+    /// Reads the history from `next` and the run's state, as the owner holds them now.
+    async fn catch_up(&mut self) -> Result<(), ApiError> {
+        let Some(view) = self.app.read_run(&self.run).await? else {
             self.done = true;
-            return Ok(false);
+            return Ok(());
         };
-        let views = self.app.views();
-        let history = views.history_from(&record, self.next).await?;
-        let entries = views
-            .entries(
-                &self.run.tenant,
-                &history,
-                rewind_api::common::PAYLOAD_VALUE_LIMIT,
-            )
+        let history = self.app.views().history_from(&self.run, self.next).await?;
+        self.push(&history).await?;
+        let caught_up = self.next >= view.head.history_len;
+        if caught_up && (view.head.is_ended() || self.changes.is_none()) {
+            self.end(view.head.status);
+        }
+        Ok(())
+    }
+
+    /// A batch the owner committed: its entries, read again from the history when the batch
+    /// starts past `next`.
+    async fn changed(&mut self, changed: Changed) -> Result<(), ApiError> {
+        let Some(summary) = &changed.summary else {
+            // The run was erased.
+            self.done = true;
+            return Ok(());
+        };
+        let starts_after = changed
+            .entries
+            .first()
+            .is_some_and(|first| first.index > self.next);
+        if starts_after {
+            return self.catch_up().await;
+        }
+        let entries: Vec<HistoryEntry> = changed
+            .entries
+            .into_iter()
+            .filter(|entry| entry.index >= self.next)
+            .collect();
+        self.push(&entries).await?;
+        if summary.status.is_terminal() && self.next >= summary.history_len {
+            self.end(summary.status);
+        }
+        Ok(())
+    }
+
+    async fn push(&mut self, history: &[HistoryEntry]) -> Result<(), ApiError> {
+        let entries = self
+            .app
+            .views()
+            .entries(&self.run, history, rewind_api::common::PAYLOAD_VALUE_LIMIT)
             .await?;
         for entry in entries {
+            if entry.idx < self.next {
+                continue;
+            }
             self.next = entry.idx + 1;
             self.pending
                 .push_back(sse(&StreamEvent::Entry(Box::new(entry))));
         }
-        let caught_up = self.next >= record.history_len;
-        if caught_up && (record.status.is_terminal() || !self.follow) {
-            self.pending.push_back(sse(&StreamEvent::End {
-                status: record.status.into(),
-            }));
-            self.done = true;
-        }
-        Ok(!self.pending.is_empty())
+        Ok(())
+    }
+
+    fn end(&mut self, status: RunStatus) {
+        self.pending.push_back(sse(&StreamEvent::End {
+            status: status.into(),
+        }));
+        self.done = true;
     }
 }
 

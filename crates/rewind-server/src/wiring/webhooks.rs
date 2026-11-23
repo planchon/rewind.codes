@@ -4,9 +4,10 @@
 //! Each delivery is a `POST` of the API's `WebhookEvent` (`{type, timestamp, data}`), signed
 //! following Standard Webhooks with the subscription's secret: `webhook-id` (the event's
 //! deterministic id, the same on every retry), `webhook-timestamp` and `webhook-signature`.
-//! A delivery that fails (a network error, a timeout, a 408, 429 or 5xx) is retried with
-//! backoff; another 4xx, a redirect and a refused address are not. The sender reports an error
-//! once it gives up.
+//! A delivery that fails (a network error, a timeout, a 408, 429 or 5xx) is tried again within
+//! the sender's [`Retries`]; another 4xx, a redirect and a refused address are not. A node's
+//! sender makes one attempt: the owner of the run's partition keeps the delivery in its outbox
+//! and tries it again on a timer (`archi/06-storage-and-scale.md`, "The outbox").
 //!
 //! Where a delivery may go is [`WebhookEgress`]: a deployed server sends only to `https://`
 //! URLs whose addresses are public, with the egress checks of the `http` tool (`rewind-mcp`'s
@@ -24,16 +25,14 @@ use rewind_api::webhooks::{
     WEBHOOK_TIMESTAMP, WebhookSecret,
 };
 use rewind_engine::ports::{
-    CredentialsExpiredReason, JournalStore, RunRef, Subscription, TaskRef, WebhookError,
-    WebhookEvent, WebhookEventKind, WebhookSender,
+    CredentialsExpiredReason, RunRef, Subscription, TaskRef, WebhookError, WebhookEvent,
+    WebhookEventKind, WebhookSender,
 };
 use rewind_outbound::{Egress, NameResolver, SystemResolver};
 use tokio::time::Instant;
 
-use crate::titles::ScriptTexts;
-use crate::views::{Views, task_id};
-use crate::wiring::blobs::Blobs;
-use crate::wiring::store::Store;
+use crate::app::App;
+use crate::views::task_id;
 
 /// How deliveries are retried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,10 +163,6 @@ impl<R> HttpWebhooks<R> {
             egress,
         }
     }
-
-    pub(crate) fn retries(&self) -> Retries {
-        self.retries
-    }
 }
 
 impl<R: Render> HttpWebhooks<R> {
@@ -264,13 +259,12 @@ impl<R: Render> WebhookSender for HttpWebhooks<R> {
     }
 }
 
-/// Renders events as the API's `WebhookEvent`, with the run's state read from the store when
-/// the delivery is sent.
+/// Renders events as the API's `WebhookEvent`, with the run's state read from its owner when the
+/// delivery is sent.
 #[derive(Debug, Clone)]
 pub(crate) struct ServerRender {
-    pub(crate) store: Store,
-    pub(crate) blobs: Blobs,
-    pub(crate) texts: Arc<ScriptTexts>,
+    /// The server, set once it is wired: the sender is part of the plane the server holds.
+    pub(crate) app: Arc<std::sync::OnceLock<std::sync::Weak<App>>>,
 }
 
 impl Render for ServerRender {
@@ -295,12 +289,17 @@ impl Render for ServerRender {
             .run
             .ok_or_else(|| failed("a run's event without its run".to_owned()))?;
         let run = RunRef::new(event.tenant.clone(), run_id);
-        let record = self
-            .store
-            .get_run(&run)
+        let app = self
+            .app
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| failed("the server is stopping".to_owned()))?;
+        let view = app
+            .read_run(&run)
             .await
-            .map_err(|error| failed(format!("the run cannot be read: {error}")))?
+            .map_err(|error| failed(format!("the run cannot be read: {}", error.0.detail)))?
             .ok_or_else(|| failed(format!("run {run_id} no longer exists")))?;
+        let record = &view.head;
         let task = |seq| {
             task_id(&TaskRef {
                 run: run.clone(),
@@ -318,7 +317,7 @@ impl Render for ServerRender {
                         task_id: task(*seq),
                         seq: seq.0,
                         tool: tool.clone(),
-                        server: mcp_server(&self.store, &record, tool).await,
+                        server: mcp_server(&app, record, tool).await,
                         toolset: record.toolset.to_hex(),
                         message: message.clone(),
                     },
@@ -339,7 +338,7 @@ impl Render for ServerRender {
                     task_id: task(*seq),
                     seq: seq.0,
                     tool: tool.clone(),
-                    server: mcp_server(&self.store, &record, tool).await,
+                    server: mcp_server(&app, record, tool).await,
                     toolset: record.toolset.to_hex(),
                     reason: match reason {
                         CredentialsExpiredReason::Refused => {
@@ -354,14 +353,10 @@ impl Render for ServerRender {
                 },
             },
             kind => {
-                let views = Views {
-                    store: &self.store,
-                    blobs: &self.blobs,
-                    texts: &self.texts,
-                };
                 let data = RunEvent {
-                    run: views
-                        .run(&record)
+                    run: app
+                        .views()
+                        .run(&view)
                         .await
                         .map_err(|error| failed(error.0.detail.clone()))?,
                 };
@@ -400,13 +395,11 @@ impl Render for ServerRender {
 }
 
 /// The MCP server of a tool of the run's toolset.
-async fn mcp_server(
-    store: &Store,
-    record: &rewind_engine::ports::RunRecord,
-    tool: &str,
-) -> Option<String> {
-    let stored = store
-        .get_toolset(&record.run.tenant, record.toolset)
+async fn mcp_server(app: &App, head: &rewind_engine::ports::RunHead, tool: &str) -> Option<String> {
+    use rewind_engine::ports::CatalogStore as _;
+    let stored = app
+        .catalog()
+        .get_toolset(&head.run.tenant, head.toolset)
         .await
         .ok()??;
     stored.toolset.tool(tool)?.route.server().map(str::to_owned)

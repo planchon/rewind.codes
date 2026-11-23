@@ -2,8 +2,9 @@
 //! `POST /v1/workflows/{name}/record`, `GET /v1/tests/{digest}`, and the suite a fork of a run
 //! of a workflow passes first.
 //!
-//! Running a test runs model-written code: only a server with the worker role does it. Test
-//! documents are written in the stored format v1, which the engine is given here.
+//! Running a test runs model-written code, on the node that answers, under its sandbox, each
+//! test on a run plane of its own in virtual time. Test documents are written in the stored
+//! format v1, which the engine is given here.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,13 +18,14 @@ use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
 };
 use rewind_api::workflows::{RecordTests, RecordedTest, RecordedTests, SkippedRun};
-use rewind_core::{Cassette, Digest, Script, Test, TestOrigin, Toolset, WorkflowSchemas};
-use rewind_engine::ports::{JournalStore, ReadModel, RunRecord, StoredWorkflow, TenantId};
+use rewind_core::{Cassette, Digest, Script, Test, Toolset, WorkflowSchemas};
+use rewind_engine::edge::{RecordFrom, RecordingError};
+use rewind_engine::ports::link::RunView;
+use rewind_engine::ports::{CatalogStore, StoredWorkflow, TenantId};
 use rewind_engine::suites::{
-    DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, Recorder, SuiteError, SuiteLoadError,
-    TestFormat, TestInput,
+    DEFAULT_RECORDED, MAX_RECORDED, SuiteError, SuiteLoadError, TestFormat, TestInput,
 };
-use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport, run_tests};
+use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
 use rewind_runtime::TsMockLoader;
 use serde_json::Value;
 
@@ -160,21 +162,9 @@ pub(crate) fn suite_error(error: SuiteLoadError) -> ApiError {
 pub(crate) fn test_error(error: TestError) -> ApiError {
     match error {
         TestError::Start(error) => error.into(),
-        TestError::Engine(error) => error.into(),
+        TestError::Unavailable(message) => ApiError::unavailable(message),
         TestError::Mocks(message) => ApiError::internal(message),
     }
-}
-
-/// Refuses to run tests on a server without the worker role: only workers run model-written
-/// code.
-pub(crate) fn require_worker(app: &App, what: &str) -> Result<(), ApiError> {
-    if app.settings.worker() {
-        return Ok(());
-    }
-    Err(ApiError::unavailable(format!(
-        "{what} runs tests, and this server has only the api role: send it to a server with the \
-         worker role"
-    )))
 }
 
 /// Runs tests against a subject, within the wall-clock bound.
@@ -185,10 +175,9 @@ pub(crate) async fn run(
     options: &TestOptions,
 ) -> Result<Vec<TestReport>, ApiError> {
     let loader = TsMockLoader::default();
-    let executor = app.engine.executor();
     match tokio::time::timeout(
         TESTS_TIMEOUT,
-        run_tests(executor, &loader, subject, tests, options),
+        app.edge.run_tests(&loader, subject, tests, options),
     )
     .await
     {
@@ -207,8 +196,9 @@ pub(crate) async fn suite(
     stored: &StoredWorkflow,
 ) -> Result<Vec<Test>, ApiError> {
     Ok(app
-        .engine
-        .load_suite(tenant, &stored.workflow, format())
+        .edge
+        .suites(format())
+        .load_suite(tenant, &stored.workflow)
         .await
         .map_err(suite_error)?
         .into_iter()
@@ -232,7 +222,6 @@ pub(super) async fn test(
     Body(request): Body<TestRequest>,
 ) -> Result<Json<TestRun>, ApiError> {
     caller.require(Permission::RunsStart)?;
-    require_worker(&app, "POST /v1/test")?;
     let bounds = super::scripts::bounds(&app, &caller).await?;
     let tenant = &caller.tenant;
     let version = match &request.workflow {
@@ -262,8 +251,9 @@ pub(super) async fn test(
     for given in request.tests {
         let given = input(given)?;
         tests.push(
-            app.engine
-                .resolve_test(tenant, &given, format())
+            app.edge
+                .suites(format())
+                .resolve_test(tenant, &given)
                 .await
                 .map_err(suite_error)?,
         );
@@ -274,9 +264,7 @@ pub(super) async fn test(
     let interface: Option<&WorkflowSchemas> =
         version.as_ref().map(|version| version.workflow.schemas());
     let options = TestOptions {
-        ttl: bounds
-            .max_ttl
-            .map(|max| max.min(app.engine.config().default_ttl)),
+        ttl: bounds.max_ttl.map(|max| max.min(app.config.default_ttl)),
         statics: None,
     };
     let reports = run(
@@ -318,8 +306,9 @@ pub(super) async fn get(
         }
     }
     let test = app
-        .engine
-        .load_test(&caller.tenant, parsed, format())
+        .edge
+        .suites(format())
+        .load_test(&caller.tenant, parsed)
         .await
         .map_err(suite_error)?
         .ok_or_else(not_found)?;
@@ -352,43 +341,18 @@ pub(super) async fn record(
             usize::try_from(limit).unwrap_or(MAX_RECORDED)
         })
         .clamp(1, MAX_RECORDED);
-    let candidates: Vec<RunRecord> = if request.runs.is_empty() {
-        let mut query = search::run_query(&caller, request.query.as_deref(), None, app.now())?;
-        query = query
-            .with(rewind_engine::ports::Predicate::Workflow(vec![
-                rewind_engine::ports::TextMatch::Exact(name.clone()),
-            ]))
-            .with(rewind_engine::ports::Predicate::Status(
-                [
-                    rewind_core::RunStatus::Completed,
-                    rewind_core::RunStatus::Failed,
-                ]
-                .into_iter()
-                .collect(),
-            ));
-        let found = app
-            .store
-            .search_runs(
-                &query,
-                rewind_engine::ports::RunOrder::Started,
-                None,
-                MAX_RECORDING_CANDIDATES,
-            )
-            .await?;
-        let mut records = Vec::with_capacity(found.len());
-        for found in found {
-            if let Some(record) = app.store.get_run(&found.run).await?
-                && caller.sees_run(&record)
-            {
-                records.push(record);
-            }
+    let from = if request.runs.is_empty() {
+        let query = search::run_query(&caller, request.query.as_deref(), None, app.now())?;
+        RecordFrom::Search {
+            scope: search::scope_of(&query),
+            query,
         }
-        records
     } else {
-        let mut records = Vec::with_capacity(request.runs.len());
+        let mut runs = Vec::with_capacity(request.runs.len());
         for id in &request.runs {
-            let record = app.run(&caller, id).await?;
-            if record
+            let view = app.run(&caller, id).await?;
+            if view
+                .head
                 .metadata
                 .workflow
                 .as_ref()
@@ -399,46 +363,27 @@ pub(super) async fn record(
                     "run {id} is not a run of the workflow {name}"
                 )));
             }
-            records.push(record);
+            runs.push(view.head.run);
         }
-        records
+        RecordFrom::Runs(runs)
     };
-
-    let views = app.views();
-    let mut recorder = Recorder::new(limit, format());
-    for record in &candidates {
-        if recorder.is_full() {
-            break;
-        }
-        let Some(workflow) = &record.metadata.workflow else {
-            continue;
-        };
-        let mut history = views.history(record).await?;
-        views.inline(&record.run.tenant, &mut history).await?;
-        recorder.offer(
-            &history,
-            TestOrigin {
-                run: record.run.id,
-                version: workflow.version,
-                namespace: record.namespace.to_string(),
-            },
-        );
-    }
-    let tests: Vec<Test> = recorder
-        .recorded
-        .iter()
-        .map(|recorded| recorded.test.clone())
-        .collect();
-    let digests = app
-        .engine
-        .store_tests(tenant, &tests, format())
+    let recording = app
+        .edge
+        .record_tests(&mut app.gateway(), &name, from, limit, format())
         .await
-        .map_err(suite_error)?;
+        .map_err(|error| match error {
+            RecordingError::RunNotFound(run) => ApiError::run_not_found(&run.to_string()),
+            RecordingError::NotOfWorkflow { run, workflow } => {
+                ApiError::invalid(format!("run {run} is not a run of the workflow {workflow}"))
+            }
+            RecordingError::Edge(error) => error.into(),
+            RecordingError::Suite(error) => suite_error(error),
+        })?;
     Ok(Json(RecordedTests {
-        tests: recorder
+        tests: recording
             .recorded
             .iter()
-            .zip(digests)
+            .zip(recording.digests)
             .map(|(recorded, digest)| RecordedTest {
                 digest: digest.to_hex(),
                 name: recorded.test.name.clone(),
@@ -447,7 +392,7 @@ pub(super) async fn record(
                 status: recorded.path.status.into(),
             })
             .collect(),
-        skipped: recorder
+        skipped: recording
             .skipped
             .iter()
             .map(|skipped| SkippedRun {
@@ -462,13 +407,13 @@ pub(super) async fn record(
 /// script (`archi/05-testing-and-observability.md`, "Suites and the gate").
 pub(crate) async fn gate_fork(
     app: &App,
-    parent: &RunRecord,
+    parent: &RunView,
     script: &Script,
 ) -> Result<(), ApiError> {
-    let Some(workflow) = &parent.metadata.workflow else {
+    let Some(workflow) = &parent.head.metadata.workflow else {
         return Ok(());
     };
-    let tenant = &parent.run.tenant;
+    let tenant = &parent.head.run.tenant;
     let Some(stored) = app.store.get_workflow(tenant, workflow.version).await? else {
         return Ok(());
     };
@@ -476,7 +421,6 @@ pub(crate) async fn gate_fork(
     if tests.is_empty() {
         return Ok(());
     }
-    require_worker(app, "a fork of a run of a workflow")?;
     let toolset = toolsets::stored(app, tenant, &stored.workflow.toolset().to_hex())
         .await?
         .toolset;

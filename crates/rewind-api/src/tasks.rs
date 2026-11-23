@@ -7,9 +7,7 @@
 //! run's state, for the harness's decisions (`/v1/tasks/{id}/approve`, `/reject`).
 //!
 //! The task stream (`GET /v1/tasks/stream`: [`TaskStreamQuery`], [`TaskStreamEvent`]) hands the
-//! tasks, and the open stream is the liveness of every task handed on it. The long-poll
-//! (`GET /v1/tasks`: [`TaskQuery`]) claims them one request at a time, each claim kept alive
-//! with heartbeats ([`HeartbeatAck`]).
+//! tasks, and the open stream is the liveness of every task handed on it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -141,81 +139,9 @@ impl TaskStreamEvent {
     }
 }
 
-/// `GET /v1/tasks`: claims host-tool tasks that are ready, waiting up to `wait` for one. A key
-/// limited to labels claims those of the runs carrying them only.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct TaskQuery {
-    /// Only tasks of runs of this toolset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
-    /// Only these tools. Repeat for several. All the toolset's host tools when absent.
-    #[serde(default, rename = "tool", skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
-    /// At most this many tasks (1 by default, 100 at most).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// How long to wait for a task before answering with none. 30 seconds by default, 60 at
-    /// most.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[param(value_type = Option<String>)]
-    pub wait: Option<Duration>,
-}
-
-/// The tasks claimed; empty when `wait` passed without one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskBatch {
-    pub tasks: Vec<Task>,
-}
-
-/// A claimed host-tool call. The worker keeps the claim alive with heartbeats, and answers
-/// with `/complete` or `/fail`, or `/defer` to answer later.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Task {
-    /// The claim's secret token: `/v1/tasks/{token}/…`. It changes with each claim.
-    pub token: String,
-    /// The task's id, as listed in the run's state.
-    pub id: String,
-    pub run_id: String,
-    /// The namespace of the run: the end user the handler acts for.
-    pub namespace: NamespaceName,
-    pub seq: u32,
-    pub tool: String,
-    /// The arguments, validated against the tool's input schema.
-    pub args: Value,
-    /// `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
-    /// attempt: the handler uses it to recognize a call it already made.
-    pub idempotency_key: String,
-    /// From 1. Above 1, an earlier attempt was interrupted.
-    pub attempt: u32,
-    /// The claim expires if no heartbeat comes within this many milliseconds.
-    pub heartbeat_timeout_ms: u64,
-    /// The tool's execution timeout, in milliseconds: past it, the call is not waited for any
-    /// more. Absent when the tool has none, the default of host tools: the run's TTL bounds it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// The run's labels.
-    pub labels: Labels,
-    /// W3C trace context, with the tool call's span as parent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub traceparent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tracestate: Option<String>,
-}
-
-/// `POST /v1/tasks/{token}/heartbeat`: the worker is still working on the task.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HeartbeatAck {
-    /// The claim now expires if no heartbeat comes within this many milliseconds.
-    pub heartbeat_timeout_ms: u64,
-}
-
 /// `POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with
 /// `/complete` or `/fail` and the same token, whether the task stream it was handed on stays open
-/// or not: its slot on the stream is free, and no heartbeat is needed meanwhile.
+/// or not: its slot on the stream is free.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeferTask {

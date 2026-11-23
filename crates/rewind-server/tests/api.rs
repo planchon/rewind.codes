@@ -22,14 +22,16 @@ use rewind_api::runs::{
     TraceFormat, WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
-use rewind_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskQuery, TaskState};
+use rewind_api::tasks::{
+    CompleteTask, DeferTask, FailTask, RejectTask, TaskState, TaskStreamQuery,
+};
 use rewind_api::toolsets::{CreateToolset, HostTool, ToolPolicy};
 use rewind_api::webhooks::{
     CreateSubscription, SignedHeaders, WebhookEvent, WebhookEventType, WebhookSecret,
 };
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
-use support::{TestServer, eventually, wait};
+use support::{TaskWorker, TestServer, eventually, wait};
 
 const SLEEP: &str = r#"import { sleep } from "rewind";
 export default async function main(input: { ms: number }) {
@@ -216,7 +218,7 @@ async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skippe
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn host_tools_are_long_polled_heartbeated_and_answered() {
+async fn host_tools_are_handed_on_a_stream_and_answered() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let worker = server.key(BuiltInRole::Worker, &[]).await;
@@ -248,24 +250,22 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
     request.toolset = Some(toolset.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
 
-    let query = TaskQuery {
+    let query = TaskStreamQuery {
         toolset: Some(toolset.id.clone()),
         tools: vec!["ask_user".into()],
-        limit: Some(1),
-        wait: Some("10s".parse().unwrap()),
+        slots: Some(1),
+        worker: Some("worker-1".into()),
+        ..TaskStreamQuery::default()
     };
-    let batch = worker.claim_tasks(&query).await.unwrap();
-    let task = &batch.tasks[0];
+    let mut stream = TaskWorker::open(&worker, &query).await;
+    let task = &stream.task().await;
     assert_eq!(task.run_id, run.id);
     assert_eq!(task.args, json!({ "question": "ready?" }));
     assert_eq!(task.idempotency_key, format!("{}/1", run.id));
-    assert_eq!(task.heartbeat_timeout_ms, 5_000);
     assert_eq!(
         task.timeout_ms, None,
         "a host tool has no execution timeout"
     );
-    let ack = worker.heartbeat_task(&task.token).await.unwrap();
-    assert!(ack.heartbeat_timeout_ms > 0);
 
     // Deferred, then answered later through the same token.
     worker
@@ -296,13 +296,24 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
         Some(json!({ "answer": "yes" }))
     );
     assert_eq!(
-        problem(worker.heartbeat_task(&task.token).await.unwrap_err()).kind(),
+        problem(
+            worker
+                .complete_task(
+                    &task.token,
+                    &CompleteTask {
+                        result: json!("again")
+                    }
+                )
+                .await
+                .unwrap_err()
+        )
+        .kind(),
         Some(ProblemType::TaskGone)
     );
 
-    // A retryable failure is retried: the next claim is attempt 2.
+    // A retryable failure is retried: the next hand-out is attempt 2.
     let run = harness.start_run(&request, None).await.unwrap();
-    let first = worker.claim_tasks(&query).await.unwrap().tasks.remove(0);
+    let first = stream.task().await;
     worker
         .fail_task(
             &first.token,
@@ -314,18 +325,13 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
         )
         .await
         .unwrap();
-    let mut retry_query = query.clone();
-    retry_query.wait = Some("20s".parse().unwrap());
-    let second = worker
-        .claim_tasks(&retry_query)
-        .await
-        .unwrap()
-        .tasks
-        .remove(0);
+    let second = stream.task().await;
     assert_eq!(
         (second.run_id.as_str(), second.attempt),
         (run.id.as_str(), 2)
     );
+    let attempts = harness.get_run(&run.id, None).await.unwrap().attempts;
+    assert_eq!((attempts[0].seq, attempts[0].attempts), (1, 2));
     worker
         .complete_task(
             &second.token,
@@ -337,12 +343,6 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
         .unwrap();
     let ended = harness.get_run(&run.id, wait("20s")).await.unwrap();
     assert_eq!(ended.status, RunStatus::Completed);
-    let attempts = eventually(|| async {
-        let run = harness.get_run(&run.id, None).await.unwrap();
-        (!run.attempts.is_empty()).then_some(run.attempts)
-    })
-    .await;
-    assert_eq!((attempts[0].seq, attempts[0].attempts), (1, 2));
     server.stop().await;
 }
 
@@ -371,14 +371,14 @@ export default async function main() {
     let mut request = start(script);
     request.toolset = Some(toolset.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
-    let query = TaskQuery {
+    let query = TaskStreamQuery {
         toolset: Some(toolset.id.clone()),
         tools: vec!["ask_user".into()],
-        limit: Some(1),
-        wait: Some("10s".parse().unwrap()),
+        ..TaskStreamQuery::default()
     };
+    let mut stream = TaskWorker::open(&worker, &query).await;
     for message in ["the user is away", "the user left"] {
-        let task = worker.claim_tasks(&query).await.unwrap().tasks.remove(0);
+        let task = stream.task().await;
         worker
             .fail_task(
                 &task.token,
@@ -475,15 +475,10 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
         problem(harness.approve_task(&task_id).await.unwrap_err()).kind(),
         Some(ProblemType::TaskNotWaiting)
     );
-    let task = harness
-        .claim_tasks(&TaskQuery {
-            wait: Some("10s".parse().unwrap()),
-            ..TaskQuery::default()
-        })
+    let task = TaskWorker::open(&harness, &TaskStreamQuery::default())
         .await
-        .unwrap()
-        .tasks
-        .remove(0);
+        .task()
+        .await;
     harness
         .complete_task(
             &task.token,
@@ -1205,15 +1200,10 @@ async fn host_tool_failures_are_bounded_like_results() {
     let mut request = start(ASK);
     request.toolset = Some(toolset.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
-    let task = harness
-        .claim_tasks(&TaskQuery {
-            wait: Some("10s".parse().unwrap()),
-            ..TaskQuery::default()
-        })
+    let task = TaskWorker::open(&harness, &TaskStreamQuery::default())
         .await
-        .unwrap()
-        .tasks
-        .remove(0);
+        .task()
+        .await;
     harness
         .defer_task(&task.token, &DeferTask::default())
         .await
@@ -1572,26 +1562,36 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
         refused.detail
     );
 
-    // Statistics and facets.
-    let stats = harness
-        .run_stats(&RunStatsQuery {
-            q: Some("@agent:triage".into()),
-            ..RunStatsQuery::default()
+    // Statistics, from the counters: a scope (the tenant, or one namespace) and whole hours.
+    let refused = problem(
+        harness
+            .run_stats(&RunStatsQuery {
+                q: Some("@agent:triage".into()),
+                ..RunStatsQuery::default()
+            })
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(refused.kind(), Some(ProblemType::InvalidQuery), "{refused}");
+    for q in [None, Some("namespace:tests".to_owned())] {
+        let stats = eventually(|| async {
+            let stats = harness
+                .run_stats(&RunStatsQuery {
+                    q: q.clone(),
+                    ..RunStatsQuery::default()
+                })
+                .await
+                .unwrap();
+            (stats.statuses.failed == 2).then_some(stats)
         })
-        .await
-        .unwrap();
-    assert_eq!(stats.runs, 3);
-    assert_eq!(stats.statuses.failed, 2);
-    assert_eq!(stats.statuses.active, 1);
-    assert_eq!(stats.waiting.signal, 1);
-    let env = stats
-        .facets
-        .labels
-        .iter()
-        .find(|label| label.key == "env")
-        .unwrap();
-    assert_eq!(env.values[0].value, "test");
-    assert_eq!(env.values[0].runs, 2);
+        .await;
+        assert_eq!(stats.runs, 5);
+        assert_eq!(stats.statuses.completed, 1);
+        assert_eq!(stats.statuses.active, 2);
+        assert_eq!(stats.waiting.signal, 1);
+        assert_eq!(stats.waiting.approval, 1);
+        assert_eq!(stats.facets.namespaces[0].value, "tests");
+    }
     let now = jiff::Timestamp::now();
     let series = harness
         .run_stats(&RunStatsQuery {
@@ -1602,19 +1602,23 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
         })
         .await
         .unwrap();
-    assert_eq!(series.series.len(), 7);
-    let started: u64 = series
+    assert_eq!(
+        series.bucket,
+        Some("1h".parse().unwrap()),
+        "a bucket is rounded up to whole hours"
+    );
+    assert!((2..=3).contains(&series.series.len()), "{series:?}");
+    let failed_in_series: u64 = series
         .series
         .iter()
         .map(|bucket| bucket.statuses.failed)
         .sum();
-    assert_eq!(started, 2);
-    assert_eq!(series.waiting.approval, 1);
+    assert_eq!(failed_in_series, 2);
     let too_many = problem(
         harness
             .run_stats(&RunStatsQuery {
-                since: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)),
-                bucket: Some("1s".parse().unwrap()),
+                since: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 30)),
+                bucket: Some("1h".parse().unwrap()),
                 ..RunStatsQuery::default()
             })
             .await
@@ -1641,7 +1645,16 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
         .await;
     assert_eq!(found(&support, "").await, vec![done.id.clone()]);
     assert!(found(&support, "@agent:triage").await.is_empty());
-    let stats = support.run_stats(&RunStatsQuery::default()).await.unwrap();
-    assert_eq!(stats.runs, 1);
+    assert_eq!(
+        problem(
+            support
+                .run_stats(&RunStatsQuery::default())
+                .await
+                .unwrap_err()
+        )
+        .kind(),
+        Some(ProblemType::Forbidden),
+        "counters know no labels"
+    );
     server.stop().await;
 }

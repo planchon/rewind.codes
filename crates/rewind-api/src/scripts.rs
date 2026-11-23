@@ -1,7 +1,6 @@
 //! Scripts: type-checking (`POST /v1/check`), scenarios in mock mode (`POST /v1/test`), and
 //! the distinct scripts executed on the platform (`GET /v1/scripts`).
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -169,9 +168,6 @@ pub struct ScriptFilter {
     /// Only this script: its digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-    /// Only scripts that ran with this label, as `key:value`. Repeat to require several.
-    #[serde(default, rename = "label", skip_serializing_if = "Vec::is_empty")]
-    pub labels: Vec<String>,
     /// Only scripts that called this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
@@ -217,9 +213,6 @@ pub struct ScriptSummary {
     pub runs: RunCounts,
     /// The tools its runs called.
     pub tools: Vec<String>,
-    /// The labels its runs carried, with the number of runs for each `key:value`.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub labels: BTreeMap<String, u64>,
 }
 
 /// A number of runs per status.

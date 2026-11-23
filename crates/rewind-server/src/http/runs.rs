@@ -1,5 +1,6 @@
 //! Runs: start, list, state, trace, entries, signals, cancellation, forks, export, quarantine,
 //! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
+//! Each goes through the edge to the owner of the run's partition.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -10,23 +11,16 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
-use rewind_api::common::{Payload, timestamp};
+use rewind_api::common::Payload;
 use rewind_api::events::Entry;
 use rewind_api::runs::{
-    CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalExport, JournalQuery,
-    Run, RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
-    TraceQuery,
+    CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
+    SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
 };
-use rewind_core::{
-    Attachments, Command, Digest, Event, JournalDocument, Lifecycle, Matching, RunHandle, RunMode,
-    Script, SecretRef, canonical_json,
-};
+use rewind_core::{Attachments, Matching, RunMode, Script, SecretRef, canonical_json};
 use rewind_engine::attachments::AttachRights;
-use rewind_engine::ports::{
-    Enqueued, FailureWindow, JournalStore, ReadModel, RunMetadata, RunRecord, StatsWindow,
-    TraceContext,
-};
-use rewind_engine::trace::{TraceInput, render_trace};
+use rewind_engine::ports::link::RunView;
+use rewind_engine::ports::{Enqueued, Page, RunMetadata, SCAN_BUDGET, TraceContext};
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -35,7 +29,7 @@ use crate::extract::{Body, Idempotency, OptionalBody, Query};
 use crate::http::{search, toolsets, workflows};
 use crate::titles::Title;
 
-/// Runs a page of `GET /v1/runs` holds by default, and at most; failure groups likewise.
+/// Runs a page of `GET /v1/runs` holds by default, and at most.
 const PAGE: u32 = 50;
 const MAX_PAGE: u32 = 500;
 
@@ -60,6 +54,7 @@ pub(super) async fn start(
         secrets,
         ..RunMetadata::default()
     };
+    let mut gateway = app.gateway();
     let created = match request.workflow {
         Some(reference) => {
             if !request.secrets.is_empty() {
@@ -70,21 +65,25 @@ pub(super) async fn start(
             }
             if !request.script.is_empty() || request.toolset.is_some() {
                 return Err(ApiError::invalid(
-                    "give either a workflow, or a script and its toolset: a run of a workflow                      executes the workflow's script with its toolset",
+                    "give either a workflow, or a script and its toolset: a run of a workflow \
+                     executes the workflow's script with its toolset",
                 ));
             }
             let stored =
                 workflows::resolve(&app, &caller.tenant, &caller.labels, &reference).await?;
-            app.engine
-                .start_workflow(rewind_engine::StartWorkflow {
-                    tenant: caller.tenant.clone(),
-                    namespace,
-                    version: stored.workflow.version(),
-                    input: input.clone(),
-                    ttl: request.ttl.map(|ttl| ttl.get()),
-                    metadata,
-                    idempotency_key: key,
-                })
+            app.edge
+                .start_workflow(
+                    &mut gateway,
+                    rewind_engine::StartWorkflow {
+                        tenant: caller.tenant.clone(),
+                        namespace,
+                        version: stored.workflow.version(),
+                        input: input.clone(),
+                        ttl: request.ttl.map(|ttl| ttl.get()),
+                        metadata,
+                        idempotency_key: key,
+                    },
+                )
                 .await?
         }
         None => {
@@ -106,20 +105,21 @@ pub(super) async fn start(
                 attach: attach_rights(&caller),
             };
             if request.check == Some(false) {
-                app.engine.start_run(start).await?
+                app.edge.start_run(&mut gateway, start).await?
             } else {
-                app.engine.start_run_checked(start, &app.checker).await?
+                app.edge
+                    .start_run_checked(&mut gateway, start, &app.checker)
+                    .await?
             }
         }
     };
-    app.wake.bump();
-    let record = app
+    let view = app
         .wait_for_end(&created.run, request.wait.map(|wait| wait.get()))
         .await?;
-    if !caller.sees_run(&record) {
+    if !caller.sees_run(&view.head) {
         return Err(ApiError::run_not_found(&created.run.id.to_string()));
     }
-    let mut run = app.views().run(&record).await?;
+    let mut run = app.views().run(&view).await?;
     if run.input.is_none() && created.created {
         run.input = Some(Payload::of(input, rewind_api::common::PAYLOAD_VALUE_LIMIT));
     }
@@ -131,9 +131,9 @@ pub(super) async fn start(
     Ok((status, Json(run)).into_response())
 }
 
-/// `GET /v1/runs`: a page of the read model's runs, in the order of `sort`. The run's own
-/// record, which the read model follows by a moment, gives each its status, quarantine and
-/// times as they are now.
+/// `GET /v1/runs`: a page of the runs' summaries, in the order of `sort`, merged from the
+/// partitions of the scope. A partition that stopped at its scan budget cuts the page short,
+/// with a cursor.
 pub(super) async fn list(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -151,195 +151,32 @@ pub(super) async fn list(
     let limit = usize::try_from(filter.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let query = search::run_query(&caller, filter.q.as_deref(), Some(&filter), app.now())?;
     let order = search::order(filter.sort);
-    let after = filter
+    let cursor = filter
         .cursor
         .as_deref()
         .map(|cursor| search::decode_cursor(order, cursor))
         .transpose()?;
+    let scope = search::scope_of(&query);
     let found = app
-        .store
-        .search_runs(&query, order, after.as_ref(), limit)
-        .await?;
-    let next_cursor = (found.len() == limit)
-        .then(|| found.last())
-        .flatten()
-        .map(|last| search::encode_cursor(order, &last.cursor(order)));
-    let titles = app
-        .titles(&caller.tenant, found.iter().map(|found| found.script))
-        .await?;
-    let mut runs = Vec::with_capacity(found.len());
-    for found in &found {
-        runs.push(listed(&app, found, &titles).await?);
-    }
-    Ok(Json(RunPage { runs, next_cursor }))
-}
-
-/// A filter's run (`parent`, `startedBy`) by its id, when the filter gives its handle: `false`
-/// when the handle names no run the caller sees, which no run of the list can then match. What
-/// is neither an id nor a handle is left for the filter to refuse.
-async fn by_id(app: &App, caller: &Caller, run: &mut Option<String>) -> Result<bool, ApiError> {
-    let Some(given) = run.as_deref() else {
-        return Ok(true);
-    };
-    if given.parse::<rewind_core::RunId>().is_ok() || given.parse::<RunHandle>().is_err() {
-        return Ok(true);
-    }
-    match app.run(caller, given).await {
-        Ok(record) => {
-            *run = Some(record.run.id.to_string());
-            Ok(true)
-        }
-        Err(error) if error.0.status == 404 => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
-/// A run of the read model as `GET /v1/runs` lists it, and as the change stream sends it, with
-/// its script's title from `titles`: the run's own record, which the read model follows by a
-/// moment, gives its status, quarantine and times as they are now.
-pub(crate) async fn listed(
-    app: &App,
-    found: &rewind_engine::ports::RunSummary,
-    titles: &BTreeMap<Digest, Title>,
-) -> Result<rewind_api::runs::RunSummary, ApiError> {
-    let mut summary = search::summary(found);
-    summary.script_title = titles.get(&found.script).map(|title| title.title.clone());
-    if let Some(record) = app.store.get_run(&found.run).await? {
-        summary.status = record.status.into();
-        summary.quarantined = record.quarantine.is_some();
-        summary.history_len = summary.history_len.max(record.history_len);
-        summary.last_activity_at = summary.last_activity_at.max(timestamp(record.updated_at));
-        if let Some(ended_at) = record.ended_at {
-            summary.ended_at = Some(timestamp(ended_at));
-        }
-        if record.status.is_terminal() {
-            summary.waiting_for.clear();
-            summary.wakes_at = None;
-            if summary.error.is_none() {
-                summary.error = ended_with(app, &record).await?;
-            }
-        }
-    }
-    Ok(summary)
-}
-
-/// `GET /v1/runs/stats`.
-pub(super) async fn stats(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Query(request): Query<RunStatsQuery>,
-) -> Result<Json<RunStats>, ApiError> {
-    caller.require(Permission::RunsRead)?;
-    let now = app.now();
-    let query = search::run_query(&caller, request.q.as_deref(), None, now)?;
-    let (since, until, bucket) = window(request.since, request.until, request.bucket, now)?;
-    let top = usize::try_from(request.top.unwrap_or(10).clamp(1, 50)).unwrap_or(10);
-    let stats = app
-        .store
-        .run_stats(
+        .edge
+        .search(
+            &mut app.gateway(),
+            &scope,
             &query,
-            &StatsWindow {
-                since,
-                until: Some(until),
-                bucket_ms: bucket,
-                top,
-            },
-        )
-        .await?;
-    Ok(Json(RunStats {
-        since: since.map(timestamp),
-        until: timestamp(until),
-        bucket: request.bucket,
-        runs: stats.runs,
-        statuses: search::status_counts(&stats.statuses),
-        series: search::series(&stats.series, since, bucket),
-        durations: search::durations(stats.durations),
-        waiting: search::wait_counts(&stats.waiting),
-        quarantined: stats.quarantined,
-        facets: search::facets(&stats.facets),
-    }))
-}
-
-/// `GET /v1/runs/failures`.
-pub(super) async fn failures(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Query(request): Query<FailureQuery>,
-) -> Result<Json<FailureGroupPage>, ApiError> {
-    caller.require(Permission::RunsRead)?;
-    let now = app.now();
-    let query = search::run_query(&caller, request.q.as_deref(), None, now)?;
-    let (since, until, bucket) = window(request.since, request.until, request.bucket, now)?;
-    let limit = usize::try_from(request.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
-    let groups = app
-        .store
-        .failure_groups(
-            &query,
-            &FailureWindow {
-                since,
-                until: Some(until),
-                bucket_ms: bucket,
+            order,
+            &Page {
+                cursor,
                 limit,
+                budget: SCAN_BUDGET,
             },
         )
         .await?;
-    Ok(Json(FailureGroupPage {
-        since: since.map(timestamp),
-        until: timestamp(until),
-        bucket: request.bucket,
-        runs: groups.runs,
-        total_groups: groups.groups,
-        groups: groups.top.iter().map(search::failure_group).collect(),
-    }))
-}
-
-/// Buckets of a series at most.
-const MAX_BUCKETS: u64 = 500;
-
-/// The window of the statistics and the failure groups: `until` is now by default, and a
-/// bucket needs `since`.
-fn window(
-    since: Option<jiff::Timestamp>,
-    until: Option<jiff::Timestamp>,
-    bucket: Option<rewind_api::common::Duration>,
-    now: rewind_core::Timestamp,
-) -> Result<
-    (
-        Option<rewind_core::Timestamp>,
-        rewind_core::Timestamp,
-        Option<u64>,
-    ),
-    ApiError,
-> {
-    let since = since.map(core_time);
-    let until = until.map_or(now, core_time);
-    if since.is_some_and(|since| since >= until) {
-        return Err(ApiError::invalid(
-            "since must be before until (now by default)",
-        ));
-    }
-    let bucket = match (bucket, since) {
-        (None, _) => None,
-        (Some(_), None) => {
-            return Err(ApiError::invalid(
-                "bucket needs since: the series starts there",
-            ));
-        }
-        (Some(bucket), Some(since)) => {
-            let width = bucket.as_millis();
-            if width == 0 {
-                return Err(ApiError::invalid("bucket must be longer than 0ms"));
-            }
-            let span = until.as_millis().saturating_sub(since.as_millis());
-            if span.div_ceil(width) > MAX_BUCKETS {
-                return Err(ApiError::invalid(format!(
-                    "{bucket} buckets from since to until make more than {MAX_BUCKETS}: widen the bucket or narrow the window"
-                )));
-            }
-            Some(width)
-        }
-    };
-    Ok((since, until, bucket))
+    let next_cursor = found
+        .cursor
+        .as_ref()
+        .map(|cursor| search::encode_cursor(order, cursor));
+    let runs = found.summaries.iter().map(search::summary).collect();
+    Ok(Json(RunPage { runs, next_cursor }))
 }
 
 /// `GET /v1/runs/{id}`.
@@ -350,25 +187,25 @@ pub(super) async fn get(
     Query(query): Query<GetRunQuery>,
 ) -> Result<Json<Run>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let record = app.run(&caller, &id).await?;
-    let record = app
-        .wait_for_end(&record.run, query.wait.map(|wait| wait.get()))
+    let view = app.run(&caller, &id).await?;
+    let view = app
+        .wait_for_end(&view.head.run, query.wait.map(|wait| wait.get()))
         .await?;
-    Ok(Json(app.views().run(&record).await?))
+    Ok(Json(app.views().run(&view).await?))
 }
 
-/// `DELETE /v1/runs/{id}`.
+/// `DELETE /v1/runs/{id}`: the run's sealed journals and blobs, then its records, summary and
+/// counts, by its owner.
 pub(super) async fn erase(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     caller.require(Permission::RunsDelete)?;
-    let record = app.run(&caller, &id).await?;
-    if !app.housekeeper().delete_run(&record.run, app.now()).await? {
+    let view = app.run(&caller, &id).await?;
+    if !app.edge.erase(&mut app.gateway(), &view.head.run).await? {
         return Err(ApiError::run_not_found(&id));
     }
-    app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -380,18 +217,10 @@ pub(super) async fn trace(
     Query(query): Query<TraceQuery>,
 ) -> Result<Json<Trace>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let record = app.run(&caller, &id).await?;
-    let views = app.views();
-    let history = views.history(&record).await?;
-    let payloads = views.payload_rows(&record.run.tenant, &history).await?;
-    let text = render_trace(TraceInput {
-        record: &record,
-        history: &history,
-        payloads: &payloads,
-        now: app.now(),
-    });
+    let view = app.run(&caller, &id).await?;
+    let text = app.edge.trace(&mut app.gateway(), &view.head.run).await?;
     Ok(Json(Trace {
-        run_id: record.run.id.to_string(),
+        run_id: view.head.run.id.to_string(),
         format: query.format.unwrap_or(TraceFormat::Llm),
         text,
     }))
@@ -404,22 +233,22 @@ pub(super) async fn entry(
     Path((id, idx)): Path<(String, String)>,
 ) -> Result<Json<Entry>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let record = app.run(&caller, &id).await?;
+    let view = app.run(&caller, &id).await?;
     let missing = || {
         ApiError::not_found(format!(
             "run {id} has no entry {idx}: its entries are numbered from 0 to {}",
-            record.history_len.saturating_sub(1)
+            view.head.history_len.saturating_sub(1)
         ))
     };
     let index: u64 = idx.parse().map_err(|_| missing())?;
     let views = app.views();
-    let history = views.history_from(&record, index).await?;
+    let history = views.history_from(&view.head.run, index).await?;
     let entry = history
         .into_iter()
         .find(|entry| entry.index == index)
         .ok_or_else(missing)?;
     let mut entries = views
-        .entries(&record.run.tenant, std::slice::from_ref(&entry), u64::MAX)
+        .entries(&view.head.run, std::slice::from_ref(&entry), u64::MAX)
         .await?;
     entries.pop().map(Json).ok_or_else(missing)
 }
@@ -433,32 +262,41 @@ pub(super) async fn signal(
     OptionalBody(payload): OptionalBody<serde_json::Value>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsControl)?;
-    let record = app.run(&caller, &id).await?;
+    let view = app.run(&caller, &id).await?;
     check_payload_size(&app, &payload)?;
     let enqueued = app
-        .engine
-        .signal(&record.run, name.clone(), payload, key)
-        .await?;
-    accepted_signal(&app, &record, &name, enqueued)
+        .edge
+        .signal(
+            &mut app.gateway(),
+            &view.head.run,
+            name.clone(),
+            payload,
+            key,
+        )
+        .await;
+    accepted_signal(&view, &name, enqueued)
 }
 
 /// The answer to a signal, from the API or an inbound webhook.
 pub(crate) fn accepted_signal(
-    app: &App,
-    record: &RunRecord,
+    view: &RunView,
     name: &str,
-    enqueued: Enqueued,
+    enqueued: Result<Enqueued, rewind_engine::edge::EdgeError>,
 ) -> Result<Response, ApiError> {
+    use rewind_engine::edge::EdgeError;
+    use rewind_engine::ports::link::Refusal;
     let duplicate = match enqueued {
-        Enqueued::Accepted => false,
-        Enqueued::Duplicate => true,
-        Enqueued::RunEnded => return Err(run_ended(record, "a signal")),
+        Ok(Enqueued::Accepted) => false,
+        Ok(Enqueued::Duplicate) => true,
+        Ok(Enqueued::RunEnded) | Err(EdgeError::Refused(Refusal::RunEnded(_))) => {
+            return Err(run_ended(view, "a signal"));
+        }
+        Err(error) => return Err(error.into()),
     };
-    app.wake.bump();
     Ok((
         StatusCode::ACCEPTED,
         Json(SignalAccepted {
-            run_id: record.run.id.to_string(),
+            run_id: view.head.run.id.to_string(),
             name: name.to_owned(),
             duplicate,
         }),
@@ -468,7 +306,7 @@ pub(crate) fn accepted_signal(
 
 pub(crate) fn check_payload_size(app: &App, payload: &serde_json::Value) -> Result<(), ApiError> {
     let size = canonical_json(payload).len();
-    let max = app.engine.config().limits.max_payload_bytes;
+    let max = app.config.limits.max_payload_bytes;
     if size > max {
         return Err(ApiError::new(
             ProblemType::PayloadTooLarge,
@@ -478,13 +316,13 @@ pub(crate) fn check_payload_size(app: &App, payload: &serde_json::Value) -> Resu
     Ok(())
 }
 
-fn run_ended(record: &RunRecord, what: &str) -> ApiError {
+fn run_ended(view: &RunView, what: &str) -> ApiError {
     ApiError::new(
         ProblemType::RunEnded,
         format!(
             "run {} has ended ({}): {what} can only be sent to a run that is still active",
-            record.run.id,
-            record.status.as_str()
+            view.head.run.id,
+            view.head.status.as_str()
         ),
     )
 }
@@ -496,16 +334,25 @@ pub(super) async fn cancel(
     Path(id): Path<String>,
     OptionalBody(request): OptionalBody<CancelRun>,
 ) -> Result<Response, ApiError> {
+    use rewind_engine::edge::EdgeError;
+    use rewind_engine::ports::link::Refusal;
     caller.require(Permission::RunsControl)?;
-    let record = app.run(&caller, &id).await?;
-    match app.engine.cancel(&record.run, request.reason).await? {
-        Enqueued::RunEnded => return Err(run_ended(&record, "a cancellation")),
-        Enqueued::Accepted | Enqueued::Duplicate => app.wake.bump(),
+    let view = app.run(&caller, &id).await?;
+    match app
+        .edge
+        .cancel(&mut app.gateway(), &view.head.run, request.reason)
+        .await
+    {
+        Ok(Enqueued::RunEnded) | Err(EdgeError::Refused(Refusal::RunEnded(_))) => {
+            return Err(run_ended(&view, "a cancellation"));
+        }
+        Ok(Enqueued::Accepted | Enqueued::Duplicate) => {}
+        Err(error) => return Err(error.into()),
     }
-    let record = app
-        .wait_for_end(&record.run, request.wait.map(|wait| wait.get()))
+    let view = app
+        .wait_for_end(&view.head.run, request.wait.map(|wait| wait.get()))
         .await?;
-    let run = app.views().run(&record).await?;
+    let run = app.views().run(&view).await?;
     Ok((StatusCode::ACCEPTED, Json(run)).into_response())
 }
 
@@ -527,7 +374,7 @@ pub(super) async fn fork(
     let script = Script::new(request.script);
     super::testing::gate_fork(&app, &parent, &script).await?;
     let fork = rewind_engine::ForkRun {
-        parent: parent.run.clone(),
+        parent: parent.head.run.clone(),
         script,
         at: request.at,
         input: request.input,
@@ -538,19 +385,21 @@ pub(super) async fn fork(
         secrets: request.secrets.as_ref().map(attachments).transpose()?,
         attach: attach_rights(&caller),
     };
+    let mut gateway = app.gateway();
     let created = if request.check == Some(false) {
-        app.engine.fork(fork).await?
+        app.edge.fork(&mut gateway, fork).await?
     } else {
-        app.engine.fork_checked(fork, &app.checker).await?
+        app.edge
+            .fork_checked(&mut gateway, fork, &app.checker)
+            .await?
     };
-    app.wake.bump();
-    let record = app
+    let view = app
         .wait_for_end(&created.run, request.wait.map(|wait| wait.get()))
         .await?;
-    if !caller.sees_run(&record) {
+    if !caller.sees_run(&view.head) {
         return Err(ApiError::run_not_found(&created.run.id.to_string()));
     }
-    let run = app.views().run(&record).await?;
+    let run = app.views().run(&view).await?;
     let status = if created.created {
         StatusCode::CREATED
     } else {
@@ -568,46 +417,31 @@ pub(super) async fn journal(
     Query(query): Query<JournalQuery>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let record = app.run(&caller, &id).await?;
-    let views = app.views();
-    let tenant = &record.run.tenant;
-    let mut history = views.history(&record).await?;
-    if history.is_empty() {
+    let view = app.run(&caller, &id).await?;
+    if view.head.history_len == 0 && !view.head.is_ended() {
         return Err(ApiError::invalid(format!(
             "run {id} has not started yet: its journal is empty"
         )));
     }
-    views.inline(tenant, &mut history).await?;
-    let document = match query.export_as.unwrap_or_default() {
-        JournalExport::Journal => {
-            let script = app
-                .store
-                .get_script(tenant, record.script)
-                .await?
-                .ok_or_else(|| ApiError::internal(format!("script {} is missing", record.script)))?
-                .script;
-            let toolset = app
-                .store
-                .get_toolset(tenant, record.toolset)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::internal(format!("toolset {} is missing", record.toolset))
-                })?
-                .toolset;
-            rewind_format::encode_journal(&JournalDocument {
-                run: record.run.id,
-                script,
-                toolset,
-                entries: history,
-            })
-        }
+    let document = app
+        .edge
+        .export_journal(&mut app.gateway(), &view.head.run)
+        .await?;
+    if document.entries.is_empty() {
+        return Err(ApiError::invalid(format!(
+            "run {id} has not started yet: its journal is empty"
+        )));
+    }
+    let body = match query.export_as.unwrap_or_default() {
+        JournalExport::Journal => rewind_format::encode_journal(&document),
         JournalExport::Cassette => {
-            let cassette = rewind_core::Cassette::from_history(&history, Matching::Sequential)
-                .map_err(ApiError::internal)?;
+            let cassette =
+                rewind_core::Cassette::from_history(&document.entries, Matching::Sequential)
+                    .map_err(ApiError::internal)?;
             rewind_format::encode_cassette(&cassette)
         }
     };
-    Ok(([(header::CONTENT_TYPE, "application/json")], document).into_response())
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }
 
 /// `POST /v1/runs/{id}/release`.
@@ -617,14 +451,12 @@ pub(super) async fn release(
     Path(id): Path<String>,
 ) -> Result<Json<Run>, ApiError> {
     caller.require(Permission::RunsQuarantine)?;
-    let record = app.run(&caller, &id).await?;
-    if !app.engine.release_quarantine(&record.run).await? {
+    let view = app.run(&caller, &id).await?;
+    if !app.edge.release(&mut app.gateway(), &view.head.run).await? {
         return Err(not_quarantined(&id));
     }
-    app.record_quarantine(&record.run).await;
-    app.wake.bump();
-    let record = app.run(&caller, &id).await?;
-    Ok(Json(app.views().run(&record).await?))
+    let view = app.run(&caller, &id).await?;
+    Ok(Json(app.views().run(&view).await?))
 }
 
 /// `POST /v1/runs/{id}/give-up`.
@@ -634,19 +466,17 @@ pub(super) async fn give_up(
     Path(id): Path<String>,
 ) -> Result<Json<Run>, ApiError> {
     caller.require(Permission::RunsQuarantine)?;
-    let record = app.run(&caller, &id).await?;
-    if record.quarantine.is_none() {
+    let view = app.run(&caller, &id).await?;
+    if view.head.quarantine.is_none() {
         return Err(not_quarantined(&id));
     }
-    if !app.engine.give_up(&record.run).await? {
-        return Err(ApiError::unavailable(format!(
-            "run {id} is being activated: give it up again in a few seconds"
-        )));
+    if !app.edge.give_up(&mut app.gateway(), &view.head.run).await? {
+        return Err(not_quarantined(&id));
     }
-    app.record_quarantine(&record.run).await;
-    app.wake.bump();
-    let record = app.run(&caller, &id).await?;
-    Ok(Json(app.views().run(&record).await?))
+    let view = app
+        .wait_for_end(&view.head.run, Some(std::time::Duration::from_secs(10)))
+        .await?;
+    Ok(Json(app.views().run(&view).await?))
 }
 
 fn not_quarantined(id: &str) -> ApiError {
@@ -680,23 +510,6 @@ pub(crate) fn attach_rights(caller: &Caller) -> AttachRights {
     } else {
         AttachRights::NamespaceOnly
     }
-}
-
-/// What ended a run: the name of the script's error, or the kind of the abort.
-async fn ended_with(app: &App, record: &RunRecord) -> Result<Option<String>, ApiError> {
-    if !record.status.is_terminal() || record.archive.is_some() || record.history_len == 0 {
-        return Ok(None);
-    }
-    let last = app
-        .store
-        .load_history(&record.run, record.history_len - 1)
-        .await
-        .unwrap_or_default();
-    Ok(last.last().and_then(|entry| match &entry.event {
-        Event::Command(Command::FailRun { error }) => Some(error.name.clone()),
-        Event::Lifecycle(Lifecycle::RunAborted(reason)) => Some(reason.kind.as_str().to_owned()),
-        _ => None,
-    }))
 }
 
 pub(crate) fn core_time(time: jiff::Timestamp) -> rewind_core::Timestamp {

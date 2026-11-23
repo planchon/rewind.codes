@@ -2,8 +2,8 @@
 //!
 //! - service telemetry: the process's `tracing` subscriber, logs on standard error filtered by
 //!   `--log`, and spans and logs over OTLP when an endpoint is configured;
-//! - run telemetry: the `SpanExporter` the projector hands the spans and log records it derives
-//!   from the journal, over OTLP when an endpoint is configured, dropped otherwise.
+//! - run telemetry: the `SpanExporter` the outbox hands the spans and log records the owners
+//!   derive from committed entries, over OTLP when an endpoint is configured, dropped otherwise.
 //!
 //! OTLP is on when `--otlp-endpoint` is given, or when the standard
 //! `OTEL_EXPORTER_OTLP_ENDPOINT` (or `…_TRACES_ENDPOINT`) is set; the other `OTEL_*` variables
@@ -50,9 +50,9 @@ pub(crate) fn service(instance: &str) -> ServiceConfig {
 /// long as the process.
 pub(crate) fn install(args: &ServerArgs) -> Result<TelemetryGuard, String> {
     let instance = args
-        .worker_name
+        .node_id
         .clone()
-        .unwrap_or_else(crate::config::default_worker_name);
+        .unwrap_or_else(|| crate::config::default_node_id().to_string());
     rewind_otel::install(&SubscriberConfig {
         filter: Some(args.log.clone()),
         stderr: true,

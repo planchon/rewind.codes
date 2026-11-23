@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_util::StreamExt as _;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::common::{Labels, RunStatus};
@@ -17,7 +18,7 @@ use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CallAttempts, Run, StartRun};
-use rewind_api::tasks::{CompleteTask, TaskQuery};
+use rewind_api::tasks::{CompleteTask, TaskStreamEvent, TaskStreamQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool, McpServer};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -95,8 +96,8 @@ pub(crate) struct Thresholds {
 /// What the host-tool worker saw.
 #[derive(Debug, Default)]
 struct HostRecord {
-    /// Claims by run and seq.
-    claims: HashMap<(String, u32), u32>,
+    /// Hand-outs by run and seq.
+    handed: HashMap<(String, u32), u32>,
     /// When the result of each run's host call was accepted.
     answered: HashMap<String, Instant>,
 }
@@ -176,10 +177,15 @@ pub(crate) async fn run(
     let errors = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
     let workers_stop = CancellationToken::new();
     let workers: Vec<_> = (0..settings.host_workers.max(1))
-        .map(|_| {
+        .map(|index| {
             tokio::spawn(host_worker(
                 worker.clone(),
-                toolset.id.clone(),
+                TaskStreamQuery {
+                    toolset: Some(toolset.id.clone()),
+                    slots: Some(HOST_SLOTS),
+                    worker: Some(format!("{id}-host-{index}")),
+                    ..TaskStreamQuery::default()
+                },
                 host.clone(),
                 errors.clone(),
                 workers_stop.clone(),
@@ -407,10 +413,18 @@ fn thresholds(report: &mut Report, thresholds: &Thresholds) {
     }
 }
 
-/// Answers `host.square` until stopped.
+/// The tasks a host worker holds at once.
+const HOST_SLOTS: u32 = 16;
+
+/// How long a host worker waits before it opens its stream again.
+const STREAM_BACKOFF: Duration = Duration::from_millis(200);
+
+/// Answers `host.square` on a task stream until stopped: the tasks handed to the worker as
+/// they become ready, `query.slots` at once. A stream that fails or ends is opened again with the
+/// same worker id, after a backoff: the tasks handed on it stay this worker's.
 async fn host_worker(
     worker: Client,
-    toolset: String,
+    query: TaskStreamQuery,
     record: Arc<Mutex<HostRecord>>,
     errors: Arc<Mutex<BTreeMap<String, usize>>>,
     stop: CancellationToken,
@@ -422,48 +436,66 @@ async fn host_worker(
             .entry(kind)
             .or_default() += 1;
     };
-    let query = TaskQuery {
-        toolset: Some(toolset),
-        tools: Vec::new(),
-        limit: Some(16),
-        wait: Some(Duration::from_secs(5).into()),
-    };
     loop {
-        let batch = tokio::select! {
+        let opened = tokio::select! {
             () = stop.cancelled() => return,
-            batch = worker.claim_tasks(&query) => batch,
+            opened = worker.task_stream(&query) => opened,
         };
-        let batch = match batch {
-            Ok(batch) => batch,
-            Err(failure) => {
-                error(format!("claim tasks: {}", kind(&failure)));
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                continue;
-            }
-        };
-        for task in batch.tasks {
-            *record
+        match opened {
+            Ok(mut stream) => loop {
+                let event = tokio::select! {
+                    () = stop.cancelled() => return,
+                    event = stream.next() => event,
+                };
+                match event {
+                    Some(Ok(TaskStreamEvent::Task(task))) => {
+                        answer(&worker, *task, &record, &error).await;
+                    }
+                    // Its run ended, or its call timed out: nothing to answer.
+                    Some(Ok(TaskStreamEvent::Gone(_))) => {}
+                    Some(Err(failure)) => {
+                        error(format!("task stream: {}", kind(&failure)));
+                        break;
+                    }
+                    None => break,
+                }
+            },
+            Err(failure) => error(format!("task stream: {}", kind(&failure))),
+        }
+        tokio::select! {
+            () = stop.cancelled() => return,
+            () = tokio::time::sleep(STREAM_BACKOFF) => {}
+        }
+    }
+}
+
+/// Answers one task of `host.square`.
+async fn answer(
+    worker: &Client,
+    task: rewind_api::tasks::HandedTask,
+    record: &Mutex<HostRecord>,
+    error: &impl Fn(String),
+) {
+    *record
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .handed
+        .entry((task.run_id.clone(), task.seq))
+        .or_default() += 1;
+    let n = task.args["n"].as_u64().unwrap_or(0);
+    let result = CompleteTask {
+        result: json!({ "square": n * n }),
+    };
+    match worker.complete_task(&task.token, &result).await {
+        Ok(()) => {
+            record
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .claims
-                .entry((task.run_id.clone(), task.seq))
-                .or_default() += 1;
-            let n = task.args["n"].as_u64().unwrap_or(0);
-            let result = CompleteTask {
-                result: json!({ "square": n * n }),
-            };
-            match worker.complete_task(&task.token, &result).await {
-                Ok(()) => {
-                    record
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .answered
-                        .entry(task.run_id)
-                        .or_insert_with(Instant::now);
-                }
-                Err(failure) => error(format!("complete task: {}", kind(&failure))),
-            }
+                .answered
+                .entry(task.run_id)
+                .or_insert_with(Instant::now);
         }
+        Err(failure) => error(format!("complete task: {}", kind(&failure))),
     }
 }
 
@@ -666,7 +698,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
             record.without_key
         ));
     }
-    for (run, _) in host.claims.keys() {
+    for (run, _) in host.handed.keys() {
         if !runs.contains_key(run.as_str()) {
             report.violation(format!("a host task of run {run}, not one of this load"));
         }
@@ -736,9 +768,9 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
             ));
         }
         let host_calls: Vec<(u32, u32)> = host
-            .claims
+            .handed
             .iter()
-            .filter(|((claimed, _), _)| claimed == run)
+            .filter(|((handed, _), _)| handed == run)
             .map(|((_, seq), count)| (*seq, *count))
             .collect();
         if host_calls.len() != 1 {
@@ -752,7 +784,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
             let expected = attempts(seq);
             if count != expected {
                 report.violation(format!(
-                    "run {run} (n={}): host.square #{seq} was claimed {count} times, attempted \
+                    "run {run} (n={}): host.square #{seq} was handed out {count} times, attempted \
                      {expected} times",
                     outcome.n
                 ));
@@ -766,7 +798,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
         .map(|call| u64::from(call.count))
         .sum::<u64>()
         + host
-            .claims
+            .handed
             .values()
             .map(|count| u64::from(*count))
             .sum::<u64>();
@@ -843,7 +875,7 @@ mod tests {
         calls(&server, "r1/1", "echo", 1);
         calls(&server, "r1/3", "flaky", 2);
         let mut host = HostRecord::default();
-        host.claims.insert(("r1".into(), 2), 1);
+        host.handed.insert(("r1".into(), 2), 1);
         let outcomes = [completed(
             "r1",
             1,
@@ -899,7 +931,7 @@ mod tests {
         calls(&server, "r1/3", "flaky", 2);
         calls(&server, "other/1", "echo", 1);
         let mut host = HostRecord::default();
-        host.claims.insert(("r1".into(), 2), 2);
+        host.handed.insert(("r1".into(), 2), 2);
         let outcomes = [completed(
             "r1",
             1,

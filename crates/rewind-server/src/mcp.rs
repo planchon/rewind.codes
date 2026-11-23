@@ -9,8 +9,7 @@
 //! - Each tool calls `/v1` on this server over the loopback address, with the caller's Bearer,
 //!   `Rewind-Organization` and `Rewind-Namespace`: the path every client takes, with the same
 //!   authorization. What runs model-written code (`POST /v1/test`, `POST /v1/workflows`, a fork's
-//!   suite) goes to the workers through the public URL when this server has no worker role, as
-//!   the edge routes it.
+//!   suite) runs on this node, under its sandbox.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -51,9 +50,6 @@ struct McpState {
     app: Arc<App>,
     /// `/v1` on this server, over the loopback address.
     local: Client,
-    /// `/v1` through the public URL, for what runs model-written code, when this server has no
-    /// worker role.
-    workers: Option<Client>,
 }
 
 /// The routes of `/mcp`, served by a server listening on TCP at `local`.
@@ -68,18 +64,7 @@ pub(crate) fn router(app: Arc<App>, local: SocketAddr) -> Result<Router, String>
     );
     let local = Client::remote(&format!("http://{loopback}"), None)
         .map_err(|error| format!("/mcp cannot reach this server's /v1: {error}"))?;
-    let workers = match (&app.settings.public_url, app.settings.worker()) {
-        (Some(url), false) => Some(
-            Client::remote(url, None)
-                .map_err(|error| format!("/mcp cannot reach the workers at {url}: {error}"))?,
-        ),
-        _ => None,
-    };
-    let state = Arc::new(McpState {
-        app,
-        local,
-        workers,
-    });
+    let state = Arc::new(McpState { app, local });
     // No `Host` check: every request carries a Bearer and none reads a cookie, so a page that
     // rebinds a name to this server gains nothing.
     let service = http_service(
@@ -172,8 +157,6 @@ pub(crate) struct ServerConnector {
     organizations: Arc<Vec<Organization>>,
     /// `/v1` on this server, with the caller's Bearer.
     local: Client,
-    /// `/v1` through the public URL, with the caller's Bearer.
-    workers: Option<Client>,
 }
 
 impl ServerConnector {
@@ -198,7 +181,6 @@ impl ServerConnector {
         Ok(Self {
             organizations: Arc::new(organizations),
             local: with_token(&state.local)?,
-            workers: state.workers.as_ref().map(with_token).transpose()?,
         })
     }
 }
@@ -226,7 +208,6 @@ impl Connector for ServerConnector {
         };
         Ok(ServerApi {
             local: bind(&self.local)?,
-            workers: self.workers.as_ref().map(bind).transpose()?,
         })
     }
 }
@@ -234,14 +215,6 @@ impl Connector for ServerConnector {
 /// `/v1` as one caller of `/mcp`, in one organization.
 pub(crate) struct ServerApi {
     local: Client,
-    workers: Option<Client>,
-}
-
-impl ServerApi {
-    /// Where what runs model-written code goes.
-    fn workers(&self) -> &Client {
-        self.workers.as_ref().unwrap_or(&self.local)
-    }
 }
 
 impl Api for ServerApi {
@@ -290,7 +263,7 @@ impl Api for ServerApi {
         fork: &ForkRun,
         key: Option<&IdempotencyKey>,
     ) -> Result<Run, ToolError> {
-        Api::fork_run(self.workers(), run, fork, key).await
+        Api::fork_run(&self.local, run, fork, key).await
     }
 
     async fn check(&self, check: &CheckRequest) -> Result<CheckResult, ToolError> {
@@ -299,7 +272,7 @@ impl Api for ServerApi {
 
     /// Tests run model-written code: on a worker.
     async fn test(&self, test: &TestRequest) -> Result<TestRun, ToolError> {
-        Api::test(self.workers(), test).await
+        Api::test(&self.local, test).await
     }
 
     async fn get_script(&self, digest: &str) -> Result<Script, ToolError> {
@@ -328,7 +301,7 @@ impl Api for ServerApi {
 
     /// The gate runs the version's suite: on a worker.
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ToolError> {
-        Api::create_workflow(self.workers(), workflow).await
+        Api::create_workflow(&self.local, workflow).await
     }
 
     async fn workflow_versions(&self, name: &str) -> Result<WorkflowVersions, ToolError> {

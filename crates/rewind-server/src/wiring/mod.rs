@@ -1,23 +1,29 @@
-//! The adapters this composition root wires, each in its own module:
+//! The adapters this composition root wires, each in its own module
+//! (`archi/07-code-architecture.md`, "Crates"):
 //!
 //! | Module | Port | Adapter |
 //! | --- | --- | --- |
-//! | [`store`] | `JournalStore`, `AccessStore`, `ReadModel`, `SecretStore` | `rewind-store-turso`, `rewind-store-postgres` |
-//! | [`blobs`] | `BlobStore` | `rewind-blob` (files, S3 behind the workers' cache) |
+//! | [`control`] | `CatalogStore`, `AccessStore`, `SecretStore`, `Cluster` | `rewind-store-postgres`, `rewind-store-turso`; the engine's in-memory adapters for the tests |
+//! | [`bucket`] | `PartitionStore`, `RunArchive`, `BlobStore` | `rewind-store-slatedb`; `rewind-blob` (files, S3 behind this process's caches) |
+//! | [`link`] | `NodeLink` | in the process |
+//! | [`executor`] | `ScriptExecutor` | `rewind-runtime`'s `V8Executor` |
 //! | [`tools`] | `ToolDispatcher`, discovery and declarations | the engine's routing dispatcher |
 //! | [`checker`] | `TypeChecker` | `rewind-check` (tsgo) |
-//! | [`telemetry`] | `SpanExporter`, the `tracing` subscriber | log lines on standard error |
+//! | [`telemetry`] | `SpanExporter`, the `tracing` subscriber | `rewind-otel` |
 //! | [`webhooks`] | `WebhookSender` | HTTP, Standard Webhooks (this crate) |
 //! | [`clock`] | `Clock` | system or virtual time |
-//! | [`identity`] | `IdentityProvider` | `rewind-workos` (WorkOS), on the api role |
+//! | [`identity`] | `IdentityProvider` | `rewind-workos` (WorkOS) |
 //!
-//! The executor is `rewind-runtime`'s `V8Executor`, and entropy the engine's system entropy.
+//! Entropy is the engine's system entropy. [`jobs`] are the control plane's daily jobs.
 
-pub(crate) mod blobs;
+pub(crate) mod bucket;
 pub(crate) mod checker;
 pub(crate) mod clock;
+pub(crate) mod control;
+pub(crate) mod executor;
 pub(crate) mod identity;
-pub(crate) mod store;
+pub(crate) mod jobs;
+pub(crate) mod link;
 pub(crate) mod telemetry;
 pub(crate) mod tools;
 pub(crate) mod webhooks;

@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use libtest_mimic::{Arguments, Failed, Trial};
-use rewind_api::admin::{ServerInfo, ServerRole};
+use rewind_api::admin::ServerInfo;
 use rewind_cli::embedded::{LaunchError, Launcher, VERSION};
 
 fn main() -> ExitCode {
@@ -391,7 +391,9 @@ async fn serve(dir: PathBuf, version: String) {
     let info = ServerInfo {
         version,
         epochs: vec![1],
-        roles: vec![ServerRole::Api, ServerRole::Worker],
+        node: "test".into(),
+        partitions: 1,
+        nodes: 1,
         embedded: true,
         virtual_time: false,
         mcp_url: None,

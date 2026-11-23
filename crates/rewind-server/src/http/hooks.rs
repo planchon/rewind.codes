@@ -1,6 +1,7 @@
 //! Inbound webhooks: `POST /hooks/{token}`, at the unguessable URL `webhook(name)` returned to a
 //! script. Whatever is posted becomes a signal on the run (`archi/01-product.md`, "Signals").
-//! No API key: the token is the credential.
+//! No API key: the token is the credential, and it names its run: any process routes it to the
+//! run's owner, which resolves it.
 
 use std::sync::Arc;
 
@@ -10,7 +11,9 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::webhooks::DELIVERY_ID_HEADERS;
-use rewind_engine::ports::{Enqueued, JournalStore, WebhookToken};
+use rewind_engine::edge::EdgeError;
+use rewind_engine::ports::Enqueued;
+use rewind_engine::ports::link::Refusal;
 use serde_json::Value;
 
 use crate::app::App;
@@ -31,11 +34,6 @@ pub(super) async fn post(
     if token.contains('\0') {
         return Err(missing());
     }
-    let target = app
-        .store
-        .resolve_webhook_token(&WebhookToken(token))
-        .await?
-        .ok_or_else(missing)?;
     let json = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -58,17 +56,18 @@ pub(super) async fn post(
             .map(|key| key.as_str().to_owned())
     });
     match app
-        .engine
-        .signal(&target.run, target.name, payload, key)
-        .await?
+        .edge
+        .webhook(&mut app.gateway(), &token, payload, key)
+        .await
     {
-        Enqueued::RunEnded => Err(ApiError::new(
-            rewind_api::ProblemType::RunEnded,
-            "the run this webhook belongs to has ended",
-        )),
-        Enqueued::Accepted | Enqueued::Duplicate => {
-            app.wake.bump();
-            Ok(StatusCode::ACCEPTED.into_response())
+        Ok(Enqueued::RunEnded) | Err(EdgeError::Refused(Refusal::RunEnded(_))) => {
+            Err(ApiError::new(
+                rewind_api::ProblemType::RunEnded,
+                "the run this webhook belongs to has ended",
+            ))
         }
+        Ok(Enqueued::Accepted | Enqueued::Duplicate) => Ok(StatusCode::ACCEPTED.into_response()),
+        Err(EdgeError::Refused(Refusal::RunNotFound(_) | Refusal::TaskGone)) => Err(missing()),
+        Err(error) => Err(error.into()),
     }
 }

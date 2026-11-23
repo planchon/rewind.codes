@@ -1,46 +1,61 @@
-//! Starting and stopping the server: the adapters wired by configuration, the engine, the
-//! listeners, the worker's loops, and a stop that lets the work in flight commit.
+//! Starting and stopping a node (`archi/07-code-architecture.md`, "Inside a node";
+//! `archi/06-storage-and-scale.md`, "Partitions, owners and nodes"):
+//!
+//! ```text
+//!  config ─► control plane (catalog, access, secrets) ─► place_namespaces
+//!         ─► bucket (partitions, archive, blobs)
+//!         ─► plane ─► cluster.join(NodeInfo) ─► runtime::spawn(plane, config, membership, link)
+//!         ─► the control plane's changes: the partition map, every change to the streams
+//!         ─► the HTTP edge (TCP or the embedded socket), the node link, the idle stop, the
+//!            daily jobs
+//! ```
+//!
+//! A stop hands the node's partitions over to the other nodes before the process exits.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
+use futures_util::StreamExt as _;
 use rewind_api::Problem;
 use rewind_api::access::OPERATOR;
-use rewind_api::admin::ServerRole;
-use rewind_engine::adapters::{MemoryIdentity, SystemClock, SystemEntropy, VirtualClock};
+use rewind_core::Timestamp;
+use rewind_engine::adapters::{LocalLink, MemoryIdentity, SystemClock, SystemEntropy};
+use rewind_engine::node::runtime;
+use rewind_engine::plane::{NodeConfig, Wiring};
+use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    AccessStore, ApiKey, Clock, Grant, MasterKeyId, Principal, SecretError, SecretStore,
-    StoreError, TaskFilter,
+    AccessStore, ApiKey, Clock, Cluster, ControlPlaneChange, Grant, MasterKeyId, NodeInfo,
+    PartitionMap, Principal, ScriptExecutor, SecretError, SecretStore, StoreError,
 };
-use rewind_engine::projector::ProjectorConfig;
-use rewind_engine::{Adapters, Engine, EngineConfig};
 use rewind_runtime::{SandboxLimits, V8Executor};
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
-use crate::app::{App, Settings, SignIn};
+use crate::app::{App, Control, Parts, Settings, SignIn};
 use crate::auth::key_hash;
 use crate::config::{Config, Listen, MasterKeyRing, ServerArgs};
 use crate::connections::{self, McpCaller};
-use crate::deliveries::{Background, Deliveries, PER_SUBSCRIPTION};
 use crate::embedded::Directory;
+use crate::http;
+use crate::idle::Idle;
 use crate::oauth::OAuthServer;
-use crate::titles::ScriptTexts;
-use crate::wiring::blobs::Blobs;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
+use crate::wiring::control::{ControlPlane, SharedMembership};
+use crate::wiring::executor::Executor;
 use crate::wiring::identity::Identity;
-use crate::wiring::store::Store;
+use crate::wiring::link::ServerLink;
 use crate::wiring::telemetry::{self, Exporter};
 use crate::wiring::tools::Tools;
 use crate::wiring::webhooks::{HttpWebhooks, Retries, ServerRender, WebhookEgress};
-use crate::{http, worker};
+use crate::wiring::{bucket, jobs};
 
 /// The version of the `rewind` binary.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// How long the work in flight may take to commit when the server stops.
+/// How long the stop may take: the hand-over of the partitions and the requests in flight.
 const DRAIN: Duration = Duration::from_secs(30);
 
 /// Why the server could not start.
@@ -70,12 +85,14 @@ impl From<crate::config::ConfigError> for StartupError {
 #[derive(Debug)]
 pub struct Running {
     app: Arc<App>,
-    /// The address of the TCP listener.
+    /// The address of the TCP listener of the edge.
     addr: Option<SocketAddr>,
+    /// The address of the node link's listener.
+    link_addr: Option<SocketAddr>,
     /// The embedded server's socket.
     socket: Option<PathBuf>,
-    listener: JoinHandle<()>,
-    workers: Vec<JoinHandle<()>>,
+    listeners: Vec<JoinHandle<()>>,
+    tasks: Vec<JoinHandle<()>>,
     /// Holds the embedded server's lock until the server has stopped.
     directory: Option<Directory>,
 }
@@ -90,12 +107,21 @@ impl Running {
         self.addr
     }
 
+    /// The address the node link listens on, on a deployed node.
+    pub fn link_addr(&self) -> Option<SocketAddr> {
+        self.link_addr
+    }
+
     /// The embedded server's socket.
     pub fn socket(&self) -> Option<&PathBuf> {
         self.socket.as_ref()
     }
 
-    /// Waits until something stops the server: `POST /v1/server/stop`, or the idle timeout.
+    /// The id of this server's node.
+    pub fn node(&self) -> String {
+        self.app.node.node().to_string()
+    }
+
     /// Who calls `/mcp` with `bearer`, and the organizations it reaches with the permissions it
     /// may use in each (`archi/07-code-architecture.md`, "MCP and OAuth"): a connection's access
     /// token, an API key or an end user's token. A member's access token, or anything else, is
@@ -104,29 +130,33 @@ impl Running {
         connections::mcp_caller_or_problem(&self.app, bearer).await
     }
 
+    /// Waits until something stops the server: `POST /v1/server/stop`, or the idle timeout.
     pub async fn stopped(&self) {
         let mut stop = self.app.stop.subscribe();
         let _ = stop.wait_for(|stop| *stop).await;
     }
 
-    /// Stops the server: no new request, no new work; the work in flight commits, and the
-    /// embedded server's socket and lock are released.
+    /// Stops the server: no new request; the node hands its partitions over to the other nodes
+    /// (the work in flight is rebuilt by their next owner from the records), and the embedded
+    /// server's socket and lock are released.
     pub async fn stop(self) {
         self.app.stop.send_replace(true);
-        self.app.wake.bump();
         let drain = async {
-            let _ = self.listener.await;
-            for worker in self.workers {
-                let _ = worker.await;
+            for listener in self.listeners {
+                let _ = listener.await;
+            }
+            if let Err(error) = self.app.node.stop().await {
+                tracing::warn!(%error, "the node did not hand its partitions over");
             }
         };
         if tokio::time::timeout(DRAIN, drain).await.is_err() {
-            tracing::warn!("the work in flight did not finish within {DRAIN:?}");
+            tracing::warn!("the stop did not finish within {DRAIN:?}");
         }
-        // The engine's webhooks still in progress are not sent: none is in the journal.
-        self.app.deliveries.abort();
+        for task in self.tasks {
+            task.abort();
+        }
         self.app.tools.close();
-        self.app.exporter.shutdown().await;
+        self.app.plane.spans.shutdown().await;
         self.app.store.close().await;
         if let Some(socket) = &self.socket {
             let _ = std::fs::remove_file(socket);
@@ -151,16 +181,17 @@ pub struct Rewrapped {
 }
 
 /// `rewind server --rewrap-data-keys` (`archi/04-tools.md`, "Secrets": the master key can be
-/// replaced): opens the store with `--master-key` and `--previous-master-keys`, encrypts with the
-/// current key every data key held under a previous one, one tenant at a time, and closes the
-/// store. Servers may keep running meanwhile, and two rewraps at once change each data key once.
+/// replaced): opens the control plane with `--master-key` and `--previous-master-keys`, encrypts
+/// with the current key every data key held under a previous one, one tenant at a time, and
+/// closes it. Servers may keep running meanwhile, and two rewraps at once change each data key
+/// once.
 pub async fn rewrap_data_keys(args: ServerArgs) -> Result<Rewrapped, StartupError> {
     let config = args.resolve()?;
     let keys = config
         .master_keys
         .clone()
         .ok_or_else(|| StartupError::Config("--rewrap-data-keys needs --master-key".into()))?;
-    let store = Store::open(&config.store, &keys).await?;
+    let store = ControlPlane::open(&config.store, &keys).await?;
     let rewrapped = async {
         check_master_keys(&store, &keys).await?;
         let changed = store.rewrap_data_keys().await.map_err(secret_setup)?;
@@ -183,7 +214,7 @@ fn secret_setup(error: SecretError) -> StartupError {
 /// (`archi/04-tools.md`, "Secrets"), naming its id: the operator gives it in
 /// `--previous-master-keys` until `--rewrap-data-keys` has run, so that it is not removed too
 /// early.
-async fn check_master_keys(store: &Store, keys: &MasterKeyRing) -> Result<(), StartupError> {
+async fn check_master_keys(store: &ControlPlane, keys: &MasterKeyRing) -> Result<(), StartupError> {
     let in_use = store.master_keys_in_use().await.map_err(secret_setup)?;
     let current = keys.current_id();
     let previous = keys.previous_ids();
@@ -214,7 +245,7 @@ async fn check_master_keys(store: &Store, keys: &MasterKeyRing) -> Result<(), St
 /// Starts a server in this process whose identity provider is `identity`, the engine's fake of
 /// WorkOS, instead of WorkOS: the server's tests. The four `WORKOS_*` are still required for
 /// the sign-in to exist (the cookie password and the redirect URI are used; the client id and
-/// API key are not), and only the api role uses it.
+/// API key are not).
 pub async fn start_with_identity(
     args: ServerArgs,
     identity: MemoryIdentity,
@@ -222,10 +253,10 @@ pub async fn start_with_identity(
     start_wired(args, Some(identity)).await
 }
 
-/// Starts a server in this process on the engine's in-memory adapters of `JournalStore`,
-/// `AccessStore`, `ReadModel` and `SecretStore`, the reference implementations of their
-/// contracts, instead of `--store`: the server's tests. With `identity`, as
-/// [`start_with_identity`]. Its blobs are in `--blobs`, which is required.
+/// Starts a server in this process whose control plane is the engine's in-memory adapters of
+/// `CatalogStore`, `AccessStore`, `SecretStore` and `Cluster`, the reference implementations of
+/// their contracts, instead of `--store`: the server's tests. Its bucket is `--bucket`, which is
+/// required. With `identity`, as [`start_with_identity`].
 pub async fn start_in_memory(
     mut args: ServerArgs,
     identity: Option<MemoryIdentity>,
@@ -234,7 +265,7 @@ pub async fn start_in_memory(
     start_wired(args, identity).await
 }
 
-/// The dashboard's sign-in, when the configuration has WorkOS (on the api role).
+/// The dashboard's sign-in, when the configuration has WorkOS.
 fn sign_in(
     config: &Config,
     memory: Option<MemoryIdentity>,
@@ -256,6 +287,10 @@ fn sign_in(
     }))
 }
 
+fn setup(error: impl std::fmt::Display) -> StartupError {
+    StartupError::Setup(error.to_string())
+}
+
 async fn start_wired(
     args: ServerArgs,
     memory: Option<MemoryIdentity>,
@@ -271,23 +306,34 @@ async fn start_wired(
     let sign_in = sign_in(&config, memory)?;
     let directory = match &config.listen {
         Listen::Embedded { dir } => Some(Directory::open(dir)?),
-        Listen::Tcp(_) => None,
+        Listen::Tcp { .. } => None,
     };
     let master_keys = match (&directory, &config.master_keys) {
         (Some(directory), _) => MasterKeyRing::new(directory.master_key),
         (None, Some(keys)) => keys.clone(),
         (None, None) => return Err(StartupError::Config("no master key".into())),
     };
-    let store = Store::open(&config.store, &master_keys).await?;
+    let store = ControlPlane::open(&config.store, &master_keys).await?;
     check_master_keys(&store, &master_keys).await?;
-    let blobs = Blobs::open(&config.blobs)?;
+    let placed = store
+        .place_namespaces(config.partitions)
+        .await
+        .map_err(setup)?;
+    if placed > 0 {
+        tracing::info!(placed, "namespaces placed in their partitions");
+    }
+    let opened = bucket::open(&config.bucket)?;
     let clock = clock(&config, &store).await?;
-    let executor = V8Executor::new(SandboxLimits::default())
-        .map_err(|error| StartupError::Setup(error.to_string()))?;
+    let idle = Idle::new();
+    let executor = Executor {
+        v8: V8Executor::new(SandboxLimits::default()).map_err(setup)?,
+        idle: idle.clone(),
+    };
+    let epochs = executor.epochs().iter().copied().collect();
     let tools = Tools::new(config.tool_egress.clone()).map_err(StartupError::Setup)?;
     let exporter = Exporter::new(
         config.otlp.as_ref(),
-        &telemetry::service(&config.worker_name),
+        &telemetry::service(config.node.as_str()),
     )
     .map_err(StartupError::Setup)?;
     let webhook_egress = if config.allow_private_webhooks {
@@ -295,66 +341,93 @@ async fn start_wired(
     } else {
         WebhookEgress::public()
     };
-    let texts = Arc::new(ScriptTexts::default());
-    let deliveries = Arc::new(Deliveries::new(
-        HttpWebhooks::new(
-            ServerRender {
-                store: store.clone(),
-                blobs: blobs.clone(),
-                texts: texts.clone(),
-            },
-            Retries::default(),
-            webhook_egress.clone(),
-        ),
-        PER_SUBSCRIPTION,
-    ));
-    let engine_config = EngineConfig {
-        worker: config.worker_name.clone(),
-        tenants: config.tenants.clone(),
-        tool_tasks: TaskFilter::Dispatched {
-            tenants: config.tenants.clone(),
+    let rendered: Arc<OnceLock<Weak<App>>> = Arc::new(OnceLock::new());
+    let webhooks = HttpWebhooks::new(
+        ServerRender {
+            app: Arc::clone(&rendered),
         },
-        public_url: config.public_url.clone(),
-        build: format!("rewind {VERSION}"),
-        default_ttl: config.default_ttl,
-        max_ttl: config.max_ttl,
-        cache: config.cache,
-        ..EngineConfig::default()
-    };
-    let engine = Engine::new(
-        Adapters {
-            journal: store.clone(),
-            blobs: blobs.clone(),
-            executor,
-            dispatcher: tools.dispatcher(),
-            clock,
-            entropy: SystemEntropy,
-            secrets: store.clone(),
-            webhooks: Background(deliveries.clone()),
+        // One attempt: the owner tries a failed delivery again on a timer.
+        Retries {
+            attempts: 1,
+            ..Retries::default()
         },
-        engine_config,
+        webhook_egress.clone(),
     );
-    let mut roles = Vec::new();
-    if config.api {
-        roles.push(ServerRole::Api);
-    }
-    if config.worker {
-        roles.push(ServerRole::Worker);
-    }
+    let plane = Arc::new(Wiring {
+        catalog: store.catalog(),
+        partitions: opened.partitions,
+        archive: opened.archive,
+        blobs: opened.blobs,
+        executor,
+        dispatcher: tools.dispatcher(),
+        secrets: store.clone(),
+        spans: exporter,
+        webhooks,
+        clock,
+        entropy: SystemEntropy,
+    });
+    let build = format!("rewind {VERSION}");
+    let mut node_config = NodeConfig::new(config.node.clone(), config.partitions);
+    node_config.build.clone_from(&build);
+    node_config.pool.clone_from(&config.pool);
+    node_config.executors_only = config.executors_only;
+    node_config.executors = config.executors;
+    node_config.calls = config.calls;
+    node_config.cache = config.cache;
+    node_config.public_url.clone_from(&config.public_url);
+    node_config.default_ttl = config.default_ttl;
+    node_config.max_ttl = config.max_ttl;
+    let address = match &config.listen {
+        Listen::Tcp {
+            link: Some(link), ..
+        } => link.address.clone(),
+        _ => "local".to_owned(),
+    };
+    let cluster = store
+        .cluster(config.partitions, &config.cluster_database)
+        .await
+        .map_err(setup)?;
+    let membership = SharedMembership(Arc::new(
+        cluster
+            .join(NodeInfo {
+                id: config.node.clone(),
+                address,
+                build,
+                epochs,
+                pool: config.pool.clone(),
+                executors_only: config.executors_only,
+            })
+            .await
+            .map_err(setup)?,
+    ));
+    let (map, control, changes) = control_plane(&membership).await?;
+    let link = Arc::new(ServerLink::Local(LocalLink::new()));
+    let node = if plane.clock.is_virtual() {
+        runtime::spawn_in_virtual_time(
+            Arc::clone(&plane),
+            node_config.clone(),
+            membership.clone(),
+            Arc::clone(&link),
+            Arc::new(plane.clock.clone()),
+        )
+    } else {
+        runtime::spawn(
+            Arc::clone(&plane),
+            node_config.clone(),
+            membership.clone(),
+            Arc::clone(&link),
+        )
+    };
+    let ServerLink::Local(local) = &*link;
+    local.register(node.clone());
     let settings = Settings {
         version: VERSION,
         embedded: config.embedded(),
-        roles,
         ceiling: config.ceiling.clone(),
         retention: config.retention,
         allow_stdio: config.allow_stdio,
         public_url: config.public_url.clone(),
         webhook_egress,
-        projector: ProjectorConfig {
-            owner: config.worker_name.clone(),
-            ..ProjectorConfig::default()
-        },
-        changes_per_pass: config.changes_per_pass,
     };
     let oauth = match (&config.public_url, &sign_in) {
         (Some(public_url), Some(sign_in)) => Some(
@@ -367,52 +440,107 @@ async fn start_wired(
         ),
         _ => None,
     };
-    let app = Arc::new(App::new(
-        engine,
+    let app = Arc::new(App::new(Parts {
+        plane,
+        node,
+        config: node_config,
         store,
-        blobs,
-        checker::checker(config.tsgo_cache.clone()),
+        membership,
+        link,
+        map,
+        control: control.clone(),
+        checker: checker::checker(config.tsgo_cache.clone()),
         tools,
-        exporter,
-        deliveries,
-        texts,
         settings,
+        idle,
         sign_in,
         oauth,
-    ));
+    }));
+    let _ = rendered.set(Arc::downgrade(&app));
     register_admin_key(&app, &config).await?;
 
-    let workers = if config.worker {
-        worker::spawn(&app, config.activations, config.dispatches)
-    } else {
-        Vec::new()
-    };
-    let (listener, addr, socket) = listen(&app, &config, directory.as_ref()).await?;
-    let mut workers = workers;
+    let mut tasks = vec![tokio::spawn(changes)];
+    tasks.push(tokio::spawn(jobs::daily(Arc::clone(&app))));
+    if app.clock().is_virtual() {
+        tasks.push(tokio::spawn(keep_virtual_time(Arc::clone(&app))));
+    }
+    let (listeners, addr, socket) = listen(&app, &config, directory.as_ref()).await?;
     if let Some(timeout) = config.idle_timeout {
-        workers.push(tokio::spawn(stop_when_idle(app.clone(), timeout)));
+        tasks.push(tokio::spawn(stop_when_idle(Arc::clone(&app), timeout)));
     }
     tracing::info!(
         version = VERSION,
+        node = %app.node.node(),
+        partitions = config.partitions.get(),
         addr = ?addr,
         socket = ?socket,
-        worker = config.worker,
-        virtual_time = app.engine.clock().is_virtual(),
+        executors_only = config.executors_only,
+        virtual_time = app.clock().is_virtual(),
         "Rewind server started"
     );
     Ok(Running {
         app,
         addr,
+        link_addr: None,
         socket,
-        listener,
-        workers,
+        listeners,
+        tasks,
         directory,
     })
 }
 
+/// The partition map as it is now and as each change gives it, and the changes of the control
+/// plane fanned out to the process: the task that keeps them.
+async fn control_plane(
+    membership: &SharedMembership,
+) -> Result<
+    (
+        watch::Receiver<PartitionMap>,
+        broadcast::Sender<Control>,
+        impl std::future::Future<Output = ()> + Send + 'static,
+    ),
+    StartupError,
+> {
+    let mut changes = membership.changes().await.map_err(setup)?;
+    let initial = membership.partition_map().await.map_err(setup)?;
+    let (map_sink, map) = watch::channel(initial);
+    let (control, _) = broadcast::channel(4_096);
+    let sink = control.clone();
+    let membership = membership.clone();
+    let task = async move {
+        loop {
+            while let Some(change) = changes.next().await {
+                if let ControlPlaneChange::PartitionMap(moved) = &change {
+                    map_sink.send_replace(moved.clone());
+                }
+                let _ = sink.send(Control::Change(change));
+            }
+            // The stream ended: changes may have been missed. Listen again, read the map again,
+            // and tell whoever cached something.
+            let _ = sink.send(Control::Lost);
+            loop {
+                match membership.changes().await {
+                    Ok(listening) => {
+                        changes = listening;
+                        break;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the control plane's changes cannot be read");
+                        // A backoff after an error.
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+            if let Ok(current) = membership.partition_map().await {
+                map_sink.send_replace(current);
+            }
+        }
+    };
+    Ok((map, control, task))
+}
+
 /// Real or virtual time, as the command line and the store say.
-async fn clock(config: &Config, store: &Store) -> Result<ServerClock, StartupError> {
-    let setup = |error: rewind_engine::ports::StoreError| StartupError::Setup(error.to_string());
+async fn clock(config: &Config, store: &ControlPlane) -> Result<ServerClock, StartupError> {
     let saved = store.virtual_time().await.map_err(setup)?;
     Ok(match (config.virtual_time, saved) {
         (Some(false), _) => {
@@ -422,11 +550,30 @@ async fn clock(config: &Config, store: &Store) -> Result<ServerClock, StartupErr
         (Some(true), saved) => {
             let at = saved.unwrap_or_else(|| SystemClock.now());
             store.set_virtual_time(Some(at)).await.map_err(setup)?;
-            ServerClock::Virtual(Arc::new(VirtualClock::new(at)))
+            ServerClock::virtual_at(at)
         }
-        (None, Some(at)) => ServerClock::Virtual(Arc::new(VirtualClock::new(at))),
+        (None, Some(at)) => ServerClock::virtual_at(at),
         (None, None) => ServerClock::System,
     })
+}
+
+/// In virtual time, saves where the clock stands each time the node moves it, so that a server
+/// started again goes on from there.
+async fn keep_virtual_time(app: Arc<App>) {
+    let Some(mut moved) = app.clock().watch() else {
+        return;
+    };
+    let mut saved: Option<Timestamp> = None;
+    while moved.changed().await.is_ok() {
+        let at = *moved.borrow_and_update();
+        if saved != Some(at) {
+            if let Err(error) = app.store.set_virtual_time(Some(at)).await {
+                tracing::warn!(%error, "the virtual time was not saved");
+            }
+            saved = Some(at);
+            app.idle.touch();
+        }
+    }
 }
 
 /// The name of the key given with `--admin-key`.
@@ -487,16 +634,18 @@ async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupErr
     Ok(())
 }
 
-type Listening = (JoinHandle<()>, Option<SocketAddr>, Option<PathBuf>);
+type Listening = (Vec<JoinHandle<()>>, Option<SocketAddr>, Option<PathBuf>);
 
 async fn listen(
     app: &Arc<App>,
     config: &Config,
     directory: Option<&Directory>,
 ) -> Result<Listening, StartupError> {
-    let mut stop = app.stop.subscribe();
-    let shutdown = async move {
-        let _ = stop.wait_for(|stop| *stop).await;
+    let shutdown = || {
+        let mut stop = app.stop.subscribe();
+        async move {
+            let _ = stop.wait_for(|stop| *stop).await;
+        }
     };
     match (&config.listen, directory) {
         (Listen::Embedded { .. }, Some(directory)) => {
@@ -508,6 +657,7 @@ async fn listen(
             std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
                 .map_err(|error| StartupError::Io(format!("{}: {error}", socket.display())))?;
             let router = http::router(app.clone(), true, None);
+            let shutdown = shutdown();
             let handle = tokio::spawn(async move {
                 if let Err(error) = axum::serve(listener, router)
                     .with_graceful_shutdown(shutdown)
@@ -516,29 +666,36 @@ async fn listen(
                     tracing::error!(%error, "the socket listener failed");
                 }
             });
-            Ok((handle, None, Some(socket)))
+            Ok((vec![handle], None, Some(socket)))
         }
-        (Listen::Tcp(addr), _) => {
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .map_err(|error| StartupError::Io(format!("cannot listen on {addr}: {error}")))?;
-            let addr = listener
-                .local_addr()
-                .map_err(|error| StartupError::Io(error.to_string()))?;
-            // `/mcp` calls `/v1` on this listener.
-            let mcp = crate::mcp::router(app.clone(), addr).map_err(StartupError::Setup)?;
-            let router = http::router(app.clone(), false, Some(mcp));
-            let handle = tokio::spawn(async move {
-                // The peer's address: the sign-in passes a browser's to the identity provider.
-                let service = router.into_make_service_with_connect_info::<SocketAddr>();
-                if let Err(error) = axum::serve(listener, service)
-                    .with_graceful_shutdown(shutdown)
-                    .await
-                {
-                    tracing::error!(%error, "the TCP listener failed");
-                }
-            });
-            Ok((handle, Some(addr), None))
+        (Listen::Tcp { edge, .. }, _) => {
+            let mut handles = Vec::new();
+            let mut bound = None;
+            if let Some(addr) = edge {
+                let listener = tokio::net::TcpListener::bind(addr).await.map_err(|error| {
+                    StartupError::Io(format!("cannot listen on {addr}: {error}"))
+                })?;
+                let addr = listener
+                    .local_addr()
+                    .map_err(|error| StartupError::Io(error.to_string()))?;
+                // `/mcp` calls `/v1` on this listener.
+                let mcp = crate::mcp::router(app.clone(), addr).map_err(StartupError::Setup)?;
+                let router = http::router(app.clone(), false, Some(mcp));
+                let shutdown = shutdown();
+                handles.push(tokio::spawn(async move {
+                    // The peer's address: the sign-in passes a browser's to the identity
+                    // provider.
+                    let service = router.into_make_service_with_connect_info::<SocketAddr>();
+                    if let Err(error) = axum::serve(listener, service)
+                        .with_graceful_shutdown(shutdown)
+                        .await
+                    {
+                        tracing::error!(%error, "the TCP listener failed");
+                    }
+                }));
+                bound = Some(addr);
+            }
+            Ok((handles, bound, None))
         }
         (Listen::Embedded { .. }, None) => Err(StartupError::Setup(
             "the embedded server has no directory".into(),
@@ -546,16 +703,10 @@ async fn listen(
     }
 }
 
-/// Stops the server once nothing has happened for `timeout`: no request, no stream, no work.
+/// Stops the server once nothing has happened for `timeout`: no request, no stream, no
+/// activation.
 async fn stop_when_idle(app: Arc<App>, timeout: Duration) {
-    let check = (timeout / 4).clamp(Duration::from_millis(100), Duration::from_secs(5));
-    let mut stop = app.stop.subscribe();
-    while !app.stopping() {
-        let _ = tokio::time::timeout(check, stop.changed()).await;
-        if app.activity.idle_for().is_some_and(|idle| idle >= timeout) {
-            tracing::info!(?timeout, "stopping: idle");
-            app.stop.send_replace(true);
-            app.wake.bump();
-        }
-    }
+    app.idle.until_idle(timeout).await;
+    tracing::info!(?timeout, "stopping: idle");
+    app.stop.send_replace(true);
 }

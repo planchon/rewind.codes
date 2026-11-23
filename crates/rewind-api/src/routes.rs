@@ -38,8 +38,6 @@ pub const CHANGES: &str = "/v1/changes";
 /// The host-tool tasks handed to a worker, as server-sent events
 /// (`crate::tasks::TaskStreamEvent`).
 pub const TASK_STREAM: &str = "/v1/tasks/stream";
-pub const TASKS: &str = "/v1/tasks";
-pub const TASK_HEARTBEAT: &str = "/v1/tasks/{token}/heartbeat";
 pub const TASK_DEFER: &str = "/v1/tasks/{token}/defer";
 pub const TASK_COMPLETE: &str = "/v1/tasks/{token}/complete";
 pub const TASK_FAIL: &str = "/v1/tasks/{token}/fail";
@@ -127,7 +125,7 @@ pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server"
 pub const MCP: &str = "/mcp";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 115] = [
+pub const OPERATIONS: [(&str, &str); 113] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -159,8 +157,6 @@ pub const OPERATIONS: [(&str, &str); 115] = [
     ("POST", RUN_RELEASE),
     ("POST", RUN_GIVE_UP),
     ("GET", TASK_STREAM),
-    ("GET", TASKS),
-    ("POST", TASK_HEARTBEAT),
     ("POST", TASK_DEFER),
     ("POST", TASK_COMPLETE),
     ("POST", TASK_FAIL),

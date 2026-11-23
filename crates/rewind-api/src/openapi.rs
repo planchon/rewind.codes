@@ -86,8 +86,6 @@ use crate::webhooks::{
         operations::release_run,
         operations::give_up_run,
         operations::stream_tasks,
-        operations::claim_tasks,
-        operations::heartbeat_task,
         operations::defer_task,
         operations::complete_task,
         operations::fail_task,
@@ -558,8 +556,7 @@ mod operations {
         Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
     };
     use crate::tasks::{
-        CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
-        TaskStreamEvent, TaskStreamQuery,
+        CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamEvent, TaskStreamQuery,
     };
     use crate::testing::{Test, TestRun};
     use crate::toolsets::{
@@ -1083,32 +1080,10 @@ mod operations {
     )]
     pub(super) fn stream_tasks() {}
 
-    /// Claim host-tool tasks (long-poll)
-    ///
-    /// The tasks of the runs the caller sees: an end user's token claims those of its
-    /// namespace, a key limited to labels those of the runs carrying them.
-    #[utoipa::path(
-        get, path = "/v1/tasks", tag = "tasks", operation_id = "claimTasks",
-        params(TaskQuery),
-        responses((status = 200, description = "The tasks claimed; none when `wait` passed.", body = TaskBatch))
-    )]
-    pub(super) fn claim_tasks() {}
-
-    /// Keep a claim alive
-    #[utoipa::path(
-        post, path = "/v1/tasks/{token}/heartbeat", tag = "tasks", operation_id = "heartbeatTask",
-        params(("token" = String, Path, description = "The claim's token.")),
-        responses(
-            (status = 200, description = "Extended.", body = HeartbeatAck),
-            (status = 410, description = "The task no longer exists: stop working on it (`task-gone`).", body = Problem, content_type = "application/problem+json"),
-        )
-    )]
-    pub(super) fn heartbeat_task() {}
-
     /// Answer later
     ///
-    /// The task waits for `/complete` or `/fail` with the same token, without heartbeats, up to
-    /// its timeout.
+    /// The task waits for `/complete` or `/fail` with the same token, whether the stream it was
+    /// handed on stays open or not, up to its timeout.
     #[utoipa::path(
         post, path = "/v1/tasks/{token}/defer", tag = "tasks", operation_id = "deferTask",
         params(("token" = String, Path, description = "The claim's token.")),

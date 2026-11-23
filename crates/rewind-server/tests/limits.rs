@@ -22,7 +22,7 @@ use rewind_api::Client;
 use rewind_api::access::BuiltInRole;
 use rewind_api::common::{AbortKind, RunStatus};
 use rewind_api::runs::{JournalExport, Run, StartRun};
-use rewind_api::tasks::{CompleteTask, TaskQuery};
+use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
@@ -254,19 +254,16 @@ export default async function main() {
     );
     waiting.toolset = Some(toolset.id.clone());
     let waiting = harness.start_run(&waiting, None).await.unwrap();
-    let task = loop {
-        let batch = worker
-            .claim_tasks(&TaskQuery {
-                toolset: Some(toolset.id.clone()),
-                wait: wait("10s"),
-                ..TaskQuery::default()
-            })
-            .await
-            .unwrap();
-        if let Some(task) = batch.tasks.into_iter().next() {
-            break task;
-        }
-    };
+    let task = support::TaskWorker::open(
+        &worker,
+        &TaskStreamQuery {
+            toolset: Some(toolset.id.clone()),
+            ..TaskStreamQuery::default()
+        },
+    )
+    .await
+    .task()
+    .await;
     let result = problem(
         worker
             .complete_task(

@@ -30,8 +30,8 @@ use rewind_core::{
 };
 use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
-    Day, JournalStore, ReadModel, Secret, SecretId, SecretNamespace, SecretReader, SecretStore,
-    StoredToolset, TenantId, ToolDeclarations,
+    CatalogStore, Day, Secret, SecretId, SecretNamespace, SecretReader, SecretStore, StoredToolset,
+    TenantId, ToolDeclarations,
 };
 use rewind_engine::text::{TOOLSET_TEXT, refuse_nul};
 use rewind_mcp::ListingAuth;
@@ -78,7 +78,14 @@ pub(super) async fn create(
         .iter()
         .map(|tool| tool.name.clone())
         .collect();
-    let observed = app.store.observed_shapes(&caller.tenant, &names).await?;
+    let observed = app
+        .edge
+        .shapes(
+            &mut app.gateway(),
+            &rewind_engine::ports::Scope::Tenant(caller.tenant.clone()),
+            &names,
+        )
+        .await?;
     let generated = app.tools.declarations(&toolset, &observed);
     let declarations = ToolDeclarations {
         typescript: generated.typescript,
@@ -186,7 +193,14 @@ pub(super) async fn search(
         .iter()
         .map(|tool| tool.name.clone())
         .collect();
-    let observed = app.store.observed_shapes(&caller.tenant, &names).await?;
+    let observed = app
+        .edge
+        .shapes(
+            &mut app.gateway(),
+            &rewind_engine::ports::Scope::Tenant(caller.tenant.clone()),
+            &names,
+        )
+        .await?;
     let generated = app.tools.declarations(&stored.toolset, &observed);
     let declared: BTreeMap<&str, _> = generated
         .tools
@@ -465,8 +479,7 @@ async fn attached_for_listing(
     for (server, secret) in attached {
         let id = SecretId::organization(secret.name.clone());
         let seen = app
-            .engine
-            .secrets()
+            .store
             .meta(&caller.tenant, &id, today)
             .await?
             .is_some_and(|meta| {
@@ -476,8 +489,7 @@ async fn attached_for_listing(
                     .all(|(key, value)| meta.labels.get(key) == Some(value))
             });
         let value = if seen {
-            app.engine
-                .secrets()
+            app.store
                 .read(&caller.tenant, &id, &reader, app.now())
                 .await?
         } else {
@@ -495,8 +507,7 @@ async fn attached_for_listing(
     }
     problems.sort_by(|a, b| a.server().cmp(b.server()));
     let listed = app
-        .engine
-        .secrets()
+        .store
         .list(
             &caller.tenant,
             &SecretNamespace::Organization,

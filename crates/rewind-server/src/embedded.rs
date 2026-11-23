@@ -6,10 +6,15 @@
 //!   server.lock    held by the server: a second server fails to take it and exits; the lock
 //!                  goes with the process, `kill -9` included
 //!   server.sock    the API /v1, mode 0600, no key, tenant `local`
-//!   journal.db     Turso; `meta` keeps the schema version and the virtual time
+//!   control.db     Turso: the control plane; `meta` keeps the schema version and the virtual time
 //!   master.key     the master key of the secret store, mode 0600, made at the first start
-//!   blobs/         payloads above 64 KiB
+//!   partitions/0/  SlateDB: the one partition's write-ahead log, tables and manifest
+//!   runs/          the sealed attempts, by tenant and run
+//!   blobs/         payloads above 64 KiB, under their run
+//!   tests/         test documents, by tenant
 //! ```
+//!
+//! One node owns the one partition, with the node link inside the process.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;

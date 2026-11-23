@@ -14,8 +14,8 @@ use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
-use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
-use rewind_api::tasks::{CompleteTask, TaskQuery};
+use rewind_api::scripts::{CheckRequest, ScriptFilter};
+use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Client, Problem, ProblemType};
@@ -39,7 +39,7 @@ async fn server_with_roles(
     roles: &[(String, BTreeSet<String>)],
 ) -> (TestServer, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("journal.db");
+    let path = dir.path().join("control.db");
     {
         let store = TursoStore::open(&path, MasterKey::from_bytes([9; 32]))
             .await
@@ -83,7 +83,7 @@ enum Call {
     ReleaseRun,
     GiveUpRun,
     DeleteRun,
-    Heartbeat,
+    DeferTask,
     ApproveTask,
     ListSubscriptions,
     DeleteSubscription,
@@ -105,7 +105,7 @@ const CALLS: [Call; 19] = [
     Call::ReleaseRun,
     Call::GiveUpRun,
     Call::DeleteRun,
-    Call::Heartbeat,
+    Call::DeferTask,
     Call::ApproveTask,
     Call::ListSubscriptions,
     Call::DeleteSubscription,
@@ -139,7 +139,7 @@ impl Call {
             Call::CancelRun => Permission::RunsControl,
             Call::ReleaseRun | Call::GiveUpRun => Permission::RunsQuarantine,
             Call::DeleteRun => Permission::RunsDelete,
-            Call::Heartbeat => Permission::TasksWork,
+            Call::DeferTask => Permission::TasksWork,
             Call::ApproveTask => Permission::TasksApprove,
             Call::ListSubscriptions => Permission::SubscriptionsRead,
             Call::DeleteSubscription => Permission::SubscriptionsWrite,
@@ -177,7 +177,11 @@ impl Call {
             Call::ReleaseRun => outcome(client.release_run(UNKNOWN_RUN).await),
             Call::GiveUpRun => outcome(client.give_up_run(UNKNOWN_RUN).await),
             Call::DeleteRun => outcome(client.delete_run(UNKNOWN_RUN).await),
-            Call::Heartbeat => outcome(client.heartbeat_task("unknown").await),
+            Call::DeferTask => outcome(
+                client
+                    .defer_task("unknown", &rewind_api::tasks::DeferTask::default())
+                    .await,
+            ),
             Call::ApproveTask => outcome(client.approve_task("unknown").await),
             Call::ListSubscriptions => outcome(client.list_subscriptions().await),
             Call::DeleteSubscription => outcome(client.delete_subscription("unknown").await),
@@ -515,45 +519,29 @@ export default async function main() {
 
     let dev = server.key(BuiltInRole::Worker, &[("env", "dev")]).await;
     let prod = server.key(BuiltInRole::Worker, &[("env", "prod")]).await;
-    let query = TaskQuery {
+    let query = TaskStreamQuery {
         toolset: Some(toolset.id.clone()),
         tools: vec!["ask_user".into()],
-        limit: Some(10),
-        wait: Some("10s".parse().unwrap()),
+        slots: Some(10),
+        ..TaskStreamQuery::default()
     };
-    let ours = dev.claim_tasks(&query).await.unwrap().tasks;
-    assert_eq!(
-        ours.iter()
-            .map(|task| task.run_id.as_str())
-            .collect::<Vec<_>>(),
-        [dev_run.id.as_str()]
-    );
+    let mut devs = support::TaskWorker::open(&dev, &query).await;
+    let ours = vec![devs.task().await];
+    assert_eq!(ours[0].run_id, dev_run.id);
     assert_eq!(ours[0].labels, Labels::from_iter([("env", "dev")]));
-    let quick = TaskQuery {
-        wait: Some("300ms".parse().unwrap()),
-        ..query.clone()
-    };
     assert!(
-        dev.claim_tasks(&quick).await.unwrap().tasks.is_empty(),
+        devs.none_within(std::time::Duration::from_millis(300))
+            .await,
         "the prod run's task is not dev's"
     );
-    let theirs = prod.claim_tasks(&query).await.unwrap().tasks;
-    assert_eq!(
-        theirs
-            .iter()
-            .map(|task| task.run_id.as_str())
-            .collect::<Vec<_>>(),
-        [prod_run.id.as_str()]
-    );
+    let theirs = vec![support::TaskWorker::open(&prod, &query).await.task().await];
+    assert_eq!(theirs[0].run_id, prod_run.id);
 
     // A token of the other scope's task is answered as a task that no longer exists.
     let answer = CompleteTask {
         result: serde_json::json!("from dev"),
     };
-    for refused in [
-        dev.heartbeat_task(&theirs[0].token).await.map(|_| ()),
-        dev.complete_task(&theirs[0].token, &answer).await,
-    ] {
+    for refused in [dev.complete_task(&theirs[0].token, &answer).await] {
         let refused = problem(refused.unwrap_err());
         assert_eq!(
             (refused.status, refused.kind()),
@@ -569,7 +557,7 @@ export default async function main() {
         ended.output.and_then(|output| output.value),
         Some(serde_json::json!("from dev"))
     );
-    prod.heartbeat_task(&theirs[0].token).await.unwrap();
+    prod.complete_task(&theirs[0].token, &answer).await.unwrap();
     server.stop().await;
 }
 

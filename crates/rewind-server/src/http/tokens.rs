@@ -16,7 +16,7 @@ use rewind_api::namespaces::{
     Token as ApiToken, TokenKey as ApiTokenKey, TokenKeyList,
 };
 use rewind_core::{Digest, Timestamp};
-use rewind_engine::ports::{AccessStore, JournalStore, NamespaceWrite, Principal, Token, TokenKey};
+use rewind_engine::ports::{AccessStore, CatalogStore, NamespaceWrite, Principal, Token, TokenKey};
 use rewind_engine::text::{refuse_nul, refuse_nul_in_labels};
 
 use crate::app::App;
@@ -136,7 +136,7 @@ pub(super) async fn create(
     let now = app.now();
     if app
         .store
-        .put_namespace(&caller.tenant, &namespace, None, now)
+        .put_namespace(&caller.tenant, &namespace, None, app.config.partitions, now)
         .await?
         == NamespaceWrite::Deleting
     {

@@ -12,7 +12,8 @@
 //! | `GET /organizations/{tenant}/jwks.json` | none | `Cache-Control: max-age=300` |
 //!
 //! A value is written and never answered. Putting a secret again makes ready the calls parked by
-//! a refusal or a missing secret in the runs that attach it (`Engine::put_secret`).
+//! a refusal or a missing secret in the runs that attach it: the write's change of the control
+//! plane reaches the owners, which resume them.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -29,10 +30,12 @@ use rewind_api::secrets::{
     DailyReads, Jwk, Jwks, LastRead, PutSecret, Secret as SecretView, SecretList, SecretScope,
     SecretUsage, SigningKey, SigningKeyList, WorkflowAttaching,
 };
+use rewind_core::RunStatus;
 use rewind_core::{MAX_SECRET_VALUE_BYTES, SecretName};
 use rewind_engine::ports::{
-    CallClaims, Day, JournalStore, NamespaceWrite, NewSecret, PublicKey, PutSecret as Put, Secret,
-    SecretId, SecretMeta, SecretNamespace, SecretStore, TenantId,
+    CallClaims, CatalogStore, Day, NamespaceWrite, NewSecret, Page, Predicate, PublicKey,
+    PutSecret as Put, RunOrder, RunRef, SCAN_BUDGET, Scope, Secret, SecretId, SecretMeta,
+    SecretNamespace, SecretStore, TenantId, Term, WaitingFor, WorkflowFilter,
 };
 
 use crate::app::App;
@@ -58,8 +61,7 @@ pub(super) async fn list(
     caller.require(Permission::SecretsRead)?;
     organization_only(&caller)?;
     let listed = app
-        .engine
-        .secrets()
+        .store
         .list(
             &caller.tenant,
             &SecretNamespace::Organization,
@@ -86,8 +88,7 @@ pub(super) async fn put(
     rewind_engine::text::refuse_nul_in_labels(&labels)?;
     // A key limited to labels writes only the secrets carrying them: it does not see the others.
     if let Some(found) = app
-        .engine
-        .secrets()
+        .store
         .meta(&caller.tenant, &id, Day::of(app.now()))
         .await?
         && !carries(&found.labels, &caller.labels)
@@ -137,8 +138,7 @@ pub(super) async fn list_of_namespace(
     let namespace = namespace_name(&namespace)?;
     reach(&caller, &namespace)?;
     let listed = app
-        .engine
-        .secrets()
+        .store
         .list(
             &caller.tenant,
             &SecretNamespace::Namespace(namespace),
@@ -171,7 +171,13 @@ pub(super) async fn put_of_namespace(
     }
     if app
         .store
-        .put_namespace(&caller.tenant, &namespace, None, app.now())
+        .put_namespace(
+            &caller.tenant,
+            &namespace,
+            None,
+            app.config.partitions,
+            app.now(),
+        )
         .await?
         == NamespaceWrite::Deleting
     {
@@ -216,11 +222,7 @@ pub(super) async fn signing_keys(
     caller.require(Permission::SecretsRead)?;
     organization_only(&caller)?;
     let issuer = issuer(&app, &caller.tenant)?;
-    let keys = app
-        .engine
-        .secrets()
-        .public_keys(&caller.tenant, app.now())
-        .await?;
+    let keys = app.store.public_keys(&caller.tenant, app.now()).await?;
     Ok(Json(SigningKeyList {
         keys: keys.iter().map(signing_key).collect(),
         jwks_url: format!("{issuer}/jwks.json"),
@@ -235,8 +237,7 @@ pub(super) async fn rotate_signing_key(
 ) -> Result<Json<SigningKey>, ApiError> {
     caller.require(Permission::OrganizationWrite)?;
     let key = app
-        .engine
-        .secrets()
+        .store
         .rotate_signing_key(&caller.tenant, app.now())
         .await?;
     tracing::info!(tenant = %caller.tenant, kid = %key.public.kid, "signing key rotated");
@@ -250,7 +251,7 @@ pub(super) async fn jwks(
     Path(tenant): Path<String>,
 ) -> Result<Response, ApiError> {
     let keys = match TenantId::new(tenant) {
-        Ok(tenant) => app.engine.secrets().public_keys(&tenant, app.now()).await?,
+        Ok(tenant) => app.store.public_keys(&tenant, app.now()).await?,
         Err(_) => Vec::new(),
     };
     let jwks = Jwks {
@@ -309,8 +310,7 @@ fn writes_namespaces(caller: &Caller) -> Result<(), ApiError> {
 /// namespace's. 404 otherwise.
 async fn seen(app: &App, caller: &Caller, id: &SecretId) -> Result<SecretMeta, ApiError> {
     let meta = app
-        .engine
-        .secrets()
+        .store
         .meta(&caller.tenant, id, since(app))
         .await?
         .filter(|meta| {
@@ -357,22 +357,10 @@ async fn write(
         labels,
         by: caller.writer(),
     };
-    let (put, resumed) = app.engine.put_secret(&caller.tenant, &new).await?;
-    tracing::info!(tenant = %caller.tenant, secret = %id, resumed, "secret written");
-    if resumed > 0 {
-        // The calls made ready are in the runs waiting on a server the secret serves.
-        let usage = app
-            .store
-            .secret_usage(&caller.tenant, &id, &BTreeMap::new(), USAGE_RUNS)
-            .await?;
-        for run in &usage.waiting_runs {
-            app.record_tasks(run).await;
-        }
-        app.wake.bump();
-    }
+    let put = app.store.put(&caller.tenant, &new, app.now()).await?;
+    tracing::info!(tenant = %caller.tenant, secret = %id, "secret written");
     let meta = app
-        .engine
-        .secrets()
+        .store
         .meta(&caller.tenant, &id, since(app))
         .await?
         .ok_or_else(|| ApiError::internal("the secret was not stored"))?;
@@ -386,7 +374,7 @@ async fn write(
 /// Deletes a secret: 204, or 404 when it does not exist. The next call of a run that attaches
 /// it is parked.
 async fn erase(app: &App, caller: &Caller, id: &SecretId) -> Result<Response, ApiError> {
-    if !app.engine.delete_secret(&caller.tenant, id).await? {
+    if !app.store.delete(&caller.tenant, id).await? {
         return Err(not_found(id));
     }
     tracing::info!(tenant = %caller.tenant, secret = %id, "secret deleted");
@@ -401,50 +389,115 @@ async fn usage_of(
     id: &SecretId,
     meta: &SecretMeta,
 ) -> Result<SecretUsage, ApiError> {
-    let usage = app
-        .store
-        .secret_usage(&caller.tenant, id, &caller.labels, USAGE_RUNS)
-        .await?;
-    let mut visible = BTreeMap::new();
-    for run in usage.active_runs.iter().chain(&usage.waiting_runs) {
-        if visible.contains_key(&run.id) {
-            continue;
-        }
-        let sees = match app.store.get_run(run).await? {
-            Some(record) => caller.sees_run(&record),
-            None => false,
-        };
-        visible.insert(run.id, sees);
-    }
-    let shown = |runs: &[rewind_engine::ports::RunRef]| -> Vec<String> {
+    let usage = attaching(app, caller, id).await?;
+    let shown = |runs: &[RunRef]| -> Vec<String> {
         runs.iter()
-            .filter(|run| visible.get(&run.id).copied().unwrap_or(false))
+            .take(USAGE_RUNS)
             .map(|run| run.id.to_string())
             .collect()
     };
     let mut workflows = Vec::new();
-    for version in &usage.versions {
-        let carries_labels = app
-            .store
-            .get_workflow(&caller.tenant, version.version)
-            .await?
-            .is_some_and(|stored| stored.carries(&caller.labels));
-        if carries_labels {
+    let latest = app
+        .catalog()
+        .latest_workflows(&WorkflowFilter {
+            tenant: caller.tenant.clone(),
+            labels: caller.labels.clone(),
+            after: None,
+            limit: Some(1_000),
+        })
+        .await?;
+    for stored in latest {
+        let servers: Vec<String> = stored
+            .workflow
+            .secrets()
+            .iter()
+            .filter(|(_, secret)| {
+                matches!(&id.namespace, SecretNamespace::Organization)
+                    && secret.scope == rewind_core::SecretScope::Organization
+                    && secret.name == id.name
+            })
+            .map(|(server, _)| server.to_owned())
+            .collect();
+        if !servers.is_empty() {
             workflows.push(WorkflowAttaching {
-                name: version.name.clone(),
-                version: version.version.to_hex(),
-                servers: version.servers.clone(),
+                name: stored.workflow.name().to_owned(),
+                version: stored.workflow.version().to_hex(),
+                servers,
             });
         }
     }
     Ok(SecretUsage {
         secret: seen_by(app, caller, meta).await?,
-        active_runs: shown(&usage.active_runs),
-        active_total: usage.active_total,
-        waiting_runs: shown(&usage.waiting_runs),
-        waiting_total: usage.waiting_total,
+        active_runs: shown(&usage.active),
+        active_total: usage.active.len() as u64,
+        waiting_runs: shown(&usage.waiting),
+        waiting_total: usage.waiting.len() as u64,
         workflows,
     })
+}
+
+/// The active runs the caller sees that attach a secret, and those of them parked on a call.
+struct Attaching {
+    active: Vec<RunRef>,
+    waiting: Vec<RunRef>,
+}
+
+/// The runs that attach a secret, among the active runs of its scope the caller sees: the
+/// newest [`SCAN_BUDGET`] of the index, each run's head read for what it attaches.
+async fn attaching(app: &App, caller: &Caller, id: &SecretId) -> Result<Attaching, ApiError> {
+    let mut query = crate::http::search::run_query(caller, None, None, app.now())?;
+    query.terms.push(Term {
+        negated: false,
+        predicate: Predicate::Status([RunStatus::Active].into()),
+    });
+    let scope = match &id.namespace {
+        SecretNamespace::Namespace(namespace) => Scope::Namespace {
+            tenant: caller.tenant.clone(),
+            namespace: namespace.clone(),
+        },
+        SecretNamespace::Organization => crate::http::search::scope_of(&query),
+    };
+    let found = app
+        .edge
+        .search(
+            &mut app.gateway(),
+            &scope,
+            &query,
+            RunOrder::Started,
+            &Page {
+                cursor: None,
+                limit: 1_000,
+                budget: SCAN_BUDGET,
+            },
+        )
+        .await?;
+    let mut attaching = Attaching {
+        active: Vec::new(),
+        waiting: Vec::new(),
+    };
+    for summary in found.summaries {
+        let Some(view) = app.read_run(&summary.run).await? else {
+            continue;
+        };
+        let attached = view
+            .head
+            .metadata
+            .secrets
+            .iter()
+            .any(|(_, secret)| SecretId::resolve(secret, &view.head.namespace) == *id);
+        if !attached {
+            continue;
+        }
+        let parked = summary
+            .waits
+            .iter()
+            .any(|wait| wait.waiting_for() == WaitingFor::Parked);
+        if parked {
+            attaching.waiting.push(summary.run.clone());
+        }
+        attaching.active.push(summary.run);
+    }
+    Ok(attaching)
 }
 
 /// The first day of the reads a secret is listed with: 30 days, today included.
@@ -472,13 +525,13 @@ async fn seen_by(app: &App, caller: &Caller, meta: &SecretMeta) -> Result<Secret
         .as_ref()
         .and_then(|last| last.by.run())
         .map(|(run, _)| run);
-    if let Some(last) = last_run {
-        let run = rewind_engine::ports::RunRef::new(caller.tenant.clone(), last);
-        let record = app.store.get_run(&run).await?;
-        let sees = record
-            .as_ref()
-            .is_some_and(|record| caller.sees_run(record));
-        if restricted && !sees {
+    if restricted && let Some(last) = last_run {
+        let run = RunRef::new(caller.tenant.clone(), last);
+        let sees = match app.read_run(&run).await? {
+            Some(view) => caller.sees_run(&view.head),
+            None => false,
+        };
+        if !sees {
             view.last_read = None;
         } else if let (Some(read), Some(record)) = (view.last_read.as_mut(), record) {
             read.run_handle = Some(record.handle().to_string());

@@ -1,40 +1,51 @@
-//! The change stream (`GET /v1/changes`): server-sent events of the runs of the organization
-//! whose summary changes, as the caller may see them. The loop that reads the changes is the
-//! process's own (`crate::changes`); each stream keeps the runs its caller may open.
+//! The change stream (`GET /v1/changes`): what changes in the organization, as the caller may
+//! see it (`archi/07-code-architecture.md`, "HTTP API `/v1`"; `archi/05-testing-and-observability.md`,
+//! "Live").
+//!
+//! ```text
+//!  owners of the scope's partitions ── Changed (once durable) ──► run {summary}
+//!  Membership::changes ───────────── ControlPlaneChange ────────► script, workflow, secret,
+//!                                                                 namespace, connection
+//!  a subscription lost, changes lost ────────────────────────────► resync, then closed
+//! ```
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use rewind_api::access::Permission;
-use rewind_api::events::{ChangeEvent, Resync};
+use rewind_api::events::{
+    ChangeEvent, ConnectionChanged, NamespaceChanged, Resync, ScriptChanged, SecretChanged,
+    WorkflowChanged,
+};
 use rewind_engine::adapters::SystemClock;
-use rewind_engine::ports::Clock;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::watch;
+use rewind_engine::ports::link::{Changed, SubscriptionKey};
+use rewind_engine::ports::{
+    CatalogStore, Clock, ControlPlaneChange, Day, SecretNamespace, SecretStore,
+};
+use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::app::App;
+use crate::app::{App, Control};
 use crate::auth::{self, Caller, TokenExpiry};
-use crate::changes::{Batch, Changes, Subscription};
 use crate::error::ApiError;
-use crate::wake::Busy;
-
-/// How often the caller's token and grant are checked again while its stream is open.
-const RECHECK: Duration = Duration::from_secs(1);
+use crate::follow;
+use crate::http::search;
+use crate::idle::Busy;
+use crate::streams::Rights;
 
 /// `GET /v1/changes`. Each `run` event holds the run's summary as `GET /v1/runs` lists it, for
 /// the runs the caller may see: of its tenant, in the namespace its request is bound to (an end
 /// user's token's own), carrying every label of its grant. No other run shows, not even its id.
-/// `resync` says the client should read again what it shows. There is no resume. Closed at a
-/// member's or a connection's access token's expiry (an access token already expired is refused
-/// with 401, though the identity provider's leeway let it through); once an end user's token or
-/// a connection no longer authenticates; once a key is revoked or the grant of a key, a member
-/// or a connection is removed, changes its labels or no longer gives `runs:read`; and after
-/// `resync` when the server cannot read the changes any more.
+/// The control plane's events name what changed, for what the caller may read. `resync` says the
+/// client should read again what it shows. There is no resume. Closed at a member's or a
+/// connection's access token's expiry (an access token already expired is refused with 401);
+/// once an end user's token or a connection no longer authenticates; once a key is revoked or
+/// the grant of a key, a member or a connection is removed, changes its labels or no longer
+/// gives `runs:read`; and after `resync` when a subscription is lost.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -42,31 +53,29 @@ pub(super) async fn stream(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     caller.require(Permission::RunsRead)?;
     // Tokens expire in the world's time, whatever the server's clock.
-    let now = SystemClock.now().as_millis();
     if let Some(expires_at) = expiry
-        && expires_at.as_millis() <= now
+        && expires_at.as_millis() <= SystemClock.now().as_millis()
     {
         return Err(auth::unauthorized(
             "the access token has expired: POST /auth/session gives a new one, then open the \
              stream again",
         ));
     }
-    let deadline = expiry.map(|expires_at| {
-        let left = expires_at.as_millis().saturating_sub(now);
-        tokio::time::Instant::now() + Duration::from_millis(left)
-    });
-    let rechecked =
-        caller.token.is_some() || caller.connection.is_some() || caller.principal.is_some();
+    let key = match &caller.namespace {
+        Some(namespace) => SubscriptionKey::Namespace {
+            tenant: caller.tenant.clone(),
+            namespace: namespace.clone(),
+        },
+        None => SubscriptionKey::Tenant(caller.tenant.clone()),
+    };
     let follow = Follow {
-        checked: rechecked.then(tokio::time::Instant::now),
-        subscription: Changes::subscribe(&app, &caller.tenant),
-        stop: app.stop.subscribe(),
-        busy: app.activity.busy(),
-        caller,
+        control: app.control(),
+        runs: follow::follow(&app, key),
+        rights: Rights::new(&app, caller, Permission::RunsRead, expiry),
+        _busy: app.idle.busy(),
         app,
         pending: VecDeque::new(),
         closing: false,
-        deadline,
     };
     let events = futures_util::stream::unfold(follow, |mut follow| async move {
         follow.next_event().await.map(|event| (Ok(event), follow))
@@ -77,85 +86,147 @@ pub(super) async fn stream(
 /// Where a stream stands.
 struct Follow {
     app: Arc<App>,
-    caller: Caller,
-    /// When the caller was last found to authenticate with the same rights; `None` over the
-    /// socket.
-    checked: Option<tokio::time::Instant>,
-    subscription: Subscription,
-    stop: watch::Receiver<bool>,
+    rights: Rights,
+    runs: UnboundedReceiver<Changed>,
+    control: broadcast::Receiver<Control>,
     pending: VecDeque<Event>,
-    /// The loop cannot read the changes: the stream ends once `pending` is sent.
+    /// A subscription was lost: the stream ends once `pending` is sent.
     closing: bool,
     /// A stream keeps the embedded server from stopping on idle, as a followed run's does.
-    #[allow(dead_code)]
-    busy: Busy,
-    /// The expiry of the access token that opened the stream, which ends it.
-    deadline: Option<tokio::time::Instant>,
+    _busy: Busy,
 }
 
 impl Follow {
     async fn next_event(&mut self) -> Option<Event> {
         loop {
-            let now = tokio::time::Instant::now();
-            if self.deadline.is_some_and(|deadline| now >= deadline) || self.app.stopping() {
-                return None;
-            }
-            if let Some(checked) = self.checked
-                && now >= checked + RECHECK
-            {
-                if !auth::still_holds(&self.app, &self.caller, Permission::RunsRead).await {
-                    return None;
-                }
-                self.checked = Some(tokio::time::Instant::now());
-            }
             if let Some(event) = self.pending.pop_front() {
                 return Some(event);
             }
             if self.closing {
                 return None;
             }
-            let mut until = now + RECHECK;
-            if let Some(deadline) = self.deadline {
-                until = until.min(deadline);
-            }
             tokio::select! {
-                received = self.subscription.batches.recv() => match received {
-                    Ok(batch) => self.keep(&batch),
-                    // Batches were missed: the client reads again what it shows.
-                    Err(RecvError::Lagged(_)) => self.pending.push_back(resync()),
+                () = self.rights.lost() => return None,
+                changed = self.runs.recv() => match changed {
+                    Some(changed) => self.run(changed),
+                    None => {
+                        self.pending.push_back(resync());
+                        self.closing = true;
+                    }
+                },
+                control = self.control.recv() => match control {
+                    Ok(Control::Change(change)) => self.control_plane(change).await,
+                    Ok(Control::Lost) | Err(RecvError::Lagged(_)) => self.pending.push_back(resync()),
                     Err(RecvError::Closed) => return None,
                 },
-                () = tokio::time::sleep_until(until) => {}
-                _ = self.stop.changed() => {}
             }
         }
     }
 
-    /// Queues what of a batch the caller may see.
-    fn keep(&mut self, batch: &Batch) {
-        let caller = &self.caller;
-        if batch.close {
-            self.pending.push_back(resync());
-            self.closing = true;
+    /// A run's summary, if the caller may see the run.
+    fn run(&mut self, changed: Changed) {
+        let caller = self.rights.caller();
+        let Some(summary) = changed.summary else {
+            return;
+        };
+        if summary.run.tenant != caller.tenant
+            || !caller.reaches(&summary.namespace)
+            || !caller.sees(&summary.labels)
+        {
             return;
         }
-        if batch.resync.contains(&caller.tenant) {
-            self.pending.push_back(resync());
-        }
-        for run in &batch.runs {
-            if run.tenant == caller.tenant
-                && caller.reaches(&run.namespace)
-                && caller.sees(&run.labels)
-            {
-                self.pending
-                    .push_back(Event::default().event(run.event).data(run.data.as_str()));
+        let event = ChangeEvent::Run(Box::new(search::summary(&summary)));
+        self.pending.push_back(sse(&event));
+    }
+
+    /// What changed in the control plane, if the caller may read it.
+    async fn control_plane(&mut self, change: ControlPlaneChange) {
+        let caller = self.rights.caller();
+        let tenant = caller.tenant.clone();
+        let unscoped = caller.namespace.is_none() && caller.labels.is_empty();
+        let event = match change {
+            ControlPlaneChange::Script { tenant: of, digest } if of == tenant && unscoped => {
+                Some(ChangeEvent::Script(ScriptChanged {
+                    digest: digest.to_hex(),
+                }))
             }
+            ControlPlaneChange::Workflow {
+                tenant: of,
+                name,
+                version,
+            } if of == tenant => {
+                let labels_seen = match self.app.catalog().get_workflow(&tenant, version).await {
+                    Ok(Some(stored)) => caller
+                        .labels
+                        .iter()
+                        .all(|(key, value)| stored.workflow.labels().get(key) == Some(value)),
+                    _ => false,
+                };
+                labels_seen.then(|| {
+                    ChangeEvent::Workflow(WorkflowChanged {
+                        name,
+                        version: version.to_hex(),
+                    })
+                })
+            }
+            ControlPlaneChange::Secret { tenant: of, secret } if of == tenant => {
+                let seen = match &secret.namespace {
+                    SecretNamespace::Namespace(namespace) => caller.reaches(namespace),
+                    SecretNamespace::Organization if caller.labels.is_empty() => true,
+                    SecretNamespace::Organization => {
+                        match self
+                            .app
+                            .store
+                            .meta(&tenant, &secret, Day::of(self.app.now()))
+                            .await
+                        {
+                            Ok(Some(meta)) => caller.sees(&meta.labels),
+                            // Deleted: what it carried is gone with it.
+                            Ok(None) => false,
+                            Err(_) => false,
+                        }
+                    }
+                };
+                seen.then(|| {
+                    ChangeEvent::Secret(SecretChanged {
+                        name: secret.name.to_string(),
+                        namespace: match &secret.namespace {
+                            SecretNamespace::Namespace(namespace) => {
+                                Some(crate::views::namespace(namespace))
+                            }
+                            SecretNamespace::Organization => None,
+                        },
+                    })
+                })
+            }
+            ControlPlaneChange::Namespace { tenant: of, name } if of == tenant => {
+                caller.reaches(&name).then(|| {
+                    ChangeEvent::Namespace(NamespaceChanged {
+                        name: Some(crate::views::namespace(&name)),
+                    })
+                })
+            }
+            ControlPlaneChange::Tenant { tenant: of } if of == tenant => {
+                Some(ChangeEvent::Namespace(NamespaceChanged { name: None }))
+            }
+            ControlPlaneChange::Connection { id }
+                if caller.require(Permission::MembersRead).is_ok() =>
+            {
+                Some(ChangeEvent::Connection(ConnectionChanged { id }))
+            }
+            _ => None,
+        };
+        if let Some(event) = event {
+            self.pending.push_back(sse(&event));
         }
     }
 }
 
-fn resync() -> Event {
-    let event = ChangeEvent::Resync(Resync {});
-    let data = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_owned());
+fn sse(event: &ChangeEvent) -> Event {
+    let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_owned());
     Event::default().event(event.sse_event()).data(data)
+}
+
+fn resync() -> Event {
+    sse(&ChangeEvent::Resync(Resync {}))
 }

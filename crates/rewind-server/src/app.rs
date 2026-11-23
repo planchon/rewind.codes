@@ -1,60 +1,86 @@
-//! The state every request and every loop shares: the engine wired with this server's
-//! adapters, and what the HTTP API needs beside it.
+//! What every request shares: the node of this process and its plane, the edge's use cases, the
+//! control plane, and what the HTTP API needs beside them.
+//!
+//! ```text
+//!  request ─► App ─► Edge (checks) ─► NodeHandle (gateway) ─► owner of the run's partition
+//!                │                                             here, or through the node link
+//!                ├─► follow(key) ◄── Changed from the owners, once their batches are durable
+//!                └─► control()   ◄── ControlPlaneChange from Membership::changes
+//! ```
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rewind_api::admin::ServerRole;
-use rewind_core::{Digest, Timestamp, Toolset};
-use rewind_engine::Engine;
+use rewind_core::{Digest, RunId, Timestamp, Toolset};
 use rewind_engine::adapters::SystemEntropy;
-use rewind_engine::handles::find_run;
+use rewind_engine::edge::{Edge, EdgeError};
+use rewind_engine::node::runtime::NodeHandle;
+use rewind_engine::plane::{NodeConfig, Plane, Wiring};
+use rewind_engine::ports::link::{RunView, SubscriptionKey};
 use rewind_engine::ports::{
-    Clock, JournalStore, ReadModel, Retention, RunRecord, RunRef, StoredToolset, TaskProgress,
-    Tenant, TenantId, ToolDeclarations, ToolTask,
+    CatalogStore, Clock, ControlPlaneChange, PartitionMap, Quotas, Retention, RunRef,
+    StoredToolset, Tenant, TenantId, ToolDeclarations,
 };
-use rewind_engine::projector::{Projector, ProjectorConfig};
-use rewind_engine::retention::Housekeeper;
-use rewind_runtime::V8Executor;
+use rewind_store_slatedb::SlatePartitions;
 use rewind_workos::CookieSeal;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use crate::auth::Caller;
-use crate::changes::Changes;
-use crate::deliveries::{Background, Deliveries};
 use crate::error::ApiError;
+use crate::follow;
+use crate::idle::Idle;
 use crate::oauth::OAuthServer;
 use crate::titles::{ScriptTexts, Title};
 use crate::views::Views;
-use crate::wake::{Activity, POLL, Wake, wait};
-use crate::wiring::blobs::Blobs;
+use crate::wiring::bucket::{Archive, Blobs};
 use crate::wiring::checker::Checker;
 use crate::wiring::clock::ServerClock;
+use crate::wiring::control::{Catalog, ControlPlane, SharedMembership};
+use crate::wiring::executor::Executor;
 use crate::wiring::identity::Identity;
-use crate::wiring::store::Store;
+use crate::wiring::link::ServerLink;
 use crate::wiring::telemetry::Exporter;
 use crate::wiring::tools::{Dispatcher, Tools};
-use crate::wiring::webhooks::{ServerRender, WebhookEgress};
+use crate::wiring::webhooks::{HttpWebhooks, ServerRender, WebhookEgress};
 
-/// The engine's sender of lifecycle webhooks: in the background.
-pub(crate) type Webhooks = Background<ServerRender>;
+/// The sender of lifecycle webhooks: one attempt per delivery, the next a timer of the owner.
+pub(crate) type Webhooks = HttpWebhooks<ServerRender>;
 
-/// The engine of this server.
-pub(crate) type ServerEngine =
-    Engine<Store, Blobs, V8Executor, Dispatcher, ServerClock, SystemEntropy, Store, Webhooks>;
+/// The ports of this node.
+pub(crate) type ServerPlane = Wiring<
+    Catalog,
+    SlatePartitions,
+    Archive,
+    Blobs,
+    Executor,
+    Dispatcher,
+    ControlPlane,
+    Exporter,
+    Webhooks,
+    ServerClock,
+    SystemEntropy,
+>;
 
-/// The longest `wait` of a request: a client waits longer with several requests.
-pub(crate) const MAX_WAIT: Duration = Duration::from_secs(300);
+/// The node of this process, and the gateway of its edge.
+pub(crate) type Node = NodeHandle<ServerPlane>;
+
+/// What the change stream of the control plane carries inside the process.
+#[derive(Debug, Clone)]
+pub(crate) enum Control {
+    Change(ControlPlaneChange),
+    /// The listener lost changes: whoever cached something drops it, and the change streams
+    /// send `resync`.
+    Lost,
+}
 
 /// What does not change while the server runs.
 #[derive(Debug, Clone)]
 pub(crate) struct Settings {
     pub(crate) version: &'static str,
     pub(crate) embedded: bool,
-    pub(crate) roles: Vec<ServerRole>,
     /// The ceiling of the tenants this server creates.
-    pub(crate) ceiling: rewind_engine::ports::Quotas,
+    pub(crate) ceiling: Quotas,
     /// The retention of the tenants this server creates.
     pub(crate) retention: Retention,
     pub(crate) allow_stdio: bool,
@@ -62,34 +88,28 @@ pub(crate) struct Settings {
     pub(crate) public_url: Option<String>,
     /// Where lifecycle webhooks may go.
     pub(crate) webhook_egress: WebhookEgress,
-    pub(crate) projector: ProjectorConfig,
-    /// The most runs a pass of the change stream's loop reads (`changes`).
-    pub(crate) changes_per_pass: usize,
-}
-
-impl Settings {
-    pub(crate) fn worker(&self) -> bool {
-        self.roles.contains(&ServerRole::Worker)
-    }
 }
 
 pub(crate) struct App {
-    pub(crate) engine: ServerEngine,
-    pub(crate) store: Store,
-    pub(crate) blobs: Blobs,
+    pub(crate) plane: Arc<ServerPlane>,
+    pub(crate) edge: Edge<ServerPlane>,
+    pub(crate) node: Node,
+    pub(crate) config: NodeConfig,
+    /// Access and secrets.
+    pub(crate) store: ControlPlane,
+    pub(crate) membership: SharedMembership,
+    pub(crate) link: Arc<ServerLink>,
+    /// The partition map, as the last change of the control plane gave it.
+    pub(crate) map: watch::Receiver<PartitionMap>,
+    /// The changes of the control plane, to every stream and cache of the process.
+    pub(crate) control: broadcast::Sender<Control>,
     pub(crate) checker: Checker,
     pub(crate) tools: Tools,
-    pub(crate) exporter: Exporter,
-    /// Every delivery of lifecycle webhooks: those of the feed, and the engine's.
-    pub(crate) deliveries: Arc<Deliveries<ServerRender>>,
     pub(crate) settings: Settings,
-    pub(crate) wake: Wake,
-    pub(crate) activity: Activity,
-    /// The change streams' loop (`GET /v1/changes`).
-    pub(crate) changes: Changes,
+    pub(crate) idle: Idle,
     /// Set to stop the server.
     pub(crate) stop: watch::Sender<bool>,
-    /// The dashboard's sign-in: `None` without WorkOS, and on a worker alone.
+    /// The dashboard's sign-in: `None` without WorkOS.
     pub(crate) sign_in: Option<SignIn>,
     /// The OAuth authorization server of people's connections: with a public URL and a
     /// sign-in only.
@@ -113,44 +133,69 @@ pub(crate) struct SignIn {
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
+            .field("node", self.node.node())
             .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
 
+/// What [`App::new`] takes.
+pub(crate) struct Parts {
+    pub(crate) plane: Arc<ServerPlane>,
+    pub(crate) node: Node,
+    pub(crate) config: NodeConfig,
+    pub(crate) store: ControlPlane,
+    pub(crate) membership: SharedMembership,
+    pub(crate) link: Arc<ServerLink>,
+    pub(crate) map: watch::Receiver<PartitionMap>,
+    pub(crate) control: broadcast::Sender<Control>,
+    pub(crate) checker: Checker,
+    pub(crate) tools: Tools,
+    pub(crate) settings: Settings,
+    pub(crate) idle: Idle,
+    pub(crate) sign_in: Option<SignIn>,
+    pub(crate) oauth: Option<OAuthServer>,
+}
+
 impl App {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        engine: ServerEngine,
-        store: Store,
-        blobs: Blobs,
-        checker: Checker,
-        tools: Tools,
-        exporter: Exporter,
-        deliveries: Arc<Deliveries<ServerRender>>,
-        texts: Arc<ScriptTexts>,
-        settings: Settings,
-        sign_in: Option<SignIn>,
-        oauth: Option<OAuthServer>,
-    ) -> Self {
+    pub(crate) fn new(parts: Parts) -> Self {
         Self {
-            engine,
-            store,
-            blobs,
-            checker,
-            tools,
-            exporter,
-            deliveries,
-            changes: Changes::new(settings.changes_per_pass),
-            settings,
-            wake: Wake::new(),
-            activity: Activity::new(),
+            edge: Edge::new(Arc::clone(&parts.plane), parts.config.clone()),
+            plane: parts.plane,
+            node: parts.node,
+            config: parts.config,
+            store: parts.store,
+            membership: parts.membership,
+            link: parts.link,
+            map: parts.map,
+            control: parts.control,
+            checker: parts.checker,
+            tools: parts.tools,
+            settings: parts.settings,
+            idle: parts.idle,
             stop: watch::Sender::new(false),
-            sign_in,
-            oauth,
-            texts,
+            sign_in: parts.sign_in,
+            oauth: parts.oauth,
+            headlines: Mutex::new(HashMap::new()),
             tenants: Mutex::new(HashSet::new()),
         }
+    }
+
+    pub(crate) fn catalog(&self) -> &Catalog {
+        self.plane.catalog()
+    }
+
+    pub(crate) fn blobs(&self) -> &Blobs {
+        self.plane.blobs()
+    }
+
+    pub(crate) fn clock(&self) -> &ServerClock {
+        self.plane.clock()
+    }
+
+    /// The way of a request to the owner of a partition: this node's router.
+    pub(crate) fn gateway(&self) -> Node {
+        self.node.clone()
     }
 
     /// The sign-in, or 404 on a server without WorkOS: organizations, members and invitations
@@ -184,12 +229,13 @@ impl App {
         if self.tenants.lock().is_ok_and(|tenants| known(&tenants)) {
             return Ok(());
         }
-        if self.store.get_tenant(tenant).await?.is_none() {
-            self.store
+        let catalog = self.catalog();
+        if catalog.get_tenant(tenant).await?.is_none() {
+            catalog
                 .put_tenant(&Tenant {
                     id: tenant.clone(),
                     quotas: self.settings.ceiling.clone(),
-                    namespace_defaults: rewind_engine::ports::Quotas::default(),
+                    namespace_defaults: Quotas::default(),
                     retention: self.settings.retention,
                 })
                 .await?;
@@ -204,35 +250,11 @@ impl App {
     }
 
     pub(crate) fn views(&self) -> Views<'_> {
-        Views {
-            store: &self.store,
-            blobs: &self.blobs,
-            texts: &self.texts,
-        }
+        Views { app: self }
     }
 
     pub(crate) fn now(&self) -> Timestamp {
-        self.engine.clock().now()
-    }
-
-    pub(crate) fn projector(&self) -> Projector<'_, Store, Store, Exporter, Webhooks> {
-        Projector {
-            journal: &self.store,
-            read_model: &self.store,
-            exporter: &self.exporter,
-            webhooks: self.engine.webhooks(),
-            config: self.settings.projector.clone(),
-        }
-    }
-
-    pub(crate) fn housekeeper(&self) -> Housekeeper<'_, Store, Blobs, Store, Store> {
-        Housekeeper {
-            journal: &self.store,
-            blobs: &self.blobs,
-            read_model: &self.store,
-            secrets: &self.store,
-            batch: 100,
-        }
+        self.clock().now()
     }
 
     /// Whether the server is stopping.
@@ -240,37 +262,63 @@ impl App {
         *self.stop.borrow()
     }
 
-    /// A run the caller sees, named by its id or its handle: of its tenant, with its allowed
-    /// labels, in the namespace its request is bound to, if any. Any other is answered as
-    /// missing, by what the caller asked for.
-    pub(crate) async fn run(&self, caller: &Caller, id: &str) -> Result<RunRecord, ApiError> {
-        match find_run(&self.store, &caller.tenant, id).await? {
-            Some(record) if caller.sees_run(&record) => Ok(record),
+    /// The changes of the control plane from now on.
+    pub(crate) fn control(&self) -> broadcast::Receiver<Control> {
+        self.control.subscribe()
+    }
+
+    /// A run as its owner knows it, `None` when it does not exist.
+    pub(crate) async fn read_run(&self, run: &RunRef) -> Result<Option<RunView>, ApiError> {
+        match self.edge.get_run(&mut self.gateway(), run).await {
+            Ok(view) => Ok(view),
+            Err(EdgeError::Refused(rewind_engine::ports::link::Refusal::RunNotFound(_))) => {
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// A run the caller sees: of its tenant, with its allowed labels, in the namespace its
+    /// request is bound to, if any. Any other is answered as missing.
+    pub(crate) async fn run(&self, caller: &Caller, id: &str) -> Result<RunView, ApiError> {
+        let run_id: RunId = id.parse().map_err(|_| ApiError::run_not_found(id))?;
+        let run = RunRef::new(caller.tenant.clone(), run_id);
+        match self.read_run(&run).await? {
+            Some(view) if caller.sees_run(&view.head) => Ok(view),
             _ => Err(ApiError::run_not_found(id)),
         }
     }
 
-    /// The run, once it has ended or `wait` has passed.
+    /// The run, once it has ended, is quarantined, or `wait` has passed: one request held, woken
+    /// by the run's changes as its owner pushes them.
     pub(crate) async fn wait_for_end(
-        &self,
+        self: &Arc<Self>,
         run: &RunRef,
-        wait_for: Option<Duration>,
-    ) -> Result<RunRecord, ApiError> {
-        let mut changes = self.wake.subscribe();
-        let deadline = wait_for.map(|wait| tokio::time::Instant::now() + wait.min(MAX_WAIT));
+        wait: Option<Duration>,
+    ) -> Result<RunView, ApiError> {
+        let missing = || ApiError::run_not_found(&run.id.to_string());
+        let Some(wait) = wait else {
+            return self.read_run(run).await?.ok_or_else(missing);
+        };
+        let _busy = self.idle.busy();
+        let deadline = tokio::time::Instant::now() + wait;
+        let mut changes = follow::follow(self, SubscriptionKey::Run(run.clone()));
+        let mut stop = self.stop.subscribe();
         loop {
-            let record = self
-                .store
-                .get_run(run)
-                .await?
-                .ok_or_else(|| ApiError::run_not_found(&run.id.to_string()))?;
-            let done = record.status.is_terminal()
-                || deadline.is_none_or(|deadline| tokio::time::Instant::now() >= deadline)
-                || self.stopping();
-            if done {
-                return Ok(record);
+            let view = self.read_run(run).await?.ok_or_else(missing)?;
+            let settled = view.head.is_ended() || view.head.quarantine.is_some();
+            if settled || tokio::time::Instant::now() >= deadline || self.stopping() {
+                return Ok(view);
             }
-            wait(&mut changes, POLL, deadline).await;
+            tokio::select! {
+                change = changes.recv() => {
+                    if change.is_none() {
+                        return Ok(view);
+                    }
+                }
+                () = tokio::time::sleep_until(deadline) => {}
+                _ = stop.changed() => {}
+            }
         }
     }
 
@@ -280,7 +328,8 @@ impl App {
         tenant: &TenantId,
     ) -> Result<StoredToolset, ApiError> {
         let toolset = Toolset::new([], [self.tools.webhook_tool()]).map_err(ApiError::internal)?;
-        if let Some(stored) = self.store.get_toolset(tenant, toolset.digest()).await? {
+        let catalog = self.catalog();
+        if let Some(stored) = catalog.get_toolset(tenant, toolset.digest()).await? {
             return Ok(stored);
         }
         let generated = self
@@ -290,9 +339,7 @@ impl App {
             typescript: generated.typescript,
             prompt: generated.prompt,
         };
-        self.store
-            .put_toolset(tenant, &toolset, &declarations)
-            .await?;
+        catalog.put_toolset(tenant, &toolset, &declarations).await?;
         Ok(StoredToolset {
             toolset,
             declarations,
@@ -301,57 +348,25 @@ impl App {
 
     /// The first non-blank line of a script.
     pub(crate) async fn headline(&self, tenant: &TenantId, digest: Digest) -> String {
-        self.texts
-            .text(&self.store, tenant, digest)
-            .await
-            .map(|text| text.headline.clone())
-            .unwrap_or_default()
-    }
-
-    /// The titles of these scripts of the tenant, for those that have one.
-    pub(crate) async fn titles(
-        &self,
-        tenant: &TenantId,
-        scripts: impl IntoIterator<Item = Digest>,
-    ) -> Result<BTreeMap<Digest, Title>, ApiError> {
-        Ok(self.texts.titles(&self.store, tenant, scripts).await?)
-    }
-
-    /// Records the state of a task the caller holds in the read model: a claim, a deferral.
-    pub(crate) async fn record_task(&self, task: &ToolTask) {
-        self.record_progress(
-            &task.task.run,
-            rewind_engine::projector::task_progress(task),
-        )
-        .await;
-    }
-
-    /// Records a task's state in the read model.
-    pub(crate) async fn record_progress(&self, run: &RunRef, progress: TaskProgress) {
-        match self.store.record_tasks(run, &[progress]).await {
-            Ok(()) => self.changes.poke(),
-            Err(error) => {
-                tracing::warn!(run = %run, seq = progress.seq.0, %error, "the task's state was not recorded");
+        let key = (tenant.clone(), digest);
+        if let Some(headline) = self
+            .headlines
+            .lock()
+            .ok()
+            .and_then(|headlines| headlines.get(&key).cloned())
+        {
+            return headline;
+        }
+        let headline = match self.catalog().get_script(tenant, digest).await {
+            Ok(Some(stored)) => rewind_api::scripts::headline(stored.script.source()),
+            _ => return String::new(),
+        };
+        if let Ok(mut headlines) = self.headlines.lock() {
+            if headlines.len() > 10_000 {
+                headlines.clear();
             }
+            headlines.insert(key, headline.clone());
         }
-    }
-
-    /// Records the states of a run's open tasks, as the store holds them now, after a change
-    /// the caller does not see the result of: an approval, a rejection, a call that may have
-    /// been parked, the secret it reads put again.
-    pub(crate) async fn record_tasks(&self, run: &RunRef) {
-        match self.projector().record_tasks(run).await {
-            Ok(_) => self.changes.poke(),
-            Err(error) => tracing::warn!(run = %run, %error, "the tasks' states were not recorded"),
-        }
-    }
-
-    /// Records a run's quarantine, as the store holds it now, after a quarantine, a release or
-    /// a give-up.
-    pub(crate) async fn record_quarantine(&self, run: &RunRef) {
-        match self.projector().record_quarantine(run, self.now()).await {
-            Ok(_) => self.changes.poke(),
-            Err(error) => tracing::warn!(run = %run, %error, "the quarantine was not recorded"),
-        }
+        headline
     }
 }

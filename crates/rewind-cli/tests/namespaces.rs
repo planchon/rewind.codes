@@ -12,7 +12,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use rewind_api::admin::{ServerInfo, ServerRole};
+use rewind_api::admin::ServerInfo;
 use rewind_api::common::Timestamp;
 use rewind_api::namespaces::{
     Namespace, NamespaceDefaults, NamespaceDetail, NamespaceList, NamespacePatch, PutNamespace,
@@ -278,7 +278,9 @@ impl Embedded {
                     axum::Json(ServerInfo {
                         version: rewind_cli::embedded::VERSION.into(),
                         epochs: vec![1],
-                        roles: vec![ServerRole::Api, ServerRole::Worker],
+                        node: "test".into(),
+                        partitions: 1,
+                        nodes: 1,
                         embedded: true,
                         virtual_time: false,
                         mcp_url: None,

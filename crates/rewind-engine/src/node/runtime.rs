@@ -14,11 +14,16 @@
 //! The actors' state lives in the node's task: they handle a message each in turn, and what
 //! they ask for runs concurrently (commits of different partitions, activations, calls, reads).
 //! The task waits on its channel and on the earliest timer of its wheels, nothing else.
+//!
+//! In virtual time ([`spawn_in_virtual_time`]), the task does not sleep until a timer: once
+//! nothing is queued and nothing it asked for is in flight, it moves the clock to the next timer
+//! that wakes a run by itself (or an earlier run deadline), as the driver does, and fires it.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use futures_util::{Stream, StreamExt as _};
@@ -36,7 +41,7 @@ use crate::ports::link::{
     ActivationRequest, ActivationResult, Changed, NodeReply, NodeRequest, PartitionReply,
     PartitionRequest, StreamAttach, StreamEvent, StreamId, SubscriptionKey,
 };
-use crate::ports::{Clock, ClusterError, LinkError, NodeId, NodeLink, TenantId};
+use crate::ports::{Clock, ClusterError, LinkError, NodeId, NodeLink, TenantId, VirtualTime};
 use crate::tasks::Backoff;
 
 /// What reaches a node's task.
@@ -203,6 +208,38 @@ where
     M: Membership + 'static,
     L: NodeLink + 'static,
 {
+    start(plane, config, membership, link, None)
+}
+
+/// [`spawn`], in virtual time: `clock` is the plane's clock, which the node moves to its next
+/// timer whenever nothing else is left to do (the embedded server's `--virtual-time`).
+pub fn spawn_in_virtual_time<P, M, L>(
+    plane: Arc<P>,
+    config: NodeConfig,
+    membership: M,
+    link: Arc<L>,
+    clock: Arc<dyn VirtualTime>,
+) -> NodeHandle<P>
+where
+    P: Plane,
+    M: Membership + 'static,
+    L: NodeLink + 'static,
+{
+    start(plane, config, membership, link, Some(clock))
+}
+
+fn start<P, M, L>(
+    plane: Arc<P>,
+    config: NodeConfig,
+    membership: M,
+    link: Arc<L>,
+    virtual_time: Option<Arc<dyn VirtualTime>>,
+) -> NodeHandle<P>
+where
+    P: Plane,
+    M: Membership + 'static,
+    L: NodeLink + 'static,
+{
     let (inputs, receiver) = unbounded_channel();
     let membership = Arc::new(membership);
     let id = config.node.clone();
@@ -221,6 +258,8 @@ where
         activations: BTreeMap::new(),
         wakes: BTreeMap::new(),
         next_id: 1,
+        in_flight: Arc::new(AtomicUsize::new(0)),
+        virtual_time,
     };
     tokio::spawn(task.run());
     NodeHandle { inputs, node: id }
@@ -318,8 +357,29 @@ struct Task<P: Plane, M: Membership + 'static, L: NodeLink> {
     routes: BTreeMap<u64, oneshot::Sender<Result<NodeReply, EdgeError>>>,
     links: BTreeMap<u64, oneshot::Sender<NodeReply>>,
     activations: BTreeMap<u64, oneshot::Sender<ActivationResult>>,
-    wakes: BTreeMap<(Timestamp, u64), Message<P>>,
+    /// The wakes, with whether each wakes something by itself.
+    wakes: BTreeMap<(Timestamp, u64), (Message<P>, bool)>,
     next_id: u64,
+    /// The work this task spawned whose answer has not reached its channel yet.
+    in_flight: Arc<AtomicUsize>,
+    /// The clock the task moves, in virtual time.
+    virtual_time: Option<Arc<dyn VirtualTime>>,
+}
+
+/// One piece of work in flight, counted until its answer is in the task's channel.
+struct Flight(Arc<AtomicUsize>);
+
+impl Flight {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(count))
+    }
+}
+
+impl Drop for Flight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
@@ -328,6 +388,37 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
         self.carry(effects);
         loop {
             self.drain_local();
+            if let Some(clock) = self.virtual_time.clone() {
+                let input = match self.receiver.try_recv() {
+                    Ok(input) => Some(input),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                        let now = self.plane.clock().now();
+                        let quiet = self.in_flight.load(Ordering::SeqCst) == 0;
+                        if let Some(at) = self.next_timer().filter(|at| *at <= now) {
+                            self.fire(at);
+                            continue;
+                        }
+                        match self.next_jump().filter(|_| quiet) {
+                            Some(at) => {
+                                clock.advance_to(at);
+                                self.fire(at);
+                                continue;
+                            }
+                            // Something in flight answers through the channel; else only the
+                            // outside world wakes a run.
+                            None => self.receiver.recv().await,
+                        }
+                    }
+                };
+                let Some(input) = input else {
+                    return;
+                };
+                if self.input(input) {
+                    return;
+                }
+                continue;
+            }
             let next = self.next_timer();
             let input = match next {
                 Some(at) => {
@@ -350,6 +441,22 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
         }
     }
 
+    /// Where virtual time goes next: the earliest timer or wake that wakes something by itself,
+    /// or an earlier run deadline, if later than now.
+    fn next_jump(&self) -> Option<Timestamp> {
+        let now = self.plane.clock().now();
+        let (waking, deadline) = self.node.wake_ups();
+        let alone = self
+            .wakes
+            .iter()
+            .filter(|(_, (_, alone))| *alone)
+            .map(|((at, _), _)| *at)
+            .min();
+        let next = [waking, alone].into_iter().flatten().min()?;
+        let next = deadline.map_or(next, |deadline| deadline.min(next));
+        (next > now).then_some(next)
+    }
+
     /// The earliest of the wheels' timers and horizons, and of the wakes.
     fn next_timer(&self) -> Option<Timestamp> {
         let timers = self.node.next_timer().map(|(at, _)| at);
@@ -369,7 +476,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
             .map(|(key, _)| *key)
             .collect();
         for key in due {
-            if let Some(message) = self.wakes.remove(&key) {
+            if let Some((message, _)) = self.wakes.remove(&key) {
                 self.local.push_back(message);
             }
         }
@@ -436,12 +543,14 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
             }
             Some(owner) => {
                 let link = Arc::clone(&self.link);
+                let flight = Flight::new(&self.in_flight);
                 tokio::spawn(async move {
                     let answer = link
                         .call(&owner, request)
                         .await
                         .map_err(|error| EdgeError::Unavailable(error.to_string()));
                     let _ = reply.send(answer);
+                    drop(flight);
                 });
             }
             None => {
@@ -477,6 +586,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                 } => {
                     let link = Arc::clone(&self.link);
                     let inputs = self.inputs.clone();
+                    let flight = Flight::new(&self.in_flight);
                     tokio::spawn(async move {
                         let answer = link.call(&node, request).await;
                         if let Some(asker) = asker {
@@ -484,6 +594,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                         } else if let Err(error) = answer {
                             tracing::warn!(%node, %error, "a notice was lost on the link");
                         }
+                        drop(flight);
                     });
                 }
                 Effect::Reply(to, reply) => match to {
@@ -504,14 +615,16 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                 },
                 Effect::Job(_, job) => {
                     let inputs = self.inputs.clone();
+                    let flight = Flight::new(&self.in_flight);
                     tokio::spawn(async move {
                         let message = job.await;
                         let _ = inputs.send(Input::Message(message));
+                        drop(flight);
                     });
                 }
-                Effect::Wake { at, message, .. } => {
+                Effect::Wake { at, message, alone } => {
                     let id = self.id();
-                    self.wakes.insert((at, id), message);
+                    self.wakes.insert((at, id), (message, alone));
                 }
                 Effect::Activate {
                     node,
@@ -521,6 +634,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                     let link = Arc::clone(&self.link);
                     let inputs = self.inputs.clone();
                     let run = request.head.run.id;
+                    let flight = Flight::new(&self.in_flight);
                     tokio::spawn(async move {
                         let result = link
                             .activate(&node, *request)
@@ -536,6 +650,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                             },
                         );
                         let _ = inputs.send(Input::Message(message));
+                        drop(flight);
                     });
                 }
                 Effect::ActivationReply(to, result) => {

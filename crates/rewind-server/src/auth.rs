@@ -58,8 +58,8 @@ use rewind_api::namespaces::{SignedTokenClaims, TOKEN_AUDIENCE, TOKEN_MAX_TTL};
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::{
-    AccessStore, Clock, IdentityError, IdentityProvider, JournalStore, NamespaceName,
-    NamespaceWrite, OrganizationId, Principal, RunRecord, SessionId, StoreError, TenantId, UserId,
+    AccessStore, CatalogStore, Clock, IdentityError, IdentityProvider, NamespaceName,
+    NamespaceWrite, OrganizationId, Principal, RunHead, SessionId, StoreError, TenantId, UserId,
 };
 
 use crate::app::App;
@@ -295,8 +295,8 @@ impl Caller {
 
     /// Whether the caller sees the run: it carries the caller's labels, and it is in the
     /// namespace the request is bound to, if any.
-    pub(crate) fn sees_run(&self, record: &RunRecord) -> bool {
-        self.sees(&record.metadata.labels) && self.reaches(&record.namespace)
+    pub(crate) fn sees_run(&self, head: &RunHead) -> bool {
+        self.sees(&head.metadata.labels) && self.reaches(&head.namespace)
     }
 
     /// Whether the request reaches `namespace`: any, unless it is bound to one.
@@ -866,7 +866,7 @@ async fn signed_token(
         Some(namespace) => namespace,
         None => match app
             .store
-            .put_namespace(&key.tenant, &name, None, app.now())
+            .put_namespace(&key.tenant, &name, None, app.config.partitions, app.now())
             .await?
         {
             NamespaceWrite::Written(namespace) => namespace,

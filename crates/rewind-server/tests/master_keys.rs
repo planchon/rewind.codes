@@ -24,19 +24,19 @@ const OLD: [u8; 32] = [1; 32];
 const NEW: [u8; 32] = [2; 32];
 
 fn server(dir: &Path, keys: &[&str]) -> ServerArgs {
-    let store = format!("turso:{}", dir.join("journal.db").display());
+    let store = format!("turso:{}", dir.join("control.db").display());
     let blobs = dir.join("blobs").display().to_string();
     let mut args = vec![
         "rewind server",
         "--store",
         &store,
-        "--blobs",
+        "--bucket",
         &blobs,
         "--listen",
         "127.0.0.1:0",
-        "--activations",
+        "--executors",
         "1",
-        "--dispatches",
+        "--calls",
         "1",
     ];
     args.extend_from_slice(keys);
@@ -48,7 +48,7 @@ fn github() -> SecretId {
 }
 
 async fn read_with(dir: &Path, key: [u8; 32]) -> Option<Secret> {
-    let store = TursoStore::open(dir.join("journal.db"), MasterKey::from_bytes(key))
+    let store = TursoStore::open(dir.join("control.db"), MasterKey::from_bytes(key))
         .await
         .unwrap();
     let reader = SecretReader::Run {
@@ -67,7 +67,7 @@ async fn the_master_key_is_replaced_and_a_key_left_out_refuses_the_start() {
     let (old, new) = (BASE64.encode(OLD), BASE64.encode(NEW));
     {
         // A secret put under the old key.
-        let store = TursoStore::open(dir.path().join("journal.db"), MasterKey::from_bytes(OLD))
+        let store = TursoStore::open(dir.path().join("control.db"), MasterKey::from_bytes(OLD))
             .await
             .unwrap();
         let secret = NewSecret {

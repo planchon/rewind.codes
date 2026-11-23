@@ -198,7 +198,7 @@ fn suite_error(error: SuiteLoadError) -> ApiError {
 fn test_error(error: TestError) -> ApiError {
     match error {
         TestError::Start(error) => start_error(error),
-        TestError::Engine(error) => engine_error(error),
+        TestError::Unavailable(message) => fault(EngineError::Store(StoreError::Backend(message))),
         TestError::Mocks(message) => fault(EngineError::Store(StoreError::Backend(message))),
     }
 }

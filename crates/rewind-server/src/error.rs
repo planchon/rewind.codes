@@ -5,11 +5,12 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rewind_api::scripts::{Diagnostic, Location, Severity};
 use rewind_api::{Problem, ProblemType};
+use rewind_engine::edge::EdgeError;
+use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    BlobError, CheckerError, DiagnosticSource, IdentityError, InvalidScript, ReadModelError,
-    SecretError, StoreError,
+    ArchiveError, BlobError, CatalogError, CheckerError, DiagnosticSource, IdentityError,
+    InvalidScript, SecretError, StoreError,
 };
-use rewind_engine::retention::RetentionError;
 use rewind_engine::{EngineError, ForkError, NulCharacter, StartError};
 
 /// An error answered by the API.
@@ -210,9 +211,69 @@ impl From<NulCharacter> for ApiError {
     }
 }
 
-impl From<ReadModelError> for ApiError {
-    fn from(error: ReadModelError) -> Self {
+impl From<CatalogError> for ApiError {
+    fn from(error: CatalogError) -> Self {
+        match error {
+            CatalogError::Unavailable(message) | CatalogError::Backend(message) => {
+                tracing::error!(%message, "control plane error");
+                Self::unavailable(format!(
+                    "the control plane cannot be reached ({message}): retry later"
+                ))
+            }
+            CatalogError::Conflict(message) => Self::internal(message),
+        }
+    }
+}
+
+impl From<ArchiveError> for ApiError {
+    fn from(error: ArchiveError) -> Self {
         Self::internal(error)
+    }
+}
+
+/// What the owner of a run refused, as the routes answer it (`archi/07-code-architecture.md`,
+/// "HTTP API `/v1`").
+impl From<Refusal> for ApiError {
+    fn from(refusal: Refusal) -> Self {
+        match refusal {
+            Refusal::RunNotFound(run) => Self::run_not_found(&run.to_string()),
+            Refusal::RunEnded(run) => Self::new(
+                ProblemType::RunEnded,
+                format!("run {run} has ended: nothing can be sent to it any more"),
+            ),
+            Refusal::Signal(message) => Self::new(ProblemType::InvalidSignal, message),
+            Refusal::Quota(exceeded) => Self::quota_exceeded(&exceeded),
+            Refusal::NamespaceDeleting => Self::new(
+                ProblemType::NamespaceDeleting,
+                "this namespace is being erased: it takes no run",
+            ),
+            Refusal::TaskGone => Self::new(ProblemType::TaskGone, refusal.to_string()),
+            Refusal::TaskNotWaiting { .. } => {
+                Self::new(ProblemType::TaskNotWaiting, refusal.to_string())
+            }
+            Refusal::ResultTooLarge { .. } => Self::new(
+                ProblemType::PayloadTooLarge,
+                format!("{refusal}: fail the task instead, or return less"),
+            ),
+            Refusal::ParentNotStarted(_) => Self::invalid(refusal.to_string()),
+            Refusal::Unavailable(message) => {
+                tracing::warn!(%message, "an owner could not answer");
+                Self::unavailable(format!("{message}: retry"))
+            }
+        }
+    }
+}
+
+impl From<EdgeError> for ApiError {
+    fn from(error: EdgeError) -> Self {
+        match error {
+            EdgeError::Refused(refusal) => refusal.into(),
+            EdgeError::NulCharacter(error) => error.into(),
+            EdgeError::Unavailable(message) => {
+                tracing::warn!(%message, "the run plane could not answer");
+                Self::unavailable(format!("{message}: retry"))
+            }
+        }
     }
 }
 
@@ -224,12 +285,6 @@ impl From<BlobError> for ApiError {
 
 impl From<SecretError> for ApiError {
     fn from(error: SecretError) -> Self {
-        Self::internal(error)
-    }
-}
-
-impl From<RetentionError> for ApiError {
-    fn from(error: RetentionError) -> Self {
         Self::internal(error)
     }
 }

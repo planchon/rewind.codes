@@ -15,7 +15,7 @@ use rewind_api::webhooks::{
 };
 use rewind_core::RunId;
 use rewind_engine::adapters::SystemEntropy;
-use rewind_engine::ports::{Entropy, JournalStore, Secret, Subscription};
+use rewind_engine::ports::{CatalogStore, Entropy, Secret, Subscription};
 use rewind_engine::text::{refuse_nul, refuse_nul_in_labels};
 
 use crate::app::App;

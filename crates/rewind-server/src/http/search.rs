@@ -1,7 +1,7 @@
 //! Searching runs (`archi/05-testing-and-observability.md`, "Query language"): the query of
-//! `q` and the filters of `GET /v1/runs`, turned into the read model's typed query within the
-//! caller's tenant and, for a key limited to labels, its labels; and the read model's answers
-//! turned into the API's.
+//! `q` and the filters of `GET /v1/runs`, turned into the typed query the partitions evaluate on
+//! their summaries, within the caller's tenant and, for a key limited to labels, its labels; and
+//! the summaries turned into the API's.
 
 use std::collections::BTreeSet;
 use std::ops::Bound;
@@ -9,13 +9,10 @@ use std::ops::Bound;
 use rewind_api::Problem;
 use rewind_api::common::{Callsite, Labels, timestamp};
 use rewind_api::query::{self, Comparison, Filter, Pattern, TimeValue, WaitKind};
-use rewind_api::runs::{
-    DurationStats, FacetValue, Facets, FailureGroup, FailureSample, LabelFacet, RunFilter, RunSort,
-    RunWait, SeriesBucket, StatusCounts, WaitCounts,
-};
-use rewind_core::{Digest, RunId, RunMode, RunStatus, ToolFailureKind};
+use rewind_api::runs::{DurationStats, RunFilter, RunSort, RunWait, WaitCounts};
+use rewind_core::{Digest, RunId, RunMode, ToolFailureKind};
 use rewind_engine::ports::{
-    self, Predicate, Range, RunOrder, RunQuery, SearchCursor, Term, TextMatch, WaitingFor,
+    self, Predicate, Range, RunOrder, RunQuery, Scope, SearchCursor, Term, TextMatch, WaitingFor,
 };
 
 use crate::auth::Caller;
@@ -23,7 +20,7 @@ use crate::error::ApiError;
 use crate::http::runs::core_time;
 use crate::http::{refuse_nul_in_filter, runs_status};
 
-/// The read model's query for `q`, and for the filters of `GET /v1/runs` when given, as the
+/// The query for `q`, and for the filters of `GET /v1/runs` when given, as the
 /// caller may see it: every term of both, the namespace the request is bound to, and the
 /// caller's labels.
 pub(crate) fn run_query(
@@ -250,6 +247,19 @@ pub(crate) fn waiting_for(kind: WaitKind) -> WaitingFor {
     }
 }
 
+/// What a run waits for, as the query language names it.
+pub(crate) fn wait_name(waiting: WaitingFor) -> &'static str {
+    match waiting {
+        WaitingFor::Signal => "signal",
+        WaitingFor::Timer => "timer",
+        WaitingFor::Call => "call",
+        WaitingFor::Host => "host",
+        WaitingFor::Approval => "approval",
+        WaitingFor::Parked => "parked",
+        WaitingFor::Deferred => "deferred",
+    }
+}
+
 fn wait_kind(waiting: WaitingFor) -> WaitKind {
     match waiting {
         WaitingFor::Signal => WaitKind::Signal,
@@ -262,7 +272,25 @@ fn wait_kind(waiting: WaitingFor) -> WaitKind {
     }
 }
 
-/// The read model's order for the API's.
+/// The scope a query reads: one namespace when the request is bound to it or one term
+/// `namespace:` of one value names it, and the tenant otherwise (`archi/08-decisions.md`, "Taken
+/// while writing the object-storage spec": a query goes to one partition when its scope is one
+/// namespace).
+pub(crate) fn scope_of(query: &RunQuery) -> Scope {
+    let named = query.terms.iter().find_map(|term| match &term.predicate {
+        Predicate::Namespace(names) if !term.negated && names.len() == 1 => names.first(),
+        _ => None,
+    });
+    match named {
+        Some(namespace) => Scope::Namespace {
+            tenant: query.tenant.clone(),
+            namespace: namespace.clone(),
+        },
+        None => Scope::Tenant(query.tenant.clone()),
+    }
+}
+
+/// The run plane's order for the API's.
 pub(crate) fn order(sort: Option<RunSort>) -> RunOrder {
     match sort.unwrap_or_default() {
         RunSort::Started => RunOrder::Started,
@@ -313,7 +341,7 @@ pub(crate) fn decode_cursor(order: RunOrder, text: &str) -> Result<SearchCursor,
     })
 }
 
-/// A run of the read model, as `GET /v1/runs` lists it.
+/// A run's summary, as `GET /v1/runs` lists it and the change stream sends it.
 pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
     let ending = run.ending.as_ref();
     rewind_api::runs::RunSummary {
@@ -357,24 +385,6 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
     }
 }
 
-pub(crate) fn status_counts<'a>(
-    statuses: impl IntoIterator<Item = (&'a RunStatus, &'a u64)>,
-) -> StatusCounts {
-    let mut counts = StatusCounts::default();
-    for (status, count) in statuses {
-        let slot = match status {
-            RunStatus::Pending => &mut counts.pending,
-            RunStatus::Active => &mut counts.active,
-            RunStatus::Completed => &mut counts.completed,
-            RunStatus::Failed => &mut counts.failed,
-            RunStatus::Cancelled => &mut counts.cancelled,
-            RunStatus::Aborted => &mut counts.aborted,
-        };
-        *slot += count;
-    }
-    counts
-}
-
 pub(crate) fn wait_counts<'a>(
     waiting: impl IntoIterator<Item = (&'a WaitingFor, &'a u64)>,
 ) -> WaitCounts {
@@ -394,28 +404,6 @@ pub(crate) fn wait_counts<'a>(
     counts
 }
 
-pub(crate) fn series(
-    series: &[std::collections::BTreeMap<RunStatus, u64>],
-    since: Option<rewind_core::Timestamp>,
-    bucket_ms: Option<u64>,
-) -> Vec<SeriesBucket> {
-    let (Some(since), Some(bucket)) = (since, bucket_ms) else {
-        return Vec::new();
-    };
-    series
-        .iter()
-        .enumerate()
-        .map(|(i, statuses)| SeriesBucket {
-            at: timestamp(rewind_core::Timestamp::from_millis(
-                since
-                    .as_millis()
-                    .saturating_add(bucket.saturating_mul(u64::try_from(i).unwrap_or(u64::MAX))),
-            )),
-            statuses: status_counts(statuses),
-        })
-        .collect()
-}
-
 pub(crate) fn durations(latency: Option<ports::Latency>) -> Option<DurationStats> {
     latency.map(|latency| DurationStats {
         count: latency.count,
@@ -424,59 +412,6 @@ pub(crate) fn durations(latency: Option<ports::Latency>) -> Option<DurationStats
         p99: latency.p99_ms,
         max: latency.max_ms,
     })
-}
-
-fn values(values: &[ports::FacetValue]) -> Vec<FacetValue> {
-    values
-        .iter()
-        .map(|value| FacetValue {
-            value: value.value.clone(),
-            runs: value.runs,
-        })
-        .collect()
-}
-
-pub(crate) fn facets(facets: &ports::Facets) -> Facets {
-    Facets {
-        statuses: values(&facets.statuses),
-        workflows: Vec::new(),
-        labels: facets
-            .labels
-            .iter()
-            .map(|label| LabelFacet {
-                key: label.key.clone(),
-                runs: label.runs,
-                values: values(&label.values),
-            })
-            .collect(),
-        tools: values(&facets.tools),
-        errors: values(&facets.errors),
-        scripts: values(&facets.scripts),
-        waiting: values(&facets.waiting),
-        signals: values(&facets.signals),
-        namespaces: values(&facets.namespaces),
-    }
-}
-
-pub(crate) fn failure_group(group: &ports::FailureGroup) -> FailureGroup {
-    FailureGroup {
-        fingerprint: group.fingerprint.clone(),
-        signature: group.signature.clone(),
-        error: group.error.clone(),
-        runs: group.runs,
-        series: group.series.clone(),
-        scripts: group.scripts,
-        first_ended_at: timestamp(group.first_ended_at),
-        last_ended_at: timestamp(group.last_ended_at),
-        line: group.line,
-        labels: values(&group.labels),
-        latest: FailureSample {
-            id: group.latest.to_string(),
-            handle: group.latest_handle.to_string(),
-            status: group.latest_status.into(),
-            message: group.latest_message.clone(),
-        },
-    }
 }
 
 #[cfg(test)]

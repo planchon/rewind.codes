@@ -68,7 +68,7 @@ struct RunArgs {
     #[arg(long, default_value_t = 100)]
     concurrency: usize,
 
-    /// Loops answering the host tool, each claiming up to 16 tasks at a time.
+    /// Workers answering the host tool, each on a task stream of 16 slots.
     #[arg(long, default_value_t = 8)]
     host_workers: usize,
 

@@ -18,6 +18,7 @@ mod scripts;
 mod search;
 mod secrets;
 mod sign_in;
+mod stats;
 mod subscriptions;
 mod tasks;
 mod testing;
@@ -61,14 +62,11 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::TEST_DOCUMENT, get(testing::get))
         .route(routes::CHECK, post(scripts::check))
         .route(routes::TEST, post(testing::test))
-        .route(routes::SCRIPTS, get(reading::scripts))
-        .route(
-            routes::SCRIPT,
-            get(reading::script).patch(reading::set_title),
-        )
+        .route(routes::SCRIPTS, get(stats::scripts))
+        .route(routes::SCRIPT, get(reading::script))
         .route(routes::RUNS, post(runs::start).get(runs::list))
-        .route(routes::RUN_STATS, get(runs::stats))
-        .route(routes::RUN_FAILURES, get(runs::failures))
+        .route(routes::RUN_STATS, get(stats::runs))
+        .route(routes::RUN_FAILURES, get(stats::failures))
         .route(routes::RUN, get(runs::get).delete(runs::erase))
         .route(routes::RUN_TRACE, get(runs::trace))
         .route(routes::RUN_ENTRY, get(runs::entry))
@@ -80,8 +78,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::RUN_JOURNAL, get(runs::journal))
         .route(routes::RUN_RELEASE, post(runs::release))
         .route(routes::RUN_GIVE_UP, post(runs::give_up))
-        .route(routes::TASKS, get(tasks::claim))
-        .route(routes::TASK_HEARTBEAT, post(tasks::heartbeat))
+        .route(routes::TASK_STREAM, get(tasks::stream))
         .route(routes::TASK_DEFER, post(tasks::defer))
         .route(routes::TASK_COMPLETE, post(tasks::complete))
         .route(routes::TASK_FAIL, post(tasks::fail))
@@ -92,7 +89,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             post(subscriptions::create).get(subscriptions::list),
         )
         .route(routes::SUBSCRIPTION, delete(subscriptions::delete))
-        .route(routes::TOOL_STATS, get(reading::tool_stats))
+        .route(routes::TOOL_STATS, get(stats::tools))
         .route(routes::PAYLOAD, get(reading::payload))
         .route(
             routes::API_KEYS,
@@ -308,10 +305,10 @@ pub(crate) fn runs_status(status: rewind_api::common::RunStatus) -> rewind_core:
 }
 
 /// Every response carries `Rewind-Version`, and a monthly quota's refusal `Retry-After`: the
-/// seconds left in the month, by the server's clock. Every request counts as activity for
-/// the embedded server's idle stop.
+/// seconds left in the month, by the server's clock. Every request pushes back the embedded
+/// server's idle stop.
 async fn every_response(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
-    let busy = app.activity.busy();
+    let busy = app.idle.busy();
     let mut response = next.run(request).await;
     drop(busy);
     response.headers_mut().insert(

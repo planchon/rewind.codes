@@ -4594,6 +4594,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "futures-util",
  "rewind-api",
  "rmcp",
  "serde",
@@ -4752,6 +4753,7 @@ dependencies = [
  "rewind-outbound",
  "rewind-runtime",
  "rewind-store-postgres",
+ "rewind-store-slatedb",
  "rewind-store-turso",
  "rewind-workos",
  "rmcp",
@@ -4765,6 +4767,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

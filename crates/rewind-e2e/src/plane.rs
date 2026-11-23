@@ -22,7 +22,7 @@ use rewind_engine::adapters::{
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::Edge;
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
-use rewind_engine::ports::link::{HostFailure, HostTask, StreamAttach, StreamId};
+use rewind_engine::ports::link::{HostFailure, HostTask, StreamAttach, StreamEvent, StreamId};
 use rewind_engine::ports::{
     CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind, Predicate, RunOrder,
     RunQuery, RunRef, Scope, ScriptExecutor, Secret, SecretId, SecretStore, TaskRef, TaskState,
@@ -71,7 +71,7 @@ type CorpusPlane = Wiring<
 /// A harness's worker: the SDK stream it holds.
 struct Worker {
     stream: StreamId,
-    tasks: UnboundedReceiver<HostTask>,
+    tasks: UnboundedReceiver<StreamEvent>,
     generation: u32,
 }
 
@@ -215,7 +215,13 @@ impl World {
         let Some(worker) = &mut self.worker else {
             return Ok(0);
         };
-        let tasks = Driver::<CorpusPlane, MemoryCluster>::drain(&mut worker.tasks);
+        let tasks: Vec<HostTask> = Driver::<CorpusPlane, MemoryCluster>::drain(&mut worker.tasks)
+            .into_iter()
+            .filter_map(|event| match event {
+                StreamEvent::Task(task) => Some(task),
+                StreamEvent::Gone(_) => None,
+            })
+            .collect();
         let tenant = TenantId::local();
         let mut crashed = false;
         for task in &tasks {

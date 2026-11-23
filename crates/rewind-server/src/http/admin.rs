@@ -203,12 +203,29 @@ pub(super) async fn permissions(_caller: Caller) -> Json<PermissionList> {
 
 /// `GET /v1/server`: any caller.
 pub(super) async fn server(State(app): State<Arc<App>>, _caller: Caller) -> Json<ServerInfo> {
+    use rewind_engine::ports::ScriptExecutor as _;
+    use rewind_engine::ports::cluster::Membership as _;
+    let nodes = match app.membership.nodes().await {
+        Ok(nodes) => u32::try_from(nodes.len()).unwrap_or(u32::MAX),
+        Err(error) => {
+            tracing::warn!(%error, "the members of the cluster cannot be read");
+            0
+        }
+    };
     Json(ServerInfo {
         version: app.settings.version.to_owned(),
-        epochs: app.engine.epochs().iter().map(|epoch| epoch.0).collect(),
-        roles: app.settings.roles.clone(),
+        epochs: app
+            .plane
+            .executor
+            .epochs()
+            .iter()
+            .map(|epoch| epoch.0)
+            .collect(),
+        node: app.node.node().to_string(),
+        partitions: app.config.partitions.get(),
+        nodes,
         embedded: app.settings.embedded,
-        virtual_time: app.engine.clock().is_virtual(),
+        virtual_time: app.clock().is_virtual(),
         mcp_url: app
             .settings
             .public_url

@@ -13,7 +13,7 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use rewind_api::admin::{ServerInfo, ServerRole};
+use rewind_api::admin::ServerInfo;
 use rewind_api::common::{Callsite, Labels, Payload, RunMode, RunStatus, Timestamp};
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{
@@ -481,7 +481,9 @@ fn app(stub: Shared) -> Router {
                 axum::Json(ServerInfo {
                     version: rewind_cli::embedded::VERSION.into(),
                     epochs: vec![1],
-                    roles: vec![ServerRole::Api, ServerRole::Worker],
+                    node: "test".into(),
+                    partitions: 1,
+                    nodes: 1,
                     embedded: true,
                     virtual_time: false,
                     mcp_url: None,

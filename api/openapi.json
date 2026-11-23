@@ -1641,7 +1641,7 @@
       },
       "DeferTask": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with\n`/complete` or `/fail` and the same token, whether the task stream it was handed on stays open\nor not: its slot on the stream is free, and no heartbeat is needed meanwhile.",
+        "description": "`POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with\n`/complete` or `/fail` and the same token, whether the task stream it was handed on stays open\nor not: its slot on the stream is free.",
         "properties": {
           "timeout": {
             "oneOf": [
@@ -2810,21 +2810,6 @@
           "idempotencyKey",
           "attempt",
           "labels"
-        ],
-        "type": "object"
-      },
-      "HeartbeatAck": {
-        "description": "`POST /v1/tasks/{token}/heartbeat`: the worker is still working on the task.",
-        "properties": {
-          "heartbeatTimeoutMs": {
-            "description": "The claim now expires if no heartbeat comes within this many milliseconds.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "heartbeatTimeoutMs"
         ],
         "type": "object"
       },
@@ -5712,18 +5697,6 @@
             "description": "The first line of the source that is not blank, for display.",
             "type": "string"
           },
-          "labels": {
-            "additionalProperties": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "description": "The labels its runs carried, with the number of runs for each `key:value`.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
           "lastRunAt": {
             "format": "date-time",
             "type": "string"
@@ -5973,7 +5946,7 @@
             "type": "boolean"
           },
           "epochs": {
-            "description": "The determinism epochs this server's workers support. New runs start under the last.",
+            "description": "The determinism epochs this server's executors support. New runs start under the last.",
             "items": {
               "format": "int32",
               "minimum": 0,
@@ -5988,15 +5961,25 @@
               "null"
             ]
           },
+          "node": {
+            "description": "The node that answered.",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "The nodes of the deployment alive now, executors-only nodes included.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "oauth": {
             "description": "People connect MCP clients with OAuth (`/oauth`): the server has a public URL and a\nsign-in. Without it, `/mcp` takes API keys and end users' tokens only.",
             "type": "boolean"
           },
-          "roles": {
-            "items": {
-              "$ref": "#/components/schemas/ServerRole"
-            },
-            "type": "array"
+          "partitions": {
+            "description": "The partitions of the deployment: 64 by default, 1 for the embedded server.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           },
           "version": {
             "description": "The version of the `rewind` binary. A CLI of another version restarts an embedded server.",
@@ -6010,18 +5993,13 @@
         "required": [
           "version",
           "epochs",
-          "roles",
+          "node",
+          "partitions",
+          "nodes",
           "embedded",
           "virtualTime"
         ],
         "type": "object"
-      },
-      "ServerRole": {
-        "enum": [
-          "api",
-          "worker"
-        ],
-        "type": "string"
       },
       "ServerSummary": {
         "properties": {
@@ -6576,108 +6554,6 @@
         "required": [
           "name",
           "digest"
-        ],
-        "type": "object"
-      },
-      "Task": {
-        "description": "A claimed host-tool call. The worker keeps the claim alive with heartbeats, and answers\nwith `/complete` or `/fail`, or `/defer` to answer later.",
-        "properties": {
-          "args": {
-            "description": "The arguments, validated against the tool's input schema."
-          },
-          "attempt": {
-            "description": "From 1. Above 1, an earlier attempt was interrupted.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "heartbeatTimeoutMs": {
-            "description": "The claim expires if no heartbeat comes within this many milliseconds.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "id": {
-            "description": "The task's id, as listed in the run's state.",
-            "type": "string"
-          },
-          "idempotencyKey": {
-            "description": "`{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every\nattempt: the handler uses it to recognize a call it already made.",
-            "type": "string"
-          },
-          "labels": {
-            "$ref": "#/components/schemas/Labels",
-            "description": "The run's labels."
-          },
-          "namespace": {
-            "$ref": "#/components/schemas/NamespaceName",
-            "description": "The namespace of the run: the end user the handler acts for."
-          },
-          "runId": {
-            "type": "string"
-          },
-          "seq": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "timeoutMs": {
-            "description": "The tool's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the tool has none, the default of host tools: the run's TTL bounds it.",
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "token": {
-            "description": "The claim's secret token: `/v1/tasks/{token}/…`. It changes with each claim.",
-            "type": "string"
-          },
-          "tool": {
-            "type": "string"
-          },
-          "traceparent": {
-            "description": "W3C trace context, with the tool call's span as parent.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "tracestate": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "token",
-          "id",
-          "runId",
-          "namespace",
-          "seq",
-          "tool",
-          "args",
-          "idempotencyKey",
-          "attempt",
-          "heartbeatTimeoutMs",
-          "labels"
-        ],
-        "type": "object"
-      },
-      "TaskBatch": {
-        "description": "The tasks claimed; empty when `wait` passed without one.",
-        "properties": {
-          "tasks": {
-            "items": {
-              "$ref": "#/components/schemas/Task"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "tasks"
         ],
         "type": "object"
       },
@@ -17155,18 +17031,6 @@
             }
           },
           {
-            "description": "Only scripts that ran with this label, as `key:value`. Repeat to require several.",
-            "in": "query",
-            "name": "label",
-            "required": false,
-            "schema": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          {
             "description": "Only scripts that called this tool.",
             "in": "query",
             "name": "tool",
@@ -18337,139 +18201,6 @@
         ]
       }
     },
-    "/v1/tasks": {
-      "get": {
-        "description": "The tasks of the runs the caller sees: an end user's token claims those of its\nnamespace, a key limited to labels those of the runs carrying them.",
-        "operationId": "claimTasks",
-        "parameters": [
-          {
-            "description": "Only tasks of runs of this toolset.",
-            "in": "query",
-            "name": "toolset",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only these tools. Repeat for several. All the toolset's host tools when absent.",
-            "in": "query",
-            "name": "tool",
-            "required": false,
-            "schema": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          {
-            "description": "At most this many tasks (1 by default, 100 at most).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "How long to wait for a task before answering with none. 30 seconds by default, 60 at\nmost.",
-            "in": "query",
-            "name": "wait",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskBatch"
-                }
-              }
-            },
-            "description": "The tasks claimed; none when `wait` passed."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Claim host-tool tasks (long-poll)",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
     "/v1/tasks/stream": {
       "get": {
         "description": "The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
@@ -18992,7 +18723,7 @@
     },
     "/v1/tasks/{token}/defer": {
       "post": {
-        "description": "The task waits for `/complete` or `/fail` with the same token, without heartbeats, up to\nits timeout.",
+        "description": "The task waits for `/complete` or `/fail` with the same token, whether the stream it was\nhanded on stays open or not, up to its timeout.",
         "operationId": "deferTask",
         "parameters": [
           {
@@ -19219,116 +18950,6 @@
           }
         },
         "summary": "Fail a task",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/v1/tasks/{token}/heartbeat": {
-      "post": {
-        "operationId": "heartbeatTask",
-        "parameters": [
-          {
-            "description": "The claim's token.",
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HeartbeatAck"
-                }
-              }
-            },
-            "description": "Extended."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "410": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The task no longer exists: stop working on it (`task-gone`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Keep a claim alive",
         "tags": [
           "tasks"
         ]
