@@ -266,7 +266,7 @@ where
         activations: BTreeMap::new(),
         wakes: BTreeMap::new(),
         next_id: 1,
-        in_flight: Arc::new(AtomicUsize::new(0)),
+        in_flight: Arc::new(Flights::default()),
         virtual_time,
         stopping: None,
     };
@@ -387,26 +387,52 @@ struct Task<P: Plane, M: Membership + 'static, L: NodeLink> {
     wakes: BTreeMap<(Timestamp, u64), (Message<P>, bool)>,
     next_id: u64,
     /// The work this task spawned whose answer has not reached its channel yet.
-    in_flight: Arc<AtomicUsize>,
+    in_flight: Arc<Flights>,
     /// The clock the task moves, in virtual time.
     virtual_time: Option<Arc<dyn VirtualTime>>,
     /// The stop asked: answered once the node's partitions are handed over.
     stopping: Option<oneshot::Sender<()>>,
 }
 
+/// The work a node's task spawned whose answer has not reached its channel yet, and a wake-up
+/// for the task when the last of it lands. A piece of work sends its answer, then ends its
+/// [`Flight`]: the task that saw the answer before the count moved waits on [`Flights::idle`],
+/// not on its channel alone, which nothing fills again.
+#[derive(Debug, Default)]
+struct Flights {
+    count: AtomicUsize,
+    idle: tokio::sync::Notify,
+}
+
+impl Flights {
+    /// Whether nothing is in flight. Read before the channel: every answer of the work counted
+    /// out is then in the channel already.
+    fn quiet(&self) -> bool {
+        self.count.load(Ordering::SeqCst) == 0
+    }
+
+    /// Resolves once the work in flight dropped to none since the last time it did (a wake-up
+    /// given while nobody waited is kept, so none is lost).
+    async fn idle(&self) {
+        self.idle.notified().await;
+    }
+}
+
 /// One piece of work in flight, counted until its answer is in the task's channel.
-struct Flight(Arc<AtomicUsize>);
+struct Flight(Arc<Flights>);
 
 impl Flight {
-    fn new(count: &Arc<AtomicUsize>) -> Self {
-        count.fetch_add(1, Ordering::SeqCst);
-        Self(Arc::clone(count))
+    fn new(flights: &Arc<Flights>) -> Self {
+        flights.count.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(flights))
     }
 }
 
 impl Drop for Flight {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        if self.0.count.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.0.idle.notify_one();
+        }
     }
 }
 
@@ -417,12 +443,13 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
         loop {
             self.drain_local();
             if let Some(clock) = self.virtual_time.clone() {
+                // Before the channel: once nothing is in flight, every answer is in it.
+                let quiet = self.in_flight.quiet();
                 let input = match self.receiver.try_recv() {
                     Ok(input) => Some(input),
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
                         let now = self.plane.clock().now();
-                        let quiet = self.in_flight.load(Ordering::SeqCst) == 0;
                         if let Some(at) = self.next_timer().filter(|at| *at <= now) {
                             self.fire(at);
                             continue;
@@ -433,9 +460,16 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                                 self.fire(at);
                                 continue;
                             }
-                            // Something in flight answers through the channel; else only the
-                            // outside world wakes a run.
-                            None => self.receiver.recv().await,
+                            // Something in flight answers through the channel, and its end
+                            // wakes the task to look again; else only the outside world wakes
+                            // a run.
+                            None => {
+                                let flights = Arc::clone(&self.in_flight);
+                                tokio::select! {
+                                    input = self.receiver.recv() => input,
+                                    () = flights.idle(), if !quiet => continue,
+                                }
+                            }
                         }
                     }
                 };
@@ -710,5 +744,57 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{Flight, Flights};
+
+    /// The race of virtual time: the task saw a piece of work's answer, then the work ended its
+    /// flight. The task waiting for the work in flight is woken by that end, whether it began
+    /// waiting before it or after.
+    #[tokio::test]
+    async fn the_end_of_the_last_flight_wakes_the_task() {
+        let flights = Arc::new(Flights::default());
+        let flight = Flight::new(&flights);
+        assert!(!flights.quiet());
+        let waiting = tokio::spawn({
+            let flights = Arc::clone(&flights);
+            async move { flights.idle().await }
+        });
+        tokio::task::yield_now().await;
+        drop(flight);
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("woken by the last flight's end")
+            .expect("the waiter");
+        assert!(flights.quiet());
+
+        let flight = Flight::new(&flights);
+        drop(flight);
+        tokio::time::timeout(Duration::from_secs(5), flights.idle())
+            .await
+            .expect("an end before the wait is kept");
+    }
+
+    /// Only the last flight's end wakes the task: one still in flight keeps it waiting.
+    #[tokio::test]
+    async fn a_flight_left_keeps_the_task_waiting() {
+        let flights = Arc::new(Flights::default());
+        let (first, second) = (Flight::new(&flights), Flight::new(&flights));
+        drop(first);
+        assert!(!flights.quiet());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), flights.idle())
+                .await
+                .is_err(),
+            "woken while a flight is left"
+        );
+        drop(second);
+        assert!(flights.quiet());
     }
 }
