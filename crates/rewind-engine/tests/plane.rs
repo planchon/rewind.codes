@@ -713,6 +713,50 @@ async fn a_start_above_the_active_runs_limit_is_refused() {
 }
 
 #[tokio::test]
+async fn a_start_above_the_tenant_s_ceiling_is_refused_in_any_namespace() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let acme = TenantId::new("acme").unwrap();
+    world
+        .plane
+        .catalog
+        .put_tenant(&rewind_engine::ports::Tenant {
+            quotas: Quotas {
+                active_runs: Some(1),
+                ..Quotas::default()
+            },
+            ..rewind_engine::ports::Tenant::new(acme.clone())
+        })
+        .await
+        .unwrap();
+    let start = |namespace: &str| {
+        let mut start = request("approval", json!({}));
+        start.tenant = acme.clone();
+        start.namespace = NamespaceName::new(namespace).unwrap();
+        start
+    };
+    let first = world.run(start("alice")).await;
+    let refused = world.start(start("bob")).await;
+    let Err(rewind_engine::StartError::QuotaExceeded(exceeded)) = refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!(
+        exceeded,
+        rewind_engine::ports::QuotaExceeded {
+            quota: rewind_engine::ports::QuotaKind::ActiveRuns,
+            scope: rewind_engine::ports::QuotaScope::Tenant,
+            limit: 1,
+            used: 1,
+            resets_at: None,
+        },
+        "the ceiling counts the runs of every namespace"
+    );
+    // Once the first run has ended, another can start.
+    world.cancel(&first).await.unwrap();
+    world.idle().await;
+    world.start(start("bob")).await.unwrap();
+}
+
+#[tokio::test]
 async fn an_erased_run_leaves_nothing_and_retention_erases_an_ended_one() {
     let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
     let run = world.run(request("chain", json!({}))).await;

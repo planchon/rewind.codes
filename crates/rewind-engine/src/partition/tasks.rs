@@ -1032,14 +1032,38 @@ impl<P: Plane> Owner<P> {
     // ---------------------------------------------------------------------------------------
     // Secrets put again
 
-    /// A secret was put again: the calls parked by a refusal or a missing secret in the runs
-    /// that attach it are ready again (`archi/04-tools.md`, "Secrets").
+    /// A secret changed: once it is put again, the calls parked by a refusal or a missing
+    /// secret in the runs that attach it are ready again (`archi/04-tools.md`, "Secrets"). A
+    /// secret deleted resumes nothing: its calls would park again.
     pub(crate) fn secret_put(&mut self, tenant: TenantId, secret: SecretId) {
         let Some(log) = self.log.clone() else {
             return;
         };
         let partition = self.partition;
+        let plane = std::sync::Arc::clone(&self.plane);
+        let today = crate::ports::Day::of(self.now());
         self.out.push(crate::node::message::job(async move {
+            match crate::ports::SecretStore::meta(plane.secrets(), &tenant, &secret, today).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Message::Owner(
+                        partition,
+                        OwnerMsg::Step(Box::new(super::runs::Step::Parked {
+                            secret,
+                            tasks: Ok(Vec::new()),
+                        })),
+                    );
+                }
+                Err(error) => {
+                    return Message::Owner(
+                        partition,
+                        OwnerMsg::Step(Box::new(super::runs::Step::Parked {
+                            secret,
+                            tasks: Err(error.to_string()),
+                        })),
+                    );
+                }
+            }
             let scope = match &secret.namespace {
                 crate::ports::SecretNamespace::Namespace(namespace) => {
                     crate::ports::Scope::Namespace {
