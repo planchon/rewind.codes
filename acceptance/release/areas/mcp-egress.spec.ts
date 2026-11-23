@@ -21,6 +21,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer } from "n
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { type RewindCall, RewindSignatureError, verifyRewindCall, verifyWebhook } from "@rewind.codes/sdk";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { eventually } from "../../support/processes.js";
@@ -408,6 +409,7 @@ test("an API is read from its OpenAPI document by URL: one tool per operation, t
 });
 
 test("a tool whose schema changed parks the call, tells the harness, and goes on once approved", { tag: "@success" }, async () => {
+  test.setTimeout(4 * 60_000);
   const server = await startMcpFixture();
   try {
     const toolset = await toolsetOf(a, [{ name: "fx", url: server.url }]);
@@ -419,6 +421,11 @@ test("a tool whose schema changed parks the call, tells the harness, and goes on
           : tool,
       ),
     );
+    // A connection trusts the tool list it read for 60 s (08: the schema check lists again
+    // after 60 s or on tools/list_changed, which this stateless server cannot send): a node that
+    // listed the tools at registration, in the process that also makes the call, sees the change
+    // once that time has passed.
+    await delay(61_000);
     const run = await startRun(a.api.ns("alice"), { toolset, script: LOOKUP, input: { id: "9" } });
     const parked = await waitingCall(a.api.ns("alice"), run.id, "parked");
     expect(parked.parked).toBe("schema_changed");

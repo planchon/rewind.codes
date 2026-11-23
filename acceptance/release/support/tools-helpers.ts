@@ -89,6 +89,8 @@ export class TaskStream {
   /** Settles once the stream has ended: closed here, or dropped by the server. */
   readonly done: Promise<void>;
   private closed = false;
+  /** The reader of the stream's body, cancelled by `close`. */
+  private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   private constructor(
     readonly api: Api,
@@ -162,14 +164,20 @@ export class TaskStream {
     this.closed = true;
     streams.delete(this);
     this.abort.abort();
+    // The abort alone does not always end a read under way: cancelling the reader does.
+    await this.reader?.cancel().catch(() => undefined);
     await this.done;
   }
 
   private async read(body: ReadableStream<Uint8Array>): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = "";
+    const reader = body.getReader();
+    this.reader = reader;
     try {
-      for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+      for (;;) {
+        const { done, value: chunk } = await reader.read();
+        if (done) break;
         buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n?/g, "\n");
         let end: number;
         while ((end = buffer.indexOf("\n\n")) >= 0) {

@@ -247,7 +247,8 @@ export default async function main() {
     const stats = await eventually(
       "the tool statistics count the calls",
       async () => {
-        const reply = await t.api.get("/v1/tools/stats", { query: { toolset: own.json.id } });
+        // Per tool, filtered by the start of the tools' names: counters keep no toolset.
+        const reply = await t.api.get("/v1/tools/stats", { query: { prefix: "st." } });
         expectOk(reply);
         const by = Object.fromEntries((reply.json.tools as any[]).map((s) => [s.tool, s]));
         return by["st.lookup"]?.calls === 3 && by["st.fail"]?.calls === 2 ? by : undefined;
@@ -526,9 +527,8 @@ test("a payload is read only through a run that holds it", { tag: "@attack" }, a
     status: 404,
     slug: "not-found",
   });
-  // With the Rewind-Namespace header, `run` is required (api/README.md; the status is not
-  // written there: the server answers forbidden, naming what to do).
-  await expectRefused({ attempt: () => alice().get(`/v1/payloads/${digest}`), status: 403, slug: "forbidden" });
+  // A payload belongs to its run: `run` is required from every caller (api/README.md).
+  await expectRefused({ attempt: () => alice().get(`/v1/payloads/${digest}`), status: 400, slug: "invalid-request" });
   expectOk(await alice().get(`/v1/payloads/${digest}`, { query: { run: holder.id } }));
-  evidence("through a run that does not hold it: 404; without a run under a namespace: 403; through its run: 200");
+  evidence("through a run that does not hold it: 404; without a run: 400; through its run: 200");
 });

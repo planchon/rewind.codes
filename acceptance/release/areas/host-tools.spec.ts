@@ -191,21 +191,29 @@ test("a handler's failure reaches the script as a ToolError with its message and
   }
 });
 
-test("a retryable failure is retried with the same idempotency key, and the attempts are counted", { tag: "@success" }, async () => {
+test("a retryable failure is retried with the same idempotency key, and the attempts are counted while the run is active", { tag: "@success" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
-  const { worker, seen } = serve(toolset, tool, ({ id }, ctx) => {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const { worker, seen } = serve(toolset, tool, async ({ id }, ctx) => {
     if (ctx.attempt === 1) throw new HostToolError("upstream busy", { retryable: true });
+    await released;
     return { id, name: "second try" };
   });
   try {
     const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-5" } });
+    // The attempts live in the run's tool tasks: shown while the second attempt is in flight.
+    await expect.poll(async () => (await alice().get(`/v1/runs/${run.id}`)).json.attempts, { timeout: 30_000 }).toEqual([{ seq: 1, attempts: 2 }]);
+    release();
     const done = await ended(alice(), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     expect(done.output.value).toEqual({ id: "c-5", name: "second try" });
     expect(seen.map((s) => s.ctx.attempt)).toEqual([1, 2]);
     expect(new Set(seen.map((s) => s.ctx.idempotencyKey))).toEqual(new Set([`${run.id}/1`]));
-    await expect.poll(async () => (await alice().get(`/v1/runs/${run.id}`)).json.attempts).toEqual([{ seq: 1, attempts: 2 }]);
+    expect(done.attempts ?? [], "the run's end clears its tool tasks, and their attempts with them").toEqual([]);
+    evidence("attempt 1 failed retryable, attempt 2 with the same key; attempts [{seq: 1, attempts: 2}] while the call was in flight, none once the run ended");
   } finally {
+    release();
     await worker.stop();
   }
 });

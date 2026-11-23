@@ -784,8 +784,9 @@ test.describe("keys limited to labels", () => {
       expectProblem(reply, 403, "forbidden");
       expect(reply.text).not.toContain(blueRun);
     }
-    expectProblem(await red.get(`/v1/payloads/${NO_DIGEST}`), 403, "forbidden");
-    evidence("GET /v1/runs/stats, /v1/runs/failures, /v1/scripts and /v1/tools/stats, and a payload without its run → 403 for a key limited to labels");
+    // A payload belongs to its run: no caller reads one without naming it.
+    expectProblem(await red.get(`/v1/payloads/${NO_DIGEST}`), 400, "invalid-request");
+    evidence("GET /v1/runs/stats, /v1/runs/failures, /v1/scripts and /v1/tools/stats → 403 for a key limited to labels; a payload without its run → 400");
   });
 
   test("a worker key limited to labels is handed and answers the host-tool tasks of its runs only", { tag: "@attack" }, async () => {

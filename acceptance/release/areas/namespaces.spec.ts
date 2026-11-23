@@ -6,6 +6,7 @@
  * namespace and reaches nothing of Bob's, whatever it sends or whatever script its model writes.
  * Each end user has quotas, secrets of their own that only their runs attach, and can be erased.
  */
+import { setTimeout as delay } from "node:timers/promises";
 import { eventually } from "../../support/processes.js";
 import { hmacConfusedToken, type SigningKey, signingKey, startMcpFixture, type TokenAlg, unsignedToken } from "../support/fixtures.js";
 import {
@@ -636,14 +637,15 @@ export default async function main(input: { id: string }) {
   test("payloads are read only through Alice's own runs", { tag: "@attack" }, async () => {
     const herInput = hers.waiting.input.digest;
     const hisInput = bob.waiting.input.digest;
-    expectProblem(await alice.get(`/v1/payloads/${herInput}`), 403, "forbidden");
+    // A payload belongs to its run: no caller reads one without naming it.
+    expectProblem(await alice.get(`/v1/payloads/${herInput}`), 400, "invalid-request");
     expect(hers.waiting.input.value, "a value above 256 KiB is left out of the run").toBeUndefined();
     const read = await alice.get(`/v1/payloads/${herInput}`, { query: { run: hers.waiting.id } });
     expectOk(read, 200);
     expect(JSON.stringify(read.json)).toContain(hers.waiting.input.preview.slice(0, 20));
     await expectRefused({ attempt: () => alice.get(`/v1/payloads/${hisInput}`, { query: { run: hers.waiting.id } }), status: 404, slug: "not-found" });
     await expectRefused({ attempt: () => alice.get(`/v1/payloads/${hisInput}`, { query: { run: bob.waiting.id } }), status: 404, slug: "not-found" });
-    evidence("a token must name its run (403 without), a payload its run does not hold → 404, a run of Bob's → 404");
+    evidence("a payload is read through its run (400 without), a payload its run does not hold → 404, a run of Bob's → 404");
   });
 
   test("a script Alice runs cannot signal Bob's run, and the runs it starts are hers", { tag: "@attack" }, async () => {
@@ -1033,6 +1035,11 @@ test.describe("erasure", () => {
     const token = await mint(tenant.api, namespace);
     expectOk(await tenant.api.as(token.token).get("/v1/whoami"), 200);
     expectOk(await tenant.api.put(`/v1/namespaces/${namespace}/secrets/github`, { value: `${canary()}-leaving` }), 201);
+    // A run whose activation spins until its CPU limit (5 s) is cancelled only once that
+    // activation ends: the erasure, which waits for the partition to hold nothing of the
+    // namespace, stays under way while the checks below run.
+    await start(api, { script: `// ${unique("spinning")}\nexport default async function main() { for (;;) {} }\n`, check: false });
+    await delay(500);
 
     expectOk(await tenant.api.delete(`/v1/namespaces/${namespace}`), 202);
     const cancelled = await tenant.api.get(`/v1/runs/${run.id}`, { query: { wait: "20s" } });
