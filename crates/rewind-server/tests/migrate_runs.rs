@@ -1,0 +1,493 @@
+//! `rewind server migrate-runs` on the stores the journal store filled (`archi/08-decisions.md`,
+//! "Taken while writing the object-storage spec": the migration): a Postgres database and an
+//! embedded `.rewind/`, kept as fixtures (`tests/fixtures/`). The command runs twice, the second
+//! time moving nothing; then a server on the result reads every run back as the tables held it,
+//! and lets the live ones go on: a timer fires, signals and a webhook end them, a workflow run's
+//! end reaches its starter, host tasks in flight are handed again.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod support;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use base64::Engine as _;
+use clap::Parser;
+use rewind_api::Client;
+use rewind_api::common::RunStatus;
+use rewind_api::runs::JournalExport;
+use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
+use rewind_engine::ports::legacy::{LegacyBlobs, LegacyHistory, LegacyRuns};
+use rewind_server::{MigrateArgs, ServerArgs, migrate_runs};
+use serde_json::{Value, json};
+use support::{ADMIN_KEY, Postgres, TaskWorker, copy_tree, eventually};
+
+const ARCHIVED: &str = "63cbe1e4-5932-7dd7-a7cf-1707c6e1d01f";
+const COMPLETED: &str = "031deb6d-6ddc-7cb5-8e1a-a6f8b428d15a";
+const FAILED: &str = "2af4fb3b-d947-7ebb-a55c-0d794c298dc9";
+const CANCELLED: &str = "551d70f7-e034-761a-b0bb-4c12308730b1";
+const TIMER: &str = "1f2f83db-2016-79eb-9387-81ecf0cd83a5";
+const SIGNAL: &str = "a54b0d91-1850-7392-919d-d7d434ec2c56";
+const INBOX: &str = "18b72207-70d2-77c5-8642-0c8599a04aef";
+const BIG_LIVE: &str = "2c582b9e-1961-750f-be22-215ba1ff1918";
+const WEBHOOK: &str = "6e4cacb5-4098-7d30-88c3-933c639bdaad";
+const PARENT: &str = "85df88e9-7e9c-7d21-8f60-46463925e0b1";
+const CHILD: &str = "e1dced5d-e291-7195-be97-f0d0ea8e5bf6";
+const QUARANTINED: &str = "55872074-cf3c-79e1-8326-dad575e80391";
+const DEFERRED: &str = "f9c322e4-79c4-735d-ae70-d0f08fa8a8b1";
+const FORK: &str = "e206c2c7-f3cd-701f-b2d5-81899e11fb5d";
+const HOST: &str = "9e5651b0-ef95-7636-82c9-c08ce3ca2634";
+
+/// The payload above 64 KiB the ended and live runs hold: `{"text": "b" × 100 000}`.
+const BIG: &str = "fb3a224297affd9c23852a92179568da187a161043a76d58ca6b12ef6e529618";
+/// The test written by hand.
+const TEST: &str = "fa89ec08d9fd85b9458a351547bb1c3262ebcc720090b21ba2a448a8a4710016";
+
+const CLUSTER_SECRET: &str = "the-cluster-secret-of-the-tests-0123456789";
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn master_key() -> String {
+    base64::engine::general_purpose::STANDARD.encode([9u8; 32])
+}
+
+/// The event names of each run's history, as the set-aside tables hold them.
+type Histories = BTreeMap<String, Vec<&'static str>>;
+
+async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Histories {
+    let mut histories = BTreeMap::new();
+    for run in legacy.runs(None, 100).await.unwrap() {
+        let entries = match run.history {
+            LegacyHistory::Entries(entries) => entries,
+            LegacyHistory::Archived(document) => blobs
+                .journal(&run.run.tenant, document)
+                .await
+                .unwrap()
+                .unwrap(),
+        };
+        histories.insert(
+            run.run.id.to_string(),
+            entries.iter().map(|entry| entry.event.name()).collect(),
+        );
+    }
+    histories
+}
+
+fn status(run: &rewind_api::runs::Run) -> RunStatus {
+    run.status
+}
+
+fn output(run: &rewind_api::runs::Run) -> Value {
+    run.output
+        .as_ref()
+        .and_then(|payload| payload.value.clone())
+        .unwrap_or(Value::Null)
+}
+
+/// The run once it ended, within 30 s.
+async fn ended(client: &Client, run: &str) -> rewind_api::runs::Run {
+    eventually(|| async {
+        let found = client.get_run(run, None).await.unwrap();
+        (!matches!(found.status, RunStatus::Pending | RunStatus::Active)).then_some(found)
+    })
+    .await
+}
+
+/// Every run reads back as the tables held it, and the live ones go on.
+async fn check(url: &str, client: &Client, histories: &Histories, webhooks: bool) {
+    assert_eq!(histories.len(), 15, "{histories:?}");
+    for (run, events) in histories {
+        let journal = client
+            .export_journal(run, JournalExport::Journal)
+            .await
+            .unwrap();
+        let read: Vec<String> = journal["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["event"]["type"].as_str().unwrap().to_owned())
+            .collect();
+        // A live run may already have gone on: what the tables held comes first.
+        assert!(
+            read.len() >= events.len() && read[..events.len()] == events[..],
+            "the history of {run}: {read:?}, expected {events:?} first"
+        );
+    }
+
+    // The ended runs.
+    let run = client.get_run(ARCHIVED, None).await.unwrap();
+    assert_eq!(status(&run), RunStatus::Completed);
+    assert_eq!(
+        output(&run),
+        json!({ "a": { "ok": true }, "m": 2_000, "b": 100_000, "n": 1 })
+    );
+    let run = client.get_run(COMPLETED, None).await.unwrap();
+    assert_eq!(
+        output(&run),
+        json!({ "a": { "ok": true }, "m": 2_000, "b": 100_000, "tail": "bbbbb" })
+    );
+    for holder in [ARCHIVED, COMPLETED, BIG_LIVE] {
+        assert_eq!(
+            client.get_payload(BIG, Some(holder)).await.unwrap(),
+            json!({ "text": "b".repeat(100_000) }),
+            "{holder} holds its payload above 64 KiB"
+        );
+    }
+    assert_eq!(
+        status(&client.get_run(FAILED, None).await.unwrap()),
+        RunStatus::Failed
+    );
+    assert_eq!(
+        status(&client.get_run(CANCELLED, None).await.unwrap()),
+        RunStatus::Cancelled
+    );
+    let fork = client.get_run(FORK, None).await.unwrap();
+    assert_eq!(output(&fork), json!({ "fixed": true }));
+    assert_eq!(fork.parent.map(|parent| parent.run), Some(FAILED.into()));
+
+    // A timer that came due while nothing ran fires; a signal in the inbox is delivered.
+    assert_eq!(
+        output(&ended(client, TIMER).await),
+        json!({ "slept": true, "size": 3_000 })
+    );
+    assert_eq!(
+        output(&ended(client, INBOX).await),
+        json!({ "first": { "n": 1 }, "second": { "n": 2 } })
+    );
+
+    // Signals end the runs that wait for them; a signal key moved with its run.
+    let again = client
+        .signal_run(
+            INBOX,
+            "first",
+            &json!({ "n": 3 }),
+            Some(&"key-first".parse().unwrap()),
+        )
+        .await;
+    assert!(again.is_err() || again.unwrap().duplicate);
+    client
+        .signal_run(SIGNAL, "approval", &json!({ "ok": true }), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        output(&ended(client, SIGNAL).await),
+        json!({ "approval": { "ok": true } })
+    );
+    client
+        .signal_run(BIG_LIVE, "done", &json!("yes"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        output(&ended(client, BIG_LIVE).await),
+        json!({ "b": 100_000, "m": 2_000, "done": "yes" })
+    );
+
+    // The workflow run its starter waits for passed its deadline (30 days, the default) while
+    // nothing ran: its deadline's timer moved with it and cancels it, and its end reaches the run
+    // that waits for it, whose `result()` rejects.
+    assert_eq!(status(&ended(client, CHILD).await), RunStatus::Cancelled);
+    let parent = ended(client, PARENT).await;
+    assert_eq!(status(&parent), RunStatus::Failed, "{parent:?}");
+
+    // The host tasks in flight, a deferred call among them, are handed again.
+    let mut worker = TaskWorker::open(
+        client,
+        &TaskStreamQuery {
+            tools: vec!["ask_human".into(), "slow".into()],
+            slots: Some(10),
+            ..TaskStreamQuery::default()
+        },
+    )
+    .await;
+    let mut handed = BTreeMap::new();
+    while handed.len() < 2 {
+        let task = worker.task().await;
+        handed.insert(task.tool.clone(), task);
+    }
+    for (tool, task) in &handed {
+        client
+            .complete_task(
+                &task.token,
+                &CompleteTask {
+                    result: json!({ "from": tool }),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(handed["ask_human"].run_id, HOST);
+    assert_eq!(handed["slow"].run_id, DEFERRED);
+    assert_eq!(
+        output(&ended(client, HOST).await),
+        json!({ "answer": { "from": "ask_human" } })
+    );
+    assert_eq!(
+        output(&ended(client, DEFERRED).await),
+        json!({ "from": "slow" })
+    );
+
+    // The webhook URL the script was given still signals it, where every run lives in one
+    // partition.
+    if webhooks {
+        let journal = client
+            .export_journal(WEBHOOK, JournalExport::Journal)
+            .await
+            .unwrap();
+        let hook = journal["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|entry| entry["event"]["result"]["value"]["url"].as_str())
+            .unwrap()
+            .to_owned();
+        let token = hook.rsplit('/').next().unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{url}/hooks/{token}"))
+            .json(&json!({ "merged": true }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 202);
+        assert_eq!(
+            output(&ended(client, WEBHOOK).await),
+            json!({ "url": hook, "merged": true })
+        );
+    }
+
+    // The quarantined run is not lost: it waits, quarantined or tried again by this build.
+    let quarantined = client.get_run(QUARANTINED, None).await.unwrap();
+    assert!(
+        matches!(quarantined.status, RunStatus::Active),
+        "{quarantined:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join(".rewind");
+    copy_tree(&fixture("embedded/rewind"), &dir);
+    let expected = {
+        let copy = temp.path().join("expected");
+        copy_tree(&fixture("embedded/rewind"), &copy);
+        let store = rewind_store_turso::TursoStore::open(
+            copy.join("journal.db"),
+            rewind_store_turso::MasterKey::from_bytes([9; 32]),
+        )
+        .await
+        .unwrap();
+        histories(
+            &store.legacy(),
+            &rewind_blob::LegacyFiles::new(copy.join("blobs")),
+        )
+        .await
+    };
+    let dir_text = dir.display().to_string();
+
+    // The embedded server refuses a directory whose runs did not move, and says how.
+    let Err(refused) = rewind_server::start(
+        ServerArgs::try_parse_from(["rewind server", "--embedded", "--dir", &dir_text]).unwrap(),
+    )
+    .await
+    else {
+        panic!("a directory of the journal store is refused");
+    };
+    assert_eq!(rewind_server::exit_code(&refused), 70);
+    assert!(
+        refused
+            .to_string()
+            .contains("rewind server migrate-runs --embedded"),
+        "{refused}"
+    );
+
+    let migrate = || {
+        MigrateArgs::try_parse_from([
+            "rewind server migrate-runs",
+            "--embedded",
+            "--dir",
+            &dir_text,
+        ])
+        .unwrap()
+    };
+    let report = migrate_runs(migrate()).await.unwrap();
+    assert_eq!(report.moved.len(), 15, "{report:?}");
+    assert!(report.failed.is_empty() && report.dropped, "{report:?}");
+    let again = migrate_runs(migrate()).await.unwrap();
+    assert!(
+        again.moved.is_empty() && again.failed.is_empty(),
+        "{again:?}"
+    );
+
+    // The layout of the run plane, and nothing of the journal store's.
+    assert!(!dir.join("journal.db").exists());
+    assert!(dir.join("control.db").exists());
+    assert!(dir.join("partitions/0").is_dir());
+    assert!(
+        dir.join(format!("tests/local/sha256/{}/{TEST}", &TEST[..2]))
+            .exists()
+    );
+    assert!(!dir.join("blobs/tests").exists());
+    assert!(!dir.join("blobs/local/sha256").exists());
+    for run in [ARCHIVED, COMPLETED, FAILED, CANCELLED, FORK] {
+        assert!(
+            dir.join(format!("runs/local/{run}/1.json")).exists(),
+            "{run}"
+        );
+    }
+    for run in [ARCHIVED, COMPLETED, BIG_LIVE] {
+        assert!(
+            dir.join(format!("blobs/local/{run}/sha256/{}/{BIG}", &BIG[..2]))
+                .exists(),
+            "{run}"
+        );
+    }
+    let store = rewind_store_turso::TursoStore::open(
+        dir.join("control.db"),
+        rewind_store_turso::MasterKey::from_bytes([9; 32]),
+    )
+    .await
+    .unwrap();
+    assert!(store.legacy().runs(None, 1).await.unwrap().is_empty());
+    drop(store);
+
+    // A server on the directory: the runs read back, and the live ones go on.
+    let key = master_key();
+    let bucket = dir.display().to_string();
+    let store = format!("turso:{}", dir.join("control.db").display());
+    let running = rewind_server::start(
+        ServerArgs::try_parse_from([
+            "rewind server",
+            "--store",
+            &store,
+            "--bucket",
+            &bucket,
+            "--master-key",
+            &key,
+            "--admin-key",
+            ADMIN_KEY,
+            "--admin-tenant",
+            "local",
+            "--listen",
+            "127.0.0.1:0",
+            "--executors",
+            "2",
+        ])
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let url = running.url().unwrap();
+    let client = Client::remote(&url, Some(ADMIN_KEY)).unwrap();
+    check(&url, &client, &expected, true).await;
+    running.stop().await;
+
+    // The embedded server starts on it.
+    let running = rewind_server::start(
+        ServerArgs::try_parse_from(["rewind server", "--embedded", "--dir", &dir_text]).unwrap(),
+    )
+    .await
+    .unwrap();
+    running.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archive() {
+    let Some(postgres) = Postgres::start() else {
+        return;
+    };
+    postgres.load(&fixture("postgres/dump.sql"));
+    let temp = tempfile::tempdir().unwrap();
+    let bucket = temp.path().join("bucket");
+    copy_tree(&fixture("postgres/bucket"), &bucket);
+    let expected = {
+        let store = rewind_store_postgres::PostgresStore::connect(
+            &rewind_store_postgres::Config::new(postgres.url()),
+            rewind_store_postgres::MasterKey::from_bytes([9; 32]),
+        )
+        .await
+        .unwrap();
+        let expected = histories(&store.legacy(), &rewind_blob::LegacyFiles::new(&bucket)).await;
+        store.close().await;
+        expected
+    };
+    let key = master_key();
+    let url = postgres.url();
+    let bucket_text = bucket.display().to_string();
+    let options = |command: &str| {
+        let mut options = vec![
+            command.to_owned(),
+            "--store".into(),
+            url.clone(),
+            "--bucket".into(),
+            bucket_text.clone(),
+            "--partitions".into(),
+            "4".into(),
+            "--master-key".into(),
+            key.clone(),
+            "--cluster-secret".into(),
+            CLUSTER_SECRET.into(),
+        ];
+        if command == "rewind server" {
+            options.extend(
+                [
+                    "--link-listen",
+                    "127.0.0.1:0",
+                    "--admin-key",
+                    ADMIN_KEY,
+                    "--admin-tenant",
+                    "acme",
+                    "--listen",
+                    "127.0.0.1:0",
+                    "--executors",
+                    "2",
+                ]
+                .map(str::to_owned),
+            );
+        }
+        options
+    };
+    let report =
+        migrate_runs(MigrateArgs::try_parse_from(options("rewind server migrate-runs")).unwrap())
+            .await
+            .unwrap();
+    assert_eq!(report.moved.len(), 15, "{report:?}");
+    assert!(report.failed.is_empty() && report.dropped, "{report:?}");
+    let partitions: std::collections::BTreeSet<_> =
+        report.moved.iter().map(|moved| moved.partition).collect();
+    assert_eq!(partitions.len(), 2, "alice and bob have a partition each");
+    let again =
+        migrate_runs(MigrateArgs::try_parse_from(options("rewind server migrate-runs")).unwrap())
+            .await
+            .unwrap();
+    assert!(again.moved.is_empty(), "{again:?}");
+    assert_eq!(
+        postgres.psql_scalar("SELECT count(*) FROM pg_namespace WHERE nspname = 'legacy'"),
+        "0",
+        "the schema legacy is dropped"
+    );
+    assert_eq!(
+        postgres.psql_scalar("SELECT count(*) FROM legacy_runs"),
+        "15",
+        "every version 7 id finds its partition"
+    );
+    for run in [ARCHIVED, COMPLETED, FAILED, CANCELLED, FORK] {
+        assert!(
+            bucket.join(format!("runs/acme/{run}/1.json")).exists(),
+            "{run}"
+        );
+    }
+
+    let running =
+        rewind_server::start(ServerArgs::try_parse_from(options("rewind server")).unwrap())
+            .await
+            .unwrap();
+    let server = running.url().unwrap();
+    let client = Client::remote(&server, Some(ADMIN_KEY)).unwrap();
+    check(&server, &client, &expected, false).await;
+    running.stop().await;
+}

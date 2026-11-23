@@ -725,6 +725,64 @@ impl Postgres {
     pub(crate) fn url(&self) -> String {
         format!("postgres://rewind:rewind-secret@{}/postgres", self.address)
     }
+
+    /// The first column of the first row `sql` returns in the database `postgres`.
+    pub(crate) fn psql_scalar(&self, sql: &str) -> String {
+        run(&[
+            "exec", &self.name, "psql", "-U", "rewind", "-d", "postgres", "-tAc", sql,
+        ])
+        .trim()
+        .to_owned()
+    }
+
+    /// Runs the SQL of `script` (a `pg_dump`) in the database `postgres`, with `psql`.
+    pub(crate) fn load(&self, script: &std::path::Path) {
+        use std::io::Write as _;
+        let mut psql = Command::new("docker")
+            .args([
+                "exec",
+                "-i",
+                &self.name,
+                "psql",
+                "-q",
+                "-U",
+                "rewind",
+                "-d",
+                "postgres",
+                "-v",
+                "ON_ERROR_STOP=1",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        psql.stdin
+            .take()
+            .unwrap()
+            .write_all(&std::fs::read(script).unwrap())
+            .unwrap();
+        let output = psql.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "psql: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// Copies the files under `from` to `to`, directories included.
+pub(crate) fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
 }
 
 impl Drop for Postgres {
