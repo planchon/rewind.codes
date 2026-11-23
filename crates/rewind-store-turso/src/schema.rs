@@ -805,6 +805,9 @@ CREATE TABLE legacy_runs (
 /// references, the feed, the read model's tables, and the namespaces' use per day, quota alerts
 /// and script counts. `rewind server migrate-runs` reads them, moves each run into the partition
 /// or the archive, and drops them once every run moved.
+///
+/// A tenant keeps one retention, how long an ended run is kept from its end: `retention_ms`,
+/// which was the retention of archived journals; the other three go.
 const V12: &str = r#"
 ALTER TABLE runs RENAME TO legacy_journal_runs;
 ALTER TABLE history RENAME TO legacy_history;
@@ -826,6 +829,11 @@ ALTER TABLE tool_calls RENAME TO legacy_tool_calls;
 ALTER TABLE usage RENAME TO legacy_usage;
 ALTER TABLE quota_alerts RENAME TO legacy_quota_alerts;
 ALTER TABLE namespace_scripts RENAME TO legacy_namespace_scripts;
+
+ALTER TABLE tenants DROP COLUMN journal_retention_ms;
+ALTER TABLE tenants DROP COLUMN read_model_retention_ms;
+ALTER TABLE tenants DROP COLUMN payload_grace_ms;
+ALTER TABLE tenants RENAME COLUMN archive_retention_ms TO retention_ms;
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.

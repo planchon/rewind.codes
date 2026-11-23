@@ -101,30 +101,19 @@ impl Tenant {
     }
 }
 
-/// How long the data of a finished run is kept (`archi/06-storage-and-scale.md`, "Retention
-/// and deletion"). Active runs are never touched.
+/// How long an ended run is kept (`archi/06-storage-and-scale.md`, "Retention and deletion"):
+/// its summary, its sealed journals and its payloads, from its end; then a timer erases it.
+/// Active runs are never touched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Retention {
-    /// A finished run's journal stays in the store this long after the run ended; then it is
-    /// archived as a journal document. 30 days by default.
-    pub journal: Duration,
-    /// An archived journal is kept this long after it was archived; then the run is deleted.
     /// 1 year by default.
-    pub archive: Duration,
-    /// The read model keeps a run this long after it ended. 90 days by default.
-    pub read_model: Duration,
-    /// A payload no run references any more is deleted after this long. 24 hours by default.
-    pub payload_grace: Duration,
+    pub runs: Duration,
 }
 
 impl Default for Retention {
     fn default() -> Self {
-        const DAY: u64 = 86_400;
         Self {
-            journal: Duration::from_secs(30 * DAY),
-            archive: Duration::from_secs(365 * DAY),
-            read_model: Duration::from_secs(90 * DAY),
-            payload_grace: Duration::from_secs(DAY),
+            runs: Duration::from_secs(365 * 86_400),
         }
     }
 }

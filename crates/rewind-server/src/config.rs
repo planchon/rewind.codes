@@ -642,7 +642,7 @@ impl ServerArgs {
             if kept.is_zero() {
                 return Err(ConfigError::new("--retention must be above zero"));
             }
-            retention.archive = kept;
+            retention.runs = kept;
         }
         if let Some(url) = &self.public_url
             && !(url.starts_with("http://") || url.starts_with("https://"))
@@ -1118,7 +1118,7 @@ mod tests {
                 max_bytes: 512 << 20
             }
         );
-        assert_eq!(config.retention.archive, Duration::from_secs(30 * DAY));
+        assert_eq!(config.retention.runs, Duration::from_secs(30 * DAY));
 
         let mut longer = base.to_vec();
         longer.extend(["--default-ttl", "8d", "--max-ttl", "7d"]);

@@ -36,3 +36,9 @@ ALTER TABLE namespace_scripts SET SCHEMA legacy;
 
 ALTER STATISTICS run_labels_per_tenant SET SCHEMA legacy;
 ALTER STATISTICS tool_calls_per_tenant SET SCHEMA legacy;
+
+ALTER TABLE tenants
+    DROP COLUMN journal_retention_ms,
+    DROP COLUMN read_model_retention_ms,
+    DROP COLUMN payload_grace_ms;
+ALTER TABLE tenants RENAME COLUMN archive_retention_ms TO retention_ms;

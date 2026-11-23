@@ -1937,7 +1937,7 @@ async fn seal_attempt<P: Plane>(
         .await
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| crate::ports::Tenant::new(run.tenant.clone()));
-    Ok(tenant.retention.archive)
+    Ok(tenant.retention.runs)
 }
 
 /// Drops what the control plane keeps of an erased namespace: its tests, its secrets and their

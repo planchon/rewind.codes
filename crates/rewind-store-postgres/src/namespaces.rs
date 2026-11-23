@@ -64,8 +64,7 @@ pub(crate) fn display_name_of(text: String) -> Result<DisplayName, Error> {
 /// column of version 1, `active_run_quota`.
 fn tenant_columns() -> String {
     format!(
-        "id, journal_retention_ms, archive_retention_ms, read_model_retention_ms, \
-         payload_grace_ms, cpu_per_month_ms, active_run_quota, runs_per_month, scripts, \
+        "id, retention_ms, cpu_per_month_ms, active_run_quota, runs_per_month, scripts, \
          max_ttl_ms, max_script_lines, {}",
         quota_columns("default_")
     )
@@ -75,13 +74,10 @@ fn tenant_from_row(row: &PgRow) -> Result<Tenant, Error> {
     Ok(Tenant {
         id: row.tenant(0)?,
         retention: Retention {
-            journal: row.duration(1)?,
-            archive: row.duration(2)?,
-            read_model: row.duration(3)?,
-            payload_grace: row.duration(4)?,
+            runs: row.duration(1)?,
         },
-        quotas: quotas_from_row(row, 5)?,
-        namespace_defaults: quotas_from_row(row, 11)?,
+        quotas: quotas_from_row(row, 2)?,
+        namespace_defaults: quotas_from_row(row, 8)?,
     })
 }
 
@@ -93,7 +89,7 @@ pub(crate) async fn put_tenant(conn: &mut PgConnection, record: &Tenant) -> Resu
         .map(|column| format!("{column} = EXCLUDED.{column}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let placeholders = (1..=17)
+    let placeholders = (1..=14)
         .map(|n| format!("${n}"))
         .collect::<Vec<_>>()
         .join(", ");
@@ -103,10 +99,7 @@ pub(crate) async fn put_tenant(conn: &mut PgConnection, record: &Tenant) -> Resu
     );
     let mut query = sqlx::query(&sql)
         .bind(tenant(&record.id))
-        .bind(ms(record.retention.journal))
-        .bind(ms(record.retention.archive))
-        .bind(ms(record.retention.read_model))
-        .bind(ms(record.retention.payload_grace));
+        .bind(ms(record.retention.runs));
     for value in quota_values(&record.quotas)
         .into_iter()
         .chain(quota_values(&record.namespace_defaults))

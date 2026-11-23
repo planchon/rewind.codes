@@ -53,8 +53,7 @@ pub(crate) fn quota_values(quotas: &Quotas) -> [Value; 6] {
 /// column of version 1, `active_run_quota`.
 fn tenant_columns() -> String {
     format!(
-        "id, journal_retention_ms, archive_retention_ms, read_model_retention_ms, \
-         payload_grace_ms, cpu_per_month_ms, active_run_quota, runs_per_month, scripts, \
+        "id, retention_ms, cpu_per_month_ms, active_run_quota, runs_per_month, scripts, \
          max_ttl_ms, max_script_lines, {}",
         quota_columns("default_")
     )
@@ -64,24 +63,15 @@ fn tenant_from_row(row: &Row) -> Result<Tenant, Error> {
     Ok(Tenant {
         id: row.tenant(0)?,
         retention: Retention {
-            journal: row.duration(1)?,
-            archive: row.duration(2)?,
-            read_model: row.duration(3)?,
-            payload_grace: row.duration(4)?,
+            runs: row.duration(1)?,
         },
-        quotas: quotas_from_row(row, 5)?,
-        namespace_defaults: quotas_from_row(row, 11)?,
+        quotas: quotas_from_row(row, 2)?,
+        namespace_defaults: quotas_from_row(row, 8)?,
     })
 }
 
 pub(crate) async fn put_tenant(connection: &Connection, record: &Tenant) -> Result<(), Error> {
-    let mut params = vec![
-        tenant(&record.id),
-        ms(record.retention.journal),
-        ms(record.retention.archive),
-        ms(record.retention.read_model),
-        ms(record.retention.payload_grace),
-    ];
+    let mut params = vec![tenant(&record.id), ms(record.retention.runs)];
     params.extend(quota_values(&record.quotas));
     params.extend(quota_values(&record.namespace_defaults));
     sql::execute(
@@ -89,7 +79,7 @@ pub(crate) async fn put_tenant(connection: &Connection, record: &Tenant) -> Resu
         &format!(
             "INSERT OR REPLACE INTO tenants ({}) VALUES ({})",
             tenant_columns(),
-            sql::placeholders(17)
+            sql::placeholders(14)
         ),
         params,
     )
