@@ -1593,3 +1593,16 @@ The stream's contract and the dashboard's layers stay.
 | A level-0 table every 4096 batches or 64 MiB: a takeover replays at most 4096 WAL objects | Fewer | SlateDB refuses less than 4096 |
 | One block cache per process, on moka, 256 MiB of blocks and 64 MiB of indexes and filters, shared by the partitions it opens | SlateDB's default of 512 MiB and 128 MiB per database | 64 partitions per node |
 | Scans keep their blocks in the cache and read ahead 256 KiB with two fetches; tables and WAL objects are compressed with lz4 | One block per request, uncompressed | R2 charges by request: a cold history is one or two requests |
+
+### Taken while building the control plane of the run plane (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| Catalog, access and secrets changes go on `NOTIFY control_plane`, the partition map on `partition_map`, both in the write's transaction; a payload names a kind and keys (`{"k":"secret","t":…,"ns":…,"n":…}`), never a value, but for the partition map, sent whole and compact; a payload above 7,900 bytes goes as numbered frames; a stream that reads a broken sequence ends, and its listener drops its caches | One channel; values in the payload | `NOTIFY` holds 8,000 bytes. The suite wants every notification to carry the map as it committed. |
+| A node's lock key is the first 8 bytes of SHA-256(`rewind node/<id>`); the node holds it exclusively on a connection of its own, a watcher waits on it in shared mode on another; the dedicated connections set `tcp_keepalives_idle=5`, `interval=1`, `count=5` and `tcp_user_timeout=10000` | A lease row | About 10 s for a machine that vanishes; at once for a process that dies (measured: 12 ms for a killed process). |
+| The locks are taken in a database of their own on the same server (`--cluster-database`, `postgres` by default) | The control plane's database | A backend blocked on a lock holds a snapshot, which holds back VACUUM for its database for as long as it waits. In a database that stores nothing, that costs nothing. |
+| The ring is the rows of `nodes`, the dead ones included until the watcher that names a dead node deletes its row while it holds its lock; `leave` only releases the lock | A ring of live members | A ring of live members loses the node that died just before a watch began. |
+| A write that changes nothing sends nothing; usage stamps (a connection's last use, a secret's reads, OAuth clients and codes, signing keys) send nothing | Sending on every write | No change, no message. |
+| `namespaces.partition` is set for the rows created before it by `place_namespaces`, run once before the catalog serves | A migration computing the hash in SQL | The hash is the engine's, in Rust. |
+| The Turso cluster's members live in the process, and its partition map and epochs in the database | A cluster of one member only | The cluster suite joins three members; embedded, there is one. |
+| The archive's cache keeps an attempt when it reads one, never when it puts it | Caching at put | Another process may have written the first put, which is the one kept. |

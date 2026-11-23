@@ -188,7 +188,10 @@ read forever after, so every process caches it without asking again.
   lock of the next. When a node dies, its session ends and its lock comes free: the node waiting
   on it moves the dead node's partitions to the others in one transaction (each partition's
   `epoch` + 1, `NOTIFY partition_map`), and waits on the next node of the ring. A process that dies
-  frees its lock at once; a machine that vanishes, once TCP keepalive gives up, about 10 s. A node
+  frees its lock at once; a machine that vanishes, once TCP keepalive gives up, about 10 s. The
+  locks live in a database of their own on the same Postgres server (`postgres` by default),
+  where nothing else is stored: a watcher blocked on a lock holds back the cleanup of that database
+  only. A node whose lock connection fails gives its partitions up at once. A node
   that joins takes some partitions from the others, and one that stops hands its partitions over
   before it exits. Partitions go to nodes by rendezvous hashing, so a change moves only what it
   must.
