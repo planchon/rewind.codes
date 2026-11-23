@@ -2,7 +2,7 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
-## 0.5.0 (unreleased)
+## 0.5.0 (2026-11-23)
 
 For the run plane on object storage, where nothing polls: host tools are handed on a task stream, a wait is one
 request. Runs are named by their handles, scripts have titles, and workflow versions have numbers.
