@@ -261,6 +261,55 @@ async fn a_lost_message_is_rebuilt_from_the_records_when_the_partition_moves() {
     assert_eq!(calls[0].attempt, 2);
 }
 
+/// A call that asked its organization actor for a slot, when the actor moves: the actor that
+/// opens on the next node knows none of the slots asked of the one before, and every call that
+/// waits for one asks it again. The call goes once, the run's partition never moved.
+#[tokio::test]
+async fn a_call_waiting_for_its_slot_asks_again_when_the_organization_moves() {
+    let mut world = two_nodes(mcp_caller(), RecordingDispatcher::echo(), 4).await;
+    let (a, b) = (node("node-a"), node("node-b"));
+    // The run lives on one node, its tenant's organization actor on the other.
+    let map = world.driver.map(&a).unwrap();
+    let home = home_partition(&TenantId::local(), world.partitions);
+    let home_node = map.owner(home).unwrap().clone();
+    let other = if home_node == a { b.clone() } else { a.clone() };
+    let (namespace, partition) = namespace_on(&world, &other);
+    world.at = other.clone();
+
+    // The request for the call's slot is lost on the link, as when the actor is moving.
+    world.driver.faults().drop_next(1, |request| {
+        matches!(
+            request,
+            NodeRequest::Organization { request, .. }
+                if matches!(**request, rewind_engine::ports::link::OrgRequest::Slot(_))
+        )
+    });
+    let run = world
+        .start(in_namespace(mcp_request("mcp"), &namespace))
+        .await
+        .unwrap()
+        .run;
+    world.settle().await;
+    assert_eq!(world.driver.faults().dropped, 1);
+    assert!(
+        world.plane.dispatcher.calls().is_empty(),
+        "the call waits for a slot nobody knows it asked"
+    );
+
+    // The organization's node dies: its partition opens on the run's node, and the call asks
+    // again.
+    world.driver.kill(&home_node);
+    world.settle().await;
+    assert_eq!(
+        world.driver.map(&other).unwrap().owner(partition),
+        Some(&other)
+    );
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+    let calls = world.plane.dispatcher.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].attempt, 1, "the call was never interrupted");
+}
+
 #[tokio::test]
 async fn an_owner_cut_off_is_fenced_at_its_next_commit() {
     let mut world = two_nodes(waiter(), RecordingDispatcher::echo(), 4).await;

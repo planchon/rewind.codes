@@ -30,7 +30,7 @@ use crate::ports::link::{
     Decision, HostFailure, HostTaskOffer, NodeRequest, OrgRequest, PartitionReply, Refusal,
     SlotRequest, TaskAnswer,
 };
-use crate::ports::partition::Change;
+use crate::ports::partition::{Change, home_partition};
 use crate::ports::{
     CredentialsExpiredReason, Dispatched, DueTimer, ParkKind, ParkReason, Projection, RunRef,
     SecretId, TaskChange, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, TimerChange,
@@ -96,38 +96,69 @@ impl<P: Plane> Owner<P> {
         };
         match server {
             Some(server) => {
-                let limit = slot
-                    .toolset
-                    .as_ref()
-                    .and_then(|toolset| match &record.task.route {
-                        ToolRoute::Mcp { server } => toolset.server(server).map(|s| s.concurrency),
-                        ToolRoute::Api { api } => toolset.api(api).map(|api| api.concurrency),
-                        _ => None,
-                    })
-                    .unwrap_or(8);
                 self.flights.insert(
                     task.clone(),
                     Flight::Asked {
                         server: server.clone(),
                     },
                 );
-                let tenant = task.run.tenant.clone();
-                self.tell(
-                    Target::Home(tenant.clone()),
-                    NodeRequest::Organization {
-                        tenant,
-                        request: Box::new(OrgRequest::Slot(SlotRequest {
-                            partition: self.partition,
-                            epoch: self.epoch,
-                            task: task.clone(),
-                            server,
-                            limit,
-                        })),
-                    },
-                );
+                self.ask_slot(task, server);
             }
             None => self.send(task, record, None, host),
         }
+    }
+
+    /// Asks the organization actor for a slot of `server` for the task: its concurrency, from
+    /// the run's toolset.
+    fn ask_slot(&mut self, task: &TaskRef, server: String) {
+        let limit = self
+            .slot(task.run.id)
+            .and_then(|slot| {
+                let record = slot.tasks.get(&task.seq)?;
+                let toolset = slot.toolset.as_ref()?;
+                match &record.task.route {
+                    ToolRoute::Mcp { server } => toolset.server(server).map(|s| s.concurrency),
+                    ToolRoute::Api { api } => toolset.api(api).map(|api| api.concurrency),
+                    _ => None,
+                }
+            })
+            .unwrap_or(8);
+        let tenant = task.run.tenant.clone();
+        self.tell(
+            Target::Home(tenant.clone()),
+            NodeRequest::Organization {
+                tenant,
+                request: Box::new(OrgRequest::Slot(SlotRequest {
+                    partition: self.partition,
+                    epoch: self.epoch,
+                    task: task.clone(),
+                    server,
+                    limit,
+                })),
+            },
+        );
+    }
+
+    /// The partition `home` opened again: the organization actors homed there are new, and know
+    /// none of the slots asked of the ones before. Each call of a tenant homed there that waits
+    /// for its slot asks again; dropped, it would wait forever.
+    pub(crate) fn home_reopened(&mut self, home: rewind_core::PartitionId) -> Vec<Effect<P>> {
+        if self.is_closed() {
+            return Vec::new();
+        }
+        let asked: Vec<(TaskRef, String)> = self
+            .flights
+            .iter()
+            .filter(|(task, _)| home_partition(&task.run.tenant, self.config.partitions) == home)
+            .filter_map(|(task, flight)| match flight {
+                Flight::Asked { server } => Some((task.clone(), server.clone())),
+                _ => None,
+            })
+            .collect();
+        for (task, server) in asked {
+            self.ask_slot(&task, server);
+        }
+        std::mem::take(&mut self.out)
     }
 
     /// Hands the task to the call executor, with a new token.

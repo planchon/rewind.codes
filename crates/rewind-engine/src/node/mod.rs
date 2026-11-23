@@ -374,6 +374,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                     EdgeNotice::Reopened { partition } => {
                         let mut effects = vec![Effect::Reply(reply, NodeReply::Done)];
                         effects.extend(self.attach_again(partition));
+                        effects.extend(self.ask_slots_again(partition));
                         return effects;
                     }
                 };
@@ -763,6 +764,17 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 },
                 asker: None,
             })
+            .collect();
+        self.route(effects)
+    }
+
+    /// The calls of this node's owners that wait for a slot of a tenant homed in `partition`,
+    /// asked again of its organization actor: the partition was opened, and its actors are new.
+    fn ask_slots_again(&mut self, partition: PartitionId) -> Vec<Effect<P>> {
+        let effects: Vec<Effect<P>> = self
+            .owners
+            .values_mut()
+            .flat_map(|owner| owner.home_reopened(partition))
             .collect();
         self.route(effects)
     }
