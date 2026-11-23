@@ -33,6 +33,8 @@
 //!   plane of its own in the driver; the checks of a test against its toolset and its
 //!   workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
+//! - [`migrate`]: `rewind server migrate-runs`, the runs of the set-aside tables moved into their
+//!   partitions and the archive, once.
 //! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions),
 //!   archive, link between nodes, blobs, access, secrets, telemetry and webhooks; a fake
 //!   identity provider; static tool responses and type-checking; system and virtual time;
@@ -60,6 +62,7 @@ mod executors;
 pub mod failures;
 pub mod fork;
 pub mod metrics;
+pub mod migrate;
 pub mod mock;
 pub mod node;
 mod org;

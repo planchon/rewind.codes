@@ -356,6 +356,13 @@ impl Apply<'_> {
                 }
                 Ok(())
             }
+            Change::SignalKey { run, key } => {
+                let state = self.existing(&run).await?;
+                if !state.head.is_ended() {
+                    self.put(&keys::signal_key(&run, &key), &record::SignalKey {})?;
+                }
+                Ok(())
+            }
             Change::Activation(activation) => self.activate(*activation).await,
             Change::Task { run, seq, change } => {
                 let ended = self.existing_ended(&run).await?;

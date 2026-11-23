@@ -22,7 +22,7 @@ use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workfl
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, Secret, StoredScript,
+    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, Secret, StoredScript,
     StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant,
     TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
@@ -1134,6 +1134,24 @@ impl CatalogStore for PostgresCatalog {
                 })
             })
             .transpose()
+    }
+
+    async fn put_legacy_run(
+        &self,
+        run: &RunRef,
+        partition: PartitionId,
+    ) -> Result<(), CatalogError> {
+        sqlx::query(
+            "INSERT INTO legacy_runs (id, tenant, partition) VALUES ($1, $2, $3) \
+             ON CONFLICT (id) DO UPDATE SET partition = EXCLUDED.partition",
+        )
+        .bind(run.id.as_uuid())
+        .bind(tenant(&run.tenant))
+        .bind(i32::from(partition.get()))
+        .execute(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(())
     }
 
     // ---------------------------------------------------------------------------------------

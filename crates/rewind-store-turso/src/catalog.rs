@@ -18,7 +18,7 @@ use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workfl
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, Secret, StoredScript,
+    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, Secret, StoredScript,
     StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant,
     TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
@@ -949,6 +949,25 @@ impl CatalogStore for TursoCatalog {
             })
         })
         .transpose()
+    }
+
+    async fn put_legacy_run(
+        &self,
+        run: &RunRef,
+        partition: PartitionId,
+    ) -> Result<(), CatalogError> {
+        let connection = self.store.connection().await?;
+        sql::execute(
+            &connection,
+            "INSERT OR REPLACE INTO legacy_runs (id, tenant, partition) VALUES (?, ?, ?)",
+            vec![
+                sql::run_id(run.id),
+                sql::tenant(&run.tenant),
+                sql::int(u64::from(partition.get())),
+            ],
+        )
+        .await?;
+        Ok(())
     }
 
     // ---------------------------------------------------------------------------------------

@@ -653,7 +653,13 @@ impl<P: Plane> Edge<P> {
         payload: JsonValue,
         key: Option<String>,
     ) -> Result<Enqueued, EdgeError> {
-        let (_, partition) = self.partition_of_token(token).await?;
+        let partition = match crate::partition::tokens::run_of(token) {
+            Some(run) => self.partition_of(run).await?,
+            // The token of a run `migrate-runs` moved names no run: a deployment of one
+            // partition holds it there, as it holds every run.
+            None if self.config.partitions.get() == 1 => PartitionId::new(0),
+            None => return Err(Refusal::TaskGone.into()),
+        };
         let request = PartitionRequest::Webhook {
             token: token.to_owned(),
             payload,

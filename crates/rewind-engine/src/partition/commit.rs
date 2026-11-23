@@ -124,6 +124,7 @@ fn changed_run(change: &Change) -> Option<&RunRef> {
     match change {
         Change::CreateRun(create) => Some(&create.run),
         Change::Enqueue { run, .. }
+        | Change::SignalKey { run, .. }
         | Change::Task { run, .. }
         | Change::Failure { run, .. }
         | Change::Interrupted { run }

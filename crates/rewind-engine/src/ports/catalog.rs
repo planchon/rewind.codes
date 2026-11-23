@@ -22,7 +22,7 @@ use crate::ports::journal::{
 use crate::ports::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
 };
-use crate::ports::tenancy::{Tenant, TenantId};
+use crate::ports::tenancy::{RunRef, Tenant, TenantId};
 use crate::ports::webhooks::Subscription;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -373,4 +373,13 @@ pub trait CatalogStore: Send + Sync {
         let _ = run;
         std::future::ready(Ok(None))
     }
+
+    /// Records where a run `migrate-runs` moved lives (`legacy_runs`), once its partition holds
+    /// it. Recording it again, with the same partition, changes nothing; nothing is announced:
+    /// the command runs while no node does.
+    fn put_legacy_run(
+        &self,
+        run: &RunRef,
+        partition: PartitionId,
+    ) -> impl Future<Output = Result<(), CatalogError>> + Send;
 }

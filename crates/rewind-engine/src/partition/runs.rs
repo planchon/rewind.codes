@@ -48,8 +48,8 @@ pub(crate) enum Step {
     },
     /// The run and signal a webhook's token is bound to.
     Webhook {
-        /// The run its token names.
-        run: RunId,
+        /// The run its token names; none for a token of a run `migrate-runs` moved.
+        run: Option<RunId>,
         payload: JsonValue,
         key: Option<String>,
         reply: ReplyTo,
@@ -288,7 +288,9 @@ impl<P: Plane> Owner<P> {
                 // The run it names ended, was erased, or never was.
                 Ok(None) => self.reply(
                     reply,
-                    PartitionReply::Enqueued(Err(Refusal::RunNotFound(run))),
+                    PartitionReply::Enqueued(Err(
+                        run.map_or(Refusal::TaskGone, Refusal::RunNotFound)
+                    )),
                 ),
                 Err(error) => self.reply(
                     reply,
@@ -783,10 +785,7 @@ impl<P: Plane> Owner<P> {
         let Some(log) = self.log.clone() else {
             return;
         };
-        let Some(run) = super::tokens::run_of(token) else {
-            self.reply(reply, PartitionReply::Enqueued(Err(Refusal::TaskGone)));
-            return;
-        };
+        let run = super::tokens::run_of(token);
         let hash = super::tokens::hash(token);
         let partition = self.partition;
         self.out.push(job(async move {

@@ -8,9 +8,9 @@ use crate::adapters::ControlPlaneChanges;
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, StoredScript, StoredToolset,
-    StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord,
-    ToolDeclarations, WorkflowFilter, namespace_partition,
+    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, StoredScript,
+    StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant,
+    TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 
 /// `CatalogStore` in memory: engine tests and mock mode. Every write sends its change through
@@ -92,13 +92,6 @@ impl MemoryCatalog {
             state: Mutex::default(),
             changes,
         }
-    }
-
-    /// Records where a run moved from the `legacy` schema lives, as `migrate-runs` does: its
-    /// version 7 id names no partition.
-    pub fn put_legacy_run(&self, run: RunId, partition: PartitionId) -> Result<(), CatalogError> {
-        self.lock()?.legacy.insert(run, partition);
-        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, State>, CatalogError> {
@@ -715,5 +708,14 @@ impl CatalogStore for MemoryCatalog {
 
     async fn legacy_partition(&self, run: RunId) -> Result<Option<PartitionId>, CatalogError> {
         Ok(self.lock()?.legacy.get(&run).copied())
+    }
+
+    async fn put_legacy_run(
+        &self,
+        run: &RunRef,
+        partition: PartitionId,
+    ) -> Result<(), CatalogError> {
+        self.lock()?.legacy.insert(run.id, partition);
+        Ok(())
     }
 }

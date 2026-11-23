@@ -118,7 +118,13 @@ mod tests {
         );
         let legacy = RunId::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001);
         assert_eq!(router.partition_of(&catalog, legacy).await.unwrap(), None);
-        catalog.put_legacy_run(legacy, PartitionId::new(3)).unwrap();
+        catalog
+            .put_legacy_run(
+                &crate::ports::RunRef::new(crate::ports::TenantId::local(), legacy),
+                PartitionId::new(3),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             router.partition_of(&catalog, legacy).await.unwrap(),
             Some(PartitionId::new(3))

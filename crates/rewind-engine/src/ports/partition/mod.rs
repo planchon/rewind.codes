@@ -100,7 +100,8 @@ pub trait PartitionStore: Send + Sync {
 ///   or has been erased. Also refused: a run created twice, an inbox item or an outbox entry
 ///   numbered twice, a task created twice, a webhook token bound to two runs, an activation of
 ///   an attempt that is not the run's or has ended, the seal of an attempt that has not ended.
-/// - **Signal keys.** An `Enqueue` with a signal key already seen for that run changes nothing.
+/// - **Signal keys.** An `Enqueue` with a signal key already seen for that run, or recorded by a
+///   `SignalKey`, changes nothing.
 /// - **Ends.** A terminal `Activation` (its head's status is terminal) clears the run's timers
 ///   of the attempt, tool tasks and inbox, and its webhook tokens stop resolving; nothing is
 ///   enqueued for an ended attempt (an `Enqueue` changes nothing).
@@ -315,6 +316,13 @@ pub enum Change {
         run: RunRef,
         item: InboxItem,
         signal_key: Option<String>,
+    },
+    /// Records a signal key as taken by the run, without an item: an `Enqueue` under it changes
+    /// nothing from then on. The keys of the signals a run moved by `migrate-runs` took. Changes
+    /// nothing for an ended attempt.
+    SignalKey {
+        run: RunRef,
+        key: String,
     },
     Activation(Box<Activation>),
     /// Writes or deletes one tool task. Changes nothing for an ended attempt.

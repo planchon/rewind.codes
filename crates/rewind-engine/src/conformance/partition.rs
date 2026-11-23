@@ -1003,6 +1003,22 @@ pub async fn a_signal_key_is_taken_once_per_run<S: PartitionStore>(store: &S) {
         [signal(5, "approval")],
         "a key outlives the delivery of its signal"
     );
+    let key = |run: &RunRef, key: &str| Change::SignalKey {
+        run: run.clone(),
+        key: key.to_owned(),
+    };
+    commit(&log, vec![key(&r2, "key-2"), key(&r2, "key-2")]).await;
+    assert!(log.signal_key(&r2, "key-2").await.expect("signal_key"));
+    commit(
+        &log,
+        vec![enqueue(&r2, signal(7, "approval"), Some("key-2"))],
+    )
+    .await;
+    assert_eq!(
+        log.inbox(&r2).await.expect("inbox").len(),
+        1,
+        "a key recorded alone is taken: its signal changes nothing"
+    );
 }
 
 pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: &S) {

@@ -172,6 +172,13 @@ impl PartitionState {
                 records.signal_keys.extend(signal_key);
                 Ok(())
             }
+            Change::SignalKey { run, key } => {
+                let records = self.records_mut(&run)?;
+                if !records.head.is_ended() {
+                    records.signal_keys.insert(key);
+                }
+                Ok(())
+            }
             Change::Activation(activation) => self.activate(*activation),
             Change::Task { run, seq, change } => {
                 let records = self.records_mut(&run)?;

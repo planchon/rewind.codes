@@ -36,10 +36,10 @@ use rewind_engine::ports::{
     DeleteNamespace, Departed, DisplayName, DropNamespace, Grant, GrantClaim, GrantDeletion,
     GrantWrite, MasterKeyId, Moves, Namespace, NamespaceName, NamespaceWrite, NewConnection,
     NewSecret, NewToken, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization,
-    PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, Secret,
-    SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader, SecretStore, SigningKey,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, Tenant, TenantId,
-    TestRecord, Token, TokenKey, ToolDeclarations, UserId, WorkflowFilter,
+    PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef,
+    Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader, SecretStore,
+    SigningKey, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, Tenant,
+    TenantId, TestRecord, Token, TokenKey, ToolDeclarations, UserId, WorkflowFilter,
 };
 use rewind_store_postgres::{PostgresCatalog, PostgresCluster, PostgresMembership, PostgresStore};
 use rewind_store_turso::{TursoCatalog, TursoCluster, TursoMembership, TursoStore};
@@ -847,6 +847,14 @@ impl CatalogStore for Catalog {
     async fn legacy_partition(&self, run: RunId) -> Result<Option<PartitionId>, CatalogError> {
         catalog!(self, catalog => catalog.legacy_partition(run).await)
     }
+
+    async fn put_legacy_run(
+        &self,
+        run: &RunRef,
+        partition: PartitionId,
+    ) -> Result<(), CatalogError> {
+        catalog!(self, catalog => catalog.put_legacy_run(run, partition).await)
+    }
 }
 
 /// The control plane is its catalog too: what the edge and the routes read of scripts,
@@ -1099,6 +1107,14 @@ impl CatalogStore for ControlPlane {
 
     async fn legacy_partition(&self, run: RunId) -> Result<Option<PartitionId>, CatalogError> {
         self.catalog().legacy_partition(run).await
+    }
+
+    async fn put_legacy_run(
+        &self,
+        run: &RunRef,
+        partition: PartitionId,
+    ) -> Result<(), CatalogError> {
+        self.catalog().put_legacy_run(run, partition).await
     }
 }
 

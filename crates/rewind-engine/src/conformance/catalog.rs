@@ -45,6 +45,7 @@ pub async fn run_all<C: CatalogStore, K: Cluster>(new_store: impl Fn() -> (C, K)
     catalog_check!(namespaces_are_listed_by_name_in_pages);
     catalog_check!(an_erased_namespace_is_dropped_once_marked);
     catalog_check!(a_run_not_moved_has_no_legacy_partition);
+    catalog_check!(a_moved_run_is_found_in_its_partition);
     eprintln!("catalog conformance: every_write_sends_its_change");
     let (catalog, cluster) = new_store();
     every_write_sends_its_change(&catalog, &cluster).await;
@@ -666,12 +667,38 @@ pub async fn subscriptions_are_stored_per_tenant<C: CatalogStore>(catalog: &C) {
 }
 
 /// `legacy_partition` answers `None` for a run `migrate-runs` did not move: a new catalog holds
-/// none. Where a moved run lives is written by the migration, which each adapter tests.
+/// none.
 pub async fn a_run_not_moved_has_no_legacy_partition<C: CatalogStore>(catalog: &C) {
     let run = rewind_core::RunId::from_u128(7);
     assert_eq!(
         catalog
             .legacy_partition(run)
+            .await
+            .expect("legacy_partition"),
+        None
+    );
+}
+
+/// `put_legacy_run` records where a moved run lives, once: recording it again changes nothing.
+pub async fn a_moved_run_is_found_in_its_partition<C: CatalogStore>(catalog: &C) {
+    let run = crate::ports::RunRef::new(acme(), rewind_core::RunId::from_u128(8));
+    let partition = rewind_core::PartitionId::new(5);
+    for _ in 0..2 {
+        catalog
+            .put_legacy_run(&run, partition)
+            .await
+            .expect("put_legacy_run");
+        assert_eq!(
+            catalog
+                .legacy_partition(run.id)
+                .await
+                .expect("legacy_partition"),
+            Some(partition)
+        );
+    }
+    assert_eq!(
+        catalog
+            .legacy_partition(rewind_core::RunId::from_u128(9))
             .await
             .expect("legacy_partition"),
         None
