@@ -218,7 +218,7 @@ fn task_from_row(row: &Row) -> Result<LegacyTask, Error> {
     let state = match row.text(4)?.as_str() {
         "approval" => TaskState::Approval,
         "ready" => TaskState::Ready {
-            next_attempt_at: row.opt_ts(7)?.map_or(row.ts(12)?, |at| at),
+            next_attempt_at: row.opt_ts(7)?.unwrap_or(row.ts(12)?),
         },
         "claimed" => TaskState::Claimed {
             owner: row.opt_text(5)?.unwrap_or_default(),
