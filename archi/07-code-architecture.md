@@ -85,7 +85,7 @@ Dependencies only point down. Adapters never depend on each other.
 11. **Nothing polls.** A component waits on one channel and wakes when a message arrives. The
     only timers are the timer wheel, the backoff of a retry after an error, and a few clocks that
     read no store (the embedded server's idle stop, the metrics export, the dashboard's session
-    refresh, the daily jobs). `rewind-architecture-tests` refuses `tokio::time::interval` and
+    refresh and its display clock, the SSE keep-alive comment, the daily jobs). `rewind-architecture-tests` refuses `tokio::time::interval` and
     `sleep` anywhere else, and the dashboard's lint refuses `refetchInterval`
     ([decided](08-decisions.md#taken-for-the-object-storage-rewrite-november-2026)).
 
