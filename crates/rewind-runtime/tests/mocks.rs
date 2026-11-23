@@ -10,18 +10,17 @@ use rewind_core::{
     RunId, RunMode, RunOutcome, RunState, Script, Seq, Timestamp, Tool, ToolFailure,
     ToolFailureKind, ToolRoute, Toolset,
 };
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
-};
 use rewind_engine::ports::{
     CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId, ToolCall,
     ToolDispatcher,
 };
-use rewind_engine::{Adapters, DriveOptions, Engine, EngineConfig, ReplayVerdict, StartRun};
+use rewind_engine::{ReplayVerdict, StartRun};
 use rewind_runtime::{MockError, SandboxLimits, TsMocks, V8Executor};
 use serde_json::{Value, json};
 
-const T0: Timestamp = Timestamp(1_767_225_600_000); // 2026-01-01T00:00:00Z
+mod support;
+
+use support::{T0, World};
 
 const MOCKS: &str = r#"
 type Call = { tool: string; runId: string; seq: number; attempt: number; idempotencyKey: string };
@@ -262,22 +261,17 @@ async fn invalid_modules_are_refused() {
     }
 }
 
-/// Mock mode: the engine with in-memory adapters, virtual time, and the mocks as dispatcher.
+/// Mock mode: the run plane in the driver, with memory adapters, virtual time, and the mocks
+/// as dispatcher.
 #[tokio::test]
 async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
-    let engine = Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor: V8Executor::new(SandboxLimits::default()).unwrap(),
-            dispatcher: mocks(MOCKS).await.unwrap(),
-            clock: VirtualClock::new(T0),
-            entropy: SeededEntropy::new(1),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        EngineConfig::default(),
-    );
+    let world = World::new(
+        V8Executor::new(SandboxLimits::default()).unwrap(),
+        mocks(MOCKS).await.unwrap(),
+        1,
+        |_| {},
+    )
+    .await;
     let toolset =
         Toolset::from_host_tools(["github.get_issue", "github.close_issue", "fails"]).unwrap();
     let mut request = StartRun::new(
@@ -302,12 +296,9 @@ export default async function main() {
         json!({}),
     );
     request.mode = RunMode::Mock;
-    let run = engine.start_run(request).await.unwrap().run;
-    engine
-        .run_until_idle_virtual(&DriveOptions::default())
-        .await
-        .unwrap();
-    let history = engine.export_history(&run).await.unwrap();
+    let run = world.start(request).await.unwrap();
+    world.idle().await;
+    let history = world.history(&run).await;
     let state = RunState::from_history(&history).unwrap();
     match state.outcome() {
         Some(RunOutcome::Completed { output }) => assert_eq!(
@@ -319,7 +310,7 @@ export default async function main() {
         other => panic!("{other:?}\n{history:#?}"),
     }
     assert!(matches!(
-        engine.replay(&run, None).await.unwrap(),
+        world.replay(&run, None).await,
         ReplayVerdict::Matches(_)
     ));
 }

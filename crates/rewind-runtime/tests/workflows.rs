@@ -9,24 +9,19 @@ use std::sync::Arc;
 
 use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEntry, RunMode, RunOutcome, RunState, RunStatus,
-    Script, Timestamp, ToolFailure, Toolset, WorkflowSchemas,
-};
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, StaticTypeChecker,
-    VirtualClock,
+    Script, ToolFailure, Toolset, Workflow, WorkflowSchemas,
 };
 use rewind_engine::ports::{
-    CallAuth, Dispatched, JournalStore, RunRef, TenantId, ToolCall, ToolDeclarations,
-    ToolDispatcher, WorkflowDeclarations,
+    CallAuth, CatalogStore, Dispatched, Predicate, RunRef, ScriptExecutor, TenantId, ToolCall,
+    ToolDeclarations, ToolDispatcher,
 };
-use rewind_engine::{
-    Adapters, DriveOptions, Engine, EngineConfig, RegisterWorkflow, ReplayVerdict, StartError,
-    StartRun,
-};
+use rewind_engine::{ReplayVerdict, StartError, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::{Value, json};
 
-const T0: Timestamp = Timestamp(1_767_225_600_000); // 2026-01-01T00:00:00Z
+mod support;
+
+use support::World;
 
 type Handler = dyn Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync;
 
@@ -40,35 +35,6 @@ impl ToolDispatcher for Tools {
             Err(failure) => Dispatched::Failed(failure),
         }
     }
-}
-
-type V8Engine = Engine<
-    MemoryJournal,
-    MemoryBlobs,
-    V8Executor,
-    Tools,
-    VirtualClock,
-    SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
->;
-
-fn engine(
-    tools: impl Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync + 'static,
-) -> V8Engine {
-    Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor: V8Executor::new(SandboxLimits::default()).expect("TZ=UTC"),
-            dispatcher: Tools(Arc::new(tools)),
-            clock: VirtualClock::new(T0),
-            entropy: SeededEntropy::new(7),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        EngineConfig::default(),
-    )
 }
 
 /// `triage` waits for `approval`, then closes issues, unless its input asks it to fail or to
@@ -114,7 +80,7 @@ fn schemas() -> WorkflowSchemas {
 }
 
 struct Harness {
-    engine: V8Engine,
+    world: World<Tools>,
     /// The toolset that pins `triage`.
     toolset: Toolset,
 }
@@ -126,50 +92,48 @@ async fn harness() -> Harness {
 async fn harness_with(
     tools: impl Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync + 'static,
 ) -> Harness {
-    let engine = engine(tools);
+    let world = World::new(
+        V8Executor::new(SandboxLimits::default()).expect("TZ=UTC"),
+        Tools(Arc::new(tools)),
+        7,
+        |_| {},
+    )
+    .await;
+    // `triage`'s version in the catalog, its suite empty: nothing gates it.
+    let tenant = TenantId::local();
+    let catalog = &world.plane.catalog;
     let child_toolset = Toolset::from_host_tools(["notify"]).unwrap();
-    engine
-        .journal()
-        .put_toolset(
-            &TenantId::local(),
-            &child_toolset,
-            &ToolDeclarations::default(),
-        )
+    catalog
+        .put_toolset(&tenant, &child_toolset, &ToolDeclarations::default())
         .await
         .unwrap();
-    let stored = engine
-        .register_workflow(
-            RegisterWorkflow {
-                tenant: TenantId::local(),
-                name: "triage".into(),
-                description: None,
-                script: Script::new(TRIAGE),
-                toolset: child_toolset.digest(),
-                schemas: schemas(),
-                labels: BTreeMap::new(),
-                secrets: Default::default(),
-                attach: Default::default(),
-                declarations: WorkflowDeclarations::default(),
-                suite: rewind_engine::suites::SuiteChanges::default(),
-            },
-            &StaticTypeChecker::default(),
-            // No suite: no test is written or read.
-            &rewind_engine::suites::TestKit {
-                loader: &rewind_engine::testing::NoMockLoader,
-                format: rewind_engine::suites::TestFormat {
-                    encode: |_| String::new(),
-                    decode: |_| Err("no test is read here".into()),
-                },
-                options: rewind_engine::testing::TestOptions::default(),
-            },
-        )
+    let script = Script::new(TRIAGE);
+    let compiled = world
+        .plane
+        .executor
+        .compile(&script, &child_toolset)
+        .unwrap();
+    catalog
+        .put_script(&tenant, &script, &compiled)
+        .await
+        .unwrap();
+    let workflow = Workflow::new(
+        "triage",
+        None,
+        script.digest(),
+        child_toolset.digest(),
+        schemas(),
+    )
+    .unwrap();
+    let stored = catalog
+        .put_workflow(&tenant, &workflow, world.now())
         .await
         .unwrap();
     let toolset = Toolset::from_host_tools(["notify"])
         .unwrap()
         .with_workflows([stored.workflow.pinned()])
         .unwrap();
-    Harness { engine, toolset }
+    Harness { world, toolset }
 }
 
 struct Run {
@@ -206,22 +170,17 @@ impl Harness {
     ) -> Result<RunRef, StartError> {
         let mut request = StartRun::new(Script::new(source), self.toolset.clone(), input);
         request.mode = mode;
-        Ok(self.engine.start_run(request).await?.run)
+        self.world.start(request).await
     }
 
+    /// Drives the node in virtual time until only the outside world can wake a run; no
+    /// activation failed, no run is quarantined.
     async fn drive(&self) {
-        let report = self
-            .engine
-            .run_until_idle_virtual(&DriveOptions::default())
-            .await
-            .unwrap();
-        assert!(!report.interrupted, "{report:?}");
-        assert!(report.failures.is_empty(), "{report:?}");
-        assert_eq!(report.quarantined, 0, "{report:?}");
+        self.world.idle().await;
     }
 
     async fn get(&self, id: &RunRef) -> Run {
-        let history = self.engine.export_history(id).await.unwrap();
+        let history = self.world.history(id).await;
         let state = RunState::from_history(&history).unwrap();
         Run {
             id: id.clone(),
@@ -237,7 +196,7 @@ impl Harness {
     }
 
     async fn assert_replays(&self, run: &Run) {
-        let verdict = self.engine.replay(&run.id, None).await.unwrap();
+        let verdict = self.world.replay(&run.id, None).await;
         assert!(matches!(verdict, ReplayVerdict::Matches(_)), "{verdict:?}");
     }
 
@@ -392,20 +351,12 @@ export default async function main() {
         waiting.events()
     );
 
-    let children = harness
-        .engine
-        .journal()
-        .list_runs(&rewind_engine::ports::RunFilter::new(TenantId::local()))
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|record| record.metadata.started_by.is_some_and(|by| by.run == id.id))
-        .collect::<Vec<_>>();
+    let children = harness.world.runs(vec![Predicate::StartedBy(id.id)]).await;
     assert_eq!(children.len(), 2);
     for child in &children {
         harness
-            .engine
-            .signal(&child.run, "approval", json!({ "close": false }), None)
+            .world
+            .signal(&child.run, "approval", json!({ "close": false }))
             .await
             .unwrap();
     }

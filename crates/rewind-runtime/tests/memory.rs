@@ -3,17 +3,17 @@
 
 #![allow(clippy::unwrap_used)]
 
-use rewind_core::{Epoch, RunId, RunStatus, Script, Seed, Timestamp, Toolset};
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, StaticDispatcher,
-    VirtualClock,
-};
+use rewind_core::{Epoch, RunId, RunStatus, Script, Seed, Toolset};
+use rewind_engine::adapters::StaticDispatcher;
 use rewind_engine::ports::{Delivery, RunRef, ScriptExecutor, ScriptInstance, StartScript};
-use rewind_engine::{Adapters, CacheConfig, DriveOptions, Engine, EngineConfig, StartRun};
+use rewind_engine::{CacheConfig, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
-const T0: Timestamp = Timestamp(1_767_225_600_000); // 2026-01-01T00:00:00Z
+mod support;
+
+use support::{T0, World};
+
 const MIB: u64 = 1024 * 1024;
 
 /// Keeps an array of `input` doubles (8 bytes each on the V8 heap), then grows it by the size
@@ -80,63 +80,29 @@ async fn an_instance_reports_the_memory_its_isolate_holds() {
     );
 }
 
-type V8Engine = Engine<
-    MemoryJournal,
-    MemoryBlobs,
-    V8Executor,
-    StaticDispatcher,
-    VirtualClock,
-    SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
->;
-
-fn engine(cache: CacheConfig) -> V8Engine {
-    Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor: executor(),
-            dispatcher: StaticDispatcher::new(),
-            clock: VirtualClock::new(T0),
-            entropy: SeededEntropy::new(1),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        EngineConfig {
-            cache,
-            ..EngineConfig::default()
-        },
-    )
-}
-
 /// Starts three runs that each keep 16 MiB and wait for a signal, then ends them. Returns how
-/// many instances the cache kept once the three were waiting.
+/// many instances the node's executors kept once the three were waiting.
 async fn three_hoarders(cache: CacheConfig) -> usize {
-    let engine = engine(cache);
+    let world = World::new(executor(), StaticDispatcher::new(), 1, |config| {
+        config.cache = cache;
+    })
+    .await;
     let mut runs: Vec<RunRef> = Vec::new();
     for _ in 0..3 {
         let request = StartRun::new(Script::new(HOARDER), Toolset::default(), json!(2_000_000));
-        runs.push(engine.start_run(request).await.unwrap().run);
-        engine
-            .run_until_idle_virtual(&DriveOptions::default())
-            .await
-            .unwrap();
+        runs.push(world.start(request).await.unwrap());
+        world.idle().await;
     }
-    let cached = engine.cached_instances();
+    let cached = world.cached_instances().await;
 
-    // An evicted run replays its history on its next activation, and goes on.
+    // An evicted run replays its history on its next activation, and goes on: no activation
+    // fails (`idle` checks it).
     for run in &runs {
-        engine.signal(run, "grow", json!(null), None).await.unwrap();
+        world.signal(run, "grow", json!(null)).await.unwrap();
     }
-    let report = engine
-        .run_until_idle_virtual(&DriveOptions::default())
-        .await
-        .unwrap();
-    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    world.idle().await;
     for run in &runs {
-        let record = engine.get_run(run).await.unwrap().unwrap();
-        assert_eq!(record.status, RunStatus::Completed);
+        assert_eq!(world.view(run).await.head.status, RunStatus::Completed);
     }
     cached
 }

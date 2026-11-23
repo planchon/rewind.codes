@@ -1,5 +1,6 @@
-//! The sandbox, driven by the engine with in-memory adapters and virtual time: determinism,
-//! durable time, signals, imports, callsites, cancellation, how a script ends, and limits.
+//! The sandbox, driven by the engine's run plane in its driver, with memory adapters and virtual
+//! time: determinism, durable time, signals, imports, callsites, cancellation, how a script ends,
+//! and limits.
 
 #![allow(clippy::unwrap_used)]
 
@@ -11,36 +12,41 @@ use rewind_core::{
     McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed,
     Seq, Timestamp, Tool, ToolFailure, ToolFailureKind, ToolRoute, Toolset, canonical_json,
 };
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
-};
 use rewind_engine::ports::{
-    CallAuth, CompiledScript, Dispatched, ExecutorError, RunFilter, RunRef, ScriptExecutor,
-    StartScript, TenantId, ToolCall, ToolDispatcher,
+    CallAuth, CompiledScript, Dispatched, ExecutorError, RunRef, ScriptExecutor, StartScript,
+    ToolCall, ToolDispatcher,
 };
 use rewind_engine::replay::ReplayEnd;
-use rewind_engine::{
-    Adapters, DriveOptions, Engine, EngineConfig, ReplayVerdict, StartError, StartRun, ToolOrder,
-};
+use rewind_engine::{ReplayVerdict, StartError, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::{Value, json};
 
-const T0: Timestamp = Timestamp(1_767_225_600_000); // 2026-01-01T00:00:00Z
+mod support;
+
+use support::{T0, World};
+
 const HOUR: u64 = 3_600_000;
 const DAY: u64 = 24 * HOUR;
 
-type Handler = dyn Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync;
+type Handler = dyn Fn(&ToolCall) -> Dispatched + Send + Sync;
 
 #[derive(Clone)]
 struct Tools(Arc<Handler>);
 
 impl ToolDispatcher for Tools {
     async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
-        match (self.0)(&call) {
-            Ok(result) => Dispatched::Result(result),
-            Err(failure) => Dispatched::Failed(failure),
-        }
+        (self.0)(&call)
     }
+}
+
+/// Tools that answer every call at once, as `tools` says.
+fn answered_by(
+    tools: impl Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync + 'static,
+) -> Tools {
+    Tools(Arc::new(move |call| match tools(call) {
+        Ok(result) => Dispatched::Result(result),
+        Err(failure) => Dispatched::Failed(failure),
+    }))
 }
 
 fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
@@ -85,43 +91,16 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
     }
 }
 
-type V8Engine = Engine<
-    MemoryJournal,
-    MemoryBlobs,
-    V8Executor,
-    Tools,
-    VirtualClock,
-    SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
->;
-
 struct Harness {
-    engine: V8Engine,
-    options: DriveOptions,
+    world: World<Tools>,
 }
 
-fn harness() -> Harness {
-    harness_with(SandboxLimits::default(), 1)
+async fn harness() -> Harness {
+    harness_with(SandboxLimits::default(), 1).await
 }
 
-fn harness_with(limits: SandboxLimits, entropy: u64) -> Harness {
-    Harness {
-        engine: Engine::new(
-            Adapters {
-                journal: MemoryJournal::new(),
-                blobs: MemoryBlobs::new(),
-                executor: V8Executor::new(limits).expect("TZ=UTC (see .cargo/config.toml)"),
-                dispatcher: Tools(Arc::new(issue_tools)),
-                clock: VirtualClock::new(T0),
-                entropy: SeededEntropy::new(entropy),
-                secrets: MemorySecrets::new(),
-                webhooks: MemoryWebhooks::new(),
-            },
-            EngineConfig::default(),
-        ),
-        options: DriveOptions::default(),
-    }
+async fn harness_with(limits: SandboxLimits, entropy: u64) -> Harness {
+    Harness::new(limits, entropy, answered_by(issue_tools), |_| {}).await
 }
 
 struct Run {
@@ -189,6 +168,20 @@ fn toolset() -> Toolset {
 }
 
 impl Harness {
+    /// A node running the V8 executor under `limits` and `tools`, its entropy seeded with
+    /// `entropy`, configured by `configure`.
+    async fn new(
+        limits: SandboxLimits,
+        entropy: u64,
+        tools: Tools,
+        configure: impl FnOnce(&mut rewind_engine::plane::NodeConfig),
+    ) -> Self {
+        let executor = V8Executor::new(limits).expect("TZ=UTC (see .cargo/config.toml)");
+        Self {
+            world: World::new(executor, tools, entropy, configure).await,
+        }
+    }
+
     async fn try_start(&self, source: &str, input: Value) -> Result<RunRef, StartError> {
         self.try_start_with(source, input, toolset()).await
     }
@@ -201,7 +194,7 @@ impl Harness {
     ) -> Result<RunRef, StartError> {
         let mut request = StartRun::new(Script::new(source), toolset, input);
         request.mode = rewind_core::RunMode::Mock;
-        Ok(self.engine.start_run(request).await?.run)
+        self.world.start(request).await
     }
 
     async fn start(&self, source: &str, input: Value) -> RunRef {
@@ -212,18 +205,13 @@ impl Harness {
         self.try_start_with(source, input, toolset).await.unwrap()
     }
 
+    /// Drives the node in virtual time until only the outside world can wake a run.
     async fn drive(&self) {
-        let report = self
-            .engine
-            .run_until_idle_virtual(&self.options)
-            .await
-            .unwrap();
-        assert!(!report.interrupted, "{report:?}");
-        assert_eq!(report.quarantined, 0, "{report:?}");
+        self.world.idle().await;
     }
 
     async fn get(&self, id: &RunRef) -> Run {
-        let history = self.engine.export_history(id).await.unwrap();
+        let history = self.world.history(id).await;
         let state = RunState::from_history(&history).unwrap();
         Run {
             id: id.clone(),
@@ -240,7 +228,7 @@ impl Harness {
 
     /// Replays the run with its own script: it must match, to the end of its history.
     async fn assert_replays(&self, run: &Run) {
-        let verdict = self.engine.replay(&run.id, None).await.unwrap();
+        let verdict = self.world.replay(&run.id, None).await;
         assert!(matches!(verdict, ReplayVerdict::Matches(_)), "{verdict:?}");
     }
 }
@@ -256,8 +244,13 @@ export default async function main(input: { repo: string }) {
 
 #[tokio::test]
 async fn promise_all_with_out_of_order_completions_replays_identically() {
-    let mut harness = harness();
-    harness.options.tool_order = ToolOrder::Reversed;
+    let harness = Harness::new(
+        SandboxLimits::default(),
+        1,
+        answered_by(issue_tools),
+        |config| config.reversed_calls = true,
+    )
+    .await;
     let run = harness.run(FAN_OUT, json!({ "repo": "acme/api" })).await;
 
     assert_eq!(
@@ -305,8 +298,8 @@ export default async function main() {
 
 #[tokio::test]
 async fn time_and_randomness_are_deterministic_and_keyed_by_the_seed() {
-    let first = harness_with(SandboxLimits::default(), 7);
-    let second = harness_with(SandboxLimits::default(), 7);
+    let first = harness_with(SandboxLimits::default(), 7).await;
+    let second = harness_with(SandboxLimits::default(), 7).await;
     let a = first.run(NON_DETERMINISTIC_SOURCES, json!({})).await;
     let b = second.run(NON_DETERMINISTIC_SOURCES, json!({})).await;
     assert_eq!(
@@ -328,6 +321,7 @@ async fn time_and_randomness_are_deterministic_and_keyed_by_the_seed() {
     assert_eq!(output["startedAt"], json!("2026-01-01T00:00:00.000Z"));
 
     let other = harness_with(SandboxLimits::default(), 8)
+        .await
         .run(NON_DETERMINISTIC_SOURCES, json!({}))
         .await;
     for key in ["random", "uuid", "bytes"] {
@@ -365,7 +359,7 @@ export default async function main() {
   return sample;
 }
 "#;
-    let harness = harness();
+    let harness = harness().await;
     let mut outputs = Vec::new();
     for _ in 0..4 {
         let run = harness.run(RECURSES, json!({})).await;
@@ -415,15 +409,11 @@ async fn crypto_is_chacha20_keyed_by_the_seed() {
 
 #[tokio::test]
 async fn replay_detects_a_changed_script_at_the_diverging_entry() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness.run(FAN_OUT, json!({ "repo": "acme/api" })).await;
 
     let changed_args = Script::new(FAN_OUT.replace("[1, 2, 3]", "[1, 2, 4]"));
-    let verdict = harness
-        .engine
-        .replay(&run.id, Some(&changed_args))
-        .await
-        .unwrap();
+    let verdict = harness.world.replay(&run.id, Some(&changed_args)).await;
     let ReplayVerdict::Diverges(mismatch) = verdict else {
         panic!("{verdict:?}")
     };
@@ -437,11 +427,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
         "return { titles",
         "await github.close_issue({ number: 1 });\n  return { titles",
     ));
-    let verdict = harness
-        .engine
-        .replay(&run.id, Some(&extra_call))
-        .await
-        .unwrap();
+    let verdict = harness.world.replay(&run.id, Some(&extra_call)).await;
     let ReplayVerdict::Diverges(mismatch) = verdict else {
         panic!("{verdict:?}")
     };
@@ -452,13 +438,13 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
 
     // Moving code around without changing behavior is allowed: callsites are ignored.
     let moved = Script::new(format!("\n\n// a comment\n{FAN_OUT}"));
-    let verdict = harness.engine.replay(&run.id, Some(&moved)).await.unwrap();
+    let verdict = harness.world.replay(&run.id, Some(&moved)).await;
     assert_eq!(verdict, ReplayVerdict::Matches(ReplayEnd::EndOfHistory));
 }
 
 #[tokio::test]
 async fn durable_sleep_moves_logical_time() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -493,7 +479,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn signals_are_buffered_cancel_their_timeout_and_time_out() {
-    let harness = harness();
+    let harness = harness().await;
     let id = harness
         .start(
             r#"
@@ -510,25 +496,24 @@ export default async function main() {
             json!({}),
         )
         .await;
-    let real_time = DriveOptions::default();
-    harness.engine.run_until_idle(&real_time).await.unwrap();
+    harness.world.settle().await;
     harness
-        .engine
-        .signal(&id, "approval", json!({ "by": "paul" }), None)
+        .world
+        .signal(&id, "approval", json!({ "by": "paul" }))
         .await
         .unwrap();
 
     // One hour later, the sleep ends and the script waits for "comment".
-    harness.engine.clock().advance_to_ms(T0.0 + HOUR);
-    harness.engine.run_until_idle(&real_time).await.unwrap();
+    harness.world.advance_to(Timestamp(T0.0 + HOUR));
+    harness.world.settle().await;
     let waiting = harness.get(&id).await;
     assert_eq!(waiting.state.status(), RunStatus::Active);
     assert_eq!(waiting.state.awaited_signals()[0].name, "comment");
 
-    harness.engine.clock().advance_to_ms(T0.0 + 2 * HOUR);
+    harness.world.advance_to(Timestamp(T0.0 + 2 * HOUR));
     harness
-        .engine
-        .signal(&id, "comment", json!("lgtm"), None)
+        .world
+        .signal(&id, "comment", json!("lgtm"))
         .await
         .unwrap();
     harness.drive().await; // virtual time: "never" times out two hours later
@@ -560,17 +545,6 @@ export default async function main() {
     harness.assert_replays(&run).await;
 }
 
-/// Lets tests move a virtual clock by milliseconds.
-trait AdvanceMs {
-    fn advance_to_ms(&self, ms: u64);
-}
-
-impl AdvanceMs for VirtualClock {
-    fn advance_to_ms(&self, ms: u64) {
-        rewind_engine::ports::VirtualTime::advance_to(self, Timestamp(ms));
-    }
-}
-
 /// What type-checks is what exists (`archi/04-tools.md`, "Type-checking"): the isolate's global
 /// names are exactly those `lib/globals.json` declares, with `fetch` only for a toolset that
 /// enables the `http` tool.
@@ -592,7 +566,7 @@ export default async function main() {
 "#;
     let declared = rewind_runtime::sandbox_lib::declared_globals();
     for http_tool in [false, true] {
-        let harness = harness();
+        let harness = harness().await;
         let toolset = if http_tool {
             builtins_toolset()
         } else {
@@ -654,7 +628,7 @@ fn builtins_toolset() -> Toolset {
 
 #[tokio::test]
 async fn scripts_that_cannot_load_are_refused_at_start() {
-    let harness = harness();
+    let harness = harness().await;
     for (source, expected) in [
         (
             "import fs from \"node:fs\";\nexport default async function main() { return typeof fs; }",
@@ -693,11 +667,7 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
             "{source}: {refused}"
         );
     }
-    let runs = harness
-        .engine
-        .list_runs(&RunFilter::new(TenantId::local()))
-        .await
-        .unwrap();
+    let runs = harness.world.runs(Vec::new()).await;
     assert!(runs.is_empty(), "no run was created: {runs:?}");
 }
 
@@ -705,7 +675,7 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
 /// the run when it loads.
 #[tokio::test]
 async fn scripts_that_fail_while_loading_are_aborted_as_invalid() {
-    let harness = harness();
+    let harness = harness().await;
     for (source, expected) in [
         (
             "throw new Error(\"top-level failure\");\nexport default async () => 1;",
@@ -727,7 +697,7 @@ async fn scripts_that_fail_while_loading_are_aborted_as_invalid() {
 
 #[tokio::test]
 async fn tool_errors_reach_the_script_and_can_be_caught() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -763,7 +733,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn callsites_point_to_typescript_lines() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -807,7 +777,12 @@ export default async function main(input: { repo: Repo }): Promise<string> {
 
 #[tokio::test]
 async fn cancellation_rejects_pending_awaits_and_the_script_can_clean_up() {
-    let harness = harness();
+    // `slow` never answers by itself: its call is in flight when the cancellations arrive.
+    let tools = Tools(Arc::new(|call: &ToolCall| match call.tool.name.as_str() {
+        "slow" => Dispatched::Deferred,
+        _ => Dispatched::Result(json!({ "ok": true })),
+    }));
+    let harness = Harness::new(SandboxLimits::default(), 1, tools, |_| {}).await;
     let polite = harness
         .start(
             r#"
@@ -834,17 +809,14 @@ export default async function main() { await slow({}); }
             json!({}),
         )
         .await;
-    for _ in 0..2 {
-        harness.engine.activate_next().await.unwrap();
-    }
+    harness.world.settle().await;
     harness
-        .engine
-        .cancel(&polite, Some("user asked".into()))
+        .world
+        .cancel(&polite, Some("user asked"))
         .await
         .unwrap();
-    harness.engine.cancel(&blunt, None).await.unwrap();
+    harness.world.cancel(&blunt, None).await.unwrap();
     // The cancellations are delivered before the tool answers: it is not waited for.
-    while harness.engine.activate_next().await.unwrap().is_some() {}
     harness.drive().await;
 
     let polite = harness.get(&polite).await;
@@ -873,7 +845,7 @@ export default async function main() { await slow({}); }
 
 #[tokio::test]
 async fn a_forgotten_await_is_harmless_the_run_waits_for_the_call() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -902,7 +874,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn a_forgotten_await_that_fails_fails_the_run() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -925,7 +897,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn a_rejection_left_unhandled_fails_the_run_as_in_node() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -946,7 +918,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn nothing_left_to_wake_the_script_is_a_deadlock() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             "export default async function main() { await new Promise(() => {}); }",
@@ -970,7 +942,7 @@ async fn nothing_left_to_wake_the_script_is_a_deadlock() {
 
 #[tokio::test]
 async fn after_a_failure_no_script_code_runs_and_fail_run_waits_for_calls_in_flight() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -998,7 +970,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn an_exception_in_a_timer_callback_fails_the_run() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1017,7 +989,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn a_raced_slow_tool_is_still_awaited() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1047,7 +1019,8 @@ async fn an_endless_loop_exceeds_the_cpu_limit() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             "export default async function main() { for (;;) {} }",
@@ -1067,7 +1040,8 @@ async fn a_memory_bomb_exceeds_the_heap_limit() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             "export default async function main() { const a = []; for (;;) a.push(new Array(1e5).fill(1)); }",
@@ -1083,7 +1057,7 @@ async fn a_memory_bomb_exceeds_the_heap_limit() {
 /// `new ArrayBuffer(2 ** 36)` used to abort it, resizable or not.
 #[tokio::test]
 async fn the_process_survives_an_array_buffer_of_2_pow_36() {
-    let harness = harness();
+    let harness = harness().await;
     for allocation in [
         "new ArrayBuffer(2 ** 36)",
         "new ArrayBuffer(2 ** 36, { maxByteLength: 2 ** 36 })",
@@ -1125,7 +1099,8 @@ async fn array_buffers_share_one_budget_and_fail_where_replay_does() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             r#"
@@ -1172,7 +1147,8 @@ async fn resizable_array_buffers_take_their_maximum_from_the_budget() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             r#"
@@ -1246,7 +1222,8 @@ async fn built_ins_that_would_outgrow_the_heap_end_the_call_at_once() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     for call in [
         "new Array(2 ** 27).fill(1.5)",
         "Array.prototype.fill.call({ length: 2 ** 32 + 5 }, 0)",
@@ -1330,7 +1307,8 @@ async fn one_allocation_past_the_heap_limit_ends_the_call_not_the_process() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             "export default async function main() { return \"ab\".repeat(2 ** 27).toUpperCase().length; }",
@@ -1353,7 +1331,8 @@ async fn what_one_trigger_emits_is_bounded_in_bytes() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     for flood in [
         "for (let i = 0; i < 100; i++) console.log(big);",
         "for (let i = 0; i < 100; i++) void audit.record({ big });",
@@ -1390,7 +1369,8 @@ async fn what_one_trigger_emits_is_bounded_in_number() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             "export default async function main() { for (;;) console.log(1); }",
@@ -1409,7 +1389,7 @@ async fn what_one_trigger_emits_is_bounded_in_number() {
 /// would take 384 MiB as UTF-8.
 #[tokio::test]
 async fn a_long_string_is_refused_before_it_leaves_v8() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             "export default async function main() { let s = \"\u{20ac}\"; for (let i = 0; i < 27; i++) s += s; console.log(s); }",
@@ -1434,7 +1414,8 @@ async fn the_bound_on_what_is_emitted_is_per_trigger() {
             ..SandboxLimits::default()
         },
         1,
-    );
+    )
+    .await;
     let run = harness
         .run(
             r#"
@@ -1500,7 +1481,7 @@ async fn an_unsupported_epoch_is_refused() {
 /// any double.
 #[tokio::test]
 async fn canonical_numbers_agree_with_v8() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1532,7 +1513,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn only_the_toolset_is_callable() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             "import * as tools from \"rewind:tools\";\nexport default async function main() { return Object.keys(tools).sort(); }",
@@ -1552,7 +1533,7 @@ async fn only_the_toolset_is_callable() {
 /// the script, or its replay diverges and a healthy run is quarantined.
 #[tokio::test]
 async fn object_keys_are_the_same_live_and_on_replay() {
-    let harness = harness();
+    let harness = harness().await;
     let big = "x".repeat(1_100); // above the inline threshold: stored as a blob
     let input: Value = serde_json::from_str(&format!(r#"{{"z":1,"a":"{big}"}}"#)).unwrap();
     let run = harness
@@ -1573,7 +1554,7 @@ export default async function main(input: Record<string, unknown>) {
 
 #[tokio::test]
 async fn the_real_clock_is_out_of_reach() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1619,7 +1600,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn serializing_the_output_cannot_schedule_a_call_after_the_end() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1647,7 +1628,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn lone_surrogates_become_replacement_characters() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1679,19 +1660,15 @@ export default async function main() {
 
 #[tokio::test]
 async fn cancelling_a_wait_built_on_set_timeout_ends_the_run_cancelled() {
-    let harness = harness();
+    let harness = harness().await;
     let id = harness
         .start(
             "export default async function main() {\n  await new Promise((resolve) => setTimeout(resolve, 60_000));\n  return \"woke up\";\n}",
             json!({}),
         )
         .await;
-    harness.engine.activate_next().await.unwrap();
-    harness
-        .engine
-        .cancel(&id, Some("user asked".into()))
-        .await
-        .unwrap();
+    harness.world.settle().await;
+    harness.world.cancel(&id, Some("user asked")).await.unwrap();
     harness.drive().await;
     let run = harness.get(&id).await;
     assert_eq!(run.state.status(), RunStatus::Cancelled);
@@ -1707,7 +1684,7 @@ async fn cancelling_a_wait_built_on_set_timeout_ends_the_run_cancelled() {
 /// V8: what type-checks exists.
 #[tokio::test]
 async fn the_ecmascript_lib_beyond_es2024_exists() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1761,7 +1738,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn web_standard_globals_are_pure_and_replay() {
-    let harness = harness();
+    let harness = harness().await;
     let run = harness
         .run(
             r#"
@@ -1815,7 +1792,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn invalid_args_throw_a_type_error_at_the_call_site_and_record_nothing() {
-    let harness = harness();
+    let harness = harness().await;
     let script = r#"
 import { github } from "rewind:tools";
 
@@ -1882,7 +1859,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn webhook_is_a_journaled_call_of_the_built_in() {
-    let harness = harness();
+    let harness = harness().await;
     let id = harness
         .start_with(
             r#"
@@ -1900,8 +1877,8 @@ export default async function main() {
         .await;
     harness.drive().await;
     harness
-        .engine
-        .signal(&id, "pr_merged", json!({ "merged": true }), None)
+        .world
+        .signal(&id, "pr_merged", json!({ "merged": true }))
         .await
         .unwrap();
     harness.drive().await;
@@ -1972,7 +1949,7 @@ fn crm_toolset() -> Toolset {
 
 #[tokio::test]
 async fn mcp_content_gets_the_text_and_json_helpers() {
-    let harness = harness();
+    let harness = harness().await;
     let id = harness
         .start_with(
             r#"
@@ -2030,7 +2007,7 @@ export default async function main() {
 
 #[tokio::test]
 async fn fetch_is_a_journaled_call_of_the_http_tool() {
-    let harness = harness();
+    let harness = harness().await;
     let id = harness
         .start_with(
             r#"
