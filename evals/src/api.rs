@@ -183,7 +183,7 @@ fn start_error(error: StartError) -> ApiError {
 fn fork_error(error: ForkError) -> ApiError {
     match error {
         ForkError::ParentNotFound(run) => run_not_found(&run.to_string()),
-        ForkError::ParentNotStarted(_) | ForkError::ParentArchived(_) => invalid(error.to_string()),
+        ForkError::ParentNotStarted(_) => invalid(error.to_string()),
         ForkError::Start(error) => start_error(error),
         other => fault(WorldError::Engine(other.to_string())),
     }
@@ -986,18 +986,9 @@ impl Api for World {
         })
     }
 
-    async fn get_payload(&self, digest: &str, run: Option<&str>) -> Result<Value, ApiError> {
+    async fn get_payload(&self, digest: &str, id: &str) -> Result<Value, ApiError> {
         let missing = || not_found(format!("no payload {digest} for this tenant"));
         let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
-        let Some(id) = run else {
-            return Err(problem(
-                ProblemType::Forbidden,
-                format!(
-                    "the API key is limited to labels and reads the payloads of the runs it \
-                     sees: name the run (GET /v1/payloads/{digest}?run=<id>)"
-                ),
-            ));
-        };
         let (run, _) = self.visible_run(id).await?;
         let history = self.history(&run).await.map_err(edge_error)?;
         history

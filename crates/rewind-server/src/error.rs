@@ -302,28 +302,8 @@ impl From<CheckerError> for ApiError {
 impl From<EngineError> for ApiError {
     fn from(error: EngineError) -> Self {
         match error {
-            EngineError::RunNotFound(run) => Self::run_not_found(&run.to_string()),
-            EngineError::RunEnded(run) => Self::new(
-                ProblemType::RunEnded,
-                format!("run {run} has ended: nothing can be sent to it any more"),
-            ),
-            EngineError::TaskGone => Self::new(ProblemType::TaskGone, error.to_string()),
-            EngineError::TaskNotWaiting { .. } => {
-                Self::new(ProblemType::TaskNotWaiting, error.to_string())
-            }
-            EngineError::ResultTooLarge { .. } => Self::new(
-                ProblemType::PayloadTooLarge,
-                format!("{error}: fail the task instead, or return less"),
-            ),
-            EngineError::ScriptNotFound(digest) => {
-                Self::not_found(format!("no script {digest} for this tenant"))
-            }
-            EngineError::ToolsetNotFound(digest) => Self::not_found(format!(
-                "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
-            )),
             EngineError::NulCharacter(error) => error.into(),
             EngineError::Store(error) => error.into(),
-            EngineError::SignalRefused(message) => Self::new(ProblemType::InvalidSignal, message),
             other => Self::internal(other),
         }
     }
@@ -395,9 +375,7 @@ impl From<ForkError> for ApiError {
     fn from(error: ForkError) -> Self {
         match error {
             ForkError::ParentNotFound(run) => Self::run_not_found(&run.to_string()),
-            ForkError::ParentNotStarted(_) | ForkError::ParentArchived(_) => {
-                Self::invalid(error.to_string())
-            }
+            ForkError::ParentNotStarted(_) => Self::invalid(error.to_string()),
             ForkError::Start(error) => error.into(),
             ForkError::Engine(error) => error.into(),
         }
