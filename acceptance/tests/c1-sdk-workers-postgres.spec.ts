@@ -250,10 +250,26 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
       expect(activatedBy.size).toBeGreaterThan(0);
       for (const node of activatedBy) expect(deployment.nodes).toContain(node);
     } finally {
-      await worker.stop();
+      await stopped(worker, 30_000);
     }
   });
 });
+
+/** Stops the worker; one that has not stopped within `ms` fails the check with what it holds. */
+async function stopped(worker: { stop(): Promise<void>; readonly running: number }, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`the worker did not stop within ${ms} ms: ${worker.running} handler(s) still answering`)),
+      ms,
+    );
+  });
+  try {
+    await Promise.race([worker.stop(), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function dedupe(spans: SpanRecord[]): SpanRecord[] {
   const seen = new Map<string, SpanRecord>();
