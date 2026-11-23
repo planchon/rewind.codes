@@ -47,7 +47,7 @@ pub(crate) const BODY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// The routes of one listener. Over the embedded server's socket, no key is read: the caller is
 /// the operator of the tenant `local`. Over TCP, every request to `/v1` carries a key or, with
-/// WorkOS on the api role, a member's access token.
+/// WorkOS, a member's access token.
 pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router {
     let api = Router::new()
         .route(routes::TOOLSETS, post(toolsets::create).get(toolsets::list))

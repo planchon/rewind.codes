@@ -4,7 +4,7 @@
 //!
 //! - An API key, `rewind_sk_…`. The access store keeps the SHA-256 of keys, never a key. A key
 //!   belongs to a tenant, which scopes everything it sees; its principal is `key:<hash>`.
-//! - On a server with a sign-in (WorkOS, the api role), a member's access token, checked by the
+//! - On a server with a sign-in (WorkOS), a member's access token, checked by the
 //!   identity provider ([`Member`]). Its organization is the tenant, whose record is created
 //!   when missing; its principal is `user:<id>`. A token without organization reaches only the
 //!   onboarding endpoints, which take [`Who`]: every other one answers 403.

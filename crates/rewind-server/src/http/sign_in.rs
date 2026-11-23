@@ -1,5 +1,5 @@
 //! The dashboard's sign-in, `/auth` (`archi/07-code-architecture.md`, "Sign-in (`/auth`)"), on
-//! the api role when WorkOS is configured; 404 otherwise.
+//! a server where WorkOS is configured; 404 otherwise.
 //!
 //! For a browser only: these routes read and write the sealed cookies [`SESSION_COOKIE`] (the
 //! session's tokens or the pending step, `SameSite=Strict`) and [`OAUTH_COOKIE`] (a GitHub

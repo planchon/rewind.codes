@@ -439,7 +439,9 @@ separate process.
 partitions, archive and blobs, cluster, tools, checker, telemetry, webhooks, clock, identity),
 picked by configuration: `--store turso:<path>` or `postgres://…` for the control plane,
 `--bucket <directory>` or `s3://<bucket>` (with its endpoint, for R2) for the partitions, the
-archive and the blobs, `--partitions` (64 by default, 1 embedded), `--cluster-secret`,
+archive and the blobs, `--partitions` (64 by default, 1 embedded), `--cluster-database` (where the
+nodes take their liveness locks, `postgres` by default), `--cluster-secret`, `--link-listen` and
+`--link-address` (the node link's port and the address the other nodes dial), `--node-id`,
 `--otlp-endpoint`, WorkOS's variables ([sign-in](#sign-in-auth)).
 
 ## Dependency rules
@@ -661,7 +663,7 @@ Conventions:
 | Reading (dashboard) | `GET /v1/scripts` | `runs:read` | Every distinct script, its runs, its tools |
 |  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
 |  | `GET /v1/tools/stats` | `runs:read` | Per tool, from the hourly counters of a namespace or the tenant over a window: calls, latency, errors, retries |
-|  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a token, a header, or a grant limited to labels) |
+|  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through the run that holds it (`run`, required: a payload belongs to its run) |
 | Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user; for a connection, its id, person and client, and the organizations it opens with their access |
 | | `POST /v1/organizations` | a member, even without organization | Creates an organization: in WorkOS with the caller's membership, then the tenant and the caller's `owner` grant; if the second step fails, the organization is deleted in WorkOS |
 | | `PATCH /v1/organization` | `organization:write` | The organization's name and default role |

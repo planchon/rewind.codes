@@ -1,5 +1,5 @@
 //! The OAuth authorization server of people's connections (`archi/07-code-architecture.md`,
-//! "MCP and OAuth"), on the api role when the server has a public URL and a sign-in: what the
+//! "MCP and OAuth"), on a server with a public URL and a sign-in: what the
 //! endpoints of `http::oauth` and the consent share.
 //!
 //! - **Clients.** A `client_id` that is an `https` URL with a path is a client's metadata

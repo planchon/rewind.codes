@@ -66,7 +66,7 @@ pub(crate) fn install(args: &ServerArgs) -> Result<TelemetryGuard, String> {
 /// The exporter of run telemetry.
 #[derive(Debug)]
 pub(crate) enum Exporter {
-    /// No OTLP endpoint: spans and log records are dropped. The read model is fed all the same.
+    /// No OTLP endpoint: spans and log records are dropped.
     Off,
     Otlp(Box<OtelSpanExporter>),
 }

@@ -1,5 +1,5 @@
 //! The identity provider: who someone is (`archi/06-storage-and-scale.md`, "Who calls"), for
-//! the dashboard's sign-in and members' access tokens. Wired on the api role when the four
+//! the dashboard's sign-in and members' access tokens. Wired when the four
 //! `WORKOS_*` are given:
 //!
 //! | Configuration | Adapter |
