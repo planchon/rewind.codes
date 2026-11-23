@@ -193,9 +193,21 @@ async fn call<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>) -> Ca
         "tool_attempt",
         task = %task,
         attempt,
+        traceparent = tracing::field::Empty,
+        histogram.rewind.tool_attempt.duration = tracing::field::Empty,
         rewind.tool = tool.as_str(),
+        rewind.outcome = tracing::field::Empty,
     );
-    let outcome = tracing::Instrument::instrument(attempt_of(plane, config, work), span).await;
+    let outcome =
+        tracing::Instrument::instrument(attempt_of(plane, config, work), span.clone()).await;
+    if let CallOutcome::Dispatched(dispatched) | CallOutcome::MockStart { dispatched, .. } =
+        &outcome
+    {
+        span.record(
+            crate::metrics::OUTCOME,
+            crate::metrics::attempt_outcome(dispatched),
+        );
+    }
     CallDone {
         task,
         attempt,
@@ -260,6 +272,9 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         record.task.seq,
         &config.telemetry,
     ));
+    if let Some(context) = &trace_context {
+        tracing::Span::current().record("traceparent", context.traceparent.as_str());
+    }
     if hand_out {
         return CallOutcome::HostReady(Box::new(HostTask {
             token,

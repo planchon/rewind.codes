@@ -71,6 +71,8 @@ pub(crate) enum After<P: Plane> {
     Forget(RunRef),
     /// Another message for the owner.
     Owner(OwnerMsg<P>),
+    /// The run metrics of an activation's entries.
+    Measure(Vec<crate::metrics::RunMeasurement>),
 }
 
 impl<P: Plane> Unit<P> {
@@ -367,6 +369,11 @@ impl<P: Plane> Owner<P> {
                 .out
                 .push(Effect::Local(Message::Executors(ExecMsg::Forget { run }))),
             After::Owner(message) => self.dispatch(message),
+            After::Measure(measurements) => {
+                for measurement in &measurements {
+                    measurement.emit();
+                }
+            }
         }
     }
 

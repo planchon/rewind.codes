@@ -236,7 +236,7 @@ impl RunTelemetry<'_> {
                         measurements.push(tool_call(tool, "no_outcome", None, start, at));
                     }
                     measurements.push(RunMeasurement::Ended {
-                        outcome: run_outcome(&entry.event),
+                        outcome: run_outcome(&entry.event).to_owned(),
                     });
                 }
             }
@@ -348,8 +348,8 @@ fn tool_call(
 ) -> RunMeasurement {
     RunMeasurement::ToolCall {
         tool: tool.to_owned(),
-        outcome,
-        error_kind,
+        outcome: outcome.to_owned(),
+        error_kind: error_kind.map(str::to_owned),
         seconds: end.0.saturating_sub(start.0) as f64 / 1_000.0,
     }
 }
@@ -861,11 +861,13 @@ mod tests {
             config: &config,
             payloads: &payloads,
         };
-        let call = |tool: &str, outcome, error_kind, seconds| RunMeasurement::ToolCall {
-            tool: tool.into(),
-            outcome,
-            error_kind,
-            seconds,
+        let call = |tool: &str, outcome: &str, error_kind: Option<&str>, seconds| {
+            RunMeasurement::ToolCall {
+                tool: tool.into(),
+                outcome: outcome.into(),
+                error_kind: error_kind.map(str::to_owned),
+                seconds,
+            }
         };
         assert!(telemetry.measured(&entries));
         // The first activation committed the start and the calls; the next ones, the rest.
@@ -886,7 +888,7 @@ mod tests {
             vec![
                 call("slack.post", "no_outcome", None, 5.0),
                 RunMeasurement::Ended {
-                    outcome: "cancelled"
+                    outcome: "cancelled".into()
                 },
             ]
         );

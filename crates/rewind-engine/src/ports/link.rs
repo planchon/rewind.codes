@@ -584,4 +584,6 @@ pub struct Committed {
     pub cpu: Duration,
     /// The run's mode, from its `run_started`.
     pub mode: Option<rewind_core::RunMode>,
+    /// The run metrics of the new entries, recorded once the batch is durable.
+    pub measurements: Vec<crate::metrics::RunMeasurement>,
 }

@@ -1204,6 +1204,7 @@ impl<P: Plane> Owner<P> {
             copied: _,
             cpu,
             mode,
+            measurements,
         } = committed;
         let terminal = activation.head.is_ended();
         let previous_len = slot.head.history_len;
@@ -1222,6 +1223,7 @@ impl<P: Plane> Owner<P> {
         activation.summary = derive::with_phases(activation.summary, &phases);
         activation.head.waits = activation.summary.summary.waits.clone();
         let mut unit = Unit::new();
+        unit.then(After::Measure(measurements));
         for projection in projections {
             let entry = self.outbox_entry(run_ref.tenant.clone(), Some(run), projection);
             activation.outbox.push(entry.clone());

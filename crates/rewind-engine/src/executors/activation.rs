@@ -57,8 +57,22 @@ pub(crate) async fn activate<P: Plane>(
     warm: Option<Warm<P>>,
 ) -> (ActivationResult, Option<Warm<P>>) {
     let run = request.head.run.clone();
-    let span = tracing::info_span!("activation", rewind.run_id = %run.id);
-    match work(plane, config, request, warm).instrument(span).await {
+    let (trace, _) = crate::telemetry::trace_of(&derive::record_of(&request.head));
+    let first = request.head.history_len;
+    let triggers = request.inbox.len();
+    let span = tracing::info_span!(
+        "activation",
+        rewind.run_id = %run.id,
+        trace_id = %trace,
+        span_id = %crate::telemetry::span_id(run.id, crate::telemetry::SpanKey::ActivationAt(first)),
+        parent_span_id = %crate::telemetry::span_id(run.id, crate::telemetry::SpanKey::Run),
+        histogram.rewind.activation.duration = tracing::field::Empty,
+        rewind.outcome = tracing::field::Empty,
+    );
+    let done = match work(plane, config, request, warm)
+        .instrument(span.clone())
+        .await
+    {
         Ok(done) => done,
         Err(error) => {
             tracing::error!(%run, %error, "activation failed");
@@ -69,7 +83,19 @@ pub(crate) async fn activate<P: Plane>(
                 None,
             )
         }
+    };
+    let outcome = match &done.0 {
+        ActivationResult::Committed(_) => "committed",
+        ActivationResult::Quarantined { .. } => "quarantined",
+        ActivationResult::Released => "released",
+        ActivationResult::Failed { .. } => "failed",
+        ActivationResult::Miss => "miss",
+    };
+    span.record(crate::metrics::OUTCOME, outcome);
+    if !matches!(done.0, ActivationResult::Miss) {
+        crate::metrics::inbox(triggers);
     }
+    done
 }
 
 /// The CPU time of the calls into the script that executed.
@@ -230,15 +256,22 @@ async fn work<P: Plane>(
     let hit = warm.as_ref().is_some_and(|warm| {
         purpose == Purpose::Runnable && warm.state.history_len() == head.history_len
     });
+    let counted = purpose == Purpose::Runnable && head.history_len > 0;
     let (mut instance, state, mut history) = match warm {
         Some(warm) if hit => {
             tracing::debug!("instance cache hit");
+            if counted {
+                crate::metrics::instance_cache_lookup(true);
+            }
             (Some(warm.instance), warm.state, warm.history)
         }
         _ => {
             let Some(history) = history else {
                 return Ok((ActivationResult::Miss, None));
             };
+            if counted {
+                crate::metrics::instance_cache_lookup(false);
+            }
             let state = RunState::from_history(&history).map_err(corrupt)?;
             let mut instance = None;
             if !history.is_empty() && !state.is_terminal() {
@@ -536,6 +569,8 @@ async fn commit<P: Plane, B: BlobStore>(
         &all_records,
         &config.telemetry,
     );
+    let measurements =
+        derive::measurements_of(&next, history, from, &all_records, &config.telemetry);
     let children = if state.is_terminal() || first_of_fork {
         derive::children_of(history)
     } else {
@@ -562,6 +597,7 @@ async fn commit<P: Plane, B: BlobStore>(
         copied: first_of_fork,
         cpu,
         mode,
+        measurements,
     })
 }
 

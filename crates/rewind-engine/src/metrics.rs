@@ -134,23 +134,28 @@ pub(crate) fn tool_retry(tool: &str) {
     );
 }
 
-/// What a run's committed entries measure, projected once their feed item is acknowledged.
+/// What a run's committed entries measure: a run metric, recorded once the batch that commits
+/// them is durable. An activation's executor derives them from the run's history; they reach the
+/// run's owner with the activation's result.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum RunMeasurement {
+pub enum RunMeasurement {
+    /// `rewind.runs.started`.
     Started,
-    Ended {
-        outcome: &'static str,
-    },
+    /// `rewind.runs.ended`, by how the run ended: `completed`, `failed`, `cancelled`, `aborted`.
+    Ended { outcome: String },
+    /// `rewind.tool_call.duration`: a call that ended (`completed`, `failed`, or `no_outcome`
+    /// when the run ended first), from its schedule to its outcome in the run's logical time.
     ToolCall {
         tool: String,
-        outcome: &'static str,
-        error_kind: Option<&'static str>,
+        outcome: String,
+        error_kind: Option<String>,
         seconds: f64,
     },
 }
 
 impl RunMeasurement {
-    pub(crate) fn emit(&self) {
+    /// Records the measurement through the `tracing` facade.
+    pub fn emit(&self) {
         match self {
             RunMeasurement::Started => {
                 tracing::info!(monotonic_counter.rewind.runs.started = 1_u64);
@@ -158,7 +163,7 @@ impl RunMeasurement {
             RunMeasurement::Ended { outcome } => {
                 tracing::info!(
                     monotonic_counter.rewind.runs.ended = 1_u64,
-                    rewind.outcome = *outcome
+                    rewind.outcome = outcome.as_str()
                 );
             }
             RunMeasurement::ToolCall {
@@ -170,8 +175,8 @@ impl RunMeasurement {
                 tracing::info!(
                     histogram.rewind.tool_call.duration = *seconds,
                     rewind.tool = tool.as_str(),
-                    rewind.outcome = *outcome,
-                    rewind.error.kind = *error_kind,
+                    rewind.outcome = outcome.as_str(),
+                    rewind.error.kind = error_kind.as_deref(),
                 );
             }
         }

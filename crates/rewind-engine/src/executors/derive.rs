@@ -14,6 +14,7 @@ use rewind_core::{
     Timestamp, Toolset,
 };
 
+use crate::metrics::RunMeasurement;
 use crate::ports::{
     CounterDelta, Counters, DueTimer, FailureCounts, Hour, IndexedSummary, LatestRun,
     PayloadRecord, Projection, QuarantineNote, RunHead, RunRecord, RunSummary, TaskPhase,
@@ -488,6 +489,30 @@ pub(crate) fn projections_of(
         projections.push(Projection::Webhooks(event));
     }
     projections
+}
+
+/// What the new entries (`from` on) measure: the run metrics recorded once their batch is
+/// durable, for every run but a mock run whose telemetry is not exported.
+pub(crate) fn measurements_of(
+    head: &RunHead,
+    history: &[HistoryEntry],
+    from: usize,
+    payloads: &BTreeMap<rewind_core::Digest, PayloadRecord>,
+    telemetry: &TelemetryConfig,
+) -> Vec<RunMeasurement> {
+    if history.len() <= from {
+        return Vec::new();
+    }
+    let record = record_of(head);
+    let run_telemetry = RunTelemetry {
+        record: &record,
+        config: telemetry,
+        payloads,
+    };
+    if !run_telemetry.measured(history) {
+        return Vec::new();
+    }
+    run_telemetry.measurements(history, from as u64, history.len() as u64)
 }
 
 /// The runs a history started with a workflow's `start` and whose end it does not hold, by

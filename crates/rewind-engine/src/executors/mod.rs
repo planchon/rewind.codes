@@ -182,6 +182,7 @@ impl<P: Plane> Executors<P> {
                         self.durable.insert(run.clone(), warm.state.history_len());
                     }
                     let evicted = self.cache.insert(run.clone(), warm);
+                    crate::metrics::instance_cache_evictions(evicted.len());
                     for evicted in evicted {
                         self.durable.remove(&evicted);
                     }
