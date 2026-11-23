@@ -393,7 +393,7 @@ async fn parent_history<P: Plane>(
     };
     let read = crate::partition::read_attempt(plane, log, &parent_ref, 0, true)
         .await
-        .map_err(failed)?;
+        .map_err(|error| failed(error.to_string()))?;
     Ok(read.map(|read| match read {
         crate::partition::AttemptRead::Live {
             entries, payloads, ..

@@ -25,8 +25,8 @@ use crate::partition::{Internal, Owner, OwnerMsg, Phase};
 use crate::plane::{LogOf, Plane};
 use crate::ports::partition::Change;
 use crate::ports::{
-    CatalogStore, NamespaceName, PartitionLog, PartitionStore, Recovery, TaskState, TenantId,
-    namespace_partition,
+    CatalogStore, NamespaceName, PartitionError, PartitionLog, PartitionStore, Recovery, TaskState,
+    TenantId, namespace_partition,
 };
 
 /// A partition opened and recovered.
@@ -48,23 +48,12 @@ pub(crate) fn open_job<P: Plane>(owner: &Owner<P>) -> Effect<P> {
     let horizon = owner.config.horizon;
     job(async move {
         let opened = async {
-            let log = plane
-                .partitions()
-                .open(partition, &node)
-                .await
-                .map_err(|error| error.to_string())?;
+            let log = plane.partitions().open(partition, &node).await?;
             let now = crate::ports::Clock::now(plane.clock());
-            let recovery = log
-                .recover(now.saturating_add(horizon))
-                .await
-                .map_err(|error| error.to_string())?;
+            let recovery = log.recover(now.saturating_add(horizon)).await?;
             let mut inbox_max = 0;
             for head in recovery.runnable.iter().chain(&recovery.quarantined) {
-                for item in log
-                    .inbox(&head.run)
-                    .await
-                    .map_err(|error| error.to_string())?
-                {
+                for item in log.inbox(&head.run).await? {
                     inbox_max = inbox_max.max(item.id);
                 }
             }
@@ -72,11 +61,11 @@ pub(crate) fn open_job<P: Plane>(owner: &Owner<P>) -> Effect<P> {
                 .catalog()
                 .namespaces_to_erase(1_000)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(|error| PartitionError::Backend(error.to_string()))?
                 .into_iter()
                 .filter(|(tenant, name)| namespace_partition(tenant, name, partitions) == partition)
                 .collect();
-            Ok::<_, String>(Opened {
+            Ok::<_, PartitionError>(Opened {
                 log: Arc::new(log),
                 recovery,
                 inbox_max,
@@ -88,7 +77,9 @@ pub(crate) fn open_job<P: Plane>(owner: &Owner<P>) -> Effect<P> {
             partition,
             match opened {
                 Ok(opened) => OwnerMsg::Opened(Box::new(opened)),
-                Err(error) => OwnerMsg::OpenFailed(error),
+                // Another node opened it since: the node reads the map before it tries again.
+                Err(PartitionError::Fenced { .. }) => OwnerMsg::Fenced(None),
+                Err(error) => OwnerMsg::OpenFailed(error.to_string()),
             },
         )
     })

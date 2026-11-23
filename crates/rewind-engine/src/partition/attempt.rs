@@ -13,7 +13,9 @@
 use rewind_core::HistoryEntry;
 
 use crate::plane::{LogOf, Plane};
-use crate::ports::{PartitionLog, PayloadRecord, RunArchive, RunHead, RunRef, SealedAttempt};
+use crate::ports::{
+    PartitionError, PartitionLog, PayloadRecord, RunArchive, RunHead, RunRef, SealedAttempt,
+};
 
 /// How many times a read starts over before it gives up: a seal happens once per attempt, so a
 /// second read finds the attempt sealed.
@@ -78,11 +80,9 @@ pub(crate) async fn read_attempt<P: Plane>(
     run: &RunRef,
     from: u64,
     payloads: bool,
-) -> Result<Option<AttemptRead>, String> {
-    let failed =
-        |error: &dyn std::fmt::Display| format!("run {} could not be read: {error}", run.id);
+) -> Result<Option<AttemptRead>, PartitionError> {
     for _ in 0..TRIES {
-        let Some(head) = log.run(run).await.map_err(|error| failed(&error))? else {
+        let Some(head) = log.run(run).await? else {
             return Ok(None);
         };
         if head.sealed == Some(head.attempt) {
@@ -90,31 +90,28 @@ pub(crate) async fn read_attempt<P: Plane>(
                 .archive()
                 .get(run, head.attempt)
                 .await
-                .map_err(|error| failed(&error))?;
+                .map_err(|error| {
+                    PartitionError::Unavailable(format!(
+                        "the sealed attempt of run {} could not be read: {error}",
+                        run.id
+                    ))
+                })?;
             return Ok(sealed.map(|sealed| AttemptRead::Sealed {
                 head,
                 sealed: Box::new(sealed),
             }));
         }
-        let entries = log
-            .history(run, head.attempt, from)
-            .await
-            .map_err(|error| failed(&error))?;
+        let entries = log.history(run, head.attempt, from).await?;
         let mut records = Vec::new();
         if payloads {
             for digest in crate::executors::activation::digests_of(&entries) {
-                records.extend(
-                    log.payload(run, digest)
-                        .await
-                        .map_err(|error| failed(&error))?,
-                );
+                records.extend(log.payload(run, digest).await?);
             }
         }
         // The records read are the attempt's while its head still names it live.
         let unchanged = log
             .run(run)
-            .await
-            .map_err(|error| failed(&error))?
+            .await?
             .is_some_and(|now| now.attempt == head.attempt && now.sealed != Some(head.attempt));
         if unchanged {
             return Ok(Some(AttemptRead::Live {
@@ -124,5 +121,8 @@ pub(crate) async fn read_attempt<P: Plane>(
             }));
         }
     }
-    Err(failed(&"its attempt changed at each read: try again"))
+    Err(PartitionError::Unavailable(format!(
+        "the attempt of run {} changed at each read: try again",
+        run.id
+    )))
 }

@@ -10,11 +10,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rewind_core::{Seq, Timestamp};
 
 use crate::node::message::{Message, ReplyTo, job};
-use crate::partition::{Flight, Owner};
+use crate::partition::{Flight, Owner, OwnerMsg};
 use crate::plane::Plane;
 use crate::ports::link::{NodeReply, PartitionReply, PartitionRequest, Refusal, RunView};
 use crate::ports::{
@@ -44,10 +45,6 @@ pub(crate) fn refused(request: &PartitionRequest, refusal: Refusal) -> Partition
         PartitionRequest::Usage { .. } => PartitionReply::Used(Err(refusal)),
         PartitionRequest::QuotaAlerts { .. } => PartitionReply::Alerts(Err(refusal)),
     }
-}
-
-fn unavailable(error: impl ToString) -> Refusal {
-    Refusal::Unavailable(error.to_string())
 }
 
 impl<P: Plane> Owner<P> {
@@ -90,7 +87,16 @@ impl<P: Plane> Owner<P> {
         let node = self.node.to_string();
         let now = self.now();
         let plane = Arc::clone(&self.plane);
+        let partition = self.partition;
         self.out.push(job(async move {
+            // A read that finds the partition opened by another node drops it, as a commit does.
+            let fenced = AtomicBool::new(false);
+            let unavailable = |error: PartitionError| {
+                if matches!(error, PartitionError::Fenced { .. }) {
+                    fenced.store(true, Ordering::Relaxed);
+                }
+                Refusal::Unavailable(error.to_string())
+            };
             let answer = match request {
                 PartitionRequest::GetRun { run } => PartitionReply::Run(
                     async {
@@ -172,6 +178,9 @@ impl<P: Plane> Owner<P> {
                 ),
                 other => refused(&other, Refusal::Unavailable("not a read".into())),
             };
+            if fenced.load(Ordering::Relaxed) {
+                return Message::Owner(partition, OwnerMsg::Fenced(Some(reply)));
+            }
             Message::Reply(reply, NodeReply::Partition(Box::new(answer)))
         }));
     }

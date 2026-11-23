@@ -237,23 +237,8 @@ impl<P: Plane> Owner<P> {
                 }
             }
             Err(PartitionError::Fenced { .. }) => {
-                tracing::warn!(partition = %self.partition, "the partition was opened by another node: dropped");
-                let mut units = units;
-                units.extend(std::mem::take(&mut self.pending));
-                for unit in &units {
-                    for reply in unit.replies() {
-                        self.out.push(Effect::Reply(
-                            reply,
-                            NodeReply::NotOwner {
-                                partition: self.partition,
-                            },
-                        ));
-                    }
-                }
-                self.close();
-                self.out.push(Effect::Local(Message::Node(NodeMsg::Fenced(
-                    self.partition,
-                ))));
+                self.committing = Some(units);
+                self.fenced(None);
             }
             Err(PartitionError::Conflict(message)) if units.len() > 1 => {
                 tracing::warn!(partition = %self.partition, %message, "a batch was refused: its units are committed one by one");
@@ -287,6 +272,31 @@ impl<P: Plane> Owner<P> {
                 });
             }
         }
+    }
+
+    /// Another node opened the partition, as a commit, a read or the open found: the request
+    /// `reply` and every request a unit waits to answer are answered `NotOwner`, the owner
+    /// closes, and the node reads the map again: it opens the partition again while the map
+    /// names it (`archi/06-storage-and-scale.md`, "Partitions, owners and nodes").
+    pub(crate) fn fenced(&mut self, reply: Option<ReplyTo>) {
+        tracing::warn!(partition = %self.partition, "the partition was opened by another node: dropped");
+        if let Some(reply) = reply {
+            self.out.push(Effect::Reply(
+                reply,
+                NodeReply::NotOwner {
+                    partition: self.partition,
+                },
+            ));
+        }
+        let mut units = self.committing.take().unwrap_or_default();
+        units.extend(self.isolating.drain(..));
+        units.append(&mut self.pending);
+        // `close` answers the requests of the units pending.
+        self.pending = units;
+        self.close();
+        self.out.push(Effect::Local(Message::Node(NodeMsg::Fenced(
+            self.partition,
+        ))));
     }
 
     /// A unit refused for good: its requests are answered `refusal`, and the runs it touched

@@ -1844,7 +1844,10 @@ pub(crate) async fn end_value<P: Plane>(
     log: &crate::plane::LogOf<P>,
     run: &RunRef,
 ) -> Result<Option<JsonValue>, String> {
-    let Some(read) = super::read_attempt(plane, log, run, 0, true).await? else {
+    let Some(read) = super::read_attempt(plane, log, run, 0, true)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
         return Ok(None);
     };
     let history = read.into_entries(0);

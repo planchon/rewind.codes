@@ -159,6 +159,60 @@ async fn a_writer_of_another_process_is_fenced_by_the_writer_epoch() {
     assert_eq!(third.run(&run(2)).await.unwrap(), None);
 }
 
+/// A node whose open was under way when the partition moved to another node: its open ends
+/// after the new owner's, and must not fence it. It fails, and the new owner goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_under_way_when_another_ends_fails_and_fences_nothing() {
+    use object_store::throttle::{ThrottleConfig, ThrottledStore};
+    use std::time::Duration;
+
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let before = store_on(&objects)
+        .open(PARTITION, &node("n0"))
+        .await
+        .unwrap();
+    before
+        .commit(Batch::new().with(create(&run(1))))
+        .await
+        .unwrap();
+    before.close().await.unwrap();
+
+    // The old node reaches the bucket slowly: each of its calls waits 100 ms.
+    let wait = Duration::from_millis(100);
+    let slow: Arc<dyn ObjectStore> = Arc::new(ThrottledStore::new(
+        Arc::clone(&objects),
+        ThrottleConfig {
+            wait_get_per_call: wait,
+            wait_put_per_call: wait,
+            wait_list_per_call: wait,
+            ..ThrottleConfig::default()
+        },
+    ));
+    let old_node = store_on(&slow);
+    let late = tokio::spawn(async move { old_node.open(PARTITION, &node("n1")).await });
+    // Its open has read the manifest when the new owner opens the partition and commits.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let owner = store_on(&objects)
+        .open(PARTITION, &node("n2"))
+        .await
+        .unwrap();
+    owner
+        .commit(Batch::new().with(create(&run(2))))
+        .await
+        .unwrap();
+
+    let late = late.await.unwrap();
+    assert!(
+        matches!(late, Err(PartitionError::Fenced { .. })),
+        "the late open is fenced: {late:?}"
+    );
+    owner
+        .commit(Batch::new().with(create(&run(3))))
+        .await
+        .expect("the new owner still commits");
+    assert!(owner.run(&run(3)).await.unwrap().is_some());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commits_racing_on_one_log_each_apply_whole() {
     let store = SlatePartitions::new(&Bucket::Memory, Options::default()).unwrap();

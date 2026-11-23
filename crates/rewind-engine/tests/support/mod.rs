@@ -4,7 +4,7 @@
 
 #![allow(dead_code, unreachable_pub)]
 
-pub mod late_seal;
+pub mod interleaved;
 pub mod plane;
 
 use std::collections::{BTreeSet, HashMap};

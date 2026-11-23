@@ -24,7 +24,7 @@ use rewind_engine::ports::{
     Quotas, RunArchive, RunOrder, RunQuery, Scope, SecretStore, TaskState, TenantId, Window,
 };
 use serde_json::json;
-use support::late_seal::LateSeal;
+use support::interleaved::Interleaved;
 use support::plane::{World, config};
 use support::{DAY, FakeExecutor, HOUR, RecordingDispatcher, request, result_of};
 
@@ -140,7 +140,7 @@ async fn a_run_calls_its_tools_ends_and_is_sealed() {
 /// whole history, from the archive, never an ended run with an empty one.
 #[tokio::test]
 async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
-    let store = LateSeal::new();
+    let store = Interleaved::new();
     let mut world = World::over(
         store.clone(),
         chain(),
@@ -167,7 +167,7 @@ async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
 
     // The journal's export, as `GET /v1/runs/{id}/journal` reads it.
     let mut world = World::over(
-        LateSeal::new(),
+        Interleaved::new(),
         chain(),
         RecordingDispatcher::echo(),
         1,
@@ -182,6 +182,30 @@ async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
     let journal = world.edge.export_journal(&mut gateway, &run).await.unwrap();
     assert_eq!(store.applied(), 1);
     assert_eq!(journal.entries.len(), 8);
+}
+
+/// An owner whose read finds the partition opened by another node drops it, as a fenced commit
+/// does: the request is answered `NotOwner`, and the node opens the partition again while the
+/// map names it. A partition nobody writes to is never left answering reads with an error.
+#[tokio::test]
+async fn a_read_that_finds_the_partition_opened_elsewhere_drops_it_and_the_node_opens_it_again() {
+    let store = Interleaved::new();
+    let mut world = World::over(
+        store.clone(),
+        chain(),
+        RecordingDispatcher::echo(),
+        1,
+        &[config("node-a", 1)],
+    )
+    .await;
+    let run = world.run(request("chain", json!({}))).await;
+    assert_eq!(store.opens(), 1);
+
+    store.fence_next_read();
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Completed);
+    assert_eq!(store.opens(), 2, "the partition was opened again");
+    assert_eq!(world.events(&run).await.len(), 8);
 }
 
 #[tokio::test]

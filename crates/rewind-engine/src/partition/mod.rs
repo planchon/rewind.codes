@@ -107,6 +107,9 @@ pub(crate) enum OwnerMsg<P: Plane> {
     Internal(Internal),
     /// The partition moves to another node: the owner stops taking requests.
     Close,
+    /// A job found the partition opened by another node: the request it answered, if any, is
+    /// answered `NotOwner`, and the owner drops the partition.
+    Fenced(Option<ReplyTo>),
     /// Try the commit that failed again.
     RetryCommit,
 }
@@ -142,6 +145,7 @@ impl<P: Plane> fmt::Debug for OwnerMsg<P> {
             OwnerMsg::Nodes(nodes) => write!(f, "Nodes({})", nodes.len()),
             OwnerMsg::Internal(internal) => write!(f, "Internal({internal:?})"),
             OwnerMsg::Close => f.write_str("Close"),
+            OwnerMsg::Fenced(_) => f.write_str("Fenced"),
             OwnerMsg::RetryCommit => f.write_str("RetryCommit"),
         }
     }
@@ -497,6 +501,7 @@ impl<P: Plane> Owner<P> {
             Phase::Opening => match message {
                 OwnerMsg::Opened(opened) => return self.opened(*opened),
                 OwnerMsg::OpenFailed(error) => return self.open_failed(error),
+                OwnerMsg::Fenced(reply) => return self.fenced(reply),
                 other => {
                     self.opening.push(other);
                     return;
@@ -561,6 +566,7 @@ impl<P: Plane> Owner<P> {
             }
             OwnerMsg::Internal(internal) => self.internal(internal),
             OwnerMsg::Close => self.close(),
+            OwnerMsg::Fenced(reply) => self.fenced(reply),
             OwnerMsg::RetryCommit => self.retry_commit(),
         }
     }
@@ -599,7 +605,12 @@ impl<P: Plane> Owner<P> {
         let plane = Arc::clone(&self.plane);
         let partition = self.partition;
         self.out.push(job(async move {
-            let loaded = load_run(&*plane, &*log, &run).await;
+            let loaded = match load_run(&*plane, &*log, &run).await {
+                Err(PartitionError::Fenced { .. }) => {
+                    return Message::Owner(partition, OwnerMsg::Fenced(None));
+                }
+                loaded => loaded.map_err(|error| error.to_string()),
+            };
             Message::Owner(
                 partition,
                 OwnerMsg::Loaded {
@@ -900,24 +911,23 @@ async fn load_run<P: Plane>(
     plane: &P,
     log: &LogOf<P>,
     run: &RunRef,
-) -> Result<Option<Box<Loaded>>, String> {
-    let Some(head) = log.run(run).await.map_err(|error| error.to_string())? else {
+) -> Result<Option<Box<Loaded>>, PartitionError> {
+    let Some(head) = log.run(run).await? else {
         return Ok(None);
     };
-    let summary = log.summary(run).await.map_err(|error| error.to_string())?;
+    let summary = log.summary(run).await?;
     let inbox = log
         .inbox(run)
-        .await
-        .map_err(|error| error.to_string())?
+        .await?
         .into_iter()
         .map(|item| (item.id, item.received_at))
         .collect();
-    let tasks = log.tasks(run).await.map_err(|error| error.to_string())?;
+    let tasks = log.tasks(run).await?;
     let toolset = plane
         .catalog()
         .get_toolset(&run.tenant, head.toolset)
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| PartitionError::Backend(error.to_string()))?
         .map(|stored| stored.toolset);
     Ok(Some(Box::new(Loaded {
         head,

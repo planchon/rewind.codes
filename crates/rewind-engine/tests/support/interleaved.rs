@@ -1,8 +1,12 @@
-//! A partition store whose seal lands between two reads of a job: the memory partitions, where
-//! the batch that seals an attempt is held once it is committed, and applied at the next read
-//! of a history. The driver runs a job to its end before the next one; with this store, a job
-//! that reads a run's head, then its entries, sees the seal committed between the two, as a
-//! node does when the sealer's batch and a read run at once.
+//! A partition store where the tests place what another job, or another node, does between two
+//! reads of a job: the memory partitions, with two interleavings a node meets and the driver,
+//! which runs a job to its end before the next one, never produces by itself.
+//!
+//! - **A seal between two reads.** The batch that seals an attempt is held once it is committed,
+//!   and applied at the next read of a history: a job that reads a run's head, then its entries,
+//!   sees the seal committed between the two, as when the sealer's batch and a read run at once.
+//! - **A read that finds the partition opened elsewhere.** The next read of a head answers
+//!   `Fenced`, as SlateDB does once another node opened the partition.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -18,66 +22,82 @@ use rewind_engine::ports::{
 };
 
 #[derive(Debug, Default)]
-struct Held {
+struct Interleavings {
     /// The next batch that seals an attempt is held.
-    armed: bool,
+    hold_seal: bool,
     /// The batch held, applied at the next read of a history.
-    batch: Option<Batch>,
+    held: Option<Batch>,
     /// How many held batches were applied.
     applied: usize,
+    /// The next read of a head answers `Fenced`.
+    fence_read: bool,
+    /// How many times a partition was opened.
+    opens: usize,
 }
 
-/// [`MemoryPartitions`] whose next seal is held until a history is read.
+/// [`MemoryPartitions`] where the tests interleave a seal, or a fence, with a job's reads.
 #[derive(Debug, Clone, Default)]
-pub struct LateSeal {
+pub struct Interleaved {
     inner: MemoryPartitions,
-    held: Arc<Mutex<Held>>,
+    state: Arc<Mutex<Interleavings>>,
 }
 
-impl LateSeal {
+impl Interleaved {
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Holds the next batch that seals an attempt until a history is read.
     pub fn hold_next_seal(&self) {
-        self.held.lock().unwrap().armed = true;
+        self.state.lock().unwrap().hold_seal = true;
     }
 
     /// Whether a batch is held.
     pub fn holding(&self) -> bool {
-        self.held.lock().unwrap().batch.is_some()
+        self.state.lock().unwrap().held.is_some()
     }
 
     /// How many held batches were applied.
     pub fn applied(&self) -> usize {
-        self.held.lock().unwrap().applied
+        self.state.lock().unwrap().applied
+    }
+
+    /// The next read of a run's head answers that another node opened the partition.
+    pub fn fence_next_read(&self) {
+        self.state.lock().unwrap().fence_read = true;
+    }
+
+    /// How many times a partition was opened.
+    pub fn opens(&self) -> usize {
+        self.state.lock().unwrap().opens
     }
 }
 
-/// A log of a [`LateSeal`].
+/// A log of an [`Interleaved`] store.
 #[derive(Debug, Clone)]
-pub struct LateSealLog {
+pub struct InterleavedLog {
     inner: MemoryPartitionLog,
-    held: Arc<Mutex<Held>>,
+    state: Arc<Mutex<Interleavings>>,
 }
 
-impl PartitionStore for LateSeal {
-    type Log = LateSealLog;
+impl PartitionStore for Interleaved {
+    type Log = InterleavedLog;
 
     async fn open(
         &self,
         partition: PartitionId,
         node: &NodeId,
-    ) -> Result<LateSealLog, PartitionError> {
-        Ok(LateSealLog {
-            inner: self.inner.open(partition, node).await?,
-            held: Arc::clone(&self.held),
+    ) -> Result<InterleavedLog, PartitionError> {
+        let inner = self.inner.open(partition, node).await?;
+        self.state.lock().unwrap().opens += 1;
+        Ok(InterleavedLog {
+            inner,
+            state: Arc::clone(&self.state),
         })
     }
 }
 
-impl PartitionLog for LateSealLog {
+impl PartitionLog for InterleavedLog {
     fn partition(&self) -> PartitionId {
         self.inner.partition()
     }
@@ -87,6 +107,12 @@ impl PartitionLog for LateSealLog {
     }
 
     async fn run(&self, run: &RunRef) -> Result<Option<RunHead>, PartitionError> {
+        let fenced = std::mem::take(&mut self.state.lock().unwrap().fence_read);
+        if fenced {
+            return Err(PartitionError::Fenced {
+                partition: self.partition(),
+            });
+        }
         self.inner.run(run).await
     }
 
@@ -100,10 +126,10 @@ impl PartitionLog for LateSealLog {
         attempt: Attempt,
         from: u64,
     ) -> Result<Vec<HistoryEntry>, PartitionError> {
-        let batch = self.held.lock().unwrap().batch.take();
+        let batch = self.state.lock().unwrap().held.take();
         if let Some(batch) = batch {
             self.inner.commit(batch).await?;
-            self.held.lock().unwrap().applied += 1;
+            self.state.lock().unwrap().applied += 1;
         }
         self.inner.history(run, attempt, from).await
     }
@@ -193,10 +219,10 @@ impl PartitionLog for LateSealLog {
             .iter()
             .any(|change| matches!(change, Change::Seal { .. }));
         {
-            let mut held = self.held.lock().unwrap();
-            if seals && held.armed {
-                held.armed = false;
-                held.batch = Some(batch);
+            let mut state = self.state.lock().unwrap();
+            if seals && state.hold_seal {
+                state.hold_seal = false;
+                state.held = Some(batch);
                 return Ok(());
             }
         }
