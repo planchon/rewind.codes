@@ -12,15 +12,19 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use rewind_core::RunStatus;
 use rewind_engine::adapters::{
-    ControlPlaneChanges, LocalLink, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
-    MemoryPartitions, MemorySecrets, MemorySpanExporter, MemoryWebhooks, SeededEntropy,
-    SystemClock,
+    ChangeStream, ControlPlaneChanges, LocalLink, MemoryArchive, MemoryBlobs, MemoryCatalog,
+    MemoryCluster, MemoryMembership, MemoryPartitions, MemorySecrets, MemorySpanExporter,
+    MemoryWebhooks, SeededEntropy, SystemClock,
 };
 use rewind_engine::edge::Edge;
 use rewind_engine::node::runtime::{self, NodeHandle};
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
+use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::link::{NodeRequest, OrgRequest, SubscriptionKey};
-use rewind_engine::ports::{Cluster, NodeId, NodeInfo, NodeLink, ScriptExecutor, TenantId};
+use rewind_engine::ports::{
+    Cluster, ClusterError, Departed, Moves, NodeId, NodeInfo, NodeLink, PartitionMap,
+    ScriptExecutor, TenantId,
+};
 use serde_json::json;
 use support::{FakeExecutor, RecordingDispatcher, request, result_of};
 
@@ -170,5 +174,119 @@ async fn two_nodes_run_a_run_through_the_link_in_real_time() {
         .await;
     assert!(refused.is_err());
     link.heal(b.node());
+    a.stop().await.unwrap();
+}
+
+/// A membership whose writes of the map take a while, as the control plane's over a network.
+struct SlowMembership {
+    inner: Arc<MemoryMembership>,
+    delay: Duration,
+}
+
+impl Membership for SlowMembership {
+    type Changes = ChangeStream;
+
+    fn node(&self) -> &NodeId {
+        self.inner.node()
+    }
+
+    async fn watch(&self) -> Result<Departed, ClusterError> {
+        self.inner.watch().await
+    }
+
+    async fn assign(&self, moves: &Moves) -> Result<PartitionMap, ClusterError> {
+        tokio::time::sleep(self.delay).await;
+        self.inner.assign(moves).await
+    }
+
+    async fn partition_map(&self) -> Result<PartitionMap, ClusterError> {
+        self.inner.partition_map().await
+    }
+
+    async fn nodes(&self) -> Result<Vec<NodeInfo>, ClusterError> {
+        self.inner.nodes().await
+    }
+
+    async fn changes(&self) -> Result<ChangeStream, ClusterError> {
+        self.inner.changes().await
+    }
+
+    async fn leave(self) -> Result<(), ClusterError> {
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => inner.leave().await,
+            Err(_) => Ok(()),
+        }
+    }
+}
+
+/// A stop is answered once the node's partitions are handed over, however long the control
+/// plane takes to write the map: the process exits after the write, never during it (a node
+/// stopped while it opened its partitions kept them, its hand-over cut by the exit).
+#[tokio::test]
+async fn a_stop_is_answered_once_the_partitions_are_handed_over() {
+    let changes = ControlPlaneChanges::new();
+    let cluster = MemoryCluster::with_changes(4, changes.clone());
+    let blobs = MemoryBlobs::new();
+    let plane = Arc::new(Wiring {
+        catalog: MemoryCatalog::with_changes(changes.clone()),
+        partitions: MemoryPartitions::new(),
+        archive: MemoryArchive::with_blobs(blobs.clone()),
+        blobs,
+        executor: chain(),
+        dispatcher: RecordingDispatcher::echo(),
+        secrets: MemorySecrets::with_changes(changes),
+        spans: MemorySpanExporter::new(),
+        webhooks: MemoryWebhooks::new(),
+        clock: SystemClock,
+        entropy: SeededEntropy::new(7),
+    });
+    let link = Arc::new(LocalLink::new());
+    let (a, _) = node(&plane, &cluster, &link, "node-a").await;
+    let mut config = NodeConfig::new(NodeId::new("node-b").unwrap(), NonZeroU16::new(4).unwrap());
+    config.host_tools = HostTools::Dispatched;
+    let joined = cluster
+        .join(NodeInfo {
+            id: config.node.clone(),
+            address: "node-b.local".into(),
+            build: config.build.clone(),
+            epochs: plane.executor.epochs().iter().copied().collect(),
+            pool: None,
+            executors_only: false,
+        })
+        .await
+        .unwrap();
+    let membership = Arc::new(joined);
+    let b = runtime::spawn(
+        Arc::clone(&plane),
+        config.clone(),
+        SlowMembership {
+            inner: Arc::clone(&membership),
+            delay: Duration::from_millis(200),
+        },
+        Arc::clone(&link),
+    );
+    link.register(b.clone());
+    let owned = || async {
+        membership
+            .partition_map()
+            .await
+            .unwrap()
+            .owned_by(&config.node)
+            .len()
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while owned().await == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    b.stop().await.unwrap();
+    assert_eq!(
+        owned().await,
+        0,
+        "the stop was answered before the hand-over"
+    );
     a.stop().await.unwrap();
 }

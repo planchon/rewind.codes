@@ -268,6 +268,7 @@ where
         next_id: 1,
         in_flight: Arc::new(AtomicUsize::new(0)),
         virtual_time,
+        stopping: None,
     };
     tokio::spawn(task.run());
     NodeHandle { inputs, node: id }
@@ -389,6 +390,8 @@ struct Task<P: Plane, M: Membership + 'static, L: NodeLink> {
     in_flight: Arc<AtomicUsize>,
     /// The clock the task moves, in virtual time.
     virtual_time: Option<Arc<dyn VirtualTime>>,
+    /// The stop asked: answered once the node's partitions are handed over.
+    stopping: Option<oneshot::Sender<()>>,
 }
 
 /// One piece of work in flight, counted until its answer is in the task's channel.
@@ -440,6 +443,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                     return;
                 };
                 if self.input(input) {
+                    self.finish().await;
                     return;
                 }
                 continue;
@@ -461,9 +465,30 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                 return;
             };
             if self.input(input) {
+                self.finish().await;
                 return;
             }
         }
+    }
+
+    /// The task's end. A stop hands the node's partitions over first, and is answered once the
+    /// map names their new owners: the process exits after the write, not during it (a node
+    /// stopped while it opened its partitions kept them, its hand-over cut by the exit).
+    async fn finish(&mut self) {
+        let Some(done) = self.stopping.take() else {
+            return;
+        };
+        for effect in self.node.hand_over() {
+            match effect {
+                Effect::Job(_, job) => {
+                    let message = job.await;
+                    self.local.push_back(message);
+                }
+                effect => self.carry(vec![effect]),
+            }
+        }
+        self.drain_local();
+        let _ = done.send(());
     }
 
     /// Where virtual time goes next: the earliest timer or wake that wakes something by itself,
@@ -537,10 +562,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                 self.carry(effects);
             }
             Input::Stop(done) => {
-                let effects = self.node.hand_over();
-                self.carry(effects);
-                self.drain_local();
-                let _ = done.send(());
+                self.stopping = Some(done);
                 return true;
             }
             Input::Abort => return true,
