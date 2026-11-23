@@ -563,3 +563,117 @@ async fn a_tenant_s_activations_run_on_its_pool_and_the_others_on_the_shared_one
     world.settle().await;
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
 }
+
+#[tokio::test]
+async fn an_executor_node_that_joins_is_seen_at_once() {
+    // The owner does not run the run's epoch, and no node does yet: its activation fails, and
+    // is tried again by a timer.
+    let mut owner = config("node-a", 1);
+    owner.epochs = Some(BTreeSet::from([Epoch(9)]));
+    let mut world = World::with(waiter(), RecordingDispatcher::echo(), 1, &[owner]).await;
+    let a = node("node-a");
+    let run = world.start(request("waiter", json!({}))).await.unwrap().run;
+    world.settle().await;
+    assert!(
+        world.events(&run).await.is_empty(),
+        "no executor runs its epoch"
+    );
+    assert_eq!(world.view(&run).await.head.failures, 1);
+
+    // An executors-only node of that epoch joins: the owner hears it at once, before anything
+    // asks it to read the members again.
+    let mut remote = config("node-b", 1);
+    remote.executors_only = true;
+    remote.epochs = Some(BTreeSet::from([Epoch(1)]));
+    let plane = std::sync::Arc::clone(&world.plane);
+    let now = world.now();
+    world.driver.add_node(plane, remote).await.unwrap();
+    world.settle().await;
+    assert_eq!(world.now(), now);
+    let members: Vec<String> = world
+        .driver
+        .node(&a)
+        .unwrap()
+        .members()
+        .iter()
+        .map(|member| member.id.to_string())
+        .collect();
+    assert_eq!(members, ["node-a", "node-b"]);
+
+    // The activation tried again goes to it.
+    world.idle().await;
+    assert_eq!(world.events(&run).await, ["run_started", "signal_awaited"]);
+    assert_eq!(
+        world
+            .driver
+            .node(&node("node-b"))
+            .unwrap()
+            .cached_instances(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_node_whose_membership_ends_gives_its_partitions_up_at_once() {
+    let mut world = two_nodes(sleeper(), RecordingDispatcher::echo(), 4).await;
+    let (a, b) = (node("node-a"), node("node-b"));
+    let (namespace, partition) = namespace_on(&world, &a);
+    world.at = b.clone();
+    let run = world
+        .start(in_namespace(request("sleeper", json!({})), &namespace))
+        .await
+        .unwrap()
+        .run;
+    world.settle().await;
+    assert!(!world.driver.node(&a).unwrap().partitions().is_empty());
+
+    // Node a's liveness ends (its lock's connection is lost) while its process lives on.
+    assert!(world.cluster.kill(&a));
+    world.settle().await;
+    let lost = world.driver.node(&a).unwrap();
+    assert!(lost.is_lost());
+    assert!(
+        lost.partitions().is_empty(),
+        "it holds no partition any more"
+    );
+    assert_eq!(world.driver.map(&b).unwrap().owner(partition), Some(&b));
+
+    world.advance(1_000);
+    world.idle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn an_open_that_ends_after_the_next_owner_s_leaves_the_partition_to_its_owner() {
+    use rewind_engine::ports::PartitionStore as _;
+    let mut world = two_nodes(waiter(), RecordingDispatcher::echo(), 4).await;
+    let (a, b) = (node("node-a"), node("node-b"));
+    let (namespace, partition) = namespace_on(&world, &b);
+    // Node a's open of the partition, begun while the map named it, ends after node b's: it
+    // fences node b, whose next commit is refused.
+    let late = world.plane.partitions.open(partition, &a).await.unwrap();
+    drop(late);
+    world.at = a.clone();
+    let run = world
+        .run(in_namespace(request("waiter", json!({})), &namespace))
+        .await;
+    // Node b read the map again, which still names it, and opened the partition again.
+    assert_eq!(world.events(&run).await, ["run_started", "signal_awaited"]);
+    assert_eq!(world.driver.map(&a).unwrap().owner(partition), Some(&b));
+    assert!(
+        world
+            .driver
+            .node(&b)
+            .unwrap()
+            .partitions()
+            .contains(&partition)
+    );
+    assert!(
+        !world
+            .driver
+            .node(&a)
+            .unwrap()
+            .partitions()
+            .contains(&partition)
+    );
+}

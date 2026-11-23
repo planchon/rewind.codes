@@ -13,32 +13,36 @@
 //!         └─ watch conn: waits lock_shared(a) ◄──────┘
 //! ```
 //!
-//! - **Liveness.** [`Cluster::join`] opens a connection of its own, outside the pool, and takes
-//!   on it the session advisory lock of the node, [`node_lock`]: the first 8 bytes,
-//!   big-endian, of SHA-256(`rewind node/<id>`), as a `bigint`. A second member of the same id
-//!   cannot take it ([`ClusterError::AlreadyMember`]). The node's row in `nodes` is written once
-//!   the lock is held, so a row whose lock is free is a node that died. A task keeps the
-//!   connection, and waits for it to end: once it does, the membership has ended
-//!   ([`ClusterError::NotMember`]), since the lock went with it. Dropping the membership, or
-//!   [`Membership::leave`], releases the lock and closes the connection; the row stays for the
-//!   node's watcher, as a dead node's does.
+//! - **Liveness.** [`Cluster::join`] opens a connection of its own, outside the pool, to the
+//!   lock database ([`PostgresCluster::open_in`], `postgres` by default), and takes on it the
+//!   session advisory lock of the node, [`node_lock`]: the first 8 bytes, big-endian, of
+//!   SHA-256(`rewind node/<control plane's database>/<id>`), as a `bigint`, so the deployments
+//!   sharing a server and its lock database never take each other's locks. A second member of
+//!   the same id cannot take it ([`ClusterError::AlreadyMember`]). The node's row in `nodes` is
+//!   written once the lock is held, so a row whose lock is free is a node that died. A task
+//!   keeps the connection, and waits for it to end: once it does, or once it fails, the
+//!   membership has ended ([`ClusterError::NotMember`]), since the lock went with it, and the
+//!   node gives its partitions up. Dropping the membership, or [`Membership::leave`], releases
+//!   the lock and closes the connection; the row stays for the node's watcher, as a dead node's
+//!   does.
 //! - **The ring.** The rows of `nodes`, by id, form the ring, the dead ones too: each member
 //!   [`watch`](Membership::watch)es the row after its own, the last the first. `watch` waits on
-//!   another connection of its own for the shared form of that node's lock; once it is
-//!   granted, that node's session ended: the watcher deletes its row while it holds the lock
-//!   (no new member of that id can take the lock meanwhile), releases it, and names the node.
-//!   A node whose lock is already free is named at once, so a node that died while nobody
-//!   watched it is named by the next watch of its predecessor. A member alone listens on the
-//!   channel `nodes`, which `join` notifies, until another row appears. A watch dropped while it
-//!   waits terminates its backend (`pg_terminate_backend`), which waits on a lock and would not
-//!   notice its client left.
-//! - **Members.** [`Membership::nodes`] lists the rows whose node holds its lock, from
-//!   `pg_locks`: the members alive. [`Membership::assign`] moves partitions only to them.
+//!   another connection of its own, to the lock database, for the shared form of that node's
+//!   lock; once it is granted, that node's session ended: the watcher deletes its row while it
+//!   holds the lock (no new member of that id can take the lock meanwhile), notifies the
+//!   channel `nodes`, releases the lock, and names the node. A node whose lock is already free
+//!   is named at once, so a node that died while nobody watched it is named by the next watch of
+//!   its predecessor. A member alone listens on the channel `nodes`, which `join` notifies, until
+//!   another row appears. A watch dropped while it waits terminates its backend
+//!   (`pg_terminate_backend`), which waits on a lock and would not notice its client left.
+//! - **Members.** [`Membership::nodes`] lists the rows whose node holds its lock in the lock
+//!   database, from `pg_locks`: the members alive. [`Membership::assign`] moves partitions only
+//!   to them. A join and a departure seen send `ControlPlaneChange::Nodes`.
 //! - **Moves.** `assign` locks every row of `partitions` (`FOR UPDATE`), so moves are decided
 //!   one after the other; it raises the epoch of each partition whose owner changes and sends
 //!   the whole map on the channel `partition_map` in the same transaction (`crate::changes`).
-//! - **Changes.** [`Membership::changes`] listens (`LISTEN control_plane, partition_map`) on a
-//!   connection of its own before it returns. The stream ends when that connection is lost, or
+//! - **Changes.** [`Membership::changes`] listens (`LISTEN control_plane, partition_map, nodes`)
+//!   on a connection of its own, to the control plane's database, before it returns. The stream ends when that connection is lost, or
 //!   when the membership ends: notifications sent meanwhile are lost, so its consumer drops what
 //!   it cached and listens again.
 //!
@@ -50,8 +54,9 @@
 //!
 //! A watch waits inside a statement, and Postgres keeps the snapshot of a running statement:
 //! while a watch waits, its backend holds back the horizon below which `VACUUM` removes dead
-//! rows of every table of the database (`backend_xmin` in `pg_stat_activity`). A new watch
-//! starts after each change of the ring, which moves the horizon on.
+//! rows of every table of its database (`backend_xmin` in `pg_stat_activity`). The locks are
+//! taken in a database where nothing is stored, so a watch that waits for days holds back no
+//! table of the control plane.
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
@@ -71,12 +76,9 @@ use sqlx::{ConnectOptions as _, Connection as _, PgConnection, PgPool};
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::changes::{CONTROL_PLANE, Decoder, PARTITION_MAP, notify};
+use crate::changes::{CONTROL_PLANE, Decoder, NODES, PARTITION_MAP, notify};
 use crate::sql::Columns;
 use crate::{Error, PostgresStore};
-
-/// The channel `join` notifies, on which a member alone waits for another.
-const NODES: &str = "nodes";
 
 /// The server's TCP keepalive on the dedicated connections: about 10 s to end the session of a
 /// machine that vanished.
@@ -88,23 +90,25 @@ const KEEPALIVE: [(&str, &str); 4] = [
 ];
 
 /// The advisory lock of the node whose id is the SQL expression `id`, as a `bigint`: the first 8
-/// bytes, big-endian, of SHA-256(`rewind node/<id>`).
-fn node_lock(id: &str) -> String {
+/// bytes, big-endian, of SHA-256(`<prefix><id>`), the SQL expression `prefix` being
+/// `rewind node/<control plane's database>/` ([`PostgresCluster`]'s `prefix`).
+fn node_lock(prefix: &str, id: &str) -> String {
     format!(
-        "('x' || left(encode(sha256(convert_to('rewind node/' || {id}, 'UTF8')), 'hex'), 16))\
+        "('x' || left(encode(sha256(convert_to({prefix} || {id}, 'UTF8')), 'hex'), 16))\
          ::bit(64)::bigint"
     )
 }
 
-/// Whether the node whose id is the SQL expression `id` holds its lock: a session of this
-/// database holds the exclusive advisory lock of its key (`pg_locks` shows a `bigint` key as
-/// its high half in `classid` and its low half in `objid`, with `objsubid` 1).
-fn holds_lock(id: &str) -> String {
-    let key = node_lock(id);
+/// Whether the node whose id is the SQL expression `id` holds its lock: a session of the lock
+/// database, named by the SQL expression `database`, holds the exclusive advisory lock of its
+/// key (`pg_locks`, which lists the locks of every database of the server, shows a `bigint` key
+/// as its high half in `classid` and its low half in `objid`, with `objsubid` 1).
+fn holds_lock(prefix: &str, database: &str, id: &str) -> String {
+    let key = node_lock(prefix, id);
     format!(
         "EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.granted \
          AND l.mode = 'ExclusiveLock' AND l.objsubid = 1 \
-         AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
+         AND l.database = (SELECT oid FROM pg_database WHERE datname = {database}) \
          AND l.classid = (({key} >> 32) & 4294967295)::oid \
          AND l.objid = ({key} & 4294967295)::oid)"
     )
@@ -117,12 +121,19 @@ fn failed(err: impl Into<Error>) -> ClusterError {
     }
 }
 
-/// `Cluster` on the database of a [`PostgresStore`] ([`PostgresCluster::open`]).
+/// `Cluster` on the database of a [`PostgresStore`] ([`PostgresCluster::open`]), its liveness
+/// locks in a database of their own on the same server.
 #[derive(Clone)]
 pub struct PostgresCluster {
     pool: PgPool,
-    /// What the dedicated connections are opened with.
+    /// What the dedicated connections to the control plane's database are opened with.
     options: PgConnectOptions,
+    /// What the connections that take and wait for locks are opened with: the lock database.
+    locks: PgConnectOptions,
+    /// The lock database's name.
+    lock_database: String,
+    /// `rewind node/<control plane's database>/`: what a node's lock key hashes before its id.
+    prefix: String,
 }
 
 impl std::fmt::Debug for PostgresCluster {
@@ -132,12 +143,33 @@ impl std::fmt::Debug for PostgresCluster {
 }
 
 impl PostgresCluster {
+    /// The database the liveness locks are taken in when the deployment names none: every
+    /// server has it.
+    pub const DEFAULT_LOCK_DATABASE: &str = "postgres";
+
+    /// [`open_in`](Self::open_in), the locks in [`DEFAULT_LOCK_DATABASE`](Self::DEFAULT_LOCK_DATABASE).
+    pub async fn open(store: &PostgresStore, partitions: NonZeroU16) -> Result<Self, ClusterError> {
+        Self::open_in(store, partitions, Self::DEFAULT_LOCK_DATABASE).await
+    }
+
     /// The cluster of a deployment of `partitions` partitions, on the store's database: the rows
     /// of the partitions it lacks are created, unowned at epoch 0. A database with more
-    /// partitions is refused: a partition, once created, holds runs.
-    pub async fn open(store: &PostgresStore, partitions: NonZeroU16) -> Result<Self, ClusterError> {
+    /// partitions is refused: a partition, once created, holds runs. The liveness locks are
+    /// taken in `lock_database` (`--cluster-database`), a database of the same server reached
+    /// with the same credentials, where nothing is stored (`archi/06-storage-and-scale.md`,
+    /// "Nodes").
+    pub async fn open_in(
+        store: &PostgresStore,
+        partitions: NonZeroU16,
+        lock_database: &str,
+    ) -> Result<Self, ClusterError> {
         let pool = store.pool.clone();
         let options = (*pool.connect_options()).clone().options(KEEPALIVE);
+        let locks = options.clone().database(lock_database);
+        let database: String = sqlx::query_scalar("SELECT current_database()::text")
+            .fetch_one(&pool)
+            .await
+            .map_err(failed)?;
         let mut tx = pool.begin().await.map_err(failed)?;
         sqlx::query(
             "INSERT INTO partitions (id) SELECT generate_series(0, $1 - 1) ON CONFLICT DO NOTHING",
@@ -157,19 +189,43 @@ impl PostgresCluster {
             )));
         }
         tx.commit().await.map_err(failed)?;
-        Ok(Self { pool, options })
+        Ok(Self {
+            pool,
+            options,
+            locks,
+            lock_database: lock_database.to_owned(),
+            prefix: format!("rewind node/{database}/"),
+        })
     }
 
-    /// The options of a dedicated connection, named for `pg_stat_activity`.
+    /// The options of a dedicated connection to the control plane's database, named for
+    /// `pg_stat_activity`.
     fn dedicated(&self, purpose: &str) -> PgConnectOptions {
         self.options
             .clone()
             .application_name(&format!("rewind {purpose}"))
     }
 
-    /// A listener on a connection of its own, which it never opens again once lost: its
-    /// one-connection pool closes the connection instead of keeping it.
+    /// The options of a dedicated connection to the lock database.
+    fn locking(&self, purpose: &str) -> PgConnectOptions {
+        self.locks
+            .clone()
+            .application_name(&format!("rewind {purpose}"))
+    }
+
+    /// A listener on a connection of its own to the control plane's database.
     async fn listener(&self, purpose: &str, channels: &[&str]) -> Result<PgListener, ClusterError> {
+        listener_on(self.dedicated(purpose), channels).await
+    }
+}
+
+/// A listener on a connection of its own, which it never opens again once lost: its
+/// one-connection pool closes the connection instead of keeping it.
+async fn listener_on(
+    options: PgConnectOptions,
+    channels: &[&str],
+) -> Result<PgListener, ClusterError> {
+    {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .min_connections(0)
@@ -177,7 +233,7 @@ impl PostgresCluster {
             .max_lifetime(None)
             .test_before_acquire(false)
             .after_release(|_, _| Box::pin(async { Ok(false) }))
-            .connect_lazy_with(self.dedicated(purpose));
+            .connect_lazy_with(options);
         let mut listener = PgListener::connect_with(&pool).await.map_err(failed)?;
         listener.eager_reconnect(false);
         listener.ignore_pool_close_event(true);
@@ -211,13 +267,18 @@ fn info_from_row(row: &PgRow) -> Result<NodeInfo, Error> {
     })
 }
 
-/// The members alive, by id.
-async fn members(conn: &mut PgConnection) -> Result<Vec<NodeInfo>, Error> {
+/// The members alive, by id: the rows whose node holds its lock in the lock database.
+async fn members(
+    conn: &mut PgConnection,
+    cluster: &PostgresCluster,
+) -> Result<Vec<NodeInfo>, Error> {
     let rows = sqlx::query(&format!(
         "SELECT n.id, n.address, n.build, n.epochs, n.pool, n.executors_only FROM nodes n \
          WHERE {} ORDER BY n.id",
-        holds_lock("n.id")
+        holds_lock("$1", "$2", "n.id")
     ))
+    .bind(cluster.prefix.as_str())
+    .bind(cluster.lock_database.as_str())
     .fetch_all(&mut *conn)
     .await?;
     rows.iter().map(info_from_row).collect()
@@ -253,13 +314,16 @@ impl Cluster for PostgresCluster {
     type Membership = PostgresMembership;
 
     async fn join(&self, node: NodeInfo) -> Result<PostgresMembership, ClusterError> {
-        let mut lock = self.listener(&format!("node {}", node.id), &[]).await?;
-        let taken: bool =
-            sqlx::query_scalar(&format!("SELECT pg_try_advisory_lock({})", node_lock("$1")))
-                .bind(node.id.as_str())
-                .fetch_one(&mut lock)
-                .await
-                .map_err(failed)?;
+        let mut lock = listener_on(self.locking(&format!("node {}", node.id)), &[]).await?;
+        let taken: bool = sqlx::query_scalar(&format!(
+            "SELECT pg_try_advisory_lock({})",
+            node_lock("$2", "$1")
+        ))
+        .bind(node.id.as_str())
+        .bind(self.prefix.as_str())
+        .fetch_one(&mut lock)
+        .await
+        .map_err(failed)?;
         if !taken {
             return Err(ClusterError::AlreadyMember(node.id));
         }
@@ -282,17 +346,20 @@ impl Cluster for PostgresCluster {
         .execute(&mut *tx)
         .await
         .map_err(failed)?;
-        sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(NODES)
-            .bind(node.id.as_str())
-            .execute(&mut *tx)
+        notify(&mut tx, &[ControlPlaneChange::Nodes])
             .await
             .map_err(failed)?;
         tx.commit().await.map_err(failed)?;
 
         let (alive_tx, alive) = watch::channel(true);
         let (stop, stopped) = oneshot::channel();
-        let holder = tokio::spawn(hold(lock, node.id.clone(), stopped, alive_tx));
+        let holder = tokio::spawn(hold(
+            lock,
+            node.id.clone(),
+            self.prefix.clone(),
+            stopped,
+            alive_tx,
+        ));
         Ok(PostgresMembership {
             node: node.id,
             cluster: self.clone(),
@@ -304,10 +371,12 @@ impl Cluster for PostgresCluster {
 }
 
 /// Keeps the connection that holds a node's lock until the membership ends (`stop` is sent or
-/// dropped) or the connection is lost, then says the membership is over.
+/// dropped) or the connection is lost or fails, then says the membership is over: the lock went
+/// with the connection, and the node is no member any more.
 async fn hold(
     mut lock: PgListener,
     node: NodeId,
+    prefix: String,
     stop: oneshot::Receiver<()>,
     alive: watch::Sender<bool>,
 ) {
@@ -325,10 +394,14 @@ async fn hold(
         () = lost => false,
     };
     if stopped {
-        let unlocked = sqlx::query(&format!("SELECT pg_advisory_unlock({})", node_lock("$1")))
-            .bind(node.as_str())
-            .execute(&mut lock)
-            .await;
+        let unlocked = sqlx::query(&format!(
+            "SELECT pg_advisory_unlock({})",
+            node_lock("$2", "$1")
+        ))
+        .bind(node.as_str())
+        .bind(prefix.as_str())
+        .execute(&mut lock)
+        .await;
         if let Err(error) = unlocked {
             tracing::warn!(%error, %node, "releasing the node's lock failed: its connection closes");
         }
@@ -455,7 +528,7 @@ impl Membership for PostgresMembership {
         };
         let mut conn = self
             .cluster
-            .dedicated("watch")
+            .locking("watch")
             .connect()
             .await
             .map_err(failed)?;
@@ -468,9 +541,10 @@ impl Membership for PostgresMembership {
             pid: Some(pid),
         };
         let mut alive = self.alive.clone();
-        let wait_sql = format!("SELECT pg_advisory_lock_shared({})", node_lock("$1"));
+        let wait_sql = format!("SELECT pg_advisory_lock_shared({})", node_lock("$2", "$1"));
         let wait = sqlx::query(&wait_sql)
             .bind(next.as_str())
+            .bind(self.cluster.prefix.as_str())
             .execute(&mut conn);
         tokio::select! {
             granted = wait => {
@@ -480,25 +554,23 @@ impl Membership for PostgresMembership {
         }
         abandoned.pid = None;
         // Its session ended. While this lock is held, no new member of its id takes the lock:
-        // the row deleted is the dead node's.
-        let mut tx = conn.begin().await.map_err(failed)?;
+        // the row deleted, in the control plane's database, is the dead node's.
+        let mut tx = self.cluster.pool.begin().await.map_err(failed)?;
         sqlx::query("DELETE FROM nodes WHERE id = $1")
             .bind(next.as_str())
             .execute(&mut *tx)
             .await
             .map_err(failed)?;
-        sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(NODES)
-            .bind(next.as_str())
-            .execute(&mut *tx)
+        notify(&mut tx, &[ControlPlaneChange::Nodes])
             .await
             .map_err(failed)?;
         tx.commit().await.map_err(failed)?;
         sqlx::query(&format!(
             "SELECT pg_advisory_unlock_shared({})",
-            node_lock("$1")
+            node_lock("$2", "$1")
         ))
         .bind(next.as_str())
+        .bind(self.cluster.prefix.as_str())
         .execute(&mut conn)
         .await
         .map_err(failed)?;
@@ -510,7 +582,7 @@ impl Membership for PostgresMembership {
         self.check()?;
         let mut tx = self.cluster.pool.begin().await.map_err(failed)?;
         let mut map = read_map(&mut tx, true).await.map_err(failed)?;
-        let live: BTreeSet<NodeId> = members(&mut tx)
+        let live: BTreeSet<NodeId> = members(&mut tx, &self.cluster)
             .await
             .map_err(failed)?
             .into_iter()
@@ -558,14 +630,14 @@ impl Membership for PostgresMembership {
     async fn nodes(&self) -> Result<Vec<NodeInfo>, ClusterError> {
         self.check()?;
         let mut conn = self.cluster.pool.acquire().await.map_err(failed)?;
-        members(&mut conn).await.map_err(failed)
+        members(&mut conn, &self.cluster).await.map_err(failed)
     }
 
     async fn changes(&self) -> Result<PostgresChanges, ClusterError> {
         self.check()?;
         let listener = self
             .cluster
-            .listener("changes", &[CONTROL_PLANE, PARTITION_MAP])
+            .listener("changes", &[CONTROL_PLANE, PARTITION_MAP, NODES])
             .await?;
         Ok(PostgresChanges::new(listener, self.alive.clone()))
     }
@@ -665,11 +737,11 @@ impl Stream for PostgresChanges {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_lock_of_a_node_is_derived_in_sql_from_its_id() {
+    fn the_lock_of_a_node_is_derived_in_sql_from_its_database_and_its_id() {
         assert_eq!(
-            super::node_lock("$1"),
-            "('x' || left(encode(sha256(convert_to('rewind node/' || $1, 'UTF8')), 'hex'), \
-             16))::bit(64)::bigint"
+            super::node_lock("$2", "$1"),
+            "('x' || left(encode(sha256(convert_to($2 || $1, 'UTF8')), 'hex'), 16))\
+             ::bit(64)::bigint"
         );
     }
 }

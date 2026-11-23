@@ -1,5 +1,6 @@
 //! The conformance suite of `Cluster`: members and their liveness, the ring each member
-//! watches, the partition map and the epochs of its moves, the changes every member receives.
+//! watches, the partition map and the epochs of its moves, the changes every member receives,
+//! the members' joins and departures among them.
 //!
 //! The factory creates an empty cluster of [`PARTITIONS`] partitions. A member's liveness ends
 //! when its `Membership` is dropped or leaves. A check that a `watch` still waits polls it once:
@@ -33,6 +34,7 @@ pub async fn run_all<C: Cluster>(new_cluster: impl Fn() -> C) {
     cluster_check!(assign_moves_partitions_and_raises_their_epochs);
     cluster_check!(assign_refuses_unknown_nodes_and_partitions_and_moves_nothing);
     cluster_check!(changes_reach_every_member_from_when_it_listens);
+    cluster_check!(a_node_that_joins_or_leaves_is_announced);
     cluster_check!(watch_names_the_next_node_of_the_ring_once_it_is_gone);
     cluster_check!(a_member_alone_waits_for_another);
 }
@@ -223,6 +225,39 @@ pub async fn changes_reach_every_member_from_when_it_listens<C: Cluster>(cluster
         late.next().await,
         Some(ControlPlaneChange::PartitionMap(second)),
         "a stream receives what was committed after it was opened, and only that"
+    );
+}
+
+pub async fn a_node_that_joins_or_leaves_is_announced<C: Cluster>(cluster: &C) {
+    let a = join(cluster, "node-a").await;
+    let mut changes = a.changes().await.expect("changes");
+    let b = join(cluster, "node-b").await;
+    assert_eq!(
+        changes.next().await,
+        Some(ControlPlaneChange::Nodes),
+        "a node that joins is announced"
+    );
+    // Its departure is seen once the node that watches it finds its lock free.
+    let mut watching = Box::pin(a.watch());
+    assert!(
+        watching.as_mut().now_or_never().is_none(),
+        "node-b is alive"
+    );
+    drop(b);
+    assert_eq!(
+        watching.await.expect("watch"),
+        Departed {
+            node: node("node-b")
+        }
+    );
+    assert_eq!(
+        changes.next().await,
+        Some(ControlPlaneChange::Nodes),
+        "a node that left is announced"
+    );
+    assert!(
+        changes.next().now_or_never().is_none(),
+        "nothing else was announced"
     );
 }
 

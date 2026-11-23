@@ -69,6 +69,12 @@ pub(crate) enum NodeMsg {
     RefreshNodes,
     /// A request to the membership failed; it is tried again.
     MembershipFailed(String),
+    /// The node's membership ended: its liveness is lost (its lock's connection, its process
+    /// to the cluster). It gives every partition up at once: the next owners fence it anyway.
+    Lost(String),
+    /// The node listens to the control plane again after its changes ended: what it missed is
+    /// read again, the members and the map, as at its start.
+    Resync,
 }
 
 /// A node: the actors of a process.
@@ -84,6 +90,8 @@ pub struct Node<P: Plane, M: Membership + 'static> {
     epochs: BTreeSet<Epoch>,
     subscriptions: BTreeMap<SubscriptionKey, Vec<UnboundedSender<Changed>>>,
     streams: BTreeMap<StreamId, (TenantId, StreamAttach, UnboundedSender<StreamEvent>)>,
+    /// The membership ended: the node opens no partition any more.
+    lost: bool,
 }
 
 impl<P: Plane, M: Membership + 'static> fmt::Debug for Node<P, M> {
@@ -141,6 +149,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             epochs,
             subscriptions: BTreeMap::new(),
             streams: BTreeMap::new(),
+            lost: false,
         }
     }
 
@@ -168,6 +177,11 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     /// The partition map the node knows.
     pub fn map(&self) -> &PartitionMap {
         &self.map
+    }
+
+    /// The members of the cluster, as the node last read them.
+    pub fn members(&self) -> &[NodeInfo] {
+        &self.nodes
     }
 
     /// The instances its executors keep.
@@ -388,7 +402,10 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         match message {
             NodeMsg::Fenced(partition) => {
                 self.owners.remove(&partition);
-                Vec::new()
+                // Another node opened it: its new owner, or a node whose open, begun while the
+                // map named it, ended after this one's. The map the cluster holds says which:
+                // read again, it opens the partition again if it is still this node's.
+                vec![self.read_map()]
             }
             NodeMsg::OpenFailed(partition, error) => {
                 tracing::error!(node = %self.config.node, %partition, %error, "the partition could not be opened: tried again");
@@ -434,6 +451,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                     effects.push(self.read_nodes());
                     effects
                 }
+                ControlPlaneChange::Nodes => vec![self.read_nodes()],
                 change => {
                     let mut effects = Vec::new();
                     for owner in self.owners.values_mut() {
@@ -451,7 +469,36 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 tracing::error!(node = %self.config.node, %error, "the cluster could not be reached");
                 Vec::new()
             }
+            NodeMsg::Lost(error) => self.lose(&error),
+            NodeMsg::Resync => vec![self.rebalance(None)],
         }
+    }
+
+    /// The membership ended: every owner closes (it answers `NotOwner` and writes nothing), and
+    /// the node takes no partition any more.
+    fn lose(&mut self, error: &str) -> Vec<Effect<P>> {
+        tracing::error!(node = %self.config.node, %error, "the node lost its membership: it gives its partitions up");
+        self.lost = true;
+        let mut effects = Vec::new();
+        for (_, mut owner) in std::mem::take(&mut self.owners) {
+            effects.extend(owner.handle(OwnerMsg::Close));
+        }
+        effects
+    }
+
+    /// Whether the node lost its membership.
+    pub fn is_lost(&self) -> bool {
+        self.lost
+    }
+
+    fn read_map(&self) -> Effect<P> {
+        let membership = Arc::clone(&self.membership);
+        job(async move {
+            match membership.partition_map().await {
+                Ok(map) => Message::Node(NodeMsg::Map(map)),
+                Err(error) => Message::Node(NodeMsg::MembershipFailed(error.to_string())),
+            }
+        })
     }
 
     fn read_nodes(&self) -> Effect<P> {
@@ -532,7 +579,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
 
     /// Opens a partition: its owner's first job opens and recovers it.
     fn open(&mut self, partition: PartitionId) -> Vec<Effect<P>> {
-        if self.config.executors_only {
+        if self.config.executors_only || self.lost {
             return Vec::new();
         }
         let epoch = self.map.epoch(partition).unwrap_or_default();

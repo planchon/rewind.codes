@@ -218,6 +218,7 @@ impl Shared {
         for stream in streams.iter().filter_map(Weak::upgrade) {
             lock(&stream).close();
         }
+        self.changes.send(ControlPlaneChange::Nodes);
         true
     }
 }
@@ -242,6 +243,8 @@ impl Cluster for MemoryCluster {
             },
         );
         state.wake_watchers();
+        drop(state);
+        self.shared.changes.send(ControlPlaneChange::Nodes);
         Ok(MemoryMembership {
             shared: Arc::clone(&self.shared),
             node: id,

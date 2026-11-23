@@ -4,8 +4,9 @@
 //! Every write of the catalog, of access and of secrets sends what it changed with
 //! [`notify`], in its own transaction: Postgres delivers a notification only once its
 //! transaction commits, and in commit order. A move of partitions goes to the channel
-//! [`PARTITION_MAP`], every other change to [`CONTROL_PLANE`]; a listener of both receives them
-//! in one order, the order of their commits.
+//! [`PARTITION_MAP`], a node joined or seen gone to [`NODES`], every other change to
+//! [`CONTROL_PLANE`]; a listener of the three receives them in one order, the order of their
+//! commits.
 //!
 //! A payload names what changed, never a value: no secret, document or setting leaves the
 //! database through it. It is a JSON object whose `k` is the kind of the change:
@@ -19,6 +20,7 @@
 //! {"k":"workflow","t":"acme","n":"triage","v":"<hex>"}  {"k":"script","t":"acme","d":"<hex>"}
 //! {"k":"toolset","t":"acme","d":"<hex>"}                {"k":"test","t":"acme","d":"<hex>"}
 //! {"k":"partition_map","n":["node-a","node-b"],"p":[[0,0,3],[1,1,2],[2,null,0]]}
+//! {"k":"nodes"}
 //! ```
 //!
 //! A partition map lists every partition as `[partition, node, epoch]`, the node an index into
@@ -46,6 +48,9 @@ pub(crate) const CONTROL_PLANE: &str = "control_plane";
 /// The channel of the moves of partitions: the whole map, as it committed.
 pub(crate) const PARTITION_MAP: &str = "partition_map";
 
+/// The channel of the members: a node joined, or its watcher saw it gone.
+pub(crate) const NODES: &str = "nodes";
+
 /// The longest payload sent as one notification, in bytes; Postgres refuses 8000 and more.
 pub(crate) const MAX_FRAME: usize = 7_900;
 
@@ -60,6 +65,7 @@ enum Payload {
         n: Vec<String>,
         p: Vec<(u16, Option<usize>, u64)>,
     },
+    Nodes {},
     Namespace {
         t: String,
         n: String,
@@ -145,6 +151,7 @@ impl From<&ControlPlaneChange> for Payload {
                     .collect();
                 Payload::PartitionMap { n: nodes, p }
             }
+            ControlPlaneChange::Nodes => Payload::Nodes {},
             ControlPlaneChange::Namespace { tenant, name } => Payload::Namespace {
                 t: text(tenant),
                 n: name.as_str().to_owned(),
@@ -260,6 +267,7 @@ impl TryFrom<Payload> for ControlPlaneChange {
                 tenant: tenant_of(t)?,
                 name: namespace_of(n)?,
             },
+            Payload::Nodes {} => ControlPlaneChange::Nodes,
             Payload::Tenant { t } => ControlPlaneChange::Tenant {
                 tenant: tenant_of(t)?,
             },
@@ -324,6 +332,7 @@ impl TryFrom<Payload> for ControlPlaneChange {
 pub(crate) fn channel(change: &ControlPlaneChange) -> &'static str {
     match change {
         ControlPlaneChange::PartitionMap(_) => PARTITION_MAP,
+        ControlPlaneChange::Nodes => NODES,
         _ => CONTROL_PLANE,
     }
 }
@@ -479,6 +488,7 @@ mod tests {
         );
         vec![
             ControlPlaneChange::PartitionMap(map),
+            ControlPlaneChange::Nodes,
             ControlPlaneChange::Namespace {
                 tenant: acme.clone(),
                 name: alice.clone(),

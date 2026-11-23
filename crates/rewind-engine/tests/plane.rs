@@ -1364,3 +1364,60 @@ async fn a_call_parked_by_a_schema_change_is_sent_once_the_harness_approves_it()
         Some(&json!({ "sent": "against the new schema" }))
     );
 }
+
+#[tokio::test]
+async fn a_webhook_bound_to_no_run_is_a_run_not_found() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let run = world.run(request("approval", json!({}))).await;
+    let token = format!("rewind_wh_{}_{}", run.id, "00".repeat(32));
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let refused = world
+        .edge
+        .webhook(&mut gateway, &token, json!({}), None)
+        .await;
+    assert_eq!(
+        refused,
+        Err(EdgeError::Refused(Refusal::RunNotFound(run.id))),
+        "a webhook token its run does not hold"
+    );
+    let refused = world
+        .edge
+        .webhook(&mut gateway, "rewind_wh_nothing", json!({}), None)
+        .await;
+    assert!(
+        matches!(refused, Err(EdgeError::Refused(_))),
+        "a token that names no run: {refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_signal_key_is_acknowledged_until_its_attempt_is_sealed() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let run = world.run(request("approval", json!({}))).await;
+    let key = Some("approval-1");
+    assert_eq!(
+        world
+            .signal(&run, "approval", json!("yes"), key)
+            .await
+            .unwrap(),
+        Enqueued::Accepted
+    );
+    // Sent again while the run ends: acknowledged, whether it has ended yet or not.
+    assert_eq!(
+        world
+            .signal(&run, "approval", json!("yes"), key)
+            .await
+            .unwrap(),
+        Enqueued::Duplicate
+    );
+    world.idle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+    // Sealed, the attempt's keys are gone.
+    assert_eq!(
+        world
+            .signal(&run, "approval", json!("yes"), key)
+            .await
+            .unwrap(),
+        Enqueued::RunEnded
+    );
+}

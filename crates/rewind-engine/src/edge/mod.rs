@@ -654,10 +654,7 @@ impl<P: Plane> Edge<P> {
         payload: JsonValue,
         key: Option<String>,
     ) -> Result<Enqueued, EdgeError> {
-        let (_, partition) = self
-            .partition_of_token(token)
-            .await
-            .map_err(|_| EdgeError::Unavailable("this webhook is bound to no run".into()))?;
+        let (_, partition) = self.partition_of_token(token).await?;
         let request = PartitionRequest::Webhook {
             token: token.to_owned(),
             payload,

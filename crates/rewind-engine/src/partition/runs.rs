@@ -48,6 +48,8 @@ pub(crate) enum Step {
     },
     /// The run and signal a webhook's token is bound to.
     Webhook {
+        /// The run its token names.
+        run: RunId,
         payload: JsonValue,
         key: Option<String>,
         reply: ReplyTo,
@@ -268,6 +270,7 @@ impl<P: Plane> Owner<P> {
                 Err(refusal) => self.reply(reply, PartitionReply::Enqueued(Err(refusal))),
             },
             Step::Webhook {
+                run,
                 payload,
                 key,
                 reply,
@@ -282,11 +285,10 @@ impl<P: Plane> Owner<P> {
                     }),
                     reply,
                 ))),
+                // The run it names ended, was erased, or never was.
                 Ok(None) => self.reply(
                     reply,
-                    PartitionReply::Enqueued(Err(Refusal::Unavailable(
-                        "this webhook is bound to no run that has not ended".into(),
-                    ))),
+                    PartitionReply::Enqueued(Err(Refusal::RunNotFound(run))),
                 ),
                 Err(error) => self.reply(
                     reply,
@@ -659,16 +661,35 @@ impl<P: Plane> Owner<P> {
             );
             return;
         }
-        if slot.head.is_ended() {
-            self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::RunEnded)));
-            return;
-        }
         if signal
             .key
             .as_ref()
             .is_some_and(|key| slot.keys.contains(key))
         {
             self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::Duplicate)));
+            return;
+        }
+        if slot.head.is_ended() {
+            // A key seen is acknowledged as long as it is kept: until the attempt is sealed.
+            match (&signal.key, &self.log) {
+                (Some(key), Some(log)) if slot.head.is_unsealed() => {
+                    let log = Arc::clone(log);
+                    let key = key.clone();
+                    let run = signal.run.clone();
+                    self.out.push(job(async move {
+                        let answer = match log.signal_key(&run, &key).await {
+                            Ok(true) => Ok(Enqueued::Duplicate),
+                            Ok(false) => Ok(Enqueued::RunEnded),
+                            Err(error) => Err(Refusal::Unavailable(error.to_string())),
+                        };
+                        Message::Reply(
+                            reply,
+                            NodeReply::Partition(Box::new(PartitionReply::Enqueued(answer))),
+                        )
+                    }));
+                }
+                _ => self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::RunEnded))),
+            }
             return;
         }
         if slot.head.metadata.workflow.is_none() && signal.key.is_none() {
@@ -722,10 +743,6 @@ impl<P: Plane> Owner<P> {
             );
             return;
         };
-        if slot.head.is_ended() {
-            self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::RunEnded)));
-            return;
-        }
         if checked
             && signal
                 .key
@@ -733,6 +750,10 @@ impl<P: Plane> Owner<P> {
                 .is_some_and(|key| slot.keys.contains(key))
         {
             self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::Duplicate)));
+            return;
+        }
+        if slot.head.is_ended() {
+            self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::RunEnded)));
             return;
         }
         let SignalAtOwner {
@@ -762,6 +783,10 @@ impl<P: Plane> Owner<P> {
         let Some(log) = self.log.clone() else {
             return;
         };
+        let Some(run) = super::tokens::run_of(token) else {
+            self.reply(reply, PartitionReply::Enqueued(Err(Refusal::TaskGone)));
+            return;
+        };
         let hash = super::tokens::hash(token);
         let partition = self.partition;
         self.out.push(job(async move {
@@ -769,6 +794,7 @@ impl<P: Plane> Owner<P> {
             step(
                 partition,
                 Step::Webhook {
+                    run,
                     payload,
                     key,
                     reply,
@@ -1413,6 +1439,8 @@ impl<P: Plane> Owner<P> {
         };
         slot.head.sealed = Some(attempt);
         slot.ending = false;
+        // The seal deleted the attempt's signal keys.
+        slot.keys.clear();
         let ended_at = slot.head.ended_at.unwrap_or(slot.head.updated_at);
         let namespace = slot.head.namespace.clone();
         let mut unit = Unit::new();

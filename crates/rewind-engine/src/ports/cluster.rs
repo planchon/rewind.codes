@@ -179,6 +179,9 @@ pub struct Departed {
 pub enum ControlPlaneChange {
     /// `assign` moved partitions: the whole map, as it committed.
     PartitionMap(PartitionMap),
+    /// A node joined the cluster, or its departure was seen: the members are read again, so an
+    /// executor that joins takes activations at once.
+    Nodes,
     Namespace {
         tenant: TenantId,
         name: NamespaceName,

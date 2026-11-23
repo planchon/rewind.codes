@@ -431,6 +431,13 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
                         .push_back((id.clone(), Message::Node(NodeMsg::Departed(gone))));
                     polled = true;
                 }
+                Some(Err(error @ ClusterError::NotMember(_))) => {
+                    node.watch = None;
+                    node.changes = None;
+                    self.queue
+                        .push_back((id.clone(), Message::Node(NodeMsg::Lost(error.to_string()))));
+                    polled = true;
+                }
                 Some(Err(_)) => node.watch = None,
                 None => {}
             }
