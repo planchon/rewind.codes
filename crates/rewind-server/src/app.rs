@@ -30,13 +30,14 @@ use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::follow;
 use crate::idle::Idle;
+use crate::link::SharedMembership;
 use crate::oauth::OAuthServer;
 use crate::titles::{ScriptTexts, Title};
 use crate::views::Views;
 use crate::wiring::bucket::{Archive, Blobs};
 use crate::wiring::checker::Checker;
 use crate::wiring::clock::ServerClock;
-use crate::wiring::control::{Catalog, ControlPlane, SharedMembership};
+use crate::wiring::control::{Catalog, ControlPlane, ServerMembership};
 use crate::wiring::executor::Executor;
 use crate::wiring::identity::Identity;
 use crate::wiring::link::ServerLink;
@@ -97,7 +98,7 @@ pub(crate) struct App {
     pub(crate) config: NodeConfig,
     /// Access and secrets.
     pub(crate) store: ControlPlane,
-    pub(crate) membership: SharedMembership,
+    pub(crate) membership: SharedMembership<ServerMembership>,
     pub(crate) link: Arc<ServerLink>,
     /// The partition map, as the last change of the control plane gave it.
     pub(crate) map: watch::Receiver<PartitionMap>,
@@ -145,7 +146,7 @@ pub(crate) struct Parts {
     pub(crate) node: Node,
     pub(crate) config: NodeConfig,
     pub(crate) store: ControlPlane,
-    pub(crate) membership: SharedMembership,
+    pub(crate) membership: SharedMembership<ServerMembership>,
     pub(crate) link: Arc<ServerLink>,
     pub(crate) map: watch::Receiver<PartitionMap>,
     pub(crate) control: broadcast::Sender<Control>,

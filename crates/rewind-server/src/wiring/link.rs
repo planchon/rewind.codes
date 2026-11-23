@@ -1,5 +1,6 @@
-//! The node link (`archi/07-code-architecture.md`, "`Cluster` and `NodeLink`"): inside the
-//! process for the embedded server and a single node, where no node is remote.
+//! The node link (`archi/07-code-architecture.md`, "`Cluster` and `NodeLink`"): HTTP/2 between
+//! the nodes of a deployment on Postgres ([`crate::link`]), and inside the process for the
+//! embedded server and a single node on Turso, where no node is remote.
 
 use futures_util::StreamExt as _;
 use futures_util::stream::BoxStream;
@@ -10,12 +11,16 @@ use rewind_engine::ports::link::{
 use rewind_engine::ports::{LinkError, NodeId, NodeLink};
 
 use crate::app::ServerPlane;
+use crate::link::{HttpLink, MembersOf};
+use crate::wiring::control::ServerMembership;
 
 /// The node link of this server.
 #[derive(Debug)]
 pub(crate) enum ServerLink {
     /// The nodes of this process.
     Local(LocalLink<ServerPlane>),
+    /// The other nodes of the deployment, over HTTP/2.
+    Http(HttpLink<MembersOf<ServerMembership>>),
 }
 
 impl NodeLink for ServerLink {
@@ -24,6 +29,7 @@ impl NodeLink for ServerLink {
     async fn call(&self, node: &NodeId, request: NodeRequest) -> Result<NodeReply, LinkError> {
         match self {
             ServerLink::Local(link) => link.call(node, request).await,
+            ServerLink::Http(link) => link.call(node, request).await,
         }
     }
 
@@ -35,6 +41,7 @@ impl NodeLink for ServerLink {
     ) -> Result<Self::Changes, LinkError> {
         match self {
             ServerLink::Local(link) => Ok(link.subscribe(node, key, from).await?.boxed()),
+            ServerLink::Http(link) => Ok(link.subscribe(node, key, from).await?.boxed()),
         }
     }
 
@@ -45,6 +52,7 @@ impl NodeLink for ServerLink {
     ) -> Result<ActivationResult, LinkError> {
         match self {
             ServerLink::Local(link) => link.activate(node, request).await,
+            ServerLink::Http(link) => link.activate(node, request).await,
         }
     }
 }

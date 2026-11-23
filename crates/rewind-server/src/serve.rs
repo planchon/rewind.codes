@@ -40,10 +40,11 @@ use crate::connections::{self, McpCaller};
 use crate::embedded::Directory;
 use crate::http;
 use crate::idle::Idle;
+use crate::link::{ClusterSecret, HttpLink, SharedMembership};
 use crate::oauth::OAuthServer;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
-use crate::wiring::control::{ControlPlane, SharedMembership};
+use crate::wiring::control::{ControlPlane, ServerMembership};
 use crate::wiring::executor::Executor;
 use crate::wiring::identity::Identity;
 use crate::wiring::link::ServerLink;
@@ -163,6 +164,21 @@ impl Running {
         }
         drop(self.directory);
         tracing::info!("stopped");
+    }
+}
+
+impl Running {
+    /// Stops the server at once, as a process killed (`kill -9`): its node hands nothing over,
+    /// its listeners close, and its membership of the cluster ends with the last of its tasks,
+    /// so that the other nodes take its partitions over. For the cluster's tests.
+    pub fn kill(self) {
+        self.app.node.abort();
+        self.app.stop.send_replace(true);
+        for task in self.listeners.into_iter().chain(self.tasks) {
+            task.abort();
+        }
+        drop(self.directory);
+        tracing::info!(node = %self.app.node.node(), "killed");
     }
 }
 
@@ -377,17 +393,36 @@ async fn start_wired(
     node_config.public_url.clone_from(&config.public_url);
     node_config.default_ttl = config.default_ttl;
     node_config.max_ttl = config.max_ttl;
-    let address = match &config.listen {
+    // The node link's listener is bound before the node joins: its address is the node's.
+    let linked = match &config.listen {
         Listen::Tcp {
             link: Some(link), ..
-        } => link.address.clone(),
-        _ => "local".to_owned(),
+        } => {
+            let listener = tokio::net::TcpListener::bind(link.listen)
+                .await
+                .map_err(|error| {
+                    StartupError::Io(format!("cannot listen on {}: {error}", link.listen))
+                })?;
+            let bound = listener
+                .local_addr()
+                .map_err(|error| StartupError::Io(error.to_string()))?;
+            let secret = ClusterSecret::new(link.secret.clone()).map_err(setup)?;
+            let address = link
+                .address
+                .clone()
+                .unwrap_or_else(|| crate::config::default_link_address(bound));
+            Some((listener, bound, secret, address))
+        }
+        _ => None,
     };
+    let address = linked
+        .as_ref()
+        .map_or_else(|| "local".to_owned(), |(_, _, _, address)| address.clone());
     let cluster = store
         .cluster(config.partitions, &config.cluster_database)
         .await
         .map_err(setup)?;
-    let membership = SharedMembership(Arc::new(
+    let membership: SharedMembership<ServerMembership> = SharedMembership::new(
         cluster
             .join(NodeInfo {
                 id: config.node.clone(),
@@ -399,9 +434,14 @@ async fn start_wired(
             })
             .await
             .map_err(setup)?,
-    ));
+    );
     let (map, control, changes) = control_plane(&membership).await?;
-    let link = Arc::new(ServerLink::Local(LocalLink::new()));
+    let link = Arc::new(match &linked {
+        Some((_, _, secret, _)) => {
+            ServerLink::Http(HttpLink::new(membership.members(), secret.clone()).map_err(setup)?)
+        }
+        None => ServerLink::Local(LocalLink::new()),
+    });
     let node = if plane.clock.is_virtual() {
         runtime::spawn_in_virtual_time(
             Arc::clone(&plane),
@@ -418,8 +458,9 @@ async fn start_wired(
             Arc::clone(&link),
         )
     };
-    let ServerLink::Local(local) = &*link;
-    local.register(node.clone());
+    if let ServerLink::Local(local) = &*link {
+        local.register(node.clone());
+    }
     let settings = Settings {
         version: VERSION,
         embedded: config.embedded(),
@@ -464,7 +505,20 @@ async fn start_wired(
     if app.clock().is_virtual() {
         tasks.push(tokio::spawn(keep_virtual_time(Arc::clone(&app))));
     }
-    let (listeners, addr, socket) = listen(&app, &config, directory.as_ref()).await?;
+    let (mut listeners, addr, socket) = listen(&app, &config, directory.as_ref()).await?;
+    let mut link_addr = None;
+    if let Some((listener, bound, secret, _)) = linked {
+        let mut stop = app.stop.subscribe();
+        listeners.push(crate::link::serve(
+            listener,
+            app.node.clone(),
+            secret,
+            async move {
+                let _ = stop.wait_for(|stop| *stop).await;
+            },
+        ));
+        link_addr = Some(bound);
+    }
     if let Some(timeout) = config.idle_timeout {
         tasks.push(tokio::spawn(stop_when_idle(Arc::clone(&app), timeout)));
     }
@@ -481,7 +535,7 @@ async fn start_wired(
     Ok(Running {
         app,
         addr,
-        link_addr: None,
+        link_addr,
         socket,
         listeners,
         tasks,
@@ -492,7 +546,7 @@ async fn start_wired(
 /// The partition map as it is now and as each change gives it, and the changes of the control
 /// plane fanned out to the process: the task that keeps them.
 async fn control_plane(
-    membership: &SharedMembership,
+    membership: &SharedMembership<ServerMembership>,
 ) -> Result<
     (
         watch::Receiver<PartitionMap>,

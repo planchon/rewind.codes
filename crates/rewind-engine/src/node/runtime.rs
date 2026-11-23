@@ -60,6 +60,8 @@ enum Input<P: Plane> {
     Detach(StreamId),
     /// Hand the partitions over and stop.
     Stop(oneshot::Sender<()>),
+    /// Stop at once, handing nothing over: a process that dies.
+    Abort,
 }
 
 /// A node running in tokio tasks, and its edge.
@@ -151,6 +153,12 @@ impl<P: Plane> NodeHandle<P> {
         let (done, stopped_at) = oneshot::channel();
         self.inputs.send(Input::Stop(done)).map_err(stopped)?;
         stopped_at.await.map_err(stopped)
+    }
+
+    /// Stops the node's task at once, handing nothing over, as a process that dies: its
+    /// membership ends once nothing holds it, and the other nodes take its partitions over.
+    pub fn abort(&self) {
+        let _ = self.inputs.send(Input::Abort);
     }
 }
 
@@ -275,72 +283,89 @@ fn watch_membership<P: Plane, M: Membership + 'static>(
 ) {
     let watched = Arc::clone(&membership);
     let departures = inputs.clone();
+    // Each task ends with the node's: the membership it holds would keep the node alive.
+    let node_ended = inputs.clone();
     tokio::spawn(async move {
-        let mut failures = 0;
-        loop {
-            let message = match watched.watch().await {
-                Ok(departed) => {
-                    failures = 0;
-                    NodeMsg::Departed(departed.node)
-                }
-                Err(error @ ClusterError::NotMember(_)) => {
-                    let _ = departures.send(Input::Message(Message::Node(NodeMsg::Lost(
-                        error.to_string(),
-                    ))));
-                    return;
-                }
-                Err(error) => {
-                    failures += 1;
-                    tracing::warn!(%error, failures, "watching the next node failed: tried again");
-                    tokio::time::sleep(Backoff::default().delay("membership/watch", failures))
-                        .await;
-                    continue;
-                }
-            };
-            if departures
-                .send(Input::Message(Message::Node(message)))
-                .is_err()
-            {
-                return;
-            }
-        }
-    });
-    tokio::spawn(async move {
-        let mut failures = 0;
-        let mut first = true;
-        loop {
-            let mut changes = match membership.changes().await {
-                Ok(changes) => changes,
-                Err(error @ ClusterError::NotMember(_)) => {
-                    let _ = inputs.send(Input::Message(Message::Node(NodeMsg::Lost(
-                        error.to_string(),
-                    ))));
-                    return;
-                }
-                Err(error) => {
-                    failures += 1;
-                    tracing::warn!(%error, failures, "listening to the control plane failed: tried again");
-                    tokio::time::sleep(Backoff::default().delay("membership/changes", failures))
-                        .await;
-                    continue;
-                }
-            };
-            failures = 0;
-            if !std::mem::take(&mut first)
-                && inputs
-                    .send(Input::Message(Message::Node(NodeMsg::Resync)))
-                    .is_err()
-            {
-                return;
-            }
-            while let Some(change) = changes.next().await {
-                if inputs
-                    .send(Input::Message(Message::Node(NodeMsg::Change(change))))
+        let watching = async move {
+            let mut failures = 0;
+            loop {
+                let message = match watched.watch().await {
+                    Ok(departed) => {
+                        failures = 0;
+                        NodeMsg::Departed(departed.node)
+                    }
+                    Err(error @ ClusterError::NotMember(_)) => {
+                        let _ = departures.send(Input::Message(Message::Node(NodeMsg::Lost(
+                            error.to_string(),
+                        ))));
+                        return;
+                    }
+                    Err(error) => {
+                        failures += 1;
+                        tracing::warn!(%error, failures, "watching the next node failed: tried again");
+                        tokio::time::sleep(Backoff::default().delay("membership/watch", failures))
+                            .await;
+                        continue;
+                    }
+                };
+                if departures
+                    .send(Input::Message(Message::Node(message)))
                     .is_err()
                 {
                     return;
                 }
             }
+        };
+        tokio::select! {
+            () = watching => {}
+            () = node_ended.closed() => {}
+        }
+    });
+    let node_ended = inputs.clone();
+    tokio::spawn(async move {
+        let listening = async move {
+            let mut failures = 0;
+            let mut first = true;
+            loop {
+                let mut changes = match membership.changes().await {
+                    Ok(changes) => changes,
+                    Err(error @ ClusterError::NotMember(_)) => {
+                        let _ = inputs.send(Input::Message(Message::Node(NodeMsg::Lost(
+                            error.to_string(),
+                        ))));
+                        return;
+                    }
+                    Err(error) => {
+                        failures += 1;
+                        tracing::warn!(%error, failures, "listening to the control plane failed: tried again");
+                        tokio::time::sleep(
+                            Backoff::default().delay("membership/changes", failures),
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+                failures = 0;
+                if !std::mem::take(&mut first)
+                    && inputs
+                        .send(Input::Message(Message::Node(NodeMsg::Resync)))
+                        .is_err()
+                {
+                    return;
+                }
+                while let Some(change) = changes.next().await {
+                    if inputs
+                        .send(Input::Message(Message::Node(NodeMsg::Change(change))))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        };
+        tokio::select! {
+            () = listening => {}
+            () = node_ended.closed() => {}
         }
     });
 }
@@ -518,6 +543,7 @@ impl<P: Plane, M: Membership + 'static, L: NodeLink + 'static> Task<P, M, L> {
                 let _ = done.send(());
                 return true;
             }
+            Input::Abort => return true,
         }
         false
     }

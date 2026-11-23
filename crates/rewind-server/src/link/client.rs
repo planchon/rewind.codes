@@ -43,10 +43,18 @@ pub trait Members: Send + Sync + 'static {
     fn nodes(&self) -> impl Future<Output = Result<Vec<NodeInfo>, ClusterError>> + Send;
 }
 
-/// A node's membership, shared between the node, which holds it for its liveness, and its link,
-/// which reads the members through [`SharedMembership::members`] without keeping it alive.
+/// A node's membership, shared between the node, which holds it for its liveness, the server,
+/// which reads the members and the changes, and its link, which reads the members through
+/// [`SharedMembership::members`] without keeping it alive. The membership ends when the last
+/// holder drops it.
 #[derive(Debug)]
 pub struct SharedMembership<M>(Arc<M>);
+
+impl<M> Clone for SharedMembership<M> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
 
 impl<M: Membership + 'static> SharedMembership<M> {
     pub fn new(membership: M) -> Self {

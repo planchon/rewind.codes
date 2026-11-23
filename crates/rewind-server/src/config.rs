@@ -503,8 +503,9 @@ pub(crate) enum Listen {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct LinkListen {
     pub(crate) listen: SocketAddr,
-    /// What the other nodes dial: `host:port`.
-    pub(crate) address: String,
+    /// What the other nodes dial: `host:port`; without it, the host name and the port the link
+    /// listens on (the address itself when it is not unspecified).
+    pub(crate) address: Option<String>,
     pub(crate) secret: String,
 }
 
@@ -766,10 +767,7 @@ impl ServerArgs {
             }
             (StoreLocation::Postgres(_), Some(secret)) => Some(LinkListen {
                 listen: self.link_listen,
-                address: match &self.link_address {
-                    Some(address) => address.clone(),
-                    None => default_link_address(self.link_listen),
-                },
+                address: self.link_address.clone(),
                 secret: secret.to_owned(),
             }),
             _ if self.executors_only || self.pool.is_some() => {
@@ -907,7 +905,7 @@ fn host_name() -> String {
 }
 
 /// The host name and the port the link listens on.
-fn default_link_address(listen: SocketAddr) -> String {
+pub(crate) fn default_link_address(listen: SocketAddr) -> String {
     if listen.ip().is_unspecified() {
         format!("{}:{}", host_name(), listen.port())
     } else {
@@ -994,7 +992,7 @@ mod tests {
         else {
             panic!("a node on Postgres listens on its link");
         };
-        assert_eq!(link.address, "node-a:7070");
+        assert_eq!(link.address.as_deref(), Some("node-a:7070"));
         assert!(
             !format!("{node:?}").contains(SECRET),
             "the secret is not printed"
