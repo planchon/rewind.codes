@@ -229,13 +229,15 @@ impl<P: Plane> Edge<P> {
             .put_toolset(&request.tenant, &request.toolset, &request.declarations)
             .await
             .map_err(start_unavailable)?;
+        // The run is created now: its deadline is its TTL from then.
+        let now = self.now();
         let started = |seed| RunStarted {
             script: request.script.digest(),
             toolset: request.toolset.digest(),
             input,
             seed,
             epoch,
-            expires_at: self.now().saturating_add(ttl),
+            expires_at: now.saturating_add(ttl),
             mode: request.mode,
         };
         let run = RunRef::new(
@@ -253,7 +255,7 @@ impl<P: Plane> Edge<P> {
                 metadata: request.metadata,
                 start_key: request.idempotency_key,
                 headline: projector::headline(request.script.source()),
-                created_at: self.now(),
+                created_at: now,
             },
         )
         .await
@@ -325,6 +327,7 @@ impl<P: Plane> Edge<P> {
             self.plane.entropy().run_id_in(partition),
         );
         let seed = self.plane.entropy().seed();
+        let now = self.now();
         self.create(
             gateway,
             partition,
@@ -337,13 +340,13 @@ impl<P: Plane> Edge<P> {
                     input,
                     seed,
                     epoch,
-                    expires_at: self.now().saturating_add(ttl),
+                    expires_at: now.saturating_add(ttl),
                     mode: RunMode::Live,
                 },
                 metadata,
                 start_key: request.idempotency_key,
                 headline: projector::headline(script.script.source()),
-                created_at: self.now(),
+                created_at: now,
             },
         )
         .await
@@ -492,6 +495,7 @@ impl<P: Plane> Edge<P> {
             parent.tenant.clone(),
             self.plane.entropy().run_id_in(partition),
         );
+        let now = self.now();
         let start = StartAtOwner {
             run,
             namespace: head.namespace.clone(),
@@ -501,13 +505,13 @@ impl<P: Plane> Edge<P> {
                 input,
                 seed: parent_started.seed,
                 epoch: parent_started.epoch,
-                expires_at: self.now().saturating_add(ttl),
+                expires_at: now.saturating_add(ttl),
                 mode: parent_started.mode,
             },
             metadata,
             start_key: request.idempotency_key,
             headline: projector::headline(request.script.source()),
-            created_at: self.now(),
+            created_at: now,
         };
         self.create(gateway, partition, start)
             .await
@@ -653,19 +657,25 @@ impl<P: Plane> Edge<P> {
         payload: JsonValue,
         key: Option<String>,
     ) -> Result<Enqueued, EdgeError> {
-        let partition = match crate::partition::tokens::run_of(token) {
-            Some(run) => self.partition_of(run).await?,
-            // The token of a run `migrate-runs` moved names no run: a deployment of one
-            // partition holds it there, as it holds every run.
-            None if self.config.partitions.get() == 1 => PartitionId::new(0),
-            None => return Err(Refusal::TaskGone.into()),
-        };
-        let request = PartitionRequest::Webhook {
+        let request = |payload| PartitionRequest::Webhook {
             token: token.to_owned(),
             payload,
-            key,
+            key: key.clone(),
         };
-        enqueued(ask(gateway, partition, request).await?)
+        if let Some(run) = crate::partition::tokens::run_of(token) {
+            let partition = self.partition_of(run).await?;
+            return enqueued(ask(gateway, partition, request(payload)).await?);
+        }
+        // The token of a run `migrate-runs` moved names no run: the partition that holds its
+        // hash is asked, each in turn, as only such a token is.
+        for partition in 0..self.config.partitions.get() {
+            let partition = PartitionId::new(partition);
+            match enqueued(ask(gateway, partition, request(payload.clone())).await?) {
+                Err(EdgeError::Refused(Refusal::TaskGone)) => {}
+                answered => return answered,
+            }
+        }
+        Err(Refusal::TaskGone.into())
     }
 
     /// Lifts a quarantine; returns whether the run was quarantined.

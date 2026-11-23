@@ -99,7 +99,7 @@ async fn ended(client: &Client, run: &str) -> rewind_api::runs::Run {
 }
 
 /// Every run reads back as the tables held it, and the live ones go on.
-async fn check(url: &str, client: &Client, histories: &Histories, webhooks: bool) {
+async fn check(url: &str, client: &Client, histories: &Histories) {
     assert_eq!(histories.len(), 15, "{histories:?}");
     for (run, events) in histories {
         let journal = client
@@ -231,33 +231,31 @@ async fn check(url: &str, client: &Client, histories: &Histories, webhooks: bool
         json!({ "from": "slow" })
     );
 
-    // The webhook URL the script was given still signals it, where every run lives in one
-    // partition.
-    if webhooks {
-        let journal = client
-            .export_journal(WEBHOOK, JournalExport::Journal)
-            .await
-            .unwrap();
-        let hook = journal["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find_map(|entry| entry["event"]["result"]["value"]["url"].as_str())
-            .unwrap()
-            .to_owned();
-        let token = hook.rsplit('/').next().unwrap();
-        let response = reqwest::Client::new()
-            .post(format!("{url}/hooks/{token}"))
-            .json(&json!({ "merged": true }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 202);
-        assert_eq!(
-            output(&ended(client, WEBHOOK).await),
-            json!({ "url": hook, "merged": true })
-        );
-    }
+    // The webhook URL the script was given still signals it: its token names no run, and the
+    // partition that holds its hash answers.
+    let journal = client
+        .export_journal(WEBHOOK, JournalExport::Journal)
+        .await
+        .unwrap();
+    let hook = journal["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|entry| entry["event"]["result"]["value"]["url"].as_str())
+        .unwrap()
+        .to_owned();
+    let token = hook.rsplit('/').next().unwrap();
+    let response = reqwest::Client::new()
+        .post(format!("{url}/hooks/{token}"))
+        .json(&json!({ "merged": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    assert_eq!(
+        output(&ended(client, WEBHOOK).await),
+        json!({ "url": hook, "merged": true })
+    );
 
     // The quarantined run is not lost: it waits, quarantined or tried again by this build.
     let quarantined = client.get_run(QUARANTINED, None).await.unwrap();
@@ -383,7 +381,7 @@ async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
     .unwrap();
     let url = running.url().unwrap();
     let client = Client::remote(&url, Some(ADMIN_KEY)).unwrap();
-    check(&url, &client, &expected, true).await;
+    check(&url, &client, &expected).await;
     running.stop().await;
 
     // The embedded server starts on it.
@@ -488,6 +486,6 @@ async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archiv
             .unwrap();
     let server = running.url().unwrap();
     let client = Client::remote(&server, Some(ADMIN_KEY)).unwrap();
-    check(&server, &client, &expected, false).await;
+    check(&server, &client, &expected).await;
     running.stop().await;
 }
