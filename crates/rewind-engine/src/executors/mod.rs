@@ -23,7 +23,7 @@ use std::sync::Arc;
 use rewind_core::{Digest, PartitionId, Payload, Timestamp};
 
 use crate::cache::InstanceCache;
-use crate::node::message::{Effect, Message, ReplyTo, job};
+use crate::node::message::{Effect, JobClass, Message, ReplyTo, job_of};
 use crate::partition::OwnerMsg;
 use crate::plane::{InstanceOf, LogOf, NodeConfig, Plane};
 use crate::ports::link::{ActivationRequest, ActivationResult, ParentHistory, Purpose};
@@ -233,7 +233,7 @@ impl<P: Plane> Executors<P> {
             };
             let plane = Arc::clone(&self.plane);
             let config = Arc::clone(&self.config);
-            out.push(job(async move {
+            out.push(job_of(JobClass::Activation, async move {
                 let (origin, result, warm) = match work {
                     Work::Local(local) => {
                         let LocalRun {

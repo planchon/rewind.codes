@@ -27,7 +27,7 @@ use rewind_core::{PartitionId, RunId, Timestamp};
 
 pub use faults::{Faults, Traffic};
 
-use crate::node::message::{Effect, Job, Message, ReplyTo};
+use crate::node::message::{Effect, Job, JobClass, Message, ReplyTo};
 use crate::node::{Node, NodeMsg};
 use crate::partition::OwnerMsg;
 use crate::plane::{NodeConfig, Plane};
@@ -79,7 +79,9 @@ pub struct Driver<P: Plane, K: Cluster + 'static> {
     clock: Arc<dyn VirtualClockHandle>,
     nodes: BTreeMap<NodeId, DriverNode<P, K::Membership>>,
     queue: VecDeque<(NodeId, Message<P>)>,
-    jobs: VecDeque<(NodeId, Job<P>)>,
+    /// Jobs by class: what reads and writes the stores first, then activations, then calls, the
+    /// calls of several runs in the order of the runs' ids; in the order they came within a class.
+    jobs: BTreeMap<(JobClass, u64), (NodeId, Job<P>)>,
     wakes: BTreeMap<(Timestamp, u64), (NodeId, Message<P>, bool)>,
     next_id: u64,
     waiters: BTreeMap<u64, Option<NodeReply>>,
@@ -142,7 +144,7 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
             clock,
             nodes: BTreeMap::new(),
             queue: VecDeque::new(),
-            jobs: VecDeque::new(),
+            jobs: BTreeMap::new(),
             wakes: BTreeMap::new(),
             next_id: 1,
             waiters: BTreeMap::new(),
@@ -224,7 +226,7 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
     pub fn kill(&mut self, id: &NodeId) {
         self.nodes.remove(id);
         self.queue.retain(|(node, _)| node != id);
-        self.jobs.retain(|(node, _)| node != id);
+        self.jobs.retain(|_, (node, _)| node != id);
         self.wakes.retain(|_, (node, _, _)| node != id);
         self.held.retain(|(node, _)| node != id);
     }
@@ -273,7 +275,7 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
             self.deliver(&node, message);
             return true;
         }
-        if let Some((node, job)) = self.jobs.pop_front() {
+        if let Some((_, (node, job))) = self.jobs.pop_first() {
             self.steps.jobs += 1;
             let message = job.await;
             if self.nodes.contains_key(&node) {
@@ -509,7 +511,11 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
                     }
                     ReplyTo::Nobody => {}
                 },
-                Effect::Job(job) => self.jobs.push_back((origin.clone(), job)),
+                Effect::Job(class, job) => {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    self.jobs.insert((class, id), (origin.clone(), job));
+                }
                 Effect::Wake { at, alone, message } => {
                     let id = self.next_id;
                     self.next_id += 1;

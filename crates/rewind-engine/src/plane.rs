@@ -189,6 +189,9 @@ pub struct NodeConfig {
     /// A webhook delivery is tried this many times, then given up.
     pub webhook_attempts: u32,
     pub host_tools: HostTools,
+    /// The calls an activation schedules are sent latest first: tests exercise completions that
+    /// arrive out of order under `Promise.all`. Off by default.
+    pub reversed_calls: bool,
     /// The determinism epochs its executors run; `None`: those its executor supports. A node
     /// that declares fewer sends the activations of the others to a node that runs them.
     pub epochs: Option<BTreeSet<Epoch>>,
@@ -220,6 +223,7 @@ impl NodeConfig {
             activation_retry: Duration::from_secs(30),
             webhook_attempts: 8,
             host_tools: HostTools::Streams,
+            reversed_calls: false,
             epochs: None,
         }
     }

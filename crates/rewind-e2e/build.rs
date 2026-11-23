@@ -1,4 +1,5 @@
-//! Generates one test per case of the corpus: `epoch_1::blue::fan_out`, and so on.
+//! Generates one test per case of the corpus: `epoch_1::blue::fan_out`, and so on; and the same
+//! tests run on the run plane (`corpus_plane.rs`).
 
 use std::fmt::Write as _;
 use std::fs;
@@ -6,6 +7,14 @@ use std::path::Path;
 
 fn main() {
     println!("cargo:rerun-if-changed=corpus");
+    let out = Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")).to_path_buf();
+    fs::write(out.join("corpus.rs"), tests("check_case")).expect("OUT_DIR is writable");
+    fs::write(out.join("corpus_plane.rs"), tests("check_case_on_plane"))
+        .expect("OUT_DIR is writable");
+}
+
+/// One test per case, each calling `rewind_e2e::{check}`.
+fn tests(check: &str) -> String {
     let corpus = Path::new("corpus");
     let mut tests = String::new();
     for epoch in sorted_dirs(corpus) {
@@ -25,15 +34,14 @@ fn main() {
                 let _ = writeln!(
                     tests,
                     "        #[tokio::test]\n        async fn {case_name}() {{\n            \
-                     rewind_e2e::check_case(\"{epoch_name}/{color}/{case_name}\").await;\n        }}"
+                     rewind_e2e::{check}(\"{epoch_name}/{color}/{case_name}\").await;\n        }}"
                 );
             }
             let _ = writeln!(tests, "    }}");
         }
         let _ = writeln!(tests, "}}");
     }
-    let out = Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")).join("corpus.rs");
-    fs::write(out, tests).expect("OUT_DIR is writable");
+    tests
 }
 
 fn sorted_dirs(dir: &Path) -> Vec<std::path::PathBuf> {

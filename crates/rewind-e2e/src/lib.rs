@@ -29,6 +29,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod plane;
 pub mod scenario;
 pub mod tools;
 
@@ -975,11 +976,45 @@ pub async fn check_case(name: &str) {
     }
 }
 
+/// Which engine runs a case live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Runner {
+    /// The engine over the journal store.
+    Journal,
+    /// The run plane's actors in the driver ([`plane`]).
+    Plane,
+}
+
+/// Checks a case of the corpus on the run plane: live, against the committed journal (never
+/// recorded), replayed. Panics with every failed expectation.
+pub async fn check_case_on_plane(name: &str) {
+    let failures = match Case::load(name) {
+        Ok(case) => check_on(&case, Mode::Verify, Runner::Plane).await,
+        Err(err) => vec![err],
+    };
+    if !failures.is_empty() {
+        let mut report = format!("{name} (run plane):\n");
+        for failure in failures {
+            let _ = writeln!(report, "  - {failure}");
+        }
+        panic!("{report}");
+    }
+}
+
 /// Checks a case: live, recorded, replayed. Returns every failed expectation.
 pub async fn check(case: &Case, mode: Mode) -> Vec<String> {
+    check_on(case, mode, Runner::Journal).await
+}
+
+/// [`check`], the case run live by `runner`.
+pub async fn check_on(case: &Case, mode: Mode, runner: Runner) -> Vec<String> {
     let mut failures = Vec::new();
     let expect = &case.scenario.expect;
-    let recorded = match run_live(case).await {
+    let live = match runner {
+        Runner::Journal => run_live(case).await,
+        Runner::Plane => plane::run_live(case).await,
+    };
+    let recorded = match live {
         Err(err) => return vec![format!("the live run failed: {err}")],
         Ok(Live::Refused(refused)) => {
             match &expect.start_error {

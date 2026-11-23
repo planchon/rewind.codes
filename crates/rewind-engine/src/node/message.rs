@@ -111,7 +111,7 @@ pub(crate) enum Effect<P: Plane> {
     /// The reply to a request.
     Reply(ReplyTo, NodeReply),
     /// Work with I/O.
-    Job(Job<P>),
+    Job(JobClass, Job<P>),
     /// A message at `at`, from memory: lost if the node dies. `alone`: in virtual time, the
     /// driver moves the clock to it even when nothing else is due.
     Wake {
@@ -142,7 +142,7 @@ impl<P: Plane> fmt::Debug for Effect<P> {
                 asker,
             } => write!(f, "Remote({node}, {request:?}, {asker:?})"),
             Effect::Reply(to, reply) => write!(f, "Reply({to:?}, {reply:?})"),
-            Effect::Job(_) => f.write_str("Job"),
+            Effect::Job(class, _) => write!(f, "Job({class:?})"),
             Effect::Wake { at, alone, message } => {
                 write!(f, "Wake({at:?}, alone: {alone}, {message:?})")
             }
@@ -154,7 +154,26 @@ impl<P: Plane> fmt::Debug for Effect<P> {
     }
 }
 
-/// Boxes a job.
+/// What a job does: what the driver orders jobs by. A process runs them all at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum JobClass {
+    /// Reads and writes of the stores.
+    Store,
+    /// An activation.
+    Activation,
+    /// A call of this run.
+    Call(rewind_core::RunId),
+}
+
+/// Boxes a job of a class.
+pub(crate) fn job_of<P: Plane>(
+    class: JobClass,
+    work: impl Future<Output = Message<P>> + Send + 'static,
+) -> Effect<P> {
+    Effect::Job(class, Box::pin(work))
+}
+
+/// Boxes a job that reads or writes the stores.
 pub(crate) fn job<P: Plane>(work: impl Future<Output = Message<P>> + Send + 'static) -> Effect<P> {
-    Effect::Job(Box::pin(work))
+    Effect::Job(JobClass::Store, Box::pin(work))
 }

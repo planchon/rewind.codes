@@ -1270,6 +1270,10 @@ impl<P: Plane> Owner<P> {
             }
         } else {
             unit.then(After::Confirm(run_ref.clone(), head.history_len));
+            let mut new_tasks = new_tasks;
+            if self.config.reversed_calls {
+                new_tasks.reverse();
+            }
             for task in new_tasks {
                 unit.then(After::Dispatch(task));
             }

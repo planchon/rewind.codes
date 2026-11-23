@@ -33,7 +33,7 @@ use crate::engine::idempotency_key;
 use crate::executors::activation::Carried;
 use crate::executors::derive::record_of;
 use crate::fork::left_without_outcome;
-use crate::node::message::{Effect, Message, job};
+use crate::node::message::{Effect, JobClass, Message, job_of};
 use crate::partition::OwnerMsg;
 use crate::plane::{LogOf, NodeConfig, Plane};
 use crate::ports::link::{HostTask, StartAtOwner};
@@ -173,7 +173,8 @@ impl<P: Plane> Calls<P> {
             self.running += 1;
             let plane = Arc::clone(&self.plane);
             let config = Arc::clone(&self.config);
-            out.push(job(async move {
+            let class = JobClass::Call(work.task.task.task.run.id);
+            out.push(job_of(class, async move {
                 let partition = work.partition;
                 let done = call(&*plane, &config, *work).await;
                 Message::Calls(CallMsg::Finished(partition, Box::new(done)))
