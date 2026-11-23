@@ -13,6 +13,13 @@ use rewind_core::Timestamp;
 use crate::ports::partition::{Activation, Change};
 use crate::ports::{DueTimer, OutboxChange, RunRef, TimerChange, TimerKind};
 
+/// Waits until `at` by `clock`: the one place a node sleeps, until the earliest timer of its
+/// wheels (`archi/07-code-architecture.md`, principle 11).
+pub(crate) async fn until<C: crate::ports::Clock>(clock: &C, at: Timestamp) {
+    let wait = Duration::from_millis(at.0.saturating_sub(clock.now().0));
+    tokio::time::sleep(wait).await;
+}
+
 /// The timers of a partition due before the horizon.
 #[derive(Debug)]
 pub(crate) struct Wheel {
