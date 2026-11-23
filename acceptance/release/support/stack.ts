@@ -169,6 +169,7 @@ export async function startDeployed(options: DeployedOptions): Promise<Stack> {
       await answers(server, operatorKey, dir);
     }
     await clustered([...servers.values()], operatorKey);
+    for (const server of servers.values()) await routable(server, operatorKey);
     edge = await startEdge(edgePort, servers);
     const info: StackInfo = {
       name: options.name,
@@ -278,6 +279,7 @@ function handle(
       }
       server.child = processes.start(name, rewindBinary(), server.args);
       await answers(server, operatorKey, dir);
+      await routable(server, operatorKey);
     },
     pausePostgres() {
       if (postgresContainer === "") throw new Error(`${info.name} has no Postgres`);
@@ -367,6 +369,22 @@ async function answers(server: ServerProcess, operatorKey: string, dir: string):
     },
     120_000,
     200,
+  );
+}
+
+/**
+ * Waits until a node reaches every partition: a list of runs asks each one, and is answered 503
+ * while the node knows no owner of one (it has just started and not read the partition map yet).
+ */
+async function routable(server: ServerProcess, operatorKey: string): Promise<void> {
+  await eventually(
+    `${server.name} reaches every partition`,
+    async () => {
+      const response = await fetch(`${server.url}/v1/runs?limit=1`, { headers: { authorization: `Bearer ${operatorKey}` } });
+      return response.ok ? true : undefined;
+    },
+    60_000,
+    100,
   );
 }
 
