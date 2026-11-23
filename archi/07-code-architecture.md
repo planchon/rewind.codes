@@ -557,8 +557,10 @@ Rules the engine keeps, tested in the driver:
   ready is sent once its batch is durable, within the concurrency limits: the policy's calls of
   the same tool in flight per run, held by the owner, and the server's or API's calls in flight in
   the organization, held by the organization actor. A host task goes to the organization actor,
-  which hands it to an SDK stream with a free slot, with a new token. The outcome of a task that no
-  longer exists is dropped. Approving a task parked by `schema_changed` marks it
+  which hands it to an SDK stream with a free slot, with a new token. The actor holds the streams
+  in memory: when the owner of its home partition opens it, after a takeover or again on the same
+  node, it tells every edge, and each attaches its streams of the tenants homed there again. The
+  outcome of a task that no longer exists is dropped. Approving a task parked by `schema_changed` marks it
   `schema_change_approved`. A secret put again resumes the calls parked by `credentials_refused`
   or `secret_missing` in the runs that attach it.
 - **Timers.** Script timers, call timeouts, deferred deadlines, retry backoff, run deadlines,

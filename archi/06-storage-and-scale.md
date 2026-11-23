@@ -99,13 +99,13 @@ listens, and drops what it had cached of it.
 
 ### A partition
 
-A partition is one SlateDB database, `partitions/{id}/` in the bucket. Its records are written in
-the stored format ([partition records](02-journal.md#stored-format-v1)), under keys that belong to
-`rewind-store-slatedb`; the engine never sees a key.
+A partition is one SlateDB database, `partitions/{id}/` in the bucket. Its sixteen kinds of
+records are written in the stored format ([partition records](02-journal.md#stored-format-v1)),
+under keys that belong to `rewind-store-slatedb`; the engine never sees a key.
 
 | Records | One per | Holds |
 | --- | --- | --- |
-| Run head | Run | Status, epoch, the counts of failed and started activations, quarantine, waits, deadline, history length, dates, and the run metadata: namespace, labels, trace context, idempotency key, parent, workflow and version, the run that started it and its `seq`, `detached`, scope, the secrets it attached ([05](05-testing-and-observability.md#run-metadata)) |
+| Run head | Run | Status, epoch, its script and pinned toolset, the attempt it is at and the last one sealed, the counts of failed and started activations, quarantine, waits, deadline, the attempt's history length, dates, and the run metadata: namespace, labels, trace context, idempotency key, parent, workflow and version, the run that started it and its `seq`, `detached`, scope, the secrets it attached ([05](05-testing-and-observability.md#run-metadata)) |
 | History | Entry of an attempt | The event, its index, `recorded_at` |
 | Inbox | Completion not yet delivered | The event, when it was received |
 | Signal key | Signal key used | Kept for the life of the run ([idempotency](#idempotency-of-the-api)) |
@@ -116,7 +116,9 @@ the stored format ([partition records](02-journal.md#stored-format-v1)), under k
 | Webhook token | Token | The hash of the token, the run and the signal name |
 | Run summary and index | Run, live or ended | What lists, searches and the change stream show ([05](05-testing-and-observability.md#read-model)) |
 | Start key | Idempotency key of a start | The run it started, unique per namespace |
-| Counters | Tenant, namespace and period | Exact counts, written in the batch of what they count ([quotas](#quotas)) |
+| Counters | Namespace and hour | Exact counts of the hour, written in the batch of what they count: runs created, started and ended by status and by workflow, a sketch of their durations, CPU time, failures by fingerprint, calls per tool, runs and tools per script ([quotas](#quotas), [statistics](05-testing-and-observability.md#statistics)) |
+| Gauges | Namespace | What holds now among the namespace's runs in the partition: the active runs, those waiting by what they wait for, the quarantined, the runs of each script; moved in the batch of every change to a run's head or summary |
+| Shape | Namespace and tool | The shape observed in the tool's results, merged in any order ([observed types](04-tools.md#observed-result-types)) |
 | Outbox entry | Delivery waiting to leave the partition | A span batch to export, a webhook to deliver, a `quota.alert` ([outbox](#the-outbox)) |
 | Organization state | Tenant homed here | What its organization actor keeps: alerts sent, the admissions it holds |
 
@@ -339,7 +341,8 @@ An agent acting for Alice holds a token of Alice's namespace and cannot see or r
 Bob's, whatever script its model writes.
 
 - **Name.** The customer's own id for the end user: 1 to 128 letters, digits, `-`, `_`, `.`, `:`
-  and `@`, case-sensitive. `*` is not a name: it stands for the tenant in `usage`,
+  and `@`, case-sensitive, not starting with `rewind:`, which Rewind keeps for its own names.
+  `*` is not a name: it stands for the tenant in `usage`,
   `quota_alerts` and `secrets`. A namespace's name appears in webhooks, the dashboard and the service's logs,
   so an opaque id is better than an email.
 - **Display name.** The customer's label for the end user (`Acme Corp`), optional, set and
@@ -641,7 +644,10 @@ Active runs are never touched. Defaults, configurable per tenant:
   the namespace. A version keeps the digest of an erased test in its document; the next version's
   gate leaves the test out ([suites](05-testing-and-observability.md#suites-and-the-gate)). The
   tenant's own counts keep what the namespace consumed: deleting an end user gives nothing back to
-  the tenant's ceiling.
+  the tenant's ceiling. The batch that erases the namespace's counters adds, hour by hour, what it
+  consumed (runs created, started and ended, their durations, CPU time, the runs of each workflow)
+  to the tenant's `rewind:erased:<partition>`, counted in the tenant's totals and its ceiling and
+  shown as no namespace; its failures, tools and scripts go with it.
 - Payloads go with their run, so nothing looks for payloads no run references.
 - Tests are blobs of the `BlobStore` under the tenant. A test's row is reserved before its blob
   is written; the daily cleanup marks the rows no version references, deletes their blobs, then
