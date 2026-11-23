@@ -21,10 +21,11 @@ use crate::interrupt;
 use crate::output::Console;
 use crate::render;
 
-/// One request waits at most this long: proxies cut longer ones. A longer `--wait` is split.
-const WAIT_CHUNK: StdDuration = StdDuration::from_secs(50);
-/// A server that answers a wait early is asked again at most this often.
-const WAIT_PACE: StdDuration = StdDuration::from_secs(1);
+/// How long after the wait's deadline the request is given up if the server has not answered.
+const ANSWER_GRACE: StdDuration = StdDuration::from_secs(10);
+/// A wait whose connection broke after it was held this long was cut (by a proxy): it is sent
+/// again with the time left.
+const CUT_AFTER: StdDuration = StdDuration::from_secs(1);
 
 pub(super) async fn run(
     server: &Server<'_>,
@@ -106,9 +107,15 @@ pub(super) async fn status(
 ) -> Result<Exit, CliError> {
     let client = server.client().await?;
     let deadline = Instant::now() + args.wait.map(Duration::get).unwrap_or_default();
-    let first = args.wait.map(first_wait).unwrap_or_default();
-    let run = client.get_run(&args.run, first).await?;
-    let run = wait_for_end(&client, run, deadline).await?;
+    let run = match args.wait {
+        Some(_) => held(&client, &args.run, deadline).await?,
+        None => Some(client.get_run(&args.run, None).await?),
+    };
+    let run = match run {
+        Some(run) => run,
+        // Ctrl-C before the first answer: the run as it is now.
+        None => client.get_run(&args.run, None).await?,
+    };
     show_run(console, &run)?;
     Ok(Exit::of_run(&run))
 }
@@ -151,9 +158,10 @@ pub(super) async fn cancel(
 ) -> Result<Exit, CliError> {
     let client = server.client().await?;
     let deadline = Instant::now() + args.wait.map(Duration::get).unwrap_or_default();
+    // Answered at once, so that the change is known; the wait follows, which Ctrl-C abandons.
     let request = CancelRun {
         reason: args.reason,
-        wait: args.wait.map(first_wait).unwrap_or_default(),
+        wait: None,
     };
     interrupt::before_change("the cancellation")?;
     let run = client.cancel_run(&args.run, &request).await?;
@@ -304,44 +312,37 @@ fn idempotency_key(key: Option<&str>) -> Result<Option<IdempotencyKey>, CliError
     .transpose()
 }
 
-/// The wait of a first request: the first chunk of `--wait`.
-fn first_wait(wait: Duration) -> Option<Duration> {
-    let wait = wait.get().min(WAIT_CHUNK);
-    (!wait.is_zero()).then(|| Duration::from(wait))
-}
-
 /// Waits until the run ends, is quarantined, or the deadline passes; the first Ctrl-C stops
 /// waiting. Returns the run as last read.
 pub(super) async fn wait_for_end(
     client: &Client,
-    mut run: Run,
+    run: Run,
     deadline: Instant,
 ) -> Result<Run, CliError> {
+    if run.status.is_terminal() || run.quarantine.is_some() || Instant::now() >= deadline {
+        return Ok(run);
+    }
+    Ok(held(client, &run.id, deadline).await?.unwrap_or(run))
+}
+
+/// The run, read with one request the server holds until the run ends or is quarantined, or
+/// until `deadline` (`archi/07-code-architecture.md`, "Embedded server and CLI"): nothing is
+/// asked again once the server has answered. A connection cut while the server held it (a
+/// proxy) is sent again with the time left; one the server has not answered shortly after the
+/// deadline is given up, and the run read as it is. `None` at the first Ctrl-C.
+async fn held(client: &Client, run: &str, deadline: Instant) -> Result<Option<Run>, CliError> {
     loop {
-        if run.status.is_terminal() || run.quarantine.is_some() {
-            return Ok(run);
-        }
         let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Ok(run);
-        }
-        let asked = Instant::now();
-        let chunk = Duration::from(left.min(WAIT_CHUNK));
-        match interrupt::abandonable(client.get_run(&run.id, Some(chunk))).await {
-            Some(read) => run = read?,
-            None => return Ok(run),
-        }
-        if run.status.is_terminal() || run.quarantine.is_some() {
-            return Ok(run);
-        }
-        let pace = WAIT_PACE
-            .saturating_sub(asked.elapsed())
-            .min(deadline.saturating_duration_since(Instant::now()));
-        if interrupt::abandonable(tokio::time::sleep(pace))
-            .await
-            .is_none()
-        {
-            return Ok(run);
+        let wait = (!left.is_zero()).then(|| Duration::from(left));
+        let sent = Instant::now();
+        let answer = tokio::time::timeout(left + ANSWER_GRACE, client.get_run(run, wait));
+        match interrupt::abandonable(answer).await {
+            None => return Ok(None),
+            Some(Ok(Ok(read))) => return Ok(Some(read)),
+            Some(Ok(Err(rewind_api::Error::Transport { .. }))) if sent.elapsed() >= CUT_AFTER => {}
+            Some(Ok(Err(error))) => return Err(error.into()),
+            // The server did not answer by the deadline: the run as it is now.
+            Some(Err(_)) => return Ok(Some(client.get_run(run, None).await?)),
         }
     }
 }
@@ -363,18 +364,107 @@ fn show_run(console: &mut Console, run: &Run) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
     use super::*;
 
-    #[test]
-    fn long_waits_are_split() {
-        assert_eq!(first_wait(Duration::from_millis(0)), None);
-        assert_eq!(
-            first_wait(Duration::from_millis(30_000)),
-            Some(Duration::from_millis(30_000))
+    const RUN: &str = r#"{"id":"r1","namespace":"local","status":"completed","script":"aa",
+        "toolset":"bb","epoch":1,"mode":"live","labels":{},"traceId":"00","historyLen":3,
+        "createdAt":"2026-11-09T10:00:00Z","updatedAt":"2026-11-09T10:00:01Z",
+        "expiresAt":"2026-12-09T10:00:00Z"}"#;
+
+    /// The request line of the next request on `socket`.
+    async fn request_line(socket: &mut TcpStream) -> String {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && socket.read(&mut byte).await.unwrap_or(0) == 1 {
+            head.push(byte[0]);
+        }
+        String::from_utf8_lossy(&head)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    async fn answer(socket: &mut TcpStream) {
+        let body = RUN.replace(['\n', ' '], "");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+             connection: close\r\n\r\n{body}",
+            body.len()
         );
-        assert_eq!(
-            first_wait(Duration::from_millis(600_000)),
-            Some(Duration::from_millis(50_000))
-        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    /// A server that holds the first `cut` requests a while and then drops their connection,
+    /// and answers the next one with the run; and the request lines it saw.
+    async fn server(cut: usize) -> (Client, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            for index in 0.. {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let line = request_line(&mut socket).await;
+                log.lock().unwrap().push(line);
+                if index < cut {
+                    tokio::time::sleep(StdDuration::from_millis(1_100)).await;
+                    drop(socket);
+                } else {
+                    answer(&mut socket).await;
+                }
+            }
+        });
+        let client = Client::remote(&format!("http://{address}"), None).unwrap();
+        (client, seen)
+    }
+
+    fn wait_of(line: &str) -> u64 {
+        let wait = line
+            .split(['?', '&', ' '])
+            .find_map(|part| part.strip_prefix("wait="))
+            .unwrap_or_default();
+        wait.parse::<Duration>().unwrap().as_millis()
+    }
+
+    #[tokio::test]
+    async fn a_wait_is_one_request_with_the_whole_wait() {
+        let (client, seen) = server(0).await;
+        let deadline = Instant::now() + StdDuration::from_secs(3_600);
+        let run = held(&client, "r1", deadline).await.unwrap().unwrap();
+        assert_eq!(run.status, rewind_api::common::RunStatus::Completed);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0].starts_with("GET /v1/runs/r1?wait="), "{seen:?}");
+        assert!(wait_of(&seen[0]) > 3_590_000, "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn a_cut_wait_is_sent_again_with_the_time_left() {
+        let (client, seen) = server(1).await;
+        let deadline = Instant::now() + StdDuration::from_secs(60);
+        let run = held(&client, "r1", deadline).await.unwrap().unwrap();
+        assert_eq!(run.id, "r1");
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        let (first, second) = (wait_of(&seen[0]), wait_of(&seen[1]));
+        assert!(first > 59_000, "{seen:?}");
+        assert!(second < first - 1_000, "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn a_run_that_ended_is_not_waited_for() {
+        let (client, seen) = server(0).await;
+        let run: Run = serde_json::from_str(RUN).unwrap();
+        let deadline = Instant::now() + StdDuration::from_secs(60);
+        assert_eq!(wait_for_end(&client, run, deadline).await.unwrap().id, "r1");
+        assert!(seen.lock().unwrap().is_empty());
     }
 }

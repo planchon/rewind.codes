@@ -38,6 +38,9 @@ getrandom.workspace = true
 jiff.workspace = true
 jsonwebtoken.workspace = true
 reqwest.workspace = true
+# The embedded server's `ready`: standard output sent where standard error goes once it is
+# written, without unsafe code.
+rustix = { workspace = true, features = ["stdio"] }
 serde.workspace = true
 serde_html_form.workspace = true
 serde_json.workspace = true

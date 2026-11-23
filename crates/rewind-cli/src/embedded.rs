@@ -1,41 +1,52 @@
 //! The embedded server of a state directory (`archi/07-code-architecture.md`, "Embedded server
-//! and CLI"): the CLI never opens `journal.db`; it is a client of `rewind server --embedded`, which
-//! it starts on demand as a detached process.
+//! and CLI"): the CLI never opens what `.rewind/` stores; it is a client of
+//! `rewind server --embedded`, which it starts on demand as a detached process.
 //!
 //! ```text
 //! .rewind/server.sock answers GET /v1/server ──► same version ─────────────► use it
 //!                       │                        └ other version ─► POST /v1/server/stop,
 //!                       │                                           wait for the lock, start one
-//!                       └ no answer ─► .rewind/server.lock free ─► start `rewind server --embedded`
-//!                                      └ held: a server is starting ─► wait for the socket
+//!                       └ no answer ─► .rewind/server.lock free ─► start `rewind server --embedded`,
+//!                                      │                           wait for `ready` on its pipe
+//!                                      └ held: a server is starting ─► connect again after each
+//!                                                                      refusal, with a backoff
 //! ```
 //!
 //! A server holds `server.lock` for its whole life, so a free lock means no server runs: a
 //! socket file left by a killed server is stale. Two commands may start a server at the same
 //! time: the second server fails to take the lock and exits, and both commands use the first.
+//! Nothing here asks on a clock: the CLI waits on the pipe of the server it started, and on the
+//! lock of a server asked to stop.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::Duration;
 
 use rewind_api::Client;
 use rewind_api::admin::ServerInfo;
 use rustix::fs::FlockOperation;
+use tokio::sync::oneshot;
+use tokio::time::Instant;
 
 /// The version a server must have for this CLI to use it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// How long a starting server may take to answer on its socket.
+/// How long a starting server may take to write `ready`, or to answer on its socket.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a server asked to stop may take to release its lock.
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long the version handshake may take.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-const POLL: Duration = Duration::from_millis(25);
+/// The first wait before connecting again to a server another command is starting, doubled after
+/// each refusal up to [`MAX_RETRY`].
+const FIRST_RETRY: Duration = Duration::from_millis(25);
+const MAX_RETRY: Duration = Duration::from_millis(800);
+/// The line the server writes on its standard output once it listens (`--notify-ready`).
+const READY: &str = "ready";
 /// The embedded server the CLI starts stops after 10 minutes without requests and without
 /// work in progress.
 const IDLE_TIMEOUT: &str = "10m";
@@ -166,14 +177,7 @@ impl Launcher {
 
     /// Whether no server holds the lock: no server runs in this directory.
     pub fn lock_is_free(&self) -> Result<bool, LaunchError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(self.lock_path())
-            .map_err(|source| self.dir_error(source))?;
+        let file = self.lock_file()?;
         match rustix::fs::flock(&file, FlockOperation::NonBlockingLockExclusive) {
             // Taken, so free; closing the file releases it at once.
             Ok(()) => Ok(true),
@@ -211,25 +215,33 @@ impl Launcher {
         Some((client, info))
     }
 
-    /// Asks a server of another version to stop, and waits until it released its lock.
+    /// Asks a server of another version to stop, and waits until it released its lock: a thread
+    /// blocks on the lock, which the server's exit frees.
     async fn stop(&self, client: &Client, info: &ServerInfo) -> Result<(), LaunchError> {
         // It may stop before it answers.
         let _ = client.stop_server().await;
-        let deadline = Instant::now() + STOP_TIMEOUT;
-        while Instant::now() < deadline {
-            if self.lock_is_free()? {
-                return Ok(());
-            }
-            tokio::time::sleep(POLL).await;
+        let file = self.lock_file()?;
+        let (released, freed) = oneshot::channel();
+        // Detached: a server that never stops leaves it blocked until this command exits.
+        std::thread::spawn(move || {
+            let taken = rustix::fs::flock(&file, FlockOperation::LockExclusive);
+            // Closing the file releases the lock at once.
+            drop(file);
+            let _ = released.send(taken);
+        });
+        match tokio::time::timeout(STOP_TIMEOUT, freed).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(errno))) => Err(self.dir_error(errno.into())),
+            Ok(Err(_)) | Err(_) => Err(LaunchError::NotStopped {
+                dir: self.dir.clone(),
+                version: info.version.clone(),
+            }),
         }
-        Err(LaunchError::NotStopped {
-            dir: self.dir.clone(),
-            version: info.version.clone(),
-        })
     }
 
-    /// Starts `rewind server --embedded --dir <dir>`, detached: in a process group of its own, so
-    /// that a Ctrl-C in the terminal does not reach it, its output appended to `server.log`.
+    /// Starts `rewind server --embedded --dir <dir> --notify-ready`, detached: in a process group
+    /// of its own, so that a Ctrl-C in the terminal does not reach it, its standard error appended
+    /// to `server.log`. Its standard output is the pipe it writes `ready` on.
     fn spawn(&self) -> Result<Child, LaunchError> {
         let log = OpenOptions::new()
             .create(true)
@@ -237,18 +249,18 @@ impl Launcher {
             .mode(0o600)
             .open(self.log_path())
             .map_err(|source| self.dir_error(source))?;
-        let stderr = log.try_clone().map_err(|source| self.dir_error(source))?;
         Command::new(&self.program)
             .args(&self.program_args)
             .args(["server", "--embedded", "--dir"])
             .arg(&self.dir)
             // Unlike a server run in the foreground, the CLI's stops when unused.
             .args(["--idle-timeout", IDLE_TIMEOUT])
+            .arg("--notify-ready")
             // The runtime refuses to start unless TZ=UTC.
             .env("TZ", "UTC")
             .stdin(Stdio::null())
-            .stdout(log)
-            .stderr(stderr)
+            .stdout(Stdio::piped())
+            .stderr(log)
             .process_group(0)
             .spawn()
             .map_err(|source| LaunchError::Spawn {
@@ -257,8 +269,10 @@ impl Launcher {
             })
     }
 
-    /// Waits until a server answers on the socket. `None` when the one that answers is of
-    /// another version (another command started it): the caller settles it.
+    /// Waits until a server answers on the socket: the one this command started writes `ready`
+    /// on its pipe; one another command is starting is connected to again after each refusal,
+    /// with a backoff. `None` when the one that answers is of another version (another command
+    /// started it): the caller settles it.
     async fn wait_for_server(
         &self,
         mut child: Option<Child>,
@@ -266,21 +280,25 @@ impl Launcher {
         let deadline = Instant::now() + START_TIMEOUT;
         let mut spawned = usize::from(child.is_some());
         let mut exited = None;
+        let mut retry = FIRST_RETRY;
         loop {
+            if let Some(started) = child.take() {
+                match ready(started, deadline).await {
+                    Start::Ready => {}
+                    // Another server took the lock first (it then answers soon), or it failed.
+                    Start::Exited(status) => exited = status,
+                    Start::Late => {
+                        return Err(self.not_started(format!(
+                            "it did not write `{READY}` within {}s",
+                            START_TIMEOUT.as_secs()
+                        )));
+                    }
+                }
+            }
             if let Some((client, info)) = self.handshake().await {
                 return Ok((info.version == self.version).then_some(client));
             }
-            if let Some(started) = child.as_mut()
-                && let Ok(Some(status)) = started.try_wait()
-            {
-                // The server we started exited: another one took the lock first (it then
-                // answers soon), or it failed.
-                child = None;
-                exited = Some(status);
-            }
-            // While our own server starts, the lock is left alone: checking it could make the
-            // server miss it.
-            if child.is_none() && self.lock_is_free()? {
+            if self.lock_is_free()? {
                 // Nobody holds the lock and nothing answers: start a server, a few times at
                 // most (a check of another command can make a starting server miss the lock).
                 if spawned == MAX_SPAWNS {
@@ -292,16 +310,33 @@ impl Launcher {
                 }
                 child = Some(self.spawn()?);
                 spawned += 1;
+                continue;
             }
-            if Instant::now() >= deadline {
+            // Another command's server holds the lock and is starting: its socket refused us.
+            // Connect again after a backoff.
+            let now = Instant::now();
+            if now >= deadline {
                 return Err(self.not_started(format!(
                     "it did not answer on {} within {}s",
                     self.socket().display(),
                     START_TIMEOUT.as_secs()
                 )));
             }
-            tokio::time::sleep(POLL).await;
+            tokio::time::sleep(retry.min(deadline - now)).await;
+            retry = (retry * 2).min(MAX_RETRY);
         }
+    }
+
+    /// The lock file, opened (and made if needed) without taking the lock.
+    fn lock_file(&self) -> Result<File, LaunchError> {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(self.lock_path())
+            .map_err(|source| self.dir_error(source))
     }
 
     fn not_started(&self, reason: String) -> LaunchError {
@@ -314,6 +349,40 @@ impl Launcher {
             reason,
             log,
         }
+    }
+}
+
+/// How the server this command started went.
+enum Start {
+    /// It wrote `ready`: it listens on its socket.
+    Ready,
+    /// Its pipe closed before `ready`: it exited, with this status when it could be read.
+    Exited(Option<ExitStatus>),
+    /// It wrote nothing by the deadline.
+    Late,
+}
+
+/// Waits for the server this command started to write `ready` on its pipe, or to exit. A thread
+/// reads the pipe; the server is left running, detached, once it is ready.
+async fn ready(mut child: Child, deadline: Instant) -> Start {
+    let Some(stdout) = child.stdout.take() else {
+        return Start::Exited(child.wait().ok());
+    };
+    let (told, heard) = oneshot::channel();
+    // Detached: a server that hangs before `ready` leaves it blocked until this command exits.
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let start = match BufReader::new(stdout).read_line(&mut line) {
+            Ok(_) if line.trim_end() == READY => Start::Ready,
+            // The pipe closed: the process has exited, or is exiting.
+            _ => Start::Exited(child.wait().ok()),
+        };
+        let _ = told.send(start);
+    });
+    match tokio::time::timeout_at(deadline, heard).await {
+        Ok(Ok(start)) => start,
+        Ok(Err(_)) => Start::Exited(None),
+        Err(_) => Start::Late,
     }
 }
 

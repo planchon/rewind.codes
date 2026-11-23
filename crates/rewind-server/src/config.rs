@@ -78,6 +78,12 @@ pub struct ServerArgs {
     #[arg(long)]
     pub real_time: bool,
 
+    /// Write `ready` on standard output once the server listens, then send standard output where
+    /// standard error goes: the CLI that starts the embedded server waits for it on the pipe it
+    /// gave as standard output.
+    #[arg(long, hide = true)]
+    pub notify_ready: bool,
+
     /// The roles of this process: `api` (HTTP API, no script runs) and `worker` (activations,
     /// tool dispatch, scheduler, projector, retention). Both by default.
     #[arg(long = "role", value_enum, value_delimiter = ',')]

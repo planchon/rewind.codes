@@ -4,10 +4,11 @@
 //! The test binary is also the server it starts: run as `<test> server --embedded --dir <dir>
 //! --idle-timeout 10m`,
 //! it is a stub embedded server that takes `server.lock`, listens on `server.sock` and answers
-//! `GET /v1/server` and `POST /v1/server/stop`, as `rewind server --embedded` does. Files in the
-//! state directory steer it: `stub-version` (the version it reports), `stub-delay-ms` (before it
-//! listens), `stub-fail` (it fails to start). It writes a line to `serving.log` once it holds
-//! the lock.
+//! `GET /v1/server` and `POST /v1/server/stop`, and writes `ready` on its standard output once it
+//! listens, as `rewind server --embedded --notify-ready` does. Files in the state directory steer
+//! it: `stub-version` (the version it reports), `stub-delay-ms` (before it listens),
+//! `stub-ready-delay-ms` (between listening and `ready`), `stub-fail` (it fails to start). It
+//! writes a line to `serving.log` once it holds the lock.
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -40,6 +41,7 @@ fn main() -> ExitCode {
             concurrent_commands_share_one_server,
         ),
         trial("waits_for_a_slow_server", waits_for_a_slow_server),
+        trial("waits_for_ready_on_the_pipe", waits_for_ready_on_the_pipe),
         trial(
             "a_server_that_cannot_start_is_reported",
             a_server_that_cannot_start_is_reported,
@@ -266,6 +268,23 @@ fn waits_for_a_slow_server(state: &Path) -> Result<(), Failed> {
     Ok(())
 }
 
+/// The server it started is used once it writes `ready`, not as soon as its socket exists.
+fn waits_for_ready_on_the_pipe(state: &Path) -> Result<(), Failed> {
+    std::fs::create_dir_all(state)?;
+    std::fs::write(state.join("stub-ready-delay-ms"), "600")?;
+    let started = Instant::now();
+    block_on(launcher(state).connect())?;
+    check(
+        started.elapsed() >= Duration::from_millis(600),
+        format!(
+            "the launcher waited for `ready`, not for the socket: {:?}",
+            started.elapsed()
+        ),
+    )?;
+    check(serving(state).len() == 1, "one server started")?;
+    Ok(())
+}
+
 fn a_server_that_cannot_start_is_reported(state: &Path) -> Result<(), Failed> {
     std::fs::create_dir_all(state)?;
     std::fs::write(state.join("stub-fail"), "")?;
@@ -287,16 +306,20 @@ fn a_server_that_cannot_start_is_reported(state: &Path) -> Result<(), Failed> {
 
 fn stub_server(args: &[String]) -> ExitCode {
     let dir = match args {
-        [embedded, flag, dir, idle, timeout]
+        [embedded, flag, dir, idle, timeout, notify]
             if embedded == "--embedded"
                 && flag == "--dir"
                 && idle == "--idle-timeout"
-                && timeout == "10m" =>
+                && timeout == "10m"
+                && notify == "--notify-ready" =>
         {
             PathBuf::from(dir)
         }
         _ => {
-            eprintln!("stub: usage: server --embedded --dir <dir> --idle-timeout 10m: {args:?}");
+            eprintln!(
+                "stub: usage: server --embedded --dir <dir> --idle-timeout 10m --notify-ready: \
+                 {args:?}"
+            );
             return ExitCode::from(64);
         }
     };
@@ -354,6 +377,14 @@ async fn serve(dir: PathBuf, version: String) {
     let _ = std::fs::remove_file(&socket);
     let listener = tokio::net::UnixListener::bind(&socket).expect("bind the socket");
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).expect("socket mode");
+    // It listens: `ready` on the pipe the launcher gave as standard output.
+    if let Ok(delay) = std::fs::read_to_string(dir.join("stub-ready-delay-ms"))
+        && let Ok(ms) = delay.trim().parse()
+    {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(b"ready\n").and_then(|()| stdout.flush());
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let stop = std::sync::Mutex::new(Some(stop));
     let stop = std::sync::Arc::new(stop);

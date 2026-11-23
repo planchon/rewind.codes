@@ -76,6 +76,17 @@ impl Directory {
     }
 }
 
+/// Tells the command that started this server that it listens (`--notify-ready`): `ready` and a
+/// newline on standard output, the pipe the CLI gave it, then standard output goes where standard
+/// error goes, so that nothing written later reaches a pipe nobody reads any more
+/// (`archi/07-code-architecture.md`, "Embedded server and CLI").
+pub(crate) fn notify_ready() -> std::io::Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(b"ready\n")?;
+    stdout.flush()?;
+    rustix::stdio::dup2_stdout(std::io::stderr()).map_err(std::io::Error::from)
+}
+
 /// The master key kept in `path`, made at the first start.
 fn master_key(path: &Path) -> Result<[u8; 32], StartupError> {
     match std::fs::read_to_string(path) {

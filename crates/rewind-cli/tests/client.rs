@@ -31,8 +31,11 @@ const TOOLSET_ID: &str = "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
 #[derive(Debug, Default)]
 struct Stub {
     runs: BTreeMap<String, Run>,
-    /// Reads of a run left before it completes: how a wait plays out.
+    /// Reads without a wait left before a run completes; `u32::MAX`: it never ends by itself. A
+    /// read with a wait is held until the run ends, or the wait elapses.
     reads_left: BTreeMap<String, u32>,
+    /// Runs asked to cancel, with the reason: they end cancelled by the next held read.
+    cancelling: BTreeMap<String, String>,
     requests: Vec<Seen>,
 }
 
@@ -193,16 +196,42 @@ async fn get_run(
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
-    see(&stub, format!("get {id}"), &headers, query, Value::Null);
-    // A run's handle names it as its id does.
-    let id = id
-        .strip_prefix("local/script/")
-        .map_or_else(|| id.clone(), str::to_owned);
+    see(
+        &stub,
+        format!("get {id}"),
+        &headers,
+        query.clone(),
+        Value::Null,
+    );
+    let wait = query
+        .get("wait")
+        .map(|wait| wait.parse::<rewind_api::common::Duration>().unwrap());
+    let never_ends = stub.lock().unwrap().reads_left.get(&id) == Some(&u32::MAX);
+    if let Some(wait) = wait
+        && never_ends
+        && !stub.lock().unwrap().cancelling.contains_key(&id)
+    {
+        // Held until the wait elapses: the run never ends by itself.
+        tokio::time::sleep(std::time::Duration::from(wait).min(std::time::Duration::from_secs(2)))
+            .await;
+    }
     let mut stub = stub.lock().unwrap();
     let Some(run) = stub.runs.get(&id).cloned() else {
         return problem(ProblemType::NotFound, &format!("no run {id}"));
     };
+    if wait.is_some()
+        && let Some(reason) = stub.cancelling.remove(&id)
+    {
+        // Held until the cancelled run ends.
+        let run = cancelled(run, reason);
+        stub.runs.insert(id, run.clone());
+        return axum::Json(run).into_response();
+    }
     let left = stub.reads_left.entry(id.clone()).or_insert(0);
+    // Held until the run ends: one that ends by itself is answered ended.
+    if wait.is_some() && *left != u32::MAX {
+        *left = 0;
+    }
     let run = if *left == 0 && run.status == RunStatus::Active {
         let input = run
             .input
@@ -262,23 +291,32 @@ async fn cancel(
     );
     let request: CancelRun = serde_json::from_value(body).unwrap();
     let mut stub = stub.lock().unwrap();
-    let Some(mut run) = stub.runs.get(&id).cloned() else {
+    let Some(run) = stub.runs.get(&id).cloned() else {
         return problem(ProblemType::NotFound, &format!("no run {id}"));
     };
+    let reason = request.reason.unwrap_or_default();
     if request.wait.is_some() {
-        run.status = RunStatus::Cancelled;
-        run.waiting_for.clear();
-        run.error = Some(RunError {
-            name: "CancelledError".into(),
-            message: request.reason.unwrap_or_default(),
-            stack: None,
-            location: None,
-            frame: None,
-            failed_call: None,
-        });
+        let run = cancelled(run, reason);
         stub.runs.insert(id, run.clone());
+        return axum::Json(run).into_response();
     }
+    // The run ends cancelled by the time a held read answers.
+    stub.cancelling.insert(id, reason);
     axum::Json(run).into_response()
+}
+
+fn cancelled(mut run: Run, reason: String) -> Run {
+    run.status = RunStatus::Cancelled;
+    run.waiting_for.clear();
+    run.error = Some(RunError {
+        name: "CancelledError".into(),
+        message: reason,
+        stack: None,
+        location: None,
+        frame: None,
+        failed_call: None,
+    });
+    run
 }
 
 async fn fork(
@@ -555,13 +593,15 @@ async fn run_starts_a_run_and_waits_for_it() {
         json!({ "github": "ns/github", "zendesk": "org/zendesk" }),
         "--secret attaches by server, names only"
     );
-    // The start answers at once; a wait above 50 s is split into reads of 50 s at most.
+    // The start answers at once; the wait is one request, which the server holds.
     assert_eq!(start.body.get("wait"), None);
-    assert!(requests[1..].iter().all(|seen| seen.what == "get run-1"));
-    for read in &requests[1..] {
-        let wait: rewind_api::common::Duration = read.query["wait"].parse().unwrap();
-        assert!(wait.as_millis() <= 50_000, "{wait}");
-    }
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests[1].what, "get run-1");
+    let wait: rewind_api::common::Duration = requests[1].query["wait"].parse().unwrap();
+    assert!(
+        (119_000..=120_000).contains(&wait.as_millis()),
+        "the whole wait: {wait}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -143,6 +143,55 @@ async fn one_server_holds_the_directory_until_it_is_asked_to_stop() {
     assert!(!server.socket.exists(), "the socket is removed");
 }
 
+/// What the CLI waits for: `ready` on the pipe given as standard output, once the socket answers;
+/// then nothing more reaches the pipe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_told_to_notify_writes_ready_once_it_listens() {
+    use std::io::{BufRead, BufReader, Read};
+
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join(".rewind");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rewind"))
+        .args(["server", "--embedded", "--dir"])
+        .arg(&dir)
+        .args(["--log", "warn", "--notify-ready"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let line = tokio::task::spawn_blocking(move || {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        (line, reader)
+    });
+    let (line, mut reader) = tokio::time::timeout(Duration::from_secs(60), line)
+        .await
+        .expect("ready within a minute")
+        .unwrap();
+    assert_eq!(line, "ready\n");
+    // It listens: the first request answers.
+    let socket = dir.join("server.sock");
+    let info = get(&socket, "/v1/server").await;
+    assert_eq!(info["embedded"], true);
+    // Standard output now goes where standard error goes: the pipe is closed.
+    let rest = tokio::task::spawn_blocking(move || {
+        let mut rest = String::new();
+        reader.read_to_string(&mut rest).unwrap();
+        rest
+    });
+    let rest = tokio::time::timeout(Duration::from_secs(10), rest)
+        .await
+        .expect("the pipe closes")
+        .unwrap();
+    assert_eq!(rest, "");
+    let (status, _) = post(&socket, "/v1/server/stop", json!(null)).await;
+    assert_eq!(status, 202);
+    assert!(exited(&mut child, Duration::from_secs(60)).await.success());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_server_with_an_idle_timeout_stops_by_itself() {
     let temp = tempfile::tempdir().unwrap();

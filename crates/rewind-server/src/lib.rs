@@ -122,6 +122,7 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
                 }
             };
         }
+        let notify_ready = args.notify_ready;
         let running = match start(args).await {
             Ok(running) => running,
             Err(error) => {
@@ -129,6 +130,11 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
                 return ExitCode::from(exit_code(&error));
             }
         };
+        if notify_ready && let Err(error) = embedded::notify_ready() {
+            eprintln!("rewind server: cannot write `ready` on standard output: {error}");
+            running.stop().await;
+            return ExitCode::from(exit::FAILED);
+        }
         tokio::select! {
             () = running.stopped() => {}
             () = signal() => tracing::info!("stopping: signal"),
