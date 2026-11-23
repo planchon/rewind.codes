@@ -884,6 +884,14 @@ impl<P: Plane> Owner<P> {
             .cloned();
         let warm = sticky.is_some();
         let Some(node) = sticky.or_else(|| candidates.first().cloned()) else {
+            // A node may have joined since the members were read: they are read again once.
+            if self.awaiting_nodes.insert(run.id) {
+                self.awaiting_purposes.insert(run.id, purpose);
+                self.out
+                    .push(Effect::Local(Message::Node(crate::node::NodeMsg::RefreshNodes)));
+                return;
+            }
+            self.awaiting_nodes.remove(&run.id);
             let error = format!(
                 "no node runs the epoch {} of run {}{}",
                 head.epoch,

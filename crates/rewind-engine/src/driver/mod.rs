@@ -174,6 +174,14 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
         self.steps
     }
 
+    /// The activations of a node that wait for their job to run.
+    pub fn pending_activations(&self, node: &NodeId) -> usize {
+        self.jobs
+            .iter()
+            .filter(|((class, _), (of, _))| *class == JobClass::Activation && of == node)
+            .count()
+    }
+
     /// The nodes alive.
     pub fn node_ids(&self) -> Vec<NodeId> {
         self.nodes.keys().cloned().collect()

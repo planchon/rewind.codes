@@ -65,6 +65,8 @@ pub(crate) enum NodeMsg {
     Change(ControlPlaneChange),
     /// The node this one watches left the cluster.
     Departed(NodeId),
+    /// An owner needs the members again: one may have joined.
+    RefreshNodes,
     /// A request to the membership failed; it is tried again.
     MembershipFailed(String),
 }
@@ -432,6 +434,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 tracing::warn!(node = %self.config.node, departed = %node, "a node left the cluster: its partitions move");
                 vec![self.rebalance(Some(node))]
             }
+            NodeMsg::RefreshNodes => vec![self.read_nodes()],
             NodeMsg::MembershipFailed(error) => {
                 tracing::error!(node = %self.config.node, %error, "the cluster could not be reached");
                 Vec::new()

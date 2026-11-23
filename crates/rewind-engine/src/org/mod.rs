@@ -696,7 +696,18 @@ impl<P: Plane> OrgActor<P> {
 
     fn slot(&mut self, slot: SlotRequest, out: &mut Vec<OrgEffect<P>>) {
         let server = self.servers.entry(slot.server.clone()).or_default();
-        if server.held.contains_key(&slot.task) {
+        if let Some(held) = server.held.get_mut(&slot.task) {
+            // An owner that asks again for a slot it holds lost the grant (a message lost, a new
+            // owner of the partition): it is granted again.
+            *held = (slot.partition, slot.epoch);
+            out.push(OrgEffect::Effect(Effect::Request {
+                to: Target::Partition(slot.partition),
+                request: NodeRequest::Owner {
+                    partition: slot.partition,
+                    notice: Box::new(OwnerNotice::SlotGranted { task: slot.task }),
+                },
+                asker: None,
+            }));
             return;
         }
         server.queue.retain(|queued| queued.task != slot.task);

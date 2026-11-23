@@ -312,6 +312,10 @@ pub(crate) struct Owner<P: Plane> {
     pub(crate) counted: BTreeSet<(TenantId, NamespaceName)>,
     pub(crate) deleting: BTreeSet<(TenantId, NamespaceName)>,
     pub(crate) remote: BTreeMap<RunId, NodeId>,
+    /// Runs whose activation waits for the members to be read again: no node known runs their
+    /// epoch.
+    pub(crate) awaiting_nodes: BTreeSet<RunId>,
+    pub(crate) awaiting_purposes: BTreeMap<RunId, Purpose>,
     pub(crate) epochs: BTreeSet<Epoch>,
     pub(crate) nodes: Vec<NodeInfo>,
     /// Runs erased by this owner: what arrives for them is dropped.
@@ -369,6 +373,8 @@ impl<P: Plane> Owner<P> {
             counted: BTreeSet::new(),
             deleting: BTreeSet::new(),
             remote: BTreeMap::new(),
+            awaiting_nodes: BTreeSet::new(),
+            awaiting_purposes: BTreeMap::new(),
             epochs,
             nodes,
             erased: BTreeSet::new(),
@@ -506,7 +512,20 @@ impl<P: Plane> Owner<P> {
             },
             OwnerMsg::Step(step) => self.step(*step),
             OwnerMsg::ControlPlane(change) => self.control_plane(change),
-            OwnerMsg::Nodes(nodes) => self.nodes = nodes,
+            OwnerMsg::Nodes(nodes) => {
+                self.nodes = nodes;
+                let waiting: Vec<RunId> = self.awaiting_nodes.iter().copied().collect();
+                for run in waiting {
+                    let purpose = self
+                        .awaiting_purposes
+                        .remove(&run)
+                        .unwrap_or(Purpose::Runnable);
+                    if let Some(slot) = self.slot(run) {
+                        let run = slot.run().clone();
+                        self.activate(&run, purpose);
+                    }
+                }
+            }
             OwnerMsg::Internal(internal) => self.internal(internal),
             OwnerMsg::Close => self.close(),
             OwnerMsg::RetryCommit => self.retry_commit(),
