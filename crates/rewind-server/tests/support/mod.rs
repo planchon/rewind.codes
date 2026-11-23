@@ -725,20 +725,6 @@ impl Postgres {
     pub(crate) fn url(&self) -> String {
         format!("postgres://rewind:rewind-secret@{}/postgres", self.address)
     }
-
-    /// The database `postgres`, as `pg_dump` writes it in plain SQL.
-    pub(crate) fn pg_dump(&self) -> String {
-        run(&[
-            "exec",
-            &self.name,
-            "pg_dump",
-            "-U",
-            "rewind",
-            "--no-owner",
-            "--no-privileges",
-            "postgres",
-        ])
-    }
 }
 
 impl Drop for Postgres {
