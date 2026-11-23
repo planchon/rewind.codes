@@ -228,8 +228,8 @@ pub(crate) async fn run(
         payload_bytes: settings.payload_bytes,
         ..Report::default()
     };
-    // A run's attempts are read from the read model, which the workers' projectors fill after
-    // each commit: wait until it holds every completed run before checking them.
+    // A run's attempts are read from the read model: wait until it holds every completed run
+    // before checking them.
     let last_end = outcomes.iter().filter_map(|outcome| outcome.ended).max();
     let unprojected = await_projection(
         &harness,
