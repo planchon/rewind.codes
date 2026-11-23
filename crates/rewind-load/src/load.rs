@@ -491,22 +491,32 @@ async fn drive(shared: &Shared, n: usize) -> Outcome {
     outcome.started = Some(Instant::now());
     outcome.run = Some(run.id.clone());
 
-    // The signal arrives before the script waits for it, twice with the same key.
+    // The signal arrives before the script waits for it, twice with the same key. The second is
+    // a duplicate once the first was acknowledged; after a first that failed, the server may or
+    // may not have taken it, so either answer holds.
     if let Ok(key) = IdempotencyKey::new(format!("{}-{n}-go", shared.id)) {
         let payload = json!({ "n": n });
-        for (attempt, duplicate) in [(1, false), (2, true)] {
+        let mut acknowledged = false;
+        for attempt in [1, 2] {
             match shared
                 .harness
                 .signal_run(&run.id, "go", &payload, Some(&key))
                 .await
             {
-                Ok(accepted) if accepted.duplicate != duplicate => {
-                    outcome.violations.push(format!(
-                        "run {} (n={n}): signal {attempt} with one key answered duplicate={}",
-                        run.id, accepted.duplicate
-                    ));
+                Ok(accepted) => {
+                    let expected = match attempt {
+                        1 => Some(false),
+                        _ if acknowledged => Some(true),
+                        _ => None,
+                    };
+                    if expected.is_some_and(|duplicate| duplicate != accepted.duplicate) {
+                        outcome.violations.push(format!(
+                            "run {} (n={n}): signal {attempt} with one key answered duplicate={}",
+                            run.id, accepted.duplicate
+                        ));
+                    }
+                    acknowledged = true;
                 }
-                Ok(_) => {}
                 Err(error) => outcome.errors.push(format!("signal: {}", kind(&error))),
             }
         }

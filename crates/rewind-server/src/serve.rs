@@ -668,7 +668,8 @@ async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupErr
             app.ensure_tenant(&config.admin_tenant)
                 .await
                 .map_err(setup)?;
-            app.store
+            let written = app
+                .store
                 .put_key(&ApiKey {
                     hash,
                     tenant: config.admin_tenant.clone(),
@@ -677,9 +678,23 @@ async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupErr
                     created_at: app.now(),
                     revoked_at: None,
                 })
-                .await
-                .map_err(store)?;
-            config.admin_tenant.clone()
+                .await;
+            match written {
+                Ok(()) => config.admin_tenant.clone(),
+                // Another node of the deployment, starting at the same time, wrote it first.
+                Err(StoreError::Conflict(_)) => {
+                    match app.store.find_key(hash).await.map_err(store)? {
+                        Some(existing) => existing.tenant,
+                        None => {
+                            return Err(StartupError::Setup(
+                            "--admin-key: the store refused it as a duplicate but holds no such key"
+                                .into(),
+                        ));
+                        }
+                    }
+                }
+                Err(error) => return Err(store(error)),
+            }
         }
     };
     let principal = Principal::Key(hash);

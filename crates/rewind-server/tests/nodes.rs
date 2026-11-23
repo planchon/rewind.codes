@@ -93,6 +93,11 @@ impl Deployment {
 
     /// A node of the deployment started with `more` options.
     async fn launch(&self, id: &str, more: &[&str]) -> Running {
+        self.launch_with_key(id, ADMIN_KEY, more).await
+    }
+
+    /// A node of the deployment whose operator's key is `admin_key`.
+    async fn launch_with_key(&self, id: &str, admin_key: &str, more: &[&str]) -> Running {
         let key = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
         let store = self.postgres.url();
         let mut args = vec![
@@ -121,7 +126,7 @@ impl Deployment {
             "--master-key",
             &key,
             "--admin-key",
-            ADMIN_KEY,
+            admin_key,
             "--admin-tenant",
             "acme",
             "--listen",
@@ -314,6 +319,29 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
     }
     a.stop().await;
     b.stop().await;
+}
+
+/// Nodes of one deployment that start at the same time register the operator's key once: the
+/// node that writes it second finds the other's row and starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nodes_that_start_together_register_the_operator_key_once() {
+    let Some(deployment) = Deployment::start() else {
+        return;
+    };
+    for round in 0..3 {
+        let admin_key = format!("rewind_sk_admin_of_round_{round}_0123456789abcdefghij");
+        let (id_a, id_b) = (format!("together-a-{round}"), format!("together-b-{round}"));
+        let (a, b) = tokio::join!(
+            deployment.launch_with_key(&id_a, &admin_key, &[]),
+            deployment.launch_with_key(&id_b, &admin_key, &[]),
+        );
+        for running in [&a, &b] {
+            let admin = Client::remote(&running.url().unwrap(), Some(&admin_key)).unwrap();
+            admin.whoami().await.unwrap();
+        }
+        a.stop().await;
+        b.stop().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
