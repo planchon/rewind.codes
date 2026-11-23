@@ -25,6 +25,23 @@ pub enum Route {
     Unowned,
 }
 
+/// The partition of a run among `partitions`: the 16 bits a run id of the run plane holds, the
+/// control plane's `legacy_runs` for a run of the previous design, or partition 0 when the
+/// deployment has one. `None`: no partition holds the run.
+pub async fn partition_of<C: CatalogStore>(
+    catalog: &C,
+    partitions: NonZeroU16,
+    run: RunId,
+) -> Result<Option<PartitionId>, CatalogError> {
+    if let Some(partition) = run.partition() {
+        return Ok(Some(partition));
+    }
+    if let Some(partition) = catalog.legacy_partition(run).await? {
+        return Ok(Some(partition));
+    }
+    Ok((partitions.get() == 1).then_some(PartitionId::new(0)))
+}
+
 /// The router of a process: the partition map it caches.
 #[derive(Debug)]
 pub struct Router {
@@ -49,13 +66,7 @@ impl Router {
         catalog: &C,
         run: RunId,
     ) -> Result<Option<PartitionId>, CatalogError> {
-        if let Some(partition) = run.partition() {
-            return Ok(Some(partition));
-        }
-        if let Some(partition) = catalog.legacy_partition(run).await? {
-            return Ok(Some(partition));
-        }
-        Ok((self.partitions.get() == 1).then_some(PartitionId::new(0)))
+        partition_of(catalog, self.partitions, run).await
     }
 
     /// The map cached, if any.

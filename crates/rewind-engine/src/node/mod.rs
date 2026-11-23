@@ -122,7 +122,7 @@ fn owners_of(nodes: &[NodeInfo]) -> Vec<&NodeId> {
 
 impl<P: Plane, M: Membership + 'static> Node<P, M> {
     /// A node of the cluster `membership` joined. Its first job reads the members and the map
-    /// and takes the partitions it wins ([`Node::start`]).
+    /// and takes the partitions it wins.
     pub fn new(plane: Arc<P>, config: NodeConfig, membership: Arc<M>) -> Self {
         let config = Arc::new(config);
         let epochs = config

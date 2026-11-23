@@ -133,22 +133,10 @@ impl<P: Plane> Edge<P> {
     /// plane's `legacy_runs` for a run of the previous design, the only one of an embedded
     /// deployment.
     pub async fn partition_of(&self, run: RunId) -> Result<PartitionId, EdgeError> {
-        if let Some(partition) = run.partition() {
-            return Ok(partition);
-        }
-        if let Some(partition) = self
-            .plane
-            .catalog()
-            .legacy_partition(run)
+        crate::router::partition_of(self.plane.catalog(), self.config.partitions, run)
             .await
             .map_err(unavailable)?
-        {
-            return Ok(partition);
-        }
-        if self.config.partitions.get() == 1 {
-            return Ok(PartitionId::new(0));
-        }
-        Err(Refusal::RunNotFound(run).into())
+            .ok_or_else(|| Refusal::RunNotFound(run).into())
     }
 
     /// The partition a token names, from its run.

@@ -1,5 +1,20 @@
 //! Application layer of Rewind (`archi/07-code-architecture.md`).
 //!
+//! The run plane (`archi/07-code-architecture.md`, "Inside a node"):
+//!
+//! - [`node`]: a node's actors (the owners of its partitions and the organization actors they
+//!   host, its executors, its call executor, the node actor), as state machines that take a
+//!   message and return effects; [`node::runtime`] drives them with tokio in a process.
+//! - [`driver`]: the same actors of every node stepped on one thread in virtual time: the
+//!   engine's tests and mock mode.
+//! - [`edge`]: the use cases at the edge (start, fork, signal, cancel, tasks, reads, searches,
+//!   statistics), through a [`edge::Gateway`] to the owner of the run's partition.
+//! - [`router`]: where a run's partition and its owner are.
+//! - [`plane`]: the adapters a node is wired with, and its configuration.
+//! - [`ports::link`]: what nodes send each other (`NodeLink`).
+//!
+//! The engine over the journal store:
+//!
 //! - [`ports`]: what the engine needs from the outside world, as traits. Adapters implement
 //!   them; the engine never names Postgres, S3, V8, MCP or OpenTelemetry.
 //! - [`Engine`]: the use cases (start, signal, cancel, activate with sticky execution, fire
