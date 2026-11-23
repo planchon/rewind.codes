@@ -57,8 +57,10 @@ What is left of 0.1 is not code:
   `examples/bench.rs`. The numbers so far are MinIO's on a laptop.
 - **The migration of staging**: `rewind server migrate-runs` on Dax's staging deployment, then its
   node on this build.
-- **The deploy**: Railway's node on S3 in eu-west-3 (`--bucket`, `--s3-region`, `--cluster-secret`), the dashboard, SDK 0.5.0
-  on npm with Dax moved to the task stream in the same release.
+- **The deploy**: Railway's node on S3 in eu-west-3 (`--bucket`, `--s3-region`, `--cluster-secret`),
+  reaching the bucket with the `api` service's `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+  once its `REWIND_S3_*` key and endpoint, which take precedence, are removed; the dashboard,
+  SDK 0.5.0 on npm with Dax moved to the task stream in the same release.
 - Older and still open: the evals with real models (they need API keys), a run of the CI workflow
   on GitHub, the gVisor profile on a Linux host, the example `examples/testing` (it pins the
   published SDK), a connection made from claude.ai and Claude Code against a deployment, and
