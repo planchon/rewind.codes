@@ -13,9 +13,10 @@
 #
 # Every node is an HTTP edge and a node of the run plane, and runs code written by a model: it
 # holds no network of its own, but joins the namespace of a holder (`node-N-net`) whose default
-# route goes through the egress gateway, its only way out. Under gVisor, a node's sandbox takes
-# over that namespace, and its DNS server is the relay `node-dns` (README, "Nodes: the walls").
-# The nodes reach each other's link on the core network.
+# route goes through the egress gateway, its only way out. A node restarts when its holder is
+# recreated (`restart: true`): a node left in the namespace of a removed holder has no network.
+# Under gVisor, a node's sandbox takes over that namespace, and its DNS server is the relay
+# `node-dns` (README, "Nodes: the walls"). The nodes reach each other's link on the core network.
 
 name: Rewind
 
@@ -247,7 +248,7 @@ services:
       REWIND_LINK_ADDRESS: node-1-net:7070
     depends_on:
       <<: *node-depends
-      node-1-net: { condition: service_started }
+      node-1-net: { condition: service_started, restart: true }
 
   node-2:
     <<: *node
@@ -259,7 +260,7 @@ services:
       REWIND_LINK_ADDRESS: node-2-net:7070
     depends_on:
       <<: *node-depends
-      node-2-net: { condition: service_started }
+      node-2-net: { condition: service_started, restart: true }
 
   # The same nodes under gVisor: `docker compose --profile gvisor up -d` on a host whose
   # Docker has the runsc runtime (https://gvisor.dev/docs/user_guide/install/).
@@ -276,7 +277,7 @@ services:
       REWIND_LINK_ADDRESS: node-1-net:7070
     depends_on:
       <<: *gvisor-depends
-      node-1-net: { condition: service_healthy }
+      node-1-net: { condition: service_healthy, restart: true }
 
   node-2-gvisor:
     <<: [*node, *gvisor]
@@ -288,7 +289,7 @@ services:
       REWIND_LINK_ADDRESS: node-2-net:7070
     depends_on:
       <<: *gvisor-depends
-      node-2-net: { condition: service_healthy }
+      node-2-net: { condition: service_healthy, restart: true }
 
   # The executors of the previous build, kept after an upgrade that changed the determinism
   # epoch until the runs of its epochs end (README, "Upgrades"): `--executors-only`, they own no
@@ -310,7 +311,7 @@ services:
       REWIND_LINK_ADDRESS: node-previous-net:7070
     depends_on:
       <<: *node-depends
-      node-previous-net: { condition: service_started }
+      node-previous-net: { condition: service_started, restart: true }
 
   node-previous-gvisor:
     <<: [*node, *gvisor]
@@ -324,7 +325,7 @@ services:
       REWIND_LINK_ADDRESS: node-previous-net:7070
     depends_on:
       <<: *gvisor-depends
-      node-previous-net: { condition: service_healthy }
+      node-previous-net: { condition: service_healthy, restart: true }
 
   # The walls of the nodes under gVisor, checked by check-walls.sh, which starts and removes
   # these two. A node's sandbox takes over its namespace, where nothing else can run: the
@@ -351,7 +352,7 @@ services:
 
   # The load generator (`rewind-load`), with its fake MCP server at http://loadgen:9100/mcp, which
   # the nodes reach through the egress gateway: `docker compose --profile load run --rm
-  # loadgen run …` (README, "Load and limit tests").
+  # --no-deps --use-aliases loadgen run …` (README, "Load and limit tests").
   loadgen:
     build:
       context: ..

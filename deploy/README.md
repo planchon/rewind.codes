@@ -328,11 +328,13 @@ are stored apart from their event, above 64 KiB in S3.
 
 ```sh
 docker compose --profile load build loadgen
-docker compose --profile load run --rm --use-aliases loadgen run --runs 2000 --concurrency 200
+docker compose --profile load run --rm --no-deps --use-aliases loadgen run --runs 2000 --concurrency 200
 ```
 
 `--use-aliases` gives the container its service name, `loadgen`, which the nodes reach through
-the egress gateway. The numbers measured on the reference deployment are in
+the egress gateway. `--no-deps` leaves the running deployment as it is: `--profile load` replaces
+`COMPOSE_PROFILES`, so Compose would bring the edge's dependencies up again without the nodes,
+and recreate a holder whose image was rebuilt under its node. The numbers measured on the reference deployment are in
 `archi/09-roadmap.md`.
 
 The limits of `archi/03-execution.md` are tested through the API by
