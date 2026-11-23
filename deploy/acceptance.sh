@@ -104,7 +104,7 @@ if [[ " ${failed[*]-} " == *" images "* ]]; then
   note "the images could not be built: the deployment's steps are not run"
 else
   step "deployment up" up
-  step "the workers' walls" bash -c './check-walls.sh worker-1-net && ./check-walls.sh worker-2-net'
+  step "the nodes' walls" bash -c './check-walls.sh node-1-net && ./check-walls.sh node-2-net'
 
   # 3. The load: small payloads, then payloads above 64 KiB, which go to S3.
   load() {
@@ -132,7 +132,7 @@ else
 
   if [ ${#failed[@]} -gt 0 ]; then
     note "logs of the deployment"
-    docker compose logs --tail 100 api worker-1 worker-2 egress
+    docker compose logs --tail 100 node-1 node-2 egress
   fi
 fi
 

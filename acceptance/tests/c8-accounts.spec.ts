@@ -42,7 +42,7 @@ const PROBES: { permission: string; method: string; path: string; body?: unknown
   { permission: "secrets:read", method: "GET", path: "/v1/secrets" },
   { permission: "secrets:write", method: "DELETE", path: "/v1/secrets/never-put" },
   { permission: "secrets:use", method: "POST", path: "/v1/toolsets", body: { secrets: { unknown: "org/never-put" } } },
-  { permission: "tasks:work", method: "POST", path: "/v1/tasks/unknown/heartbeat" },
+  { permission: "tasks:work", method: "POST", path: "/v1/tasks/unknown/defer", body: {} },
   { permission: "tasks:approve", method: "POST", path: "/v1/tasks/unknown/approve" },
   { permission: "subscriptions:read", method: "GET", path: "/v1/subscriptions" },
   { permission: "subscriptions:write", method: "DELETE", path: "/v1/subscriptions/unknown" },

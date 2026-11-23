@@ -1,13 +1,11 @@
 /**
  * Area "Check and test" of the release gate: `POST /v1/check` and the checks at start on setup A
- * (deployed), and `POST /v1/test` (tests in mock mode, in virtual time) on setup B, a server
- * with both roles: in production the edge sends `/v1/test` to the workers, and the api role
- * answers it with 503 (`archi/03-execution.md`, "Starting a run"; `archi/04-tools.md`,
- * "Type-checking"; `archi/05`, "Testing and mocks").
+ * (deployed), and `POST /v1/test` (tests in mock mode, in virtual time) on setup B, one node, and
+ * on each node of setup A: every node runs tests (`archi/03-execution.md`, "Starting a run";
+ * `archi/04-tools.md`, "Type-checking"; `archi/05`, "Testing and mocks").
  */
 import {
   Api,
-  allow5xx,
   evidence,
   expect,
   expectOk,
@@ -241,22 +239,24 @@ test("a test whose expectations do not hold says which, in sentences", { tag: "@
   expect(result.failures.join("\n")).toContain("crm.lookup");
 });
 
-test("on setup A, the edge sends /v1/test to a worker, where the tests run", { tag: "@success" }, async () => {
-  const reply = await api.post("/v1/test", {
-    script: "export default async function main(input: { n: number }) { return input.n + 1; }\n",
-    tests: [{ name: "adds one", input: { n: 41 }, expect: { status: "completed", output: 42 } }],
-  });
-  expectOk(reply, 200);
-  expect(reply.json.passed, JSON.stringify(reply.json)).toBe(true);
+test("on setup A, every node runs the tests itself", { tag: "@success" }, async () => {
+  const { nodeUrls } = stacks().a;
+  expect(nodeUrls.length).toBeGreaterThan(1);
+  for (const url of nodeUrls) {
+    // Each node directly, not through the edge.
+    const reply = await new Api(url, tenant.ownerKey).ns("checks").post("/v1/test", {
+      script: "export default async function main(input: { n: number }) { return input.n + 1; }\n",
+      tests: [{ name: "adds one", input: { n: 41 }, expect: { status: "completed", output: 42 } }],
+    });
+    expectOk(reply, 200);
+    expect(reply.json.passed, `${url}: ${JSON.stringify(reply.json)}`).toBe(true);
+  }
+  evidence(`POST /v1/test on each of the ${nodeUrls.length} nodes: passed`);
 });
 
-test("checking or testing without Rewind-Namespace is 400, and the api role refuses /v1/test with 503", { tag: "@failure" }, async () => {
+test("checking or testing without Rewind-Namespace is 400", { tag: "@failure" }, async () => {
   expectProblem(await tenant.api.post("/v1/check", { script: "export default async function main() {}\n" }), 400, "invalid-request");
-  allow5xx("unavailable");
-  // The api server itself, behind the edge: it runs no script.
-  const apiOnly = await new Api(stacks().a.apiUrl, tenant.ownerKey).ns("checks").post("/v1/test", { script: "export default async function main() {}\n" });
-  expectProblem(apiOnly, 503, "unavailable");
-  expect(apiOnly.json.detail).toContain("worker role");
+  expectProblem(await tenant.api.post("/v1/test", { script: "export default async function main() {}\n" }), 400, "invalid-request");
 });
 
 test("a namespace's maxScriptLines refuses a longer script in check, test and start alike", { tag: "@failure" }, async () => {

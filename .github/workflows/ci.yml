@@ -275,12 +275,12 @@ jobs:
             sleep 2
           done
           docker compose ps
-      # Under gVisor, from a sandbox with the workers' network settings (check-walls.sh).
-      - name: The workers' walls
-        run: ./check-walls.sh worker-1-net && ./check-walls.sh worker-2-net
+      # Under gVisor, from a sandbox with the nodes' network settings (check-walls.sh).
+      - name: The nodes' walls
+        run: ./check-walls.sh node-1-net && ./check-walls.sh node-2-net
       - name: Load
         run: docker compose --profile load run --rm --use-aliases loadgen run --runs 300 --concurrency 60 --timeout 10m
-      # Payloads above 64 KiB go to S3: the workers reach MinIO.
+      # Payloads above 64 KiB go to S3: the nodes reach MinIO.
       - name: Load with payloads in S3
         run: docker compose --profile load run --rm --use-aliases loadgen run --runs 60 --concurrency 20 --payload-bytes 102400 --timeout 10m
       - uses: pnpm/action-setup@v4

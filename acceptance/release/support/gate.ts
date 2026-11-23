@@ -403,7 +403,7 @@ export async function newTenant(prefix: string, stack: StackInfo = stacks().a): 
 
 /**
  * The canary run: a trivial script that must complete on the setup, after an attack meant to
- * take a worker down. Uses the tenant's owner key and a namespace of its own.
+ * take a node down. Uses the tenant's owner key and a namespace of its own.
  */
 export async function expectHealthy(tenant: Tenant, namespace = "canary"): Promise<void> {
   const started = await tenant.api.ns(namespace).post("/v1/runs", {

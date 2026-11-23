@@ -6,23 +6,26 @@ import type { StagingCredentials } from "./workos.js";
 import { eventually, freePort, Processes } from "./processes.js";
 
 /**
- * A deployment as 06 describes it: one Postgres, blobs on S3 (MinIO), an OpenTelemetry
- * Collector, a `rewind server --role api` and two `rewind server --role worker`.
+ * A deployment as 06 describes it: one Postgres for the control plane, a bucket on S3 (MinIO)
+ * for the partitions, the archive and the blobs, an OpenTelemetry Collector, and two nodes
+ * (`rewind server`, each an HTTP edge and a node) linked by the node link.
  */
 export interface Deployment {
-  /** The api server's URL. */
+  /** The first node's URL. */
   url: string;
+  /** Every node's URL, in the order of `nodes`: each answers every route. */
+  urls: string[];
   /** The admin key, `--admin-key`, of the tenant `acme`. */
   adminKey: string;
   admin: Rewind;
   minio: Minio;
   collector: Collector;
-  /** The workers' names: `service.instance.id` of their telemetry. */
-  workers: string[];
+  /** The nodes' ids (`--node-id`): `service.instance.id` of their telemetry. */
+  nodes: string[];
   stop(): Promise<void>;
 }
 
-/** A `rewind server` with both roles, started by `startServer`. */
+/** A `rewind server` on Turso and local files, started by `startServer`. */
 export interface Server {
   /** Its URL, for the API. */
   url: string;
@@ -37,10 +40,10 @@ export interface Server {
 }
 
 /**
- * One `rewind server` with both roles, on Turso and local files in `dir`, over TCP. With
- * `workos`, the dashboard's sign-in on that WorkOS environment: the four `WORKOS_*`, with a cookie
- * password made for this server and the redirect URI of its own origin (only a sign-in with GitHub
- * goes there).
+ * One `rewind server`, a single node on Turso and local files in `dir`, over TCP. With `workos`,
+ * the dashboard's sign-in on that WorkOS environment: the four `WORKOS_*`, with a cookie password
+ * made for this server and the redirect URI of its own origin (only a sign-in with GitHub goes
+ * there).
  */
 export async function startServer(dir: string, options: { workos?: StagingCredentials } = {}): Promise<Server> {
   const processes = new Processes(dir);
@@ -59,9 +62,9 @@ export async function startServer(dir: string, options: { workos?: StagingCreden
   const child = processes.start("server", rewindBinary(), [
     "server",
     "--store",
-    `turso:${dir}/journal.db`,
-    "--blobs",
-    `${dir}/blobs`,
+    `turso:${dir}/control.db`,
+    "--bucket",
+    `${dir}/bucket`,
     "--master-key",
     randomBytes(32).toString("base64"),
     "--admin-key",
@@ -84,7 +87,7 @@ export async function startServer(dir: string, options: { workos?: StagingCreden
   return { url, origin, adminKey, admin: new Rewind({ url, apiKey: adminKey }), stop: () => processes.stopAll() };
 }
 
-export async function startDeployment(dir: string, options: { workers?: number } = {}): Promise<Deployment> {
+export async function startDeployment(dir: string, options: { nodes?: number } = {}): Promise<Deployment> {
   const containers = new Containers();
   const processes = new Processes(dir);
   const stop = async () => {
@@ -94,14 +97,14 @@ export async function startDeployment(dir: string, options: { workers?: number }
   try {
     const [postgres, minio, collector] = await Promise.all([
       startPostgres(containers),
-      startMinio(containers, "rewind-blobs"),
+      startMinio(containers, "rewind"),
       startCollector(containers, dir),
     ]);
     const adminKey = `rewind_sk_${randomBytes(24).toString("hex")}`;
     const common = [
       "--store",
       postgres.url,
-      "--blobs",
+      "--bucket",
       `s3://${minio.bucket}`,
       "--s3-endpoint",
       minio.endpoint,
@@ -114,26 +117,35 @@ export async function startDeployment(dir: string, options: { workers?: number }
       minio.password,
       "--master-key",
       randomBytes(32).toString("base64"),
+      "--cluster-secret",
+      randomBytes(32).toString("hex"),
       "--otlp-endpoint",
       collector.http,
       "--otlp-protocol",
       "http",
+      "--admin-key",
+      adminKey,
       "--admin-tenant",
       "acme",
     ];
     const binary = rewindBinary();
-    const server = async (name: string, role: "api" | "worker", extra: string[] = []) => {
+    const nodes = Array.from({ length: options.nodes ?? 2 }, (_, n) => `node-${n + 1}`);
+    const urls: string[] = [];
+    // One at a time: the first opens the cluster and its partitions, each next one takes its share.
+    for (const name of nodes) {
       const port = await freePort();
+      const link = await freePort();
       const child = processes.start(name, binary, [
         "server",
-        "--role",
-        role,
-        "--worker-name",
+        "--node-id",
         name,
         "--listen",
         `127.0.0.1:${port}`,
+        "--link-listen",
+        `127.0.0.1:${link}`,
+        "--link-address",
+        `127.0.0.1:${link}`,
         ...common,
-        ...extra,
       ]);
       const url = `http://127.0.0.1:${port}`;
       await eventually(`${name} listens`, async () => {
@@ -141,21 +153,24 @@ export async function startDeployment(dir: string, options: { workers?: number }
         const response = await fetch(`${url}/v1/server`, { headers: { authorization: `Bearer ${adminKey}` } });
         return response.ok ? true : undefined;
       });
-      return url;
-    };
-    // The api server registers the admin key and runs the migrations first.
-    const url = await server("api", "api", ["--admin-key", adminKey]);
-    const workers = Array.from({ length: options.workers ?? 2 }, (_, n) => `worker-${n + 1}`);
-    for (const name of workers) {
-      await server(name, "worker", ["--admin-key", adminKey]);
+      urls.push(url);
+    }
+    // Every node counts the others: the partitions are shared out.
+    for (const [n, url] of urls.entries()) {
+      await eventually(`${nodes[n]} sees the ${nodes.length} nodes`, async () => {
+        const response = await fetch(`${url}/v1/server`, { headers: { authorization: `Bearer ${adminKey}` } });
+        const info = (await response.json()) as { node?: string; nodes?: number };
+        return info.node === nodes[n] && info.nodes === nodes.length ? true : undefined;
+      });
     }
     return {
-      url,
+      url: urls[0]!,
+      urls,
       adminKey,
-      admin: new Rewind({ url, apiKey: adminKey }),
+      admin: new Rewind({ url: urls[0]!, apiKey: adminKey }),
       minio,
       collector,
-      workers,
+      nodes,
       stop,
     };
   } catch (error) {

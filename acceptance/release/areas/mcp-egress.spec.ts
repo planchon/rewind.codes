@@ -673,7 +673,7 @@ test("no secret's value is stored in clear: a dump of setup A's database holds n
   // At least this file's secrets are there, written above.
   const listed = await a.api.get("/v1/secrets");
   expect(listed.json.secrets.length).toBeGreaterThan(0);
-  const dump = spawnSync("docker", ["exec", postgres!.container, "pg_dump", "-U", "rewind", "-d", "postgres", "--data-only"], {
+  const dump = spawnSync("docker", ["exec", postgres!.container, "pg_dump", "-U", "rewind", "-d", postgres!.database, "--data-only"], {
     encoding: "utf8",
     maxBuffer: 1 << 30,
   });

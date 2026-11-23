@@ -69,9 +69,12 @@ async function query(q: string, extra: Record<string, string | string[]> = {}): 
   return (reply.json.runs as { id: string }[]).map((r) => r.id).sort();
 }
 
-/** Starts the runs of a query case, labelled `case:<c>`, and waits until the read model has them settled. */
-async function corpus(c: string) {
-  const start = (script: string, labels: Record<string, string>) => startRun(alice(), { toolset, script, labels: { case: c, ...labels } });
+/**
+ * Starts the runs of a query case, labelled `case:<c>`, in `namespace` (`alice` by default), and
+ * waits until their summaries have them settled.
+ */
+async function corpus(c: string, namespace = "alice") {
+  const start = (script: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { toolset, script, labels: { case: c, ...labels } });
   const [completed, rateLimited, waiting, toolFails] = await Promise.all([
     start(SCRIPTS.lookup, { agent: "triage" }),
     start(SCRIPTS.rateLimited, { agent: "billing" }),
@@ -144,26 +147,35 @@ test("the query language finds runs by label, status, tool, error, wait and text
   evidence(`${cases.length} queries answered exactly`);
 });
 
-test("statistics count the runs a query matches, by status and by wait", { tag: "@success" }, async () => {
+test("statistics count the runs of a namespace, by status and by wait", { tag: "@success" }, async () => {
+  // Statistics come from the hourly counters of one namespace or the tenant: a namespace of its
+  // own holds the case's runs alone.
   const c = unique("s");
-  await corpus(c);
-  const reply = await t.api.get("/v1/runs/stats", { query: { q: `@case:${c}` } });
+  const namespace = `stats-${c}`;
+  await corpus(c, namespace);
+  const reply = await t.api.get("/v1/runs/stats", { query: { q: `namespace:${namespace}` } });
   expectOk(reply);
   expect(reply.json.runs).toBe(4);
   expect(reply.json.statuses).toMatchObject({ completed: 1, failed: 2, active: 1, cancelled: 0, aborted: 0 });
   expect(reply.json.waiting.signal).toBe(1);
+  // The same scope named by the header.
+  const header = await t.api.ns(namespace).get("/v1/runs/stats");
+  expectOk(header);
+  expect(header.json.runs).toBe(4);
 });
 
 test("failures are grouped by fingerprint, numbers and quoted strings set aside", { tag: "@success" }, async () => {
   const c = unique("f");
+  const namespace = `failures-${c}`;
+  const own = t.api.ns(namespace);
   const fail = (order: number, quoted: string) =>
-    startRun(alice(), { script: `export default async function main() {\n  throw new Error('order ${order} of "${quoted}" not found');\n}\n`, labels: { case: c } });
-  const runs = await Promise.all([fail(1234, "ada"), fail(99, "grace"), startRun(alice(), { script: SCRIPTS.rateLimited, labels: { case: c } })]);
-  for (const run of runs) await ended(alice(), run.id);
+    startRun(own, { script: `export default async function main() {\n  throw new Error('order ${order} of "${quoted}" not found');\n}\n`, labels: { case: c } });
+  const runs = await Promise.all([fail(1234, "ada"), fail(99, "grace"), startRun(own, { script: SCRIPTS.rateLimited, labels: { case: c } })]);
+  for (const run of runs) await ended(own, run.id);
   const groups = await eventually(
     "the failures are grouped",
     async () => {
-      const reply = await t.api.get("/v1/runs/failures", { query: { q: `@case:${c}` } });
+      const reply = await t.api.get("/v1/runs/failures", { query: { q: `namespace:${namespace}` } });
       expectOk(reply);
       return reply.json.runs === 3 ? reply.json : undefined;
     },
@@ -181,15 +193,18 @@ test("failures are grouped by fingerprint, numbers and quoted strings set aside"
 
 test("scripts are listed once per source, with their runs and tools, and read whole", { tag: "@success" }, async () => {
   const c = unique("sc");
+  const namespace = `scripts-${c}`;
+  const own = t.api.ns(namespace);
   const source = `import { fx } from "rewind:tools";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const runs = await Promise.all([1, 2].map(() => startRun(alice(), { toolset, script: source, labels: { case: c } })));
-  for (const run of runs) expect((await ended(alice(), run.id)).status).toBe("completed");
+  const runs = await Promise.all([1, 2].map(() => startRun(own, { toolset, script: source, labels: { case: c } })));
+  for (const run of runs) expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
   expect(runs[0]!.script).toBe(digest);
+  // The scripts of one namespace, from its counters.
   const listed = await eventually(
     "the script is listed with both runs",
     async () => {
-      const reply = await t.api.get("/v1/scripts", { query: { label: [`case:${c}`] } });
+      const reply = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}` } });
       expectOk(reply);
       const found = (reply.json.scripts as any[]).find((s) => s.digest === digest);
       return found?.runs.completed === 2 ? reply.json.scripts : undefined;
@@ -199,6 +214,13 @@ test("scripts are listed once per source, with their runs and tools, and read wh
   expect(listed).toHaveLength(1);
   expect(listed[0].tools).toEqual(["fx.lookup"]);
   expect(listed[0].headline).toBe(`import { fx } from "rewind:tools";`);
+  // Filtered by a tool it called, and not by one it did not.
+  const byTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, tool: "fx.lookup" } });
+  expectOk(byTool);
+  expect((byTool.json.scripts as any[]).map((s) => s.digest)).toEqual([digest]);
+  const otherTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, tool: "fx.fail" } });
+  expectOk(otherTool);
+  expect(otherTool.json.scripts).toEqual([]);
   const one = await t.api.get(`/v1/scripts/${digest}`);
   expectOk(one);
   expect(one.json.source).toBe(source);
@@ -390,6 +412,17 @@ test("a query that cannot be read is refused with the position of the term at fa
 test("statistics and failures refuse the same unreadable query", { tag: "@failure" }, async () => {
   expectProblem(await t.api.get("/v1/runs/stats", { query: { q: "status:nope" } }), 400, "invalid-query");
   expectProblem(await t.api.get("/v1/runs/failures", { query: { q: "fingerprint:" } }), 400, "invalid-query");
+});
+
+test("statistics take one namespace: term and nothing else: counters know no label nor status", { tag: "@failure" }, async () => {
+  for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"]) {
+    for (const q of ["@agent:triage", "status:failed", "namespace:alice namespace:bob", "namespace:alice,bob", "-namespace:alice"]) {
+      const reply = await t.api.get(path, { query: { q } });
+      expectProblem(reply, 400, "invalid-query");
+      expect(reply.json.query, `${path} ${q}: ${reply.text}`).toBeDefined();
+    }
+    expectOk(await t.api.get(path, { query: { q: "namespace:alice" } }));
+  }
 });
 
 test("a list's parameters out of range are refused as invalid-request", { tag: "@failure" }, async () => {

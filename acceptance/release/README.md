@@ -31,7 +31,7 @@ end, even after Ctrl-C.
 | build | `cargo build --release -p rewind`, the SDK, the suite, Chromium | |
 | criteria | Criteria 1, 2, 3, 5 and 7 of 0.1 (`tests/`), unchanged | Their own servers |
 | areas | One spec per area (`areas/`), three files at once, a tenant each | Setups A and B, C for the CLI |
-| lifecycle | Kills, restarts, a Postgres outage, retention and erasure (`lifecycle/`) | Setup D |
+| lifecycle | Nodes killed, stopped and joining, restarts, a Postgres outage, the archive, retention and erasure (`lifecycle/`) | Setup D |
 | sweeps | What the stages left: no unexpected 5xx, no panic, no leaked canary, every problem type provoked (`sweeps/`) | The results directory |
 | load | Criterion 6: `deploy/acceptance.sh`, the reference deployment under load, and the limits | Its own Compose project |
 
@@ -43,10 +43,10 @@ that is broken. The GitHub workflow (`.github/workflows/release-gate.yml`, start
 
 | Setup | What | Used for |
 | --- | --- | --- |
-| A, deployed | Postgres 17, MinIO, an OpenTelemetry Collector, `--role api`, two `--role worker`, behind an edge that sends `POST /v1/test` to the workers (as `deploy/edge/Caddyfile`); `--allow-internal-tools 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable; `--public-url` its edge, so signed calls are checked against its JWKS | Every area |
-| B, strict | One server with both roles on Turso, with a deployed server's defaults: no internal MCP server, no private webhook, no stdio, no WorkOS | Egress and SSRF, hardening |
+| A, deployed | Postgres 17 for the control plane, MinIO for the bucket (`--bucket s3://…`: the partitions, the archive and the blobs), an OpenTelemetry Collector, two nodes linked by the node link (`--cluster-secret`, each its own `--node-id`, `--listen`, `--link-listen`), behind an edge that sends each request to the next node, as `deploy/edge/Caddyfile` does; `--allow-internal-tools 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable; `--public-url` its edge, so signed calls are checked against its JWKS | Every area |
+| B, strict | One node on Turso and a local bucket, with a deployed server's defaults: no internal MCP server, no private webhook, no stdio, no WorkOS | Egress and SSRF, hardening |
 | C, local | The CLI and the embedded server it starts in a project directory | CLI |
-| D, lifecycle | A deployed setup of its own, retention in seconds | Lifecycle |
+| D, lifecycle | A deployed setup of its own, a retention of seconds (`--retention`) | Lifecycle |
 
 `support/stack.ts` starts them; the global setup (`global-setup.ts`) starts A and B once per
 invocation and publishes them in `results/release/stacks.json`.
@@ -91,7 +91,7 @@ later runs reuse.
 | --- | --- | --- |
 | Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, the change stream, traces |
 | Endings and limits | `areas/endings.spec.ts` | How a script ends; CPU, heap, array buffers, commands, payload sizes |
-| Host tools and tasks | `areas/host-tools.spec.ts` | Claims, heartbeats, deferrals, failures, retries, timeouts, approvals, task tokens |
+| Host tools and tasks | `areas/host-tools.spec.ts` | Task streams: the open stream as the liveness of its tasks, slots, a worker back within the grace, a stream that does not come back, `gone`; deferrals, failures, retries, timeouts, approvals, task tokens |
 | MCP, APIs, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; secrets attached per run (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
 | Workflows | `areas/workflows.spec.ts` | Versions, a version refused by its own tests or by its suite, starts by name, from scripts, schemas, label scope |
 | Check and test | `areas/check-test.spec.ts` | `/v1/check`, `/v1/test`, refusals at start |
@@ -102,7 +102,7 @@ later runs reuse.
 | Sandbox | `areas/sandbox.spec.ts` | Determinism, removed globals, imports, state across runs, exhaustion |
 | API hardening | `areas/hardening.spec.ts` | Malformed and oversized input and secrets, paths, injections, idempotency keys, `/hooks`, cookies, `/auth` |
 | CLI and local | `areas/cli.spec.ts` | Exit codes, `--json`, the embedded server, virtual time, replay, an API called over http with the secret `rewind secrets put` wrote and `--secret` attaches |
-| Lifecycle | `lifecycle/lifecycle.spec.ts` | Worker killed, full restart, Postgres paused, archive, erasure |
+| Lifecycle | `lifecycle/lifecycle.spec.ts` | The owner of a partition killed, a node stopping and joining, full restart, Postgres paused, the archive, retention, erasure |
 | Sweeps | `sweeps/sweeps.spec.ts` | 5xx, panics, the canary (answers, problems, logs, the Collector's spans), problem types |
 
 ## Report

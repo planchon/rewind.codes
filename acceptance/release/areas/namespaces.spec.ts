@@ -18,12 +18,14 @@ import {
   expectRefused,
   newTenant,
   operator,
+  type Reply,
   stacks,
   type Tenant,
   test,
   unique,
 } from "../support/gate.js";
 import { namespaceState, runState, short, start, TOKEN_ALL, TOKEN_DEFAULT, untilWaiting, waiting } from "../support/namespaces-helpers.js";
+import { TaskStream } from "../support/tools-helpers.js";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -50,7 +52,7 @@ async function register(owner: Api, alg: TokenAlg, permissions?: string[]): Prom
 
 test.describe("the Rewind-Namespace header", () => {
   let tenant: Tenant;
-  /** The same on setup B: `POST /v1/test` runs on a server with the worker role. */
+  /** The same on setup B, one node. */
   let strict: Tenant;
   test.beforeAll(async () => {
     tenant = await newTenant("ns-header");
@@ -566,7 +568,7 @@ export default async function main(input: { id: string }) {
   });
 
   test("Alice's lists, statistics and scripts hold her namespace only", { tag: "@success" }, async () => {
-    const page = await eventually("Alice's runs are in the read model", async () => {
+    const page = await eventually("Alice's runs are listed", async () => {
       const reply = await alice.get("/v1/runs");
       const ids = (reply.json?.runs ?? []).map((r: any) => r.id);
       return ids.includes(hers.waiting.id) && ids.includes(hers.asking.id) ? reply.json : undefined;
@@ -579,6 +581,10 @@ export default async function main(input: { id: string }) {
     if (searched.status === 200) expect(searched.json.runs.map((r: any) => r.id).filter((id: string) => bobs.includes(id))).toEqual([]);
     const stats = await alice.get("/v1/runs/stats");
     expectOk(stats, 200);
+    // Her statistics are her namespace's counters: another namespace's are refused.
+    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"]) {
+      expectProblem(await alice.get(path, { query: { q: "namespace:bob" } }), 403, "forbidden");
+    }
     const scripts = await alice.get("/v1/scripts");
     expectOk(scripts, 200);
     const digests = scripts.json.scripts.map((s: any) => s.digest);
@@ -589,36 +595,42 @@ export default async function main(input: { id: string }) {
     expect(JSON.stringify(failures.json)).not.toContain(bob.waiting.id);
   });
 
-  test("Alice's worker token claims her tasks only, and cannot answer Bob's", { tag: "@attack" }, async () => {
-    const claimed = await aliceWorker.get("/v1/tasks", { query: { toolset: asking, tool: "support.ask", limit: 10, wait: "5s" } });
-    expectOk(claimed, 200);
-    expect(claimed.json.tasks.map((t: any) => t.runId)).toEqual([hers.asking.id]);
-    expect(claimed.json.tasks[0].namespace).toBe("alice");
-    // The customer's worker claims Bob's; Alice's token cannot answer it.
+  test("Alice's worker token is handed her tasks only, and cannot answer Bob's", { tag: "@attack" }, async () => {
+    const query = { toolset: asking, tools: ["support.ask"], slots: 10 };
+    // Her stream is limited to her namespace: naming Bob's is refused.
+    const named = await TaskStream.attempt(aliceWorker, { ...query, namespace: "bob" });
+    expect(named instanceof TaskStream, "a stream of Bob's namespace for Alice's token").toBe(false);
+    expectProblem(named as Reply, 403, "forbidden");
+    const hersStream = await TaskStream.open(aliceWorker, query);
+    // The customer's worker is handed Bob's; Alice's token cannot answer it.
     const customerWorker = tenant.api.as((await tenant.key("worker")).key);
-    const theirs = await customerWorker.get("/v1/tasks", { query: { toolset: asking, tool: "support.ask", limit: 10, wait: "5s" } });
-    expectOk(theirs, 200);
-    const bobs = theirs.json.tasks.find((t: any) => t.runId === bob.asking.id);
-    expect(bobs, JSON.stringify(theirs.json)).toBeTruthy();
-    for (const [path, body] of [
-      [`/v1/tasks/${bobs.token}/heartbeat`, undefined],
-      [`/v1/tasks/${bobs.token}/complete`, { result: "answered by mallory" }],
-      [`/v1/tasks/${bobs.token}/fail`, { message: "failed by mallory" }],
-      [`/v1/tasks/${bobs.token}/defer`, {}],
-    ] as const) {
-      await expectRefused({
-        attempt: () => aliceWorker.post(path, body),
-        status: 410,
-        slug: "task-gone",
-        probe: () => runState(tenant.api, bob.asking.id),
-      });
+    const theirs = await TaskStream.open(customerWorker, query);
+    try {
+      const mine = await hersStream.task("Alice's task", (t) => t.runId === hers.asking.id);
+      expect(mine.namespace).toBe("alice");
+      const bobs = await theirs.task("Bob's task", (t) => t.runId === bob.asking.id);
+      expect(hersStream.handed.map((t) => t.runId), "Alice's stream is handed nothing of Bob's").toEqual([hers.asking.id]);
+      for (const [path, body] of [
+        [`/v1/tasks/${bobs.token}/complete`, { result: "answered by mallory" }],
+        [`/v1/tasks/${bobs.token}/fail`, { message: "failed by mallory" }],
+        [`/v1/tasks/${bobs.token}/defer`, {}],
+      ] as const) {
+        await expectRefused({
+          attempt: () => aliceWorker.post(path, body),
+          status: 410,
+          slug: "task-gone",
+          probe: () => runState(tenant.api, bob.asking.id),
+        });
+      }
+      // Her own answer reaches her run.
+      expectOk(await aliceWorker.post(`/v1/tasks/${mine.token}/complete`, { result: "yes" }));
+      const ended = await tenant.api.get(`/v1/runs/${hers.asking.id}`, { query: { wait: "20s" } });
+      expect(ended.json.status).toBe("completed");
+      expect(ended.json.output.value).toBe("yes");
+    } finally {
+      await Promise.all([hersStream.close(), theirs.close()]);
     }
-    // Her own answer reaches her run.
-    expectOk(await aliceWorker.post(`/v1/tasks/${claimed.json.tasks[0].token}/complete`, { result: "yes" }));
-    const ended = await tenant.api.get(`/v1/runs/${hers.asking.id}`, { query: { wait: "20s" } });
-    expect(ended.json.status).toBe("completed");
-    expect(ended.json.output.value).toBe("yes");
-    evidence("Alice's tasks:work token claims only her run's task; heartbeat/complete/fail/defer of Bob's task token → 410 task-gone");
+    evidence("Alice's tasks:work token: a stream of bob → 403; her stream is handed only her run's task; complete/fail/defer of Bob's task token → 410 task-gone");
   });
 
   test("payloads are read only through Alice's own runs", { tag: "@attack" }, async () => {
@@ -1029,8 +1041,8 @@ test.describe("erasure", () => {
     expectProblem(await api.post("/v1/runs", { script: short(unique("again")) }), 409, "namespace-deleting");
     expectProblem(await tenant.api.post(`/v1/namespaces/${namespace}/tokens`, {}), 409, "namespace-deleting");
     expectProblem(await tenant.api.put(`/v1/namespaces/${namespace}`, {}), 409, "namespace-deleting");
-    // Its secrets go with it, in the background at a worker's housekeeping: the lifecycle stage
-    // proves no row is left. Meanwhile none is written.
+    // Its runs and secrets go with it, in the background: the lifecycle stage
+    // proves nothing is left. Meanwhile none is written.
     expectProblem(await tenant.api.put(`/v1/namespaces/${namespace}/secrets/github`, { value: "again" }), 409, "namespace-deleting");
     const detail = await tenant.api.get(`/v1/namespaces/${namespace}`);
     if (detail.status === 200) expect(detail.json.namespace.deletingSince).toBeTruthy();

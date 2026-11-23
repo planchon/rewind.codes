@@ -1,12 +1,13 @@
 /**
  * Helpers of the specs of tools, egress and observability (`release/areas/host-tools.spec.ts`,
  * `mcp-egress.spec.ts`, `observability.spec.ts`): starting runs and waiting on their states
- * through the raw API, claiming host-tool tasks by hand, and a broken MCP server.
+ * through the raw API, task streams opened by hand, and a broken MCP server.
  */
+import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { eventually } from "../../support/processes.js";
-import { type Api, expect, expectOk, type Reply } from "./gate.js";
+import { type Api, expect, expectOk, type Reply, recordingFetch } from "./gate.js";
 
 /** A run as `GET /v1/runs/{id}` answers it. */
 export type RunState = Record<string, any>;
@@ -58,24 +59,170 @@ export async function waitingCall(api: Api, id: string, state: string, timeoutMs
   return (run.waitingFor as RunState[]).find((w) => w.kind === "tool_call" && w.state === state)!;
 }
 
-/** Claims host-tool tasks by hand: `GET /v1/tasks`, waiting up to `wait`. */
-export async function claim(api: Api, toolset: string, tools: string[], wait = "10s"): Promise<RunState[]> {
-  const reply = await api.get("/v1/tasks", { query: { toolset, tool: tools, wait, limit: 10 } });
-  expectOk(reply);
-  return reply.json.tasks as RunState[];
+/** What a task stream asks for (`GET /v1/tasks/stream`). */
+export interface TaskStreamQuery {
+  toolset?: string;
+  tools?: string[];
+  namespace?: string;
+  /** The tasks in flight on the stream at most: the server's 1 by default. */
+  slots?: number;
+  /** The worker's id, sent again by `reopen`; one is drawn when absent. */
+  worker?: string;
 }
 
-/** Claims until one task of `tool` (and of `runId`, when given) comes, within `timeoutMs`. */
-export async function claimOne(api: Api, toolset: string, tool: string, runId?: string, timeoutMs = 30_000): Promise<RunState> {
-  return eventually(
-    `a task of ${tool} is claimed`,
-    async () => {
-      const tasks = await claim(api, toolset, [tool], "2s");
-      return tasks.find((t) => runId === undefined || t.runId === runId);
-    },
-    timeoutMs,
-    50,
-  );
+/** Every stream `TaskStream.open` opened and nobody closed: `closeTaskStreams` closes them. */
+const streams = new Set<TaskStream>();
+
+/**
+ * A task stream opened by hand, as a harness's worker holds one (`archi/04-tools.md`, "Tool task
+ * lifecycle"): the tasks handed on it and the tokens it says are gone, kept as they come. The open
+ * stream is the liveness of the tasks handed on it; `close` drops it, as a worker that dies does,
+ * and `reopen` opens it again with the same worker id.
+ */
+export class TaskStream {
+  /** Every task handed on the stream, in order: `HandedTask`s. */
+  readonly handed: RunState[] = [];
+  /** The tokens of the tasks the stream said are gone. */
+  readonly gone: string[] = [];
+  /** Called with each task as it is handed, once set; the tasks handed before are in `handed`. */
+  onTask: ((task: RunState) => void) | undefined;
+  /** Settles once the stream has ended: closed here, or dropped by the server. */
+  readonly done: Promise<void>;
+  private closed = false;
+
+  private constructor(
+    readonly api: Api,
+    readonly query: TaskStreamQuery & { worker: string },
+    private readonly abort: AbortController,
+    body: ReadableStream<Uint8Array>,
+  ) {
+    this.done = this.read(body);
+    streams.add(this);
+  }
+
+  /** Opens a stream: the stream once the server answered with one, or the server's refusal. */
+  static async attempt(api: Api, query: TaskStreamQuery = {}): Promise<TaskStream | Reply> {
+    const full = { ...query, worker: query.worker ?? `gate-${randomUUID()}` };
+    const params = new URLSearchParams();
+    if (full.toolset !== undefined) params.append("toolset", full.toolset);
+    for (const tool of full.tools ?? []) params.append("tools", tool);
+    if (full.namespace !== undefined) params.append("namespace", full.namespace);
+    if (full.slots !== undefined) params.append("slots", String(full.slots));
+    params.append("worker", full.worker);
+    const headers = new Headers(api.defaultHeaders);
+    if (api.bearer !== undefined) headers.set("authorization", `Bearer ${api.bearer}`);
+    headers.set("accept", "text/event-stream");
+    const abort = new AbortController();
+    const response = await recordingFetch(`${api.url}/v1/tasks/stream?${params}`, { headers, signal: abort.signal });
+    const type = response.headers.get("content-type") ?? "";
+    if (response.status === 200 && type.includes("text/event-stream") && response.body !== null) {
+      return new TaskStream(api, full, abort, response.body);
+    }
+    const text = await response.text();
+    let json: any;
+    try {
+      json = text === "" ? undefined : JSON.parse(text);
+    } catch {
+      json = undefined;
+    }
+    const slug = type.includes("problem+json") && json?.type ? String(json.type).replace("urn:rewind:problem:", "") : undefined;
+    return { status: response.status, headers: response.headers, text, json, slug };
+  }
+
+  /** Opens a stream, which the server must answer with one. */
+  static async open(api: Api, query: TaskStreamQuery = {}): Promise<TaskStream> {
+    const opened = await TaskStream.attempt(api, query);
+    if (opened instanceof TaskStream) return opened;
+    throw new Error(`GET /v1/tasks/stream → ${opened.status} ${opened.text.slice(0, 600)}`);
+  }
+
+  /** The same stream opened again, with the same worker id. */
+  reopen(): Promise<TaskStream> {
+    return TaskStream.open(this.api, this.query);
+  }
+
+  /** The first task handed on the stream that `check` accepts, within `timeoutMs`. */
+  task(what: string, check: (task: RunState) => boolean = () => true, timeoutMs = 30_000): Promise<RunState> {
+    return eventually(`${what} is handed on the stream`, () => this.handed.find(check), timeoutMs, 25);
+  }
+
+  /** The task of `tool` (of `runId`, when given) handed on the stream, within `timeoutMs`. */
+  taskOf(tool: string, runId?: string, timeoutMs = 30_000): Promise<RunState> {
+    return this.task(`a task of ${tool}${runId ? ` of run ${runId}` : ""}`, (t) => t.tool === tool && (runId === undefined || t.runId === runId), timeoutMs);
+  }
+
+  /** Resolves once the stream said the task of `token` is gone, within `timeoutMs`. */
+  async goneOf(token: string, timeoutMs = 30_000): Promise<void> {
+    await eventually(`the task ${token.slice(0, 16)}… is gone on the stream`, () => (this.gone.includes(token) ? true : undefined), timeoutMs, 25);
+  }
+
+  /** Drops the stream, as a worker that dies does. */
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    streams.delete(this);
+    this.abort.abort();
+    await this.done;
+  }
+
+  private async read(body: ReadableStream<Uint8Array>): Promise<void> {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n?/g, "\n");
+        let end: number;
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          let event = "message";
+          const data: string[] = [];
+          for (const line of block.split("\n")) {
+            // Comments (`:`, the keep-alive) are skipped.
+            if (line.startsWith(":") || line === "") continue;
+            const colon = line.indexOf(":");
+            const field = colon < 0 ? line : line.slice(0, colon);
+            const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+            if (field === "event") event = value;
+            else if (field === "data") data.push(value);
+          }
+          if (data.length === 0) continue;
+          const parsed = JSON.parse(data.join("\n"));
+          if (event === "task") {
+            this.handed.push(parsed);
+            this.onTask?.(parsed);
+          } else if (event === "gone") {
+            this.gone.push(String(parsed.token));
+          }
+        }
+      }
+    } catch {
+      // Closed by `close`, or dropped by the server: what came is kept.
+    }
+    streams.delete(this);
+  }
+}
+
+/** Closes every stream still open: a spec's `afterEach`. */
+export async function closeTaskStreams(): Promise<void> {
+  await Promise.all([...streams].map((stream) => stream.close()));
+}
+
+/**
+ * Opens a stream for `tool` of `toolset` and waits for the task of `runId` (any, without it): the
+ * task and the stream it was handed on, which stays open until it is closed.
+ */
+export async function handOne(api: Api, toolset: string, tool: string, runId?: string, timeoutMs = 30_000): Promise<{ task: RunState; stream: TaskStream }> {
+  const stream = await TaskStream.open(api, { toolset, tools: [tool] });
+  return { task: await stream.taskOf(tool, runId, timeoutMs), stream };
+}
+
+/** The tasks handed within `ms` on a stream opened for it, then closed. */
+export async function handedWithin(api: Api, query: TaskStreamQuery, ms = 1_000): Promise<RunState[]> {
+  const stream = await TaskStream.open(api, query);
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  await stream.close();
+  return stream.handed;
 }
 
 /** The journal's event types of a run, in order. */

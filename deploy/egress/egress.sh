@@ -1,17 +1,17 @@
 #!/bin/sh
-# The workers' egress gateway: their only way out of the core network.
+# The nodes' egress gateway: their only way out of the core network.
 #
-# Workers have no route but the core network and a default route through this container
-# (route.sh). It forwards a worker's connection only to an address that one of the allowed
+# Nodes have no route but the core network and a default route through this container
+# (route.sh). It forwards a node's connection only to an address that one of the allowed
 # names resolved to, through this container's own DNS server:
 #
 #   1. dnsmasq answers only the names of REWIND_EGRESS_ALLOW (and their subdomains), from Docker's
-#      DNS; any other name is refused. IPv6 answers are dropped: workers have no IPv6 route.
+#      DNS; any other name is refused. IPv6 answers are dropped: nodes have no IPv6 route.
 #   2. Each address it answers joins the ipset `allowed`.
 #   3. iptables forwards TCP from the core network to the addresses of `allowed` only, and
 #      never to 169.254.0.0/16 (the cloud metadata endpoint), whatever a name resolves to.
 #
-# REWIND_EGRESS_ADDRESS is this container's address on the core network, the workers' gateway and
+# REWIND_EGRESS_ADDRESS is this container's address on the core network, the nodes' gateway and
 # DNS server. REWIND_EGRESS_ALLOW lists the allowed names, separated by spaces or commas.
 set -eu
 

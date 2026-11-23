@@ -1,18 +1,28 @@
 /**
  * Host tools and their tasks (`archi/04-tools.md`, "Tool task lifecycle", "Policies"), on setup A:
- * the SDK's worker and tasks claimed by hand; claims, heartbeats, deferrals, failures, retries,
- * expired claims, timeouts, approvals; arguments checked against the schema before the harness
- * sees them; and the replays a hostile worker could try with a token or an approval already used.
+ * the SDK's worker, and task streams opened by hand; the open stream as the liveness of its
+ * tasks, a stream's slots, a worker coming back within the grace, a stream that does not come
+ * back, `gone`, deferrals, failures, retries, timeouts, approvals; arguments checked against the
+ * schema before the harness sees them; and the replays a hostile worker could try with a token or
+ * an approval already used.
+ *
+ * The grace a task handed on a closed stream waits for its worker is the tool's policy
+ * `heartbeatTimeout` (archi/04's "Grace after a stream closes", 60 s by default).
  */
 import { type HostToolContext, HostToolError, type HostToolWorker } from "@rewind.codes/sdk";
 import { setTimeout as delay } from "node:timers/promises";
 import { evidence, expect, expectOk, expectProblem, expectRefused, newTenant, type Tenant, test, unique } from "../support/gate.js";
-import { claim, claimOne, ended, hostTool, runUntil, startRun, waitingCall } from "../support/tools-helpers.js";
+import { closeTaskStreams, ended, handedWithin, handOne, hostTool, runUntil, startRun, TaskStream, waitingCall } from "../support/tools-helpers.js";
 
 let tenant: Tenant;
 
 test.beforeAll(async () => {
   tenant = await newTenant("host-tools");
+});
+
+// A stream a test left open would keep its tasks: each test's streams close with it.
+test.afterEach(async () => {
+  await closeTaskStreams();
 });
 
 /** A toolset of one host tool `<group>.lookup`, with a group of its own so tests never share tasks. */
@@ -96,32 +106,47 @@ test("a host tool served by the SDK's worker is called once, with its run's cont
   }
 });
 
-test("heartbeats keep a claim alive past its heartbeat timeout", { tag: "@success" }, async () => {
-  const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "2s" });
+test("an open stream keeps its task while the handler works, past the grace, with nothing sent meanwhile", { tag: "@success" }, async () => {
+  const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "1s" });
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-2" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
-  expect(task.heartbeatTimeoutMs).toBe(2000);
-  for (let n = 0; n < 4; n++) {
-    await delay(1000);
-    const beat = await tenant.api.post(`/v1/tasks/${task.token}/heartbeat`);
-    expectOk(beat);
-    // The claim now ends one heartbeat timeout from the heartbeat.
-    expect(beat.json.heartbeatTimeoutMs).toBeGreaterThan(1500);
-    expect(beat.json.heartbeatTimeoutMs).toBeLessThanOrEqual(2000);
-  }
-  // Four seconds later, twice the timeout, the claim is still this worker's.
+  const { task, stream } = await handOne(tenant.api, toolset, tool, run.id);
+  expect(task).toMatchObject({ runId: run.id, namespace: "alice", seq: 1, attempt: 1, idempotencyKey: `${run.id}/1` });
+  expect(task.token).toEqual(expect.any(String));
+  // Three times the grace, and the stream still open: the task is still this worker's.
+  await delay(3000);
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/complete`, { result: { id: "c-2", name: "kept" } }));
   const done = await ended(alice(), run.id);
   expect(done.status).toBe("completed");
   expect(done.output.value).toEqual({ id: "c-2", name: "kept" });
   expect(done.attempts ?? []).toEqual([]);
+  expect(stream.handed.filter((t) => t.runId === run.id)).toHaveLength(1);
+  evidence("a task held 3 s on an open stream (grace 1 s), answered by its token: attempt 1, handed once");
 });
 
-test("a deferred task is answered later, by its token, from another key of the tenant", { tag: "@success" }, async () => {
+test("a stream holds at most its slots: the next task is handed once a slot is free", { tag: "@success" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
+  const stream = await TaskStream.open(tenant.api, { toolset, tools: [tool], slots: 1 });
+  const first = await startRun(alice(), { toolset, script: script(group), input: { id: "c-2a" } });
+  const second = await startRun(alice(), { toolset, script: script(group), input: { id: "c-2b" } });
+  const handed = await stream.taskOf(tool);
+  await delay(1500);
+  expect(stream.handed, "one slot, one task in flight").toHaveLength(1);
+  expectOk(await tenant.api.post(`/v1/tasks/${handed.token}/complete`, { result: { id: handed.args.id, name: "first" } }));
+  const next = await stream.task("the other run's task", (t) => t.runId !== handed.runId);
+  expect([first.id, second.id].sort()).toEqual([handed.runId, next.runId].sort());
+  expectOk(await tenant.api.post(`/v1/tasks/${next.token}/complete`, { result: { id: next.args.id, name: "second" } }));
+  for (const run of [first, second]) expect((await ended(alice(), run.id)).status).toBe("completed");
+  evidence("slots=1: the second task was handed only once the first was answered");
+});
+
+test("a deferred task is answered later, by its token, from another key, after its stream closed", { tag: "@success" }, async () => {
+  const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "1s" });
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-3" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task, stream } = await handOne(tenant.api, toolset, tool, run.id);
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/defer`, { timeout: "5m" }));
+  // Deferred, the task does not need its stream: it waits past the grace for its answer.
+  await stream.close();
+  await delay(2000);
   const wait = await waitingCall(alice(), run.id, "deferred");
   expect(wait.tool).toBe(tool);
   // Another process of the harness, with a key of role `worker`, answers it.
@@ -130,6 +155,23 @@ test("a deferred task is answered later, by its token, from another key of the t
   const done = await ended(alice(), run.id);
   expect(done.status).toBe("completed");
   expect(done.output.value).toEqual({ id: "c-3", name: "answered later" });
+  expect(done.attempts ?? []).toEqual([]);
+});
+
+test("a worker that opens its stream again within the grace keeps its task: it is not handed again", { tag: "@success" }, async () => {
+  const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "10s" });
+  const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-3b" } });
+  const { task, stream } = await handOne(tenant.api, toolset, tool, run.id);
+  // The connection drops; the worker comes back with its id within the grace.
+  await stream.close();
+  const again = await stream.reopen();
+  await delay(1500);
+  expect(again.handed, "the task kept is not handed again").toEqual([]);
+  expectOk(await tenant.api.post(`/v1/tasks/${task.token}/complete`, { result: { id: "c-3b", name: "after the drop" } }));
+  const done = await ended(alice(), run.id);
+  expect(done.output.value).toEqual({ id: "c-3b", name: "after the drop" });
+  expect(done.attempts ?? []).toEqual([]);
+  evidence(`the stream of ${stream.query.worker} dropped and came back within the grace: its token answered, attempt 1`);
 });
 
 test("a handler's failure reaches the script as a ToolError with its message and data", { tag: "@success" }, async () => {
@@ -204,12 +246,14 @@ test("a rejected call fails with a ToolError carrying the harness's message, and
   }
 });
 
-test("an expired claim is given again with the same idempotency key, as attempt 2", { tag: "@success" }, async () => {
+test("a task whose stream closed and did not come back within its grace is handed again, as attempt 2, with the same idempotency key", { tag: "@success" }, async () => {
   const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "1s" });
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-8" } });
-  const first = await claimOne(tenant.api, toolset, tool, run.id);
-  // No heartbeat: the claim expires and the task is ready again.
-  const second = await claimOne(tenant.api, toolset, tool, run.id, 60_000);
+  const { task: first, stream: lost } = await handOne(tenant.api, toolset, tool, run.id);
+  // Another worker holds a stream; the first one dies and never comes back.
+  const other = await TaskStream.open(tenant.api, { toolset, tools: [tool] });
+  await lost.close();
+  const second = await other.taskOf(tool, run.id, 60_000);
   expect(second.attempt).toBe(2);
   expect(second.idempotencyKey).toBe(first.idempotencyKey);
   expect(second.token).not.toBe(first.token);
@@ -219,24 +263,26 @@ test("an expired claim is given again with the same idempotency key, as attempt 
   expect(done.output.value).toEqual({ id: "c-8", name: "attempt 2" });
 });
 
-test("an expired claim of an at_most_once tool fails the call with outcomeUnknown, never sent again", { tag: "@success" }, async () => {
+test("a task of an at_most_once tool whose stream did not come back fails with outcomeUnknown, never handed again", { tag: "@success" }, async () => {
   const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "1s", onInterruption: "at_most_once" });
   const run = await startRun(alice(), { toolset, script: script(group, CATCHING), input: { id: "c-9" } });
-  await claimOne(tenant.api, toolset, tool, run.id);
-  await delay(1500);
-  // The harness's worker polls again: the task is not handed out.
-  expect(await claim(tenant.api, toolset, [tool], "1s")).toEqual([]);
+  const { stream: lost } = await handOne(tenant.api, toolset, tool, run.id);
+  // Another worker holds a stream: the task is not handed to it.
+  const other = await TaskStream.open(tenant.api, { toolset, tools: [tool] });
+  await lost.close();
   const done = await ended(alice(), run.id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toMatchObject({ name: "ToolError", tool, outcomeUnknown: true });
+  expect(other.handed.filter((t) => t.runId === run.id)).toEqual([]);
 });
 
-test("an expired claim of an at_most_once tool fails at once, even when no worker polls again", { tag: "@failure" }, async () => {
-  // archi/04-tools.md, "Tool task lifecycle": the claim expired → `done` with `outcomeUnknown`
-  // at once (`at_most_once`). The harness's worker died: nothing claims the tool again.
+test("a task of an at_most_once tool whose stream did not come back fails, even when no stream is open", { tag: "@failure" }, async () => {
+  // archi/04-tools.md, "Tool task lifecycle": the stream closed and did not come back within its
+  // grace → `done` with `outcomeUnknown` at once (`at_most_once`). The harness's worker died.
   const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "1s", onInterruption: "at_most_once" });
   const run = await startRun(alice(), { toolset, script: script(group, CATCHING), input: { id: "c-9b" } });
-  await claimOne(tenant.api, toolset, tool, run.id);
+  const { stream } = await handOne(tenant.api, toolset, tool, run.id);
+  await stream.close();
   const done = await ended(alice(), run.id, 30_000);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toMatchObject({ name: "ToolError", tool, outcomeUnknown: true });
@@ -258,7 +304,7 @@ export default async function main() {
   expect(done.status, JSON.stringify(done)).toBe("failed");
   expect(done.error.name).toBe("TypeError");
   expect(done.error.location?.line).toBe(4);
-  expect(await claim(tenant.api, toolset, [tool], "1s"), "the harness never sees the call").toEqual([]);
+  expect(await handedWithin(tenant.api, { toolset, tools: [tool] }), "the harness never sees the call").toEqual([]);
   evidence(`${done.error.name}: ${done.error.message}`);
 });
 
@@ -282,12 +328,12 @@ test("a failure the script does not catch fails the run, naming the call and its
 test("approving a task that does not wait for an approval is refused with task-not-waiting", { tag: "@failure" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-11" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   const reply = await tenant.api.post(`/v1/tasks/${task.id}/approve`);
   expectProblem(reply, 409, "task-not-waiting");
   const rejected = await tenant.api.post(`/v1/tasks/${task.id}/reject`, { message: "too late" });
   expectProblem(rejected, 409, "task-not-waiting");
-  // The claim still answers.
+  // The task handed still answers.
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/complete`, { result: { id: "c-11", name: "fine" } }));
   expect((await ended(alice(), run.id)).status).toBe("completed");
 });
@@ -297,10 +343,10 @@ test("approving or rejecting a task that does not exist is not-found", { tag: "@
   expectProblem(await tenant.api.post(`/v1/tasks/00000000-0000-7000-8000-000000000000/reject`, {}), 404, "not-found");
 });
 
-test("an answer without its result is an invalid request, and the task stays claimed", { tag: "@failure" }, async () => {
+test("an answer without its result is an invalid request, and the task stays handed", { tag: "@failure" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-12" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   expectProblem(await tenant.api.post(`/v1/tasks/${task.token}/complete`, { value: 1 }), 400, "invalid-request");
   expectProblem(await tenant.api.post(`/v1/tasks/${task.token}/fail`, { retryable: true }), 400, "invalid-request");
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/complete`, { result: { id: "c-12", name: "then" } }));
@@ -310,7 +356,7 @@ test("an answer without its result is an invalid request, and the task stays cla
 test("a deferred task nobody answers fails at its timeout", { tag: "@failure" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-13" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/defer`, { timeout: "1s" }));
   const done = await ended(alice(), run.id);
   expect(done.status, JSON.stringify(done)).toBe("failed");
@@ -322,7 +368,7 @@ test("a deferral is bounded by the tool's execution timeout", { tag: "@failure" 
   // timeout from now, whichever comes first; the worker is told the timeout (`timeoutMs`).
   const { toolset, group, tool } = await lookupToolset({ timeout: "1s" });
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-14" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   expect(task.timeoutMs).toBe(1000);
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/defer`, { timeout: "10m" }));
   const done = await ended(alice(), run.id);
@@ -333,7 +379,7 @@ test("a deferral is bounded by the tool's execution timeout", { tag: "@failure" 
 test("a host-tool failure above 64 KiB is refused as payload-too-large", { tag: "@failure" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-15" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   const reply = await tenant.api.post(`/v1/tasks/${task.token}/fail`, { message: "x".repeat(70 * 1024) });
   expectProblem(reply, 413, "payload-too-large");
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/fail`, { message: "a short reason" }));
@@ -347,7 +393,7 @@ test("a host-tool failure above 64 KiB is refused as payload-too-large", { tag: 
 test("a task token used again after its answer is gone", { tag: "@attack" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-16" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   expectOk(await tenant.api.post(`/v1/tasks/${task.token}/complete`, { result: { id: "c-16", name: "first answer" } }));
   const first = await ended(alice(), run.id);
   const probe = async () => {
@@ -361,10 +407,9 @@ test("a task token used again after its answer is gone", { tag: "@attack" }, asy
     probe,
   });
   await expectRefused({ attempt: () => tenant.api.post(`/v1/tasks/${task.token}/fail`, { message: "late failure" }), status: 410, slug: "task-gone", probe });
-  await expectRefused({ attempt: () => tenant.api.post(`/v1/tasks/${task.token}/heartbeat`), status: 410, slug: "task-gone", probe });
   await expectRefused({ attempt: () => tenant.api.post(`/v1/tasks/${task.token}/defer`, {}), status: 410, slug: "task-gone", probe });
   expect(first.output.value).toEqual({ id: "c-16", name: "first answer" });
-  evidence("complete, fail, heartbeat and defer with a used token: 410 task-gone; the output is the first answer");
+  evidence("complete, fail and defer with a used token: 410 task-gone; the output is the first answer");
 });
 
 test("an approval cannot be used twice: the tool runs once", { tag: "@attack" }, async () => {
@@ -388,28 +433,33 @@ test("an approval cannot be used twice: the tool runs once", { tag: "@attack" },
   }
 });
 
-test("the answer of a lost claim is refused; the new claim's answer stands", { tag: "@attack" }, async () => {
+test("the answer of a task handed on a stream gone past its grace is refused; the next hand-out's answer stands", { tag: "@attack" }, async () => {
   const { toolset, group, tool } = await lookupToolset({ heartbeatTimeout: "1s" });
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-18" } });
-  const lost = await claimOne(tenant.api, toolset, tool, run.id);
-  const current = await claimOne(tenant.api, toolset, tool, run.id, 60_000);
+  const { task: lost, stream } = await handOne(tenant.api, toolset, tool, run.id);
+  const other = await TaskStream.open(tenant.api, { toolset, tools: [tool] });
+  await stream.close();
+  const current = await other.taskOf(tool, run.id, 60_000);
   await expectRefused({
-    attempt: () => tenant.api.post(`/v1/tasks/${lost.token}/complete`, { result: { id: "c-18", name: "from the lost claim" } }),
+    attempt: () => tenant.api.post(`/v1/tasks/${lost.token}/complete`, { result: { id: "c-18", name: "from the stream gone" } }),
     status: 410,
     slug: "task-gone",
     probe: async () => (await alice().get(`/v1/runs/${run.id}`)).json.historyLen,
   });
-  expectOk(await tenant.api.post(`/v1/tasks/${current.token}/complete`, { result: { id: "c-18", name: "from the current claim" } }));
-  expect((await ended(alice(), run.id)).output.value).toEqual({ id: "c-18", name: "from the current claim" });
+  expectOk(await tenant.api.post(`/v1/tasks/${current.token}/complete`, { result: { id: "c-18", name: "from the next hand-out" } }));
+  expect((await ended(alice(), run.id)).output.value).toEqual({ id: "c-18", name: "from the next hand-out" });
+  evidence(`the token of attempt ${lost.attempt}, handed on a stream that did not come back → 410 task-gone; attempt ${current.attempt}'s answer stands`);
 });
 
 test("an answer for a run that was cancelled is gone, and the run stays cancelled", { tag: "@attack" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-19" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task, stream } = await handOne(tenant.api, toolset, tool, run.id);
   expectOk(await alice().post(`/v1/runs/${run.id}/cancel`, {}));
   const cancelled = await ended(alice(), run.id);
   expect(cancelled.status).toBe("cancelled");
+  // The stream says so: the task handed on it is gone.
+  await stream.goneOf(task.token);
   await expectRefused({
     attempt: () => tenant.api.post(`/v1/tasks/${task.token}/complete`, { result: { id: "c-19", name: "too late" } }),
     status: 410,
@@ -424,7 +474,7 @@ test("an answer for a run that was cancelled is gone, and the run stays cancelle
 test("a forged task token reaches no task", { tag: "@attack" }, async () => {
   const { toolset, group, tool } = await lookupToolset();
   const run = await startRun(alice(), { toolset, script: script(group), input: { id: "c-20" } });
-  const task = await claimOne(tenant.api, toolset, tool, run.id);
+  const { task } = await handOne(tenant.api, toolset, tool, run.id);
   // The real token with its last character changed, and a token of the right shape made up.
   const last = task.token.at(-1) === "A" ? "B" : "A";
   for (const forged of [`${task.token.slice(0, -1)}${last}`, `rewind_tt_${"0".repeat(64)}`, "rewind_tt_", "../../runs"]) {

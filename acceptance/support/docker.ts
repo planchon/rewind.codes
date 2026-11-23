@@ -55,7 +55,14 @@ export class Containers {
   }
 }
 
-/** Postgres 17 on a tmpfs. */
+/**
+ * The database of the control plane (`--store`). The server's `postgres` database holds the
+ * nodes' liveness locks alone (`--cluster-database`, `archi/06-storage-and-scale.md`,
+ * "Partitions, owners and nodes").
+ */
+export const CONTROL_DATABASE = "rewind";
+
+/** Postgres 17 on a tmpfs, with the control plane's database. */
 export async function startPostgres(containers: Containers): Promise<{ url: string; name: string }> {
   const name = containers.run("postgres", [
     "--publish",
@@ -66,6 +73,8 @@ export async function startPostgres(containers: Containers): Promise<{ url: stri
     "POSTGRES_USER=rewind",
     "--env",
     "POSTGRES_PASSWORD=rewind-secret",
+    "--env",
+    `POSTGRES_DB=${CONTROL_DATABASE}`,
     IMAGES.postgres,
   ]);
   const address = containers.port(name, "5432/tcp");
@@ -74,7 +83,7 @@ export async function startPostgres(containers: Containers): Promise<{ url: stri
     () => {
       const ready = spawnSync(
         "docker",
-        ["exec", name, "psql", "-h", "127.0.0.1", "-U", "rewind", "-d", "postgres", "-tAc", "SELECT 1"],
+        ["exec", name, "psql", "-h", "127.0.0.1", "-U", "rewind", "-d", CONTROL_DATABASE, "-tAc", "SELECT 1"],
         { encoding: "utf8" },
       );
       return ready.status === 0 ? true : undefined;
@@ -82,7 +91,7 @@ export async function startPostgres(containers: Containers): Promise<{ url: stri
     60_000,
     300,
   );
-  return { url: `postgres://rewind:rewind-secret@${address}/postgres`, name };
+  return { url: `postgres://rewind:rewind-secret@${address}/${CONTROL_DATABASE}`, name };
 }
 
 export interface Minio {

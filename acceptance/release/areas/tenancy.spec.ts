@@ -12,6 +12,7 @@ import { randomBytes } from "node:crypto";
 import { createKey, mintToken, runProbe, startRun, waitingRun } from "../support/access-helpers.js";
 import { follow } from "../support/runs-helpers.js";
 import { signingKey, startWebhookReceiver, type WebhookReceiver } from "../support/fixtures.js";
+import { handedWithin, TaskStream } from "../support/tools-helpers.js";
 import {
   Api,
   evidence,
@@ -86,7 +87,7 @@ const SHARED_SCRIPT = `export default async function main() {
 }
 `;
 
-/** acme's own output: 2 KiB, above the inline tier, so a row of the payloads table. */
+/** acme's own output: 2 KiB, above the inline tier, so a payload record of its run's partition. */
 const COMPLETED_SCRIPT = `export default async function main() {
   return { owner: "${MARK}", pad: "p".repeat(2048) };
 }
@@ -115,6 +116,7 @@ interface Acme {
 let acme: Acme;
 let globex: Tenant;
 let receiver: WebhookReceiver;
+let acmeWorker: TaskStream | undefined;
 
 async function untilWaiting(api: Api, id: string, match: (w: any) => boolean): Promise<any> {
   for (let attempt = 0; attempt < 120; attempt++) {
@@ -150,15 +152,11 @@ test.beforeAll(async () => {
   expectOk(approvalRun);
   const approval = await untilWaiting(tenant.api, approvalRun.json.id, (w) => w.kind === "tool_call" && w.state === "approval");
 
+  // acme's worker holds a stream open for the whole file: the task handed on it stays its own.
+  acmeWorker = await TaskStream.open(tenant.api, { toolset: toolsetId, tools: ["crm.lookup"] });
   const taskRun = await startRun(tenant.api, NS, { script: TASK_SCRIPT, toolset: toolsetId });
   expectOk(taskRun);
-  let claimed: any;
-  for (let attempt = 0; attempt < 10 && !claimed; attempt++) {
-    const batch = await tenant.api.get("/v1/tasks", { query: { toolset: toolsetId, tool: "crm.lookup", wait: "5s" } });
-    expectOk(batch, 200);
-    claimed = (batch.json.tasks as any[]).find((t) => t.runId === taskRun.json.id);
-  }
-  expect(claimed, "acme claims its own task").toBeDefined();
+  const handed = await acmeWorker.taskOf("crm.lookup", taskRun.json.id);
 
   const subscription = await tenant.api.post("/v1/subscriptions", { url: receiver.url, labels: { owner: MARK } });
   expectOk(subscription, 201);
@@ -184,7 +182,7 @@ test.beforeAll(async () => {
     shared: { id: shared.json.id, outputDigest: shared.json.output.digest },
     failed: failed.json.id,
     approval: { runId: approvalRun.json.id, taskId: approval.taskId },
-    task: { runId: taskRun.json.id, token: claimed.token, id: claimed.id },
+    task: { runId: taskRun.json.id, token: handed.token, id: handed.id },
     subscription: subscription.json.id,
     key,
     role,
@@ -196,7 +194,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await receiver?.close();
+  await Promise.all([receiver?.close(), acmeWorker?.close()]);
 });
 
 /** Asserts no answer of globex holds anything of acme's. */
@@ -371,11 +369,13 @@ test("another tenant's workflow is not found, and starts nothing", { tag: "@atta
 });
 
 test("a payload is read only through a run of the reader's tenant, even when both hold the same bytes", { tag: "@attack" }, async () => {
-  // Payloads up to 1 KiB stay in their event, and GET /v1/payloads serves the larger ones: acme's
-  // output is a row of the table tier, the shared one a blob.
+  // Payloads up to 1 KiB stay in their event, and GET /v1/payloads serves the larger ones through
+  // their run: acme's output is a payload record of its run, the shared one a blob.
   const digest = acme.completed.outputDigest;
   expect(digest).toMatch(/^[0-9a-f]{64}$/);
-  expectProblem(await globex.api.get(`/v1/payloads/${digest}`), 404, "not-found");
+  // Without its run, a payload is read by no one: the request is malformed, whoever asks.
+  expectProblem(await globex.api.get(`/v1/payloads/${digest}`), 400, "invalid-request");
+  expectProblem(await acme.tenant.api.get(`/v1/payloads/${digest}`), 400, "invalid-request");
   expectProblem(await globex.api.get(`/v1/payloads/${digest}`, { query: { run: acme.completed.id } }), 404, "not-found");
   // The same bytes in globex: its own run reads them, acme's run still does not lend them.
   const mine = await startRun(globex.api, "globex-ns", { script: SHARED_SCRIPT, wait: "30s" });
@@ -387,17 +387,16 @@ test("a payload is read only through a run of the reader's tenant, even when bot
   // acme reads its own.
   expectOk(await acme.tenant.api.get(`/v1/payloads/${digest}`, { query: { run: acme.completed.id } }), 200);
   expectOk(await acme.tenant.api.get(`/v1/payloads/${acme.shared.outputDigest}`, { query: { run: acme.shared.id } }), 200);
-  evidence("globex: acme's 2 KiB payload by digest, and through acme's run → 404; with the same 100 KiB blob, through its own run → 200, through acme's run → 404");
+  evidence("globex: acme's 2 KiB payload without a run → 400, through acme's run → 404; with the same 100 KiB blob, through its own run → 200, through acme's run → 404");
 });
 
-test("another tenant's host-tool task cannot be claimed, answered, heartbeated nor approved", { tag: "@attack" }, async () => {
+test("another tenant's host-tool task cannot be handed, answered nor approved", { tag: "@attack" }, async () => {
   const forged = `${acme.task.token.slice(0, -4)}${acme.task.token.endsWith("aaaa") ? "bbbb" : "aaaa"}`;
   // A token never issued, for comparison: globex must not tell acme's token from it.
-  const unknownAnswer = await globex.api.post(`/v1/tasks/${forged}/heartbeat`);
+  const unknownAnswer = await globex.api.post(`/v1/tasks/${forged}/defer`, {});
   expect([404, 410], unknownAnswer.text).toContain(unknownAnswer.status);
   const taskProbe = () => runProbe(acme.tenant.api, acme.task.runId);
   for (const [what, attempt] of [
-    ["heartbeat", () => globex.api.post(`/v1/tasks/${acme.task.token}/heartbeat`)],
     ["complete", () => globex.api.post(`/v1/tasks/${acme.task.token}/complete`, { result: { id: "stolen" } })],
     ["fail", () => globex.api.post(`/v1/tasks/${acme.task.token}/fail`, { message: "hostile", retryable: false })],
     ["defer", () => globex.api.post(`/v1/tasks/${acme.task.token}/defer`, {})],
@@ -405,13 +404,17 @@ test("another tenant's host-tool task cannot be claimed, answered, heartbeated n
     await expectRefused({ attempt, status: unknownAnswer.status, slug: unknownAnswer.slug!, probe: taskProbe });
     void what;
   }
-  // globex's claim never hands acme's tasks out.
-  const claimed = await globex.api.get("/v1/tasks", { query: { toolset: acme.toolset, wait: "1s" } });
-  if (claimed.status === 200) {
-    expect((claimed.json.tasks as unknown[]).length).toBe(0);
+  // A stream of globex's for acme's toolset is handed none of acme's tasks, or is not found.
+  const opened = await TaskStream.attempt(globex.api, { toolset: acme.toolset, tools: ["crm.lookup", "pay.refund"] });
+  if (opened instanceof TaskStream) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await opened.close();
+    expect(opened.handed).toEqual([]);
   } else {
-    expectProblem(claimed, 404, "not-found");
+    expectProblem(opened, 404, "not-found");
   }
+  // Nor is one for acme's tools by name, whatever their toolset.
+  expect(await handedWithin(globex.api, { tools: ["crm.lookup", "pay.refund"] })).toEqual([]);
   // The approval waiting in acme cannot be decided by globex.
   const approvalProbe = () => runProbe(acme.tenant.api, acme.approval.runId);
   await expectRefused({ attempt: () => globex.api.post(`/v1/tasks/${acme.approval.taskId}/approve`), status: 404, slug: "not-found", probe: approvalProbe });
@@ -423,7 +426,7 @@ test("another tenant's host-tool task cannot be claimed, answered, heartbeated n
   expect(done.json.output.value).toEqual({ customer: { id: "cus_1" } });
   expectOk(await acme.tenant.api.post(`/v1/tasks/${acme.approval.taskId}/reject`, { message: "not today" }));
   evidence(
-    `globex with acme's task token: heartbeat, complete, fail, defer → ${unknownAnswer.status} ${unknownAnswer.slug ?? ""}, as for a token never issued; globex's claim hands out nothing; approve and reject of acme's parked call → 404; acme then completes its task (cus_1) and rejects its approval`,
+    `globex with acme's task token: complete, fail, defer → ${unknownAnswer.status} ${unknownAnswer.slug ?? ""}, as for a token never issued; globex's task streams are handed nothing; approve and reject of acme's parked call → 404; acme then completes its task (cus_1) and rejects its approval`,
   );
 });
 

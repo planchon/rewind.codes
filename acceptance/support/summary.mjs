@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 const [results, ...selected] = process.argv.slice(2);
 const CRITERIA = {
-  1: "A harness drives runs through the SDK, with several workers on one Postgres; one trace per run under the harness's span; runs searched by label and tool",
+  1: "A harness drives runs through the SDK, with several nodes on one Postgres; one trace per run under the harness's span; runs searched by label and tool",
   2: "Locally, run, signal, replay and trace across processes; a forgotten await, an unhandled rejection and a deadlock end as specified",
   3: "A script calls a real MCP server, with types checked beforehand",
   4: "The evals report, per model and prompt rendering, first-try check pass rate, task success, iterations and tokens",

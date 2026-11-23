@@ -22,8 +22,8 @@ import {
   waitingRun,
 } from "../support/access-helpers.js";
 import { startWebhookReceiver } from "../support/fixtures.js";
+import { TaskStream } from "../support/tools-helpers.js";
 import {
-  allow5xx,
   Api,
   evidence,
   expect,
@@ -76,11 +76,6 @@ interface Probe {
   stream?: true;
   /** Refused (403) to these principals even when they hold the permission, by a rule of 06. */
   refusedTo?: Scope[];
-  /**
-   * Runs a script: an api-only server answers 503 `unavailable` to a holder (in production the
-   * edge sends it to a worker; setup A has no edge).
-   */
-  worker?: true;
 }
 
 const p = (permission: string): Need => ({ permission });
@@ -125,8 +120,9 @@ const PROBES: Probe[] = [
   { op: "DELETE /v1/api-keys/{id}", need: p("api_keys:write"), path: `/v1/api-keys/${NO_DIGEST}` },
   // Scripts.
   { op: "POST /v1/check", need: p("runs:start"), path: "/v1/check", body: { script: "export default async function main( {" }, namespaced: true },
-  { op: "POST /v1/test", need: p("runs:start"), path: "/v1/test", body: { script: "export default async function main( {" }, namespaced: true, worker: true },
-  { op: "GET /v1/scripts", need: p("runs:read"), path: "/v1/scripts" },
+  { op: "POST /v1/test", need: p("runs:start"), path: "/v1/test", body: { script: "export default async function main( {" }, namespaced: true },
+  // Scripts and statistics come from counters, which carry no labels: not for a grant limited to them.
+  { op: "GET /v1/scripts", need: p("runs:read"), path: "/v1/scripts", refusedTo: ["labels"] },
   { op: "GET /v1/scripts/{digest}", need: p("runs:read"), path: `/v1/scripts/${NO_DIGEST}` },
   { op: "PATCH /v1/scripts/{digest}", need: p("scripts:write"), path: `/v1/scripts/${NO_DIGEST}`, body: { title: "matrix" } },
   // Onboarding: a member only.
@@ -203,8 +199,8 @@ const PROBES: Probe[] = [
     body: { script: "export default async function main( {" },
     namespaced: true,
   },
-  { op: "GET /v1/runs/failures", need: p("runs:read"), path: "/v1/runs/failures" },
-  { op: "GET /v1/runs/stats", need: p("runs:read"), path: "/v1/runs/stats" },
+  { op: "GET /v1/runs/failures", need: p("runs:read"), path: "/v1/runs/failures", refusedTo: ["labels"] },
+  { op: "GET /v1/runs/stats", need: p("runs:read"), path: "/v1/runs/stats", refusedTo: ["labels"] },
   { op: "DELETE /v1/runs/{id}", need: p("runs:delete"), path: `/v1/runs/${NO_RUN}` },
   { op: "GET /v1/runs/{id}", need: p("runs:read"), path: `/v1/runs/${NO_RUN}` },
   { op: "POST /v1/runs/{id}/cancel", need: p("runs:control"), path: `/v1/runs/${NO_RUN}/cancel`, body: {} },
@@ -231,13 +227,12 @@ const PROBES: Probe[] = [
   { op: "POST /v1/subscriptions", need: p("subscriptions:write"), path: "/v1/subscriptions", body: { url: "not a url" } },
   { op: "DELETE /v1/subscriptions/{id}", need: p("subscriptions:write"), path: "/v1/subscriptions/sub_unknown" },
   // Host-tool tasks.
-  { op: "GET /v1/tasks", need: p("tasks:work"), path: "/v1/tasks", query: { wait: "0s" } },
+  { op: "GET /v1/tasks/stream", need: p("tasks:work"), path: "/v1/tasks/stream", stream: true },
   { op: "POST /v1/tasks/{id}/approve", need: p("tasks:approve"), path: `/v1/tasks/${NO_TASK}/approve` },
   { op: "POST /v1/tasks/{id}/reject", need: p("tasks:approve"), path: `/v1/tasks/${NO_TASK}/reject`, body: {} },
   { op: "POST /v1/tasks/{token}/complete", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/complete`, body: { result: null } },
   { op: "POST /v1/tasks/{token}/defer", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/defer`, body: {} },
   { op: "POST /v1/tasks/{token}/fail", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/fail`, body: { message: "matrix" } },
-  { op: "POST /v1/tasks/{token}/heartbeat", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/heartbeat` },
   // Tokens.
   { op: "DELETE /v1/tokens/{id}", need: p("tokens:write"), path: `/v1/tokens/${NO_DIGEST}` },
   // Tool statistics span the tenant: not for a grant limited to labels.
@@ -304,7 +299,6 @@ async function send(api: Api, probe: Probe, principal: Principal, tenant: string
   const method = probe.op.split(" ")[0]!;
   let target = api;
   if (probe.namespaced && principal.scope !== "token") target = target.ns("matrix-ns");
-  if (probe.worker) allow5xx("unavailable");
   return target.request(method, probe.path.replace("{tenant}", tenant), {
     json: probe.body,
     query: probe.query,
@@ -356,8 +350,7 @@ async function matrix(tenant: Tenant, principal: Principal): Promise<Cell[]> {
       const scoped = principal.scope !== undefined && (probe.refusedTo ?? []).includes(principal.scope);
       if (held && !scoped) {
         expected = "answered";
-        ok = reply.status !== 401 && reply.status !== 403 && (reply.status < 500 || (probe.worker === true && reply.status === 503 && reply.slug === "unavailable"));
-        if (probe.worker && reply.status === 503) why = "api role only: a worker runs it";
+        ok = reply.status !== 401 && reply.status !== 403 && reply.status < 500;
       } else if (held && scoped) {
         expected = "refused";
         ok = reply.status === 403 && reply.slug === "forbidden";
@@ -460,7 +453,7 @@ test.describe("the permission matrix", () => {
     expectMatrix(role, await matrix(tenant, { name: role, bearer: key, holds: ["tasks:approve"] }));
   });
 
-  test("an owner key limited to labels cannot administer or read tool statistics", { tag: "@attack" }, async () => {
+  test("an owner key limited to labels cannot administer or read statistics", { tag: "@attack" }, async () => {
     const { key } = await createKey(tenant.api, "owner", { name: "matrix owner red", allowedLabels: { team: "red" } });
     const whoami = await new Api(stacks().a.url, key).get("/v1/whoami");
     const holds = PERMISSIONS.filter((p) => !ADMINISTRATION.includes(p));
@@ -699,10 +692,7 @@ test.describe("keys limited to labels", () => {
     expect(ids).toContain(redRun);
     expect(ids).not.toContain(blueRun);
     expect(ids).not.toContain(blueWaiting);
-    const stats = await red.get("/v1/runs/stats");
-    expectOk(stats, 200);
-    expect(JSON.stringify(stats.json)).not.toContain(blueRun);
-    evidence("the red key: the blue run, its journal, trace, entries and events → 404; lists and stats hold red runs only");
+    evidence("the red key: the blue run, its journal, trace, entries and events → 404; lists hold red runs only");
   });
 
   test("a key limited to labels cannot signal, cancel, fork or erase a run it does not see", { tag: "@attack" }, async () => {
@@ -787,14 +777,18 @@ test.describe("keys limited to labels", () => {
     evidence("a role without secrets:use: org/shared-crm for a listing → 403 naming secrets:use; for a run → 422 secret-required (forbidden), no run");
   });
 
-  test("a key limited to labels reads no tool statistics, and no payload without its run", { tag: "@attack" }, async () => {
-    const stats = await red.get("/v1/tools/stats");
-    expectProblem(stats, 403, "forbidden");
+  test("a key limited to labels reads no statistics, no scripts, and no payload without its run", { tag: "@attack" }, async () => {
+    // Statistics come from hourly counters, which carry no labels: none would be the key's alone.
+    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"]) {
+      const reply = await red.get(path);
+      expectProblem(reply, 403, "forbidden");
+      expect(reply.text).not.toContain(blueRun);
+    }
     expectProblem(await red.get(`/v1/payloads/${NO_DIGEST}`), 403, "forbidden");
-    evidence("GET /v1/tools/stats, and a payload without its run → 403 for a key limited to labels");
+    evidence("GET /v1/runs/stats, /v1/runs/failures, /v1/scripts and /v1/tools/stats, and a payload without its run → 403 for a key limited to labels");
   });
 
-  test("a worker key limited to labels claims and answers the host-tool tasks of its runs only", { tag: "@attack" }, async () => {
+  test("a worker key limited to labels is handed and answers the host-tool tasks of its runs only", { tag: "@attack" }, async () => {
     // One toolset for both teams, as two environments of a tenant register the same host tools.
     const toolset = await tenant.api.post("/v1/toolsets", {
       host: [{ name: "team.lookup", description: "Looks something up.", inputSchema: { type: "object" } }],
@@ -803,39 +797,43 @@ test.describe("keys limited to labels", () => {
     const script = `import { team } from "rewind:tools";
 export default async function main() { return await team.lookup({}); }
 `;
-    const ask = (labels: Record<string, string>) => startRun(tenant.api, "labels", { script, toolset: toolset.json.id, labels });
-    const redAsks = await ask({ team: "red" });
-    const blueAsks = await ask({ team: "blue" });
-    expectOk(redAsks);
-    expectOk(blueAsks);
     const redWorker = new Api(stacks().a.url, (await createKey(tenant.api, "worker", { name: "red worker", allowedLabels: { team: "red" } })).key);
-    const query = { toolset: toolset.json.id, tool: "team.lookup", limit: 10 };
+    const query = { toolset: toolset.json.id, tools: ["team.lookup"], slots: 10 };
+    const reds = await TaskStream.open(redWorker, query);
+    try {
+      const ask = (labels: Record<string, string>) => startRun(tenant.api, "labels", { script, toolset: toolset.json.id, labels });
+      const redAsks = await ask({ team: "red" });
+      const blueAsks = await ask({ team: "blue" });
+      expectOk(redAsks);
+      expectOk(blueAsks);
 
-    const ours = await redWorker.get("/v1/tasks", { query: { ...query, wait: "10s" } });
-    expectOk(ours, 200);
-    expect(ours.json.tasks.map((task: { runId: string }) => task.runId)).toEqual([redAsks.json.id]);
-    expect(ours.json.tasks[0].labels).toMatchObject({ team: "red" });
-    const more = await redWorker.get("/v1/tasks", { query: { ...query, wait: "1s" } });
-    expectOk(more, 200);
-    expect(more.json.tasks, "the blue run's task is not the red worker's").toEqual([]);
+      const ours = await reds.task("the red run's task", (task) => task.runId === redAsks.json.id);
+      expect(ours.labels).toMatchObject({ team: "red" });
 
-    // The blue task, claimed by a worker of the tenant: the red worker cannot answer it.
-    const theirs = await tenant.api.get("/v1/tasks", { query: { ...query, wait: "10s" } });
-    expectOk(theirs, 200);
-    expect(theirs.json.tasks.map((task: { runId: string }) => task.runId)).toEqual([blueAsks.json.id]);
-    const blueToken = theirs.json.tasks[0].token as string;
-    const probe = async () => (await tenant.api.get(`/v1/runs/${blueAsks.json.id}`)).json.status;
-    await expectRefused({ attempt: () => redWorker.post(`/v1/tasks/${blueToken}/complete`, { result: "from red" }), status: 410, slug: "task-gone", probe });
-    expectProblem(await redWorker.post(`/v1/tasks/${blueToken}/heartbeat`), 410, "task-gone");
+      // The blue task, handed to a worker of the tenant: the red worker is never handed it, and
+      // cannot answer it.
+      const all = await TaskStream.open(tenant.api, query);
+      try {
+        const blue = await all.task("the blue run's task", (task) => task.runId === blueAsks.json.id);
+        expect(reds.handed.map((task) => task.runId), "the blue run's task is not the red worker's").toEqual([redAsks.json.id]);
+        const probe = async () => (await tenant.api.get(`/v1/runs/${blueAsks.json.id}`)).json.status;
+        await expectRefused({ attempt: () => redWorker.post(`/v1/tasks/${blue.token}/complete`, { result: "from red" }), status: 410, slug: "task-gone", probe });
+        await expectRefused({ attempt: () => redWorker.post(`/v1/tasks/${blue.token}/defer`, {}), status: 410, slug: "task-gone", probe });
 
-    expectOk(await redWorker.post(`/v1/tasks/${ours.json.tasks[0].token}/complete`, { result: "red's" }), 204);
-    expectOk(await tenant.api.post(`/v1/tasks/${blueToken}/complete`, { result: "blue's" }), 204);
-    for (const [run, answer] of [[redAsks.json.id, "red's"], [blueAsks.json.id, "blue's"]]) {
-      const done = await tenant.api.get(`/v1/runs/${run}`, { query: { wait: "20s" } });
-      expect(done.json.status).toBe("completed");
-      expect(done.json.output.value).toBe(answer);
+        expectOk(await redWorker.post(`/v1/tasks/${ours.token}/complete`, { result: "red's" }), 204);
+        expectOk(await tenant.api.post(`/v1/tasks/${blue.token}/complete`, { result: "blue's" }), 204);
+      } finally {
+        await all.close();
+      }
+      for (const [run, answer] of [[redAsks.json.id, "red's"], [blueAsks.json.id, "blue's"]]) {
+        const done = await tenant.api.get(`/v1/runs/${run}`, { query: { wait: "20s" } });
+        expect(done.json.status).toBe("completed");
+        expect(done.json.output.value).toBe(answer);
+      }
+    } finally {
+      await reds.close();
     }
-    evidence("GET /v1/tasks by a worker key limited to team:red → the red run's task only; the blue task's token → 410 task-gone for it");
+    evidence("the task stream of a worker key limited to team:red → the red run's task only; the blue task's token → 410 task-gone for it");
   });
 
   test("a subscription a key limited to labels creates carries them", { tag: "@success" }, async () => {

@@ -1,11 +1,13 @@
 /**
  * Criterion 1 (`archi/09-roadmap.md`, "0.1 is done when"): a harness drives runs through the SDK,
- * with several workers on one Postgres. Each run appears as one trace under the harness's span,
+ * with several nodes on one Postgres. Each run appears as one trace under the harness's span,
  * and runs can be searched by label and tool.
  *
- * The deployment: Postgres, blobs on MinIO, an OpenTelemetry Collector writing to a file, one
- * `rewind server --role api` and two `rewind server --role worker`. The harness is the TypeScript SDK:
- * its host-tool worker serves the harness's tools; it sends a signal and approves a call.
+ * The deployment: Postgres for the control plane, a bucket on MinIO for the partitions, the
+ * archive and the blobs, an OpenTelemetry Collector writing to a file, and two nodes
+ * (`rewind server`, each an HTTP edge and a node). The harness is the TypeScript SDK: its
+ * host-tool worker holds a task stream open on one node and serves the harness's tools; it sends
+ * a signal and approves a call through the other.
  */
 import { randomBytes } from "node:crypto";
 import { type HostToolContext, Rewind, type Run } from "@rewind.codes/sdk";
@@ -38,7 +40,7 @@ const RUNS = 6;
 /** This run gets no refund: it never calls `payments.refund`. */
 const NO_REFUND = 5;
 
-test.describe("criterion 1: SDK, two workers, one Postgres", () => {
+test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
   test.skip(!dockerAvailable(), "needs Docker");
 
   let deployment: Deployment;
@@ -51,14 +53,22 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
     await deployment?.stop();
   });
 
-  test("runs driven by the SDK on an api server and two workers, traced under the harness", async () => {
+  test("runs driven by the SDK on two nodes, traced under the harness", async () => {
     const { admin } = deployment;
     const harnessKey = await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "acceptance harness" });
-    // The runs act for one end user of the harness: a key names its namespace to start them.
-    const rewind = new Rewind({ url: deployment.url, apiKey: harnessKey.key ?? undefined }).namespace("alice");
+    // One client per node: each request reaches the owner of the run's partition, through the
+    // node link when another node owns it.
+    const edges = deployment.urls.map((url) => new Rewind({ url, apiKey: harnessKey.key ?? undefined }));
+    // Both nodes are of one deployment, and each answers for itself.
+    const infos = await Promise.all(edges.map((edge) => edge.server.info()));
+    expect(infos.map((info) => info.node)).toEqual(deployment.nodes);
+    for (const info of infos) expect(info.nodes).toBe(deployment.nodes.length);
+    // Each run acts for an end user of its own: a key names its namespace to start it. The
+    // namespaces spread over the partitions, and so over the nodes.
+    const user = (n: number, edge: number) => edges[edge % edges.length]!.namespace(`user${n}`);
     const suite = `acceptance-${randomBytes(4).toString("hex")}`;
 
-    const toolset = await rewind.toolsets.create({
+    const toolset = await edges[0]!.toolsets.create({
       host: [
         {
           name: "crm.lookup",
@@ -93,11 +103,12 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
     });
     expect(toolset.declarations.dts).toContain("lookup");
 
-    // The harness's host tools, served by the SDK's worker. Each call is logged with its context.
+    // The harness's host tools, served by the SDK's worker on the second node's task stream,
+    // whichever node owns the run. Each call is logged with its context.
     const calls: { tool: string; runId: string; seq: number; traceparent: string | undefined; key: string }[] = [];
     const log = (tool: string, ctx: HostToolContext) =>
       calls.push({ tool, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
-    const worker = rewind.worker({
+    const worker = edges[1 % edges.length]!.worker({
       toolset: toolset.id,
       tools: {
         "crm.lookup": async ({ email }: { email: string }, ctx) => {
@@ -125,37 +136,39 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
           labels: { suite, conversation: `c${n}` },
           traceparent: harness[n]!.traceparent,
         };
-        const run = await rewind.runs.start(request);
-        // The model's tool call handled twice starts one run.
-        expect((await rewind.runs.start(request)).id).toBe(run.id);
+        const run = await user(n, 0).runs.start(request);
+        // The model's tool call handled twice, through either node, starts one run.
+        expect((await user(n, 1).runs.start(request)).id).toBe(run.id);
         expect(run.traceId).toBe(harness[n]!.traceId);
+        expect(run.namespace).toBe(`user${n}`);
         runs.push(run);
       }
 
-      // Each run looks its customer up, sleeps, then waits for the decision.
+      // Each run looks its customer up, sleeps, then waits for the decision, sent through the
+      // other node.
       for (const [n, run] of runs.entries()) {
         await eventually(`run ${n} waits for its decision`, async () => {
-          const state = await rewind.runs.get(run.id);
+          const state = await user(n, 1).runs.get(run.id);
           return state.waitingFor?.some((w) => w.kind === "signal" && w.name === "decision") ? state : undefined;
         });
         const refund = n === NO_REFUND ? 0 : 10 * (n + 1);
-        await rewind.runs.signal(run.id, "decision", { refund }, { idempotencyKey: `${suite}-decision-${n}` });
+        await user(n, 1).runs.signal(run.id, "decision", { refund }, { idempotencyKey: `${suite}-decision-${n}` });
       }
 
       // A person approves each refund, after reading its arguments.
       for (const [n, run] of runs.entries()) {
         if (n === NO_REFUND) continue;
         const pending = await eventually(`run ${n}'s refund waits for approval`, async () => {
-          const found = rewind.approvals.pending(await rewind.runs.get(run.id));
+          const found = user(n, 0).approvals.pending(await user(n, 0).runs.get(run.id));
           return found.length > 0 ? found : undefined;
         });
         expect(pending).toHaveLength(1);
         expect(pending[0]!.tool).toBe("payments.refund");
-        expect(await rewind.approvals.args(pending[0]!)).toEqual({ customer: `cus_user${n}`, amount: 10 * (n + 1) });
-        await rewind.approvals.approve(pending[0]!);
+        expect(await user(n, 0).approvals.args(pending[0]!)).toEqual({ customer: `cus_user${n}`, amount: 10 * (n + 1) });
+        await user(n, 0).approvals.approve(pending[0]!);
       }
 
-      const ended = await Promise.all(runs.map((run) => rewind.runs.get(run.id, { wait: "120s" })));
+      const ended = await Promise.all(runs.map((run, n) => user(n, 1).runs.get(run.id, { wait: "120s" })));
       for (const [n, run] of ended.entries()) {
         expect(run.status, JSON.stringify(run)).toBe("completed");
         expect(run.output?.value).toEqual(
@@ -169,20 +182,23 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
       expect(calls.filter((c) => c.tool === "crm.lookup")).toHaveLength(RUNS);
       expect(calls.filter((c) => c.tool === "payments.refund")).toHaveLength(RUNS - 1);
 
-      // Found through the API by label and by tool (the read model, filled by the projector).
-      const ids = (page: { runs: { id: string }[] }) => page.runs.map((r) => r.id).sort();
+      // Found through the API by label and by tool, across the namespaces and so the partitions
+      // (each run's summary in its partition's index).
       const all = runs.map((r) => r.id).sort();
-      await expect.poll(async () => ids(await rewind.runs.list({ labels: { suite } }))).toEqual(all);
-      await expect
-        .poll(async () => ids(await rewind.runs.list({ labels: { suite }, tool: "payments.refund" })))
-        .toEqual(all.filter((id) => id !== runs[NO_REFUND]!.id));
-      await expect.poll(async () => ids(await rewind.runs.list({ labels: { suite }, tool: "crm.lookup" }))).toEqual(all);
-      expect(ids(await rewind.runs.list({ labels: { suite, conversation: "c2" } }))).toEqual([runs[2]!.id]);
-      expect(ids(await rewind.runs.list({ labels: { suite }, status: "failed" }))).toEqual([]);
+      for (const edge of edges) {
+        const ids = (page: { runs: { id: string }[] }) => page.runs.map((r) => r.id).sort();
+        await expect.poll(async () => ids(await edge.runs.list({ labels: { suite } }))).toEqual(all);
+        await expect
+          .poll(async () => ids(await edge.runs.list({ labels: { suite }, tool: "payments.refund" })))
+          .toEqual(all.filter((id) => id !== runs[NO_REFUND]!.id));
+        await expect.poll(async () => ids(await edge.runs.list({ labels: { suite }, tool: "crm.lookup" }))).toEqual(all);
+        expect(ids(await edge.runs.list({ labels: { suite, conversation: "c2" } }))).toEqual([runs[2]!.id]);
+        expect(ids(await edge.runs.list({ labels: { suite }, status: "failed" }))).toEqual([]);
+      }
 
-      // The large customer record went to MinIO.
+      // The large customer record went to MinIO, under its run.
       const objects = deployment.minio.objects();
-      expect(objects.some((key) => key.includes("sha256")), objects.join("\n")).toBe(true);
+      expect(objects.some((key) => key.startsWith("blobs/") && key.includes("sha256")), objects.join("\n")).toBe(true);
 
       // The traces: every run is one trace under its harness span.
       for (const span of harness) await span.export(deployment.collector.http);
@@ -218,7 +234,7 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
         expect(only(children("timer")).parentSpanId).toBe(runSpan.spanId);
         expect(only(children("signal decision")).parentSpanId).toBe(runSpan.spanId);
         if (n !== NO_REFUND) expect(only(children("payments.refund")).parentSpanId).toBe(runSpan.spanId);
-        // The activations (service telemetry, from the workers) sit under the run span.
+        // The activations (service telemetry, from the node that ran them) sit under the run span.
         const activations = children("activation");
         expect(activations.length).toBeGreaterThan(0);
         for (const activation of activations) {
@@ -230,8 +246,9 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
         expect(call?.traceparent).toBeDefined();
         expect(parseTraceparent(call!.traceparent!)).toEqual({ traceId: span.traceId, parentId: lookup.spanId });
       }
-      // Both workers ran activations; the api server ran none.
-      expect([...activatedBy].sort()).toEqual(deployment.workers);
+      // The activations ran on the nodes of the deployment, each on the node owning its run.
+      expect(activatedBy.size).toBeGreaterThan(0);
+      for (const node of activatedBy) expect(deployment.nodes).toContain(node);
     } finally {
       await worker.stop();
     }

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
-# The image of the `rewind` binary: one image for every role, chosen by its arguments
-# (`rewind server --role api`, `rewind server --role worker`). The dashboard is built with pnpm and
+# The image of the `rewind` binary: one image for every node, chosen by its arguments
+# (`rewind server`, `rewind server --executors-only`). The dashboard is built with pnpm and
 # embedded in the binary; tsgo, the type-checker, is embedded by rewind-check's build script.
 #
 #   docker build -t rewind:local .                     # the server image (the last stage)
@@ -57,10 +57,10 @@ CMD ["--help"]
 # The server and CLI.
 FROM gcr.io/distroless/cc-debian13:nonroot AS rewind
 LABEL org.opencontainers.image.title="rewind" \
-      org.opencontainers.image.description="Rewind: the HTTP API, the workers and the dashboard; the role is chosen by the arguments"
+      org.opencontainers.image.description="Rewind: a node of the run plane, its HTTP API and the dashboard, as its arguments choose"
 COPY --from=build /out/rewind /usr/local/bin/rewind
 COPY --from=build --chown=65532:65532 /out/cache /var/cache/rewind
-# tsgo is extracted here at the first type-check, by the api role: give it a writable
+# tsgo is extracted here at the first type-check, by the node that checks: give it a writable
 # directory that allows execution when the root file system is read-only.
 ENV TZ=UTC \
     REWIND_LISTEN=0.0.0.0:8080 \

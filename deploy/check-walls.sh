@@ -1,12 +1,12 @@
 #!/bin/sh
-# Checks the walls around a worker, from inside its network settings:
+# Checks the walls around a node, from inside its network settings:
 #
-#   ./check-walls.sh [worker-1-net]
+#   ./check-walls.sh [node-1-net]
 #
-# Under runc, from the holder of the worker's namespace, which shares it and has the tools the
-# worker's image has not. Under gVisor, the worker's sandbox has taken over that namespace, and
+# Under runc, from the holder of the node's namespace, which shares it and has the tools the
+# node's image has not. Under gVisor, the node's sandbox has taken over that namespace, and
 # nothing else can run in it: from the service `walls`, a gVisor sandbox with the network
-# settings of the workers under gVisor, in a holder of its own (compose.yaml), started for the
+# settings of the nodes under gVisor, in a holder of its own (compose.yaml), started for the
 # check and removed after it.
 #
 # Open: the core network (MinIO here). Closed: names outside REWIND_EGRESS_ALLOW, addresses no
@@ -14,7 +14,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-holder="${1:-worker-1-net}"
+holder="${1:-node-1-net}"
 failed=0
 
 holder_id="$(docker compose ps -q "$holder")"
@@ -23,7 +23,7 @@ if [ -z "$holder_id" ]; then
     exit 1
 fi
 
-# The runtime of the worker that joined the holder's namespace.
+# The runtime of the node that joined the holder's namespace.
 project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$holder_id")"
 runtime="$(docker ps -q --filter "label=com.docker.compose.project=$project" |
     xargs docker inspect -f '{{.HostConfig.NetworkMode}} {{.HostConfig.Runtime}}' |
@@ -43,7 +43,7 @@ if [ "$runtime" = runsc ]; then
     trap 'docker compose rm -fs walls walls-net >/dev/null 2>&1' EXIT
     start walls-net
     start walls
-    echo "from a gVisor sandbox with the network settings of the worker in $holder:"
+    echo "from a gVisor sandbox with the network settings of the node in $holder:"
 else
     probe="$holder"
     echo "from $holder:"

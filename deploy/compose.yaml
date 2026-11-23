@@ -1,67 +1,79 @@
-# The reference deployment of Rewind (deploy/README.md): Postgres, MinIO (S3), an OpenTelemetry
-# Collector, one api server and two workers behind an edge, and the workers' egress gateway.
+# The reference deployment of Rewind (deploy/README.md): Postgres for the control plane, MinIO
+# (S3) for the bucket of the partitions, the archive and the blobs, an OpenTelemetry Collector,
+# two nodes behind an edge, and the nodes' egress gateway.
 #
 #   ./init.sh                                   # writes .env with fresh secrets, once
-#   docker compose up -d --build                # workers under runc
-#   docker compose --profile gvisor up -d       # workers under gVisor (needs runsc)
-#   ./check-walls.sh                            # the workers' walls hold
+#   docker compose up -d --build                # nodes under runc
+#   docker compose --profile gvisor up -d       # nodes under gVisor (needs runsc)
+#   ./check-walls.sh                            # the nodes' walls hold
 #
 # Networks:
-#   public  the edge, the api's outbound calls (MCP discovery), services outside the deployment
-#   core    internal, no route out: the stores, the collector, the api, the workers, the egress
+#   public  the edge, services outside the deployment
+#   core    internal, no route out: the stores, the collector, the nodes, the egress
 #
-# Workers hold no network of their own: each joins the namespace of a holder (`worker-N-net`)
-# whose default route goes through the egress gateway, their only way out. Under gVisor, a
-# worker's sandbox takes over that namespace, and its DNS server is the relay `worker-dns`
-# (README, "Workers: the walls").
+# Every node is an HTTP edge and a node of the run plane, and runs code written by a model: it
+# holds no network of its own, but joins the namespace of a holder (`node-N-net`) whose default
+# route goes through the egress gateway, its only way out. Under gVisor, a node's sandbox takes
+# over that namespace, and its DNS server is the relay `node-dns` (README, "Nodes: the walls").
+# The nodes reach each other's link on the core network.
 
 name: Rewind
 
 x-rewind: &rewind
   image: ${REWIND_IMAGE:-rewind:local}
   restart: unless-stopped
-  # A stopping server lets the work in flight commit, for up to 30 s.
+  # A stopping node hands its partitions over and lets the requests in flight end, for up to 30 s.
   stop_grace_period: 40s
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   tmpfs:
     - /tmp:size=64m
+    # tsgo, extracted at the first type-check: it must be executable.
+    - /var/cache/rewind:size=256m,exec,uid=65532,gid=65532,mode=0700
 
-x-rewind-env: &rewind-env
+x-node: &node
+  <<: *rewind
+  command: [server]
+  mem_limit: ${REWIND_NODE_MEMORY:-1g}
+  cpus: ${REWIND_NODE_CPUS:-2}
+  depends_on: &node-depends
+    postgres: { condition: service_healthy }
+    minio-init: { condition: service_completed_successfully }
+    otel-collector: { condition: service_started }
+
+# What every node of the deployment is given, the executors of a previous build included.
+x-node-env: &node-env
   REWIND_STORE: postgres://rewind:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/rewind
-  REWIND_BLOBS: s3://rewind-payloads
+  REWIND_BUCKET: s3://rewind-payloads
   REWIND_S3_ENDPOINT: http://minio:9000
   REWIND_S3_REGION: us-east-1
   REWIND_S3_ALLOW_HTTP: "true"
   REWIND_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?run ./init.sh first}
   REWIND_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?run ./init.sh first}
   REWIND_MASTER_KEY: ${REWIND_MASTER_KEY:?run ./init.sh first}
+  REWIND_CLUSTER_SECRET: ${REWIND_CLUSTER_SECRET:?run ./init.sh first}
   REWIND_PUBLIC_URL: ${REWIND_PUBLIC_URL:-http://localhost:8080}
   REWIND_OTLP_ENDPOINT: http://otel-collector:4318
   REWIND_LOG: ${REWIND_LOG:-info}
   REWIND_DEFAULT_TTL: ${REWIND_DEFAULT_TTL:-30d}
   REWIND_MAX_TTL: ${REWIND_MAX_TTL:-365d}
-  # MCP servers at private addresses the servers may reach (names, *.domain, CIDR networks):
+  REWIND_EXECUTORS: ${REWIND_EXECUTORS:-4}
+  REWIND_CALLS: ${REWIND_CALLS:-256}
+  REWIND_CACHE_INSTANCES: ${REWIND_CACHE_INSTANCES:-500}
+  REWIND_CACHE_MEMORY: ${REWIND_CACHE_MEMORY:-384MiB}
+  # MCP servers at private addresses the nodes may reach (names, *.domain, CIDR networks):
   # `loadgen` is the load generator's fake MCP server (profile load).
   REWIND_ALLOW_INTERNAL_TOOLS: ${REWIND_ALLOW_INTERNAL_TOOLS:-loadgen}
 
-x-worker: &worker
-  <<: *rewind
-  command: [server, --role, worker]
-  mem_limit: ${REWIND_WORKER_MEMORY:-1g}
-  cpus: ${REWIND_WORKER_CPUS:-2}
-  depends_on: &worker-depends
-    postgres: { condition: service_healthy }
-    minio-init: { condition: service_completed_successfully }
-    otel-collector: { condition: service_started }
-
-x-worker-env: &worker-env
-  <<: *rewind-env
-  REWIND_ACTIVATIONS: ${REWIND_WORKER_ACTIVATIONS:-4}
-  REWIND_DISPATCHES: ${REWIND_WORKER_DISPATCHES:-64}
-  REWIND_CACHE_INSTANCES: ${REWIND_CACHE_INSTANCES:-500}
-  REWIND_CACHE_MEMORY: ${REWIND_CACHE_MEMORY:-384MiB}
+# What the nodes that serve the HTTP API are given besides: the first key, and what the tenants
+# they create get.
+x-edge-env: &edge-env
+  <<: *node-env
+  REWIND_ADMIN_KEY: ${REWIND_ADMIN_KEY:?run ./init.sh first}
+  REWIND_ADMIN_TENANT: ${REWIND_ADMIN_TENANT:-default}
+  REWIND_QUOTA_ACTIVE_RUNS: ${REWIND_QUOTA_ACTIVE_RUNS:-10000}
+  REWIND_RETENTION: ${REWIND_RETENTION:-365d}
 
 x-holder: &holder
   build: ./egress
@@ -85,18 +97,18 @@ x-holder: &holder
     start_interval: 1s
   depends_on: [egress]
 
-# A worker under gVisor. Its sandbox runs its own network stack, which copies the addresses and
+# A node under gVisor. Its sandbox runs its own network stack, which copies the addresses and
 # routes of the holder's namespace when it starts and takes them from the namespace: it starts
 # once the holder has set its route. That stack cannot reach Docker's DNS server (127.0.0.11),
-# so its DNS server is the relay `worker-dns`, which answers what Docker's answers a worker
-# under runc.
+# so its DNS server is the relay `node-dns`, which answers what Docker's answers a node under
+# runc.
 x-gvisor: &gvisor
   runtime: runsc
   volumes: [./egress/resolv.conf:/etc/resolv.conf:ro]
 
 x-gvisor-depends: &gvisor-depends
-  <<: *worker-depends
-  worker-dns: { condition: service_started }
+  <<: *node-depends
+  node-dns: { condition: service_started }
 
 networks:
   public: {}
@@ -113,6 +125,8 @@ volumes:
   minio: {}
 
 services:
+  # The control plane, and the nodes' liveness locks in the database `postgres` of the same
+  # server, where nothing else is stored.
   postgres:
     image: postgres:17
     restart: unless-stopped
@@ -148,7 +162,7 @@ services:
       timeout: 5s
       retries: 30
 
-  # The bucket of large payloads and archived journals.
+  # The bucket: the partitions, the archive of ended runs and the blobs.
   minio-init:
     image: cgr.dev/chainguard/minio-client:latest
     command: [mb, --ignore-existing, rewind/rewind-payloads]
@@ -166,7 +180,7 @@ services:
     networks: [core]
     mem_limit: 256m
 
-  # The workers' only way out: forwards to the addresses of REWIND_EGRESS_ALLOW's names only.
+  # The nodes' only way out: forwards to the addresses of REWIND_EGRESS_ALLOW's names only.
   egress:
     build: ./egress
     image: rewind-egress:local
@@ -177,8 +191,9 @@ services:
       net.ipv4.ip_forward: "1"
     environment:
       REWIND_EGRESS_ADDRESS: ${REWIND_EGRESS_ADDRESS:-172.29.213.2}
-      # MCP servers, hosts of `http` tools, receivers of webhook subscriptions. `loadgen` is the
-      # fake MCP server of the load generator (profile load).
+      # MCP servers, APIs and their OpenAPI documents, hosts of `http` tools, receivers of
+      # webhook subscriptions. `loadgen` is the fake MCP server of the load generator (profile
+      # load).
       REWIND_EGRESS_ALLOW: ${REWIND_EGRESS_ALLOW:-loadgen}
       REWIND_EGRESS_LOG_QUERIES: ${REWIND_EGRESS_LOG_QUERIES:-}
     networks:
@@ -186,8 +201,8 @@ services:
       public: {}
     mem_limit: 64m
 
-  # The DNS server of the workers under gVisor (egress/dns.sh, egress/resolv.conf).
-  worker-dns:
+  # The DNS server of the nodes under gVisor (egress/dns.sh, egress/resolv.conf).
+  node-dns:
     build: ./egress
     image: rewind-egress:local
     entrypoint: [/usr/local/bin/dns.sh]
@@ -197,39 +212,14 @@ services:
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE, SETUID, SETGID]
     environment:
-      REWIND_WORKER_DNS_ADDRESS: ${REWIND_WORKER_DNS_ADDRESS:-172.29.213.3}
+      REWIND_NODE_DNS_ADDRESS: ${REWIND_NODE_DNS_ADDRESS:-172.29.213.3}
     dns: ["${REWIND_EGRESS_ADDRESS:-172.29.213.2}"]
     networks:
-      core: { ipv4_address: "${REWIND_WORKER_DNS_ADDRESS:-172.29.213.3}" }
+      core: { ipv4_address: "${REWIND_NODE_DNS_ADDRESS:-172.29.213.3}" }
     mem_limit: 32m
     depends_on: [egress]
 
-  api:
-    <<: *rewind
-    build:
-      context: ..
-      target: rewind
-    command: [server, --role, api]
-    environment:
-      <<: *rewind-env
-      REWIND_WORKER_NAME: api
-      REWIND_ADMIN_KEY: ${REWIND_ADMIN_KEY:?run ./init.sh first}
-      REWIND_ADMIN_TENANT: ${REWIND_ADMIN_TENANT:-default}
-      REWIND_QUOTA_ACTIVE_RUNS: ${REWIND_QUOTA_ACTIVE_RUNS:-10000}
-      REWIND_JOURNAL_RETENTION: ${REWIND_JOURNAL_RETENTION:-30d}
-      REWIND_ARCHIVE_RETENTION: ${REWIND_ARCHIVE_RETENTION:-365d}
-      REWIND_READ_MODEL_RETENTION: ${REWIND_READ_MODEL_RETENTION:-90d}
-      REWIND_PAYLOAD_GRACE: ${REWIND_PAYLOAD_GRACE:-24h}
-    tmpfs:
-      - /tmp:size=64m
-      # tsgo, extracted at the first type-check: it must be executable.
-      - /var/cache/rewind:size=256m,exec,uid=65532,gid=65532,mode=0700
-    networks: [public, core]
-    mem_limit: 512m
-    cpus: 2
-    depends_on:
-      <<: *worker-depends
-
+  # The only published port: each request goes to a node (edge/Caddyfile).
   edge:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -238,92 +228,106 @@ services:
       - ${REWIND_BIND:-127.0.0.1}:${REWIND_PORT:-8080}:8080
     networks: [public, core]
     mem_limit: 128m
-    depends_on: [api]
+    depends_on: [node-1-net, node-2-net]
 
-  # The network namespaces of the workers.
-  worker-1-net: *holder
-  worker-2-net: *holder
+  # The network namespaces of the nodes.
+  node-1-net: *holder
+  node-2-net: *holder
 
-  worker-1:
-    <<: *worker
+  node-1:
+    <<: *node
+    build:
+      context: ..
+      target: rewind
     profiles: [runc]
-    network_mode: service:worker-1-net
+    network_mode: service:node-1-net
     environment:
-      <<: *worker-env
-      REWIND_WORKER_NAME: worker-1
+      <<: *edge-env
+      REWIND_NODE_ID: node-1
+      REWIND_LINK_ADDRESS: node-1-net:7070
     depends_on:
-      <<: *worker-depends
-      worker-1-net: { condition: service_started }
+      <<: *node-depends
+      node-1-net: { condition: service_started }
 
-  worker-2:
-    <<: *worker
+  node-2:
+    <<: *node
     profiles: [runc]
-    network_mode: service:worker-2-net
+    network_mode: service:node-2-net
     environment:
-      <<: *worker-env
-      REWIND_WORKER_NAME: worker-2
+      <<: *edge-env
+      REWIND_NODE_ID: node-2
+      REWIND_LINK_ADDRESS: node-2-net:7070
     depends_on:
-      <<: *worker-depends
-      worker-2-net: { condition: service_started }
+      <<: *node-depends
+      node-2-net: { condition: service_started }
 
-  # The same workers under gVisor: `docker compose --profile gvisor up -d` on a host whose
+  # The same nodes under gVisor: `docker compose --profile gvisor up -d` on a host whose
   # Docker has the runsc runtime (https://gvisor.dev/docs/user_guide/install/).
-  worker-1-gvisor:
-    <<: [*worker, *gvisor]
+  node-1-gvisor:
+    <<: [*node, *gvisor]
+    build:
+      context: ..
+      target: rewind
     profiles: [gvisor]
-    network_mode: service:worker-1-net
+    network_mode: service:node-1-net
     environment:
-      <<: *worker-env
-      REWIND_WORKER_NAME: worker-1
+      <<: *edge-env
+      REWIND_NODE_ID: node-1
+      REWIND_LINK_ADDRESS: node-1-net:7070
     depends_on:
       <<: *gvisor-depends
-      worker-1-net: { condition: service_healthy }
+      node-1-net: { condition: service_healthy }
 
-  worker-2-gvisor:
-    <<: [*worker, *gvisor]
+  node-2-gvisor:
+    <<: [*node, *gvisor]
     profiles: [gvisor]
-    network_mode: service:worker-2-net
+    network_mode: service:node-2-net
     environment:
-      <<: *worker-env
-      REWIND_WORKER_NAME: worker-2
+      <<: *edge-env
+      REWIND_NODE_ID: node-2
+      REWIND_LINK_ADDRESS: node-2-net:7070
     depends_on:
       <<: *gvisor-depends
-      worker-2-net: { condition: service_healthy }
+      node-2-net: { condition: service_healthy }
 
-  # The worker pool of the previous build, kept after an upgrade that changed the determinism
-  # epoch until the runs of its epochs end (README, "Upgrades"). Its build only runs the epochs
-  # it supports, so it only takes their runs. `previous-epoch` runs it under runc,
-  # `previous-epoch-gvisor` under gVisor.
-  worker-previous-net:
+  # The executors of the previous build, kept after an upgrade that changed the determinism
+  # epoch until the runs of its epochs end (README, "Upgrades"): `--executors-only`, they own no
+  # partition and serve no HTTP route, and the owners send them the activations of those runs
+  # over the node link. `previous-epoch` runs it under runc, `previous-epoch-gvisor` under gVisor.
+  node-previous-net:
     <<: *holder
     profiles: [previous-epoch, previous-epoch-gvisor]
 
-  worker-previous:
-    <<: *worker
+  node-previous:
+    <<: *node
     image: ${REWIND_PREVIOUS_IMAGE:-rewind:local}
+    command: [server, --executors-only]
     profiles: [previous-epoch]
-    network_mode: service:worker-previous-net
+    network_mode: service:node-previous-net
     environment:
-      <<: *worker-env
-      REWIND_WORKER_NAME: worker-previous
+      <<: *node-env
+      REWIND_NODE_ID: node-previous
+      REWIND_LINK_ADDRESS: node-previous-net:7070
     depends_on:
-      <<: *worker-depends
-      worker-previous-net: { condition: service_started }
+      <<: *node-depends
+      node-previous-net: { condition: service_started }
 
-  worker-previous-gvisor:
-    <<: [*worker, *gvisor]
+  node-previous-gvisor:
+    <<: [*node, *gvisor]
     image: ${REWIND_PREVIOUS_IMAGE:-rewind:local}
+    command: [server, --executors-only]
     profiles: [previous-epoch-gvisor]
-    network_mode: service:worker-previous-net
+    network_mode: service:node-previous-net
     environment:
-      <<: *worker-env
-      REWIND_WORKER_NAME: worker-previous
+      <<: *node-env
+      REWIND_NODE_ID: node-previous
+      REWIND_LINK_ADDRESS: node-previous-net:7070
     depends_on:
       <<: *gvisor-depends
-      worker-previous-net: { condition: service_healthy }
+      node-previous-net: { condition: service_healthy }
 
-  # The walls of the workers under gVisor, checked by check-walls.sh, which starts and removes
-  # these two. A worker's sandbox takes over its namespace, where nothing else can run: the
+  # The walls of the nodes under gVisor, checked by check-walls.sh, which starts and removes
+  # these two. A node's sandbox takes over its namespace, where nothing else can run: the
   # walls are checked from a sandbox of their own, with the same network settings (`x-gvisor`)
   # in the namespace of a holder like theirs.
   walls-net:
@@ -343,10 +347,10 @@ services:
     network_mode: service:walls-net
     depends_on:
       walls-net: { condition: service_healthy }
-      worker-dns: { condition: service_started }
+      node-dns: { condition: service_started }
 
   # The load generator (`rewind-load`), with its fake MCP server at http://loadgen:9100/mcp, which
-  # the workers reach through the egress gateway: `docker compose --profile load run --rm
+  # the nodes reach through the egress gateway: `docker compose --profile load run --rm
   # loadgen run …` (README, "Load and limit tests").
   loadgen:
     build:

@@ -1,27 +1,16 @@
-# The edge: the only published port. Everything goes to the api role, except the requests that
-# run tests, and therefore model-written code, on the workers (the api role answers them with
-# 503): `POST /v1/test`, `POST /v1/workflows` (the gate runs the version's suite) and
-# `POST /v1/runs/{id}/fork` (a fork of a run of a workflow runs its suite first).
+# The edge: the only published port. Every node answers every route (it reaches the owner of a
+# run's partition through the node link), so each request goes to the next node; a node that is
+# down or starting again leaves it to the other.
 {
 	admin off
 	auto_https off
 }
 
 :8080 {
-	@runs_tests {
-		method POST
-		path_regexp ^/v1/(test|workflows|runs/[^/]+/fork)$
-	}
-	handle @runs_tests {
-		reverse_proxy worker-1-net:8080 worker-2-net:8080 {
-			lb_policy round_robin
-			lb_try_duration 5s
-		}
-	}
-	handle {
-		# Event streams and long polls: no buffering.
-		reverse_proxy api:8080 {
-			flush_interval -1
-		}
+	# Event streams: no buffering.
+	reverse_proxy node-1-net:8080 node-2-net:8080 {
+		lb_policy round_robin
+		lb_try_duration 5s
+		flush_interval -1
 	}
 }

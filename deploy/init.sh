@@ -1,7 +1,7 @@
 #!/bin/sh
-# Writes deploy/.env (or the file given) with fresh secrets: the master key, the first admin
-# key, and the passwords of Postgres and MinIO. It never overwrites an existing file: losing the
-# master key loses every secret stored with it.
+# Writes deploy/.env (or the file given) with fresh secrets: the master key, the cluster's
+# secret, the first admin key, and the passwords of Postgres and MinIO. It never overwrites an
+# existing file: losing the master key loses every secret stored with it.
 set -eu
 cd "$(dirname "$0")"
 
@@ -21,7 +21,9 @@ cat >"$env_file" <<ENV
 
 # The master key of the secret store: 32 random bytes in base64.
 REWIND_MASTER_KEY=$(head -c 32 /dev/urandom | base64)
-# The first API key (role admin, tenant \$REWIND_ADMIN_TENANT): it creates the others.
+# The secret every node shares: it authenticates the node link.
+REWIND_CLUSTER_SECRET=$(random 64)
+# The first API key (role operator, tenant \$REWIND_ADMIN_TENANT): it creates the others.
 REWIND_ADMIN_KEY=rewind_sk_$(random 43)
 REWIND_ADMIN_TENANT=default
 
@@ -29,7 +31,7 @@ POSTGRES_PASSWORD=$(random 32)
 MINIO_ROOT_USER=rewind
 MINIO_ROOT_PASSWORD=$(random 32)
 
-# The workers under runc. Use the profile gvisor instead on a host with runsc.
+# The nodes under runc. Use the profile gvisor instead on a host with runsc.
 COMPOSE_PROFILES=runc
 ENV
 echo "init.sh: wrote $env_file"

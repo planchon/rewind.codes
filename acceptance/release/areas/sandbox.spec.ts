@@ -10,7 +10,7 @@
  *   stack traces name no host path; a secret the run attaches never enters the isolate.
  * - Exhaustion (`archi/03-execution.md`, "Resource limits"): CPU per call, heap, array buffers
  *   (a catchable `RangeError`), commands per activation, commands and logs per trigger, payloads;
- *   each attack is followed by a canary run, and at the end both workers still activate runs.
+ *   each attack is followed by a canary run, and at the end every node still activates runs.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -39,6 +39,7 @@ import {
   replayDocument,
   runScript,
 } from "../support/sandbox-helpers.js";
+import { handedWithin } from "../support/tools-helpers.js";
 
 let tenant: Tenant;
 /** A toolset of host tools nobody serves: `t.noop`. */
@@ -500,11 +501,9 @@ test("a million tool calls in one trigger end the run, and no task is created", 
   expectLimit(run, "reacting to one trigger");
   expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "run_aborted"]);
   const worker = await tenant.key("worker");
-  const claimed = await tenant.api.as(worker.key).get("/v1/tasks", { query: { toolset: hostToolset, wait: "1s" } });
-  expectOk(claimed);
-  expect(claimed.json.tasks).toEqual([]);
+  expect(await handedWithin(tenant.api.as(worker.key), { toolset: hostToolset, slots: 100 })).toEqual([]);
   await expectHealthy(tenant);
-  evidence(`${String(run.abort.message)}; no task to claim`);
+  evidence(`${String(run.abort.message)}; no task handed on a stream`);
 });
 
 test("more than 10,000 commands in one activation end the run", { tag: "@attack" }, async () => {
@@ -565,13 +564,13 @@ test("logs are bounded: 64 MiB of logs in one trigger end the run", { tag: "@att
   evidence("8 MiB of logs kept; 120 MiB and 200,000 lines in one trigger: run_aborted limit_exceeded");
 });
 
-test("after every attack, both workers still activate runs", { tag: "@success" }, async () => {
+test("after every attack, every node still activates runs", { tag: "@success" }, async () => {
   const { a } = stacks();
   const traces = a.collector?.traces;
   expect(traces, "setup A has a Collector").toBeDefined();
-  const namespace = unique("workers-");
-  // Runs of three activations, each with a little CPU, started together: a busy worker leaves
-  // runs to the other. Batches until each worker's activation spans reach the Collector.
+  // Runs of three activations, each with a little CPU, each in a namespace of its own: the
+  // namespaces spread over the partitions, so over the nodes that own them. Batches until each
+  // node's activation spans reach the Collector.
   const SCRIPT = `import { sleep } from "rewind";
 function spin(n: number): number { let x = 0; for (let i = 0; i < n; i++) x = (x + i) % 1000003; return x; }
 export default async function main() { spin(20_000_000); await sleep(1); spin(20_000_000); await sleep(1); return "done"; }
@@ -583,10 +582,10 @@ export default async function main() { spin(20_000_000); await sleep(1); spin(20
         .filter((span) => span.name === "activation" && ids.has(String(span.attributes["rewind.run_id"])))
         .map((span) => String(span.resource["service.instance.id"])),
     );
-  for (let batch = 0; batch < 6 && seen().size < a.workers.length; batch++) {
+  for (let batch = 0; batch < 6 && seen().size < a.nodes.length; batch++) {
     const runs = await Promise.all(
       Array.from({ length: 8 }, async () => {
-        const started = await tenant.api.ns(namespace).post("/v1/runs", { script: SCRIPT, check: false });
+        const started = await tenant.api.ns(unique("nodes-")).post("/v1/runs", { script: SCRIPT, check: false });
         expectOk(started);
         ids.add(started.json.id);
         return started.json.id as string;
@@ -595,12 +594,12 @@ export default async function main() { spin(20_000_000); await sleep(1); spin(20
     for (const id of runs) expect((await ended(tenant.api, id)).status).toBe("completed");
     await eventually("the batch's activation spans reach the Collector", () => (seen().size > 0 ? true : undefined), 30_000, 500).catch(() => undefined);
   }
-  const workers = await eventually(
-    "both workers' activation spans reach the Collector",
-    () => (seen().size === a.workers.length ? [...seen()].sort() : undefined),
+  const nodes = await eventually(
+    "every node's activation spans reach the Collector",
+    () => (seen().size === a.nodes.length ? [...seen()].sort() : undefined),
     30_000,
     500,
   );
-  expect(workers).toEqual([...a.workers].sort());
-  evidence(`activations of ${ids.size} runs started after the attacks, by ${workers.join(" and ")}`);
+  expect(nodes).toEqual([...a.nodes].sort());
+  evidence(`activations of ${ids.size} runs started after the attacks, by ${nodes.join(" and ")}`);
 });

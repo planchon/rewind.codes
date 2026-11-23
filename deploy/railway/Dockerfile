@@ -2,8 +2,8 @@
 #
 # The image of the `rewind` binary, as Railway builds it (deploy/railway/README.md): the server
 # stage of the repository's Dockerfile, without its cache mounts, whose ids Railway restricts to
-# one service. The api and the worker build it each, and choose their role by their start
-# command (`/usr/local/bin/rewind server --role api`).
+# one service. The node service builds it, and starts it with its start command
+# (`/usr/local/bin/rewind server`).
 
 ARG RUST_VERSION=1.99
 ARG NODE_VERSION=22
@@ -31,12 +31,14 @@ RUN cargo build --release --locked -p rewind \
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 LABEL org.opencontainers.image.title="rewind" \
-      org.opencontainers.image.description="Rewind on Railway: the api or the worker, chosen by the start command"
+      org.opencontainers.image.description="Rewind on Railway: rewind server, an HTTP edge and a node of the run plane"
 COPY --from=build /out/rewind /usr/local/bin/rewind
 COPY --from=build --chown=65532:65532 /out/cache /var/cache/rewind
-# Railway's private network is IPv6: listen on every address, IPv4 and IPv6.
+# Railway's private network is IPv6: the edge and the node link listen on every address, IPv4
+# and IPv6.
 ENV TZ=UTC \
     REWIND_LISTEN=[::]:8080 \
+    REWIND_LINK_LISTEN=[::]:7070 \
     REWIND_TSGO_CACHE=/var/cache/rewind/tsgo
 USER nonroot
 EXPOSE 8080

@@ -1,18 +1,17 @@
 /**
  * The Rewind setups of the release gate (`acceptance/release/README.md`):
  *
- * - **A, deployed**: Postgres 17, blobs on MinIO, an OpenTelemetry Collector, one
- *   `rewind server --role api` and two `--role worker` behind an edge, as production runs: the edge
- *   sends what runs tests (`POST /v1/test`, `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) to
- *   the workers and everything else to the api server
- *   (`deploy/edge/Caddyfile`). It lets MCP servers on
- *   127.0.0.1 through (`--allow-internal-tools`), and webhooks to private addresses, so that the
- *   gate's fixtures are reachable; stdio MCP servers too.
- * - **B, strict**: one server with both roles on Turso and local files, with a deployed server's
- *   defaults: no internal MCP server, no private webhook, no stdio, no WorkOS. Egress attacks
- *   are proven there.
- * - **D, lifecycle**: a deployed stack of its own, with the options a test gives it (short
- *   retention), whose servers the test kills and restarts and whose Postgres it pauses.
+ * - **A, deployed**: Postgres 17 for the control plane, a bucket on MinIO for the partitions, the
+ *   archive and the blobs, an OpenTelemetry Collector, and two nodes (`rewind server`, each an
+ *   HTTP edge and a node) linked by the node link, behind an edge that spreads the requests over
+ *   them, as `deploy/edge/Caddyfile` does: every node answers every route, and reaches the owner
+ *   of a run's partition through the link. It lets MCP servers on 127.0.0.1 through
+ *   (`--allow-internal-tools`), and webhooks to private addresses, so that the gate's fixtures
+ *   are reachable; stdio MCP servers too.
+ * - **B, strict**: one node on Turso and local files, with a deployed server's defaults: no
+ *   internal MCP server, no private webhook, no stdio, no WorkOS. Egress attacks are proven there.
+ * - **D, lifecycle**: a deployed stack of its own, with the options a test gives it (a short
+ *   retention), whose nodes the test kills and restarts and whose Postgres it pauses.
  *
  * The servers run the binary under test (`REWIND_BIN`, else the workspace's debug build).
  */
@@ -21,17 +20,18 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer, request as httpRequest, type ServerResponse } from "node:http";
 import { join } from "node:path";
-import { type Collector, Containers, type Minio, startCollector, startMinio, startPostgres } from "../../support/docker.js";
+import { CONTROL_DATABASE, type Collector, Containers, type Minio, startCollector, startMinio, startPostgres } from "../../support/docker.js";
 import { rewindBinary } from "../../support/paths.js";
 import { eventually, freePort, Processes } from "../../support/processes.js";
 
 /** The tenant of the operator key of every setup. */
 export const OPERATOR_TENANT = "gate-operator";
 
-/** One `rewind server` process of a setup. */
+/** One `rewind server` process of a setup: a node, with its HTTP edge. */
 export interface ServerProcess {
+  /** Its node id (`--node-id`), and the name of its log. */
   name: string;
-  role: "api" | "worker" | "both";
+  /** Its own HTTP edge. */
   url: string;
   args: string[];
   child: ChildProcess;
@@ -41,26 +41,24 @@ export interface ServerProcess {
 export interface StackInfo {
   name: string;
   /**
-   * Where clients reach the setup: the edge of a deployed setup (`POST /v1/test` to the workers,
-   * the rest to the api server), or the one server of the strict setup.
+   * Where clients reach the setup: the edge in front of the nodes of a deployed setup, or the one
+   * node of the strict setup.
    */
   url: string;
-  /** The api server itself, behind the edge. */
-  apiUrl: string;
-  /** The workers' own URLs, behind the edge. */
-  workerUrls: string[];
+  /** Each node's own HTTP edge, behind the setup's edge, in the order of `nodes`. */
+  nodeUrls: string[];
   /** The operator's key (`--admin-key`), tenant `gate-operator`. */
   operatorKey: string;
   /** Where the servers' logs are. */
   logDir: string;
-  /** The workers' names: `service.instance.id` of their telemetry. */
-  workers: string[];
-  /** Postgres's container, for the setups on Postgres. */
-  postgres?: { container: string; url: string };
+  /** The nodes' ids (`--node-id`): `service.instance.id` of their telemetry. */
+  nodes: string[];
+  /** Postgres's container and the control plane's database, for the setups on Postgres. */
+  postgres?: { container: string; url: string; database: string };
   minio?: { container: string; endpoint: string; user: string; password: string; bucket: string };
   /** The JSON lines the Collector writes, one export request per line. */
   collector?: { http: string; traces: string; logs: string; metrics: string };
-  /** The directory of the setup on Turso: its database and blobs. */
+  /** The directory of the setup on Turso: its control plane and its bucket. */
   dataDir?: string;
 }
 
@@ -69,9 +67,9 @@ export interface Stack {
   servers: Map<string, ServerProcess>;
   minio?: Minio;
   collector?: Collector;
-  /** `kill -<signal>` of one server; resolves once it is gone. */
+  /** `kill -<signal>` of one node; resolves once it is gone. */
   kill(name: string, signal?: NodeJS.Signals): Promise<void>;
-  /** Starts a server again with its arguments, and waits until it answers. */
+  /** Starts a node again with its arguments, and waits until it answers. */
   restart(name: string): Promise<void>;
   /** `docker pause` / `docker unpause` of Postgres. */
   pausePostgres(): void;
@@ -84,14 +82,13 @@ export interface DeployedOptions {
   name: string;
   /** Where its logs and the Collector's output go. */
   dir: string;
-  workers?: number;
-  /** Arguments every server of the setup gets. */
+  /** The nodes of the setup: 2 by default. */
+  nodes?: number;
+  /** Arguments every node of the setup gets. */
   extraArgs?: string[];
-  /** Arguments the api server alone gets. */
-  apiArgs?: string[];
 }
 
-/** A deployed setup: Postgres, MinIO, a Collector, an api server and its workers. */
+/** A deployed setup: Postgres, MinIO, a Collector, and its nodes behind an edge. */
 export async function startDeployed(options: DeployedOptions): Promise<Stack> {
   const { dir } = options;
   mkdirSync(dir, { recursive: true });
@@ -112,19 +109,18 @@ export async function startDeployed(options: DeployedOptions): Promise<Stack> {
   try {
     const [postgres, minio, collector] = await Promise.all([
       startPostgres(containers),
-      startMinio(containers, "rewind-blobs"),
+      startMinio(containers, "rewind"),
       startCollector(containers, dir),
     ]);
     postgresContainer = postgres.name;
     const operatorKey = `rewind_sk_${randomBytes(24).toString("hex")}`;
-    const apiPort = await freePort();
     const edgePort = await freePort();
     // Clients and the webhooks scripts hand out reach the setup at its edge.
     const url = `http://127.0.0.1:${edgePort}`;
     const common = [
       "--store",
       postgres.url,
-      "--blobs",
+      "--bucket",
       `s3://${minio.bucket}`,
       "--s3-endpoint",
       minio.endpoint,
@@ -137,48 +133,51 @@ export async function startDeployed(options: DeployedOptions): Promise<Stack> {
       minio.password,
       "--master-key",
       randomBytes(32).toString("base64"),
+      "--cluster-secret",
+      randomBytes(32).toString("hex"),
       "--otlp-endpoint",
       collector.http,
       "--otlp-protocol",
       "http",
+      "--admin-key",
+      operatorKey,
       "--admin-tenant",
       OPERATOR_TENANT,
       "--public-url",
       url,
       ...(options.extraArgs ?? []),
     ];
-    const start = async (name: string, role: "api" | "worker", port: number, extra: string[]) => {
+    const nodes = Array.from({ length: options.nodes ?? 2 }, (_, n) => `node-${n + 1}`);
+    // One at a time: the first opens the cluster and its partitions, each next one takes its share.
+    for (const name of nodes) {
+      const port = await freePort();
+      const link = await freePort();
       const args = [
         "server",
-        "--role",
-        role,
-        "--worker-name",
+        "--node-id",
         name,
         "--listen",
         `127.0.0.1:${port}`,
+        "--link-listen",
+        `127.0.0.1:${link}`,
+        "--link-address",
+        `127.0.0.1:${link}`,
         ...common,
-        "--admin-key",
-        operatorKey,
-        ...extra,
       ];
-      const server: ServerProcess = { name, role, url: `http://127.0.0.1:${port}`, args, child: processes.start(name, rewindBinary(), args) };
+      const server: ServerProcess = { name, url: `http://127.0.0.1:${port}`, args, child: processes.start(name, rewindBinary(), args) };
       servers.set(name, server);
       await answers(server, operatorKey, dir);
-    };
-    // The api server runs the migrations and registers the operator key first.
-    await start("api", "api", apiPort, options.apiArgs ?? []);
-    const workers = Array.from({ length: options.workers ?? 2 }, (_, n) => `worker-${n + 1}`);
-    for (const name of workers) await start(name, "worker", await freePort(), []);
+    }
+    await clustered([...servers.values()], operatorKey);
     edge = await startEdge(edgePort, servers);
     const info: StackInfo = {
       name: options.name,
       url,
-      apiUrl: servers.get("api")!.url,
-      workerUrls: workers.map((name) => servers.get(name)!.url),
+      nodeUrls: nodes.map((name) => servers.get(name)!.url),
       operatorKey,
       logDir: dir,
-      workers,
-      postgres: { container: postgres.name, url: postgres.url },
+      nodes,
+      postgres: { container: postgres.name, url: postgres.url, database: CONTROL_DATABASE },
       minio: {
         container: minioContainer(minio),
         endpoint: minio.endpoint,
@@ -200,7 +199,7 @@ export async function startDeployed(options: DeployedOptions): Promise<Stack> {
   }
 }
 
-/** The strict setup: one server, both roles, Turso, a deployed server's defaults. */
+/** The strict setup: one node on Turso and local files, a deployed server's defaults. */
 export async function startStrict(options: { name: string; dir: string; extraArgs?: string[] }): Promise<Stack> {
   const { dir } = options;
   mkdirSync(dir, { recursive: true });
@@ -214,9 +213,9 @@ export async function startStrict(options: { name: string; dir: string; extraArg
   const args = [
     "server",
     "--store",
-    `turso:${dataDir}/journal.db`,
-    "--blobs",
-    `${dataDir}/blobs`,
+    `turso:${dataDir}/control.db`,
+    "--bucket",
+    `${dataDir}/bucket`,
     "--master-key",
     randomBytes(32).toString("base64"),
     "--admin-key",
@@ -225,13 +224,13 @@ export async function startStrict(options: { name: string; dir: string; extraArg
     OPERATOR_TENANT,
     "--public-url",
     url,
-    "--worker-name",
+    "--node-id",
     "strict",
     "--listen",
     `127.0.0.1:${port}`,
     ...(options.extraArgs ?? []),
   ];
-  const server: ServerProcess = { name: "strict", role: "both", url, args, child: processes.start("strict", rewindBinary(), args) };
+  const server: ServerProcess = { name: "strict", url, args, child: processes.start("strict", rewindBinary(), args) };
   servers.set("strict", server);
   const stop = () => processes.stopAll();
   try {
@@ -240,7 +239,7 @@ export async function startStrict(options: { name: string; dir: string; extraArg
     await stop();
     throw error;
   }
-  const info: StackInfo = { name: options.name, url, apiUrl: url, workerUrls: [url], operatorKey, logDir: dir, workers: ["strict"], dataDir };
+  const info: StackInfo = { name: options.name, url, nodeUrls: [url], operatorKey, logDir: dir, nodes: ["strict"], dataDir };
   return handle(info, servers, processes, stop, operatorKey, dir, "");
 }
 
@@ -257,7 +256,7 @@ function handle(
 ): Stack {
   const get = (name: string) => {
     const server = servers.get(name);
-    if (!server) throw new Error(`no server ${name} in ${info.name}`);
+    if (!server) throw new Error(`no node ${name} in ${info.name}`);
     return server;
   };
   return {
@@ -295,18 +294,17 @@ function handle(
 }
 
 /**
- * The edge of a deployed setup, as `deploy/edge/Caddyfile` routes: what runs tests (`POST /v1/test`,
- * `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) goes to the workers in turn; everything else
- * goes to the api server, unbuffered (event streams, long polls). A server that is down answers
- * 502, as Caddy does.
+ * The edge of a deployed setup, as `deploy/edge/Caddyfile` routes: each request goes to the next
+ * node in turn, unbuffered (event streams). A node that refuses the connection (killed, or
+ * starting again) leaves the request to the next one; when every node refuses it, the edge
+ * answers 502, as Caddy does. A body is read whole first, so that it can go to another node; a
+ * request with `Expect: 100-continue` goes to one node, which answers the expectation.
  */
 async function startEdge(port: number, servers: Map<string, ServerProcess>): Promise<HttpServer> {
   let turn = 0;
-  const forward = (req: IncomingMessage, res: ServerResponse, expectContinue: boolean) => {
-    const path = (req.url ?? "").split("?")[0] ?? "";
-    const toWorkers = req.method === "POST" && /^\/v1\/(test|workflows|runs\/[^/]+\/fork)$/.test(path);
-    const targets = toWorkers ? [...servers.values()].filter((s) => s.role === "worker") : [servers.get("api")!];
-    const target = new URL(targets[turn++ % targets.length]!.url);
+  const send = (req: IncomingMessage, res: ServerResponse, body: Buffer | undefined, tried: number) => {
+    const nodes = [...servers.values()];
+    const target = new URL(nodes[turn++ % nodes.length]!.url);
     const upstream = httpRequest(
       {
         host: target.hostname,
@@ -321,29 +319,37 @@ async function startEdge(port: number, servers: Map<string, ServerProcess>): Pro
         answer.pipe(res);
       },
     );
-    upstream.on("error", () => {
+    upstream.on("error", (error: NodeJS.ErrnoException) => {
+      if (body !== undefined && error.code === "ECONNREFUSED" && tried + 1 < nodes.length && !res.headersSent) {
+        send(req, res, body, tried + 1);
+        return;
+      }
       if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
-      res.end("the edge cannot reach the server");
+      res.end("the edge cannot reach a node");
     });
     res.on("close", () => upstream.destroy());
-    if (expectContinue) {
-      // `Expect: 100-continue` goes to the server, which answers it: `100 Continue` is relayed and
+    if (body === undefined) {
+      // `Expect: 100-continue` goes to the node, which answers it: `100 Continue` is relayed and
       // the body follows; a final answer (a 413 from Content-Length) is relayed without the body.
       upstream.on("continue", () => {
         res.writeContinue();
         req.pipe(upstream);
       });
     } else {
-      req.pipe(upstream);
+      upstream.end(body);
     }
   };
-  const edge = createServer((req, res) => forward(req, res, false));
-  edge.on("checkContinue", (req, res) => forward(req, res, true));
+  const edge = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => send(req, res, Buffer.concat(chunks), 0));
+  });
+  edge.on("checkContinue", (req, res) => send(req, res, undefined, 0));
   await new Promise<void>((resolve) => edge.listen(port, "127.0.0.1", resolve));
   return edge;
 }
 
-/** Waits until a server answers `GET /v1/server`, or fails if it exits first. */
+/** Waits until a node answers `GET /v1/server`, or fails if it exits first. */
 async function answers(server: ServerProcess, operatorKey: string, dir: string): Promise<void> {
   await eventually(
     `${server.name} answers`,
@@ -357,6 +363,22 @@ async function answers(server: ServerProcess, operatorKey: string, dir: string):
     120_000,
     200,
   );
+}
+
+/** Waits until every node counts every other one in the deployment (`GET /v1/server`'s `nodes`). */
+async function clustered(servers: ServerProcess[], operatorKey: string): Promise<void> {
+  for (const server of servers) {
+    await eventually(
+      `${server.name} sees the ${servers.length} nodes`,
+      async () => {
+        const response = await fetch(`${server.url}/v1/server`, { headers: { authorization: `Bearer ${operatorKey}` } });
+        const info = (await response.json()) as { node?: string; nodes?: number };
+        return info.node === server.name && info.nodes === servers.length ? true : undefined;
+      },
+      60_000,
+      200,
+    );
+  }
 }
 
 /** The MinIO container's name, from the `docker port` lookup `startMinio` made. */
