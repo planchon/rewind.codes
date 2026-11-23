@@ -131,9 +131,13 @@ test.describe("criterion 7: the dashboard", () => {
     await server?.stop();
   });
 
-  /** The ids of the runs the table shows. */
+  /** The ids of the runs the table shows: each row names its run by its handle, whose title ends with its id. */
   const shown = (page: Page) => async () =>
-    (await page.locator("table.grid tbody tr .run-id").evaluateAll((spans) => spans.map((s) => s.getAttribute("title")))).sort();
+    (
+      await page
+        .locator("table.grid tbody tr .run-handle")
+        .evaluateAll((spans) => spans.map((s) => /\nid (\S+)$/.exec(s.getAttribute("title") ?? "")?.[1] ?? null))
+    ).sort();
 
   /** Types a query in the bar and applies it. */
   async function search(page: Page, q: string) {
@@ -187,7 +191,8 @@ test.describe("criterion 7: the dashboard", () => {
     await search(page, "@team:billing tool:crm.lookup");
     await expect.poll(shown(page)).toEqual([runs.triage.id]);
     await page.locator("table.grid tbody tr a.row-link").first().click();
-    await expect(page).toHaveURL(new RegExp(`^[^#]*/runs/${runs.triage.id}`));
+    // A run's page is at its handle.
+    await expect(page).toHaveURL(new RegExp(`^[^#]*/runs/${runs.triage.handle}`));
 
     // Its source, each line with what it caused.
     const source = page.getByRole("region", { name: "Source" });
@@ -242,7 +247,7 @@ test.describe("criterion 7: the dashboard", () => {
 
     // Waiting: the run waiting for the signal, on its line.
     await page.goto(`${server.url}/observability/waiting`);
-    const waiting = page.locator("table.grid tbody tr", { has: page.locator(`.run-id[title="${waiter.id}"]`) });
+    const waiting = page.locator("table.grid tbody tr", { has: page.locator(`.run-handle[title$="id ${waiter.id}"]`) });
     await expect(waiting).toContainText('signal "go-ahead"');
     await expect(waiting).toContainText('const go = await signal<{ go: boolean }>("go-ahead");');
     await expect(page.getByRole("tab", { name: /Signals/ })).toContainText("1");
@@ -251,7 +256,7 @@ test.describe("criterion 7: the dashboard", () => {
     await page.goto(`${server.url}/observability/failures`);
     const group = page.locator("table.grid tbody tr", { hasText: "DeadlockError" }).first();
     await expect(group).toBeVisible();
-    await expect(group).toContainText(runs.stuck.id.slice(0, 8));
+    await expect(group).toContainText(runs.stuck.handle.split("/").pop()!);
     await group.locator("td").first().getByRole("link").click();
     await expect(page).toHaveURL(/^[^#]*\/observability\?q=fingerprint/);
     await expect.poll(shown(page)).toEqual([runs.stuck.id]);

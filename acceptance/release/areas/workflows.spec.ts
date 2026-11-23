@@ -98,6 +98,9 @@ test("each change is a new version: versions are listed newest first, the list s
   const versions = await tenant.api.get(`/v1/workflows/${name}`);
   expectOk(versions, 200);
   expect(versions.json.versions.map((v: any) => v.version)).toEqual([second.version, first.version]);
+  // Numbered from 1 in the order they were saved.
+  expect(versions.json.versions.map((v: any) => v.number)).toEqual([2, 1]);
+  expect([first.number, second.number]).toEqual([1, 2]);
   const listed = await tenant.api.get("/v1/workflows", { query: { limit: 200 } });
   expectOk(listed, 200);
   const mine = listed.json.workflows.filter((w: any) => w.name === name);
@@ -111,16 +114,20 @@ test("the harness starts a run of a workflow by name, or by name@version, and si
   const second = await save(tenant.api, triage(name, TRIAGE.replace("? 3 : 0", "? 5 : 0")));
 
   const latest = await started(api, { workflow: name, input: { repo: "acme/api" } });
-  expect(latest.workflow).toEqual({ name, version: second.version });
+  expect(latest.workflow).toEqual({ name, version: second.version, number: 2 });
   const pinned = await started(api, { workflow: `${name}@${first.version.slice(0, 12)}`, input: { repo: "acme/web" } });
-  expect(pinned.workflow).toEqual({ name, version: first.version });
+  expect(pinned.workflow).toEqual({ name, version: first.version, number: 1 });
+  // A version by its number pins it too.
+  const numbered = await started(api, { workflow: `${name}@v1`, input: { repo: "acme/app" } });
+  expect(numbered.workflow).toEqual({ name, version: first.version, number: 1 });
 
-  for (const run of [latest, pinned]) {
+  for (const run of [latest, pinned, numbered]) {
     await waitingFor(api, run.id, "signal", "approval");
     expectOk(await api.post(`/v1/runs/${run.id}/signals/approval`, { close: true }), 202);
   }
   expect((await ended(api, latest.id)).output.value).toEqual({ closed: 5, repo: "acme/api" });
   expect((await ended(api, pinned.id)).output.value).toEqual({ closed: 3, repo: "acme/web" });
+  expect((await ended(api, numbered.id)).output.value).toEqual({ closed: 3, repo: "acme/app" });
 });
 
 test("a script starts a run of a workflow, signals it and receives its result", { tag: "@success" }, async () => {
@@ -146,7 +153,7 @@ export default async function main(input: { repo: string }) {
   const child = await getRun(api, done.output.value.id);
   expect(child.status).toBe("completed");
   expect(child.namespace).toBe("wf");
-  expect(child.workflow).toEqual({ name, version: saved.version });
+  expect(child.workflow).toEqual({ name, version: saved.version, number: 1 });
   expect(child.startedBy).toMatchObject({ run: parent.id, detached: false });
 });
 

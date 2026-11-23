@@ -226,6 +226,47 @@ test("scripts are listed once per source, with their runs and tools, and read wh
   expect(one.json.source).toBe(source);
 });
 
+test("a script is titled by its top comment, then by a person's title and description, on its runs too", { tag: "@success" }, async () => {
+  const c = unique("ti");
+  const own = t.api.ns(`titles-${c}`);
+  const source = `// Look up ${c}\nimport { fx } from "rewind:tools";\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
+  const run = await startRun(own, { toolset, script: source, labels: { case: c } });
+  expect((await ended(own, run.id)).status).toBe("completed");
+  const digest = createHash("sha256").update(source).digest("hex");
+  // The comment at the top of the source titles it.
+  const read = await t.api.get(`/v1/scripts/${digest}`);
+  expectOk(read);
+  expect(read.json).toMatchObject({ title: `Look up ${c}`, titleSource: "comment" });
+  expect((await own.get(`/v1/runs/${run.id}`)).json.scriptTitle).toBe(`Look up ${c}`);
+  // A person's title and description win, for the whole organization.
+  const titled = await t.api.patch(`/v1/scripts/${digest}`, { title: `Tier of ${c}`, description: "Reads a customer's tier." });
+  expectOk(titled);
+  expect(titled.json).toMatchObject({ title: `Tier of ${c}`, description: "Reads a customer's tier.", titleSource: "person" });
+  await eventually("the run carries the person's title", async () => {
+    const reply = await own.get(`/v1/runs/${run.id}`);
+    return reply.json.scriptTitle === `Tier of ${c}` ? reply : undefined;
+  });
+  // Removed, the comment's title comes back.
+  const removed = await t.api.patch(`/v1/scripts/${digest}`, { title: null });
+  expectOk(removed);
+  expect(removed.json).toMatchObject({ title: `Look up ${c}`, titleSource: "comment" });
+  evidence(`script ${digest.slice(0, 12)}: comment, person, comment`);
+});
+
+test("a title or a description out of bounds is refused as invalid-title", { tag: "@failure" }, async () => {
+  const c = unique("tb");
+  const own = t.api.ns(`titles-${c}`);
+  const source = `import { fx } from "rewind:tools";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
+  const run = await startRun(own, { toolset, script: source });
+  expect((await ended(own, run.id)).status).toBe("completed");
+  const digest = createHash("sha256").update(source).digest("hex");
+  for (const body of [{ title: "" }, { title: "t".repeat(121) }, { title: "Fine", description: "d".repeat(2001) }]) {
+    expectProblem(await t.api.patch(`/v1/scripts/${digest}`, body), 422, "invalid-title");
+  }
+  // Nothing was kept.
+  expect((await t.api.get(`/v1/scripts/${digest}`)).json.titleSource ?? null).not.toBe("person");
+});
+
 test("tool statistics count each tool's calls, errors and their kinds", { tag: "@success" }, async () => {
   const server = await startMcpFixture();
   try {

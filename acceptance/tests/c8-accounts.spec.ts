@@ -263,7 +263,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
         .poll(async () => ((await call(server, key, "GET", "/v1/runs?q=%40suite%3Ac8")).body.runs as unknown[]).length)
         .toBe(1);
       await page.goto(`${origin}/runs`);
-      await expect(page.locator(`table.grid tbody tr .run-id[title="${started.id}"]`)).toBeVisible();
+      await expect(page.locator(`table.grid tbody tr .run-handle[title$="id ${started.id}"]`)).toBeVisible();
     });
 
     let inviteeToken = "";
