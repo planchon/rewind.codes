@@ -1798,8 +1798,8 @@ pub async fn seal_keeps_the_head_and_the_summary<S: PartitionStore>(store: &S) {
         "its payload records"
     );
     assert!(
-        !log.signal_key(&r1, "signal-key").await.expect("signal_key"),
-        "its signal keys"
+        log.signal_key(&r1, "signal-key").await.expect("signal_key"),
+        "its signal keys stay, for the life of the run"
     );
     let sealed = log.run(&r1).await.expect("run").expect("the head stays");
     assert_eq!(
@@ -1853,7 +1853,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
         vec![
             create_in(&erased, &alice(), Some("start")),
             create(&kept),
-            enqueue(&erased, started_item(1), None),
+            enqueue(&erased, started_item(1), Some("signal-key")),
         ],
     )
     .await;
@@ -1949,6 +1949,12 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
         None
     );
     assert_eq!(log.webhook(token).await.expect("webhook"), None);
+    assert!(
+        !log.signal_key(&erased, "signal-key")
+            .await
+            .expect("signal_key"),
+        "its signal keys"
+    );
     assert_eq!(
         log.started(&acme(), &alice(), "start")
             .await

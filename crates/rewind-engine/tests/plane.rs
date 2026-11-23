@@ -1642,8 +1642,11 @@ async fn a_webhook_bound_to_no_run_is_a_run_not_found() {
     );
 }
 
+/// A signal's key is kept for the life of the run (`archi/06-storage-and-scale.md`,
+/// "Idempotency of the API"): a late retry of a delivered signal is acknowledged, its attempt
+/// sealed or not; a new signal is refused, the run having ended.
 #[tokio::test]
-async fn a_signal_key_is_acknowledged_until_its_attempt_is_sealed() {
+async fn a_signal_key_is_acknowledged_for_the_life_of_the_run() {
     let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
     let run = world.run(request("approval", json!({}))).await;
     let key = Some("approval-1");
@@ -1663,11 +1666,20 @@ async fn a_signal_key_is_acknowledged_until_its_attempt_is_sealed() {
         Enqueued::Duplicate
     );
     world.idle().await;
-    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
-    // Sealed, the attempt's keys are gone.
+    let head = world.view(&run).await.head;
+    assert_eq!(head.status, RunStatus::Completed);
+    assert!(!head.is_unsealed(), "the attempt is sealed");
     assert_eq!(
         world
             .signal(&run, "approval", json!("yes"), key)
+            .await
+            .unwrap(),
+        Enqueued::Duplicate,
+        "a late retry, the attempt sealed"
+    );
+    assert_eq!(
+        world
+            .signal(&run, "approval", json!("yes"), Some("approval-2"))
             .await
             .unwrap(),
         Enqueued::RunEnded

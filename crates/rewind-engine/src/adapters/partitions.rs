@@ -517,7 +517,6 @@ impl PartitionState {
         records.inbox.clear();
         records.tasks.clear();
         records.payloads.clear();
-        records.signal_keys.clear();
         records.head.sealed = Some(attempt);
         Ok(())
     }

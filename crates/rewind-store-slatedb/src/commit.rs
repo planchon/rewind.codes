@@ -736,7 +736,8 @@ impl Apply<'_> {
             )));
         }
         self.delete_all(&keys::history_of(run, attempt)).await?;
-        for family in [keys::INBOX, keys::TASK, keys::PAYLOAD, keys::SIGNAL_KEY] {
+        // The signal keys stay for the life of the run: `erase` deletes them.
+        for family in [keys::INBOX, keys::TASK, keys::PAYLOAD] {
             self.delete_all(&keys::of_run(family, run)).await?;
         }
         let mut after = before.clone();

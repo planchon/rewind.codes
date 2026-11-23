@@ -749,9 +749,9 @@ impl<P: Plane> Owner<P> {
             return;
         }
         if slot.head.is_ended() {
-            // A key seen is acknowledged as long as it is kept: until the attempt is sealed.
+            // A key seen is acknowledged for the life of the run, sealed or not.
             match (&signal.key, &self.log) {
-                (Some(key), Some(log)) if slot.head.is_unsealed() => {
+                (Some(key), Some(log)) => {
                     let log = Arc::clone(log);
                     let key = key.clone();
                     let run = signal.run.clone();

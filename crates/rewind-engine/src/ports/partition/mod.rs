@@ -108,10 +108,12 @@ pub trait PartitionStore: Send + Sync {
 /// - **Activations** write, with the entries, the payload records of the payloads that left the
 ///   events, the run's head and summary, its index entries, the counters it moves and its
 ///   outbox entries.
-/// - **Seal and erase.** `Seal` deletes the attempt's history, inbox, tool tasks, payload
-///   records and signal keys, and keeps the run's head (sealed), summary and index entries.
-///   `Erase` deletes everything of the run: its records, summary, start key, webhook tokens,
-///   timers, outbox entries, and what it held in the gauges. Neither is refused for a run
+/// - **Seal and erase.** `Seal` deletes the attempt's history, inbox, tool tasks and payload
+///   records, and keeps the run's head (sealed), summary, index entries and signal keys: a key
+///   is kept for the life of the run, so a late retry of a signal is acknowledged
+///   (`archi/06-storage-and-scale.md`, "Idempotency of the API"). `Erase` deletes everything of
+///   the run: its records, summary, start key, signal keys, webhook tokens, timers, outbox
+///   entries, and what it held in the gauges. Neither is refused for a run
 ///   already sealed or erased.
 /// - **Search.** `search` evaluates every term of the query on the summaries of the scope, in
 ///   the order asked, reads at most `budget` summaries, and returns a cursor when it stopped

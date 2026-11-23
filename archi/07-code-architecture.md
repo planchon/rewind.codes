@@ -247,8 +247,9 @@ Contracts, all covered by the conformance suite:
   ended), the quarantined runs, the timers due before `horizon`, the tool tasks that are `ready`,
   `deferred` or waiting for approval, the attempts that ended and are not sealed, the outbox, the
   counters of every tenant, and the organization states homed here.
-- `Seal` deletes the attempt's history, inbox, tool tasks, payload records and signal keys, and keeps
-  the run's head, summary and index entries. `Erase` deletes everything of the run, and the counts it
+- `Seal` deletes the attempt's history, inbox, tool tasks and payload records, and keeps the run's
+  head, summary, index entries and signal keys, which live as long as the run
+  ([idempotency](06-storage-and-scale.md#idempotency-of-the-api)). `Erase` deletes everything of the run, and the counts it
   held. Neither is refused for a run already sealed or erased.
 - `search` evaluates every term of the query on the summaries of the scope, in the order asked,
   reads at most `budget` summaries, and returns a cursor when it stopped before the end. Summaries
