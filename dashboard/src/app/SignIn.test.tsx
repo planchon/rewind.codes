@@ -98,6 +98,8 @@ describe("sign-in", () => {
     // Alan's calls: those of the previous test may still be in flight.
     const alan = callsTo("/v1/whoami").at(-1)?.headers.get("Authorization");
     expect(alan).toBeTruthy();
+    // The runs view mounted its reads: the list of runs, and anything it reads beside it.
+    await waitFor(() => expect(callsTo("/v1/runs").length).toBeGreaterThan(0));
     const counted = ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"];
     expect(
       counted

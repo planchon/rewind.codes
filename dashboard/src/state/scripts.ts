@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { RANGES, type RangeKey } from "../model/filters";
 import type { ListScriptsQuery, Script, ScriptSummary, SetScriptTitle } from "../model/types";
+import { useAccess } from "./access";
 import { type Action, useAction } from "./actions";
 import { type PagedRead, usePaged } from "./paged";
 import { SCRIPT_TITLES } from "./queries";
@@ -69,16 +70,19 @@ export function useScriptList({
 
 /**
  * The title of each script the runs ran, by digest, for the menus that list scripts by their
- * digest (a facet's values): a script without a title has none here.
+ * digest (a facet's values): a script without a title has none here. The list of scripts comes
+ * from the statistics, which a grant limited to labels does not read: its menus show digests.
  */
 export function useScriptTitles(): (digest: string) => string | undefined {
   const { api } = useStore();
+  const { statistics } = useAccess();
   const titles = useQuery({
     queryKey: SCRIPT_TITLES,
     queryFn: async ({ signal }) => {
       const page = await api.scripts({ limit: 500 }, signal);
       return new Map(page.scripts.flatMap((s) => (s.title ? [[s.digest, s.title] as const] : [])));
     },
+    enabled: statistics,
     // Read again on a `script` change only (`queries.ts`).
     staleTime: Number.POSITIVE_INFINITY,
   });
