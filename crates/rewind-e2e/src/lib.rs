@@ -1,6 +1,6 @@
-//! End-to-end corpus of Rewind: TypeScript scripts run by the real engine and V8 sandbox, with
-//! in-memory storage and virtual time; their journals are recorded in the stored format and
-//! replayed (`archi/07-code-architecture.md`, "Tests": the epoch corpus).
+//! End-to-end corpus of Rewind: TypeScript scripts run by the engine's run plane and the V8
+//! sandbox, over the memory adapters in virtual time; their journals are recorded in the stored
+//! format and replayed (`archi/07-code-architecture.md`, "Tests": the epoch corpus).
 //!
 //! A case is a directory `corpus/epoch-<n>/<blue|red>/<name>/` holding:
 //!
@@ -19,7 +19,8 @@
 //!
 //! Each case is checked three ways:
 //!
-//! 1. **Live**: the scenario runs, and its expectations hold.
+//! 1. **Live**: the scenario runs on one node of the run plane in the engine's driver
+//!    ([`live`]), and its expectations hold.
 //! 2. **Recorded**: the journal it produced is byte for byte the committed `journal.v1.json`.
 //!    `REWIND_E2E_RECORD=1 cargo test -p rewind-e2e` writes the files instead: review the diff.
 //! 3. **Replayed**: the committed journal, decoded from its file, replays identically with the
@@ -29,41 +30,29 @@
 
 #![forbid(unsafe_code)]
 
-pub mod plane;
+pub mod live;
 pub mod scenario;
 pub mod tools;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rewind_core::{
     Attachments, Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle,
-    McpServer, McpTransport, RunId, RunMode, RunOutcome, RunState, Script, SecretPlacement,
-    SecretRef, Timestamp, Tool, ToolAuth, ToolRoute, Toolset, Workflow, WorkflowSchemas,
-    parse_duration,
+    McpServer, McpTransport, RunId, RunOutcome, RunState, Script, SecretPlacement, SecretRef,
+    Timestamp, Tool, ToolAuth, ToolRoute, Toolset, Workflow, WorkflowSchemas,
 };
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, StaticTypeChecker,
-    VirtualClock,
-};
-use rewind_engine::ports::{
-    Entropy, JournalStore, NewSecret, ParkKind, RunFilter, RunRef, ScriptExecutor, Secret,
-    SecretId, TaskFilter, TaskRef, TaskState, TenantId, TenantScope, ToolDeclarations, VirtualTime,
-    WorkflowDeclarations,
-};
+use rewind_engine::adapters::{MemoryBlobs, SeededEntropy};
+use rewind_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
-use rewind_engine::{
-    Adapters, DriveOptions, Engine, EngineConfig, ForkRun, HostClaim, HostFailure, Limits,
-    RegisterWorkflow, ReplayVerdict, StartRun, ToolOrder,
-};
 use rewind_runtime::V8Executor;
 use serde_json::Value;
 
+pub use live::run_live;
+use scenario::ReplayCheck;
 pub use scenario::Scenario;
-use scenario::{ReplayCheck, Step};
-use tools::{Answer, ScenarioTools};
 
 /// Every run of the corpus starts at 2026-01-01T00:00:00Z, in virtual time.
 pub const T0: Timestamp = Timestamp(1_767_225_600_000);
@@ -461,17 +450,6 @@ fn attachments(secrets: &BTreeMap<String, String>) -> Result<Attachments, String
         .collect()
 }
 
-type CorpusEngine = Engine<
-    MemoryJournal,
-    MemoryBlobs,
-    V8Executor,
-    ScenarioTools,
-    VirtualClock,
-    SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
->;
-
 fn executor(scenario: &Scenario) -> V8Executor {
     let mut limits = rewind_runtime::SandboxLimits::default();
     if let Some(ms) = scenario.limits.cpu_per_trigger_ms {
@@ -481,47 +459,6 @@ fn executor(scenario: &Scenario) -> V8Executor {
         limits.heap_bytes = mb * 1024 * 1024;
     }
     V8Executor::new(limits).expect("the corpus runs with TZ=UTC (see .cargo/config.toml)")
-}
-
-fn engine(case: &Case) -> CorpusEngine {
-    let mut config = EngineConfig::default();
-    let defaults = Limits::default();
-    config.limits = Limits {
-        max_commands_per_activation: case
-            .scenario
-            .limits
-            .max_commands
-            .unwrap_or(defaults.max_commands_per_activation),
-        max_payload_bytes: case
-            .scenario
-            .limits
-            .max_payload_bytes
-            .unwrap_or(defaults.max_payload_bytes),
-        ..defaults
-    };
-    if case.scenario.auth.values().any(|auth| auth == "rewind") {
-        // Signed calls name their issuer from the public URL.
-        config.public_url = Some("https://rewind.example.com".into());
-    }
-    if case.scenario.host_worker {
-        // Host tools wait for the harness's worker, as on a server.
-        config.tool_tasks = TaskFilter::Dispatched {
-            tenants: TenantScope::All,
-        };
-    }
-    Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor: executor(&case.scenario),
-            dispatcher: ScenarioTools::new(&case.scenario.tools),
-            clock: VirtualClock::new(T0),
-            entropy: SeededEntropy::new(case.scenario.seed),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        config,
-    )
 }
 
 /// What a live run of a case produced.
@@ -541,397 +478,12 @@ pub struct Recorded {
     pub keys: Vec<String>,
 }
 
-/// The outcome of a live run.
+/// The outcome of a live run ([`run_live`]).
 #[derive(Debug)]
 pub enum Live {
     /// The start was refused: no run exists.
     Refused(String),
     Ran(Box<Recorded>),
-}
-
-/// Runs a case live: starts the run, drives it, applies the steps, drives it in virtual time.
-pub async fn run_live(case: &Case) -> Result<Live, String> {
-    let engine = engine(case);
-    put_secrets(case, &engine).await?;
-    register_workflows(case, &engine).await?;
-    let mut request = StartRun::new(
-        case.script.clone(),
-        case.toolset(),
-        case.scenario.input.clone(),
-    );
-    request.metadata.secrets = attachments(&case.scenario.secrets)?;
-    if case.scenario.attach.as_deref() == Some("organization") {
-        request.attach = rewind_engine::attachments::AttachRights::Organization {
-            labels: BTreeMap::new(),
-        };
-    }
-    request.mode = if case.scenario.live {
-        RunMode::Live
-    } else {
-        RunMode::Mock
-    };
-    if let Some(ttl) = &case.scenario.ttl {
-        request.ttl = Some(parse_duration(ttl).map_err(|err| format!("ttl {ttl:?}: {err}"))?);
-    }
-    let run = match engine.start_run(request).await {
-        Ok(created) => created.run,
-        Err(refused) => return Ok(Live::Refused(refused.to_string())),
-    };
-
-    let options = DriveOptions {
-        tool_order: match case.scenario.tool_order {
-            scenario::ToolOrder::Scheduled => ToolOrder::Scheduled,
-            scenario::ToolOrder::Reversed => ToolOrder::Reversed,
-        },
-        ..DriveOptions::default()
-    };
-    let drive = |virtual_time: bool| {
-        let engine = &engine;
-        let options = &options;
-        async move {
-            // With a worker, the engine and the worker take turns until neither has work: a
-            // turn of the engine follows every turn of the worker, which may have answered.
-            let mut idle_turns = 0;
-            loop {
-                let report = if virtual_time {
-                    engine.run_until_idle_virtual(options).await
-                } else {
-                    engine.run_until_idle(options).await
-                }
-                .map_err(|err| err.to_string())?;
-                if let Some((run, error)) = report.failures.first() {
-                    return Err(format!("an activation of run {} failed: {error}", run.id));
-                }
-                if report.interrupted {
-                    return Err(format!("the run never became idle: {report:?}"));
-                }
-                if !case.scenario.host_worker {
-                    return Ok::<(), String>(());
-                }
-                if work(engine).await? > 0 {
-                    idle_turns = 0;
-                } else {
-                    idle_turns += 1;
-                    if idle_turns == 2 {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    };
-    let fail = |err: rewind_engine::EngineError| err.to_string();
-    drive(false).await?;
-    apply_steps(&engine, &run, &case.scenario.steps, &drive).await?;
-    drive(true).await?;
-
-    let mut run = run;
-    if let (Some(fork), Some(script)) = (&case.scenario.fork, &case.fork_script) {
-        let mut request = ForkRun::new(run.clone(), script.clone());
-        request.at = fork.at;
-        request.input = fork.input.clone();
-        run = match engine.fork(request).await {
-            Ok(created) => created.run,
-            Err(refused) => return Ok(Live::Refused(refused.to_string())),
-        };
-        drive(false).await?;
-        apply_steps(&engine, &run, &fork.steps, &drive).await?;
-        drive(true).await?;
-    }
-
-    // The engine's own replay, from its store, must agree with the live run.
-    match engine.replay(&run, None).await.map_err(fail)? {
-        ReplayVerdict::Matches(_) => {}
-        other => return Err(format!("the engine's replay of the live run: {other:?}")),
-    }
-
-    let journal = engine.export_journal(&run).await.map_err(fail)?;
-    let state = RunState::from_history(&journal.entries).map_err(|err| err.to_string())?;
-    let mut children: Vec<(u32, String)> = engine
-        .journal()
-        .list_runs(&RunFilter::new(TenantId::local()))
-        .await
-        .map_err(|err| err.to_string())?
-        .into_iter()
-        .filter_map(|record| {
-            let by = record.metadata.started_by.filter(|by| by.run == run.id)?;
-            Some((by.seq.0, record.status.as_str().to_owned()))
-        })
-        .collect();
-    children.sort();
-    Ok(Live::Ran(Box::new(Recorded {
-        run_id: run.id,
-        journal,
-        state,
-        dispatched: engine.dispatcher().dispatched(),
-        children: children.into_iter().map(|(_, status)| status).collect(),
-        auth: engine.dispatcher().auth(),
-        keys: engine.dispatcher().keys(),
-    })))
-}
-
-/// Puts the secrets the scenario says exist before the run starts: `ns/` ones in the run's
-/// namespace.
-async fn put_secrets(case: &Case, engine: &CorpusEngine) -> Result<(), String> {
-    let namespace =
-        rewind_engine::ports::NamespaceName::new(rewind_engine::ports::NamespaceName::LOCAL)
-            .map_err(|err| err.to_string())?;
-    for (reference, value) in &case.scenario.put_secrets {
-        let reference = SecretRef::parse(reference).map_err(|err| err.to_string())?;
-        let secret = NewSecret {
-            id: SecretId::resolve(&reference, &namespace),
-            value: Secret::new(value.clone()),
-            labels: BTreeMap::new(),
-            by: "user:harness".into(),
-        };
-        engine
-            .put_secret(&TenantId::local(), &secret)
-            .await
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-/// Registers the scenario's workflows, with the scenario's tools as their toolset, so that the
-/// run's starts find them.
-async fn register_workflows(case: &Case, engine: &CorpusEngine) -> Result<(), String> {
-    if case.scenario.workflows.is_empty() {
-        return Ok(());
-    }
-    let tenant = TenantId::local();
-    let toolset = scenario_toolset(&case.scenario)?;
-    engine
-        .journal()
-        .put_toolset(&tenant, &toolset, &ToolDeclarations::default())
-        .await
-        .map_err(|err| err.to_string())?;
-    for workflow in case.workflows()? {
-        let name = workflow.name().to_owned();
-        engine
-            .register_workflow(
-                RegisterWorkflow {
-                    tenant: tenant.clone(),
-                    name: name.clone(),
-                    description: workflow.description().map(str::to_owned),
-                    script: case.workflow_scripts[&name].clone(),
-                    toolset: toolset.digest(),
-                    schemas: workflow.schemas().clone(),
-                    labels: BTreeMap::new(),
-                    secrets: workflow.secrets().clone(),
-                    attach: rewind_engine::attachments::AttachRights::Organization {
-                        labels: BTreeMap::new(),
-                    },
-                    declarations: WorkflowDeclarations::default(),
-                    suite: rewind_engine::suites::SuiteChanges::default(),
-                },
-                &StaticTypeChecker::default(),
-                &rewind_engine::suites::TestKit {
-                    loader: &rewind_runtime::TsMockLoader::default(),
-                    format: rewind_engine::suites::TestFormat {
-                        encode: rewind_format::encode_test,
-                        decode: |document| {
-                            rewind_format::decode_test(document).map_err(|err| err.to_string())
-                        },
-                    },
-                    options: rewind_engine::testing::TestOptions::default(),
-                },
-            )
-            .await
-            .map_err(|err| format!("workflow {name}: {err}"))?;
-    }
-    Ok(())
-}
-
-/// Applies steps to a run, each followed by a pass of the engine at the current time.
-async fn apply_steps<F, Fut>(
-    engine: &CorpusEngine,
-    run: &RunRef,
-    steps: &[Step],
-    drive: &F,
-) -> Result<(), String>
-where
-    F: Fn(bool) -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
-{
-    let fail = |err: rewind_engine::EngineError| err.to_string();
-    let run = run.clone();
-    for step in steps {
-        match step {
-            Step::Signal { name, payload, key } => {
-                engine
-                    .signal(&run, name.clone(), payload.clone(), key.clone())
-                    .await
-                    .map_err(fail)?;
-            }
-            Step::Cancel { message } => {
-                engine.cancel(&run, message.clone()).await.map_err(fail)?;
-            }
-            Step::Advance(by) => {
-                let by = parse_duration(by).map_err(|err| format!("advance {by:?}: {err}"))?;
-                let now = rewind_engine::ports::Clock::now(engine.clock());
-                engine.clock().advance_to(now.saturating_add(by));
-            }
-            Step::Approve(tool) => {
-                let task = waiting_task(engine, &run, tool).await?;
-                engine.approve_task(&task).await.map_err(fail)?;
-            }
-            Step::Reject { tool, message } => {
-                let task = waiting_task(engine, &run, tool).await?;
-                engine
-                    .reject_task(&task, message.clone())
-                    .await
-                    .map_err(fail)?;
-            }
-            Step::Credentials(servers) => {
-                for (server, headers) in servers {
-                    let value = headers.values().next().cloned().unwrap_or_default();
-                    accept_again(engine, &run, server, value).await?;
-                }
-            }
-            Step::DeleteSecret(server) => {
-                let record = engine
-                    .get_run(&run)
-                    .await
-                    .map_err(fail)?
-                    .ok_or_else(|| format!("run {} not found", run.id))?;
-                let attached = record.metadata.secrets.get(server).ok_or_else(|| {
-                    format!("delete_secret: the run attaches no secret for {server}")
-                })?;
-                let id = SecretId::resolve(attached, &record.namespace);
-                if !engine.delete_secret(&run.tenant, &id).await.map_err(fail)? {
-                    return Err(format!("delete_secret: {id} does not exist"));
-                }
-            }
-            Step::Parked { tool, reason } => {
-                let tasks = engine.tool_tasks(&run).await.map_err(fail)?;
-                let parked = tasks.iter().any(|task| {
-                    task.tool == *tool
-                        && matches!(&task.state, TaskState::Parked(why) if why.kind.as_str() == reason)
-                });
-                if !parked {
-                    let states: Vec<String> = tasks
-                        .iter()
-                        .map(|task| format!("{} {:?}", task.tool, task.state))
-                        .collect();
-                    return Err(format!(
-                        "parked: no call of {tool} is parked by {reason}: {states:?}"
-                    ));
-                }
-            }
-        }
-        drive(false).await?;
-    }
-    Ok(())
-}
-
-/// The harness makes `server` accept the run's calls again (`archi/04-tools.md`, "Secrets"):
-/// it puts the secret the run attached for the server again, with `value`, which makes ready
-/// the calls a refusal or a missing secret parked; for a server whose run attaches no secret
-/// (a refused signature), it approves the refused calls.
-async fn accept_again(
-    engine: &CorpusEngine,
-    run: &RunRef,
-    server: &str,
-    value: String,
-) -> Result<(), String> {
-    let fail = |err: rewind_engine::EngineError| err.to_string();
-    let record = engine
-        .get_run(run)
-        .await
-        .map_err(fail)?
-        .ok_or_else(|| format!("run {} not found", run.id))?;
-    if let Some(attached) = record.metadata.secrets.get(server) {
-        let secret = NewSecret {
-            id: SecretId::resolve(attached, &record.namespace),
-            value: Secret::new(value),
-            labels: BTreeMap::new(),
-            by: "user:harness".into(),
-        };
-        engine
-            .put_secret(&run.tenant, &secret)
-            .await
-            .map_err(fail)?;
-        return Ok(());
-    }
-    let tasks = engine.tool_tasks(run).await.map_err(fail)?;
-    // The tools of `server`: an MCP server's, or, in mock mode, a group of the scenario named
-    // as the server.
-    let refused = tasks.into_iter().filter(|task| {
-        task.tool.split_once('.').map(|(namespace, _)| namespace) == Some(server)
-            && matches!(&task.state, TaskState::Parked(reason) if reason.kind == ParkKind::CredentialsRefused)
-    });
-    for task in refused {
-        engine.approve_task(&task.task).await.map_err(fail)?;
-    }
-    Ok(())
-}
-
-/// The call of `tool` that waits for the harness.
-async fn waiting_task(engine: &CorpusEngine, run: &RunRef, tool: &str) -> Result<TaskRef, String> {
-    let tasks = engine
-        .tool_tasks(run)
-        .await
-        .map_err(|err| err.to_string())?;
-    tasks
-        .into_iter()
-        .find(|task| {
-            task.tool == tool && matches!(task.state, TaskState::Approval | TaskState::Parked(_))
-        })
-        .map(|task| task.task)
-        .ok_or_else(|| format!("no call of {tool} waits for the harness"))
-}
-
-/// One turn of the harness's worker: claims the host-tool tasks that are ready, and answers
-/// each from the scenario's tools through its token. Returns how many it claimed.
-async fn work(engine: &CorpusEngine) -> Result<usize, String> {
-    let tenant = TenantId::local();
-    let claim = HostClaim {
-        tenant: tenant.clone(),
-        namespace: None,
-        labels: BTreeMap::new(),
-        toolset: None,
-        tools: BTreeSet::new(),
-        limit: 100,
-    };
-    let tasks = engine
-        .claim_host_tasks(&claim)
-        .await
-        .map_err(|err| err.to_string())?;
-    for task in &tasks {
-        let token = &task.token;
-        let failed = |failure: rewind_core::ToolFailure, retryable| HostFailure {
-            message: failure.message,
-            data: failure.data,
-            retryable,
-        };
-        let answer = engine
-            .dispatcher()
-            .answer(&task.tool, &task.args, &task.idempotency_key);
-        let answered = match answer {
-            Answer::Result(result) => engine.complete_task(&tenant, token, result).await,
-            Answer::Failed(failure) => {
-                engine
-                    .fail_task(&tenant, token, failed(failure, false))
-                    .await
-            }
-            Answer::Transient(failure) => {
-                engine
-                    .fail_task(&tenant, token, failed(failure, true))
-                    .await
-            }
-            Answer::Unauthorized(_) => {
-                return Err(format!(
-                    "{}: a host tool's worker cannot answer $unauthorized; only a dispatched \
-                     call is parked",
-                    task.tool
-                ));
-            }
-            // The worker dies with the call, or keeps it without answering: no heartbeat, no
-            // answer.
-            Answer::Crash | Answer::Deferred => Ok(()),
-        };
-        answered.map_err(|err| err.to_string())?;
-    }
-    Ok(tasks.len())
 }
 
 /// How replaying a journal ended.
@@ -976,45 +528,11 @@ pub async fn check_case(name: &str) {
     }
 }
 
-/// Which engine runs a case live.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Runner {
-    /// The engine over the journal store.
-    Journal,
-    /// The run plane's actors in the driver ([`plane`]).
-    Plane,
-}
-
-/// Checks a case of the corpus on the run plane: live, against the committed journal (never
-/// recorded), replayed. Panics with every failed expectation.
-pub async fn check_case_on_plane(name: &str) {
-    let failures = match Case::load(name) {
-        Ok(case) => check_on(&case, Mode::Verify, Runner::Plane).await,
-        Err(err) => vec![err],
-    };
-    if !failures.is_empty() {
-        let mut report = format!("{name} (run plane):\n");
-        for failure in failures {
-            let _ = writeln!(report, "  - {failure}");
-        }
-        panic!("{report}");
-    }
-}
-
 /// Checks a case: live, recorded, replayed. Returns every failed expectation.
 pub async fn check(case: &Case, mode: Mode) -> Vec<String> {
-    check_on(case, mode, Runner::Journal).await
-}
-
-/// [`check`], the case run live by `runner`.
-pub async fn check_on(case: &Case, mode: Mode, runner: Runner) -> Vec<String> {
     let mut failures = Vec::new();
     let expect = &case.scenario.expect;
-    let live = match runner {
-        Runner::Journal => run_live(case).await,
-        Runner::Plane => plane::run_live(case).await,
-    };
-    let recorded = match live {
+    let recorded = match run_live(case).await {
         Err(err) => return vec![format!("the live run failed: {err}")],
         Ok(Live::Refused(refused)) => {
             match &expect.start_error {

@@ -16,7 +16,7 @@ use serde_json::Value;
 /// | `{"$error": "message", "$kind": "timeout", "$data": …}` | a failure (`$kind` defaults to `error`) |
 /// | `{"$transient": "message", "$kind": …}` | a transient failure: retried with backoff under `retry` |
 /// | `{"$unauthorized": "message"}` | the server answers 401: the call is parked (`credentials_refused`) until the secret is put again or the harness approves it |
-/// | `{"$crash": true}` | the worker dies with the call (with `host_worker` only): its claim expires |
+/// | `{"$crash": true}` | the worker dies with the call (with `host_worker` only): its stream closes, and another worker opens one |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |
 /// | `{"$defer": true}` | no answer: the call stays without an outcome |
 #[derive(Debug)]

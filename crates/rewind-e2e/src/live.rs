@@ -1,12 +1,12 @@
-//! The corpus on the run plane: the same cases, run by the engine's actors in the driver
-//! instead of the journal's engine (`archi/07-code-architecture.md`, "Inside a node", "Tests").
+//! A case run live: by the engine's actors in the driver (`archi/07-code-architecture.md`,
+//! "Inside a node", "Tests").
 //!
 //! One node holds the one partition of the deployment, over the memory adapters, with the V8
 //! executor and the scenario's tools, in virtual time from [`T0`](crate::T0). A harness's
 //! worker is an SDK stream at the node's edge: it is handed the host tasks and answers them
 //! through their token; a worker that crashes closes its stream, and another worker opens one.
-//! The entropy draws the ids and seeds the journal's engine draws, so every case records the
-//! committed journal byte for byte through this path too.
+//! The entropy draws the scenario's ids and seeds in order, whatever the partition, so a case's
+//! run has the id its committed journal holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -35,8 +35,8 @@ use crate::scenario::Step;
 use crate::tools::{Answer, ScenarioTools};
 use crate::{Case, Live, Recorded, T0, attachments, executor, scenario_toolset};
 
-/// The ids and seeds of a scenario's entropy, as the journal's engine draws them: a run of the
-/// one partition keeps the version 7 id the committed journal holds.
+/// The ids and seeds of a scenario's entropy, drawn in order: a run of the one partition has
+/// the version 7 id the committed journal holds.
 #[derive(Debug)]
 pub struct CorpusEntropy(SeededEntropy);
 

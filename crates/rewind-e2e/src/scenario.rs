@@ -46,9 +46,9 @@ pub struct Scenario {
     /// The policies that differ from the default, by tool.
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
-    /// The tools are host tools answered by a harness's worker, which claims them through the
-    /// engine's host-tool use cases, instead of mocks called by the engine. A `$crash` response
-    /// is a worker that dies with the call.
+    /// The tools are host tools answered by a harness's worker, handed their tasks on an SDK
+    /// stream and answering through their tokens, instead of mocks called by the engine. A
+    /// `$crash` response is a worker that dies with the call: its stream closes.
     #[serde(default)]
     pub host_worker: bool,
     /// The run is live rather than in mock mode: its tools still answer from `tools`, but the
