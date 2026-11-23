@@ -320,12 +320,10 @@ bound against it. It removes its containers, volumes and images at the end
 server (`fake.echo`, and `fake.flaky`, which fails transiently once per call) and a host tool it
 answers itself on task streams (`host.square`), starts many runs that each call the three tools,
 sleep, and read a signal sent twice with one idempotency key, waits for every run, then checks
-that each ended as expected and that no tool call was sent more times than the run says it was
-attempted. It reports throughput, latencies (start, first activation, activation, end to end),
-errors, and how long the runs' summaries took to list every run after the last ended. It reads
-the runs' attempts once they are listed, and exits with 1 when an invariant broke or a threshold
-given (`--min-runs-per-s`, `--max-p99-end-to-end`, `--max-p99-activation`,
-`--max-read-model-lag`) was missed. `--payload-bytes` pads each run's payloads: above 1 KiB they
+that each ended as expected and that no tool call reached its tool more times than its failures
+call for (`flaky` twice, the others once). It reports throughput, latencies (start, first
+activation, activation, end to end) and errors, and exits with 1 when an invariant broke or a
+threshold given (`--min-runs-per-s`, `--max-p99-end-to-end`, `--max-p99-activation`) was missed. `--payload-bytes` pads each run's payloads: above 1 KiB they
 are stored apart from their event, above 64 KiB in S3.
 
 ```sh

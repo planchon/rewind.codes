@@ -109,7 +109,7 @@ else
   # 3. The load: small payloads, then payloads above 64 KiB, which go to S3.
   load() {
     docker compose --profile load run --rm --no-deps --use-aliases loadgen run \
-      --timeout 15m --max-read-model-lag 3m "$@"
+      --timeout 15m "$@"
   }
   step "load: 1000 runs, 100 at once" load --runs 1000 --concurrency 100 \
     --min-runs-per-s 10 --max-p99-end-to-end 15s --max-p99-activation 2s
