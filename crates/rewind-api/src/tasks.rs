@@ -46,7 +46,9 @@ pub struct TaskStreamQuery {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
     /// At most this many tasks in flight on this stream: handed, and neither completed, failed,
-    /// deferred (by whichever process answers) nor gone. 1 by default, 100 at most.
+    /// deferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none
+    /// is handed: a worker that stops opens its stream again with 0 slots and its `worker`, which
+    /// keeps alive the tasks handed to it before while its handlers finish them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slots: Option<u32>,
     /// The worker's own id, drawn once when it starts (a UUID) and sent again on every

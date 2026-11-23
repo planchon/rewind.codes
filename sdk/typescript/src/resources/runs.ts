@@ -5,7 +5,6 @@ import { RewindApiError, RewindConnectionError, RewindError } from "../errors.js
 import { backoff, checkIdempotencyKey, messageOf, sleep, throwIfAborted, type Transport } from "../http.js";
 import { labelParams, timeParam } from "../params.js";
 import {
-  isTerminal,
   type Duration,
   type Entry,
   type FailureGroupPage,
@@ -21,13 +20,14 @@ import {
 } from "../types.js";
 import type { RequestOptions } from "./toolsets.js";
 
-/**
- * The longest a single request waits for a run on the server. A longer `wait` is split into
- * several requests, so proxies and the HTTP client's own timeouts never cut it.
- */
-export const MAX_REQUEST_WAIT_MS = 50_000;
+/** How long after a wait's deadline the client gives up a request the server has not answered. */
+const ANSWER_GRACE_MS = 10_000;
 
-const MIN_REPOLL_MS = 1_000;
+/** A request held at least this long before its connection broke was cut: it is sent again at once. */
+const CUT_AFTER_MS = 1_000;
+
+/** The longest delay of a timer; a deadline further away is the server's alone. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** What a run executes: a script and its toolset. */
 export interface ScriptTarget {
@@ -57,11 +57,14 @@ export interface StartRunOptions extends RequestOptions {
   /** The input of `main`. `{}` when absent. */
   input?: unknown;
   /**
-   * Wait up to this long for the run to end. The run is returned as it is then: ended, or still
-   * active with what it waits for.
+   * Wait up to this long for the run to end: the server holds the one request until the run ends or is quarantined,
+   * or until `wait` passes. The run is returned as it is then: ended, or still active with what it waits for.
    */
   wait?: Duration | undefined;
-  /** A request repeated with the same key returns the run the first one started. */
+  /**
+   * A request repeated with the same key returns the run the first one started. With `wait` and no key, the client
+   * draws one, so that a connection cut while the server holds the request is sent again safely.
+   */
   idempotencyKey?: string | undefined;
   /** Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. */
   labels?: Labels | undefined;
@@ -137,32 +140,42 @@ export interface ListRunsParams extends RequestOptions {
   startedBy?: string | undefined;
   startedAfter?: Date | string | undefined;
   startedBefore?: Date | string | undefined;
-  /** At most this many runs (50 by default, 500 at most). */
+  /**
+   * At most this many runs (50 by default, 500 at most). A page may hold fewer, or none, and still have a
+   * `nextCursor`: the server stopped at its scan budget. Only a page without `nextCursor` is the last.
+   */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export interface RunStatsParams extends RequestOptions {
-  /** A query, as in `list`. */
+  /**
+   * The scope: one term `namespace:<name>`, or nothing for every namespace the client reaches (the client's own
+   * namespace, or an end user's token, narrows it too). Any other term is refused with `invalid-query`: statistics
+   * come from hourly counters, by namespace and window only.
+   */
   q?: string | undefined;
-  /** Runs started at or after this time. No lower bound by default. */
+  /** Runs started at or after this time, rounded down to the hour. No lower bound by default. */
   since?: Date | string | undefined;
-  /** Runs started before this time. Now by default. */
+  /** Runs started before this time, rounded up to the hour. Now by default. */
   until?: Date | string | undefined;
-  /** The width of the series' buckets, from `since`, which it requires. No series without it. */
+  /**
+   * The width of the series' buckets, from `since`, which it requires: whole hours, a shorter width is rounded up. No
+   * series without it.
+   */
   bucket?: Duration | undefined;
   /** Values per facet (10 by default, 50 at most). */
   top?: number | undefined;
 }
 
 export interface FailuresParams extends RequestOptions {
-  /** A query, as in `list`. */
+  /** The scope, as `stats` takes it: one term `namespace:<name>`, or nothing. */
   q?: string | undefined;
-  /** Runs ended at or after this time. No lower bound by default. */
+  /** Runs ended at or after this time, rounded down to the hour. No lower bound by default. */
   since?: Date | string | undefined;
-  /** Runs ended before this time. Now by default. */
+  /** Runs ended before this time, rounded up to the hour. Now by default. */
   until?: Date | string | undefined;
-  /** The width of each group's series' buckets, from `since`, which it requires. */
+  /** The width of each group's series' buckets, from `since`, which it requires: whole hours. */
   bucket?: Duration | undefined;
   /** Groups at most (50 by default, 500 at most). */
   limit?: number | undefined;
@@ -192,32 +205,40 @@ export class Runs {
    * (`rewind.namespace(name)`, or an end user's token). A key's client without a namespace is refused
    * (`NamespaceRequiredError`). A script is compiled, checked and type-checked first: a script that cannot run
    * is refused with `invalid-script` (a `RewindApiError` with `diagnostics`) before any run exists. A workflow's
-   * input that does not match its schema is refused with `invalid-input`. With `wait`, answers when the run ends
-   * or `wait` passes, whichever comes first.
+   * input that does not match its schema is refused with `invalid-input`. With `wait`, the server holds the one
+   * request until the run ends or is quarantined, or until `wait` passes, whichever comes first.
    */
   async start(params: StartRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;
     checkIdempotencyKey(idempotencyKey);
-    const asked = Date.now();
-    const deadline = deadlineOf(wait, asked);
-    const run = await this.transport.send(
-      () =>
-        this.transport.api.POST("/v1/runs", {
-          params: { header: { "Idempotency-Key": idempotencyKey, ...this.transport.namespaceHeader } },
-          body: { ...body, wait: firstWait(wait) },
-          signal,
-        }),
-      { retry: idempotencyKey !== undefined, createsInNamespace: true, signal },
-    );
-    return this.waitUntil(run, asked, deadline, signal);
+    const send = (key: string | undefined, held: string | undefined, sendSignal: AbortSignal | undefined) =>
+      this.transport.send(
+        () =>
+          this.transport.api.POST("/v1/runs", {
+            params: { header: { "Idempotency-Key": key, ...this.transport.namespaceHeader } },
+            body: { ...body, wait: held },
+            signal: sendSignal,
+          }),
+        { retry: key !== undefined && wait === undefined, createsInNamespace: true, signal: sendSignal },
+      );
+    if (wait === undefined) {
+      return send(idempotencyKey, undefined, signal);
+    }
+    // The key makes a request sent again after a cut answer the same run.
+    const key = idempotencyKey ?? globalThis.crypto.randomUUID();
+    const start = (held: string | undefined, sendSignal: AbortSignal | undefined) => send(key, held, sendSignal);
+    return this.held(wait, signal, start, start);
   }
 
-  /** A run's state. With `wait`, waits up to that long for the run to end first. */
+  /** A run's state. With `wait`, the server holds the one request until the run ends or `wait` passes. */
   async get(id: string, options: RequestOptions & { wait?: Duration | undefined } = {}): Promise<Run> {
-    const asked = Date.now();
-    const deadline = deadlineOf(options.wait, asked);
-    const run = await this.fetchRun(id, firstWait(options.wait), options.signal);
-    return this.waitUntil(run, asked, deadline, options.signal);
+    const { signal, wait } = options;
+    if (wait === undefined) {
+      return this.fetchRun(id, undefined, signal, true);
+    }
+    const read = (held: string | undefined, sendSignal: AbortSignal | undefined) =>
+      this.fetchRun(id, held, sendSignal, false);
+    return this.held(wait, signal, read, read);
   }
 
   /** A page of runs, most recently started first unless `sort` says otherwise. */
@@ -343,18 +364,23 @@ export class Runs {
     options: RequestOptions & { reason?: string | undefined; wait?: Duration | undefined } = {},
   ): Promise<Run> {
     const { signal, reason, wait } = options;
-    const asked = Date.now();
-    const deadline = deadlineOf(wait, asked);
-    const run = await this.transport.send(
-      () =>
-        this.transport.api.POST("/v1/runs/{id}/cancel", {
-          params: { path: { id } },
-          body: { reason, wait: firstWait(wait) },
-          signal,
-        }),
-      { retry: false, signal },
-    );
-    return this.waitUntil(run, asked, deadline, signal);
+    const cancel = (held: string | undefined, sendSignal: AbortSignal | undefined) =>
+      this.transport.send(
+        () =>
+          this.transport.api.POST("/v1/runs/{id}/cancel", {
+            params: { path: { id } },
+            body: { reason, wait: held },
+            signal: sendSignal,
+          }),
+        { retry: false, signal: sendSignal },
+      );
+    if (wait === undefined) {
+      return cancel(undefined, signal);
+    }
+    // Once the cancellation was sent, a cut connection waits through a read of the run.
+    const read = (held: string | undefined, sendSignal: AbortSignal | undefined) =>
+      this.fetchRun(id, held, sendSignal, false);
+    return this.held(wait, signal, cancel, read);
   }
 
   /**
@@ -367,18 +393,22 @@ export class Runs {
   async fork(id: string, params: ForkRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;
     checkIdempotencyKey(idempotencyKey);
-    const asked = Date.now();
-    const deadline = deadlineOf(wait, asked);
-    const run = await this.transport.send(
-      () =>
-        this.transport.api.POST("/v1/runs/{id}/fork", {
-          params: { path: { id }, header: { "Idempotency-Key": idempotencyKey } },
-          body: { ...body, wait: firstWait(wait) },
-          signal,
-        }),
-      { retry: idempotencyKey !== undefined, signal },
-    );
-    return this.waitUntil(run, asked, deadline, signal);
+    const send = (key: string | undefined, held: string | undefined, sendSignal: AbortSignal | undefined) =>
+      this.transport.send(
+        () =>
+          this.transport.api.POST("/v1/runs/{id}/fork", {
+            params: { path: { id }, header: { "Idempotency-Key": key } },
+            body: { ...body, wait: held },
+            signal: sendSignal,
+          }),
+        { retry: key !== undefined && wait === undefined, signal: sendSignal },
+      );
+    if (wait === undefined) {
+      return send(idempotencyKey, undefined, signal);
+    }
+    const key = idempotencyKey ?? globalThis.crypto.randomUUID();
+    const fork = (held: string | undefined, sendSignal: AbortSignal | undefined) => send(key, held, sendSignal);
+    return this.held(wait, signal, fork, fork);
   }
 
   /** The run's trace, written for a model (`format=llm`). */
@@ -511,61 +541,91 @@ export class Runs {
     );
   }
 
-  private fetchRun(id: string, wait: string | undefined, signal: AbortSignal | undefined): Promise<Run> {
+  private fetchRun(
+    id: string,
+    wait: string | undefined,
+    signal: AbortSignal | undefined,
+    retry: boolean,
+  ): Promise<Run> {
     return this.transport.send(
       () =>
         this.transport.api.GET("/v1/runs/{id}", {
           params: { path: { id }, query: { wait } },
           signal,
         }),
-      { retry: true, signal },
+      { retry, signal },
     );
   }
 
   /**
-   * Asks again, one bounded request at a time, until the run ends or the deadline passes. A
-   * server that answers before the wait it was asked for is asked again at most once a second.
+   * One request the server holds until the run ends or is quarantined, or until `wait` passes, and what it answered:
+   * nothing is asked again once the server has answered. A connection cut while the request is held (by a proxy, or
+   * by the HTTP client's own timeout: Node's `fetch` gives up waiting for an answer after 5 minutes) is sent again at
+   * once with the time left, through `again`; a failure that comes at once is sent again after a backoff, up to the
+   * client's `maxRetries`. A request the server has not answered shortly after the wait's deadline is given up, and
+   * the run is read once as it is.
    */
-  private async waitUntil(
-    run: Run,
-    asked: number,
-    deadline: number | undefined,
+  private async held(
+    whole: Duration,
     signal: AbortSignal | undefined,
+    first: (wait: string | undefined, signal: AbortSignal | undefined) => Promise<Run>,
+    again: (wait: string | undefined, signal: AbortSignal | undefined) => Promise<Run>,
   ): Promise<Run> {
-    let current = run;
-    let askedAt = asked;
-    while (deadline !== undefined && !isTerminal(current.status)) {
-      const early = MIN_REPOLL_MS - (Date.now() - askedAt);
-      if (early > 0) {
-        await sleep(Math.min(early, Math.max(0, deadline - Date.now())), signal);
+    const deadline = Date.now() + toMillis(whole);
+    let request = first;
+    let resent = false;
+    let failures = 0;
+    for (;;) {
+      throwIfAborted(signal);
+      const left = deadline - Date.now();
+      // The first request carries the wait as asked; one sent again, the time left.
+      const wait = !resent ? durationParam(whole) : left >= 10 ? durationParam(left) : undefined;
+      const sent = new AbortController();
+      const abort = () => sent.abort(signal?.reason);
+      signal?.addEventListener("abort", abort, { once: true });
+      let late = false;
+      const giveUp =
+        wait !== undefined && left + ANSWER_GRACE_MS <= MAX_TIMER_MS
+          ? setTimeout(() => {
+              late = true;
+              sent.abort(new RewindConnectionError(`the server did not answer within the wait of ${wait}`));
+            }, left + ANSWER_GRACE_MS)
+          : undefined;
+      const sentAt = Date.now();
+      try {
+        return await request(wait, sent.signal);
+      } catch (error) {
+        throwIfAborted(signal);
+        if (late) {
+          // The wait is over: the run as it is now.
+          return await again(undefined, signal);
+        }
+        if (!resendable(error)) {
+          throw error;
+        }
+        if (Date.now() - sentAt < CUT_AFTER_MS || error instanceof RewindApiError) {
+          if (failures >= this.transport.maxRetries) {
+            throw error;
+          }
+          await sleep(backoff(failures), signal);
+          failures += 1;
+        }
+        request = again;
+        resent = true;
+      } finally {
+        clearTimeout(giveUp);
+        signal?.removeEventListener("abort", abort);
       }
-      const wait = requestWait(deadline);
-      if (wait === undefined) {
-        break;
-      }
-      askedAt = Date.now();
-      current = await this.fetchRun(current.id, wait, signal);
     }
-    return current;
   }
+}
+
+/** A failure of a held request that a new request may get past: the connection, or a server that is stopping. */
+function resendable(error: unknown): boolean {
+  return error instanceof RewindConnectionError || (error instanceof RewindApiError && error.status === 503);
 }
 
 /** A failure a new connection may get past: anything but a problem the API answered, unless a 5xx or a 429. */
 function reconnectable(error: unknown): boolean {
   return !(error instanceof RewindApiError) || error.status >= 500 || error.status === 429;
-}
-
-function deadlineOf(wait: Duration | undefined, now: number): number | undefined {
-  return wait === undefined ? undefined : now + toMillis(wait);
-}
-
-/** What the first request waits: all of `wait`, up to `MAX_REQUEST_WAIT_MS`. */
-function firstWait(wait: Duration | undefined): string | undefined {
-  return wait === undefined ? undefined : durationParam(Math.min(toMillis(wait), MAX_REQUEST_WAIT_MS));
-}
-
-/** What a later request waits: the time left, up to `MAX_REQUEST_WAIT_MS`; none once it is (almost) past. */
-function requestWait(deadline: number): string | undefined {
-  const left = deadline - Date.now();
-  return left < 10 ? undefined : durationParam(Math.min(left, MAX_REQUEST_WAIT_MS));
 }

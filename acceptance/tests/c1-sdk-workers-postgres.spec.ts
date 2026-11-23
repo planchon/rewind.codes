@@ -99,7 +99,6 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
       calls.push({ tool, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
     const worker = rewind.worker({
       toolset: toolset.id,
-      pollWait: "2s",
       tools: {
         "crm.lookup": async ({ email }: { email: string }, ctx) => {
           log("crm.lookup", ctx);

@@ -20,7 +20,13 @@ export type Auth = Schemas["Auth"];
 export type Callsite = Schemas["Callsite"];
 export type CallOrder = Schemas["CallOrder"];
 export type CancelReason = Schemas["CancelReason"];
+/**
+ * The `data` of an event of the change stream (`GET /v1/changes`): a run's summary (`run`), what changed in the
+ * control plane (`script`, `workflow`, `secret`, `namespace`, `connection`), or `{}` (`resync`).
+ */
+export type ChangeEvent = Schemas["ChangeEvent"];
 export type CheckResult = Schemas["CheckResult"];
+export type ConnectionChanged = Schemas["ConnectionChanged"];
 export type CreateApiKey = Schemas["CreateApiKey"];
 export type CreateSubscription = Schemas["CreateSubscription"];
 export type CreateToken = Schemas["CreateToken"];
@@ -50,7 +56,6 @@ export type FailureGroup = Schemas["FailureGroup"];
 export type FailureGroupPage = Schemas["FailureGroupPage"];
 export type FailureSample = Schemas["FailureSample"];
 export type ForkParent = Schemas["ForkParent"];
-export type HeartbeatAck = Schemas["HeartbeatAck"];
 export type HostTool = Schemas["HostTool"];
 export type HttpTool = Schemas["HttpTool"];
 export type Jwk = Schemas["Jwk"];
@@ -65,6 +70,7 @@ export type LogLine = Schemas["LogLine"];
 export type McpServer = Schemas["McpServer"];
 export type McpTransport = Schemas["McpTransport"];
 export type Namespace = Schemas["Namespace"];
+export type NamespaceChanged = Schemas["NamespaceChanged"];
 export type NamespaceDefaults = Schemas["NamespaceDefaults"];
 export type NamespaceDetail = Schemas["NamespaceDetail"];
 export type NamespaceList = Schemas["NamespaceList"];
@@ -117,11 +123,13 @@ export type RunSummary = Schemas["RunSummary"];
 export type RunWait = Schemas["RunWait"];
 export type RunWorkflow = Schemas["RunWorkflow"];
 export type Script = Schemas["Script"];
+export type ScriptChanged = Schemas["ScriptChanged"];
 export type ScriptError = Schemas["ScriptError"];
 export type ScriptPage = Schemas["ScriptPage"];
 export type ScriptSummary = Schemas["ScriptSummary"];
 /** A secret as listed: its name, scope, labels, who wrote it and when, its reads per day and its last read; never its value. */
 export type Secret = Schemas["Secret"];
+export type SecretChanged = Schemas["SecretChanged"];
 export type SecretEncoding = Schemas["SecretEncoding"];
 export type SecretList = Schemas["SecretList"];
 export type SecretScope = Schemas["SecretScope"];
@@ -145,8 +153,12 @@ export type StatusCounts = Schemas["StatusCounts"];
 export type StreamEvent = Schemas["StreamEvent"];
 export type Subscription = Schemas["Subscription"];
 export type SuiteTest = Schemas["SuiteTest"];
-export type Task = Schemas["Task"];
-export type TaskBatch = Schemas["TaskBatch"];
+/** A host-tool call handed to the worker on its task stream, with its token. */
+export type HandedTask = Schemas["HandedTask"];
+/** A task handed on the task stream that no longer waits for its answer: its token. */
+export type TaskGone = Schemas["TaskGone"];
+/** An event of the task stream: a task handed (`task`) or gone (`gone`). */
+export type TaskStreamEvent = { type: "task"; task: HandedTask } | { type: "gone"; token: string };
 export type TaskState = Schemas["TaskState"];
 /**
  * A test: the world a run meets (its input, the tools' answers, signals, its start and seed) and what must hold at the
@@ -190,6 +202,7 @@ export type WebhookEvent = Schemas["WebhookEvent"];
 export type WebhookEventType = Schemas["WebhookEventType"];
 export type Workflow = Schemas["Workflow"];
 export type WorkflowAttaching = Schemas["WorkflowAttaching"];
+export type WorkflowChanged = Schemas["WorkflowChanged"];
 export type WorkflowPage = Schemas["WorkflowPage"];
 export type WorkflowVersions = Schemas["WorkflowVersions"];
 export type World = Schemas["World"];

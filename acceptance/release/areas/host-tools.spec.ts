@@ -50,7 +50,6 @@ function serve(toolset: string, tool: string, handler: (args: any, ctx: HostTool
   const seen: Seen[] = [];
   const worker = tenant.rewind.worker({
     toolset,
-    pollWait: "2s",
     tools: {
       [tool]: async (args, ctx) => {
         seen.push({

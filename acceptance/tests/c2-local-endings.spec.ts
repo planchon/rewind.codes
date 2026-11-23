@@ -46,7 +46,6 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
     toolset = added.value.id;
     worker = project.client().worker({
       toolset,
-      pollWait: "1s",
       tools: {
         // A card is always declined.
         "payments.charge": async () => {

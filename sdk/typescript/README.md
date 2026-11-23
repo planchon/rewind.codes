@@ -122,7 +122,7 @@ const outcome = await rewind.namespace(user.id).scripts.test({ script: fixedSour
 | `rewind.tests`               | `get`: a stored test, by digest                                                                                                                                                                                                                                                                          |
 | `rewind.scripts`             | `check`, `test` (tests in mock mode, virtual time, and the suite of a `workflow`), `list`, `listAll`, `get`                                                                                                                                                                                              |
 | `rewind.runs`                | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`: the query language, `sort`, `workflow`, `startedBy`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `delete`; `start` and `fork` take `secrets` |
-| `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                                   |
+| `rewind.tasks`               | `stream` (the task stream), `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                             |
 | `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                                                                                              |
 | `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                                                                                                    |
 | `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `rename`, `delete`, `alerts`                                                                                                                                                                                      |
@@ -139,7 +139,7 @@ const outcome = await rewind.namespace(user.id).scripts.test({ script: fixedSour
 | `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                                                                                           |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
-exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
+exported under their names (`Run`, `Toolset`, `HandedTask`, `WebhookEvent`…).
 
 **Errors.** The API answers errors as `application/problem+json`. The client throws them as `RewindApiError`, with
 `status`, `slug` (`"run-ended"`, `"invalid-script"`, `"invalid-workflow"`, `"tests-failed"`, `"invalid-signal"`…),
@@ -155,8 +155,18 @@ without naming a namespace gets the server's 400 as a `NamespaceRequiredError`. 
 tests, and the requests that carry an idempotency key. Starting a run, forking it or sending a signal without a key is
 never repeated, nor is minting a token.
 
-**Waiting.** `runs.start`, `runs.fork`, `runs.cancel` and `runs.get` take `wait`: they answer when the run ends or
-`wait` passes. A wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never cut it.
+**Waiting.** `runs.start`, `runs.fork`, `runs.cancel` and `runs.get` take `wait`: one request, which the server holds
+until the run ends or is quarantined, or until `wait` passes, however long it is. Nothing is asked again once the server
+has answered. A connection cut while the server holds it (a proxy, or the HTTP client's own timeout: Node's `fetch`
+waits 5 minutes for an answer) is sent again with the time left; a start or a fork that waits carries an idempotency
+key for that, the caller's or one the client draws.
+
+**Pages and statistics.** A page of `runs.list` may hold fewer runs than `limit`, or none, and still have a
+`nextCursor`: the server stopped at its scan budget; `listAll` follows the cursor to the last page. `runs.stats`,
+`runs.failures`, `scripts.list` and `tools.stats` answer from hourly counters: a scope (`q: "namespace:<name>"`, the
+client's own namespace, or every namespace it reaches) and a window of whole hours; another term of `q` is refused
+with `invalid-query`, and a key or a token limited to labels with `forbidden`. `tools.stats` also takes `prefix`, the
+start of a tool's name.
 
 **The event stream.** `runs.events(id, { follow: true })` is an async iterator over the run's journal entries as they
 are committed, ending with `{ type: "end" }`. A dropped connection resumes after the last entry received.
@@ -330,8 +340,9 @@ are answered `null`. `signingKeys.rotate()` replaces the key; the old one stays 
 
 ## The host-tool worker
 
-A script calls a host tool like any tool. The server queues a task; the worker claims it (long-poll), runs the handler,
-keeps the claim alive with heartbeats while it runs, and answers with the result.
+A script calls a host tool like any tool. The worker holds a task stream open (`GET /v1/tasks/stream`); the server hands
+it each task as it becomes ready, the worker runs the handler and answers with the result. Nothing is sent while a
+handler runs: the open stream is the liveness of every task handed on it.
 
 ```ts
 import { HostToolError } from "@rewind.codes/sdk";
@@ -358,20 +369,26 @@ const worker = rewind.worker({
 // Later, maybe in another process, when the user answers:
 await rewind.tasks.complete(token, { answer: "yes" });
 
-await worker.stop(); // lets the claim in flight finish, then waits for the handlers
+await worker.stop(); // no new task; waits for the handlers in flight to answer
 ```
 
 - One worker with the harness's key serves every end user: each task names the namespace of its run
-  (`ctx.namespace`). A worker holding an end user's token claims only the tasks of that namespace's runs.
+  (`ctx.namespace`). A worker holding an end user's token is handed only the tasks of that namespace's runs.
+- `concurrency` (10 by default, 100 at most) is the number of slots of the stream: the server hands at most that many
+  tasks at once. A deferred task frees its slot.
+- After a drop, the worker opens its stream again with the same id (`worker.id`), after a backoff (500 ms, doubling up
+  to 30 s, starting over once a stream lived); the server keeps the tasks handed to it for their tool's grace (60 s by
+  default), and the handlers in flight go on. A stream silent for 45 s (the server writes a comment at least every
+  15 s) is taken as broken. `stop()` keeps the stream open with no slot until the handlers in flight have answered.
 - A thrown `HostToolError` is the tool's failure: the script gets a `ToolError` with its `message` and `data`. With
   `retryable: true`, a tool under the `retry` policy is called again later. Any other exception fails the call too,
   with `Name: message`, and is reported to `onError`.
-- `ctx.signal` aborts when the claim is lost (the run ended, or the claim expired and another worker took the task).
-  The result is then dropped, as the server would drop it.
+- `ctx.signal` aborts when the task no longer waits for its answer: the stream says it is gone (its run ended, its call
+  timed out), or the server refused an answer as `task-gone`. The result is then dropped, as the server would drop it.
 - After `ctx.defer()`, the handler's return value is not an answer: whoever holds the token answers. If the handler
   throws after deferring, the worker fails the task.
-- A refused key (401, 403) or an invalid claim stops the worker: `worker.done` rejects. Other failures are reported to
-  `onError` (`console.error` by default) and retried.
+- A refused key (401, 403), an invalid request or an unknown toolset (400, 404) stops the worker: `worker.done`
+  rejects. Other failures are reported to `onError` (`console.error` by default), and the stream is opened again.
 
 ## Approvals
 
@@ -441,8 +458,8 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
   `test_script` and `search_tools` of these agent tools use the derived toolset: `agentTools.toolset` is its id, and
   `result.workflow` and `result.toolset` hold what was saved and derived. A harness that creates the agent tools for
   each turn keeps `agentTools.toolset` with the conversation and passes it as `toolset` the next time. The derived
-  toolset has another id: a worker that claims tasks `toolset: <id>` does not claim those of its runs (start it
-  without `toolset`, with its `tools`); the secrets its runs attach do not depend on the toolset. A refused script
+  toolset has another id: a worker started with `toolset: <id>` is not handed the tasks of its runs (start it without
+  `toolset`, with its `tools`); the secrets its runs attach do not depend on the toolset. A refused script
   comes back with its diagnostics.
 - `save_workflow` and `retry_run` (of a run of a workflow) run the suite first. When a test does not pass, the model
   reads each test's problem (`stale`, `incompatible` or `failed`), its failures and the trace of the run, and is told

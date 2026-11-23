@@ -63,11 +63,16 @@ export class Payloads {
 }
 
 export interface ToolStatsParams extends RequestOptions {
-  toolset?: string | undefined;
-  tool?: string | undefined;
-  /** 24 hours ago by default. */
+  /**
+   * The scope, as `runs.stats` takes it: one term `namespace:<name>`, or nothing for every namespace the client
+   * reaches. Any other term is refused with `invalid-query`.
+   */
+  q?: string | undefined;
+  /** Only the tools whose name starts with this (`github.`). */
+  prefix?: string | undefined;
+  /** Rounded down to the hour; 24 hours ago by default. */
   since?: Date | string | undefined;
-  /** Now by default. */
+  /** Rounded up to the hour; now by default. */
   until?: Date | string | undefined;
 }
 
@@ -75,7 +80,7 @@ export interface ToolStatsParams extends RequestOptions {
 export class Tools {
   constructor(private readonly transport: Transport) {}
 
-  /** Latency, errors and retries per tool, over a window. */
+  /** Latency, errors and retries per tool, over a window of whole hours, from hourly counters. */
   stats(params: ToolStatsParams = {}): Promise<ToolStatsPage> {
     const { signal } = params;
     return this.transport.send(
@@ -83,8 +88,8 @@ export class Tools {
         this.transport.api.GET("/v1/tools/stats", {
           params: {
             query: {
-              toolset: params.toolset,
-              tool: params.tool,
+              q: params.q,
+              prefix: params.prefix,
               since: timeParam(params.since),
               until: timeParam(params.until),
             },

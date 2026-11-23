@@ -13163,7 +13163,9 @@ export interface operations {
                 tools?: string[];
                 /**
                  * @description At most this many tasks in flight on this stream: handed, and neither completed, failed,
-                 *     deferred (by whichever process answers) nor gone. 1 by default, 100 at most.
+                 *     deferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none
+                 *     is handed: a worker that stops opens its stream again with 0 slots and its `worker`, which
+                 *     keeps alive the tasks handed to it before while its handlers finish them.
                  */
                 slots?: number;
                 /**

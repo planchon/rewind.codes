@@ -1,17 +1,31 @@
-import { durationParam } from "../duration.js";
+import { EventSourceParserStream } from "eventsource-parser/stream";
+
+import { RewindConnectionError } from "../errors.js";
 import type { Transport } from "../http.js";
-import type { Duration, HeartbeatAck, TaskBatch } from "../types.js";
+import type { Duration, HandedTask, TaskGone, TaskStreamEvent } from "../types.js";
 import type { RequestOptions } from "./toolsets.js";
 
-export interface ClaimParams extends RequestOptions {
-  /** Only tasks of runs of this toolset. */
+export interface TaskStreamParams extends RequestOptions {
+  /**
+   * Only tasks of runs of this toolset. Without it, the tasks of the tools named in `tools`, whatever the toolset of
+   * their run.
+   */
   toolset?: string | undefined;
-  /** Only these tools. All the toolset's host tools when absent. */
+  /** Only these tools. All the host tools of `toolset` when absent. */
   tools?: string[] | undefined;
-  /** At most this many tasks (1 by default, 100 at most). */
-  limit?: number | undefined;
-  /** How long to wait for a task before answering with none (30 s by default, 60 s at most). */
-  wait?: Duration | undefined;
+  /** Only tasks of runs of this namespace (an end user's token is limited to its own). */
+  namespace?: string | undefined;
+  /** At most this many tasks in flight on the stream (1 by default, 100 at most; 0 hands none). */
+  slots?: number | undefined;
+  /**
+   * The worker's own id, the same on every reconnection: a stream opened again with it within the grace keeps the
+   * tasks handed on the one that closed.
+   */
+  worker?: string | undefined;
+  /** Called once the server has answered and the stream is open. */
+  onOpen?: (() => void) | undefined;
+  /** Called with each chunk the server writes, comments included: what tells a live stream from a silent one. */
+  onBytes?: (() => void) | undefined;
 }
 
 /** How a host tool failed, as the script will see it: a thrown `ToolError`. */
@@ -25,48 +39,68 @@ export interface TaskFailure {
 }
 
 /**
- * Host-tool tasks, at the level of the API. The worker (`rewind.worker`) drives them; a task
+ * Host-tool tasks, at the level of the API. The worker (`rewind.worker`) follows the task stream and answers; a task
  * deferred by a handler is answered here, by its token, possibly days later.
  */
 export class Tasks {
   constructor(private readonly transport: Transport) {}
 
-  /** Claims host-tool tasks (long-poll). Each claim has a token and must be kept alive with heartbeats. */
-  claim(params: ClaimParams = {}): Promise<TaskBatch> {
+  /**
+   * The tasks handed on one task stream (`GET /v1/tasks/stream`), until the server ends it or the connection drops:
+   * `task`, a task with its token; `gone`, a task handed on it that no longer waits for its answer. The open stream is
+   * the liveness of every task handed on it: there is no heartbeat. It is never opened again here: the worker does
+   * that, with a backoff after an error. Comments and events of a later version are skipped.
+   */
+  async *stream(params: TaskStreamParams = {}): AsyncGenerator<TaskStreamEvent> {
     const { signal } = params;
-    return this.transport.send(
+    const body = await this.transport.send(
       () =>
-        this.transport.api.GET("/v1/tasks", {
+        this.transport.api.GET("/v1/tasks/stream", {
           params: {
             query: {
               toolset: params.toolset,
-              tool: params.tools,
-              limit: params.limit,
-              wait: params.wait === undefined ? undefined : durationParam(params.wait),
+              tools: params.tools,
+              namespace: params.namespace,
+              slots: params.slots,
+              worker: params.worker,
             },
           },
+          headers: { Accept: "text/event-stream" },
+          parseAs: "stream",
           signal,
         }),
-      // Never sent again: the lost answer of a claim holds claimed tasks.
+      // The worker opens it again after a drop, with its own backoff.
       { retry: false, signal },
     );
-  }
-
-  /** Keeps a claim alive. A `task-gone` problem (410) means: stop working on the task. */
-  heartbeat(token: string, options: RequestOptions = {}): Promise<HeartbeatAck> {
-    return this.transport.send(
-      () =>
-        this.transport.api.POST("/v1/tasks/{token}/heartbeat", {
-          params: { path: { token } },
-          signal: options.signal,
-        }),
-      { retry: false, signal: options.signal },
-    );
+    if (body === null) {
+      throw new RewindConnectionError("the task stream has no body");
+    }
+    params.onOpen?.();
+    const onBytes = params.onBytes;
+    const bytes =
+      onBytes === undefined
+        ? body
+        : body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                onBytes();
+                controller.enqueue(chunk);
+              },
+            }),
+          );
+    const messages = bytes.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream());
+    for await (const message of messages) {
+      if (message.event === "task") {
+        yield { type: "task", task: JSON.parse(message.data) as HandedTask };
+      } else if (message.event === "gone") {
+        yield { type: "gone", token: (JSON.parse(message.data) as TaskGone).token };
+      }
+    }
   }
 
   /**
-   * The handler answers later, with `complete` or `fail` and the same token: the task is
-   * `deferred` and needs no heartbeat, up to `timeout` (bounded by the run's TTL).
+   * The handler answers later, with `complete` or `fail` and the same token: the task is `deferred`, its slot on the
+   * stream free, up to `timeout` (bounded by the run's TTL).
    */
   async defer(token: string, options: RequestOptions & { timeout?: Duration | undefined } = {}): Promise<void> {
     await this.transport.send(

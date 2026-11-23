@@ -18506,7 +18506,7 @@
             }
           },
           {
-            "description": "At most this many tasks in flight on this stream: handed, and neither completed, failed,\ndeferred (by whichever process answers) nor gone. 1 by default, 100 at most.",
+            "description": "At most this many tasks in flight on this stream: handed, and neither completed, failed,\ndeferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none\nis handed: a worker that stops opens its stream again with 0 slots and its `worker`, which\nkeeps alive the tasks handed to it before while its handlers finish them.",
             "in": "query",
             "name": "slots",
             "required": false,

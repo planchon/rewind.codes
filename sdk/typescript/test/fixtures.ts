@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { Payload, Run, Task, Toolset, Workflow } from "../src/types.js";
+import type { HandedTask, Payload, Run, Toolset, Workflow } from "../src/types.js";
 
 export const RUN_ID = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10";
 /** The handle of the run `RUN_ID`. */
@@ -43,7 +43,7 @@ export function run(overrides: Partial<Run> = {}): Run {
   };
 }
 
-export function task(overrides: Partial<Task> = {}): Task {
+export function task(overrides: Partial<HandedTask> = {}): HandedTask {
   return {
     id: "task-1",
     token: "tok-1",
@@ -55,7 +55,6 @@ export function task(overrides: Partial<Task> = {}): Task {
     namespace: NAMESPACE,
     idempotencyKey: `${RUN_ID}/3`,
     labels: { conversation: "c-42" },
-    heartbeatTimeoutMs: 60_000,
     traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
     ...overrides,
   };

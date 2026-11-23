@@ -1,6 +1,6 @@
 import type { Transport } from "../http.js";
-import { labelParams } from "../params.js";
-import type { CheckResult, Labels, Script, ScriptPage, ScriptSummary, TestRequest, TestRun } from "../types.js";
+import { timeParam } from "../params.js";
+import type { CheckResult, Script, ScriptPage, ScriptSummary, TestRequest, TestRun } from "../types.js";
 import type { RequestOptions } from "./toolsets.js";
 
 export interface CheckParams extends RequestOptions {
@@ -21,10 +21,15 @@ export interface ScriptTitleParams extends RequestOptions {
 }
 
 export interface ListScriptsParams extends RequestOptions {
-  /** Only scripts that ran with all these labels. */
-  labels?: Labels | undefined;
-  /** Only scripts that called this tool. */
-  tool?: string | undefined;
+  /**
+   * The scope, as `runs.stats` takes it: one term `namespace:<name>`, or nothing for every namespace the client
+   * reaches. Any other term is refused with `invalid-query`: the list comes from hourly counters.
+   */
+  q?: string | undefined;
+  /** Scripts of the runs started at or after this time, rounded down to the hour. No lower bound by default. */
+  since?: Date | string | undefined;
+  /** Scripts of the runs started before this time, rounded up to the hour. Now by default. */
+  until?: Date | string | undefined;
   /** At most this many scripts (50 by default, 500 at most). */
   limit?: number | undefined;
   cursor?: string | undefined;
@@ -73,7 +78,10 @@ export class Scripts {
     );
   }
 
-  /** A page of the distinct scripts executed, most recently run first. */
+  /**
+   * A page of the distinct scripts the runs of a scope ran in a window, most recently run first, each with its runs by
+   * status and the tools it called.
+   */
   list(params: ListScriptsParams = {}): Promise<ScriptPage> {
     const { signal } = params;
     return this.transport.send(
@@ -81,8 +89,9 @@ export class Scripts {
         this.transport.api.GET("/v1/scripts", {
           params: {
             query: {
-              label: labelParams(params.labels),
-              tool: params.tool,
+              q: params.q,
+              since: timeParam(params.since),
+              until: timeParam(params.until),
               limit: params.limit,
               cursor: params.cursor,
             },

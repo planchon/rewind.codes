@@ -2,27 +2,33 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.5.0 (unreleased)
 
-For runs named by their handles, scripts with titles, and workflow versions with numbers.
+For the run plane on object storage, where nothing polls: host tools are handed on a task stream, a wait is one
+request.
 
-- `Run` and `RunSummary` have `handle`, the run's readable name `<namespace>/<origin>/<suffix>`
-  (`dana/triage/06bqx3k9f2mt`), and `scriptTitle`; `id` stays the run's UUID. `Run.parent` and `Run.startedBy` have
-  the `handle` of the run they name, a secret's `lastRead` its run's `runHandle`, `PendingApproval` its
-  `runHandle`, and a failure group's `latest` (`FailureSample`) its `handle`. Every method of `rewind.runs` that
-  takes a run's id takes its handle too, percent-encoded in the path; so do the `parent` and `startedBy` filters of
-  `runs.list`.
-- `Script` and `ScriptSummary` have `title`, `description` and `titleSource` (`person` or `comment`): the title a
-  person gave the script, else the first line of the comment at its top.
-  `scripts.setTitle(digest, { title, description })` gives one for the whole organization, `{ title: null }` takes it
-  away; it needs the new permission `scripts:write`, which the built-in roles `owner` and `harness` hold. The problem
-  slug `invalid-title`.
-- `Workflow` and `Run.workflow` have `number`, the version's number among the versions of its workflow;
-  `triage@v12` names a version wherever `triage@<version>` does (`runs.start({ workflow })`, `scripts.test`, a
-  toolset's `workflows`, a workflow's `parent`).
-- The agent tools name runs by their handle and take one wherever they take a run's id. `run_script` and
-  `check_script` ask the model to start a script with a comment giving its title (`/** <title> … */`), and
-  `check_script` adds a note when the script has none.
+- The host-tool worker holds a task stream open (`GET /v1/tasks/stream`, server-sent events `task` and `gone`) and is
+  handed each task as it becomes ready; the open stream is the liveness of every task handed on it. The long-poll and
+  the heartbeats are gone: `ctx.heartbeat()`, the option `pollWait` and the claim's `heartbeatTimeoutMs` are removed.
+  `concurrency` is the stream's slots (100 at most). After a drop the worker opens the stream again with the same id
+  (`worker.id`), after a backoff that starts over once a stream lived, and its handlers go on: the server keeps their
+  tasks for their grace. A stream silent for 45 s is taken as broken. `stop()` keeps the stream open with no slot
+  until the handlers in flight have answered. `timings` tunes the backoff and the silence. `WorkerErrorInfo.phase` is
+  `stream`, `answer` or `handler`.
+- `ctx.signal` aborts, with `task-gone`, when the stream says the task is gone (its run ended, its call timed out).
+- `rewind.tasks.stream(params)` reads one task stream (`toolset`, `tools`, `namespace`, `slots`, `worker`);
+  `tasks.claim`, `tasks.heartbeat` and `ClaimParams` are removed. The types `HandedTask`, `TaskGone` and
+  `TaskStreamEvent` replace `Task`, `TaskBatch` and `HeartbeatAck`.
+- `runs.start`, `runs.fork`, `runs.cancel` and `runs.get` with `wait` send one request, which the server holds until
+  the run ends or is quarantined, or `wait` passes, however long; nothing is asked again once it answered. A connection
+  cut while it is held is sent again with the time left; a start or a fork that waits carries an idempotency key (one
+  the client draws when none is given). `MAX_REQUEST_WAIT_MS` is removed.
+- The statistics take a scope and a window only: `runs.stats`, `runs.failures`, `scripts.list` (`q`, `since`, `until`)
+  and `tools.stats` (`q`, `prefix`, `since`, `until`); `q` holds at most one `namespace:` term (`invalid-query`
+  otherwise). `scripts.list` loses `labels` and `tool`, `tools.stats` loses `toolset` and `tool`.
+- The generated types describe the change stream's control-plane events (`script`, `workflow`, `secret`, `namespace`,
+  `connection`: `ScriptChanged`, `WorkflowChanged`, `SecretChanged`, `NamespaceChanged`, `ConnectionChanged`), the
+  facet of workflows, and the pages of `GET /v1/runs` that may be short with a cursor.
 
 ## 0.4.0 (2026-11-22)
 

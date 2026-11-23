@@ -84,7 +84,6 @@ test.describe("criterion 7: the dashboard", () => {
     });
     const worker = harness.worker({
       toolset: toolset.id,
-      pollWait: "1s",
       tools: {
         "crm.lookup": ({ email }: { email: string }) => ({ id: `cus_${email.split("@")[0]}` }),
         "audit.record": () => ({ ok: true }),

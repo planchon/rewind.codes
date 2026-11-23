@@ -176,42 +176,86 @@ describe("the client", () => {
     expect(server.requests).toHaveLength(0);
   });
 
-  it("waits longer than one request by asking again until the run ends", async () => {
-    let gets = 0;
-    server
-      .on("POST", "/v1/runs", json(run({ status: "active", waitingFor: [] }), 201))
-      .on("GET", "/v1/runs/{id}", () => {
-        gets += 1;
-        return json(run({ status: gets < 3 ? "active" : "completed", output: payload(1) }));
-      });
-    const ended = await rewind.runs.start({ script: "x", wait: "5s" });
+  it("waits with one request the server holds until the run ends, however long the wait", async () => {
+    server.on("POST", "/v1/runs", json(run({ status: "completed", output: payload(1) }), 201));
+    const ended = await rewind.runs.start({ script: "x", wait: "2h" });
     expect(ended.status).toBe("completed");
-    expect(gets).toBe(3);
-    const waits = server.calls("GET", `/v1/runs/${RUN_ID}`).map((r) => r.query.get("wait"));
-    expect(waits.every((wait) => wait !== null && /^\d+(ms|s)/.test(wait))).toBe(true);
-    expect(server.requests[0]?.body).toMatchObject({ wait: expect.stringMatching(/^(5s|4s\d+ms)$/) });
-  });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]?.body).toMatchObject({ wait: "2h" });
+    // A start that waits carries a key, so that a cut connection may be sent again.
+    expect(server.requests[0]?.headers["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
 
-  it("splits a long wait for a cancellation as for a start", async () => {
-    let gets = 0;
-    server.on("POST", "/v1/runs/{id}/cancel", json(run({ status: "active" }), 202)).on("GET", "/v1/runs/{id}", () => {
-      gets += 1;
-      return json(run({ status: gets < 2 ? "active" : "cancelled" }));
-    });
-    const cancelled = await rewind.runs.cancel(RUN_ID, { wait: "2m" });
+    server.on("POST", "/v1/runs/{id}/cancel", json(run({ status: "cancelled" }), 202));
+    const cancelled = await rewind.runs.cancel(RUN_ID, { wait: "10m" });
     expect(cancelled.status).toBe("cancelled");
-    expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: "50s" });
-    const waits = server.calls("GET", `/v1/runs/${RUN_ID}`).map((r) => r.query.get("wait"));
-    expect(waits).toHaveLength(2);
-    expect(waits.every((wait) => wait !== null && /^(50s|1m\d)/.test(wait))).toBe(true);
+    expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: "10m" });
+    expect(server.calls("GET", `/v1/runs/${RUN_ID}`)).toHaveLength(0);
   });
 
-  it("returns a run still active when the wait passes", async () => {
+  it("returns the run as the server answered it, still active when the wait passed, without asking again", async () => {
     server
       .on("POST", "/v1/runs", json(run({ status: "active" }), 201))
       .on("GET", "/v1/runs/{id}", json(run({ status: "active" })));
     const started = await rewind.runs.start({ script: "x", wait: 30 });
     expect(started.status).toBe("active");
+    const read = await rewind.runs.get(RUN_ID, { wait: "1h" });
+    expect(read.status).toBe("active");
+    expect(server.requests).toHaveLength(2);
+  });
+
+  it("sends a held request again with the time left when its connection is cut", async () => {
+    let gets = 0;
+    server.on("GET", "/v1/runs/{id}", (request) => {
+      gets += 1;
+      if (gets === 1) {
+        // A proxy cuts the connection while the server holds the request.
+        return (response) =>
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              response.destroy();
+              resolve();
+            }, 1_100),
+          );
+      }
+      return json(run({ status: "completed", labels: { wait: request.query.get("wait") ?? "" } }));
+    });
+    const ended = await rewind.runs.get(RUN_ID, { wait: "1m" });
+    expect(ended.status).toBe("completed");
+    const waits = server.calls("GET", `/v1/runs/${RUN_ID}`).map((r) => r.query.get("wait"));
+    expect(waits).toHaveLength(2);
+    expect(waits[0]).toBe("1m");
+    expect(waits[1]).toMatch(/^58s\d+ms$/);
+
+    // Cut before the server held it: sent again after a backoff, `maxRetries` times, then thrown.
+    const once = new Rewind({ url: server.url, maxRetries: 1 });
+    server.on("GET", "/v1/runs/{id}", () => (response) => {
+      response.destroy();
+    });
+    await expect(once.runs.get(RUN_ID, { wait: "30s" })).rejects.toBeInstanceOf(RewindConnectionError);
+    expect(server.calls("GET", `/v1/runs/${RUN_ID}`)).toHaveLength(4);
+  });
+
+  it("sends a start that waits again with its key after a cut, and a cancellation as a read", async () => {
+    let posts = 0;
+    server.on("POST", "/v1/runs", () => {
+      posts += 1;
+      return posts === 1
+        ? (response) => new Promise<void>((resolve) => setTimeout(() => (response.destroy(), resolve()), 1_100))
+        : json(run({ status: "completed" }));
+    });
+    expect((await rewind.runs.start({ script: "x", wait: "1m", idempotencyKey: "k-1" })).status).toBe("completed");
+    expect(server.calls("POST", "/v1/runs").map((r) => r.headers["idempotency-key"])).toEqual(["k-1", "k-1"]);
+
+    server
+      .on(
+        "POST",
+        "/v1/runs/{id}/cancel",
+        () => (response) => new Promise<void>((resolve) => setTimeout(() => (response.destroy(), resolve()), 1_100)),
+      )
+      .on("GET", "/v1/runs/{id}", json(run({ status: "cancelled" })));
+    expect((await rewind.runs.cancel(RUN_ID, { wait: "1m" })).status).toBe("cancelled");
+    expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)).toHaveLength(1);
+    expect(server.calls("GET", `/v1/runs/${RUN_ID}`)[0]?.query.get("wait")).toMatch(/^58s\d+ms$/);
   });
 
   it("turns problems into RewindApiError, with the diagnostics of a refused script", async () => {
@@ -328,7 +372,7 @@ describe("the client", () => {
     expect(server.requests[0]?.query.get("q")).toBe('@agent:triage -status:completed "rate limit"');
     expect(server.requests[0]?.query.get("sort")).toBe("wakes");
     const stats = await rewind.runs.stats({
-      q: "waiting:*",
+      q: "namespace:alice",
       since: new Date("2026-11-11T00:00:00Z"),
       bucket: "1h",
       top: 5,
@@ -339,7 +383,7 @@ describe("the client", () => {
     expect(statsQuery?.get("bucket")).toBe("1h");
     expect(statsQuery?.get("top")).toBe("5");
     expect(statsQuery?.get("until")).toBeNull();
-    const failures = await rewind.runs.failures({ q: "@env:prod", bucket: 3_600_000, limit: 10 });
+    const failures = await rewind.runs.failures({ q: "namespace:alice", bucket: 3_600_000, limit: 10 });
     expect(failures.totalGroups).toBe(1);
     expect(server.requests[2]?.query.get("bucket")).toBe("1h");
     expect(server.requests[2]?.query.get("limit")).toBe("10");
@@ -494,8 +538,9 @@ describe("the client", () => {
     expect(tested.passed).toBe(true);
     expect(tested.tests.map((t) => t.name)).toEqual(["waits"]);
     expect(server.requests[1]?.body).toEqual({ script: "x", tests, workflow: "triage" });
-    expect((await rewind.scripts.list({ labels: { agent: "a" } })).scripts).toEqual([]);
-    expect(server.requests[2]?.query.getAll("label")).toEqual(["agent:a"]);
+    expect((await rewind.scripts.list({ q: "namespace:alice", since: "2026-11-11T00:00:00Z" })).scripts).toEqual([]);
+    expect(server.requests[2]?.query.get("q")).toBe("namespace:alice");
+    expect(server.requests[2]?.query.get("since")).toBe("2026-11-11T00:00:00Z");
     expect((await rewind.scripts.get("dd")).source).toBe("src");
   });
 
@@ -701,8 +746,10 @@ describe("the client", () => {
     await rewind.subscriptions.delete("s1");
     expect((await rewind.apiKeys.create({ name: "w", role: "worker", tenant: "t" })).key).toBe("rewind_sk_new");
     await rewind.apiKeys.revoke("k1");
-    await rewind.tools.stats({ tool: "github.list_issues", since: "2026-11-11T00:00:00Z" });
-    expect(server.calls("GET", "/v1/tools/stats")[0]?.query.get("tool")).toBe("github.list_issues");
+    await rewind.tools.stats({ q: "namespace:alice", prefix: "github.", since: "2026-11-11T00:00:00Z" });
+    const toolStats = server.calls("GET", "/v1/tools/stats")[0]?.query;
+    expect(toolStats?.get("prefix")).toBe("github.");
+    expect(toolStats?.get("q")).toBe("namespace:alice");
     await rewind.server.stop();
   });
 });

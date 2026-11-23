@@ -17,7 +17,6 @@ export { Workflows, type ListWorkflowsParams, type RecordTestsParams } from "./r
 export { Tests } from "./resources/tests.js";
 export { Scripts, type CheckParams, type ListScriptsParams, type ScriptTitleParams } from "./resources/scripts.js";
 export {
-  MAX_REQUEST_WAIT_MS,
   Runs,
   type EventsParams,
   type FailuresParams,
@@ -29,7 +28,7 @@ export {
   type StartRunParams,
   type WorkflowTarget,
 } from "./resources/runs.js";
-export { Tasks, type ClaimParams, type TaskFailure } from "./resources/tasks.js";
+export { Tasks, type TaskFailure, type TaskStreamParams } from "./resources/tasks.js";
 export {
   ApiKeys,
   type PayloadOptions,
@@ -66,6 +65,7 @@ export {
   type HostToolHandler,
   type WorkerErrorInfo,
   type WorkerOptions,
+  type WorkerTimings,
 } from "./worker.js";
 export { Approvals, pendingApprovals, type PendingApproval } from "./approvals.js";
 export { WebhookVerificationFailed, verifyWebhook, type WebhookHeaders } from "./webhooks.js";

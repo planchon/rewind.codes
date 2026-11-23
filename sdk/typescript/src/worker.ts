@@ -1,12 +1,12 @@
-import { RewindApiError, isProblem } from "./errors.js";
+import { RewindApiError, RewindConnectionError, isProblem } from "./errors.js";
 import { backoff, sleep } from "./http.js";
 import type { TaskFailure, Tasks } from "./resources/tasks.js";
-import type { Duration, Labels, Task } from "./types.js";
+import type { Duration, HandedTask, Labels } from "./types.js";
 
 /** What a handler knows about the call it executes, and what it can do about it. */
 export interface HostToolContext {
-  /** The claimed task, as the server sent it. */
-  readonly task: Task;
+  /** The task, as the server handed it. */
+  readonly task: HandedTask;
   readonly runId: string;
   /**
    * The namespace of the run: the end user the handler acts for. Act on their data only, and reach their runs with
@@ -15,7 +15,10 @@ export interface HostToolContext {
   readonly namespace: string;
   /** The call's position in the run. */
   readonly seq: number;
-  /** From 1. Above 1, an earlier attempt was interrupted: the call may already have happened. */
+  /**
+   * From 1. Above 1, an earlier attempt was interrupted (the stream it was handed on closed and did not come back
+   * within its grace): the call may already have happened.
+   */
   readonly attempt: number;
   /**
    * `{run_id}/{seq}`, the same on every attempt: use it to recognize a call already made, so an
@@ -28,24 +31,21 @@ export interface HostToolContext {
   readonly traceparent: string | undefined;
   readonly tracestate: string | undefined;
   /**
-   * Aborted when the claim is lost: the run ended, or the claim expired and the task went to
-   * another worker. The result of the call is then dropped.
+   * Aborted when the task no longer waits for its answer: the stream says it is gone (its run ended, its call timed
+   * out), or the server refused an answer as `task-gone`. The result of the call is then dropped.
    */
   readonly signal: AbortSignal;
-  /** Sends a heartbeat now. The worker already sends them on its own while the handler runs. */
-  heartbeat(): Promise<void>;
   /**
-   * The handler answers later, possibly days later, by the returned token: the task is
-   * `deferred` and needs no heartbeat, up to `timeout` (bounded by the run's TTL). After it, the
-   * worker no longer answers the task when the handler returns, but still fails it if the
-   * handler throws.
+   * The handler answers later, possibly days later, by the returned token: the task is `deferred` and its slot is
+   * free, up to `timeout` (bounded by the run's TTL). After it, the worker no longer answers the task when the handler
+   * returns, but still fails it if the handler throws.
    */
   defer(options?: { timeout?: Duration | undefined }): Promise<DeferredTask>;
 }
 
 /** A task the handler answers later, from anywhere, by its token. */
 export interface DeferredTask {
-  /** The claim's token: keep it to answer, even from another process (`rewind.tasks.complete`). */
+  /** The task's token: keep it to answer, even from another process (`rewind.tasks.complete`). */
   readonly token: string;
   readonly taskId: string;
   complete(result: unknown): Promise<void>;
@@ -75,49 +75,81 @@ export class HostToolError extends Error {
 }
 
 export interface WorkerErrorInfo {
-  /** What failed: claiming tasks, a heartbeat, answering a task, or a handler that threw an unexpected error. */
-  phase: "claim" | "heartbeat" | "answer" | "handler";
-  task?: Task | undefined;
+  /** What failed: the task stream, answering a task, or a handler that threw an unexpected error. */
+  phase: "stream" | "answer" | "handler";
+  task?: HandedTask | undefined;
+}
+
+/** How the worker follows its stream; the defaults suit the server's keep-alive. */
+export interface WorkerTimings {
+  /** The wait before opening the stream again after its first error, doubled after each one: 500 ms. */
+  backoffMs?: number | undefined;
+  /** The longest of those waits: 30 s. */
+  maxBackoffMs?: number | undefined;
+  /**
+   * A stream that writes nothing for this long, not even the comment the server writes at least every 15 s, is taken
+   * as broken and opened again: 45 s.
+   */
+  silenceMs?: number | undefined;
+  /** A stream the server closes sooner than this after it opened counts as an error: 5 s. */
+  minLifeMs?: number | undefined;
 }
 
 export interface WorkerOptions {
-  /** Only tasks of runs of this toolset. */
-  toolset?: string | undefined;
-  /** The handlers, by tool name as the toolset declares it. The worker claims only these tools. */
-  tools: Record<string, HostToolHandler>;
-  /** At most this many handlers running at once. 10 by default. */
-  concurrency?: number | undefined;
   /**
-   * How long one claim request waits for a task (30 s by default, 60 s at most). `stop()` lets
-   * the claim in flight finish, so it takes up to this long.
+   * Only tasks of runs of this toolset. Without it, the tasks of the tools in `tools` whatever the toolset of their
+   * run, a toolset derived from another (as `save_workflow` does) included.
    */
-  pollWait?: Duration | undefined;
+  toolset?: string | undefined;
+  /** The handlers, by tool name as the toolset declares it. The worker is handed only these tools. */
+  tools: Record<string, HostToolHandler>;
+  /** At most this many handlers running at once: the slots of its stream. 10 by default, 100 at most. */
+  concurrency?: number | undefined;
   /** Stops the worker, as `stop()`, when aborted. */
   signal?: AbortSignal | undefined;
   /** Called with what fails along the way. Logs to `console.error` by default. */
   onError?: ((error: unknown, info: WorkerErrorInfo) => void) | undefined;
+  timings?: WorkerTimings | undefined;
+}
+
+/** The reason a context's signal aborts when the stream says its task is gone. */
+function gone(task: HandedTask): RewindApiError {
+  return new RewindApiError({
+    type: "urn:rewind:problem:task-gone",
+    title: "Gone",
+    status: 410,
+    detail: `the task of ${task.tool} (run ${task.runId}, call ${task.seq}) no longer waits for its answer`,
+  });
 }
 
 /**
- * Executes the host tools of a harness: it long-polls `GET /v1/tasks` for its tools, runs each
- * handler, keeps the claim alive with heartbeats while it runs, and answers with the result, or
- * the failure when the handler throws. A handler can also defer its answer.
+ * Executes the host tools of a harness: it holds a task stream open (`GET /v1/tasks/stream`) for its tools, is handed
+ * each task as it becomes ready, runs the handler, and answers with the result, or the failure when the handler
+ * throws. A handler can also defer its answer.
  *
- * One worker with the customer's key serves every end user: each task names the namespace of its
- * run (`ctx.namespace`). A worker holding an end user's token claims only the tasks of that
- * namespace's runs.
+ * The open stream is the liveness of the tasks handed on it: nothing is sent while a handler runs. After a drop, the
+ * worker opens the stream again with the same id, after a backoff that starts over once a stream lived; the server
+ * keeps the tasks handed to it for their grace, and the handlers in flight go on.
+ *
+ * One worker with the customer's key serves every end user: each task names the namespace of its run
+ * (`ctx.namespace`). A worker holding an end user's token is handed only the tasks of that namespace's runs.
  */
 export class HostToolWorker {
   /** Settles when the worker has stopped and its handlers have answered; rejects on a fatal error. */
   readonly done: Promise<void>;
+  /** The worker's id on its stream, the same on every reconnection. */
+  readonly id: string;
 
   private readonly tasks: Tasks;
   private readonly options: WorkerOptions;
   private readonly tools: string[];
   private readonly concurrency: number;
-  private readonly inFlight = new Set<Promise<void>>();
+  /** The handlers running, by their task's token, each with what aborts its context's signal. */
+  private readonly inFlight = new Map<string, { execution: Promise<void>; lose: (reason?: unknown) => void }>();
   private readonly stopping = new AbortController();
-  private wake: (() => void) | undefined;
+  /** Closes the stream being read. */
+  private connection: AbortController | null = null;
+  private drained: (() => void) | undefined;
 
   constructor(tasks: Tasks, options: WorkerOptions) {
     this.tasks = tasks;
@@ -127,9 +159,10 @@ export class HostToolWorker {
       throw new TypeError("a worker needs at least one host tool handler");
     }
     this.concurrency = options.concurrency ?? 10;
-    if (!Number.isInteger(this.concurrency) || this.concurrency < 1) {
-      throw new RangeError(`invalid concurrency ${this.concurrency}: expected an integer of 1 or more`);
+    if (!Number.isInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 100) {
+      throw new RangeError(`invalid concurrency ${this.concurrency}: expected an integer from 1 to 100`);
     }
+    this.id = globalThis.crypto.randomUUID();
     if (options.signal?.aborted) {
       this.stopping.abort();
     } else {
@@ -146,70 +179,131 @@ export class HostToolWorker {
   }
 
   /**
-   * Stops claiming tasks, lets the claim in flight finish (its tasks are executed), and waits
-   * for the handlers to answer.
+   * Stops: no task is handed to the worker any more, and it waits for the handlers in flight to answer. Meanwhile its
+   * stream stays open with no slot, so that the server keeps their tasks for it.
    */
   stop(): Promise<void> {
-    this.stopping.abort();
-    this.notify();
+    if (!this.stopping.signal.aborted) {
+      this.stopping.abort();
+      this.connection?.abort();
+    }
     return this.done;
   }
 
   private async loop(): Promise<void> {
-    let failures = 0;
     try {
-      while (!this.stopping.signal.aborted) {
-        if (this.inFlight.size >= this.concurrency) {
-          await this.slot();
-          continue;
-        }
-        let tasks: Task[];
-        try {
-          const batch = await this.tasks.claim({
-            toolset: this.options.toolset,
-            tools: this.tools,
-            limit: Math.min(100, this.concurrency - this.inFlight.size),
-            wait: this.options.pollWait ?? "30s",
-          });
-          tasks = batch.tasks;
-          failures = 0;
-        } catch (error) {
-          if (isFatal(error)) {
-            this.report(error, { phase: "claim" });
-            throw error;
-          }
-          this.report(error, { phase: "claim" });
-          await sleep(backoff(failures, 500, 30_000), this.stopping.signal).catch(() => undefined);
-          failures += 1;
-          continue;
-        }
-        for (const task of tasks) {
-          this.start(task);
-        }
-      }
+      await this.follow(() => this.stopping.signal.aborted, this.concurrency);
     } finally {
-      while (this.inFlight.size > 0) {
-        await Promise.allSettled([...this.inFlight]);
+      // Its tasks stay alive while the handlers finish them: a stream with no slot.
+      if (this.inFlight.size > 0) {
+        const idle = new Promise<void>((resolve) => {
+          this.drained = resolve;
+        });
+        await Promise.race([this.follow(() => this.inFlight.size === 0, 0).catch(() => undefined), idle]);
+        this.connection?.abort();
+        while (this.inFlight.size > 0) {
+          await Promise.allSettled([...this.inFlight.values()].map((f) => f.execution));
+        }
       }
     }
   }
 
-  private start(task: Task): void {
-    const execution = this.execute(task)
-      .catch((error: unknown) => this.report(error, { phase: "answer", task }))
-      .finally(() => {
-        this.inFlight.delete(execution);
-        this.notify();
-      });
-    this.inFlight.add(execution);
+  /** Holds the stream open with `slots` until `over()`, opening it again after a drop. */
+  private async follow(over: () => boolean, slots: number): Promise<void> {
+    const timings = this.options.timings ?? {};
+    const minLifeMs = timings.minLifeMs ?? 5_000;
+    let failures = 0;
+    while (!over()) {
+      const current = new AbortController();
+      this.connection = current;
+      let openedAt: number | null = null;
+      try {
+        let silence: ReturnType<typeof setTimeout> | undefined;
+        const heard = () => {
+          clearTimeout(silence);
+          silence = setTimeout(
+            () => current.abort(new RewindConnectionError("the task stream went silent")),
+            timings.silenceMs ?? 45_000,
+          );
+        };
+        try {
+          heard();
+          const events = this.tasks.stream({
+            toolset: this.options.toolset,
+            tools: this.tools,
+            slots,
+            worker: this.id,
+            signal: current.signal,
+            onOpen: () => {
+              openedAt = Date.now();
+            },
+            onBytes: heard,
+          });
+          for await (const event of events) {
+            if (event.type === "task") {
+              this.start(event.task);
+            } else {
+              this.inFlight.get(event.token)?.lose();
+            }
+          }
+        } finally {
+          clearTimeout(silence);
+        }
+        // The server ended the stream (a token that expires, a proxy): opened again at once, unless it closed as soon
+        // as it opened.
+        if (openedAt !== null && Date.now() - openedAt >= minLifeMs) {
+          failures = 0;
+          continue;
+        }
+        if (!over()) {
+          throw new RewindConnectionError("the task stream closed as soon as it opened");
+        }
+      } catch (error) {
+        if (over()) {
+          return;
+        }
+        const reason = current.signal.aborted ? (current.signal.reason ?? error) : error;
+        this.report(reason, { phase: "stream" });
+        if (isFatal(reason)) {
+          throw reason;
+        }
+        if (openedAt !== null && Date.now() - openedAt >= minLifeMs) {
+          failures = 0;
+        }
+        await sleep(
+          backoff(failures, timings.backoffMs ?? 500, timings.maxBackoffMs ?? 30_000),
+          this.stopping.signal.aborted ? undefined : this.stopping.signal,
+        ).catch(() => undefined);
+        failures += 1;
+      } finally {
+        if (this.connection === current) {
+          this.connection = null;
+        }
+      }
+    }
   }
 
-  private async execute(task: Task): Promise<void> {
-    const handler = Object.hasOwn(this.options.tools, task.tool) ? this.options.tools[task.tool] : undefined;
+  private start(task: HandedTask): void {
+    if (this.inFlight.has(task.token)) {
+      return;
+    }
     const lost = new AbortController();
-    const heartbeats = new Heartbeats(this.tasks, task, lost, (error) =>
-      this.report(error, { phase: "heartbeat", task }),
-    );
+    // Without a reason, the stream said the task is gone: the reason is `task-gone`, as the server's answer would be.
+    const lose = (reason?: unknown) => lost.abort(reason ?? gone(task));
+    const execution = this.execute(task, lost.signal, lose)
+      .catch((error: unknown) => this.report(error, { phase: "answer", task }))
+      .finally(() => {
+        this.inFlight.delete(task.token);
+        if (this.inFlight.size === 0) {
+          this.drained?.();
+        }
+      });
+    this.inFlight.set(task.token, { execution, lose });
+  }
+
+  private async execute(task: HandedTask, signal: AbortSignal, lose: (reason?: unknown) => void): Promise<void> {
+    const handler = Object.hasOwn(this.options.tools, task.tool) ? this.options.tools[task.tool] : undefined;
+    const tasks = this.tasks;
     let deferred: DeferredTask | undefined;
     const context: HostToolContext = {
       task,
@@ -221,66 +315,54 @@ export class HostToolWorker {
       labels: task.labels,
       traceparent: task.traceparent ?? undefined,
       tracestate: task.tracestate ?? undefined,
-      signal: lost.signal,
-      heartbeat: async () => {
-        await heartbeats.beat();
-        if (lost.signal.aborted) {
-          throw lost.signal.reason;
-        }
-      },
+      signal,
       defer: async (options = {}) => {
         if (deferred !== undefined) {
           return deferred;
         }
-        heartbeats.stop();
         try {
-          await this.tasks.defer(task.token, { timeout: options.timeout });
+          await tasks.defer(task.token, { timeout: options.timeout });
         } catch (error) {
           if (isProblem(error, "task-gone")) {
-            lost.abort(error);
-          } else {
-            heartbeats.start();
+            lose(error);
           }
           throw error;
         }
         deferred = {
           token: task.token,
           taskId: task.id,
-          complete: (result) => this.tasks.complete(task.token, result),
-          fail: (failure) => this.tasks.fail(task.token, typeof failure === "string" ? { message: failure } : failure),
+          complete: (result) => tasks.complete(task.token, result),
+          fail: (failure) => tasks.fail(task.token, typeof failure === "string" ? { message: failure } : failure),
         };
         return deferred;
       },
     };
 
     let outcome: Outcome;
-    heartbeats.start();
     try {
       if (handler === undefined) {
         throw new HostToolError(`this worker has no handler for the tool ${task.tool}`);
       }
       outcome = { result: await handler(task.args, context) };
     } catch (error) {
-      if (!(error instanceof HostToolError) && !lost.signal.aborted) {
+      if (!(error instanceof HostToolError) && !signal.aborted) {
         this.report(error, { phase: "handler", task });
       }
       outcome = { failure: failureOf(error) };
-    } finally {
-      heartbeats.stop();
     }
-    if (lost.signal.aborted) {
-      // The claim is lost: the server would refuse the answer.
+    if (signal.aborted) {
+      // The task is gone: the server would refuse the answer.
       return;
     }
     if (deferred !== undefined && "result" in outcome) {
       // Whoever holds the token answers.
       return;
     }
-    await this.answer(task, outcome);
+    await this.answer(task, outcome, lose);
   }
 
   /** Completes or fails the task, again after a network error; a task that is gone is dropped. */
-  private async answer(task: Task, outcome: Outcome): Promise<void> {
+  private async answer(task: HandedTask, outcome: Outcome, lose: (reason?: unknown) => void): Promise<void> {
     let current = jsonOutcome(task, outcome);
     for (let attempt = 0; ; attempt++) {
       try {
@@ -292,8 +374,9 @@ export class HostToolWorker {
         return;
       } catch (error) {
         if (isProblem(error, "task-gone")) {
-          // The run ended, or the claim was lost (possibly after an earlier attempt of this
-          // answer that did arrive): the server drops the answer.
+          // The run ended, or the task was handed again (possibly after an earlier attempt of this answer that did
+          // arrive): the server drops the answer.
+          lose(error);
           return;
         }
         if ("result" in current && isProblem(error, "payload-too-large")) {
@@ -312,18 +395,6 @@ export class HostToolWorker {
     }
   }
 
-  private slot(): Promise<void> {
-    return new Promise((resolve) => {
-      this.wake = resolve;
-    });
-  }
-
-  private notify(): void {
-    const wake = this.wake;
-    this.wake = undefined;
-    wake?.();
-  }
-
   private report(error: unknown, info: WorkerErrorInfo): void {
     const onError = this.options.onError ?? defaultOnError;
     try {
@@ -336,67 +407,7 @@ export class HostToolWorker {
 
 type Outcome = { result: unknown } | { failure: TaskFailure };
 
-/** Keeps a claim alive: a heartbeat every third of the heartbeat timeout. */
-class Heartbeats {
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private running = false;
-  private timeoutMs: number;
-
-  constructor(
-    private readonly tasks: Tasks,
-    private readonly task: Task,
-    private readonly lost: AbortController,
-    private readonly onError: (error: unknown) => void,
-  ) {
-    this.timeoutMs = task.heartbeatTimeoutMs;
-  }
-
-  start(): void {
-    if (this.running || this.lost.signal.aborted) {
-      return;
-    }
-    this.running = true;
-    this.schedule();
-  }
-
-  stop(): void {
-    this.running = false;
-    if (this.timer !== undefined) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
-  }
-
-  /** One heartbeat. A task that is gone aborts the context's signal and stops the heartbeats. */
-  async beat(): Promise<void> {
-    try {
-      const ack = await this.tasks.heartbeat(this.task.token);
-      this.timeoutMs = ack.heartbeatTimeoutMs;
-    } catch (error) {
-      if (isProblem(error, "task-gone")) {
-        this.stop();
-        this.lost.abort(error);
-        return;
-      }
-      throw error;
-    }
-  }
-
-  private schedule(): void {
-    const interval = Math.max(100, Math.floor(this.timeoutMs / 3));
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      void this.beat()
-        .catch(this.onError)
-        .finally(() => {
-          if (this.running) {
-            this.schedule();
-          }
-        });
-    }, interval);
-  }
-}
-
+/** A refusal that asking again will not change: a bad request, a refused key, an unknown toolset. */
 function isFatal(error: unknown): boolean {
   return error instanceof RewindApiError && [400, 401, 403, 404].includes(error.status);
 }
@@ -427,7 +438,7 @@ function isCut(failure: TaskFailure): boolean {
 }
 
 /** An outcome whose values JSON can carry; otherwise a failure saying why. */
-function jsonOutcome(task: Task, outcome: Outcome): Outcome {
+function jsonOutcome(task: HandedTask, outcome: Outcome): Outcome {
   if ("result" in outcome) {
     try {
       JSON.stringify(outcome.result ?? null);
