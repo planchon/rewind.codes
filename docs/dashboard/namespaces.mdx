@@ -11,7 +11,8 @@ with their use against their limits. It needs `namespaces:read`.
   <img src="/images/dashboard/namespaces-dark.webp" alt="The Namespaces view: the ceiling, the default limits, and each end user's use as meters" className="hidden dark:block" />
 </Frame>
 
-- **The first row** is your organization: its ceiling, with the totals of every end user. The defaults and the end
+- **The alerts of the month** come first: each limit an end user, or your organization, crossed, and when.
+- **The first row** of the table is your organization: its ceiling, with the totals of every end user. The defaults and the end
   users fold under it.
 - **Defaults** are the limits of every end user without exceptions. **Edit the defaults** changes them in a dialog,
   with `namespaces:write`.
@@ -36,13 +37,13 @@ runs, their scripts and their secrets.
 
 | Part | Shows |
 | --- | --- |
+| **Alerts** | Shown first, when there are any: every limit crossed this month, and whether the `quota.alert` webhook was sent |
 | **Figures** | Runs started this month, the share that completed, the failed ones (and the aborted and cancelled), the runs waiting now, the duration p95 and p50. Each opens the runs behind it |
 | **Runs started each day** | The runs of each UTC day of the month, by outcome |
 | **What fails most** | The month's failures grouped by error, the most frequent first |
 | **Tools its runs call** | The tools the month's runs called, with how many runs called each |
 | **Cumulative CPU** | CPU time over the month against the quota, with the days it reached 80 % and 100 % |
 | **Limits and use** | Each limit, the end user's use of it, and whether it is an exception to the defaults |
-| **Alerts** | Every limit crossed this month, and whether the `quota.alert` webhook was sent |
 | **Tokens and exceptions** | The tokens in use, and the exceptions to the defaults |
 | **Runs** | Its runs started this month, in the table of Observability: click a header to order the runs by its column or filter them (a status, a duration, the tools called…). The filters show as chips above the table, the namespace and the month locked; **Open in Observability** opens the same runs there |
 | **Scripts** | The scripts its runs ran, the most recently run first; **Open in Scripts** shows them all there |

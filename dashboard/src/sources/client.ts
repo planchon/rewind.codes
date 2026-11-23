@@ -52,6 +52,7 @@ import type {
   SecretUsage,
   ServerInfo,
   SetGrant,
+  SetScriptTitle,
   SignalAccepted,
   SigningKey,
   SigningKeyList,
@@ -59,7 +60,6 @@ import type {
   ToolStatsPage,
   ToolStatsQuery,
   ToolsetSummary,
-  Trace,
   UpdateConnection,
   UpdateOrganization,
   Workflow,
@@ -292,15 +292,6 @@ export class Api {
     );
   }
 
-  async trace(id: string, signal?: AbortSignal): Promise<Trace> {
-    return this.unwrap(
-      await this.client.GET("/v1/runs/{id}/trace", {
-        params: { path: { id }, query: { format: "llm" } },
-        signal,
-      }),
-    );
-  }
-
   /** The scripts the runs ran: of one end user's runs when `namespace` names one. */
   async scripts(
     query: ListScriptsQuery,
@@ -319,6 +310,13 @@ export class Api {
   async script(digest: string, signal?: AbortSignal): Promise<Script> {
     return this.unwrap(
       await this.client.GET("/v1/scripts/{digest}", { params: { path: { digest } }, signal }),
+    );
+  }
+
+  /** Gives the script a title and a description for the organization; `title: null` removes them. */
+  async setScriptTitle(digest: string, body: SetScriptTitle): Promise<Script> {
+    return this.unwrap(
+      await this.client.PATCH("/v1/scripts/{digest}", { params: { path: { digest } }, body }),
     );
   }
 

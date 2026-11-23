@@ -7,18 +7,18 @@ use std::time::Duration;
 use rewind_core::{
     CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
     Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
-    end_signal_name,
+    end_signal_name, suffix_len_apart, suffix_neighbours,
 };
 use rewind_engine::ports::{
     AcquireRunnable, Activation, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, RunWorkflow, SecretId, SecretUsage, StartedBy, StoreError, StoredScript,
-    StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState,
-    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
-    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowAttaching, WorkflowFilter,
-    deferred_timeout_failure,
+    RunRecord, RunRef, RunWorkflow, ScriptTitle, SecretId, SecretUsage, StartedBy, StoreError,
+    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef,
+    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
+    ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowAttaching,
+    WorkflowFilter, deferred_timeout_failure,
 };
 use rewind_engine::ports::{
     DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
@@ -53,7 +53,8 @@ macro_rules! run_columns {
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
          ended_at, archive_document, archived_at, parent_at, attempts, workflow, \
-         workflow_version, started_by, started_seq, detached, scope, namespace, secrets"
+         workflow_version, started_by, started_seq, detached, scope, namespace, secrets, origin, \
+         suffix_len"
     };
 }
 
@@ -99,6 +100,8 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: NamespaceName::new(namespace.clone())
             .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
+        origin: row.text(34)?,
+        suffix_len: row.suffix_len(35)?,
         script: row.digest(2)?,
         toolset: row.digest(3)?,
         status: codec::parse_status(&row.text(4)?)?,
@@ -227,6 +230,9 @@ fn random_token(prefix: &str) -> Result<String, StoreError> {
     }
     Ok(token)
 }
+
+/// Digests bound in one `IN (…)` list at most.
+const DIGESTS_PER_STATEMENT: usize = 500;
 
 /// What a lease check reads of a run.
 struct LeasedRun {
@@ -462,7 +468,7 @@ async fn propagate_end(
 /// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
 macro_rules! workflow_columns {
     () => {
-        "version, document, labels, created_at"
+        "version, document, labels, created_at, number"
     };
 }
 
@@ -479,6 +485,7 @@ fn workflow_from_row(row: &Row) -> Result<StoredWorkflow, Error> {
         workflow,
         labels: decode_labels(&row.text(2)?)?,
         created_at: row.ts(3)?,
+        number: row.u32(4)?,
     })
 }
 
@@ -711,6 +718,92 @@ impl JournalStore for TursoStore {
         }))
     }
 
+    async fn set_script_title(
+        &self,
+        tenant_id: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let stored = sql::query_row(
+                connection,
+                "SELECT 1 FROM scripts WHERE tenant = ? AND digest = ?",
+                vec![tenant(tenant_id), digest(script)],
+            )
+            .await?;
+            if stored.is_none() {
+                return Ok(false);
+            }
+            match title {
+                Some(title) => {
+                    sql::execute(
+                        connection,
+                        "INSERT OR REPLACE INTO script_titles (tenant, digest, title, \
+                         description, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        vec![
+                            tenant(tenant_id),
+                            digest(script),
+                            text(title.title.as_str()),
+                            opt_text(title.description.as_deref()),
+                            text(title.updated_by.as_str()),
+                            ts(title.updated_at),
+                        ],
+                    )
+                    .await?
+                }
+                None => {
+                    sql::execute(
+                        connection,
+                        "DELETE FROM script_titles WHERE tenant = ? AND digest = ?",
+                        vec![tenant(tenant_id), digest(script)],
+                    )
+                    .await?
+                }
+            };
+            Ok(true)
+        })
+        .await
+    }
+
+    async fn script_titles(
+        &self,
+        tenant_id: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, StoreError> {
+        let connection = self.connection().await?;
+        let mut titles = HashMap::new();
+        for chunk in scripts.chunks(DIGESTS_PER_STATEMENT) {
+            let mut params = vec![tenant(tenant_id)];
+            params.extend(chunk.iter().map(|script| digest(*script)));
+            let rows = sql::query_dynamic(
+                &connection,
+                &format!(
+                    "SELECT digest, title, description, updated_by, updated_at FROM script_titles \
+                     WHERE tenant = ? AND digest IN ({})",
+                    placeholders(chunk.len())
+                ),
+                params,
+            )
+            .await?;
+            for row in &rows {
+                let title = ScriptTitle {
+                    title: row.text(1)?,
+                    description: row.opt_text(2)?,
+                    updated_by: row.text(3)?,
+                    updated_at: row.ts(4)?,
+                };
+                titles.insert(row.digest(0)?, title);
+            }
+        }
+        // In the order they were asked for, as the reference adapter gives them.
+        Ok(scripts
+            .iter()
+            .filter_map(|script| titles.get(script).map(|title| (*script, title.clone())))
+            .collect())
+    }
+
     async fn put_toolset(
         &self,
         tenant_id: &TenantId,
@@ -845,19 +938,23 @@ impl JournalStore for TursoStore {
                 )
                 .await?;
             }
-            // Only the versions of one workflow are compared by the order they were stored in.
-            let order = sql::query_row(
+            // Only the versions of one workflow are compared by the order they were stored in,
+            // and numbered: a new version takes the next number of its workflow.
+            let (order, number) = match sql::query_row(
                 connection,
-                "SELECT COALESCE(MAX(stored_order), 0) + 1 FROM workflows \
-                 WHERE tenant = ? AND name = ?",
+                "SELECT COALESCE(MAX(stored_order), 0) + 1, COALESCE(MAX(number), 0) + 1 \
+                 FROM workflows WHERE tenant = ? AND name = ?",
                 vec![tenant(tenant_id), text(workflow.name())],
             )
             .await?
-            .map_or(Ok(1), |row| row.u64(0))?;
+            {
+                Some(row) => (row.u64(0)?, row.u32(1)?),
+                None => (1, 1),
+            };
             sql::execute(
                 connection,
                 "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
-                 stored_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 stored_order, number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 vec![
                     tenant(tenant_id),
                     digest(version),
@@ -866,6 +963,7 @@ impl JournalStore for TursoStore {
                     text(encode_labels(labels)),
                     ts(now),
                     int(order),
+                    int(u64::from(number)),
                 ],
             )
             .await?;
@@ -873,6 +971,7 @@ impl JournalStore for TursoStore {
                 workflow: workflow.clone(),
                 labels: labels.clone(),
                 created_at: now,
+                number,
             })
         })
         .await
@@ -892,6 +991,26 @@ impl JournalStore for TursoStore {
                 " FROM workflows WHERE tenant = ? AND version = ?"
             ),
             vec![tenant(tenant_id), digest(version)],
+        )
+        .await?;
+        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant_id: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, StoreError> {
+        let connection = self.connection().await?;
+        let row = sql::query_row(
+            &connection,
+            concat!(
+                "SELECT ",
+                workflow_columns!(),
+                " FROM workflows WHERE tenant = ? AND name = ? AND number = ?"
+            ),
+            vec![tenant(tenant_id), text(name), int(u64::from(number))],
         )
         .await?;
         Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
@@ -980,7 +1099,7 @@ impl JournalStore for TursoStore {
             if filter.limit.is_some_and(|max| latest.len() >= max) {
                 break;
             }
-            let name = row.text(4)?;
+            let name = row.text(5)?;
             let found = latest
                 .last()
                 .is_some_and(|known| known.workflow.name() == name);
@@ -1037,6 +1156,22 @@ impl JournalStore for TursoStore {
                 Ok(admitted) => admitted,
                 Err(refused) => return Ok(refused),
             };
+            // The handle's suffix: long enough to name no other run of the tenant. The write
+            // transaction serializes the creations, so no other run can take it meanwhile. Ids
+            // are stored as text whose order is their bits' order: the range is the ids sharing
+            // this one's first 64 bits, searched by id (`+tenant` keeps the planner from
+            // scanning the tenant's runs instead).
+            let (low, high) = suffix_neighbours(run.run.id);
+            let near = sql::query(
+                connection,
+                "SELECT id FROM runs WHERE id >= ? AND id <= ? AND +tenant = ?",
+                vec![run_id(low), run_id(high), tenant(tenant_id)],
+            )
+            .await?
+            .iter()
+            .map(|row| row.run_id(0))
+            .collect::<Result<Vec<_>, _>>()?;
+            let suffix_len = u8::try_from(suffix_len_apart(run.run.id, near)).unwrap_or(u8::MAX);
             let metadata = &run.metadata;
             let trace = metadata.trace_context.as_ref();
             let workflow = metadata.workflow.as_ref();
@@ -1047,9 +1182,9 @@ impl JournalStore for TursoStore {
                  expires_at, expiry_enqueued, failures, attempts, fence, labels, traceparent, \
                  tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
                  workflow, workflow_version, started_by, started_seq, detached, scope, namespace, \
-                 secrets) \
+                 secrets, origin, suffix_len) \
                  VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-                 ?, ?, ?, ?, ?, ?)",
+                 ?, ?, ?, ?, ?, ?, ?, ?)",
                 vec![
                     run_id(run.run.id),
                     tenant(tenant_id),
@@ -1076,6 +1211,8 @@ impl JournalStore for TursoStore {
                     text(encode_labels(&metadata.scope)),
                     text(run.namespace.as_str()),
                     text(codec::encode_attachments(&metadata.secrets)),
+                    text(run.origin.as_str()),
+                    int(u64::from(suffix_len)),
                 ],
             )
             .await?;
@@ -1136,6 +1273,34 @@ impl JournalStore for TursoStore {
         )
         .await?;
         Ok(row.map(|row| record_from_row(&row)).transpose()?)
+    }
+
+    async fn runs_in_range(
+        &self,
+        tenant_id: &TenantId,
+        low: RunId,
+        high: RunId,
+        count: usize,
+    ) -> Result<Vec<RunRecord>, StoreError> {
+        if low > high || nothing(count) {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        // Searched by id, as in `create_run`.
+        let rows = sql::query(
+            &connection,
+            concat!(
+                "SELECT ",
+                run_columns!(),
+                " FROM runs WHERE id >= ? AND id <= ? AND +tenant = ? ORDER BY id LIMIT ?"
+            ),
+            vec![run_id(low), run_id(high), tenant(tenant_id), limit(count)],
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(record_from_row)
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     async fn watch_run(

@@ -128,6 +128,7 @@ const PROBES: Probe[] = [
   { op: "POST /v1/test", need: p("runs:start"), path: "/v1/test", body: { script: "export default async function main( {" }, namespaced: true, worker: true },
   { op: "GET /v1/scripts", need: p("runs:read"), path: "/v1/scripts" },
   { op: "GET /v1/scripts/{digest}", need: p("runs:read"), path: `/v1/scripts/${NO_DIGEST}` },
+  { op: "PATCH /v1/scripts/{digest}", need: p("scripts:write"), path: `/v1/scripts/${NO_DIGEST}`, body: { title: "matrix" } },
   // Onboarding: a member only.
   { op: "GET /v1/invitations", need: "member", path: "/v1/invitations" },
   { op: "POST /v1/invitations/{id}/accept", need: "member", path: "/v1/invitations/invitation_unknown/accept" },

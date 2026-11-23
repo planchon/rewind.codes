@@ -104,6 +104,9 @@ pub struct DailyReads {
 pub struct LastRead {
     /// The run that read it; `null` for a toolset's registration.
     pub run: Option<String>,
+    /// That run's handle, while the run is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_handle: Option<String>,
     /// The namespace of that run; `null` for a toolset's registration.
     pub namespace: Option<NamespaceName>,
     pub at: Timestamp,

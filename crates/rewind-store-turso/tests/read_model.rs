@@ -113,6 +113,8 @@ async fn project(store: &TursoStore, run: Run<'_>) {
     let projected = ProjectedRun {
         run: RunRef::new(tenant(), id(run.n)),
         namespace: rewind_engine::ports::NamespaceName::migrated(),
+        origin: "script".into(),
+        suffix_len: 12,
         script: Digest::of(b"script"),
         headline: run.headline.into(),
         toolset: Digest::of(b"toolset"),

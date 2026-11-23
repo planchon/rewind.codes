@@ -8,17 +8,20 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
+use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::common::{RunStatus, Timestamp, timestamp};
 use rewind_api::reading::{Latency, PayloadQuery, ToolStats, ToolStatsFilter, ToolStatsPage};
-use rewind_api::scripts::{RunCounts, Script, ScriptFilter, ScriptPage, ScriptSummary};
-use rewind_core::{Digest, canonical_json};
-use rewind_engine::ports::{JournalStore, ReadModel};
+use rewind_api::scripts::{
+    RunCounts, Script, ScriptFilter, ScriptPage, ScriptSummary, SetScriptTitle,
+};
+use rewind_core::{Digest, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, canonical_json};
+use rewind_engine::ports::{JournalStore, ReadModel, ScriptTitle};
 
 use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
-use crate::extract::Query;
+use crate::extract::{Body, Query};
 use crate::http::refuse_nul_in_filter;
 use crate::http::runs::core_time;
 
@@ -119,10 +122,17 @@ pub(super) async fn scripts(
         )
     });
     scripts.truncate(limit);
+    let mut titles = app
+        .titles(&caller.tenant, scripts.iter().map(|summary| summary.script))
+        .await?;
     let mut page = Vec::with_capacity(scripts.len());
     for summary in scripts {
+        let title = titles.remove(&summary.script);
         page.push(ScriptSummary {
             digest: summary.script.to_hex(),
+            title_source: title.as_ref().map(|title| title.source),
+            description: title.as_ref().and_then(|title| title.description.clone()),
+            title: title.map(|title| title.title),
             headline: app.headline(&caller.tenant, summary.script).await,
             first_run_at: summary
                 .first_started_at
@@ -148,14 +158,97 @@ pub(super) async fn script(
     Path(digest): Path<String>,
 ) -> Result<Json<Script>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let missing = || ApiError::not_found(format!("no script {digest} for this tenant"));
-    let parsed = Digest::from_hex(&digest).map_err(|_| missing())?;
+    Ok(Json(seen_script(&app, &caller, &digest).await?))
+}
+
+/// `PATCH /v1/scripts/{digest}`: the title and description a person gives the script, for the
+/// organization, or their removal.
+pub(super) async fn set_title(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+    Path(digest): Path<String>,
+    Body(request): Body<SetScriptTitle>,
+) -> Result<Json<Script>, ApiError> {
+    caller.require(Permission::ScriptsWrite)?;
+    let title = match request.title {
+        Some(title) => Some(ScriptTitle {
+            title: given_title(&title)?,
+            description: given_description(request.description.as_deref())?,
+            updated_by: caller.writer(),
+            updated_at: app.now(),
+        }),
+        None => None,
+    };
+    // Only a script the caller can read is given a title.
+    let seen = seen_script(&app, &caller, &digest).await?;
+    let script = Digest::from_hex(&seen.digest).map_err(ApiError::internal)?;
+    if !app
+        .store
+        .set_script_title(&caller.tenant, script, title.as_ref())
+        .await?
+    {
+        return Err(no_script(&digest));
+    }
+    Ok(Json(seen_script(&app, &caller, &digest).await?))
+}
+
+/// A title as a person gives it: trimmed, 1 to 120 characters.
+fn given_title(title: &str) -> Result<String, ApiError> {
+    let title = title.trim();
+    let length = title.chars().count();
+    if length == 0 {
+        return Err(ApiError::new(
+            ProblemType::InvalidTitle,
+            "title is empty: give 1 to 120 characters, or null to remove the title",
+        ));
+    }
+    if length > MAX_TITLE_CHARS {
+        return Err(ApiError::new(
+            ProblemType::InvalidTitle,
+            format!(
+                "title has {length} characters, above the limit of {MAX_TITLE_CHARS}: shorten \
+                 it, and say more in the description"
+            ),
+        ));
+    }
+    Ok(title.to_owned())
+}
+
+/// A description as a person gives it: trimmed, at most 2,000 characters; none when empty.
+fn given_description(description: Option<&str>) -> Result<Option<String>, ApiError> {
+    let Some(description) = description.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    let length = description.chars().count();
+    if length > MAX_DESCRIPTION_CHARS {
+        return Err(ApiError::new(
+            ProblemType::InvalidTitle,
+            format!(
+                "description has {length} characters, above the limit of \
+                 {MAX_DESCRIPTION_CHARS}: shorten it"
+            ),
+        ));
+    }
+    Ok(Some(description.to_owned()))
+}
+
+fn no_script(digest: &str) -> ApiError {
+    ApiError::not_found(format!(
+        "no script {digest} for this tenant: GET /v1/scripts lists the scripts its runs ran"
+    ))
+}
+
+/// The script `digest` names, as `GET /v1/scripts/{digest}` shows it, if the caller may read
+/// it: the source, its title, and what the runs the caller sees did with it.
+async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script, ApiError> {
+    let missing = || no_script(digest);
+    let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
     let stored = app
         .store
         .get_script(&caller.tenant, parsed)
         .await?
         .ok_or_else(missing)?;
-    let summary = match filter(&caller, Some(&digest), &[], None)? {
+    let summary = match filter(caller, Some(digest), &[], None)? {
         Some(filter) => app.store.scripts(&filter).await?.into_iter().next(),
         None => None,
     };
@@ -177,8 +270,12 @@ pub(super) async fn script(
         return Err(missing());
     }
     let source = stored.script.source().to_owned();
-    Ok(Json(Script {
+    let title = app.titles(&caller.tenant, [parsed]).await?.remove(&parsed);
+    Ok(Script {
         digest: parsed.to_hex(),
+        title_source: title.as_ref().map(|title| title.source),
+        description: title.as_ref().and_then(|title| title.description.clone()),
+        title: title.map(|title| title.title),
         headline: rewind_api::scripts::headline(&source),
         source,
         runs: summary
@@ -196,7 +293,7 @@ pub(super) async fn script(
             .as_ref()
             .and_then(|summary| summary.last_started_at)
             .map(timestamp),
-    }))
+    })
 }
 
 /// `GET /v1/tools/stats`: per tool, over the calls scheduled in the window (the last 24 hours by

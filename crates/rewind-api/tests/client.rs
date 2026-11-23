@@ -64,10 +64,12 @@ fn run(id: &str) -> Run {
     let at = Timestamp::from_second(1_762_682_531).unwrap();
     Run {
         id: id.into(),
+        handle: "alice/script/06bqx3k9f2mt".into(),
         namespace: "alice".parse().unwrap(),
         status: RunStatus::Completed,
         quarantine: None,
         script: "aa".repeat(32),
+        script_title: None,
         toolset: "bb".repeat(32),
         epoch: 1,
         mode: RunMode::Live,
@@ -291,6 +293,13 @@ async fn path_parameters_are_one_segment_each() {
     let seen = log.lock().unwrap().clone();
     assert_eq!(seen.path, "/v1/runs/r1/signals/pr%20merged%2F1");
     assert_eq!(seen.body, json!({ "close": true }));
+
+    // A run's handle holds `/`: it is one segment too, which the server reads back whole.
+    let run = client
+        .get_run("dana/triage/06bqx3k9f2mt", None)
+        .await
+        .unwrap();
+    assert_eq!(run.id, "dana/triage/06bqx3k9f2mt");
 }
 
 #[tokio::test]

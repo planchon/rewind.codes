@@ -25,6 +25,8 @@ data_keys  (tenant PK, wrapped_key, master_key)      -- wrapped_key: the tenant'
                                                      -- by the master key whose id is master_key
 namespaces (tenant, name, display_name, quotas, tokens_revoked_before, created_at, last_active_at,
             deleting_since)                                PK (tenant, name)
+script_titles (tenant, digest, title, description, updated_by, updated_at)
+                                                           PK (tenant, digest)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
 tokens     (hash PK, tenant, namespace, permissions, labels, expires_at, created_by, created_at,
             revoked_at)                                    index (tenant, namespace)
@@ -119,6 +121,37 @@ activations that failed in a row, and `attempts` the activations started since i
 commit: those that neither committed nor failed never finished, because their worker died. A tool task keeps the route and policy of its tool, copied from
 the pinned toolset: the claim enforces the concurrency limits from them. `archive` points to the
 journal document of an archived run, in the `BlobStore`.
+
+## Run handles
+
+A run's id is a UUIDv7, and stays its identity everywhere: the journal, the stores and their
+keys, the signals runs send each other (`rewind:ended:<id>`), the trace. People read, copy and
+type its **handle**, `<namespace>/<origin>/<suffix>`
+([decisions](08-decisions.md#taken-for-script-titles-and-run-handles-november-2026)):
+
+- **namespace**: the run's namespace, by its id (a display name changes; an id never does).
+- **origin**: what ran, frozen when the run is created: its workflow's name; else its script's
+  title as a slug (lower-case ASCII letters and digits, every other run of characters a `-`, at
+  most 40 characters), the title a person gave the script or else its comment's
+  ([titles](04-tools.md#script-titles)); else `script`. A fork's is its parent's.
+- **suffix**: the start of the id in Crockford's base32 (lower case): the 48 bits of its
+  millisecond and the 12 bits after them, 12 characters. The engine writes in those 12 bits the
+  number of the process that made the id (6 bits, drawn at random when it makes its first) and
+  a counter of its ids within the millisecond (6 bits; a 65th id moves to the next millisecond):
+  one process never repeats a suffix. `/` occurs in no part, so a handle splits without doubt.
+
+A handle never names two runs of a tenant. `create_run`, under the lock that already serializes
+the tenant's runs, looks at the tenant's runs whose ids share their first 64 bits with the new
+one and gives it the shortest suffix, of at least 12 characters, that none of them has; it
+keeps it (`runs.suffix_len`). Ids of different processes rarely share those bits; a run that
+does gets one or more characters more. Runs stored before handles take `script` or their
+workflow as their origin, and 25 characters (the whole id) when they shared their first 64 bits
+with another of their tenant.
+
+The runs a suffix names are one range of ids: a handle needs no index of its own. The API takes
+a handle wherever it takes a run (`GET /v1/runs/{handle}`, percent-encoded in a path): it reads
+the tenant's runs in that range, and keeps the one whose suffix has the handle's length, of the
+handle's namespace and origin.
 
 ## Leases, fencing, workers
 
@@ -450,6 +483,7 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 | `runs:delete` | Erase a run | yes | yes | | |
 | `toolsets:read` | List toolsets and workflows, read their declarations, search their tools | yes | yes | | yes |
 | `toolsets:write` | Register a toolset, save a workflow | yes | yes | | |
+| `scripts:write` | Give a script a title and a description for the organization, or remove them ([titles](04-tools.md#script-titles)) | yes | yes | | |
 | `secrets:read` | List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids | yes | yes | | yes |
 | `secrets:write` | Put and delete secrets | yes | yes | | |
 | `secrets:use` | Attach an organization's secret to a run or a workflow ([attaching](04-tools.md#secrets)) | yes | yes | | |

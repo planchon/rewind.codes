@@ -24,6 +24,28 @@ export function useRunLinkState(): FromState | undefined {
   return from ? { from } : undefined;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The path of a run's page, by its handle (`/runs/dana/triage/06bqx3k9f2mt`) or its UUID, and of
+ * one of its sections.
+ */
+export function runPath(run: string, section?: string): string {
+  return `/runs/${run}${section ? `/${section}` : ""}`;
+}
+
+/** What the path after `/runs/` names: a UUID or a handle, then a section. */
+export function parseRunPath(rest: string): { run: string; section: string | null } {
+  const parts = rest.split("/").filter(Boolean);
+  if (UUID.test(parts[0] ?? "")) return { run: parts[0] ?? "", section: parts[1] ?? null };
+  return { run: parts.slice(0, 3).join("/"), section: parts[3] ?? null };
+}
+
+/** Whether `text` reads as a run's UUID or handle. */
+export function isRunName(text: string): boolean {
+  return UUID.test(text) || /^[\w.:@-]+\/[\w$-]+\/[0-9a-z]{12,25}$/i.test(text);
+}
+
 /** Where a run's "back" returns, from the state its link carried. */
 export function runBackPath(state: unknown): string {
   if (state && typeof state === "object" && "from" in state) {

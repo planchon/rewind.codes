@@ -48,6 +48,8 @@ change of the API shows in its diff.
 | Namespace | `Rewind-Namespace: <name>` names the end user a key's or a member's request acts for: required by `POST /v1/runs`, `/v1/check` and `/v1/test`, it narrows the reads to that namespace. A token's namespace is its own; a header naming another is `forbidden` |
 | Sign-in | `/auth` is the dashboard's, for a browser: it reads and writes the cookie `rewind_session`, which `/v1` never reads; a `POST` takes a JSON body only (`Content-Type: application/json`, else `unsupported-media-type`); the steps answer an `AuthState` tagged by `status`; `GET /auth/callback` redirects to `/#/`, or to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`). A member's access token without organization reaches only `GET /v1/whoami`, `POST /v1/organizations`, `GET /v1/invitations` and `POST /v1/invitations/{id}/accept` (`forbidden` elsewhere) |
 | JSON | camelCase fields, snake_case enumerated values, RFC 3339 times, durations `"30s"`, `"1h30m"` or a number of milliseconds |
+| Runs | A run's `id` is its UUID; its `handle`, `<namespace>/<origin>/<suffix>` (`dana/triage/06bqx3k9f2mt`), names it too wherever a path or a query takes a run (`/v1/runs/{id}` and its sub-resources, `?parent=`, `?startedBy=`, `?run=`), percent-encoded in a path: `/v1/runs/dana%2Ftriage%2F06bqx3k9f2mt` |
+| Workflow versions | `name` names the latest version the caller sees, `name@<version>` one by its digest (12 hex digits at least) and `name@v<number>` one by its number (`triage@v12`) |
 | Idempotency | `Idempotency-Key` on `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}` |
 | Errors | `application/problem+json`: `type` is `urn:rewind:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics`, `invalid-query` adds `query` |
 | Query strings | lists repeat their key: `?label=agent:triage&label=conversation:c-42`, `?tool=a&tool=b` |
@@ -83,6 +85,7 @@ The problem types:
 | `secret-required` | 422 | A run, a fork or a workflow version refused before it exists for its secrets: a server or an API the script imports takes one and none is attached, an attachment names a server that takes none or a secret that does not exist, or the caller may not attach it; also a toolset's listing secret. `attachments` gives each one at fault (`server`, `problem`, `secret`) and what the caller may attach (`attachable`) |
 | `invalid-input` | 422 | The input of a run of a workflow does not match its input schema |
 | `invalid-signal` | 422 | A signal name starting with `rewind:`; for a run of a workflow, a signal it does not declare or a payload that does not match |
+| `invalid-title` | 422 | A script's title that is empty or longer than 120 characters, or a description longer than 2,000 (`PATCH /v1/scripts/{digest}`) |
 | `quota-exceeded` | 429 | The namespace or the tenant reached its `activeRuns`, `runsPerMonth` or `scripts` |
 | `internal` | 500 | A fault of the platform |
 | `toolset-unavailable` | 502 | An MCP server of the toolset cannot be reached |

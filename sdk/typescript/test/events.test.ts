@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Rewind, RewindConnectionError, type StreamEvent } from "../src/index.js";
-import { NAMESPACE, RUN_ID, payload } from "./fixtures.js";
+import { HANDLE, NAMESPACE, RUN_ID, payload } from "./fixtures.js";
 import { MockServer, problem, sse } from "./mock-server.js";
 
 let server: MockServer;
@@ -147,6 +147,7 @@ describe("approvals", () => {
 function runWaiting() {
   return {
     id: RUN_ID,
+    handle: HANDLE,
     namespace: NAMESPACE,
     status: "active" as const,
     createdAt: "t",

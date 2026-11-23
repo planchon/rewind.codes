@@ -49,6 +49,7 @@ describe("the session", () => {
     const { callsTo, router } = renderApp("/runs", { world });
     await screen.findByRole("heading", { name: "All runs" });
     const before = callsTo("/auth/session").length;
+    const already = callsTo("/v1/scripts").length;
     const first = currentToken(world);
 
     // The token is refused (expired, say), but the session holds.
@@ -59,7 +60,7 @@ describe("the session", () => {
     // Whichever request of the page met the refusal first (the scripts, their counts, the change
     // stream) renewed the token; every refused one went again with the new one.
     expect(callsTo("/auth/session").length).toBeGreaterThan(before);
-    const scripts = callsTo("/v1/scripts");
+    const scripts = callsTo("/v1/scripts").slice(already);
     expect(scripts.at(-1)?.headers.get("Authorization")).toBe(`Bearer ${currentToken(world)}`);
     expect(currentToken(world)).not.toBe(first);
     const refused = scripts.filter((c) => c.headers.get("Authorization") === `Bearer ${first}`);

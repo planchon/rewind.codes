@@ -22,6 +22,7 @@ use rewind_engine::ports::{
 use rewind_engine::retention::Housekeeper;
 
 use crate::error::ApiError;
+use crate::titles::ScriptTexts;
 use crate::wiring::blobs::Blobs;
 use crate::wiring::store::Store;
 
@@ -33,6 +34,7 @@ const LOG_LINES: usize = 20;
 pub(crate) struct Views<'a> {
     pub(crate) store: &'a Store,
     pub(crate) blobs: &'a Blobs,
+    pub(crate) texts: &'a ScriptTexts,
 }
 
 /// A task's id in the API: `{run_id}.{seq}`.
@@ -330,8 +332,45 @@ impl Views<'_> {
             })
             .collect();
         let (trace, _) = rewind_engine::telemetry::trace_of(record);
+        let script_title = self
+            .texts
+            .titles(self.store, tenant, [record.script])
+            .await?
+            .remove(&record.script)
+            .map(|title| title.title);
+        let parent = match record.metadata.parent {
+            Some(parent) => Some(ForkParent {
+                run: parent.run.to_string(),
+                handle: self.handle_of(tenant, parent.run).await?,
+                at: parent.at,
+            }),
+            None => None,
+        };
+        let started_by = match record.metadata.started_by {
+            Some(by) => Some(rewind_api::workflows::StartedBy {
+                run: by.run.to_string(),
+                handle: self.handle_of(tenant, by.run).await?,
+                seq: by.seq.0,
+                detached: by.detached,
+            }),
+            None => None,
+        };
+        let workflow = match &record.metadata.workflow {
+            Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
+                name: workflow.name.clone(),
+                version: workflow.version.to_hex(),
+                // A version is never erased: 0 would say its row is gone.
+                number: self
+                    .store
+                    .get_workflow(tenant, workflow.version)
+                    .await?
+                    .map_or(0, |stored| stored.number),
+            }),
+            None => None,
+        };
         Ok(Run {
             id: record.run.id.to_string(),
+            handle: record.handle().to_string(),
             namespace: namespace(&record.namespace),
             status,
             quarantine: record.quarantine.as_ref().map(|quarantine| Quarantine {
@@ -342,6 +381,7 @@ impl Views<'_> {
                 reason: quarantine.reason.clone(),
             }),
             script: record.script.to_hex(),
+            script_title,
             toolset: record.toolset.to_hex(),
             epoch: record.epoch.0,
             // Only live runs are stored: mock runs live in memory (`POST /v1/test`).
@@ -354,24 +394,9 @@ impl Views<'_> {
                 .map(|(server, secret)| (server.to_owned(), secret.to_string()))
                 .collect(),
             trace_id: trace.to_string(),
-            parent: record.metadata.parent.map(|parent| ForkParent {
-                run: parent.run.to_string(),
-                at: parent.at,
-            }),
-            workflow: record.metadata.workflow.as_ref().map(|workflow| {
-                rewind_api::workflows::RunWorkflow {
-                    name: workflow.name.clone(),
-                    version: workflow.version.to_hex(),
-                }
-            }),
-            started_by: record
-                .metadata
-                .started_by
-                .map(|by| rewind_api::workflows::StartedBy {
-                    run: by.run.to_string(),
-                    seq: by.seq.0,
-                    detached: by.detached,
-                }),
+            parent,
+            workflow,
+            started_by,
             input: started.map(|started| payload(&started.input)),
             output,
             error,
@@ -385,6 +410,20 @@ impl Views<'_> {
             ended_at: record.ended_at.map(timestamp),
             expires_at: timestamp(record.expires_at),
         })
+    }
+
+    /// The handle of another run of the tenant, which a run names (its parent, the run that
+    /// started it); its id once it is erased.
+    async fn handle_of(
+        &self,
+        tenant: &TenantId,
+        run: rewind_core::RunId,
+    ) -> Result<String, ApiError> {
+        Ok(self
+            .store
+            .get_run(&RunRef::new(tenant.clone(), run))
+            .await?
+            .map_or_else(|| run.to_string(), |record| record.handle().to_string()))
     }
 
     async fn run_error(

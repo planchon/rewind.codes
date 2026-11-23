@@ -66,9 +66,11 @@ fn organization(id: &str, name: Option<&str>, permissions: &[Permission]) -> Org
 /// What the fake API was asked: `{operation} org={id} ns={namespace}`.
 type Log = Arc<Mutex<Vec<String>>>;
 
+/// A run of the fake API: its handle is `alice/script/<id>`.
 fn run(id: &str, output: Value) -> Run {
     serde_json::from_value(json!({
-        "id": id, "namespace": "alice", "status": "completed", "script": "s", "toolset": "t",
+        "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
+        "status": "completed", "script": "s", "toolset": "t",
         "epoch": 1, "mode": "live", "labels": { "via": "claude" }, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
         "endedAt": "2026-11-19T10:00:01Z", "expiresAt": "2026-12-19T10:00:00Z",
@@ -577,7 +579,11 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
     )
     .await;
     assert_eq!(ran.is_error, Some(false), "{}", text(&ran));
-    assert!(text(&ran).starts_with("Run r1 completed"), "{}", text(&ran));
+    assert!(
+        text(&ran).starts_with("Run alice/script/r1 completed"),
+        "{}",
+        text(&ran)
+    );
     // The default wait of the MCP set, and the call's toolset.
     assert!(text(&ran).contains("\"wait\":\"30s\""), "{}", text(&ran));
     assert!(text(&ran).contains("\"toolset\":\"ts1\""), "{}", text(&ran));
@@ -619,7 +625,7 @@ async fn checking_testing_and_running_need_a_namespace() {
     let checked = call(
         &client,
         "check_script",
-        json!({ "namespace": "alice", "code": "export default async () => 1;" }),
+        json!({ "namespace": "alice", "code": "/** Count to one */\nexport default async () => 1;" }),
     )
     .await;
     assert_eq!(checked.is_error, Some(false));
@@ -646,8 +652,8 @@ async fn a_result_holds_at_most_80_000_characters_and_pages_the_rest() {
     let content = text(&ran);
     assert!(content.len() <= 80_000, "{}", content.len());
     assert!(
-        content.starts_with("Run r1 completed")
-            && content.contains("the first 40000 are shown, read the rest with get_run({\"run_id\":\"r1\",\"offset\":40000})"),
+        content.starts_with("Run alice/script/r1 completed")
+            && content.contains("the first 40000 are shown, read the rest with get_run({\"run_id\":\"alice/script/r1\",\"offset\":40000})"),
         "{}",
         &content[..300]
     );
@@ -851,6 +857,6 @@ async fn a_streamable_http_client_goes_from_initialize_to_a_tool_call() {
     assert_eq!(signalled.is_error, Some(false));
     assert_eq!(
         text(&signalled),
-        "Sent the signal \"approval\" to run r9. Read what the run does next with get_run({\"run_id\":\"r9\",\"wait\":\"30s\"})."
+        "Sent the signal \"approval\" to run alice/script/r9. Read what the run does next with get_run({\"run_id\":\"alice/script/r9\",\"wait\":\"30s\"})."
     );
 }

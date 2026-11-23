@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Rewind, RewindApiError, RewindConnectionError, RewindError, isProblem } from "../src/index.js";
-import { RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
+import { HANDLE, RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
 import { MockServer, json, noContent, problem } from "./mock-server.js";
 
 let server: MockServer;
@@ -126,8 +126,13 @@ describe("the client", () => {
 
   it("starts a run of a workflow, without a script or a toolset", async () => {
     const started = run({
-      workflow: { name: "triage", version: VERSION },
-      startedBy: { run: "0193a5c4-0000-7000-8000-000000000001", seq: 3, detached: true },
+      workflow: { name: "triage", version: VERSION, number: 3 },
+      startedBy: {
+        run: "0193a5c4-0000-7000-8000-000000000001",
+        handle: "user_2fQ81/digest/06bqx3k9f2ms",
+        seq: 3,
+        detached: true,
+      },
     });
     server.on("POST", "/v1/runs", json(started, 201));
     const answered = await rewind.runs.start({
@@ -136,8 +141,13 @@ describe("the client", () => {
       idempotencyKey: "start-1",
       labels: { agent: "triage" },
     });
-    expect(answered.workflow).toEqual({ name: "triage", version: VERSION });
-    expect(answered.startedBy).toEqual({ run: "0193a5c4-0000-7000-8000-000000000001", seq: 3, detached: true });
+    expect(answered.workflow).toEqual({ name: "triage", version: VERSION, number: 3 });
+    expect(answered.startedBy).toEqual({
+      run: "0193a5c4-0000-7000-8000-000000000001",
+      handle: "user_2fQ81/digest/06bqx3k9f2ms",
+      seq: 3,
+      detached: true,
+    });
     expect(server.requests[0]?.body).toEqual({
       workflow: "triage@4be1c07a9d3e",
       input: { repo: "acme/api" },
@@ -365,7 +375,11 @@ describe("the client", () => {
   it("cancels, forks, releases, gives up and deletes runs", async () => {
     server
       .on("POST", "/v1/runs/{id}/cancel", json(run({ status: "cancelled" }), 202))
-      .on("POST", "/v1/runs/{id}/fork", json(run({ id: "fork-1", parent: { run: RUN_ID, at: 5 } }), 201))
+      .on(
+        "POST",
+        "/v1/runs/{id}/fork",
+        json(run({ id: "fork-1", parent: { run: RUN_ID, handle: HANDLE, at: 5 } }), 201),
+      )
       .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
       .on("DELETE", "/v1/runs/{id}", noContent);
@@ -378,7 +392,7 @@ describe("the client", () => {
       idempotencyKey: "fork-key",
       labels: { a: "b" },
     });
-    expect(fork.parent).toEqual({ run: RUN_ID, at: 5 });
+    expect(fork.parent).toEqual({ run: RUN_ID, handle: HANDLE, at: 5 });
     expect(server.requests[1]?.body).toEqual({ script: "fixed", at: 5, labels: { a: "b" } });
     expect(server.requests[1]?.headers["idempotency-key"]).toBe("fork-key");
 
@@ -391,6 +405,48 @@ describe("the client", () => {
       `POST /v1/runs/${RUN_ID}/release`,
       `POST /v1/runs/${RUN_ID}/give-up`,
       `DELETE /v1/runs/${RUN_ID}`,
+    ]);
+  });
+
+  it("names a run by its handle wherever it takes its id, percent-encoded in the path", async () => {
+    server
+      .on("GET", "/v1/runs/{id}", (r) => json(run({ id: RUN_ID, handle: r.params["id"]! })))
+      .on("POST", "/v1/runs/{id}/signals/{name}", json({ runId: RUN_ID, name: "approval", duplicate: false }, 202))
+      .on("POST", "/v1/runs/{id}/cancel", json(run({ status: "cancelled" }), 202))
+      .on("POST", "/v1/runs/{id}/fork", json(run({ id: "fork-1", parent: { run: RUN_ID, handle: HANDLE } }), 201))
+      .on("GET", "/v1/runs/{id}/trace", json({ format: "llm", runId: RUN_ID, text: "trace" }))
+      .on(
+        "GET",
+        "/v1/runs/{id}/entries/{idx}",
+        json({ idx: 1, recordedAt: "t", event: { type: "timer_fired", seq: 1 } }),
+      )
+      .on("GET", "/v1/runs/{id}/journal", json({ version: 1 }))
+      .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
+      .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
+      .on("DELETE", "/v1/runs/{id}", noContent);
+    expect((await rewind.runs.get(HANDLE)).handle).toBe(HANDLE);
+    await rewind.runs.signal(HANDLE, "approval");
+    await rewind.runs.cancel(HANDLE);
+    await rewind.runs.fork(HANDLE, { script: "fixed" });
+    await rewind.runs.trace(HANDLE);
+    await rewind.runs.entry(HANDLE, 1);
+    await rewind.runs.journal(HANDLE);
+    await rewind.runs.release(HANDLE);
+    await rewind.runs.giveUp(HANDLE);
+    await rewind.runs.delete(HANDLE);
+    const encoded = encodeURIComponent(HANDLE);
+    expect(encoded).toBe("user_2fQ81%2Ftriage%2F06bqx3k9f2mt");
+    expect(server.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      `GET /v1/runs/${encoded}`,
+      `POST /v1/runs/${encoded}/signals/approval`,
+      `POST /v1/runs/${encoded}/cancel`,
+      `POST /v1/runs/${encoded}/fork`,
+      `GET /v1/runs/${encoded}/trace`,
+      `GET /v1/runs/${encoded}/entries/1`,
+      `GET /v1/runs/${encoded}/journal`,
+      `POST /v1/runs/${encoded}/release`,
+      `POST /v1/runs/${encoded}/give-up`,
+      `DELETE /v1/runs/${encoded}`,
     ]);
   });
 
@@ -441,6 +497,28 @@ describe("the client", () => {
     expect((await rewind.scripts.list({ labels: { agent: "a" } })).scripts).toEqual([]);
     expect(server.requests[2]?.query.getAll("label")).toEqual(["agent:a"]);
     expect((await rewind.scripts.get("dd")).source).toBe("src");
+  });
+
+  it("gives a script a title, and takes it away", async () => {
+    server.on("PATCH", "/v1/scripts/{digest}", (r) =>
+      json({
+        digest: r.params["digest"],
+        source: "src",
+        headline: "src",
+        runs: { pending: 0, active: 0, completed: 1, failed: 0, cancelled: 0, aborted: 0 },
+        tools: [],
+        title: "Triage new issues",
+        titleSource: "person",
+      }),
+    );
+    const titled = await rewind.scripts.setTitle("dd", { title: "Triage new issues", description: "Labels them." });
+    expect([titled.title, titled.titleSource]).toEqual(["Triage new issues", "person"]);
+    await rewind.scripts.setTitle("dd", { title: null });
+    const patches = server.calls("PATCH", "/v1/scripts/dd");
+    expect(patches.map((patch) => patch.body)).toEqual([
+      { title: "Triage new issues", description: "Labels them." },
+      { title: null },
+    ]);
   });
 
   it("saves workflows, lists them and reads their versions", async () => {

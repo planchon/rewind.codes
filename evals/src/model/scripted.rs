@@ -2,8 +2,8 @@
 //! end to end without a model API. Tests write turns in code, or as a function of the
 //! conversation; `scripted:<file.json>` reads them from a file.
 //!
-//! In a call's input, the string `{{run_id}}` stands for the last run id the tool results
-//! gave, so turns can follow a run they started.
+//! In a call's input, the string `{{run_id}}` stands for the last run the tool results named,
+//! by its handle or its id, so turns can follow a run they started.
 
 use std::fmt;
 
@@ -117,19 +117,34 @@ fn substitute(value: &mut Value, run_id: &str) {
     }
 }
 
-/// The last run id in the tool results of a conversation.
+/// The last run the tool results of a conversation named, by its handle or its id.
 pub fn last_run_id(conversation: &Conversation) -> Option<String> {
     conversation.turns.iter().rev().find_map(|turn| match turn {
         Turn::ToolResults { results } => results
             .iter()
             .rev()
-            .find_map(|result| first_uuid(&result.content)),
+            .find_map(|result| first_run(&result.content)),
         _ => None,
     })
 }
 
+/// The first run a text names: by its handle, such as `dana/triage/06bqx3k9f2mt`, as the
+/// agent tools name runs, or by its id, a UUID.
+pub fn first_run(text: &str) -> Option<String> {
+    match (uuid_at(text), handle_at(text)) {
+        (Some((at, uuid)), Some((before, handle))) => Some(if before < at { handle } else { uuid }),
+        (Some((_, uuid)), None) => Some(uuid),
+        (None, Some((_, handle))) => Some(handle),
+        (None, None) => None,
+    }
+}
+
 /// The first UUID of a text, such as `019a7b3c-…`.
 pub fn first_uuid(text: &str) -> Option<String> {
+    uuid_at(text).map(|(_, uuid)| uuid)
+}
+
+fn uuid_at(text: &str) -> Option<(usize, String)> {
     let bytes = text.as_bytes();
     let shape = [8, 4, 4, 4, 12];
     let length = 36;
@@ -142,8 +157,23 @@ pub fn first_uuid(text: &str) -> Option<String> {
             })
         });
         let bounded = start == 0 || !bytes[start - 1].is_ascii_hexdigit();
-        (fits && bounded).then(|| candidate.to_owned())
+        (fits && bounded).then(|| (start, candidate.to_owned()))
     })
+}
+
+/// The first run handle of a text, and where it starts: a word, between spaces, quotes or
+/// brackets, without the punctuation that ends a sentence.
+fn handle_at(text: &str) -> Option<(usize, String)> {
+    let mut start = 0;
+    for word in text.split(|c: char| c.is_whitespace() || "\"'`(){}[],;".contains(c)) {
+        let at = start;
+        start += word.len() + 1;
+        let word = word.trim_end_matches(['.', ':']);
+        if word.contains('/') && word.parse::<rewind_core::RunHandle>().is_ok() {
+            return Some((at, word.to_owned()));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -199,6 +229,27 @@ mod tests {
         );
         conversation.turns.push(Turn::Assistant(second.turn));
         assert_eq!(model.reply(&conversation).unwrap().stop, Stop::EndTurn);
+    }
+
+    #[test]
+    fn a_run_is_found_by_its_handle_or_its_id_whichever_comes_first() {
+        assert_eq!(
+            first_run(
+                "Run dana/triage/06bqx3k9f2mt (a fork of run 019a7b3c-0000-7000-8000-00000000abcd) completed."
+            ),
+            Some("dana/triage/06bqx3k9f2mt".into())
+        );
+        assert_eq!(
+            first_run("get_run({\"run_id\":\"user_1/script/06bqx3k9f2mt\"})."),
+            Some("user_1/script/06bqx3k9f2mt".into())
+        );
+        assert_eq!(
+            first_run(
+                "recorded from run 019a7b3c-0000-7000-8000-00000000abcd of dana/x/06bqx3k9f2mt"
+            ),
+            Some("019a7b3c-0000-7000-8000-00000000abcd".into())
+        );
+        assert_eq!(first_run("acme/api is a repository"), None);
     }
 
     #[test]

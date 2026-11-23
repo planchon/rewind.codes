@@ -9,7 +9,6 @@ import { Empty, Loading, ProblemView } from "../components/bits";
 import { Meter, StackedBars, Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
-import { SaveSearch } from "../components/SaveSearch";
 import { isCancellation } from "../model/ending";
 import { RANGES, type RangeKey } from "../model/filters";
 import { formatCount, formatDuration, formatPercent, formatTime } from "../model/format";
@@ -316,9 +315,7 @@ export function OverviewView() {
         values={lookup.values}
         onTyping={lookup.onTyping}
         fault={fault}
-      >
-        <SaveSearch q={q} view="overview" />
-      </QueryBar>
+      />
       {body}
     </div>
   );

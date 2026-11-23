@@ -342,6 +342,8 @@ where
         let run = ProjectedRun {
             run: record.run.clone(),
             namespace: record.namespace.clone(),
+            origin: record.origin.clone(),
+            suffix_len: record.suffix_len,
             script: record.script,
             headline,
             toolset: record.toolset,

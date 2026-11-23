@@ -79,12 +79,15 @@ pub(super) async fn replay(
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let path = Path::new(&args.run);
-    // A run id is a UUID: what looks like a path is a file, which must exist.
+    // A run is named by its id, a UUID, or its handle, which holds `/`: what looks like a path
+    // and is no handle is a file, which must exist.
+    let handle = args.run.parse::<rewind_core::RunHandle>().is_ok();
     let is_file = path.is_file()
-        || args.run.contains(std::path::MAIN_SEPARATOR)
-        || path
-            .extension()
-            .is_some_and(|extension| extension == "json");
+        || (!handle
+            && (args.run.contains(std::path::MAIN_SEPARATOR)
+                || path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")));
     let journal = if is_file {
         let text = input::read_text(path)?;
         rewind_format::decode_journal(&text)
@@ -393,6 +396,10 @@ async fn load(
                     rewind_engine::ports::NamespaceName::LOCAL,
                 )
                 .map_err(|error| fail(&error))?,
+                // The document says what ran by its script alone.
+                origin: rewind_core::script_doc(journal.script.source())
+                    .and_then(|doc| rewind_core::origin_slug(&doc.title))
+                    .unwrap_or_else(|| rewind_core::SCRIPT_ORIGIN.to_owned()),
                 started: started.clone(),
                 metadata: RunMetadata::default(),
                 created_at: *recorded_at,

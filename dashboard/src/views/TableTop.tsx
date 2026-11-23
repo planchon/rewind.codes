@@ -1,8 +1,8 @@
-// The top of a live table (archi/05, "Nothing moves on its own"): its toolbar, whose slot
-// for an answer held back ("N new · Show") is always there, so that its arrival moves no row, and
-// which stays under the page's header while the table scrolls; and the mark that tells the state
-// whether the table is scrolled to its top, where answers apply at once.
-import { type ReactNode, useCallback, useEffect, useRef } from "react";
+// The top of a live table (archi/05, "Nothing moves on its own"): the mark that tells the state
+// whether the table is scrolled to its top, where answers apply at once, and the pill of an answer
+// held back ("N new · Show"). The pill floats over the table's top edge, sticky under the page's
+// header: it takes no room, so its arrival moves no row.
+import { useCallback, useEffect, useRef } from "react";
 import { formatCount } from "../model/format";
 import type { PendingAnswer } from "../state/runs";
 
@@ -60,27 +60,21 @@ export function PendingButton({
   );
 }
 
-/**
- * The toolbar above a live table: what it says on the left, the slot of an answer held back on
- * the right; then the mark of the table's top.
- */
-export function TableToolbar({
+/** The top of a live table: the pill of an answer held back, then the mark of the table's top. */
+export function TableTop({
   pending,
   onShow,
   setAtTop,
-  children,
 }: {
   pending: PendingAnswer | null;
   onShow: () => void;
   setAtTop: (atTop: boolean) => void;
-  children?: ReactNode;
 }) {
   const top = useAtTop(setAtTop);
   return (
     <>
-      <div className="table-toolbar">
-        <div className="table-toolbar-start">{children}</div>
-        <div className="table-toolbar-slot">
+      <div className="table-pending">
+        <div className="table-pending-slot">
           <PendingButton pending={pending} onShow={onShow} />
         </div>
       </div>

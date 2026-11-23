@@ -11,8 +11,23 @@ script executed, the most recently run first.
   <img src="/images/dashboard/scripts-dark.webp" alt="The Scripts view: each script with its runs by outcome, its tools and its labels" className="hidden dark:block" />
 </Frame>
 
-Each row shows the script's first lines and digest, its runs and their outcomes, the tools it called and the labels of its
-runs, and when it last and first ran.
+Each row shows the script's title and its first line, its runs and their outcomes, the tools it called and the labels of
+its runs, and when it last and first ran.
+
+A script's title is the first line of the comment at its top, and the rest of the comment its description:
+
+```ts
+/**
+ * Triage new GitHub issues
+ *
+ * Labels each new issue, and asks for an approval before closing a duplicate.
+ */
+import { github } from "rewind:tools";
+```
+
+Your agents write it when they write the script. On a script's page, **Edit the title** gives it a title and a
+description for your organization, over its comment's (`scripts:write`); removing it shows the comment's again. A run
+of a script without a title shows its workflow's name, else "Untitled script".
 
 Search with the same query bar as the runs, which reads an end user, labels and a tool here: `namespace:alice` shows the
 scripts Alice's runs ran, counted over her runs only; `@agent:triage` shows what one agent writes,

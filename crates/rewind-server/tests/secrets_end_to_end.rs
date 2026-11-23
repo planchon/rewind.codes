@@ -1042,6 +1042,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             (last.run.as_deref(), last.namespace),
             (Some(run.id.as_str()), Some(ns(user)))
         );
+        assert_eq!(last.run_handle.as_deref(), Some(run.handle.as_str()));
         assert!(usage.secret.reads.iter().map(|day| day.reads).sum::<u64>() >= 1);
     }
 

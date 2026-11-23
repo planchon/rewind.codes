@@ -31,6 +31,7 @@ import type {
   WaitKind,
 } from "../model/types";
 import type { RunFixture, World } from "./fixtures";
+import { handleOf, scriptTitleOf } from "./handles";
 import { fakeDigest } from "./journal";
 import { compileQuery, type MockRun, parseDuration } from "./query";
 
@@ -60,7 +61,7 @@ function frame(source: string, line: number, column: number): string {
   return out.join("\n");
 }
 
-export function deriveRun(fixture: RunFixture, now: number): Run {
+export function deriveRun(world: World, fixture: RunFixture, now: number): Run {
   const entries = visibleEntries(fixture, now);
   const model = buildRunModel(entries);
   const status = statusOf(model);
@@ -69,6 +70,7 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
   const last = entries[entries.length - 1]?.recordedAt ?? first;
   const run: Run = {
     id: fixture.id,
+    handle: handleOf(world, fixture),
     namespace: fixture.namespace,
     status,
     script: fixture.script.digest,
@@ -90,9 +92,21 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
       callsite: l.callsite,
     })),
   };
-  if (fixture.parent) run.parent = { run: fixture.parent.run, at: fixture.parent.at ?? null };
+  const handleOfId = (id: string) => {
+    const other = world.runs.find((r) => r.id === id);
+    return other ? handleOf(world, other) : id;
+  };
+  if (fixture.parent)
+    run.parent = {
+      run: fixture.parent.run,
+      handle: handleOfId(fixture.parent.run),
+      at: fixture.parent.at ?? null,
+    };
   if (fixture.workflow) run.workflow = fixture.workflow;
-  if (fixture.startedBy) run.startedBy = fixture.startedBy;
+  if (fixture.startedBy)
+    run.startedBy = { ...fixture.startedBy, handle: handleOfId(fixture.startedBy.run) };
+  const title = scriptTitleOf(world, fixture.script.digest, fixture.script.source);
+  if (title) run.scriptTitle = title.title;
   if (fixture.secrets) run.secrets = fixture.secrets;
   if (fixture.quarantine && status === "active") run.quarantine = fixture.quarantine;
   const end = model.end;
@@ -233,14 +247,15 @@ function runWaits(run: Run, model: RunModel): RunWait[] {
   });
 }
 
-export function summarize(fixture: RunFixture, now: number): MockRun {
-  const run = deriveRun(fixture, now);
+export function summarize(world: World, fixture: RunFixture, now: number): MockRun {
+  const run = deriveRun(world, fixture, now);
   const model = buildRunModel(visibleEntries(fixture, now));
   const failedKinds = model.calls.flatMap((c) =>
     c.end?.outcome === "failed" ? [c.end.error.kind] : [],
   );
   const summary: MockRun = {
     id: run.id,
+    handle: run.handle,
     namespace: run.namespace,
     status: run.status,
     script: run.script,
@@ -262,6 +277,7 @@ export function summarize(fixture: RunFixture, now: number): MockRun {
     mode: run.mode,
   };
   if (run.endedAt) summary.endedAt = run.endedAt;
+  if (run.scriptTitle) summary.scriptTitle = run.scriptTitle;
   if (run.parent) summary.parent = run.parent.run;
   if (run.workflow) summary.workflow = run.workflow.name;
   if (run.startedBy) summary.startedBy = run.startedBy.run;
@@ -327,7 +343,7 @@ function started(world: World, now: number): RunFixture[] {
 export function matchingRuns(world: World, q: string | undefined, now: number): MockRun[] {
   const predicate = compileQuery(q, now);
   return started(world, now)
-    .map((r) => summarize(r, now))
+    .map((r) => summarize(world, r, now))
     .filter(predicate);
 }
 
@@ -555,6 +571,7 @@ export function failureGroups(world: World, query: FailuresQuery, now: number): 
       labels: topValues(labels, 5),
       latest: {
         id: latest?.id ?? first.id,
+        handle: latest?.handle ?? first.handle,
         status: latest?.status ?? first.status,
         message: latest?.errorMessage ?? "",
       },
@@ -583,14 +600,18 @@ function emptyCounts(): RunCounts {
 export function listScripts(world: World, query: ListScriptsQuery, now: number): ScriptPage {
   const byDigest = new Map<string, ScriptSummary>();
   for (const fixture of started(world, now)) {
-    const s = summarize(fixture, now);
+    const s = summarize(world, fixture, now);
     if (!hasLabels(s.labels, query.label)) continue;
     let summary = byDigest.get(s.script);
     if (!summary) {
       const headline = fixture.script.source.split("\n").find((l) => l.trim() !== "") ?? "";
+      const title = scriptTitleOf(world, fixture.script.digest, fixture.script.source);
       summary = {
         digest: s.script,
         headline,
+        ...(title
+          ? { title: title.title, description: title.description, titleSource: title.source }
+          : {}),
         firstRunAt: s.startedAt,
         lastRunAt: s.startedAt,
         runs: emptyCounts(),

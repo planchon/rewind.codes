@@ -9,10 +9,11 @@ import type {
   RunStatus,
   StreamEvent,
 } from "../model/types";
-import type { Caller } from "./access";
+import { type Caller, principalOf } from "./access";
 import { accessHandlers, authenticate, guard, runsWorld } from "./access-handlers";
 import { connectionHandlers } from "./connection-handlers";
 import type { World } from "./fixtures";
+import { findRun, scriptTitleOf } from "./handles";
 import { headerNamespace, namespaceHandlers } from "./namespace-handlers";
 import { invalidQuery, problem } from "./problem";
 import { QueryError } from "./query";
@@ -93,7 +94,10 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
   const pollMs = options.pollMs ?? 250;
   const changesMs = options.changesMs ?? 1_000;
   const noRun = (id: string) => problem(404, "not-found", `No run ${id} for this tenant.`);
-  const find = (w: World, id: string) => w.runs.find((r) => r.id === id);
+  const find = (w: World, id: string) => {
+    const run = findRun(world, id);
+    return run && w.runs.includes(run) ? run : undefined;
+  };
 
   return [
     // Every request to /v1 carries a token, unless the server needs none.
@@ -188,7 +192,9 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     http.get("*/v1/runs/:id", ({ request, params }) =>
       withRuns(world, request, (w) => {
         const fixture = find(w, String(params.id));
-        return fixture ? HttpResponse.json(deriveRun(fixture, now())) : noRun(String(params.id));
+        return fixture
+          ? HttpResponse.json(deriveRun(world, fixture, now()))
+          : noRun(String(params.id));
       }),
     ),
 
@@ -212,22 +218,6 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
           return { ...value, value: w.payloads.get(value.digest) };
         });
         return HttpResponse.json(full);
-      }),
-    ),
-
-    http.get("*/v1/runs/:id/trace", ({ request, params }) =>
-      withRuns(world, request, (w) => {
-        const fixture = find(w, String(params.id));
-        if (!fixture) return noRun(String(params.id));
-        const run = deriveRun(fixture, now());
-        const lines = visibleEntries(fixture, now()).map(
-          (e) => `  ${String(e.idx).padStart(3)}  ${e.event.type}`,
-        );
-        return HttpResponse.json({
-          runId: run.id,
-          format: "llm",
-          text: `run ${run.id}  ${run.status}\nscript ${fixture.script.name} · toolset ${run.toolset.slice(0, 12)}\n\n${lines.join("\n")}\n`,
-        });
       }),
     ),
 
@@ -277,7 +267,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
                 const entry = entries[next];
                 if (entry) chunk += sse({ type: "entry", ...entry });
               }
-              const status = deriveRun(fixture, now()).status;
+              const status = deriveRun(world, fixture, now()).status;
               const ended = status !== "active" && status !== "pending";
               if (ended || !follow) chunk += sse({ type: "end", status });
               if (chunk) controller.enqueue(encoder.encode(chunk));
@@ -344,10 +334,36 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       withRuns(world, request, (w) => {
         const script = w.scripts.find((s) => s.digest === params.digest);
         return script
-          ? HttpResponse.json({ digest: script.digest, source: script.source })
+          ? HttpResponse.json(scriptOf(world, script))
           : problem(404, "not-found", `No script ${String(params.digest)} for this tenant.`);
       }),
     ),
+
+    http.patch("*/v1/scripts/:digest", async ({ request, params }) => {
+      const caller = guard(world, request, "scripts:write");
+      if (caller instanceof Response) return caller;
+      const script = runsWorld(world, caller).scripts.find((s) => s.digest === params.digest);
+      if (!script)
+        return problem(404, "not-found", `No script ${String(params.digest)} for this tenant.`);
+      const body = (await request.json()) as { title: string | null; description?: string | null };
+      if (body.title === null) {
+        world.scriptTitles.delete(script.digest);
+        return HttpResponse.json(scriptOf(world, script));
+      }
+      const title = body.title.trim();
+      const description = body.description?.trim() || null;
+      if (title.length === 0 || title.length > 120)
+        return problem(422, "invalid-title", "A title is 1 to 120 characters.");
+      if ((description?.length ?? 0) > 2_000)
+        return problem(422, "invalid-title", "A description is at most 2,000 characters.");
+      world.scriptTitles.set(script.digest, {
+        title,
+        description,
+        updatedBy: principalOf(caller) ?? "operator",
+        updatedAt: now(),
+      });
+      return HttpResponse.json(scriptOf(world, script));
+    }),
 
     http.get("*/v1/tools/stats", ({ request }) =>
       withRuns(world, request, (w, caller) => {
@@ -382,4 +398,16 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       }),
     ),
   ];
+}
+
+/** A script as `GET /v1/scripts/{digest}` answers it, with its title. */
+function scriptOf(world: World, script: { digest: string; source: string }) {
+  const title = scriptTitleOf(world, script.digest, script.source);
+  return {
+    digest: script.digest,
+    source: script.source,
+    ...(title
+      ? { title: title.title, description: title.description, titleSource: title.source }
+      : {}),
+  };
 }

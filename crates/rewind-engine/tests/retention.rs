@@ -218,6 +218,8 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows() {
                 &ProjectedRun {
                     run: run.clone(),
                     namespace: record.namespace.clone(),
+                    origin: record.origin.clone(),
+                    suffix_len: record.suffix_len,
                     script: record.script,
                     headline: String::new(),
                     toolset: record.toolset,
@@ -296,6 +298,8 @@ async fn the_read_model_keeps_runs_for_its_retention() {
             &ProjectedRun {
                 run: run.clone(),
                 namespace: record.namespace.clone(),
+                origin: record.origin.clone(),
+                suffix_len: record.suffix_len,
                 script: record.script,
                 headline: String::new(),
                 toolset: record.toolset,

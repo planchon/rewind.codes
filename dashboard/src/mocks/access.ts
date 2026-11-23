@@ -34,6 +34,7 @@ export const DESCRIPTIONS: Record<Permission, string> = {
   "runs:delete": "Erase a run, its payloads included.",
   "toolsets:read": "List toolsets and workflows, read their declarations and search their tools.",
   "toolsets:write": "Register a toolset, and save a workflow.",
+  "scripts:write": "Give a script a title and a description for the organization, or remove them.",
   "secrets:read":
     "List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids.",
   "secrets:write": "Put and delete secrets.",
@@ -66,6 +67,7 @@ const HARNESS: Permission[] = [
   "runs:delete",
   "toolsets:read",
   "toolsets:write",
+  "scripts:write",
   "secrets:read",
   "secrets:write",
   "secrets:use",

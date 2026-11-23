@@ -367,10 +367,11 @@ fn digest_range(prefix: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.toolset, s.headline, s.status, \
      s.mode, s.labels::text, s.parent, s.workflow, s.started_by, s.started_at, s.ended_at, \
      s.last_activity_at, s.tool_calls, s.errors, s.history_len, s.wakes_at, s.error, s.message, \
-     s.line, s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace, s.changed_at";
+     s.line, s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace, s.origin, \
+     s.suffix_len::bigint, s.changed_at";
 
 /// The column of [`SUMMARY_COLUMNS`] that holds `changed_at`.
-const CHANGED_AT: usize = 27;
+const CHANGED_AT: usize = 29;
 
 fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
     let ending = match row.opt_text(18)? {
@@ -392,10 +393,14 @@ fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
         None => None,
     };
     let namespace = row.text(26)?;
+    let suffix_len = row.u64(28)?;
     Ok(RunSummary {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: rewind_engine::ports::NamespaceName::new(namespace.clone())
             .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
+        origin: row.text(27)?,
+        suffix_len: u8::try_from(suffix_len)
+            .map_err(|_| Error::Corrupt(format!("a suffix of {suffix_len} characters")))?,
         script: row.digest(2)?,
         toolset: row.digest(3)?,
         headline: row.text(4)?,

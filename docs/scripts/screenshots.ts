@@ -101,7 +101,6 @@ const SHOTS: Shot[] = [
     },
   },
   { name: "run-journal", open: (page) => openWaitingRun(page, "journal") },
-  { name: "run-trace", open: (page) => openWaitingRun(page, "trace") },
   { name: "scripts", open: (page) => go(page, "/scripts") },
   { name: "tools", open: (page) => go(page, "/tools") },
   { name: "namespaces", open: (page) => go(page, "/namespaces"), height: 1000 },

@@ -14,7 +14,8 @@ import {
   type ListedSecret,
   type Run,
 } from "../src/index.js";
-import { NAMESPACE, RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
+import { UNTITLED_NOTE, hasTitle } from "../src/agent-tools/render.js";
+import { HANDLE, NAMESPACE, RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
 import { MockServer, json, problem, type MockHandler } from "./mock-server.js";
 
 const LABELS = { conversation: "c-42" };
@@ -51,9 +52,12 @@ function started(overrides: Partial<Run> = {}): MockHandler {
   };
 }
 
+/** Answers `GET /v1/runs/{id}` with `state`, by its id or its handle. */
 function serveRun(state: Run): void {
   server.on("GET", "/v1/runs/{id}", (request) =>
-    request.params["id"] === state.id ? json(state) : problem(404, "not-found", `no run ${request.params["id"]}`),
+    request.params["id"] === state.id || request.params["id"] === state.handle
+      ? json(state)
+      : problem(404, "not-found", `no run ${request.params["id"]}`),
   );
 }
 
@@ -164,7 +168,7 @@ describe("run_script", () => {
     expect(result.run?.id).toBe(RUN_ID);
     expect(result.content).toBe(
       [
-        `Run ${RUN_ID} completed.`,
+        `Run ${HANDLE} completed.`,
         "Output:",
         '{"closed":3}',
         "Last log lines:",
@@ -191,7 +195,7 @@ describe("run_script", () => {
     const result = await small.handle("run_script", { code: "x" });
     const full = JSON.stringify(output);
     expect(result.content).toContain(`Output (${Buffer.byteLength(full)} bytes; the first 32 are shown`);
-    expect(result.content).toContain(`get_run({"run_id":"${RUN_ID}","offset":32})`);
+    expect(result.content).toContain(`get_run({"run_id":"${HANDLE}","offset":32})`);
 
     let offset = 0;
     let text = "";
@@ -242,11 +246,11 @@ describe("run_script", () => {
     expect(result.isError).toBe(false);
     expect(result.content).toBe(
       [
-        `Run ${RUN_ID} is suspended, waiting for:`,
+        `Run ${HANDLE} is suspended, waiting for:`,
         '- the signal "approval" at script.ts:8:26, until 2026-11-15T10:00:00Z (then it gets undefined): send it with signal_run',
         "- the call 4 to github.delete_repo: it waits for the harness's approval",
         "- a timer, firing at 2026-11-20T00:00:00Z",
-        `Follow it with get_run({"run_id":"${RUN_ID}"}), send it a signal with signal_run, or cancel it with cancel_run.`,
+        `Follow it with get_run({"run_id":"${HANDLE}"}), send it a signal with signal_run, or cancel it with cancel_run.`,
       ].join("\n"),
     );
     expect(server.requests[0]?.body).toMatchObject({ wait: expect.stringMatching(/^\d+ms$/) });
@@ -280,7 +284,7 @@ describe("run_script", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toBe(
       [
-        `Run ${RUN_ID} failed.`,
+        `Run ${HANDLE} failed.`,
         "ToolError: Not Found at script.ts:12:9",
         "12 |   const issue = await github.get_issue({ number: 7 });\n   |         ^",
         'The call that failed: github.get_issue (call 1 at script.ts:12:9) with {"number":7}',
@@ -453,7 +457,7 @@ describe("a run answered for the tool call's idempotency key", () => {
   it("is reported when it is the run this call asked for", async () => {
     server.on("POST", "/v1/runs", json(run({ script: digest("x"), output: payload(1) })));
     const result = await tools.handle("run_script", { code: "x" }, { toolCallId: "call_0" });
-    expect(result.content).toBe(`Run ${RUN_ID} completed.\nOutput:\n1`);
+    expect(result.content).toBe(`Run ${HANDLE} completed.\nOutput:\n1`);
   });
 
   it("is never shown when another agent's labels started it, nor when another script did", async () => {
@@ -598,12 +602,12 @@ describe("the tools that take a run id", () => {
     expect(result.isError).toBe(false);
     expect(result.content).toBe(
       [
-        `Run ${RUN_ID} is still running.`,
+        `Run ${HANDLE} is still running.`,
         "Waiting for:",
         "- the call 2 to slack.post: in progress (attempt 2)",
         "Trace:",
         "#0 run_started\n#1 tool github.get_issue → error",
-        `Follow it with get_run({"run_id":"${RUN_ID}"}), send it a signal with signal_run, or cancel it with cancel_run.`,
+        `Follow it with get_run({"run_id":"${HANDLE}"}), send it a signal with signal_run, or cancel it with cancel_run.`,
       ].join("\n"),
     );
     const gets = server.calls("GET", `/v1/runs/${RUN_ID}`);
@@ -621,11 +625,11 @@ describe("the tools that take a run id", () => {
       }),
     );
     const whole = await tools.handle("get_run", { run_id: RUN_ID, entry: 3 });
-    expect(whole.content.startsWith(`Entry 3 of run ${RUN_ID}:\n{"idx":3,`)).toBe(true);
+    expect(whole.content.startsWith(`Entry 3 of run ${HANDLE}:\n{"idx":3,`)).toBe(true);
     const small = rewind.agentTools({ labels: LABELS, outputLimit: 64 });
     const page = await small.handle("get_run", { run_id: RUN_ID, entry: 3, offset: 64 });
-    expect(page.content).toMatch(new RegExp(`^Entry 3 of run ${RUN_ID}, bytes 64 to 128 of \\d+:`));
-    expect(page.content).toContain(`get_run({"run_id":"${RUN_ID}","entry":3,"offset":128})`);
+    expect(page.content).toMatch(new RegExp(`^Entry 3 of run ${HANDLE}, bytes 64 to 128 of \\d+:`));
+    expect(page.content).toContain(`get_run({"run_id":"${HANDLE}","entry":3,"offset":128})`);
   });
 
   it("get_run: no output to page through before the run completes", async () => {
@@ -647,10 +651,10 @@ describe("the tools that take a run id", () => {
       { toolCallId: "call_7" },
     );
     expect(first.content).toBe(
-      `Sent the signal "approval" to run ${RUN_ID}. Read what the run does next with get_run({"run_id":"${RUN_ID}","wait":"30s"}).`,
+      `Sent the signal "approval" to run ${HANDLE}. Read what the run does next with get_run({"run_id":"${HANDLE}","wait":"30s"}).`,
     );
     const again = await tools.handle("signal_run", { run_id: RUN_ID, name: "approval" }, { toolCallId: "call_7" });
-    expect(again.content).toBe(`This signal "approval" was already sent to run ${RUN_ID}: nothing was added.`);
+    expect(again.content).toBe(`This signal "approval" was already sent to run ${HANDLE}: nothing was added.`);
     const signals = server.calls("POST", `/v1/runs/${RUN_ID}/signals/approval`);
     expect(signals.map((r) => r.headers["idempotency-key"])).toEqual(["call_7", "call_7"]);
     expect(signals[0]?.body).toEqual({ close: true });
@@ -658,7 +662,7 @@ describe("the tools that take a run id", () => {
   });
 
   it("signal_run: a run of a workflow refuses a signal it does not declare", async () => {
-    serveRun(run({ status: "active", workflow: { name: "triage", version: VERSION } }));
+    serveRun(run({ status: "active", workflow: { name: "triage", version: VERSION, number: 3 } }));
     server.on(
       "POST",
       "/v1/runs/{id}/signals/{name}",
@@ -671,21 +675,21 @@ describe("the tools that take a run id", () => {
     const result = await tools.handle("signal_run", { run_id: RUN_ID, name: "ping" });
     expect(result.isError).toBe(true);
     expect(result.content).toBe(
-      `Run ${RUN_ID} refused the signal "ping": run ${RUN_ID} is a run of triage, which does not declare the signal "ping" (it declares approval)`,
+      `Run ${HANDLE} refused the signal "ping": run ${RUN_ID} is a run of triage, which does not declare the signal "ping" (it declares approval)`,
     );
   });
 
   it("get_run: says which workflow a run executes, and which run started it", async () => {
     serveRun(
       run({
-        workflow: { name: "triage", version: VERSION },
-        startedBy: { run: "parent-1", seq: 2, detached: true },
+        workflow: { name: "triage", version: VERSION, number: 3 },
+        startedBy: { run: "parent-1", handle: "user_2fQ81/digest/06bqx3k9f2ms", seq: 2, detached: true },
         output: payload({ closed: 1 }),
       }),
     );
     const result = await tools.handle("get_run", { run_id: RUN_ID });
     expect(result.content.split("\n")[0]).toBe(
-      `Run ${RUN_ID} (a run of the workflow triage@4be1c07a9d3e, started by run parent-1, detached) completed.`,
+      `Run ${HANDLE} (a run of the workflow triage@4be1c07a9d3e, started by run user_2fQ81/digest/06bqx3k9f2ms, detached) completed.`,
     );
   });
 
@@ -705,22 +709,33 @@ describe("the tools that take a run id", () => {
     );
     const result = await tools.handle("cancel_run", { run_id: RUN_ID });
     expect(result.isError).toBe(false);
-    expect(result.content).toBe(`Run ${RUN_ID} was cancelled.\nCancelledError: cancelled`);
+    expect(result.content).toBe(`Run ${HANDLE} was cancelled.\nCancelledError: cancelled`);
     expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: "30s" });
   });
 
   it("retry_run: forks the run with the corrected script", async () => {
     serveRun(run({ status: "failed" }));
-    server.on("POST", "/v1/runs/{id}/fork", started({ id: "fork-1", parent: { run: RUN_ID }, output: payload("ok") }));
+    server.on(
+      "POST",
+      "/v1/runs/{id}/fork",
+      started({
+        id: "fork-1",
+        handle: "user_2fQ81/triage/06bqx3k9f2mv",
+        parent: { run: RUN_ID, handle: HANDLE },
+        output: payload("ok"),
+      }),
+    );
     const result = await tools.handle("retry_run", { run_id: RUN_ID, code: "fixed" }, { toolCallId: "call_9" });
-    expect(result.content).toBe(`Run fork-1 (a fork of run ${RUN_ID}) completed.\nOutput:\n"ok"`);
+    expect(result.content).toBe(
+      `Run user_2fQ81/triage/06bqx3k9f2mv (a fork of run ${HANDLE}) completed.\nOutput:\n"ok"`,
+    );
     const fork = server.calls("POST", `/v1/runs/${RUN_ID}/fork`)[0];
     expect(fork?.headers["idempotency-key"]).toBe(runKey("call_9"));
     expect(fork?.body).toEqual({ script: "fixed", labels: LABELS, wait: "30s" });
   });
 
   it("retry_run: says which tests of the workflow's suite refused the fix", async () => {
-    serveRun(run({ status: "failed", workflow: { name: "triage", version: VERSION } }));
+    serveRun(run({ status: "failed", workflow: { name: "triage", version: VERSION, number: 3 } }));
     const tests = [
       { name: "closes once approved", passed: true, status: "completed", calls: {}, failures: [], trace: "#0 ok" },
       {
@@ -747,7 +762,7 @@ describe("the tools that take a run id", () => {
     expect(result.run?.id).toBe(RUN_ID);
     expect(result.content).toBe(
       [
-        `Run ${RUN_ID} was not retried: 1 test of the suite of triage did not pass against the corrected script`,
+        `Run ${HANDLE} was not retried: 1 test of the suite of triage did not pass against the corrected script`,
         "1 of 2 tests did not pass.",
         'PASS "closes once approved"',
         'FAIL "closes nothing without approval" (failed): it ran, and expectations do not hold:',
@@ -772,6 +787,7 @@ describe("the other tools", () => {
         runs: [
           {
             id: "r1",
+            handle: "user_2fQ81/script/06bqx3k9f2mr",
             status: "failed",
             error: "ToolError",
             errors: 1,
@@ -793,7 +809,7 @@ describe("the other tools", () => {
     expect(result.content).toBe(
       [
         "1 run with the status failed, most recent first:",
-        "- r1: failed (ToolError), started 2026-11-12T10:00:00Z, 2 tool calls, 1 failed, a fork of r0",
+        "- user_2fQ81/script/06bqx3k9f2mr: failed (ToolError), started 2026-11-12T10:00:00Z, 2 tool calls, 1 failed, a fork of r0",
         "More runs exist: narrow the list with a status.",
       ].join("\n"),
     );
@@ -811,6 +827,7 @@ describe("the other tools", () => {
         runs: [
           {
             id: "r2",
+            handle: "user_2fQ81/triage/06bqx3k9f2mv",
             status: "active",
             errors: 0,
             historyLen: 3,
@@ -831,14 +848,14 @@ describe("the other tools", () => {
     expect(result.content).toBe(
       [
         "1 run, most recent first:",
-        "- r2: active, started 2026-11-12T10:00:00Z, 1 tool call, a run of the workflow triage, started by r1",
+        "- user_2fQ81/triage/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 tool call, a run of the workflow triage, started by r1",
       ].join("\n"),
     );
   });
 
   it("check_script: the diagnostics", async () => {
     server.on("POST", "/v1/check", json({ ok: true, diagnostics: [] }));
-    expect(await tools.handle("check_script", { code: "x" })).toEqual({
+    expect(await tools.handle("check_script", { code: "/** Count to one */\nx" })).toEqual({
       content: "The script type-checks.",
       isError: false,
     });
@@ -858,7 +875,7 @@ describe("the other tools", () => {
         ],
       }),
     );
-    const failed = await tools.handle("check_script", { code: "x" });
+    const failed = await tools.handle("check_script", { code: "// Count to one\nx" });
     expect(failed.isError).toBe(true);
     expect(failed.content).toBe(
       [
@@ -868,7 +885,26 @@ describe("the other tools", () => {
         "script.ts:2:3 warning rewind/floating-promise: not awaited",
       ].join("\n"),
     );
-    expect(server.requests[0]?.body).toEqual({ script: "x", toolset: TOOLSET });
+    expect(server.requests[0]?.body).toEqual({ script: "/** Count to one */\nx", toolset: TOOLSET });
+  });
+
+  it("check_script: a note when the script has no title", async () => {
+    server.on("POST", "/v1/check", json({ ok: true, diagnostics: [] }));
+    const untitled = await tools.handle("check_script", { code: "export default async () => 1;" });
+    expect(untitled).toEqual({ content: `The script type-checks.\n${UNTITLED_NOTE}`, isError: false });
+    for (const tagged of ["// @ts-check\nx", "/** */\nx", "x\n/** Too late */"]) {
+      expect(hasTitle(tagged)).toBe(false);
+    }
+    for (const titled of ["#!/usr/bin/env rewind\n/**\n * Triage\n */\nx", "  // Triage\n// More\nx", "/* One */ x"]) {
+      expect(hasTitle(titled)).toBe(true);
+    }
+  });
+
+  it("get_run: a handle the model gives names the run, percent-encoded in the path", async () => {
+    serveRun(run({ output: payload(1) }));
+    const result = await tools.handle("get_run", { run_id: HANDLE });
+    expect(result.content.split("\n")[0]).toBe(`Run ${HANDLE} completed.`);
+    expect(server.requests[0]?.path).toBe(`/v1/runs/${encodeURIComponent(HANDLE)}`);
   });
 
   it("test_script: runs the tests, and the suite of a workflow, against the script", async () => {
@@ -1106,7 +1142,7 @@ describe("save_workflow", () => {
     const code =
       'import { triage } from "rewind:workflows";\nexport default async () => (await triage.start({ repo: "a" })).result();';
     const ran = await tools.handle("run_script", { code });
-    expect(ran.content).toBe(`Run ${RUN_ID} completed.\nOutput:\n{"closed":1}`);
+    expect(ran.content).toBe(`Run ${HANDLE} completed.\nOutput:\n{"closed":1}`);
     await tools.handle("check_script", { code });
     await tools.handle("test_script", { code, workflow: "triage" });
     await tools.handle("search_tools", { query: "triage" });
@@ -1550,7 +1586,7 @@ describe("the adapters", () => {
     expect(block).toEqual({
       type: "tool_result",
       tool_use_id: "toolu_9",
-      content: `Run ${RUN_ID} was aborted by the host (limit_exceeded): the history cap`,
+      content: `Run ${HANDLE} was aborted by the host (limit_exceeded): the history cap`,
       is_error: true,
     });
     expect(server.requests[0]?.headers["idempotency-key"]).toBe(runKey("toolu_9"));
@@ -1561,14 +1597,14 @@ describe("the adapters", () => {
     const message = await tools.openai.handle({
       id: "call_1",
       type: "function",
-      function: { name: "check_script", arguments: '{"code":"x"}' },
+      function: { name: "check_script", arguments: '{"code":"// Count to one\\nx"}' },
     });
     expect(message).toEqual({ role: "tool", tool_call_id: "call_1", content: "The script type-checks." });
     const output = await tools.openai.responses.handle({
       type: "function_call",
       call_id: "call_2",
       name: "check_script",
-      arguments: '{"code":"y"}',
+      arguments: '{"code":"// Count to two\\ny"}',
     });
     expect(output).toEqual({ type: "function_call_output", call_id: "call_2", output: "The script type-checks." });
   });
@@ -1652,7 +1688,7 @@ describe("secrets", () => {
     expect((server.calls("POST", "/v1/runs")[0]?.body as { secrets: unknown }).secrets).toEqual(attached);
 
     serveRun(run({ status: "failed" }));
-    server.on("POST", "/v1/runs/{id}/fork", started({ id: "fork-1", parent: { run: RUN_ID } }));
+    server.on("POST", "/v1/runs/{id}/fork", started({ id: "fork-1", parent: { run: RUN_ID, handle: HANDLE } }));
     await tools.handle("retry_run", { run_id: RUN_ID, code: "b", secrets: { github: "org/github" } });
     expect(server.calls("POST", `/v1/runs/${RUN_ID}/fork`)[0]?.body).toEqual({
       script: "b",

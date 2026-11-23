@@ -18,7 +18,7 @@ use rewind_api::runs::{
     FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
     RunWait, WaitKind, Waiting,
 };
-use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity};
+use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity, TitleSource};
 use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunOutcome, RunState, Seq,
@@ -85,8 +85,41 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
         waiting(world, run, &history, &state).await?
     };
     let (trace, _) = rewind_engine::telemetry::trace_of(&record);
+    let script_title = script_title(world, &run.tenant, record.script)
+        .await?
+        .map(|(title, _, _)| title);
+    let parent = match record.metadata.parent {
+        Some(parent) => Some(ForkParent {
+            run: parent.run.to_string(),
+            handle: handle_of(world, &run.tenant, parent.run).await?,
+            at: parent.at,
+        }),
+        None => None,
+    };
+    let started_by = match record.metadata.started_by {
+        Some(by) => Some(rewind_api::workflows::StartedBy {
+            run: by.run.to_string(),
+            handle: handle_of(world, &run.tenant, by.run).await?,
+            seq: by.seq.0,
+            detached: by.detached,
+        }),
+        None => None,
+    };
+    let workflow = match &record.metadata.workflow {
+        Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
+            name: workflow.name.clone(),
+            version: workflow.version.to_hex(),
+            number: engine
+                .journal()
+                .get_workflow(&run.tenant, workflow.version)
+                .await?
+                .map_or(0, |stored| stored.number),
+        }),
+        None => None,
+    };
     Ok(Run {
         id: run.id.to_string(),
+        handle: record.handle().to_string(),
         namespace: namespace_of(&record)?,
         status,
         quarantine: record.quarantine.as_ref().map(|quarantine| Quarantine {
@@ -97,6 +130,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
             reason: quarantine.reason.clone(),
         }),
         script: record.script.to_hex(),
+        script_title,
         toolset: record.toolset.to_hex(),
         epoch: record.epoch.0,
         mode: started.map_or(rewind_api::common::RunMode::Live, |started| {
@@ -110,24 +144,9 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
             .map(|(server, secret)| (server.to_owned(), secret.to_string()))
             .collect(),
         trace_id: trace.to_string(),
-        parent: record.metadata.parent.map(|parent| ForkParent {
-            run: parent.run.to_string(),
-            at: parent.at,
-        }),
-        workflow: record.metadata.workflow.as_ref().map(|workflow| {
-            rewind_api::workflows::RunWorkflow {
-                name: workflow.name.clone(),
-                version: workflow.version.to_hex(),
-            }
-        }),
-        started_by: record
-            .metadata
-            .started_by
-            .map(|by| rewind_api::workflows::StartedBy {
-                run: by.run.to_string(),
-                seq: by.seq.0,
-                detached: by.detached,
-            }),
+        parent,
+        workflow,
+        started_by,
         input: started.map(|started| payload(&started.input)),
         output,
         error,
@@ -141,6 +160,42 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
         ended_at: record.ended_at.map(timestamp),
         expires_at: timestamp(record.expires_at),
     })
+}
+
+/// The handle of another run of the tenant, which a run names; its id once it is erased.
+async fn handle_of(
+    world: &World,
+    tenant: &rewind_engine::ports::TenantId,
+    run: rewind_core::RunId,
+) -> Result<String, EngineError> {
+    Ok(world
+        .engine
+        .get_run(&RunRef::new(tenant.clone(), run))
+        .await?
+        .map_or_else(|| run.to_string(), |record| record.handle().to_string()))
+}
+
+/// A script's title, its description and where they come from, as the server shows them: the
+/// title a person gave the script, else the comment at the top of its source.
+pub async fn script_title(
+    world: &World,
+    tenant: &rewind_engine::ports::TenantId,
+    script: rewind_core::Digest,
+) -> Result<Option<(String, Option<String>, TitleSource)>, EngineError> {
+    let journal = world.engine.journal();
+    if let Some((_, given)) = journal
+        .script_titles(tenant, &[script])
+        .await?
+        .into_iter()
+        .next()
+    {
+        return Ok(Some((given.title, given.description, TitleSource::Person)));
+    }
+    Ok(journal
+        .get_script(tenant, script)
+        .await?
+        .and_then(|stored| rewind_core::script_doc(stored.script.source()))
+        .map(|doc| (doc.title, doc.description, TitleSource::Comment)))
 }
 
 async fn waiting(
@@ -315,12 +370,17 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
         .await?
         .map(|stored| rewind_api::scripts::headline(stored.script.source()))
         .unwrap_or_default();
+    let script_title = script_title(world, &run.tenant, record.script)
+        .await?
+        .map(|(title, _, _)| title);
     Ok(RunSummary {
         id: run.id.to_string(),
+        handle: record.handle().to_string(),
         namespace: namespace_of(&record)?,
         status: record.status.into(),
         quarantined: record.quarantine.is_some(),
         script: record.script.to_hex(),
+        script_title,
         headline,
         toolset: record.toolset.to_hex(),
         labels: Labels::from(record.metadata.labels.clone()),
@@ -523,6 +583,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
     rewind_api::workflows::Workflow {
         name: workflow.name().to_owned(),
         version: workflow.version().to_hex(),
+        number: stored.number,
         description: workflow.description().map(str::to_owned),
         toolset: workflow.toolset().to_hex(),
         script: workflow.script().to_hex(),

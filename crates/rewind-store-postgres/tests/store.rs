@@ -1,10 +1,11 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
 //! migrations, the keys of version 1 becoming keys and grants, the runs of version 2 moving to the
-//! namespace `migrated`, servers starting together, what a
-//! call dropped half-way leaves, secrets at rest, the master key replaced and the credentials of
-//! version 9 dropped, the byte order of tenants, claims that read
-//! several pages of due tasks, owners demoting each other at once, projectors applying the same
-//! runs at once, and the percentiles of Postgres.
+//! namespace `migrated`, servers starting together, what a call dropped half-way leaves, secrets
+//! at rest, the master key replaced and the credentials of version 9 dropped, the handles and
+//! numbers given to what version 12 stored, the byte order of tenants, claims that read several
+//! pages of due tasks, owners demoting each other at once, starts and workflow versions taking
+//! handles and numbers at once, projectors applying the same runs at once, and the percentiles of
+//! Postgres.
 //!
 //! The checks share one Postgres container, each on a new database.
 
@@ -16,7 +17,8 @@ use std::time::Duration;
 use futures_util::future::join_all;
 use rewind_core::{
     Annotation, Command, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, RunId, RunMode,
-    RunStarted, RunStatus, SecretName, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
+    RunStarted, RunStatus, SecretName, Seed, Seq, Timestamp, ToolPolicy, ToolRoute, Workflow,
+    WorkflowSchemas,
 };
 use rewind_engine::ports::{
     AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Grant, GrantDeletion, GrantWrite,
@@ -54,6 +56,7 @@ fn new_run(run: RunRef) -> NewRun {
     NewRun {
         run,
         namespace: rewind_engine::ports::NamespaceName::migrated(),
+        origin: "script".into(),
         started: started(),
         metadata: RunMetadata::default(),
         created_at: T0,
@@ -98,12 +101,14 @@ async fn the_database_behind_the_store() {
     check!(concurrent_claims_keep_to_a_tools_limit);
     check!(owners_demoting_each_other_at_once_leave_one_owner);
     check!(concurrent_starts_never_take_the_same_last_place);
+    check!(concurrent_starts_and_versions_take_distinct_handles_and_numbers);
     check!(projectors_applying_together_keep_the_longest_snapshot);
     check!(percentiles_are_nearest_rank);
     check!(secrets_are_encrypted_at_rest);
     check!(the_master_key_is_replaced_by_a_rewrap);
     check!(two_rewraps_at_once_change_each_data_key_once);
     check!(the_credentials_of_version_9_are_dropped);
+    check!(runs_and_workflows_of_version_12_get_handles_and_numbers);
     check!(a_changed_run_that_cannot_be_read_is_left_out);
 }
 
@@ -838,30 +843,35 @@ async fn two_rewraps_at_once_change_each_data_key_once(postgres: &Postgres) {
     }
 }
 
-/// Migrations 1 to 9: a database as a build of schema version 9 left it, with credentials.
-#[derive(Debug)]
-struct Version9;
+/// The migrations released before run handles, version 1 first.
+const RELEASED: [&str; 12] = [
+    include_str!("../migrations/0001_schema.sql"),
+    include_str!("../migrations/0002_access.sql"),
+    include_str!("../migrations/0003_workflows.sql"),
+    include_str!("../migrations/0004_run_workflows.sql"),
+    include_str!("../migrations/0005_namespaces.sql"),
+    include_str!("../migrations/0006_tests.sql"),
+    include_str!("../migrations/0007_connections.sql"),
+    include_str!("../migrations/0008_namespace_display_names.sql"),
+    include_str!("../migrations/0009_park_kinds.sql"),
+    include_str!("../migrations/0010_secrets.sql"),
+    include_str!("../migrations/0011_run_orders.sql"),
+    include_str!("../migrations/0012_run_changes.sql"),
+];
 
-impl<'s> sqlx::migrate::MigrationSource<'s> for Version9 {
+/// Migrations 1 to `n`: a database as a build of schema version `n` left it.
+#[derive(Debug)]
+struct Released(usize);
+
+impl<'s> sqlx::migrate::MigrationSource<'s> for Released {
     fn resolve(
         self,
     ) -> futures_util::future::BoxFuture<
         's,
         Result<Vec<sqlx::migrate::Migration>, sqlx::error::BoxDynError>,
     > {
-        Box::pin(async {
-            let migrations = [
-                include_str!("../migrations/0001_schema.sql"),
-                include_str!("../migrations/0002_access.sql"),
-                include_str!("../migrations/0003_workflows.sql"),
-                include_str!("../migrations/0004_run_workflows.sql"),
-                include_str!("../migrations/0005_namespaces.sql"),
-                include_str!("../migrations/0006_tests.sql"),
-                include_str!("../migrations/0007_connections.sql"),
-                include_str!("../migrations/0008_namespace_display_names.sql"),
-                include_str!("../migrations/0009_park_kinds.sql"),
-            ];
-            Ok(migrations
+        Box::pin(async move {
+            Ok(RELEASED[..self.0]
                 .iter()
                 .zip(1..)
                 .map(|(sql, version)| {
@@ -885,7 +895,8 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
     let pool = sqlx::PgPool::connect(&postgres.url(&database))
         .await
         .expect("connect");
-    sqlx::migrate::Migrator::new(Version9)
+    // A database as a build of schema version 9 left it, with credentials.
+    sqlx::migrate::Migrator::new(Released(9))
         .await
         .expect("migrations 1 to 9")
         .run(&pool)
@@ -930,6 +941,243 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
     let (tenant, secret) = secret_of("acme", "a-1");
     store.put(&tenant, &secret, T0).await.expect("put");
     assert_eq!(store.master_keys_in_use().await, Ok(vec![key().id()]));
+}
+
+/// A version of the workflow `name` that runs `script`.
+fn workflow(name: &str, script: &str) -> Workflow {
+    Workflow::new(
+        name,
+        None,
+        Digest::of(script.as_bytes()),
+        Digest::of(b"toolset"),
+        WorkflowSchemas {
+            input: json!({ "type": "object" }),
+            output: json!({}),
+            signals: BTreeMap::new(),
+        },
+    )
+    .expect("a valid workflow")
+}
+
+/// The runs, summaries and workflow versions of a server of schema version 12 get handles and
+/// numbers once the store is upgraded. Runs of a tenant whose ids share their first 64 bits take
+/// the full suffix, and their handles differ; the others keep the short one, as do the runs of
+/// another tenant. A run's origin is its workflow, or `script`; a summary takes its run's, or,
+/// kept longer than its run, its own workflow's. Versions are numbered by workflow and tenant, by
+/// their creation, then in the order they were stored, and a new one takes the next number.
+async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Postgres) {
+    use rewind_core::{MAX_SUFFIX_LEN, SUFFIX_LEN, run_suffix};
+
+    let database = postgres.create_database();
+    let pool = sqlx::PgPool::connect(&postgres.url(&database))
+        .await
+        .expect("connect");
+    sqlx::migrate::Migrator::new(Released(12))
+        .await
+        .expect("migrations 1 to 12")
+        .run(&pool)
+        .await
+        .expect("apply migrations 1 to 12");
+
+    let triage = workflow("triage", "t1");
+    let ms = 1_795_383_896_000;
+    // Two runs of `acme` made in one millisecond with the same 12 bits after it, as ids were
+    // before handles; a third with other bits; a run of `beta` with the twins' bits.
+    let twin = RunId::from_v7_parts(ms, 0x0c5, 1);
+    let other_twin = RunId::from_v7_parts(ms, 0x0c5, 2);
+    let alone = RunId::from_v7_parts(ms, 0x0c6, 3);
+    let elsewhere = RunId::from_v7_parts(ms, 0x0c5, 4);
+    assert_eq!(
+        run_suffix(twin, SUFFIX_LEN),
+        run_suffix(other_twin, SUFFIX_LEN),
+        "the short suffix cannot tell the twins apart"
+    );
+    let runs = [
+        ("acme", twin, None),
+        ("acme", other_twin, None),
+        ("acme", alone, Some(&triage)),
+        ("beta", elsewhere, None),
+    ];
+    for (tenant, id, workflow) in runs {
+        sqlx::query(
+            "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
+             created_at, updated_at, namespace, workflow, workflow_version) \
+             VALUES ($1, $2, $3, $4, 'completed', 1, 2, '{}', 1, 1, 'alice', $5, $6)",
+        )
+        .bind(tenant)
+        .bind(id.as_uuid())
+        .bind(Digest::of(b"script").as_bytes().to_vec())
+        .bind(Digest::of(b"toolset").as_bytes().to_vec())
+        .bind(workflow.map(|workflow| workflow.name()))
+        .bind(workflow.map(|workflow| workflow.version().as_bytes().to_vec()))
+        .execute(&pool)
+        .await
+        .expect("a run of version 12");
+    }
+    // The summaries of two of those runs, and of three runs no longer in the journal: two that
+    // share their first 64 bits, the first of a workflow, and one alone.
+    let gone_twin = RunId::from_v7_parts(ms + 1, 0x001, 1);
+    let other_gone_twin = RunId::from_v7_parts(ms + 1, 0x001, 2);
+    let gone = RunId::from_v7_parts(ms + 1, 0x002, 3);
+    let summaries = [
+        (twin, None),
+        (alone, Some("triage")),
+        (gone_twin, Some("digest")),
+        (other_gone_twin, None),
+        (gone, None),
+    ];
+    for (id, workflow) in summaries {
+        sqlx::query(
+            "INSERT INTO run_summaries (run_id, tenant, script, toolset, headline, labels, \
+             status, last_activity_at, tool_calls, errors, history_len, snapshot_len, namespace, \
+             workflow) \
+             VALUES ($1, 'acme', $2, $3, '', '{}', 'completed', 1, 0, 0, 1, 1, 'alice', $4)",
+        )
+        .bind(id.as_uuid())
+        .bind(Digest::of(b"script").as_bytes().to_vec())
+        .bind(Digest::of(b"toolset").as_bytes().to_vec())
+        .bind(workflow)
+        .execute(&pool)
+        .await
+        .expect("a summary of version 12");
+    }
+    // Versions of `triage` in `acme`: two created at once, then one created before them but
+    // stored last; one of another workflow, and one of `triage` in `beta`.
+    let second = workflow("triage", "t2");
+    let first = workflow("triage", "t3");
+    let digest = workflow("digest", "d1");
+    let theirs = workflow("triage", "x1");
+    let versions = [
+        ("acme", &triage, 10),
+        ("acme", &second, 10),
+        ("acme", &first, 5),
+        ("acme", &digest, 1),
+        ("beta", &theirs, 1),
+    ];
+    for (tenant, workflow, created_at) in versions {
+        sqlx::query(
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
+             VALUES ($1, $2, $3, $4, '{}', $5)",
+        )
+        .bind(tenant)
+        .bind(workflow.version().as_bytes().to_vec())
+        .bind(workflow.name())
+        .bind(rewind_format::encode_workflow(workflow))
+        .bind(created_at)
+        .execute(&pool)
+        .await
+        .expect("a workflow version of version 12");
+    }
+    pool.close().await;
+
+    let store = postgres.connect(&database).await;
+    assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+    let acme = TenantId::new("acme").expect("tenant");
+    let beta = TenantId::new("beta").expect("tenant");
+    let record = |tenant: &TenantId, id: RunId| {
+        let run = RunRef::new(tenant.clone(), id);
+        let store = &store;
+        async move {
+            store
+                .get_run(&run)
+                .await
+                .expect("get_run")
+                .expect("the run is kept")
+        }
+    };
+    let twin_record = record(&acme, twin).await;
+    let other_twin_record = record(&acme, other_twin).await;
+    for twin in [&twin_record, &other_twin_record] {
+        assert_eq!(twin.origin, "script");
+        assert_eq!(usize::from(twin.suffix_len), MAX_SUFFIX_LEN);
+    }
+    assert_ne!(twin_record.handle(), other_twin_record.handle());
+    let alone_record = record(&acme, alone).await;
+    assert_eq!(
+        alone_record.origin, "triage",
+        "a run of a workflow is its workflow's"
+    );
+    assert_eq!(usize::from(alone_record.suffix_len), SUFFIX_LEN);
+    assert_eq!(
+        usize::from(record(&beta, elsewhere).await.suffix_len),
+        SUFFIX_LEN,
+        "the runs of another tenant do not count"
+    );
+    // Each twin's handle names it alone.
+    for record in [&twin_record, &other_twin_record] {
+        let (low, high) = record.handle().range().expect("a range");
+        let named: Vec<RunId> = store
+            .runs_in_range(&acme, low, high, 10)
+            .await
+            .expect("runs_in_range")
+            .iter()
+            .map(|named| named.run.id)
+            .collect();
+        assert_eq!(named, [record.run.id]);
+    }
+
+    let summaries: BTreeMap<RunId, (String, usize)> = store
+        .changed_runs(std::slice::from_ref(&acme), 0, 10)
+        .await
+        .expect("changed_runs")
+        .into_iter()
+        .map(|change| {
+            let summary = change.summary;
+            (
+                summary.run.id,
+                (summary.origin, usize::from(summary.suffix_len)),
+            )
+        })
+        .collect();
+    let handle = |origin: &str, len: usize| (origin.to_owned(), len);
+    assert_eq!(
+        summaries,
+        BTreeMap::from([
+            (twin, handle("script", MAX_SUFFIX_LEN)),
+            (alone, handle("triage", SUFFIX_LEN)),
+            (gone_twin, handle("digest", MAX_SUFFIX_LEN)),
+            (other_gone_twin, handle("script", MAX_SUFFIX_LEN)),
+            (gone, handle("script", SUFFIX_LEN)),
+        ])
+    );
+
+    let number = |tenant: &TenantId, workflow: &Workflow| {
+        let (tenant, version) = (tenant.clone(), workflow.version());
+        let store = &store;
+        async move {
+            store
+                .get_workflow(&tenant, version)
+                .await
+                .expect("get_workflow")
+                .expect("the version is kept")
+                .number
+        }
+    };
+    assert_eq!(number(&acme, &first).await, 1, "created first");
+    assert_eq!(number(&acme, &triage).await, 2, "stored before the other");
+    assert_eq!(number(&acme, &second).await, 3);
+    assert_eq!(number(&acme, &digest).await, 1);
+    assert_eq!(number(&beta, &theirs).await, 1);
+    let numbered = store
+        .workflow_number(&acme, "triage", 1)
+        .await
+        .expect("workflow_number")
+        .expect("version 1");
+    assert_eq!(numbered.workflow, first);
+    let next = store
+        .put_workflow(&acme, &workflow("triage", "t4"), T0)
+        .await
+        .expect("put_workflow");
+    assert_eq!(next.number, 4, "a new version takes the next number");
+    assert_eq!(
+        store
+            .put_workflow(&acme, &triage, T0)
+            .await
+            .expect("put_workflow")
+            .number,
+        2,
+        "a version put again keeps its number"
+    );
 }
 
 /// Tenants are ordered by their bytes, as the domain orders them, whatever the database's
@@ -1188,6 +1436,8 @@ fn projected_run(n: u128) -> ProjectedRun {
             RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0001_0000 | n),
         ),
         namespace: rewind_engine::ports::NamespaceName::migrated(),
+        origin: "script".into(),
+        suffix_len: 12,
         script: Digest::of(b"script"),
         headline: format!("// Run {n}"),
         toolset: Digest::of(b"toolset"),
@@ -1539,4 +1789,56 @@ async fn concurrent_starts_never_take_the_same_last_place(postgres: &Postgres) {
         per_namespace.values().all(|runs| *runs <= 2),
         "{per_namespace:?}"
     );
+}
+
+/// Starts of a tenant whose ids share their first 64 bits, all at once, take handles that differ:
+/// each start chooses its suffix under the tenant's lock, among the runs started before it. New
+/// versions of a workflow put at once take the numbers 1 to n, each once.
+async fn concurrent_starts_and_versions_take_distinct_handles_and_numbers(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let store = postgres.connect_with(&database, 8).await;
+    let tenant = TenantId::new("acme").expect("tenant");
+    let starts = join_all((0..20u64).map(|n| {
+        let store = store.clone();
+        let tenant = tenant.clone();
+        async move {
+            let id = RunId::from_v7_parts(1_795_383_896_000, 0x0c5, n);
+            let outcome = store
+                .create_run(
+                    NewRun {
+                        run: RunRef::new(tenant.clone(), id),
+                        ..new_run(run())
+                    },
+                    None,
+                )
+                .await
+                .expect("create_run");
+            assert!(matches!(outcome, CreateRun::Created(ref c) if c.created));
+            store
+                .get_run(&RunRef::new(tenant, id))
+                .await
+                .expect("get_run")
+                .expect("the run")
+                .handle()
+        }
+    }))
+    .await;
+    let handles: std::collections::BTreeSet<_> = starts.iter().map(ToString::to_string).collect();
+    assert_eq!(handles.len(), starts.len(), "{handles:?}");
+
+    let puts = join_all((0..20).map(|n| {
+        let store = store.clone();
+        let tenant = tenant.clone();
+        async move {
+            store
+                .put_workflow(&tenant, &workflow("triage", &format!("v{n}")), T0)
+                .await
+                .expect("put_workflow")
+                .number
+        }
+    }))
+    .await;
+    let mut numbers = puts.clone();
+    numbers.sort_unstable();
+    assert_eq!(numbers, (1..=20).collect::<Vec<u32>>(), "{puts:?}");
 }

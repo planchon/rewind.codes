@@ -49,8 +49,9 @@ pub struct CreateWorkflow {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schema(value_type = Object)]
     pub signals: BTreeMap<String, Value>,
-    /// The version it derives from, `name@<version>` or a version: the latest version of the
-    /// same name saved under the caller's labels when absent. Its suite is inherited.
+    /// The version it derives from, `name@<version>`, `name@v<number>` or a version: the latest
+    /// version of the same name saved under the caller's labels when absent. Its suite is
+    /// inherited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// New tests: inline, by the digest of a recorded test, or a recorded test with a new
@@ -177,6 +178,10 @@ pub struct Workflow {
     /// The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its
     /// first 12 digits.
     pub version: String,
+    /// The version's number among the versions of its workflow, from 1 in the order they were
+    /// saved (`triage v12`): `name@v<number>` names it too.
+    #[schema(example = 12)]
+    pub number: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// The id of the toolset its runs call.
@@ -263,13 +268,18 @@ pub struct PinnedWorkflow {
 pub struct RunWorkflow {
     pub name: String,
     pub version: String,
+    /// The version's number among the versions of its workflow (`Workflow.number`).
+    pub number: u32,
 }
 
 /// The run that started a run, and the call that did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StartedBy {
+    /// The id of the run that started it.
     pub run: String,
+    /// That run's handle; its id once it is erased.
+    pub handle: String,
     /// The `seq` of the call of `workflows.<name>.start`.
     pub seq: u32,
     /// A detached run lives on its own; otherwise the run that started it does not end before

@@ -23,9 +23,9 @@ pub use activation::{
 };
 pub use feed::{FeedConsumer, FeedItem};
 pub use runs::{
-    Archive, CreateRun, Created, Enqueued, ExpiredRuns, Failures, ForkParent, NewRun,
-    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunMetadata,
-    RunRecord, TraceContext,
+    Archive, CreateRun, Created, Enqueued, ExpiredRuns, Failures, ForkParent, NEW_SUFFIX_LEN,
+    NewRun, QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter,
+    RunMetadata, RunRecord, TraceContext,
 };
 pub use tasks::{
     ClaimedTask, ParkKind, ParkReason, ParkedScope, SecretUsage, TaskFilter, TaskRef, TaskState,
@@ -50,6 +50,17 @@ use super::webhooks::Subscription;
 pub struct StoredScript {
     pub script: Script,
     pub compiled: CompiledScript,
+}
+
+/// The title and description a person gave a script, for the organization, over the comment at
+/// its top (`archi/04-tools.md`, "Script titles").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptTitle {
+    pub title: String,
+    pub description: Option<String>,
+    /// Who set it: a principal, as the audit log names it.
+    pub updated_by: String,
+    pub updated_at: Timestamp,
 }
 
 /// A pinned toolset as stored, with the declarations generated from it.
@@ -161,6 +172,22 @@ pub trait JournalStore: Send + Sync {
         digest: Digest,
     ) -> impl Future<Output = Result<Option<StoredToolset>, StoreError>> + Send;
 
+    /// Sets the title a person gave a stored script, or removes it (`None`). `false` when the
+    /// tenant has no such script: nothing is stored.
+    fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// The titles people gave these scripts, for those that have one.
+    fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> impl Future<Output = Result<Vec<(Digest, ScriptTitle)>, StoreError>> + Send;
+
     /// The tenant's toolsets, by digest.
     fn list_toolsets(
         &self,
@@ -172,6 +199,7 @@ pub trait JournalStore: Send + Sync {
 
     /// Stores a workflow version, visible to the principals that see its labels, and returns it
     /// as stored, with a row of `workflow_tests` for each test of its suite, in one transaction.
+    /// A new version takes the next number of its workflow in its tenant (1 for the first).
     /// Idempotent by version: a second put changes nothing and returns the first. A new version
     /// that references a test without a row, or whose deletion has started, is refused
     /// (`Conflict`): it would point to a blob that may be gone.
@@ -186,6 +214,14 @@ pub trait JournalStore: Send + Sync {
         &self,
         tenant: &TenantId,
         version: Digest,
+    ) -> impl Future<Output = Result<Option<StoredWorkflow>, StoreError>> + Send;
+
+    /// The version `number` of the workflow `name`, whatever its labels.
+    fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
     ) -> impl Future<Output = Result<Option<StoredWorkflow>, StoreError>> + Send;
 
     /// The versions of the workflow `name` that carry all of `labels`, newest first (the
@@ -251,6 +287,16 @@ pub trait JournalStore: Send + Sync {
         &self,
         run: &RunRef,
     ) -> impl Future<Output = Result<Option<RunRecord>, StoreError>> + Send;
+
+    /// The tenant's runs whose id is between `low` and `high`, both included, by id, at most
+    /// `limit`: the runs a handle's suffix names ([`rewind_core::suffix_range`]).
+    fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: RunId,
+        high: RunId,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<RunRecord>, StoreError>> + Send;
 
     /// Makes `watcher`, which copied the call `seq` that started `run`, a watcher of `run`, never
     /// attached: a fork receives the end of the runs its copied history started

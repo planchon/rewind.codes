@@ -70,6 +70,54 @@ export function Digest({
   );
 }
 
+/** A namespace's id cut in its middle when long: `6afbb6…77f1`. */
+function shortNamespace(name: string): string {
+  return name.length > 16 ? `${name.slice(0, 6)}…${name.slice(-4)}` : name;
+}
+
+/**
+ * A run by its handle, `namespace/origin/suffix` (archi/06, "Run handles"): what ran in full, the
+ * namespace dimmed (left out where a column of the page says it, a long id shortened out of a
+ * table), the suffix in mono; a button copies the handle whole, and the title gives the run's UUID
+ * too. A run named by its UUID only (one erased since) shows as an id.
+ */
+export function RunHandle({
+  handle,
+  id,
+  namespace = true,
+  copy = true,
+  whole = false,
+}: {
+  handle: string;
+  id?: string;
+  namespace?: boolean;
+  /** A copy button beside it: not inside a link, whose name it would join. */
+  copy?: boolean;
+  /** Its namespace whole, as in a table, where nothing is cut. */
+  whole?: boolean;
+}) {
+  const parts = handle.split("/");
+  if (parts.length !== 3)
+    return copy ? <RunId id={handle} /> : <span className="run-id">{handle}</span>;
+  const [ns = "", origin = "", suffix = ""] = parts;
+  return (
+    <span className="copyable">
+      <span className="run-handle" title={id ? `${handle}\nid ${id}` : handle}>
+        {namespace && (
+          <>
+            <span className="h-ns">{whole ? ns : shortNamespace(ns)}</span>
+            <span className="h-sep">/</span>
+          </>
+        )}
+        <span className="h-origin">{origin}</span>
+        <span className="h-sep">/</span>
+        <span className="h-suffix">{suffix}</span>
+      </span>
+      {copy && <CopyButton text={handle} label="Copy the run's handle" />}
+    </span>
+  );
+}
+
 export function RunId({ id, full = false }: { id: string; full?: boolean }) {
   return (
     <span className="copyable">

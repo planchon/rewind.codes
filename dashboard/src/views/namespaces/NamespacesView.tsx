@@ -1,5 +1,6 @@
 // Namespaces: the end users of the organization and what they use of their limits this month.
-// First the organization's ceiling (the operator's) with its totals, then, folding under it, the
+// First the alerts of the month, then the organization's ceiling (the operator's) with its
+// totals, then, folding under it, the
 // default limits and the namespaces, sorted by CPU, runs or scripts of the month, so that an end
 // user who abuses the product comes first; the query bar of the runs, which reads the start of a
 // name here, and a filter of those at 80 % or more of a limit. Live: their use moves with their
@@ -12,6 +13,7 @@ import { FormDialog } from "../../components/FormDialog";
 import { NamespaceName } from "../../components/NamespaceName";
 import { PageHeader } from "../../components/PageHeader";
 import { QueryBar } from "../../components/QueryBar";
+import { TableScroll } from "../../components/TableScroll";
 import { legacyNamespacesQuery, NAMESPACES_LANGUAGE, namespacesSearch } from "../../model/filters";
 import { formatCount } from "../../model/format";
 import {
@@ -37,7 +39,7 @@ import {
 } from "../../state/namespaces";
 import { Seg } from "../FilterBits";
 import { useListQuery, useNamespaceNameValues } from "../search";
-import { TableToolbar } from "../TableTop";
+import { TableTop } from "../TableTop";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm, worstAlert } from "./bits";
 
 const ORDERS: { value: NamespaceOrder; label: string; title: string }[] = [
@@ -194,6 +196,19 @@ function Namespaces() {
     <div className="page">
       <PageHeader
         title="Namespaces"
+        info={
+          <>
+            <p className="info-card-head">
+              {monthLabel(month)}
+              {riskyCount !== null && <> · {riskyCount} at 80% or more of a limit</>}
+            </p>
+            <p>
+              A namespace is one end user of yours: their runs, tokens and use. The ceiling is the
+              operator's, on the organization's totals; the defaults are yours, for every namespace,
+              with exceptions per namespace. CPU time is never refused: it alerts at 80% and 100%.
+            </p>
+          </>
+        }
         actions={
           write &&
           defaults.data && (
@@ -203,17 +218,6 @@ function Namespaces() {
           )
         }
       />
-      <p className="page-intro">
-        {monthLabel(month)}
-        {riskyCount !== null && <> · {riskyCount} at 80% or more of a limit</>}
-      </p>
-
-      <p className="section-intro dim">
-        A namespace is one end user of yours: their runs, tokens and use. The ceiling is the
-        operator's, on the organization's totals; the defaults are yours, for every namespace, with
-        exceptions per namespace. CPU time is never refused: it alerts at 80% and 100%.
-      </p>
-
       <FormDialog open={editing && defaults.data !== undefined} onOpenChange={setEditing} wide>
         {defaults.data && (
           <DefaultsEditor defaults={defaults.data.defaults} onDone={() => setEditing(false)} />
@@ -229,6 +233,37 @@ function Namespaces() {
             </span>
           ))}
         </div>
+      )}
+
+      {(alerts.data?.alerts.length ?? 0) > 0 && (
+        <section className="panel" aria-label="Alerts this month">
+          <div className="panel-head">
+            <h2>Alerts in {monthLabel(month)}</h2>
+            <span className="end muted">sent to your webhooks as quota.alert</span>
+          </div>
+          <ul className="alert-list">
+            {(alerts.data?.alerts ?? []).slice(0, 12).map((a) => (
+              <li key={`${a.namespace ?? "*"}-${a.quota}-${a.threshold}`}>
+                <AlertChip alert={a} />
+                {a.namespace ? (
+                  <Link to={namespacePath(a.namespace)}>
+                    <NamespaceName name={a.namespace} />
+                  </Link>
+                ) : (
+                  <span>{organization}</span>
+                )}
+                <span className="muted">
+                  {QUOTA_NAMES[a.quota]} at {formatQuota(QUOTA_KEYS[a.quota], a.used)} of{" "}
+                  {formatQuota(QUOTA_KEYS[a.quota], a.limit)}
+                </span>
+                <span className="end muted">
+                  <Ago ms={Date.parse(a.raisedAt)} />
+                  {a.sentAt ? "" : " · not sent yet"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <QueryBar
@@ -264,12 +299,9 @@ function Namespaces() {
       ) : list.status === "error" ? (
         <ProblemView error={list.error} title="The namespaces could not be read" />
       ) : (
-        <>
-          <TableToolbar pending={list.pending} onShow={list.showPending} setAtTop={list.setAtTop} />
-          <div
-            className={`table-wrap${list.stale ? " is-stale" : ""}`}
-            aria-busy={list.stale || undefined}
-          >
+        <div className="live-table">
+          <TableTop pending={list.pending} onShow={list.showPending} setAtTop={list.setAtTop} />
+          <TableScroll stale={list.stale}>
             <table className="grid namespaces-table">
               <thead>
                 <tr>
@@ -377,39 +409,8 @@ function Namespaces() {
                 )}
               </div>
             )}
-          </div>
-        </>
-      )}
-
-      {(alerts.data?.alerts.length ?? 0) > 0 && (
-        <section className="panel" aria-label="Alerts this month">
-          <div className="panel-head">
-            <h2>Alerts in {monthLabel(month)}</h2>
-            <span className="end muted">sent to your webhooks as quota.alert</span>
-          </div>
-          <ul className="alert-list">
-            {(alerts.data?.alerts ?? []).slice(0, 12).map((a) => (
-              <li key={`${a.namespace ?? "*"}-${a.quota}-${a.threshold}`}>
-                <AlertChip alert={a} />
-                {a.namespace ? (
-                  <Link to={namespacePath(a.namespace)}>
-                    <NamespaceName name={a.namespace} />
-                  </Link>
-                ) : (
-                  <span>{organization}</span>
-                )}
-                <span className="muted">
-                  {QUOTA_NAMES[a.quota]} at {formatQuota(QUOTA_KEYS[a.quota], a.used)} of{" "}
-                  {formatQuota(QUOTA_KEYS[a.quota], a.limit)}
-                </span>
-                <span className="end muted">
-                  <Ago ms={Date.parse(a.raisedAt)} />
-                  {a.sentAt ? "" : " · not sent yet"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+          </TableScroll>
+        </div>
       )}
     </div>
   );

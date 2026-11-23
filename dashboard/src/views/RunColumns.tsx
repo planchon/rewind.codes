@@ -1,6 +1,8 @@
 // The headers of the table of runs, each a menu: how to order the runs by the column, and the
 // filters of what it shows. A filter is a term of the query, the same as the query bar's and the
-// sidebar's (archi/08): a header's menu adds, excludes or removes it.
+// sidebar's (archi/08): a header's menu adds, excludes or removes it. A menu is one flat list: its
+// groups (the orders, each filter) are told apart by a stroke, not by titles; each item says what
+// it does on its own.
 import { Popover } from "@base-ui/react/popover";
 import { ArrowDown, ArrowUp, Check, ChevronDown } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -11,10 +13,12 @@ import { askedTerms, countTerms, toggleFacet, withFieldTerm } from "../model/que
 import { ascending, SORT_WORDS } from "../model/sorts";
 import type { Facets, FacetValue, RunSort, RunStatus } from "../model/types";
 import { useAccess } from "../state/access";
+import { useScriptTitles } from "../state/scripts";
 import {
   FacetToggles,
   facetRows,
   NamespaceSearch,
+  rowsStartingWith,
   timelineOf,
   withTimeline,
 } from "./observability/Filters";
@@ -120,7 +124,7 @@ export function ColumnHeader({
               aria-label={`${title}: order and filters`}
             >
               {sorts.length > 0 && (
-                <MenuSection title="Order">
+                <MenuGroup label="Order">
                   {sorts.map((s) => (
                     <Choice
                       key={s}
@@ -133,7 +137,7 @@ export function ColumnHeader({
                       {SORT_WORDS[s]}
                     </Choice>
                   ))}
-                </MenuSection>
+                </MenuGroup>
               )}
               {children?.(close)}
             </Popover.Popup>
@@ -144,17 +148,17 @@ export function ColumnHeader({
   );
 }
 
-function MenuSection({ title, children }: { title: string; children: ReactNode }) {
+/** A group of the menu: named for assistive technologies, told apart from the others by a stroke. */
+function MenuGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    // biome-ignore lint/a11y/useSemanticElements: a group of the menu, named by its title
-    <div className="column-menu-section" role="group" aria-label={title}>
-      <p className="menu-label">{title}</p>
+    // biome-ignore lint/a11y/useSemanticElements: a group of the menu, named by its label
+    <div className="column-menu-group" role="group" aria-label={label}>
       {children}
     </div>
   );
 }
 
-/** One of several choices of a section: an order, a window, a threshold. */
+/** One of several choices of a group: an order, a window, a threshold. */
 function Choice({
   picked,
   onPick,
@@ -174,7 +178,10 @@ function Choice({
   );
 }
 
-/** A facet's values with their counts, each a toggle of the query. */
+/**
+ * A facet's values with their counts, each a toggle of the query (asked, excluded, removed); with
+ * `searchNamespaces`, a search above them narrows them and finds the namespaces they do not list.
+ */
 function FacetSection({
   title,
   field,
@@ -182,7 +189,7 @@ function FacetSection({
   controls,
   show,
   dot,
-  search,
+  searchNamespaces = false,
 }: {
   title: string;
   field: string;
@@ -190,33 +197,43 @@ function FacetSection({
   controls: RunTableControls;
   show?: (value: string) => string;
   dot?: boolean;
-  search?: ReactNode;
+  searchNamespaces?: boolean;
 }) {
-  const rows = facetRows(controls.q, field, values);
-  if (rows.length === 0 && !search) return null;
+  const [typed, setTyped] = useState("");
+  const all = facetRows(controls.q, field, values);
+  if (all.length === 0 && !searchNamespaces) return null;
+  const rows = rowsStartingWith(all, typed, show);
   const toggle = (f: string, value: string) => controls.onQuery(toggleFacet(controls.q, f, value));
   return (
-    <MenuSection title={title}>
-      <div className="filter-box column-menu-box">
-        {rows.length === 0 ? (
-          <p className="column-menu-empty">No value among these runs.</p>
-        ) : (
-          <FacetToggles
-            title={title}
-            field={field}
-            rows={rows}
-            onToggle={toggle}
-            show={show}
-            dot={dot ?? false}
-          />
-        )}
-        {search}
-      </div>
-    </MenuSection>
+    <MenuGroup label={title}>
+      {searchNamespaces && (
+        <NamespaceSearch
+          typed={typed}
+          onTyped={setTyped}
+          listed={all.map((r) => r.value)}
+          onPick={(name) => toggle(field, name)}
+        />
+      )}
+      {rows.length === 0 ? (
+        typed.trim() === "" && <p className="column-menu-empty">No value among these runs.</p>
+      ) : (
+        <FacetToggles
+          title={title}
+          field={field}
+          rows={rows}
+          onToggle={toggle}
+          show={show}
+          dot={dot ?? false}
+        />
+      )}
+    </MenuGroup>
   );
 }
 
-/** A filter that takes one value at a time: a threshold, a window. */
+/**
+ * A filter that takes one value at a time (a threshold, a window): a pick replaces the previous
+ * one, and a pick of the one asked for removes it.
+ */
 function ChoiceSection({
   title,
   field,
@@ -226,28 +243,27 @@ function ChoiceSection({
 }: {
   title: string;
   field: string;
-  /** Each option's term, `null` for no filter. */
-  options: readonly { term: string | null; label: string }[];
+  options: readonly { term: string; label: string }[];
   controls: RunTableControls;
   close: () => void;
 }) {
   const current = askedTerms(controls.q, field)[0]?.raw ?? null;
   return (
-    <MenuSection title={title}>
+    <MenuGroup label={title}>
       {options.map((o) => (
         <Choice
-          key={o.term ?? "any"}
+          key={o.term}
           picked={o.term === current}
           onPick={() => {
-            controls.onQuery(withFieldTerm(controls.q, field, o.term));
+            controls.onQuery(withFieldTerm(controls.q, field, o.term === current ? null : o.term));
             close();
           }}
         >
           {o.label}
-          {o.term && <span className="menu-item-term">{o.term}</span>}
+          <span className="menu-item-term">{o.term}</span>
         </Choice>
       ))}
-    </MenuSection>
+    </MenuGroup>
   );
 }
 
@@ -262,9 +278,9 @@ export function RunHeader({ controls }: { controls: RunTableControls }) {
     >
       {() =>
         labels.length === 0 ? (
-          <MenuSection title="Labels">
+          <MenuGroup label="Labels">
             <p className="column-menu-empty">No label among these runs.</p>
-          </MenuSection>
+          </MenuGroup>
         ) : (
           labels
             .slice(0, 4)
@@ -275,6 +291,7 @@ export function RunHeader({ controls }: { controls: RunTableControls }) {
                 field={`@${l.key}`}
                 values={l.values.slice(0, 8)}
                 controls={controls}
+                show={(value) => `${l.key}:${value}`}
               />
             ))
         )
@@ -304,7 +321,6 @@ export function StatusHeader({ controls }: { controls: RunTableControls }) {
             title="Quarantine"
             field="quarantined"
             options={[
-              { term: null, label: "Any run" },
               { term: "quarantined:yes", label: "Quarantined only" },
               { term: "quarantined:no", label: "Not quarantined" },
             ]}
@@ -335,13 +351,7 @@ export function NamespaceHeader({ controls }: { controls: RunTableControls }) {
           values={controls.facets?.namespaces ?? []}
           controls={controls}
           show={(name) => label(name) ?? name}
-          search={
-            access.can("namespaces:read") ? (
-              <NamespaceSearch
-                onPick={(name) => controls.onQuery(toggleFacet(controls.q, "namespace", name))}
-              />
-            ) : null
-          }
+          searchNamespaces={access.can("namespaces:read")}
         />
       )}
     </ColumnHeader>
@@ -349,6 +359,7 @@ export function NamespaceHeader({ controls }: { controls: RunTableControls }) {
 }
 
 export function ScriptHeader({ controls }: { controls: RunTableControls }) {
+  const titleOf = useScriptTitles();
   return (
     <ColumnHeader title="Script" column="script" fields={["script"]} controls={controls}>
       {() => (
@@ -357,7 +368,7 @@ export function ScriptHeader({ controls }: { controls: RunTableControls }) {
           field="script"
           values={controls.facets?.scripts ?? []}
           controls={controls}
-          show={shortDigest}
+          show={(digest) => titleOf(digest) ?? `Untitled · ${shortDigest(digest)}`}
         />
       )}
     </ColumnHeader>
@@ -379,16 +390,17 @@ export function StartedHeader({ controls }: { controls: RunTableControls }) {
       controls={controls}
     >
       {(close) => (
-        <MenuSection title="Started in">
-          <Choice picked={timeline === null} onPick={() => pick(null, close)}>
-            Any time
-          </Choice>
+        <MenuGroup label="Started in">
           {WINDOWS.map((w) => (
-            <Choice key={w} picked={timeline === w} onPick={() => pick(w, close)}>
-              {WINDOW_WORDS[w].replace(/^the /, "The ")}
+            <Choice
+              key={w}
+              picked={timeline === w}
+              onPick={() => pick(timeline === w ? null : w, close)}
+            >
+              {`Started in ${WINDOW_WORDS[w]}`}
             </Choice>
           ))}
-        </MenuSection>
+        </MenuGroup>
       )}
     </ColumnHeader>
   );
@@ -410,7 +422,6 @@ export function DurationHeader({ controls }: { controls: RunTableControls }) {
           title="Ended runs that took"
           field="duration"
           options={[
-            { term: null, label: "Any duration" },
             { term: "duration:<1s", label: "Under a second" },
             { term: "duration:>1m", label: "Over a minute" },
             { term: "duration:>10m", label: "Over 10 minutes" },
@@ -441,10 +452,9 @@ export function CallsHeader({ controls }: { controls: RunTableControls }) {
             title="Tool calls"
             field="calls"
             options={[
-              { term: null, label: "Any number" },
-              { term: "calls:0", label: "None" },
-              { term: "calls:>=10", label: "10 or more" },
-              { term: "calls:>=100", label: "100 or more" },
+              { term: "calls:0", label: "No call" },
+              { term: "calls:>=10", label: "10 calls or more" },
+              { term: "calls:>=100", label: "100 calls or more" },
             ]}
             controls={controls}
             close={close}
@@ -453,9 +463,8 @@ export function CallsHeader({ controls }: { controls: RunTableControls }) {
             title="Failed calls"
             field="errors"
             options={[
-              { term: null, label: "Any" },
-              { term: "errors:>0", label: "At least one" },
-              { term: "errors:0", label: "None" },
+              { term: "errors:>0", label: "A call failed" },
+              { term: "errors:0", label: "No call failed" },
             ]}
             controls={controls}
             close={close}

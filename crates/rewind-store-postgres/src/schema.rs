@@ -15,7 +15,7 @@ use sqlx::migrate::{MigrateError, Migration, MigrationSource, MigrationType, Mig
 use crate::Error;
 
 /// The version of the schema this build writes: its latest migration.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// Migration `n` brings the schema to version `n`. A migration, once released, never changes: a
 /// change of the schema is a new one.
@@ -67,6 +67,11 @@ const MIGRATIONS: [(i64, &str, &str); SCHEMA_VERSION as usize] = [
         12,
         "run changes",
         include_str!("../migrations/0012_run_changes.sql"),
+    ),
+    (
+        13,
+        "run handles",
+        include_str!("../migrations/0013_run_handles.sql"),
     ),
 ];
 

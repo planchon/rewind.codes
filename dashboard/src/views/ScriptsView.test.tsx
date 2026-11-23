@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { SCRIPTS } from "../mocks/fixtures";
+import { scriptDoc } from "../mocks/handles";
 import { renderApp, search } from "../test/app";
 
 describe("ScriptsView", () => {
@@ -99,12 +100,44 @@ describe("ScriptView", () => {
     // No script column: the script is the page's.
     expect(within(section).queryByRole("columnheader", { name: "Script" })).toBeNull();
     const chips = within(section).getByRole("group", { name: "Filters" });
-    expect(chips).toHaveTextContent(`Script ${digest.slice(0, 12)}`);
+    // The chip names the script by its title, the first line of the comment at its top.
+    const title = scriptDoc(SCRIPTS.FORECAST.source)?.title ?? digest.slice(0, 12);
+    await waitFor(() => expect(chips).toHaveTextContent(`Script ${title}`));
 
     await user.click(within(chips).getByRole("button", { name: "Clear the filters" }));
     await waitFor(() => expect(search(router).get("q")).toBeNull());
     await waitFor(() =>
       expect(requested("/v1/runs").at(-1)?.searchParams.get("q")).toBe(`script:${digest}`),
     );
+  });
+
+  it("gives a script a title, which names it, then takes it back for its comment's", async () => {
+    const user = userEvent.setup();
+    const digest = SCRIPTS.FORECAST.digest;
+    const comment = scriptDoc(SCRIPTS.FORECAST.source)?.title ?? "";
+    const { callsTo } = renderApp(`/scripts/${digest}`);
+    const heading = await screen.findByRole("heading", { level: 1 });
+    await waitFor(() => expect(heading).toHaveTextContent(comment));
+
+    await user.click(screen.getByRole("button", { name: "Edit the title" }));
+    const form = await screen.findByRole("form", { name: "Title of the script" });
+    const title = within(form).getByLabelText("Title");
+    await user.clear(title);
+    await user.type(title, "  Weather for a trip  ");
+    await user.type(within(form).getByLabelText("Description"), "Looks up the forecast.");
+    await user.click(within(form).getByRole("button", { name: "Save the title" }));
+    await waitFor(() => expect(heading).toHaveTextContent("Weather for a trip"));
+    const patch = callsTo(`/v1/scripts/${digest}`, "PATCH")[0];
+    expect(JSON.parse((await patch?.body) ?? "")).toEqual({
+      title: "Weather for a trip",
+      description: "Looks up the forecast.",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Edit the title" }));
+    const again = await screen.findByRole("form", { name: "Title of the script" });
+    await user.click(
+      within(again).getByRole("button", { name: "Remove this title: the comment's shows again" }),
+    );
+    await waitFor(() => expect(heading).toHaveTextContent(comment));
   });
 });

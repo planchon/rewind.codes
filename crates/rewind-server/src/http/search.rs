@@ -93,9 +93,9 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
         with(error_predicate(std::slice::from_ref(error)));
     }
     if let Some(parent) = &filter.parent {
-        let parent = parent
-            .parse::<RunId>()
-            .map_err(|_| ApiError::invalid(format!("parent {parent:?}: expected a run id")))?;
+        let parent = parent.parse::<RunId>().map_err(|_| {
+            ApiError::invalid(format!("parent {parent:?}: expected a run's id or handle"))
+        })?;
         with(Predicate::Parent(parent));
     }
     if let Some(workflow) = &filter.workflow {
@@ -106,7 +106,9 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
     }
     if let Some(started_by) = &filter.started_by {
         let started_by = started_by.parse::<RunId>().map_err(|_| {
-            ApiError::invalid(format!("startedBy {started_by:?}: expected a run id"))
+            ApiError::invalid(format!(
+                "startedBy {started_by:?}: expected a run's id or handle"
+            ))
         })?;
         with(Predicate::StartedBy(started_by));
     }
@@ -316,10 +318,13 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
     let ending = run.ending.as_ref();
     rewind_api::runs::RunSummary {
         id: run.run.id.to_string(),
+        handle: run.handle().to_string(),
         namespace: crate::views::namespace(&run.namespace),
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
         script: run.script.to_hex(),
+        // The script's title is not the read model's: the caller gives it.
+        script_title: None,
         headline: run.headline.clone(),
         toolset: run.toolset.to_hex(),
         labels: Labels::from(run.labels.clone()),
@@ -466,6 +471,7 @@ pub(crate) fn failure_group(group: &ports::FailureGroup) -> FailureGroup {
         labels: values(&group.labels),
         latest: FailureSample {
             id: group.latest.to_string(),
+            handle: group.latest_handle.to_string(),
             status: group.latest_status.into(),
             message: group.latest_message.clone(),
         },

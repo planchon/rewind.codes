@@ -168,7 +168,9 @@ describe("the Namespaces view", () => {
     expect(requested("/v1/namespaces").some((u) => u.searchParams.get("above") === "0.8")).toBe(
       true,
     );
-    expect(screen.getByText(/3 at 80% or more of a limit/)).toBeInTheDocument();
+    // What the page is, with the month's count, opens from the (i) beside its name.
+    await user.click(screen.getByRole("button", { name: "About Namespaces" }));
+    expect(await screen.findByText(/3 at 80% or more of a limit/)).toBeInTheDocument();
   });
 
   it("folds the namespaces under the organization's row", async () => {
@@ -320,7 +322,10 @@ describe("a namespace's page", () => {
     await waitFor(() => expect(within(runs).getAllByRole("row").length).toBeGreaterThan(1));
     const scripts = screen.getByRole("region", { name: "Its scripts" });
     await waitFor(() => expect(within(scripts).getAllByRole("row").length).toBeGreaterThan(1));
-    expect(callsTo("/v1/scripts").at(-1)?.headers.get("Rewind-Namespace")).toBe("bob");
+    // Its scripts are counted over its runs (the titles of every script are read apart).
+    expect(callsTo("/v1/scripts").some((c) => c.headers.get("Rewind-Namespace") === "bob")).toBe(
+      true,
+    );
   });
 
   it("filters and orders its runs from the table's headers, in the page's URL", async () => {
@@ -377,11 +382,13 @@ describe("a namespace's page", () => {
     await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
     const title = screen.getByRole("heading", { level: 1 });
     expect(title).toHaveTextContent("Chen Logistics");
-    // The id stays one hover away, and under the title.
+    // The id stays one hover away, and in the card of the (i) beside the title.
     await user.hover(within(title).getByText("Chen Logistics"));
     const tip = await screen.findByText("Namespace", { selector: ".ns-tip-label" });
     expect(tip.parentElement).toHaveTextContent("Namespace chen");
-    expect(screen.getByText("id").parentElement).toHaveTextContent("id chen");
+    await user.unhover(within(title).getByText("Chen Logistics"));
+    await user.click(screen.getByRole("button", { name: "About this page" }));
+    expect(await screen.findByText(/^Id/)).toHaveTextContent("Id chen");
 
     await user.click(screen.getByRole("button", { name: "Rename" }));
     const form = screen.getByRole("form", { name: "Rename Chen Logistics" });
@@ -489,7 +496,7 @@ describe("a namespace's page", () => {
     await user.click(confirm);
     expect(await screen.findByText(/The erasure of/)).toBeInTheDocument();
     expect(callsTo("/v1/namespaces/bob", "DELETE")).toHaveLength(1);
-    expect(await screen.findByText(/being erased since/)).toBeInTheDocument();
+    expect(await screen.findByText(/being erased since/i)).toBeInTheDocument();
     // An end user being erased takes no change.
     expect(screen.queryByRole("button", { name: "Edit its limits" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Revoke its tokens" })).toBeNull();
@@ -556,7 +563,7 @@ describe("a namespace's page", () => {
     const form = screen.getByRole("form", { name: "Erase bob" });
     await user.type(within(form).getByLabelText("Type bob to confirm"), "bob");
     await user.click(within(form).getByRole("button", { name: "Erase bob" }));
-    expect(await screen.findByText(/being erased since/)).toBeInTheDocument();
+    expect(await screen.findByText(/being erased since/i)).toBeInTheDocument();
     expect(within(form).getByRole("button", { name: "Erasing…" })).toBeDisabled();
 
     gate.release(
@@ -566,7 +573,7 @@ describe("a namespace's page", () => {
       ),
     );
     expect(await within(form).findByRole("alert")).toHaveTextContent(/403 · forbidden/);
-    expect(screen.queryByText(/being erased since/)).toBeNull();
+    expect(screen.queryByText(/being erased since/i)).toBeNull();
     expect(screen.getByTestId("tokens")).toHaveTextContent("3");
   });
 });

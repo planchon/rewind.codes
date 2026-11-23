@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createWorld, type RunFixture, SCRIPTS, WORKFLOWS } from "../../mocks/fixtures";
+import { handleOf } from "../../mocks/handles";
 import { shortRunId } from "../../model/format";
 import { NOW, renderApp, search } from "../../test/app";
 
@@ -19,6 +20,22 @@ function notesOf(line: number): HTMLElement {
 }
 
 describe("RunView", () => {
+  it("opens a run by its handle, and names it by its handle", async () => {
+    const world = createWorld({ now: NOW });
+    const run = find(world, (r) => r.labels.conversation === "c-42");
+    const handle = handleOf(world, run);
+    // Not a run of a workflow: its origin is its script's title as a slug.
+    expect(handle).toMatch(/^alice\/triage-stale-issues\/[0-9a-z]{12}$/);
+    const { requested } = renderApp(`/runs/${handle}/journal`, { world });
+    expect(await screen.findByRole("region", { name: "Journal" })).toBeInTheDocument();
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title).toHaveTextContent(handle.split("/").slice(1).join("/"));
+    // The handle is read once, then the page follows the run by its id.
+    expect(requested(`/v1/runs/${run.id}`).length).toBeGreaterThan(0);
+    // Its id is in its details, with a button to copy it.
+    expect(screen.getByRole("button", { name: "Copy run id" })).toBeInTheDocument();
+  });
+
   it("shows a failed run: the error, its line, and each call next to the line that made it", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
@@ -146,8 +163,8 @@ describe("RunView", () => {
     const run = world.runs[world.runs.length - 1] as RunFixture;
     renderApp(`/runs/${run.id}`, { world, clock: () => clock });
 
-    expect(await screen.findByText("live")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText("active").length).toBeGreaterThan(0));
+    // Live: the cursor follows the head (the header shows no status).
+    expect(await screen.findByText("following the head")).toBeInTheDocument();
     expect(document.querySelector(".code-notes .code-row:nth-child(11) .note")).toBeNull();
 
     clock = NOW + 120_000;
@@ -155,9 +172,9 @@ describe("RunView", () => {
       () => expect(within(notesOf(11)).getByRole("button")).toHaveTextContent("llm.complete"),
       { timeout: 4_000 },
     );
-    await waitFor(() => expect(screen.getAllByText("completed").length).toBeGreaterThan(0), {
-      timeout: 4_000,
-    });
+    expect(
+      await screen.findByRole("button", { name: /Completed in step \d+/ }, { timeout: 4_000 }),
+    ).toBeInTheDocument();
     expect(within(notesOf(6)).getByRole("button")).toHaveTextContent(
       /github\.list_pull_requests\s*×6/,
     );
@@ -169,7 +186,11 @@ describe("RunView", () => {
     renderApp(`/runs/${run.id}`, { world });
     const timeline = await screen.findByRole("region", { name: "Timeline" });
     await waitFor(() => expect(within(timeline).getByText("⋯10d")).toBeInTheDocument());
-    expect(within(timeline).getByText("⋯2h 14m")).toBeInTheDocument();
+    // A break says its largest unit; its exact length is in its title.
+    expect(within(timeline).getByText("⋯2h")).toHaveAttribute(
+      "title",
+      "2h 14m with nothing happening, compressed",
+    );
     expect(within(timeline).getByText("8 spans")).toBeInTheDocument();
     expect(
       within(timeline).getByRole("button", { name: "#7 sleep 10d: fired" }),
@@ -271,13 +292,14 @@ describe("RunView", () => {
     it("shows a run of a workflow: its version, and the run that started it", async () => {
       const [child] = children as [RunFixture];
       renderApp(`/runs/${child.id}`, { world });
-      const ref = `triage@${WORKFLOWS.triage.version.slice(0, 12)}`;
+      const ref = `triage v${WORKFLOWS.triage.number}`;
       expect(await screen.findByRole("link", { name: ref })).toHaveAttribute(
         "href",
         "/observability?q=workflow%3Atriage",
       );
-      const started = screen.getByRole("link", { name: shortRunId(parent.id) });
-      expect(started).toHaveAttribute("href", `/runs/${parent.id}`);
+      // The run that started it, by its handle.
+      const started = screen.getByRole("link", { name: handleOf(world, parent) });
+      expect(started).toHaveAttribute("href", `/runs/${handleOf(world, parent)}`);
       expect(screen.queryByRole("region", { name: "Runs it started" })).toBeNull();
     });
 
@@ -285,10 +307,10 @@ describe("RunView", () => {
       const detached = children.find((c) => c.startedBy?.detached) as RunFixture;
       renderApp(`/runs/${detached.id}`, { world });
       expect(
-        await screen.findByRole("link", { name: `${shortRunId(parent.id)} · detached` }),
-      ).toHaveAttribute("href", `/runs/${parent.id}`);
+        await screen.findByRole("link", { name: `${handleOf(world, parent)} · detached` }),
+      ).toHaveAttribute("href", `/runs/${handleOf(world, parent)}`);
       expect(
-        screen.getByRole("link", { name: `digest@${WORKFLOWS.digest.version.slice(0, 12)}` }),
+        screen.getByRole("link", { name: `digest v${WORKFLOWS.digest.number}` }),
       ).toBeInTheDocument();
     });
   });

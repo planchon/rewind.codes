@@ -367,6 +367,7 @@ async fn engines_sharing_a_database_lose_and_duplicate_nothing() {
         let new_run = NewRun {
             run: run_ref(n),
             namespace: rewind_engine::ports::NamespaceName::migrated(),
+            origin: "script".into(),
             started: started(),
             metadata: RunMetadata::default(),
             created_at: now(),
@@ -512,6 +513,7 @@ async fn start_watched(store: &PostgresStore, run: &RunRef, started_by: Option<S
     let new_run = NewRun {
         run: run.clone(),
         namespace: rewind_engine::ports::NamespaceName::migrated(),
+        origin: "script".into(),
         started: started(),
         metadata: RunMetadata {
             started_by,

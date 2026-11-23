@@ -57,7 +57,7 @@ describe("the Secrets view", () => {
     // Its last read links to the run that read it.
     expect(within(slack).getByTitle("The run that read it last")).toHaveAttribute(
       "href",
-      expect.stringMatching(/^\/runs\/[0-9a-f-]+$/),
+      expect.stringMatching(/^\/runs\/[^/]+\/[^/]+\/[0-9a-z]{12,25}$/),
     );
 
     // Read only by a toolset's registration, to list its server's tools: no run to link to.
@@ -253,6 +253,7 @@ describe("a namespace's secrets", () => {
   });
 
   it("never offers a grant limited to labels to write an end user's secret", async () => {
+    const user = userEvent.setup();
     renderApp("/namespaces/alice", {
       world: graceWith(["runs:read", "namespaces:read", "secrets:read", "secrets:write"], {
         agent: "triage",
@@ -261,7 +262,9 @@ describe("a namespace's secrets", () => {
     const section = await screen.findByRole("region", { name: "Its secrets" });
     await waitFor(() => expect(within(section).getByText("ns/github")).toBeInTheDocument());
     expect(within(section).queryByRole("button", { name: /new secret/i })).toBeNull();
-    expect(within(section).getByText(/Your grant is limited to labels/)).toBeInTheDocument();
+    // Why, in the card of the (i) beside the section's title.
+    await user.click(within(section).getByRole("button", { name: "About its secrets" }));
+    expect(await screen.findByText(/Your grant is limited to labels/)).toBeInTheDocument();
   });
 
   it("is not shown without secrets:read", async () => {

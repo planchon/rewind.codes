@@ -29,10 +29,10 @@ use rewind_engine::ports::{
     MasterKeyId, NewRun, NewSecret, ParkReason, ParkedScope, PayloadRecord, Principal,
     ProjectedRun, PublicKey, PutSecret, QuarantineKind, QuarantineNote, ReadModel, ReadModelError,
     Role, RoleDeletion, RunFilter, RunOrder, RunQuery, RunRecord, RunRef, RunSnapshot, RunStats,
-    RunSummary, ScriptFilter, ScriptSummary, SearchCursor, Secret, SecretError, SecretId,
-    SecretMeta, SecretNamespace, SecretReader, SecretStore, SecretUsage, SigningKey, StatsWindow,
-    StoreError, StoredScript, StoredToolset, Subscription, TaskFilter, TaskProgress, TaskRef,
-    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolStats,
+    RunSummary, ScriptFilter, ScriptSummary, ScriptTitle, SearchCursor, Secret, SecretError,
+    SecretId, SecretMeta, SecretNamespace, SecretReader, SecretStore, SecretUsage, SigningKey,
+    StatsWindow, StoreError, StoredScript, StoredToolset, Subscription, TaskFilter, TaskProgress,
+    TaskRef, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolStats,
     ToolStatsFilter, ToolTask, WebhookTarget, WebhookToken,
 };
 use rewind_engine::ports::{
@@ -265,6 +265,23 @@ impl JournalStore for Store {
         journal!(self, store => store.get_toolset(tenant, digest).await)
     }
 
+    async fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, StoreError> {
+        journal!(self, store => store.set_script_title(tenant, script, title).await)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, StoreError> {
+        journal!(self, store => store.script_titles(tenant, scripts).await)
+    }
+
     async fn list_toolsets(&self, tenant: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
         journal!(self, store => store.list_toolsets(tenant).await)
     }
@@ -284,6 +301,15 @@ impl JournalStore for Store {
         version: Digest,
     ) -> Result<Option<rewind_engine::ports::StoredWorkflow>, StoreError> {
         journal!(self, store => store.get_workflow(tenant, version).await)
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<rewind_engine::ports::StoredWorkflow>, StoreError> {
+        journal!(self, store => store.workflow_number(tenant, name, number).await)
     }
 
     async fn workflow_versions(
@@ -340,6 +366,16 @@ impl JournalStore for Store {
 
     async fn get_run(&self, run: &RunRef) -> Result<Option<RunRecord>, StoreError> {
         journal!(self, store => store.get_run(run).await)
+    }
+
+    async fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: rewind_core::RunId,
+        high: rewind_core::RunId,
+        limit: usize,
+    ) -> Result<Vec<RunRecord>, StoreError> {
+        journal!(self, store => store.runs_in_range(tenant, low, high, limit).await)
     }
 
     async fn list_runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, StoreError> {

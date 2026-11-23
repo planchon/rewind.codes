@@ -316,6 +316,7 @@ fn failure_group(runs: &[&Found], buckets: Option<Buckets>) -> Option<FailureGro
         line,
         labels: ranked(labels, GROUP_LABELS),
         latest: latest.summary.run.id,
+        latest_handle: latest.summary.handle(),
         latest_status: latest.summary.status,
         latest_message: ending.message.clone(),
     })

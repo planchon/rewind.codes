@@ -183,11 +183,11 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
           {scale.breaks.map((b) => (
             <span
               key={b.from}
-              className="tl-break-label"
-              style={{ left: `${((b.x0 + b.x1) / 2) * 100}%` }}
+              className={`tl-break-label${b.x1 >= 0.999 ? " end" : ""}`}
+              style={{ left: `${(b.x1 >= 0.999 ? 1 : (b.x0 + b.x1) / 2) * 100}%` }}
               title={`${formatDuration(b.to - b.from)} with nothing happening, compressed`}
             >
-              ⋯{formatDuration(b.to - b.from)}
+              ⋯{formatDuration(b.to - b.from).split(" ")[0]}
             </span>
           ))}
         </div>

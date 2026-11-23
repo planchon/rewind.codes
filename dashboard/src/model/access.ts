@@ -13,6 +13,7 @@ export const PERMISSIONS: readonly Permission[] = [
   "runs:delete",
   "toolsets:read",
   "toolsets:write",
+  "scripts:write",
   "secrets:read",
   "secrets:write",
   "secrets:use",

@@ -13,6 +13,8 @@ import type { Callsite, ParkedReason, Payload, Run, Waiting } from "./types.js";
  */
 export interface PendingApproval {
   readonly runId: string;
+  /** The run's handle, `<namespace>/<origin>/<suffix>`, to show the person who decides. */
+  readonly runHandle: string;
   /** For `approve` and `reject`. */
   readonly taskId: string;
   readonly tool: string;
@@ -69,6 +71,7 @@ export function pendingApprovals(run: Run): PendingApproval[] {
     if (waiting.kind === "tool_call" && reason !== undefined) {
       pending.push({
         runId: run.id,
+        runHandle: run.handle,
         taskId: waiting.taskId,
         tool: waiting.tool,
         seq: waiting.seq,

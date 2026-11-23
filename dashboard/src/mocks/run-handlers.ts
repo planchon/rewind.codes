@@ -13,6 +13,7 @@ import { isEnded, type RunSummary, type Workflow } from "../model/types";
 import type { Caller } from "./access";
 import { guard, runsWorld } from "./access-handlers";
 import type { RunFixture, World } from "./fixtures";
+import { findRun } from "./handles";
 import { problem } from "./problem";
 import { deriveRun, publicSummary, summarize, visibleEntries } from "./readmodel";
 
@@ -103,7 +104,8 @@ function readBody(text: string): { value: unknown } | Response {
 function controlled(world: World, request: Request, id: string): RunFixture | Response {
   const caller = guard(world, request, "runs:control");
   if (caller instanceof Response) return caller;
-  const fixture = runsWorld(world, caller).runs.find((r) => r.id === id);
+  const found = findRun(world, id);
+  const fixture = found && runsWorld(world, caller).runs.includes(found) ? found : undefined;
   return fixture ?? problem(404, "not-found", `No run ${id} for this tenant.`);
 }
 
@@ -114,7 +116,7 @@ export function runHandlers(world: World, now: () => number, changesMs: number) 
       if (fixture instanceof Response) return fixture;
       const name = String(params.name);
       const at = now();
-      const run = deriveRun(fixture, at);
+      const run = deriveRun(world, fixture, at);
       if (isEnded(run.status))
         return problem(409, "run-ended", `The run ${run.id} has ended (${run.status}).`);
       const body = readBody(await request.text());
@@ -156,7 +158,7 @@ export function runHandlers(world: World, now: () => number, changesMs: number) 
       const fixture = controlled(world, request, String(params.id));
       if (fixture instanceof Response) return fixture;
       const at = now();
-      const run = deriveRun(fixture, at);
+      const run = deriveRun(world, fixture, at);
       if (isEnded(run.status))
         return problem(409, "run-ended", `The run ${run.id} has ended (${run.status}).`);
       // A second cancellation of a run being cancelled is the first, as on the server.
@@ -168,7 +170,7 @@ export function runHandlers(world: World, now: () => number, changesMs: number) 
           .after(800)
           .failRun("CancelledError", "The run was cancelled: Cancelled from the dashboard");
       }
-      return HttpResponse.json(deriveRun(fixture, at), { status: 202 });
+      return HttpResponse.json(deriveRun(world, fixture, at), { status: 202 });
     }),
 
     http.get("*/v1/changes", ({ request }) => {
@@ -209,7 +211,7 @@ function changeStream(
         done.add(fixture.id);
         continue;
       }
-      const summary = publicSummary(summarize(fixture, at));
+      const summary = publicSummary(summarize(world, fixture, at));
       const json = JSON.stringify(summary);
       if (last.get(fixture.id) !== json) {
         if (opened) changed.push(summary);

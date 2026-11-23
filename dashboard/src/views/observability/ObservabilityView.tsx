@@ -1,29 +1,18 @@
 // Observability: the runs, looked at and filtered (archi/05). Four views of the same query: every
 // run, the active ones, those waiting on the outside world (grouped by what they wait for), and
-// the failures (grouped by fingerprint). Its sidebar holds the views, the saved searches and the
-// filters; the query lives in the URL, and a filter is a term of it.
+// the failures (grouped by fingerprint). Its sidebar holds the views and the filters; the query
+// lives in the URL, and a filter is a term of it.
 import { Menu } from "@base-ui/react/menu";
-import {
-  Activity,
-  Bookmark,
-  ChevronDown,
-  CircleAlert,
-  Hourglass,
-  List,
-  RefreshCw,
-  X,
-} from "lucide-react";
+import { Activity, ChevronDown, CircleAlert, Hourglass, List, RefreshCw } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router";
 import { RunsFrom } from "../../app/runLinks";
-import { type SearchView, savedSearchPath, useSavedSearches } from "../../app/searches";
 import { useSettings } from "../../app/settings";
 import { PageSidebar } from "../../app/sidebar";
 import { Empty } from "../../components/bits";
 import { StackedBars } from "../../components/Charts";
 import { PageHeader } from "../../components/PageHeader";
 import { QueryBar } from "../../components/QueryBar";
-import { SaveSearch } from "../../components/SaveSearch";
 import { RANGES, type RangeKey } from "../../model/filters";
 import { formatCount, formatTime } from "../../model/format";
 import {
@@ -54,7 +43,6 @@ interface View {
   label: string;
   /** The term the view adds to the query. */
   term: string | null;
-  saved: SearchView;
   icon: ReactNode;
 }
 
@@ -64,7 +52,6 @@ const VIEWS: readonly View[] = [
     path: "/observability",
     label: "All runs",
     term: null,
-    saved: "runs",
     icon: <List size={14} />,
   },
   {
@@ -72,7 +59,6 @@ const VIEWS: readonly View[] = [
     path: "/observability/active",
     label: "Active",
     term: "status:active",
-    saved: "active",
     icon: <Activity size={14} />,
   },
   {
@@ -80,7 +66,6 @@ const VIEWS: readonly View[] = [
     path: "/observability/waiting",
     label: "Waiting",
     term: "waiting:*",
-    saved: "waiting",
     icon: <Hourglass size={14} />,
   },
   {
@@ -88,7 +73,6 @@ const VIEWS: readonly View[] = [
     path: "/observability/failures",
     label: "Failures",
     term: "status:failed,aborted,cancelled",
-    saved: "failures",
     icon: <CircleAlert size={14} />,
   },
 ];
@@ -147,37 +131,6 @@ function ViewSelect({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
-  );
-}
-
-function SavedSearches() {
-  const { searches, remove } = useSavedSearches();
-  return (
-    <section className="pane-section" aria-label="Saved searches">
-      <h2 className="pane-label">Saved searches</h2>
-      {searches.length === 0 ? (
-        <p className="pane-hint">Save a query to find it here, and in Find.</p>
-      ) : (
-        <ul className="saved-list">
-          {searches.map((s) => (
-            <li key={s.name}>
-              <Link to={savedSearchPath(s)} className="saved-item" title={s.q || "every run"}>
-                <Bookmark size={14} aria-hidden="true" />
-                <span className="saved-name">{s.name}</span>
-              </Link>
-              <button
-                type="button"
-                className="icon-btn saved-remove"
-                aria-label={`Forget the saved search ${s.name}`}
-                onClick={() => remove(s.name)}
-              >
-                <X size={12} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }
 
@@ -323,7 +276,6 @@ export function ObservabilityView() {
       <div className="page">
         <PageSidebar title="Observability" back={null} backLabel="Show the views">
           <ViewSelect current={view} q={q} counts={counts} />
-          <SavedSearches />
           <section className="pane-section" aria-label="Filters">
             <h2 className="pane-label">Filters</h2>
             {view.key === "failures" ? (
@@ -342,24 +294,21 @@ export function ObservabilityView() {
           crumbs="Observability"
           title={view.label}
           actions={
-            <>
-              <SaveSearch q={q} view={view.saved} />
-              <button
-                type="button"
-                className="btn icon-only"
-                aria-label="Refresh"
-                title="Refresh"
-                disabled={refreshing}
-                onClick={() => {
-                  setRefreshing(true);
-                  void Promise.all([all.refresh(), waiting.refresh(), shown.refresh()]).finally(
-                    () => setRefreshing(false),
-                  );
-                }}
-              >
-                <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn icon-only"
+              aria-label="Refresh"
+              title="Refresh"
+              disabled={refreshing}
+              onClick={() => {
+                setRefreshing(true);
+                void Promise.all([all.refresh(), waiting.refresh(), shown.refresh()]).finally(() =>
+                  setRefreshing(false),
+                );
+              }}
+            >
+              <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
+            </button>
           }
         />
         <div className="page-body">

@@ -14,6 +14,12 @@ function waitingRun(world: World): RunFixture {
   return fixture;
 }
 
+/** Opens the menu of the run's controls, in its header, and picks `item`. */
+async function pick(user: ReturnType<typeof userEvent.setup>, item: string) {
+  await user.click(await screen.findByRole("button", { name: "Controls" }));
+  await user.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 function payloadBox(): HTMLTextAreaElement {
   return screen.getByRole("textbox", { name: "Payload" }) as HTMLTextAreaElement;
 }
@@ -28,8 +34,7 @@ describe("the run's controls", () => {
     let streamed = visibleEntries(run, NOW).length;
     const events = runEvents(run.id, () => visibleEntries(run, NOW).slice(0, streamed));
 
-    const controls = await screen.findByRole("region", { name: "Controls" });
-    await user.click(await within(controls).findByRole("button", { name: "Send approval" }));
+    await pick(user, "Send approval");
     const form = await screen.findByRole("form", { name: "Send approval" });
     // The workflow declares `approval: { close: boolean }`.
     await waitFor(() => expect(payloadBox().value).toBe('{\n  "close": false\n}'));
@@ -55,18 +60,17 @@ describe("the run's controls", () => {
     expect(new Set(keys).size).toBe(1);
     expect(await sent[2]?.body).toBe('{"close":true}');
 
-    // "Sent" until the run's journal says it received it.
-    await waitFor(() =>
-      expect(within(controls).getByRole("status")).toHaveTextContent("Signal approval sent"),
-    );
+    // "Sent", beside the menu, until the run's journal says it received it.
+    const note = () => screen.getByRole("status", { name: "" });
+    await waitFor(() => expect(note()).toHaveTextContent("Signal approval sent"));
     const received = visibleEntries(run, NOW).slice(streamed);
     expect(received.map((e) => e.event.type)).toContain("signal_received");
     for (const entry of received) events.send(entry);
     streamed += received.length;
-    await waitFor(() => expect(within(controls).getByRole("status")).toHaveTextContent(""));
+    await waitFor(() => expect(note()).toHaveTextContent(""));
 
     // Another opening of the form: another key.
-    await user.click(within(controls).getByRole("button", { name: "Send a signal" }));
+    await pick(user, "Send a signal");
     const again = await screen.findByRole("form", { name: "Send a signal" });
     expect(within(again).getByRole("combobox", { name: "Signal" })).toHaveValue("approval");
     await user.click(within(again).getByRole("button", { name: "Send" }));
@@ -84,26 +88,33 @@ describe("the run's controls", () => {
     const { callsTo } = renderApp(`/runs/${run.id}`, { world });
     const changes = changeStream();
 
-    const controls = await screen.findByRole("region", { name: "Controls" });
-    await user.click(within(controls).getByRole("button", { name: "Cancel run" }));
+    await pick(user, "Cancel run");
     expect(
       await screen.findByRole("heading", { name: `Cancel the run ${shortRunId(run.id)}?` }),
     ).toBeVisible();
     await confirmInDialog(user);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(callsTo(`/v1/runs/${run.id}/cancel`, "POST")).toHaveLength(1);
-    expect(within(controls).getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Cancelling…");
+    await user.click(screen.getByRole("button", { name: "Controls" }));
+    expect(await screen.findByRole("menuitem", { name: "Cancelling…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.keyboard("{Escape}");
 
     // The run's summary arrives cancelled through the change stream.
     await waitFor(() => expect(changes.live).toBe(true));
-    const summary = publicSummary(summarize(run, NOW));
+    const summary = publicSummary(summarize(world, run, NOW));
     changes.run({
       ...summary,
       status: "cancelled",
       historyLen: summary.historyLen + 1,
       endedAt: new Date(NOW).toISOString(),
     });
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancelling…" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "" })).not.toHaveTextContent("Cancelling…"),
+    );
   });
 
   it("are not shown without runs:control", async () => {
@@ -116,7 +127,6 @@ describe("the run's controls", () => {
     grants.set(key, { ...grant, role: "reader" });
     renderApp(`/runs/${run.id}`, { world });
     await screen.findByRole("region", { name: "Details" });
-    expect(screen.queryByRole("region", { name: "Controls" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Controls" })).toBeNull();
   });
 });

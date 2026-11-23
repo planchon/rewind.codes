@@ -138,7 +138,8 @@ pub struct TestRequest {
     pub toolset: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<TestInput>,
-    /// A workflow, `triage` (its latest version) or `triage@<version>`: its suite runs too.
+    /// A workflow, `triage` (its latest version), `triage@<version>` or `triage@v12`: its suite
+    /// runs too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
 }
@@ -183,6 +184,17 @@ pub struct ScriptPage {
 pub struct ScriptSummary {
     /// SHA-256 of the TypeScript source, lowercase hex.
     pub digest: String,
+    /// The script's title: the one a person gave it, else the first line of the comment at its
+    /// top. Absent when it has neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The description that goes with the title: the person's with theirs, else the rest of
+    /// the comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Where the title comes from; absent without a title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<TitleSource>,
     /// The first line of the source that is not blank, for display.
     pub headline: String,
     pub first_run_at: Timestamp,
@@ -213,6 +225,14 @@ pub struct RunCounts {
 #[serde(rename_all = "camelCase")]
 pub struct Script {
     pub digest: String,
+    /// The script's title, as in `ScriptSummary.title`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Where the title comes from; absent without a title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<TitleSource>,
     /// The TypeScript source, as submitted.
     pub source: String,
     /// The first line of the source that is not blank, for display.
@@ -226,6 +246,41 @@ pub struct Script {
     pub first_run_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_at: Option<Timestamp>,
+}
+
+/// Where a script's title comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleSource {
+    /// A person gave it (`PATCH /v1/scripts/{digest}`), for the whole organization.
+    Person,
+    /// The first line of the comment at the top of the source (`/** Title … */` or `// Title`).
+    Comment,
+}
+
+/// `PATCH /v1/scripts/{digest}`: the title and description of a script, for the whole
+/// organization, over those of the comment at its top. The source does not change: a script is
+/// its digest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(example = json!({
+    "title": "Triage new GitHub issues",
+    "description": "Labels each new issue, and asks for an approval before closing duplicates."
+}))]
+pub struct SetScriptTitle {
+    /// The title, trimmed: 1 to 120 characters. `null` removes the title and the description a
+    /// person gave: those of the comment show again.
+    #[serde(deserialize_with = "nullable")]
+    #[schema(required = true)]
+    pub title: Option<String>,
+    /// The description, trimmed: at most 2,000 characters. Absent, `null` or `""`: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// A field that must be present, and may be `null`.
+fn nullable<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
 }
 
 /// The first line of a source that is not blank, trimmed, cut at 120 characters: how a script

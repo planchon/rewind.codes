@@ -84,7 +84,10 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --shadow-border: 0 0 0 1px var(--ds-gray-alpha-400);
-  --shadow-card: 0 0 0 1px #00000014, 0 2px 2px #0000000a;
+  --card-ring: #00000014;
+  /* The ring as it shows over the page: what draws it over moving rows (a stuck header). */
+  --card-ring-solid: color-mix(in srgb, #000 7.84%, var(--bg));
+  --shadow-card: 0 0 0 1px var(--card-ring), 0 2px 2px #0000000a;
   --shadow-menu:
     0 0 0 1px #00000014, 0 1px 1px #00000005, 0 4px 8px -4px #0000000a, 0 16px 24px -8px #0000000f;
   --shadow-modal:
@@ -218,7 +221,9 @@
     --ds-purple-700: #9440d5;
     --ds-purple-900: #c472fb;
     --ds-pink-900: #ff518d;
-    --shadow-card: 0 0 0 1px #ffffff24, 0 1px 2px #00000029;
+    --card-ring: #ffffff24;
+    --card-ring-solid: color-mix(in srgb, #fff 14.1%, var(--bg));
+    --shadow-card: 0 0 0 1px var(--card-ring), 0 1px 2px #00000029;
     --shadow-menu:
       0 0 0 1px #ffffff25, 0 1px 1px #00000005, 0 4px 8px -4px #0000000a, 0 16px 24px -8px #0000000f;
     --shadow-modal:
@@ -271,7 +276,9 @@
   --ds-purple-700: #9440d5;
   --ds-purple-900: #c472fb;
   --ds-pink-900: #ff518d;
-  --shadow-card: 0 0 0 1px #ffffff24, 0 1px 2px #00000029;
+  --card-ring: #ffffff24;
+  --card-ring-solid: color-mix(in srgb, #fff 14.1%, var(--bg));
+  --shadow-card: 0 0 0 1px var(--card-ring), 0 1px 2px #00000029;
   --shadow-menu:
     0 0 0 1px #ffffff25, 0 1px 1px #00000005, 0 4px 8px -4px #0000000a, 0 16px 24px -8px #0000000f;
   --shadow-modal:

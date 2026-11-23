@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createWorld, SCRIPTS } from "../../mocks/fixtures";
+import { handleOf } from "../../mocks/handles";
 import { NOW, renderApp, search } from "../../test/app";
 
 function rows() {
@@ -172,7 +173,7 @@ describe("Observability: every run", () => {
     expect(card).toHaveTextContent(/Ended\s*\d{4}-\d{2}-\d{2}/);
     expect(within(card).getByRole("link", { name: /Open the run/ })).toHaveAttribute(
       "href",
-      "/runs/01a1e9ea-8258-7525-9241-2f2ec0a9da28",
+      expect.stringMatching(/^\/runs\/[^/]+\/dev_notifications\/[0-9a-z]{12}$/),
     );
   });
 
@@ -258,26 +259,11 @@ describe("Observability: every run", () => {
     );
   });
 
-  it("saves a search in the browser and lists it in the sidebar", async () => {
-    const user = userEvent.setup();
+  it("keeps no saved searches: the query lives in the URL", async () => {
     renderApp("/observability?q=status%3Afailed");
     await screen.findByRole("table");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    const name = screen.getByLabelText("Name of the saved search");
-    await user.clear(name);
-    await user.type(name, "Failed runs{Enter}");
-    const saved = screen.getByRole("region", { name: "Saved searches" });
-    expect(within(saved).getByRole("link", { name: /Failed runs/ })).toHaveAttribute(
-      "href",
-      "/observability?q=status%3Afailed",
-    );
-    expect(JSON.parse(window.localStorage.getItem("rewind.searches") ?? "[]")).toEqual([
-      { name: "Failed runs", q: "status:failed", view: "runs" },
-    ]);
-    await user.click(
-      within(saved).getByRole("button", { name: "Forget the saved search Failed runs" }),
-    );
-    expect(within(saved).queryByRole("link", { name: /Failed runs/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Saved searches" })).toBeNull();
   });
 
   it("carries the query from the Overview to Observability", async () => {
@@ -426,7 +412,10 @@ describe("Observability: the waiting runs", () => {
     await screen.findByRole("table");
     const row = within(screen.getByRole("table")).getByText("c-42").closest("tr") as HTMLElement;
     await user.click(within(row).getByText('signal "approval"'));
-    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/runs\/[0-9a-f-]+$/));
+    // A run opens by its handle, `namespace/origin/suffix`.
+    await waitFor(() =>
+      expect(router.state.location.pathname).toMatch(/^\/runs\/[^/]+\/[^/]+\/[0-9a-z]{12,25}$/),
+    );
     expect(search(router).get("step")).toBeNull();
   });
 });
@@ -472,10 +461,13 @@ describe("Observability: the failures", () => {
     const row = within(table)
       .getByText("TypeError: Cannot read properties of undefined (reading 'text')")
       .closest("tr") as HTMLElement;
-    expect(within(row).getByRole("link", { name: /…/ })).toHaveAttribute(
+    // Its latest run by its handle, whole.
+    const handle = digest ? handleOf(world, digest) : "";
+    expect(within(row).getByRole("link", { name: handle })).toHaveAttribute(
       "href",
-      `/runs/${digest?.id}`,
+      `/runs/${handle}`,
     );
+    expect(row.textContent).not.toContain("…");
     await user.click(within(row).getByRole("link", { name: "1" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/observability"));
     expect(search(router).get("q")).toMatch(/^fingerprint:[0-9a-f]{16} ended:>now-24h$/);

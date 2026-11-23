@@ -34,6 +34,7 @@ mod http;
 mod mcp;
 mod oauth;
 mod serve;
+mod titles;
 mod tokens;
 mod views;
 mod wake;

@@ -8,7 +8,7 @@ use std::time::Duration;
 use rewind_core::{
     AbortKind, AbortReason, CancelReason, Completion, Digest, Epoch, Event, HistoryEntry,
     HistoryError, JsonValue, Lifecycle, NonDeterminism, Payload, RunId, RunMode, RunStarted,
-    RunState, RunStatus, Script, Seq, Toolset,
+    RunState, RunStatus, SCRIPT_ORIGIN, Script, Seq, Toolset, origin_slug, script_doc,
 };
 
 use crate::adapters::StaticTypeChecker;
@@ -614,14 +614,52 @@ where
             .map_err(StartError::SecretRequired)
     }
 
+    /// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
+    /// "Run handles"): its workflow's name; else its script's title as a slug, the title a
+    /// person gave the script or else the one of the comment at its top; else `script`.
+    pub(crate) async fn origin_of(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        metadata: &RunMetadata,
+    ) -> Result<String, StoreError> {
+        if let Some(workflow) = &metadata.workflow {
+            return Ok(workflow.name.clone());
+        }
+        let given = self
+            .journal
+            .script_titles(tenant, &[script])
+            .await?
+            .into_iter()
+            .next()
+            .map(|(_, title)| title.title);
+        let title = match given {
+            Some(title) => Some(title),
+            None => self
+                .journal
+                .get_script(tenant, script)
+                .await?
+                .and_then(|stored| script_doc(stored.script.source()))
+                .map(|doc| doc.title),
+        };
+        Ok(title
+            .as_deref()
+            .and_then(origin_slug)
+            .unwrap_or_else(|| SCRIPT_ORIGIN.to_owned()))
+    }
+
     /// Creates a run of a stored script and toolset, once the request is checked. Its
     /// attachments are in its metadata.
     pub(crate) async fn create(&self, request: NewRunRequest) -> Result<Created, StartError> {
         let now = self.clock.now();
+        let origin = self
+            .origin_of(&request.tenant, request.script, &request.metadata)
+            .await?;
         let run_ref = RunRef::new(request.tenant, self.entropy.run_id());
         let run = NewRun {
             run: run_ref.clone(),
             namespace: request.namespace,
+            origin,
             started: RunStarted {
                 script: request.script,
                 toolset: request.toolset,

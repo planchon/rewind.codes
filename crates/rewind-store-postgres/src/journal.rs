@@ -18,6 +18,9 @@
 //!   suite (`FOR SHARE`) until it has written its references; the cleanup of tests marks only
 //!   rows it holds (`FOR UPDATE SKIP LOCKED`), and checks their references again once it holds
 //!   them. A row is never marked while a version that references it is being written.
+//! - A new workflow version takes the next number of its workflow under a transaction-scoped
+//!   advisory lock on the workflow, and a new run the suffix of its handle under its tenant's
+//!   (the lock of its start): two of them never take the same.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
@@ -25,18 +28,18 @@ use std::time::Duration;
 use rewind_core::{
     CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
     Script, SecretRef, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
-    end_signal_name, starter_ended,
+    end_signal_name, starter_ended, suffix_len_apart, suffix_neighbours,
 };
 use rewind_engine::ports::{
     AcquireRunnable, Activation, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, RunWorkflow, Secret, SecretId, SecretNamespace, SecretUsage, StartedBy,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord,
-    ToolDeclarations, ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken,
-    WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
+    RunRecord, RunRef, RunWorkflow, ScriptTitle, Secret, SecretId, SecretNamespace, SecretUsage,
+    StartedBy, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE,
+    TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope,
+    TestRecord, ToolDeclarations, ToolTask, TraceContext, Trigger, Watched, WebhookTarget,
+    WebhookToken, WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 use rewind_engine::ports::{
     DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
@@ -92,14 +95,14 @@ macro_rules! run_columns {
          labels::text, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
          ended_at, archive_document, archived_at, parent_at, attempts, workflow, \
          workflow_version, started_by, started_seq, detached, scope::text, namespace, \
-         secrets::text"
+         secrets::text, origin, suffix_len::bigint"
     };
 }
 
 /// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
 macro_rules! workflow_columns {
     () => {
-        "version, document, labels::text, created_at"
+        "version, document, labels::text, created_at, number"
     };
 }
 
@@ -181,10 +184,14 @@ fn record_from_row(row: &PgRow) -> Result<RunRecord, Error> {
         }),
     };
     let namespace = row.text(32)?;
+    let suffix_len = row.u64(35)?;
     Ok(RunRecord {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: NamespaceName::new(namespace.clone())
             .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
+        origin: row.text(34)?,
+        suffix_len: u8::try_from(suffix_len)
+            .map_err(|_| Error::Corrupt(format!("a suffix of {suffix_len} characters")))?,
         script: row.digest(2)?,
         toolset: row.digest(3)?,
         status: codec::parse_status(&row.text(4)?)?,
@@ -305,6 +312,7 @@ fn workflow_from_row(row: &PgRow) -> Result<StoredWorkflow, Error> {
         workflow,
         labels: decode_labels(&row.text(2)?)?,
         created_at: row.ts(3)?,
+        number: row.u32(4)?,
     })
 }
 
@@ -617,6 +625,11 @@ fn server_key(owner: &str, tenant_id: &TenantId, server: &str) -> String {
     format!("rewind server\u{1f}{owner}\u{1f}{tenant_id}\u{1f}{server}")
 }
 
+/// The advisory lock of a tenant's workflow, under which its new versions take their numbers.
+fn workflow_key(tenant_id: &TenantId, name: &str) -> String {
+    format!("rewind workflow\u{1f}{tenant_id}\u{1f}{name}")
+}
+
 /// The runs `acquire_runnable` may lease, as a condition on `runs r`, with its parameters from
 /// `$base`: now, the epochs, and the scope's tenants when it lists some. `next` is the first
 /// parameter after them.
@@ -762,6 +775,17 @@ impl PostgresStore {
                 return Ok(refused);
             }
         };
+        // The handle's suffix, long enough to name no other run of the tenant whose id shares
+        // its first 64 bits; under the tenant's lock, no other start takes it meanwhile.
+        let (low, high) = suffix_neighbours(run.run.id);
+        let near: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM runs WHERE tenant = $1 AND id BETWEEN $2 AND $3")
+                .bind(tenant(tenant_id))
+                .bind(uuid(low))
+                .bind(uuid(high))
+                .fetch_all(&mut *tx)
+                .await?;
+        let suffix_len = suffix_len_apart(run.run.id, near.into_iter().map(RunId::from_uuid));
         let trace = run.metadata.trace_context.as_ref();
         let parent = run.metadata.parent;
         let workflow = run.metadata.workflow.as_ref();
@@ -771,9 +795,9 @@ impl PostgresStore {
             "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
              traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
              workflow, workflow_version, started_by, started_seq, detached, scope, namespace, \
-             secrets) \
+             secrets, origin, suffix_len) \
              VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13, \
-                 $14, $15, $16, $17, $18, $19::jsonb, $20, $21::jsonb) \
+                 $14, $15, $16, $17, $18, $19::jsonb, $20, $21::jsonb, $22, $23) \
              ON CONFLICT (tenant, namespace, idempotency_key) DO NOTHING RETURNING id",
         )
         .bind(tenant(tenant_id))
@@ -797,6 +821,8 @@ impl PostgresStore {
         .bind(encode_labels(&run.metadata.scope))
         .bind(run.namespace.as_str())
         .bind(codec::encode_attachments(&run.metadata.secrets))
+        .bind(run.origin.as_str())
+        .bind(i16::try_from(suffix_len).unwrap_or(i16::MAX))
         .fetch_optional(&mut *tx)
         .await?;
         if inserted.is_none() {
@@ -1749,9 +1775,17 @@ impl PostgresStore {
     ) -> Result<Option<StoredWorkflow>, Fail> {
         let version = workflow.version();
         let mut tx = self.pool.begin().await?;
+        // The workflow's lock orders its new versions: each takes the number after the highest
+        // stored, which no concurrent put takes too.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(workflow_key(tenant_id, workflow.name()))
+            .execute(&mut *tx)
+            .await?;
         let inserted = sqlx::query(concat!(
-            "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
-             VALUES ($1, $2, $3, $4, $5::jsonb, $6) ON CONFLICT DO NOTHING RETURNING ",
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at, number) \
+             SELECT $1, $2, $3, $4, $5::jsonb, $6, COALESCE(max(number), 0) + 1 \
+             FROM workflows WHERE tenant = $1 AND name = $3 \
+             ON CONFLICT (tenant, version) DO NOTHING RETURNING ",
             workflow_columns!()
         ))
         .bind(tenant(tenant_id))
@@ -2501,6 +2535,80 @@ impl JournalStore for PostgresStore {
         }))
     }
 
+    async fn set_script_title(
+        &self,
+        tenant_id: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, StoreError> {
+        // A tenant's scripts are never deleted: whether it has the script needs no lock.
+        let Some(title) = title else {
+            let stored: bool = sqlx::query_scalar(
+                "WITH removed AS (DELETE FROM script_titles WHERE tenant = $1 AND digest = $2) \
+                 SELECT EXISTS (SELECT 1 FROM scripts WHERE tenant = $1 AND digest = $2)",
+            )
+            .bind(tenant(tenant_id))
+            .bind(bytes(script))
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Error::from)?;
+            return Ok(stored);
+        };
+        let written = sqlx::query(
+            "INSERT INTO script_titles (tenant, digest, title, description, updated_by, \
+                 updated_at) \
+             SELECT tenant, digest, $3, $4, $5, $6 FROM scripts WHERE tenant = $1 AND digest = $2 \
+             ON CONFLICT (tenant, digest) DO UPDATE SET title = EXCLUDED.title, \
+                 description = EXCLUDED.description, updated_by = EXCLUDED.updated_by, \
+                 updated_at = EXCLUDED.updated_at",
+        )
+        .bind(tenant(tenant_id))
+        .bind(bytes(script))
+        .bind(title.title.as_str())
+        .bind(title.description.as_deref())
+        .bind(title.updated_by.as_str())
+        .bind(ts(title.updated_at))
+        .execute(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(written.rows_affected() > 0)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant_id: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, StoreError> {
+        if scripts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let digests: Vec<Vec<u8>> = scripts.iter().map(|digest| bytes(*digest)).collect();
+        // In the order of `scripts`.
+        let rows = sqlx::query(
+            "SELECT t.digest, t.title, t.description, t.updated_by, t.updated_at \
+             FROM unnest($2::bytea[]) WITH ORDINALITY AS d(digest, n) \
+             JOIN script_titles t ON t.tenant = $1 AND t.digest = d.digest ORDER BY d.n",
+        )
+        .bind(tenant(tenant_id))
+        .bind(digests)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        let mut titles = Vec::with_capacity(rows.len());
+        for row in &rows {
+            titles.push((
+                row.digest(0)?,
+                ScriptTitle {
+                    title: row.text(1)?,
+                    description: row.opt_text(2)?,
+                    updated_by: row.text(3)?,
+                    updated_at: row.ts(4)?,
+                },
+            ));
+        }
+        Ok(titles)
+    }
+
     async fn list_toolsets(&self, tenant_id: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
         let rows = sqlx::query(
             "SELECT digest, spec, declarations, prompt FROM toolsets WHERE tenant = $1 \
@@ -2564,6 +2672,26 @@ impl JournalStore for PostgresStore {
         ))
         .bind(tenant(tenant_id))
         .bind(bytes(version))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant_id: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, StoreError> {
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows WHERE tenant = $1 AND name = $2 AND number = $3"
+        ))
+        .bind(tenant(tenant_id))
+        .bind(name)
+        .bind(i64::from(number))
         .fetch_optional(&self.pool)
         .await
         .map_err(Error::from)?;
@@ -2680,6 +2808,34 @@ impl JournalStore for PostgresStore {
         .await
         .map_err(Error::from)?;
         Ok(row.map(|row| record_from_row(&row)).transpose()?)
+    }
+
+    async fn runs_in_range(
+        &self,
+        tenant_id: &TenantId,
+        low: RunId,
+        high: RunId,
+        max: usize,
+    ) -> Result<Vec<RunRecord>, StoreError> {
+        if nothing(max) || low > high {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(concat!(
+            "SELECT ",
+            run_columns!(),
+            " FROM runs WHERE tenant = $1 AND id BETWEEN $2 AND $3 ORDER BY id LIMIT $4"
+        ))
+        .bind(tenant(tenant_id))
+        .bind(uuid(low))
+        .bind(uuid(high))
+        .bind(limit(max))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(record_from_row)
+            .collect::<Result<_, Error>>()?)
     }
 
     async fn watch_run(

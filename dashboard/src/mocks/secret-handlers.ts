@@ -3,10 +3,11 @@
 // labels sees, writes and deletes only the organization's secrets carrying them, and the secrets
 // it writes take them; it never writes a namespace's secret. No answer holds a value.
 import { HttpResponse, http } from "msw";
-import type { Labels, PutSecret, SecretUsage, WorkflowAttaching } from "../model/types";
+import type { Labels, PutSecret, Secret, SecretUsage, WorkflowAttaching } from "../model/types";
 import { type Caller, grantOf } from "./access";
 import { guard, json, runsWorld } from "./access-handlers";
 import type { World } from "./fixtures";
+import { handleOf } from "./handles";
 import { problem } from "./problem";
 import { deriveRun } from "./readmodel";
 import {
@@ -82,7 +83,7 @@ function usageOf(world: World, caller: Caller, s: MockSecret, now: number): Secr
   const waiting: string[] = [];
   for (const fixture of runsWorld(world, caller).runs) {
     if (!attaches(fixture, s)) continue;
-    const run = deriveRun(fixture, now);
+    const run = deriveRun(world, fixture, now);
     if (run.status !== "active") continue;
     active.push(run.id);
     const servers = Object.entries(fixture.secrets ?? {})
@@ -107,7 +108,7 @@ function usageOf(world: World, caller: Caller, s: MockSecret, now: number): Secr
     if (servers.length > 0) workflows.push({ name: v.name, version: v.version, servers });
   }
   return {
-    secret: secretDto(s, now),
+    secret: withRunHandle(world, secretDto(s, now)),
     activeRuns: active.slice(0, USAGE_LIMIT),
     activeTotal: active.length,
     waitingRuns: waiting.slice(0, USAGE_LIMIT),
@@ -176,7 +177,7 @@ export function secretHandlers(world: World, now: () => number) {
       existing.labels = labels;
       existing.updatedBy = by;
       existing.updatedAt = at;
-      return HttpResponse.json(secretDto(existing, at));
+      return HttpResponse.json(withRunHandle(world, secretDto(existing, at)));
     }
     const created: MockSecret = {
       namespace,
@@ -192,7 +193,7 @@ export function secretHandlers(world: World, now: () => number) {
     };
     store.secrets.push(created);
     store.secrets.sort((a, b) => a.name.localeCompare(b.name));
-    return HttpResponse.json(secretDto(created, at), { status: 201 });
+    return HttpResponse.json(withRunHandle(world, secretDto(created, at)), { status: 201 });
   };
 
   const list = (caller: Caller, namespace: string | null) =>
@@ -200,7 +201,7 @@ export function secretHandlers(world: World, now: () => number) {
       secrets: secretsOf(world, caller)
         .secrets.filter((s) => s.namespace === namespace && sees(world, caller, s))
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map((s) => secretDto(s, now())),
+        .map((s) => withRunHandle(world, secretDto(s, now()))),
     });
 
   const remove = (caller: Caller, namespace: string | null, name: string): Response => {
@@ -313,4 +314,11 @@ export function secretHandlers(world: World, now: () => number) {
       return HttpResponse.json(signingKeyDto(key), { status: 201 });
     }),
   ];
+}
+
+/** A secret as served, its last read naming its run by handle while the run is kept. */
+function withRunHandle(world: World, dto: Secret): Secret {
+  const run = dto.lastRead?.run ? world.runs.find((r) => r.id === dto.lastRead?.run) : undefined;
+  if (!run || !dto.lastRead) return dto;
+  return { ...dto, lastRead: { ...dto.lastRead, runHandle: handleOf(world, run) } };
 }

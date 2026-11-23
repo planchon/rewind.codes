@@ -4,16 +4,17 @@
 // the last change, every 10 seconds while the change stream is down.
 import { Fragment, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { useRunLinkState } from "../../app/runLinks";
-import { Empty, LabelList, Loading, ProblemView, RunId, useNow } from "../../components/bits";
+import { runPath, useRunLinkState } from "../../app/runLinks";
+import { Empty, LabelList, Loading, ProblemView, RunHandle, useNow } from "../../components/bits";
 import { StatusGlyph } from "../../components/Status";
+import { TableScroll } from "../../components/TableScroll";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
 import { joinQuery, labelTerm, withTerm } from "../../model/query";
 import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../model/types";
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
 import { useScript } from "../../state/scripts";
-import { TableToolbar } from "../TableTop";
+import { TableTop } from "../TableTop";
 
 const POLL = 10_000;
 
@@ -100,7 +101,7 @@ function PausedLine({ digest, line }: { digest: string; line: number }) {
   return (
     <span className="paused-line" title={text}>
       <b className="num">L{line}</b>
-      <code>{text ?? (script.isPending ? "…" : "")}</code>
+      <code>{text ?? ""}</code>
     </span>
   );
 }
@@ -176,7 +177,7 @@ export function WaitingRuns({
     );
   } else {
     body = (
-      <div className={`table-wrap${runs.stale ? " is-stale" : ""}`}>
+      <TableScroll stale={runs.stale}>
         <table className="grid waiting-table">
           <thead>
             <tr>
@@ -202,7 +203,7 @@ export function WaitingRuns({
                     className="link"
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("a, button")) return;
-                      void navigate(`/runs/${run.id}`, { state: linkState });
+                      void navigate(runPath(run.handle), { state: linkState });
                     }}
                   >
                     <td className="wrap waiting-run">
@@ -211,12 +212,12 @@ export function WaitingRuns({
                           <StatusGlyph status="active" size={12} />
                         </span>
                         <Link
-                          to={`/runs/${run.id}`}
+                          to={runPath(run.handle)}
                           state={linkState}
                           className="row-link"
                           title="Open the run at its last step"
                         >
-                          <RunId id={run.id} />
+                          <RunHandle handle={run.handle} id={run.id} whole />
                         </Link>
                         <span className="headline mono" title={run.headline}>
                           {run.headline}
@@ -266,7 +267,7 @@ export function WaitingRuns({
             </button>
           </div>
         )}
-      </div>
+      </TableScroll>
     );
   }
 
@@ -296,7 +297,7 @@ export function WaitingRuns({
         ))}
       </div>
       <div role="tabpanel" className="run-table">
-        <TableToolbar pending={runs.pending} onShow={runs.showPending} setAtTop={runs.setAtTop} />
+        <TableTop pending={runs.pending} onShow={runs.showPending} setAtTop={runs.setAtTop} />
         {body}
       </div>
     </div>

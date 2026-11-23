@@ -1,7 +1,8 @@
 // A namespace's page: one end user, shown by its display name when it has one (its id on hover).
-// Over a month: how its runs went (started, completed, failed, waiting, durations, by day, what
-// fails most, the tools they call), its CPU time added up against its quota, its use of every
-// limit, the alerts of the month, its tokens in use, its exceptions to the defaults; then its runs
+// Over a month: the alerts of the month first, when it has any; how its runs went (started,
+// completed, failed, waiting, durations, by day, what fails most, the tools they call), its CPU
+// time added up against its quota, its use of every limit, its tokens in use, its exceptions to
+// the defaults; then its runs
 // of the month, the scripts its runs ran, and its secrets (`secrets:read`). What the caller's
 // permissions allow, each in a dialog: rename it and change its limits (`namespaces:write`), revoke
 // its tokens (`tokens:write`), write and delete its secrets (`secrets:write`), erase it
@@ -23,6 +24,7 @@ import { Meter, StackedBars, Tile } from "../../components/Charts";
 import { CpuChart } from "../../components/CpuChart";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { InfoCard } from "../../components/InfoCard";
 import { NamespaceName } from "../../components/NamespaceName";
 import { PageHeader } from "../../components/PageHeader";
 import { isCancellation } from "../../model/ending";
@@ -521,21 +523,21 @@ function NamespaceSecrets({ name }: { name: string }) {
   return (
     <section className="ns-section" aria-label="Its secrets">
       <header className="ns-section-head">
-        <h2>Secrets</h2>
+        <h2>
+          Secrets
+          <InfoCard label="About its secrets">
+            <p>
+              This end user's own values, such as their GitHub token: only the runs of this
+              namespace attach them, as <code>ns/&lt;name&gt;</code>, and nothing falls back on the
+              organization's.
+              {access.can("secrets:write") && access.limited
+                ? " Your grant is limited to labels: it reads them, and never writes one."
+                : ""}
+            </p>
+          </InfoCard>
+        </h2>
       </header>
-      <SecretList
-        namespace={name}
-        intro={
-          <>
-            This end user's own values, such as their GitHub token: only the runs of this namespace
-            attach them, as <code>ns/&lt;name&gt;</code>, and nothing falls back on the
-            organization's.
-            {access.can("secrets:write") && access.limited
-              ? " Your grant is limited to labels: it reads them, and never writes one."
-              : ""}
-          </>
-        }
-      />
+      <SecretList namespace={name} />
     </section>
   );
 }
@@ -602,6 +604,18 @@ function NamespacePage({ name }: { name: string }) {
             <CopyButton text={ns.name} label="Copy the namespace's id" />
           </span>
         }
+        info={
+          <p>
+            {displayName && (
+              <>
+                Id <span className="mono">{ns.name}</span>
+                <br />
+              </>
+            )}
+            Created <Time ms={Date.parse(ns.createdAt)} />, active{" "}
+            <Ago ms={Date.parse(ns.lastActiveAt)} />.
+          </p>
+        }
         actions={
           <>
             {canWrite && (
@@ -635,24 +649,11 @@ function NamespacePage({ name }: { name: string }) {
           </>
         }
       />
-      <p className="page-intro">
-        {displayName && (
-          <>
-            <span className="muted">id</span> <span className="mono">{ns.name}</span>
-            {" · "}
-          </>
-        )}
-        {deleting ? (
-          <span className="tag critical">
-            being erased since <Ago ms={Date.parse(deleting)} />
-          </span>
-        ) : (
-          <>
-            Created <Time ms={Date.parse(ns.createdAt)} /> · active{" "}
-            <Ago ms={Date.parse(ns.lastActiveAt)} />
-          </>
-        )}
-      </p>
+      {deleting && (
+        <div className="notice notice-critical" role="status">
+          Being erased since <Ago ms={Date.parse(deleting)} />.
+        </div>
+      )}
 
       {revoked && (
         <div className="notice" role="status">
@@ -711,6 +712,29 @@ function NamespacePage({ name }: { name: string }) {
         </button>
       </nav>
 
+      {d.alerts.length > 0 && (
+        <section className="panel" aria-label="Alerts">
+          <div className="panel-head">
+            <h2>Alerts in {monthLabel(d.month)}</h2>
+          </div>
+          <ul className="alert-list">
+            {d.alerts.map((a) => (
+              <li key={`${a.quota}-${a.threshold}`}>
+                <AlertChip alert={a} />
+                <span>
+                  {QUOTA_NAMES[a.quota]} at {formatQuota(QUOTA_KEYS[a.quota], a.used)} of{" "}
+                  {formatQuota(QUOTA_KEYS[a.quota], a.limit)}
+                </span>
+                <span className="end muted">
+                  <Time ms={Date.parse(a.raisedAt)} />
+                  {a.sentAt ? " · webhook sent" : " · not sent yet"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <RunFigures runs={runs} month={month} />
 
       <div className="ns-columns">
@@ -740,33 +764,6 @@ function NamespacePage({ name }: { name: string }) {
           </section>
 
           <RunsByDay runs={runs} month={month} />
-
-          <section className="panel" aria-label="Alerts">
-            <div className="panel-head">
-              <h2>Alerts in {monthLabel(d.month)}</h2>
-            </div>
-            <div className="panel-body">
-              {d.alerts.length === 0 ? (
-                <p className="muted">No limit crossed 80% this month.</p>
-              ) : (
-                <ul className="alert-list">
-                  {d.alerts.map((a) => (
-                    <li key={`${a.quota}-${a.threshold}`}>
-                      <AlertChip alert={a} />
-                      <span>
-                        {QUOTA_NAMES[a.quota]} at {formatQuota(QUOTA_KEYS[a.quota], a.used)} of{" "}
-                        {formatQuota(QUOTA_KEYS[a.quota], a.limit)}
-                      </span>
-                      <span className="end muted">
-                        <Time ms={Date.parse(a.raisedAt)} />
-                        {a.sentAt ? " · webhook sent" : " · not sent yet"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
         </div>
 
         <div className="ns-column">

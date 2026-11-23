@@ -5,7 +5,7 @@ use std::time::Duration;
 use rewind_core::{
     CancelReason, Completion, Digest, Epoch, HistoryEntry, Interruption, Payload, RunId, Script,
     Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow,
-    end_signal_name,
+    end_signal_name, suffix_len_apart, suffix_neighbours,
 };
 
 use crate::adapters::random_token;
@@ -14,9 +14,9 @@ use crate::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
     NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
-    SecretId, SecretUsage, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription,
-    TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId,
-    TenantScope, TestRecord, ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget,
+    ScriptTitle, SecretId, SecretUsage, StoreError, StoredScript, StoredToolset, StoredWorkflow,
+    Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant,
+    TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget,
     WebhookToken, WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
@@ -36,6 +36,8 @@ pub struct MemoryJournal {
 #[derive(Debug, Default)]
 struct State {
     scripts: HashMap<(TenantId, Digest), StoredScript>,
+    /// The titles people gave scripts.
+    script_titles: HashMap<(TenantId, Digest), ScriptTitle>,
     toolsets: HashMap<(TenantId, Digest), StoredToolset>,
     /// Run ids are unique across tenants.
     runs: BTreeMap<RunId, Run>,
@@ -591,6 +593,45 @@ impl JournalStore for MemoryJournal {
         Ok(self.lock()?.scripts.get(&(tenant.clone(), digest)).cloned())
     }
 
+    async fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.lock()?;
+        let key = (tenant.clone(), script);
+        if !state.scripts.contains_key(&key) {
+            return Ok(false);
+        }
+        match title {
+            Some(title) => {
+                state.script_titles.insert(key, title.clone());
+            }
+            None => {
+                state.script_titles.remove(&key);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, StoreError> {
+        let state = self.lock()?;
+        Ok(scripts
+            .iter()
+            .filter_map(|digest| {
+                state
+                    .script_titles
+                    .get(&(tenant.clone(), *digest))
+                    .map(|title| (*digest, title.clone()))
+            })
+            .collect())
+    }
+
     async fn put_toolset(
         &self,
         tenant: &TenantId,
@@ -795,9 +836,21 @@ impl JournalStore for MemoryJournal {
                 now,
             );
         }
+        // The handle's suffix: long enough to name no other run of the tenant.
+        let suffix_len = {
+            let (low, high) = suffix_neighbours(run.run.id);
+            let near = state
+                .runs
+                .range(low..=high)
+                .filter(|(_, other)| other.record.run.tenant == tenant)
+                .map(|(id, _)| *id);
+            u8::try_from(suffix_len_apart(run.run.id, near)).unwrap_or(u8::MAX)
+        };
         let record = RunRecord {
             run: run.run.clone(),
             namespace: name.clone(),
+            origin: run.origin.clone(),
+            suffix_len,
             script: run.started.script,
             toolset: run.started.toolset,
             status: rewind_core::RunStatus::Pending,
@@ -866,6 +919,26 @@ impl JournalStore for MemoryJournal {
         Ok(state.run(run).ok().map(|found| found.record.clone()))
     }
 
+    async fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: RunId,
+        high: RunId,
+        limit: usize,
+    ) -> Result<Vec<RunRecord>, StoreError> {
+        if low > high {
+            return Ok(Vec::new());
+        }
+        let state = self.lock()?;
+        Ok(state
+            .runs
+            .range(low..=high)
+            .filter(|(_, run)| &run.record.run.tenant == tenant)
+            .take(limit)
+            .map(|(_, run)| run.record.clone())
+            .collect())
+    }
+
     async fn watch_run(
         &self,
         run: &RunRef,
@@ -911,6 +984,15 @@ impl JournalStore for MemoryJournal {
                     .insert((tenant.clone(), test.test, workflow.version()));
             }
         }
+        let number = 1 + state
+            .workflows
+            .iter()
+            .filter(|((owner, _), (_, stored))| {
+                owner == tenant && stored.workflow.name() == workflow.name()
+            })
+            .map(|(_, (_, stored))| stored.number)
+            .max()
+            .unwrap_or(0);
         let (_, stored) = state.workflows.entry(key).or_insert_with(|| {
             (
                 order,
@@ -918,6 +1000,7 @@ impl JournalStore for MemoryJournal {
                     workflow: workflow.clone(),
                     labels: workflow.labels().clone(),
                     created_at: now,
+                    number,
                 },
             )
         });
@@ -936,6 +1019,22 @@ impl JournalStore for MemoryJournal {
             .workflows
             .get(&(tenant.clone(), version))
             .map(|(_, stored)| stored.clone()))
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, StoreError> {
+        let state = self.lock()?;
+        Ok(state
+            .workflows
+            .iter()
+            .find(|((owner, _), (_, stored))| {
+                owner == tenant && stored.workflow.name() == name && stored.number == number
+            })
+            .map(|(_, (_, stored))| stored.clone()))
     }
 
     async fn workflow_versions(

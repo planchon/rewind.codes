@@ -348,7 +348,7 @@ pub(super) async fn wait_for_end(
 
 fn started(console: &mut Console, run: &Run) {
     if !console.json() && !run.status.is_terminal() {
-        console.note(format!("started run {}", run.id));
+        console.note(format!("started run {}", run.handle));
     }
 }
 

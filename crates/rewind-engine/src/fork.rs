@@ -326,6 +326,8 @@ where
         let fork = NewRun {
             run: RunRef::new(parent.tenant.clone(), self.entropy.run_id()),
             namespace: record.namespace.clone(),
+            // A fork is the run of what its parent ran.
+            origin: record.origin.clone(),
             started: RunStarted {
                 script: request.script.digest(),
                 toolset: record.toolset,

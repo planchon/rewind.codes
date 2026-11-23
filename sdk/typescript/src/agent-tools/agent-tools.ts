@@ -63,8 +63,10 @@ import {
   describeWorkflowDetails,
   describeWorkflowRefusal,
   entryText,
+  hasTitle,
   json,
   limitsFor,
+  UNTITLED_NOTE,
   workflowRef,
   type Limits,
   type WorkflowDetails,
@@ -341,12 +343,11 @@ export class AgentTools {
   }
 
   private async checkScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
-    const result = await this.client.scripts.check({
-      script: requireString(input, "code"),
-      toolset: this.currentToolset,
-      signal: options.signal,
-    });
-    return { content: describeCheck(result, this.limits), isError: !result.ok };
+    const script = requireString(input, "code");
+    const result = await this.client.scripts.check({ script, toolset: this.currentToolset, signal: options.signal });
+    const checked = describeCheck(result, this.limits);
+    const content = hasTitle(script) ? checked : `${checked}\n${UNTITLED_NOTE}`;
+    return { content, isError: !result.ok };
   }
 
   private async testScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
@@ -391,27 +392,29 @@ export class AgentTools {
     if (wait !== undefined && entry === undefined) {
       run = await this.client.runs.get(runId, { wait, signal });
     }
+    // The run is named by its handle from here on, whatever the model gave.
+    const { handle } = run;
     if (entry !== undefined) {
       const text = entryText(await this.client.runs.entry(runId, entry, { signal }));
       const content = describePage(
-        `Entry ${entry} of run ${runId}`,
+        `Entry ${entry} of run ${handle}`,
         text,
         offset ?? 0,
         this.limits.output,
-        (next) => `get_run(${args({ run_id: runId, entry, offset: next })})`,
+        (next) => `get_run(${args({ run_id: handle, entry, offset: next })})`,
       );
       return { content, isError: false, run };
     }
     if (offset !== undefined) {
       if (run.status !== "completed") {
-        throw new InputError(`run ${runId} has no output to page through: it is ${run.status}.`);
+        throw new InputError(`run ${handle} has no output to page through: it is ${run.status}.`);
       }
       const content = describePage(
-        `Output of run ${runId}`,
+        `Output of run ${handle}`,
         await this.outputOf(run, signal),
         offset,
         this.limits.output,
-        (next) => `get_run(${args({ run_id: runId, offset: next })})`,
+        (next) => `get_run(${args({ run_id: handle, offset: next })})`,
       );
       return { content, isError: false, run };
     }
@@ -445,13 +448,18 @@ export class AgentTools {
     } catch (error) {
       if (isProblem(error, "invalid-signal")) {
         const detail = truncateEnd(error.detail, this.limits.value);
-        return { content: `Run ${runId} refused the signal ${JSON.stringify(name)}: ${detail}`, isError: true, run };
+        return {
+          content: `Run ${run.handle} refused the signal ${JSON.stringify(name)}: ${detail}`,
+          isError: true,
+          run,
+        };
       }
       throw error;
     }
+    const { handle } = run;
     const content = accepted.duplicate
-      ? `This signal ${JSON.stringify(name)} was already sent to run ${runId}: nothing was added.`
-      : `Sent the signal ${JSON.stringify(name)} to run ${runId}. Read what the run does next with get_run(${args({ run_id: runId, wait: "30s" })}).`;
+      ? `This signal ${JSON.stringify(name)} was already sent to run ${handle}: nothing was added.`
+      : `Sent the signal ${JSON.stringify(name)} to run ${handle}. Read what the run does next with get_run(${args({ run_id: handle, wait: "30s" })}).`;
     return { content, isError: false, run };
   }
 
@@ -484,7 +492,7 @@ export class AgentTools {
       if (isProblem(error, "tests-failed")) {
         const workflow = parent.workflow ? workflowRef(parent.workflow) : undefined;
         return {
-          content: describeRetryRefused(runId, error.detail, error.tests, workflow, this.limits),
+          content: describeRetryRefused(parent.handle, error.detail, error.tests, workflow, this.limits),
           isError: true,
           run: parent,
           tests: error.tests,

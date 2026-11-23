@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use rewind_api::events::ChangeEvent;
-use rewind_core::RunId;
+use rewind_core::{Digest, RunId};
 use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::{ChangedRun, Clock, NamespaceName, ReadModel, TenantId};
 use tokio::sync::{Notify, broadcast};
@@ -47,6 +47,7 @@ use tokio::sync::{Notify, broadcast};
 use crate::app::App;
 use crate::error::ApiError;
 use crate::http::runs::listed;
+use crate::titles::Title;
 
 /// The most runs one pass reads by default.
 pub(crate) const PER_PASS: usize = 500;
@@ -407,6 +408,20 @@ impl Cursor {
         let read = self.read(rows, per_pass, now);
         let resyncs = read.resyncs();
         let Read { fresh, full, next } = read;
+        // The titles of the runs' scripts, one read per tenant, before the cursor moves.
+        let mut titles: BTreeMap<TenantId, BTreeMap<Digest, Title>> = BTreeMap::new();
+        if !full {
+            let mut scripts: BTreeMap<&TenantId, BTreeSet<Digest>> = BTreeMap::new();
+            for row in &fresh {
+                scripts
+                    .entry(&row.summary.run.tenant)
+                    .or_default()
+                    .insert(row.summary.script);
+            }
+            for (tenant, scripts) in scripts {
+                titles.insert(tenant.clone(), app.titles(tenant, scripts).await?);
+            }
+        }
         *self = next;
         let mut batch = Batch::default();
         if full {
@@ -422,7 +437,17 @@ impl Cursor {
                 failed: false,
             });
         }
-        let making: Vec<_> = fresh.iter().map(|row| changed(app, row)).collect();
+        let none = BTreeMap::new();
+        let making: Vec<_> = fresh
+            .iter()
+            .map(|row| {
+                changed(
+                    app,
+                    row,
+                    titles.get(&row.summary.run.tenant).unwrap_or(&none),
+                )
+            })
+            .collect();
         let made: Vec<Result<Changed, ApiError>> = futures_util::stream::iter(making)
             .buffered(AT_ONCE)
             .collect()
@@ -445,9 +470,13 @@ impl Cursor {
     }
 }
 
-/// A run that changed, as `GET /v1/runs` lists it, in JSON.
-async fn changed(app: &App, row: &ChangedRun) -> Result<Changed, ApiError> {
-    let event = ChangeEvent::Run(Box::new(listed(app, &row.summary).await?));
+/// A run that changed, as `GET /v1/runs` lists it, in JSON, its script's title from `titles`.
+async fn changed(
+    app: &App,
+    row: &ChangedRun,
+    titles: &BTreeMap<Digest, Title>,
+) -> Result<Changed, ApiError> {
+    let event = ChangeEvent::Run(Box::new(listed(app, &row.summary, titles).await?));
     let data = serde_json::to_string(&event).map_err(ApiError::internal)?;
     Ok(Changed {
         tenant: row.summary.run.tenant.clone(),
@@ -474,6 +503,8 @@ mod tests {
             summary: RunSummary {
                 run: RunRef::new(TenantId::local(), RunId::from_u128(n)),
                 namespace: NamespaceName::migrated(),
+                origin: rewind_core::SCRIPT_ORIGIN.to_owned(),
+                suffix_len: rewind_engine::ports::NEW_SUFFIX_LEN,
                 script: Digest::of(b"s"),
                 headline: String::new(),
                 toolset: Digest::of(b"t"),

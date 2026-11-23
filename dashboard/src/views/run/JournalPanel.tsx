@@ -1,15 +1,12 @@
-// The journal itself, the script's logs, and the LLM trace: each a section of the run's page.
+// The journal itself and the script's logs: each a section of the run's page.
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState } from "react";
-import { Empty, Loading, ProblemView } from "../../components/bits";
-import { formatCount, formatOffset } from "../../model/format";
+import { useEffect, useRef } from "react";
+import { Empty } from "../../components/bits";
+import { formatOffset } from "../../model/format";
 import type { RunModel } from "../../model/run";
-import { useRunTrace } from "../../state/runs";
 import { entryFamily, entryLine, entrySummary } from "./describe";
 
 const ROW = 24;
-
-type Tab = "journal" | "logs" | "trace";
 
 export function JournalList({
   model,
@@ -109,69 +106,5 @@ export function Logs({
         </li>
       ))}
     </ol>
-  );
-}
-
-export function LlmTrace({ runId, historyLen }: { runId: string; historyLen: number }) {
-  const trace = useRunTrace(runId, historyLen);
-  if (trace.isPending) return <Loading>Loading the trace…</Loading>;
-  if (trace.isError) return <ProblemView error={trace.error} title="The trace could not be read" />;
-  return <pre className="llm-trace">{trace.data.text}</pre>;
-}
-
-export function JournalPanel({
-  runId,
-  model,
-  selected,
-  onSelect,
-  onSelectLine,
-}: {
-  runId: string;
-  model: RunModel;
-  selected: number | null;
-  onSelect: (idx: number) => void;
-  onSelectLine: (line: number) => void;
-}) {
-  const [tab, setTab] = useState<Tab>("journal");
-  return (
-    <section className="panel">
-      <header className="panel-head">
-        <div className="tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "journal"}
-            onClick={() => setTab("journal")}
-          >
-            Journal <span className="muted num">{formatCount(model.entries.length)}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "logs"}
-            onClick={() => setTab("logs")}
-          >
-            Logs <span className="muted num">{formatCount(model.logs.length)}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "trace"}
-            onClick={() => setTab("trace")}
-          >
-            LLM trace
-          </button>
-        </div>
-        <span className="end muted">
-          {tab === "journal" && "lifecycle · commands · completions · annotations"}
-          {tab === "trace" && "what a model reads with get_run"}
-        </span>
-      </header>
-      <div role="tabpanel">
-        {tab === "journal" && <JournalList model={model} selected={selected} onSelect={onSelect} />}
-        {tab === "logs" && <Logs model={model} onSelect={onSelect} onSelectLine={onSelectLine} />}
-        {tab === "trace" && <LlmTrace runId={runId} historyLen={model.entries.length} />}
-      </div>
-    </section>
   );
 }

@@ -30,6 +30,7 @@ use rewind_engine::ports::{
 use rewind_outbound::{Egress, NameResolver, SystemResolver};
 use tokio::time::Instant;
 
+use crate::titles::ScriptTexts;
 use crate::views::{Views, task_id};
 use crate::wiring::blobs::Blobs;
 use crate::wiring::store::Store;
@@ -269,6 +270,7 @@ impl<R: Render> WebhookSender for HttpWebhooks<R> {
 pub(crate) struct ServerRender {
     pub(crate) store: Store,
     pub(crate) blobs: Blobs,
+    pub(crate) texts: Arc<ScriptTexts>,
 }
 
 impl Render for ServerRender {
@@ -355,6 +357,7 @@ impl Render for ServerRender {
                 let views = Views {
                     store: &self.store,
                     blobs: &self.blobs,
+                    texts: &self.texts,
                 };
                 let data = RunEvent {
                     run: views

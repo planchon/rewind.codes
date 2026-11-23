@@ -227,6 +227,8 @@ async fn committed_entries_are_projected_once_whatever_the_deliveries() {
             &rewind_engine::ports::ProjectedRun {
                 run: run.clone(),
                 namespace: record.namespace.clone(),
+                origin: record.origin.clone(),
+                suffix_len: record.suffix_len,
                 script: record.script,
                 headline: "flow".into(),
                 toolset: record.toolset,

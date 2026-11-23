@@ -35,6 +35,8 @@ pub enum Permission {
     ToolsetsRead,
     #[serde(rename = "toolsets:write")]
     ToolsetsWrite,
+    #[serde(rename = "scripts:write")]
+    ScriptsWrite,
     #[serde(rename = "secrets:read")]
     SecretsRead,
     #[serde(rename = "secrets:write")]
@@ -75,7 +77,7 @@ pub enum Permission {
 
 impl Permission {
     /// The catalog, in the order of `archi/06-storage-and-scale.md`.
-    pub const ALL: [Permission; 25] = [
+    pub const ALL: [Permission; 26] = [
         Permission::RunsRead,
         Permission::RunsStart,
         Permission::RunsControl,
@@ -83,6 +85,7 @@ impl Permission {
         Permission::RunsDelete,
         Permission::ToolsetsRead,
         Permission::ToolsetsWrite,
+        Permission::ScriptsWrite,
         Permission::SecretsRead,
         Permission::SecretsWrite,
         Permission::SecretsUse,
@@ -142,6 +145,7 @@ impl Permission {
             Permission::RunsDelete => "runs:delete",
             Permission::ToolsetsRead => "toolsets:read",
             Permission::ToolsetsWrite => "toolsets:write",
+            Permission::ScriptsWrite => "scripts:write",
             Permission::SecretsRead => "secrets:read",
             Permission::SecretsWrite => "secrets:write",
             Permission::SecretsUse => "secrets:use",
@@ -186,6 +190,9 @@ impl Permission {
                 "List toolsets and workflows, read their declarations and search their tools."
             }
             Permission::ToolsetsWrite => "Register a toolset, and save a workflow.",
+            Permission::ScriptsWrite => {
+                "Give a script a title and a description for the organization, or remove them."
+            }
             Permission::SecretsRead => {
                 "List the secrets of the organization and of the namespaces, their metadata and \
                  usage, never a value; read the signing keys' ids."
@@ -263,7 +270,7 @@ pub const OPERATOR: &str = "operator";
 /// set another.
 pub const DEFAULT_ROLE: BuiltInRole = BuiltInRole::Reader;
 
-const HARNESS: [Permission; 19] = [
+const HARNESS: [Permission; 20] = [
     Permission::RunsRead,
     Permission::RunsStart,
     Permission::RunsControl,
@@ -271,6 +278,7 @@ const HARNESS: [Permission; 19] = [
     Permission::RunsDelete,
     Permission::ToolsetsRead,
     Permission::ToolsetsWrite,
+    Permission::ScriptsWrite,
     Permission::SecretsRead,
     Permission::SecretsWrite,
     Permission::SecretsUse,
@@ -557,9 +565,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_catalog_has_twenty_five_permissions_written_once() {
+    fn the_catalog_has_twenty_six_permissions_written_once() {
         let names: BTreeSet<&str> = Permission::ALL.iter().map(|p| p.as_str()).collect();
-        assert_eq!(names.len(), 25);
+        assert_eq!(names.len(), 26);
         for permission in Permission::ALL {
             assert_eq!(Permission::parse(permission.as_str()), Some(permission));
             assert_eq!(
@@ -573,7 +581,7 @@ mod tests {
             Ok(Permission::ApiKeysWrite)
         );
         assert!("runs:everything".parse::<Permission>().is_err());
-        assert_eq!(PermissionList::catalog().permissions.len(), 25);
+        assert_eq!(PermissionList::catalog().permissions.len(), 26);
         assert!(
             "credentials:write".parse::<Permission>().is_err(),
             "replaced by the secrets' permissions"
@@ -598,6 +606,7 @@ mod tests {
                 "runs:delete",
                 "toolsets:read",
                 "toolsets:write",
+                "scripts:write",
                 "secrets:read",
                 "secrets:write",
                 "secrets:use",
@@ -634,7 +643,8 @@ mod tests {
     /// What the key roles allowed before roles became data: `reader` the reading endpoints of
     /// its tenant, `harness` everything of its tenant but the administration, `worker` the
     /// host-tool tasks, the administration only `admin`, now `operator`. The permissions of
-    /// namespaces came after: `harness` manages its end users, `reader` reads them.
+    /// namespaces came after: `harness` manages its end users, `reader` reads them; and so did
+    /// `scripts:write`, which `harness` holds with `toolsets:write`.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Former {
         Read,
@@ -657,6 +667,7 @@ mod tests {
             | Permission::RunsQuarantine
             | Permission::RunsDelete
             | Permission::ToolsetsWrite
+            | Permission::ScriptsWrite
             | Permission::SecretsWrite
             | Permission::SecretsUse
             | Permission::TasksApprove
@@ -717,6 +728,7 @@ mod tests {
         assert!(Permission::TOKEN_DEFAULT.iter().all(|p| p.in_token()));
         for never in [
             Permission::ToolsetsWrite,
+            Permission::ScriptsWrite,
             Permission::SubscriptionsWrite,
             Permission::NamespacesRead,
             Permission::TokensWrite,

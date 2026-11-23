@@ -1,5 +1,6 @@
-// JSON values in Testing: a line, colored, that opens the whole value in a dialog, as a tree that
-// folds, with a copy button; and a card for the values a page is about (a test's input and what
+// JSON values in Testing: the value, colored, wrapping, never cut by an ellipsis (a long one shows
+// its start and how many characters more), that opens it whole in a dialog, as a tree that folds,
+// with a copy button; and a card for the values a page is about (a test's input and what
 // its output must contain), a tree that folds in place.
 import { Dialog } from "@base-ui/react/dialog";
 import { Maximize2, X } from "lucide-react";
@@ -8,8 +9,8 @@ import { CopyButton } from "./bits";
 import { foldable, JsonTree, OpeningButtons, useOpening } from "./JsonTree";
 import { JsonTokens, JsonValue } from "./Payload";
 
-/** Characters of a value shown in its line. */
-const LINE = 56;
+/** Characters of a value shown in place; the dialog holds the rest. */
+const SHOWN = 400;
 
 export function JsonDialog({
   title,
@@ -52,7 +53,8 @@ export function JsonDialog({
 export function JsonPeek({ value, title }: { value: unknown; title: string }) {
   const [open, setOpen] = useState(false);
   const line = JSON.stringify(value) ?? "undefined";
-  const shown = line.length > LINE ? `${line.slice(0, LINE)}…` : line;
+  const shown = line.slice(0, SHOWN);
+  const more = line.length - shown.length;
   return (
     <>
       <button
@@ -64,6 +66,9 @@ export function JsonPeek({ value, title }: { value: unknown; title: string }) {
       >
         <code>
           <JsonTokens text={shown} />
+          {more > 0 && (
+            <span className="json-peek-more">+{more.toLocaleString("en-US")} characters</span>
+          )}
         </code>
       </button>
       <JsonDialog title={title} value={value} open={open} onOpenChange={setOpen} />

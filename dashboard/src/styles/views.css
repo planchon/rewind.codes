@@ -47,11 +47,12 @@
 
 /* Scripts */
 
+/* A script's title over its first line, both whole: the table scrolls sideways rather than cut
+   them. */
 table.grid td.script-cell {
   padding-top: 5px;
   padding-bottom: 5px;
   height: auto;
-  max-width: 320px;
 }
 
 .script-cell > a,
@@ -61,11 +62,23 @@ table.grid td.script-cell {
 
 .script-cell .headline {
   display: block;
-  max-width: 320px;
   color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.script-cell .script-title {
+  font-weight: var(--weight-medium);
+}
+
+.script-cell .cell-sub {
+  display: block;
+}
+
+/* A run's script in the table of runs: its title, whole. */
+.script-cell-title {
+  display: block;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .script-cell .digest {
@@ -385,35 +398,6 @@ table.grid.tools-table .latency-cell {
 
 .run-page {
   gap: 10px;
-}
-
-.live-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-small);
-  color: var(--ink-3);
-  margin-right: 6px;
-}
-
-.live-state .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--line-strong);
-}
-
-.live-state.state-live .dot {
-  background: var(--good);
-}
-
-.live-state.state-live {
-  color: var(--ink);
-}
-
-.live-state.state-retrying .dot,
-.live-state.state-error .dot {
-  background: var(--critical);
 }
 
 .banners {
@@ -989,6 +973,8 @@ table.grid.tools-table .latency-cell {
   font-weight: var(--weight-medium);
 }
 
+/* A break says its length in its largest unit (⋯3h, ⋯2d), so two breaks side by side keep
+   their labels apart; the exact length is in its title. */
 .tl-break-label {
   position: absolute;
   top: 5px;
@@ -997,9 +983,15 @@ table.grid.tools-table .latency-cell {
   padding: 0 3px;
   color: var(--ink-2);
   font-size: var(--text-micro);
+  line-height: 14px;
   white-space: nowrap;
   border-radius: 2px;
   z-index: 1;
+}
+
+/* The break that ends the axis (a run idle until now): its label ends with the axis. */
+.tl-break-label.end {
+  transform: translateX(-100%);
 }
 
 .tl-rows {
@@ -1287,17 +1279,6 @@ table.grid.tools-table .latency-cell {
   color: var(--critical);
 }
 
-.llm-trace {
-  padding: 10px 12px;
-  font-size: var(--text-small);
-  line-height: 1.55;
-  max-height: 420px;
-  overflow: auto;
-  white-space: pre;
-  background: var(--code-bg);
-  border-radius: 0 0 6px 6px;
-}
-
 /* Narrow screens */
 
 @media (max-width: 720px) {
@@ -1509,19 +1490,6 @@ span.q-bad {
 .s-count {
   margin-left: auto;
   font-size: var(--text-small);
-}
-
-.saved-as {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-small);
-}
-
-.save-form {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
 }
 
 /* Overview */
@@ -1737,6 +1705,10 @@ span.q-bad {
   fill: var(--critical);
 }
 
+.sparkline.tone-neutral .spark-bar {
+  fill: var(--ink-3);
+}
+
 /* Waiting */
 
 .view-tabs {
@@ -1762,16 +1734,12 @@ table.grid td.waiting-run {
   padding-top: 5px;
   padding-bottom: 5px;
   height: auto;
-  max-width: 480px;
 }
 
 .waiting-run .headline {
   color: var(--ink-2);
   font-size: var(--text-small);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 260px;
 }
 
 .waiting-run > .labels:last-child {
@@ -1807,12 +1775,9 @@ table.grid td.waiting-run {
   display: inline-flex;
   gap: 6px;
   align-items: baseline;
-  max-width: 420px;
 }
 
 .paused-line code {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink-2);
   font-size: var(--text-small);
@@ -1820,11 +1785,18 @@ table.grid td.waiting-run {
 
 /* Failures */
 
+/* A signature and its message wrap between 280 and 460 px: a column that may break its text
+   anywhere would otherwise shrink to a letter. */
 table.grid td.signature-cell {
   padding-top: 5px;
   padding-bottom: 5px;
   height: auto;
+  min-width: 280px;
   max-width: 460px;
+}
+
+.signature-cell > * {
+  min-width: 280px;
 }
 
 .signature-cell .row-link {
@@ -1833,10 +1805,12 @@ table.grid td.signature-cell {
   overflow-wrap: anywhere;
 }
 
-.signature-cell .ellipsis {
+/* The latest message of a failure group: prose, it wraps rather than being cut. */
+.signature-cell .signature-message {
   display: block;
   font-size: var(--text-small);
-  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .seen-cell {
@@ -2269,8 +2243,14 @@ table.grid td.signature-cell {
   cursor: grab;
 }
 
+/* At the head, the cursor is a thin mark under the axis's labels: the run as it is needs no
+   handle, and the whole track can be dragged. */
 .tl-playhead.head {
+  width: 2px;
+  margin-left: -1px;
   background: var(--ink-3);
+  box-shadow: none;
+  z-index: 0;
 }
 
 .tl-cursor {
@@ -2623,9 +2603,6 @@ table.grid tbody tr:last-child th {
 .ns-title {
   display: block;
   font-weight: var(--weight-medium);
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .ns-note {
@@ -2975,57 +2952,6 @@ table.grid tr.row-defaults > * {
   width: max(240px, calc(var(--sidebar-width) - 16px));
 }
 
-/* Observability: the saved searches */
-
-.saved-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.saved-list li {
-  position: relative;
-}
-
-.saved-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 32px;
-  padding: 0 34px 0 10px;
-  border-radius: var(--radius-sm);
-  color: var(--ink-2);
-  font-size: var(--text-body);
-}
-
-.saved-item:hover {
-  background: var(--surface-2);
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.saved-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.saved-remove {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  opacity: 0;
-}
-
-.saved-list li:hover .saved-remove,
-.saved-remove:focus-visible {
-  opacity: 1;
-}
-
 /* Observability: the filters */
 
 .filters-list {
@@ -3160,10 +3086,6 @@ table.grid tr.row-defaults > * {
   color: #fff;
 }
 
-.filter-search {
-  border-top: 1px solid var(--line);
-}
-
 .filter-search-input {
   width: 100%;
   height: 32px;
@@ -3204,11 +3126,6 @@ table.grid tr.row-defaults > * {
 
 .view-tabs {
   align-self: flex-start;
-}
-
-.runs-table .run-cell {
-  min-width: 320px;
-  max-width: 420px;
 }
 
 /* The headers of the table of runs, each a menu: the order by its column and its filters
@@ -3272,23 +3189,37 @@ table.grid tr.row-defaults > * {
   line-height: 1;
 }
 
+/* A header's menu (RunColumns.tsx): one flat list, its groups told apart by a stroke. Orders and
+   thresholds are items with a check; a facet's values, rows with their checkbox and count. */
 .column-menu {
-  width: 280px;
+  width: max-content;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 4px;
   max-height: min(480px, var(--available-height, 480px));
   overflow-y: auto;
 }
 
-.column-menu-section + .column-menu-section {
-  margin-top: 6px;
-  padding-top: 6px;
+.column-menu-group + .column-menu-group {
+  margin: 4px -4px 0;
+  padding: 4px 4px 0;
   border-top: 1px solid var(--line);
+}
+
+.column-menu .menu-item,
+.column-menu .filter-row {
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
 }
 
 .column-menu .menu-item[aria-pressed="true"] {
   font-weight: var(--weight-medium);
 }
 
-.column-menu .menu-item:hover {
+.column-menu .menu-item:hover,
+.column-menu .filter-row:hover {
   background: var(--surface-2);
 }
 
@@ -3300,8 +3231,24 @@ table.grid tr.row-defaults > * {
   font-size: var(--text-small);
 }
 
-.column-menu-box {
-  margin: 2px 0 4px;
+/* The search of a facet, first: a field across the menu, its stroke under it. */
+.column-menu .filter-search {
+  margin: -4px -4px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.column-menu .filter-search-input {
+  height: 36px;
+  padding: 0 12px;
+}
+
+.column-menu .filter-search-list {
+  padding: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.column-menu-group:not(:first-child) > .filter-search {
+  margin-top: 0;
 }
 
 .column-menu-empty {
@@ -3309,6 +3256,44 @@ table.grid tr.row-defaults > * {
   padding: 6px 8px;
   color: var(--ink-3);
   font-size: var(--text-body);
+}
+
+/* A table wider than its page scrolls sideways: a thin shadow on an edge says columns hide past
+   it (TableScroll.tsx), so it reads as scrolling rather than cut. Over the header and the rows,
+   under the corners. */
+.table-frame {
+  position: relative;
+  min-width: 0;
+}
+
+.table-frame::before,
+.table-frame::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 3;
+}
+
+.table-frame::before {
+  left: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: linear-gradient(to right, var(--card-ring), transparent);
+}
+
+.table-frame::after {
+  right: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: linear-gradient(to left, var(--card-ring), transparent);
+}
+
+.table-frame[data-less]::before,
+.table-frame[data-more]::after {
+  opacity: 1;
 }
 
 /* While the runs of a new order or filter load, the previous ones stay, dimmed. */
@@ -3367,11 +3352,20 @@ table.grid tr.row-defaults > * {
   font-size: var(--text-small);
 }
 
+/* The run's handle, whole: the column is at least 240 px, and as wide as its longest handle. */
 .run-cell-id {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-width: 240px;
+}
+
+/* Out of a table, a long origin ends with an ellipsis: the suffix always shows. */
+.run-details .copyable,
+.two-lines .copyable {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* A run's labels in its cell: whole chips that never shrink, then "+N" (RunCells.tsx). */
@@ -3399,7 +3393,8 @@ table.grid tr.row-defaults > * {
   box-shadow: inset 0 0 0 1px var(--line-strong);
 }
 
-/* How a run ended, in its cell: the error's name over its message, never glued. */
+/* How a run ended, in its cell: the error's name over its message, never glued; the message
+   wraps rather than being cut. */
 table.grid td.end-td {
   padding-top: 6px;
   padding-bottom: 6px;
@@ -3410,7 +3405,8 @@ table.grid td.end-td {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  max-width: 280px;
+  min-width: 200px;
+  max-width: 360px;
   padding: 2px 6px;
   margin: 0 -6px;
   border: 0;
@@ -3434,10 +3430,8 @@ table.grid td.end-td {
 }
 
 .end-cell-message {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-size: var(--text-small);
   line-height: var(--leading-small);
   color: var(--ink-3);
@@ -3485,6 +3479,48 @@ table.grid td.end-td {
 .hover-card[data-ending-style] {
   opacity: 0;
   scale: 0.97;
+}
+
+/* An (i) beside a title, whose card says what the page or the section is (InfoCard.tsx). */
+.info-btn {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: help;
+}
+
+.info-btn:hover,
+.info-btn[data-popup-open] {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.info-card {
+  max-width: min(380px, calc(100vw - 24px));
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.info-card p {
+  margin: 0;
+}
+
+.info-card .info-card-head {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.ns-section-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .card-title {
@@ -3569,37 +3605,6 @@ table.grid td.end-td {
 /* A run's sidebar */
 
 /* The run at the head of its sidebar: status and id on one line, no card around them. */
-.run-ident {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px 10px 10px;
-}
-
-.run-ident-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.run-ident-line .run-id {
-  font-size: var(--text-small);
-  color: var(--ink-2);
-}
-
-.run-ident-tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.run-ident .live-state {
-  margin: 0;
-}
-
 .run-details {
   display: flex;
   flex-direction: column;
@@ -3644,8 +3649,18 @@ table.grid td.end-td {
 }
 
 .run-details .run-details-labels dd {
+  align-self: stretch;
   white-space: normal;
   text-align: left;
+}
+
+/* In the sidebar, a label is never wider than the sidebar: a long value ends with an ellipsis. */
+.run-details .run-details-labels .labels {
+  display: flex;
+}
+
+.run-details .run-details-labels .label {
+  max-width: 100%;
 }
 
 .run-page .page-header-title .run-id {
@@ -4029,7 +4044,7 @@ table.grid.compact th {
 
 .json-peek {
   display: inline-flex;
-  max-width: 100%;
+  max-width: min(100%, 420px);
   padding: 2px 6px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -4045,10 +4060,17 @@ table.grid.compact th {
   box-shadow: 0 0 0 1px var(--line-strong);
 }
 
+/* A value whole, wrapping; a long one says how much more its dialog holds (JsonPeek.tsx). */
 .json-peek code {
-  white-space: pre;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.json-peek-more {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+  white-space: nowrap;
 }
 
 .json-card {
@@ -4841,72 +4863,30 @@ table.grid .conn-orgs {
 
 /* The live dashboard (archi/05, "Live" and "Nothing moves on its own") */
 
-/* The change stream's state, at a fixed place of the top bar: one size whatever its state. */
-.connection-dot {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: var(--row-height);
-  height: var(--row-height);
-}
-
-.connection-dot-mark {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--line-strong);
-  transition: background-color 0.2s ease;
-}
-
-.connection-dot.state-live .connection-dot-mark {
-  background: var(--good);
-}
-
-.connection-dot.state-connecting .connection-dot-mark,
-.connection-dot.state-reconnecting .connection-dot-mark {
-  background: var(--warning-mark);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .connection-dot.state-reconnecting .connection-dot-mark {
-    animation: pulse 1.6s ease-in-out infinite;
-  }
-}
-
 /* A live table: its toolbar, whose slot for an answer held back ("N new · Show") is always there,
    stays under the page's header while the table scrolls; the mark under it says whether the
    table is scrolled to its top. */
-.run-table {
+.run-table,
+.live-table {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.table-toolbar {
+/* The pill of an answer held back, over the table's top edge: sticky under the page's header,
+   it takes no room (TableTop.tsx). */
+.table-pending {
   position: sticky;
   top: var(--header-height);
   z-index: 4;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  height: 36px;
-  padding: 0 2px 4px;
-  background: var(--bg);
+  height: 0;
 }
 
-.table-toolbar-start {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: var(--text-small);
-}
-
-.table-toolbar-slot {
-  display: flex;
-  justify-content: flex-end;
-  min-width: 112px;
+.table-pending-slot {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  translate: -50% 0;
 }
 
 .table-top {
@@ -4934,53 +4914,8 @@ table.grid .conn-orgs {
   background: color-mix(in srgb, var(--ink) 85%, var(--ds-background-100));
 }
 
-/* Cells of one size: the columns of the table of runs have their widths, whatever their rows
-   hold; numbers are tabular; a status takes the width of the longest. */
-.runs-table {
-  table-layout: fixed;
-}
-
-.runs-table .col-run {
-  width: 340px;
-}
-
-.runs-table .col-status {
-  width: 150px;
-}
-
-.runs-table .col-namespace {
-  width: 150px;
-}
-
-.runs-table .col-script {
-  width: 160px;
-}
-
-.runs-table .col-started {
-  width: 110px;
-}
-
-.runs-table .col-duration {
-  width: 100px;
-}
-
-.runs-table .col-calls {
-  width: 130px;
-}
-
-.runs-table .col-wakes {
-  width: 110px;
-}
-
-.runs-table .col-error {
-  width: 280px;
-}
-
-.runs-table td {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* The columns of the table of runs are at least their widths (RunTable.tsx), wider for what
+   their rows hold; numbers are tabular; a status takes the width of the longest. */
 .runs-table td,
 .runs-table .num {
   font-variant-numeric: tabular-nums;
@@ -4990,30 +4925,34 @@ table.grid .conn-orgs {
   min-width: 10ch;
 }
 
-/* The run's controls, in its sidebar */
-.run-controls .control-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* The run's controls: a menu of its header beside "Forks" (RunControls.tsx); what was sent or
+   asked shows before it until the run's journal or summary says it arrived. */
+.control-note {
+  font-size: var(--text-small);
+  white-space: nowrap;
 }
 
-.control-btn {
-  justify-content: flex-start;
-  width: 100%;
+/* Empty, it takes no room, not even the gap of the header's actions. */
+.control-note:empty {
+  margin-right: -8px;
 }
 
-.btn.danger-ghost {
+.menu-item.danger,
+.menu-item.danger svg {
   color: var(--critical-ink);
 }
 
-.btn.danger-ghost:hover:not(:disabled) {
+.menu-item.danger[data-highlighted] {
   background: var(--critical-soft);
 }
 
-.control-note {
-  min-height: 18px;
-  margin: 6px 0 0;
-  font-size: var(--text-small);
+/* The run's status and tags beside its id, in its header. */
+.run-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-body);
+  font-weight: 400;
 }
 
 .json-editor {
@@ -5043,6 +4982,32 @@ table.grid .conn-orgs {
 }
 
 /* Secrets: the organization's and a namespace's; the signing keys */
+
+/* A cell said on two lines, the second dimmer: who and when, when and by which run. */
+.two-lines {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 16px;
+}
+
+.two-lines > :last-child {
+  color: var(--ink-3);
+  font-size: var(--text-small);
+}
+
+.two-lines > .wraps {
+  white-space: normal;
+}
+
+.two-lines > .wraps > * {
+  white-space: nowrap;
+}
+
+.icon-btn.danger:hover {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
 
 .secret-reads {
   display: inline-flex;

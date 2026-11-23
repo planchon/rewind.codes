@@ -201,6 +201,20 @@ impl Caller {
         }
     }
 
+    /// Who writes, as what it writes names it (a secret, a script's title): a principal
+    /// (`user:…`, `key:…`, `connection:…`), `token:<namespace>` for an end user's token, `local`
+    /// over the embedded server's socket.
+    pub(crate) fn writer(&self) -> String {
+        if self.token.is_some()
+            && let Some(namespace) = &self.namespace
+        {
+            return format!("token:{namespace}");
+        }
+        self.principal
+            .as_ref()
+            .map_or_else(|| "local".to_owned(), ToString::to_string)
+    }
+
     /// Refuses the request (403) unless the caller's grant gives `permission`, or its token holds
     /// it; a grant limited to labels never administers.
     pub(crate) fn require(&self, permission: Permission) -> Result<(), ApiError> {

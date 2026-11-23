@@ -123,7 +123,7 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .call_tool(
             CallToolRequestParams::new("check_script").with_arguments(arguments(json!({
                 "namespace": "alice",
-                "code": "export default async () => 1;"
+                "code": "/** Count to one */\nexport default async () => 1;"
             }))),
         )
         .await
@@ -145,15 +145,22 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .await
         .unwrap();
     assert_eq!(refused.is_error, Some(true));
+    // A script without the comment its title is read from gets a note.
     assert_eq!(
         refused.content[0].as_text().unwrap().text,
-        "The script does not type-check: 1 error.\nscript.ts:1:7 error TS2322: Type 'number' is not assignable to type 'string'."
+        format!(
+            "The script does not type-check: 1 error.\nscript.ts:1:7 error TS2322: Type 'number' is not assignable to type 'string'.\n{}",
+            rewind_agent_tools::render::UNTITLED_NOTE
+        )
     );
 
     let checks = seen.lock().unwrap().clone();
     assert_eq!(checks.len(), 2);
     assert_eq!(checks[0].0.as_deref(), Some("alice"));
-    assert_eq!(checks[0].1.script, "export default async () => 1;");
+    assert_eq!(
+        checks[0].1.script,
+        "/** Count to one */\nexport default async () => 1;"
+    );
     assert_eq!(checks[0].1.toolset, None);
     assert_eq!(checks[1].0.as_deref(), Some("bob"));
 

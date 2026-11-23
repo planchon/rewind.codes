@@ -104,6 +104,7 @@ async fn runs_survive_a_restart() {
         let new_run = NewRun {
             run: run(),
             namespace: rewind_engine::ports::NamespaceName::migrated(),
+            origin: "script".into(),
             started: started(),
             metadata: RunMetadata {
                 labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
@@ -156,6 +157,7 @@ async fn runs_survive_a_restart() {
             NewRun {
                 run: RunRef::new(TenantId::local(), RunId::from_u128(2)),
                 namespace: rewind_engine::ports::NamespaceName::migrated(),
+                origin: "script".into(),
                 started: started(),
                 metadata: RunMetadata::default(),
                 created_at: T0,
@@ -380,6 +382,7 @@ async fn a_claim_reads_past_tasks_without_a_free_slot() {
     let new_run = NewRun {
         run: run(),
         namespace: rewind_engine::ports::NamespaceName::migrated(),
+        origin: "script".into(),
         started: started(),
         metadata: RunMetadata::default(),
         created_at: T0,

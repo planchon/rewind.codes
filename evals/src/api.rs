@@ -35,7 +35,7 @@ use rewind_api::workflows::{
 };
 use rewind_api::{Problem, ProblemType};
 use rewind_core::{
-    Cassette, Command, Digest, Event, RunId, Script, Test, TestOrigin, Timestamp, WorkflowSchemas,
+    Cassette, Command, Digest, Event, Script, Test, TestOrigin, Timestamp, WorkflowSchemas,
     canonical_json,
 };
 use rewind_engine::ports::{
@@ -78,7 +78,7 @@ fn not_found(detail: impl Into<String>) -> ApiError {
 
 fn run_not_found(run: &str) -> ApiError {
     not_found(format!(
-        "no run {run}: check the id (runs are listed by GET /v1/runs)"
+        "no run {run}: check the id or the handle (runs are listed by GET /v1/runs)"
     ))
 }
 
@@ -415,10 +415,11 @@ impl World {
     /// The run, if it exists and carries the caller's labels; otherwise 404, as the server
     /// answers a key limited to labels.
     async fn visible_run(&self, id: &str) -> Result<(RunRef, RunRecord), ApiError> {
-        let run_id: RunId = id.parse().map_err(|_| run_not_found(id))?;
-        let run = self.run_ref(run_id);
-        match self.engine.get_run(&run).await.map_err(engine_error)? {
-            Some(record) if self.sees(&record) => Ok((run, record)),
+        let found = rewind_engine::handles::find_run(self.engine.journal(), &TenantId::local(), id)
+            .await
+            .map_err(store_error)?;
+        match found {
+            Some(record) if self.sees(&record) => Ok((record.run.clone(), record)),
             _ => Err(run_not_found(id)),
         }
     }
@@ -940,7 +941,7 @@ impl Api for World {
             .map_err(store_error)?
             .ok_or_else(missing)?;
         // What the caller's runs of the script did.
-        let mut query = rewind_engine::ports::RunFilter::new(tenant);
+        let mut query = rewind_engine::ports::RunFilter::new(tenant.clone());
         query.labels = self.labels.clone();
         let records = self.engine.list_runs(&query).await.map_err(engine_error)?;
         let mut runs = RunCounts::default();
@@ -973,8 +974,18 @@ impl Api for World {
             }
         }
         let source = stored.script.source().to_owned();
+        let title = crate::view::script_title(self, &tenant, parsed)
+            .await
+            .map_err(engine_error)?;
+        let (title, description, title_source) = match title {
+            Some((title, description, source)) => (Some(title), description, Some(source)),
+            None => (None, None, None),
+        };
         Ok(ApiScript {
             digest: parsed.to_hex(),
+            title,
+            description,
+            title_source,
             headline: rewind_api::scripts::headline(&source),
             source,
             runs,

@@ -8,7 +8,6 @@ import {
   formatRelative,
   formatTime,
   shortDigest,
-  shortLabelValue,
   shortRunId,
   splitLabel,
 } from "./format";
@@ -65,9 +64,7 @@ describe("format", () => {
     expect(splitLabel("nocolon")).toBeNull();
   });
 
-  it("shortens a label's value by its middle, and fits whole chips in a cell", () => {
-    expect(shortLabelValue("development")).toBe("development");
-    expect(shortLabelValue("6afc64fdf4d56d8262048836")).toBe("6afc64fdf…048836");
+  it("fits whole chips in a cell, their values never cut", () => {
     const labels: [string, string][] = [
       ["dax", "iteration"],
       ["env", "development"],

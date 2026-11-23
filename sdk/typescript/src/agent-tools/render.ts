@@ -61,7 +61,7 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
   switch (run.status) {
     case "completed":
       if (extras.output !== undefined) {
-        lines.push(...outputSection(run.id, extras.output, limits.output));
+        lines.push(...outputSection(run.handle, extras.output, limits.output));
       }
       break;
     case "failed":
@@ -88,7 +88,7 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
   }
   if (run.status === "active" || run.status === "pending") {
     lines.push(
-      `Follow it with get_run(${args({ run_id: run.id })}), send it a signal with signal_run, or cancel it with cancel_run.`,
+      `Follow it with get_run(${args({ run_id: run.handle })}), send it a signal with signal_run, or cancel it with cancel_run.`,
     );
   }
   return lines.join("\n");
@@ -96,11 +96,11 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
 
 function headline(run: Run, limits: Limits): string {
   const about = [
-    run.parent ? `a fork of run ${run.parent.run}` : undefined,
+    run.parent ? `a fork of run ${run.parent.handle}` : undefined,
     run.workflow ? `a run of the workflow ${workflowRef(run.workflow)}` : undefined,
-    run.startedBy ? `started by run ${run.startedBy.run}${run.startedBy.detached ? ", detached" : ""}` : undefined,
+    run.startedBy ? `started by run ${run.startedBy.handle}${run.startedBy.detached ? ", detached" : ""}` : undefined,
   ].filter((part) => part !== undefined);
-  const name = `Run ${run.id}${about.length === 0 ? "" : ` (${about.join(", ")})`}`;
+  const name = `Run ${run.handle}${about.length === 0 ? "" : ` (${about.join(", ")})`}`;
   switch (run.status) {
     case "completed":
       return `${name} completed.`;
@@ -243,6 +243,51 @@ export function describeCheck(result: CheckResult, limits: Limits): string {
       : `The script type-checks, with ${counts.join(" and ")}:\n${diagnosticsText(result.diagnostics, limits)}`;
   }
   return `The script does not type-check: ${counts.join(" and ")}.\n${diagnosticsText(result.diagnostics, limits)}`;
+}
+
+/** What `check_script` adds to its answer for a script without the comment its title is read from. */
+export const UNTITLED_NOTE =
+  "Note: the script does not start with a comment that gives its title. Start it with:\n/** <title>\n *\n * <description> */\nIts title names what the script does in a few words: its runs are named after it.";
+
+/**
+ * Whether a script starts with the comment its title is read from, before any code: a block comment (`/** … *\/`) or a
+ * run of `//` lines, with a line of text that is not a tag (`@ts-check`). As the platform reads it
+ * (`rewind_core::script_doc`).
+ */
+export function hasTitle(source: string): boolean {
+  let rest = source.replace(/^\uFEFF/, "").trimStart();
+  // A shebang is not the comment.
+  if (rest.startsWith("#!")) {
+    const end = rest.indexOf("\n");
+    rest = end === -1 ? "" : rest.slice(end + 1).trimStart();
+  }
+  let lines: string[];
+  if (rest.startsWith("/*")) {
+    const end = rest.indexOf("*/", 2);
+    if (end === -1) {
+      return false;
+    }
+    lines = rest
+      .slice(2, end)
+      .replace(/^\*+/, "")
+      .split("\n")
+      .map((line) => {
+        const trimmed = line.trim();
+        return (trimmed.startsWith("*") ? trimmed.slice(1) : trimmed).trim();
+      });
+  } else if (rest.startsWith("//")) {
+    lines = [];
+    for (const line of rest.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("//")) {
+        break;
+      }
+      lines.push(trimmed.replace(/^\/+/, "").trim());
+    }
+  } else {
+    return false;
+  }
+  return lines.some((line) => line !== "" && !line.startsWith("@"));
 }
 
 /** A script refused before any run exists. */
@@ -541,7 +586,7 @@ export function describeRuns(runs: RunSummary[], more: boolean, status: RunStatu
   }
   const lines = [`${plural(runs.length, "run")}${which}, most recent first:`];
   for (const run of runs) {
-    const parts = [`${run.id}: ${run.status}${run.error ? ` (${run.error})` : ""}`];
+    const parts = [`${run.handle}: ${run.status}${run.error ? ` (${run.error})` : ""}`];
     if (run.quarantined) {
       parts.push("quarantined");
     }

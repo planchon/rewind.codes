@@ -5,6 +5,7 @@
 import { RotateCw } from "lucide-react";
 import { Ago, CopyButton, Loading, Time } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
+import { TableScroll } from "../../components/TableScroll";
 import { useAccess } from "../../state/access";
 import { useRotateSigningKey, useSigningKeys } from "../../state/secrets";
 import { ConfirmButton } from "./bits";
@@ -92,7 +93,7 @@ function SigningKeys() {
               it.
             </p>
           ) : (
-            <div className="table-wrap">
+            <TableScroll>
               <table className="grid">
                 <thead>
                   <tr>
@@ -127,7 +128,7 @@ function SigningKeys() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </>
       )}

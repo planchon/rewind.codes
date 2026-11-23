@@ -256,12 +256,14 @@ export function createWorkflowWorld(options: WorkflowOptions): WorkflowWorld {
 
   const v1: Workflow = {
     ...base,
+    number: 1,
     version: fakeDigest("workflow:triage:v1"),
     createdAt: iso(now - 12 * DAY),
     tests: [noApproval, closesAll, listsClosed],
   };
   const v2: Workflow = {
     ...base,
+    number: 2,
     version: options.triageVersion,
     createdAt: iso(now - 6 * DAY),
     parent: v1.version,
@@ -288,6 +290,7 @@ export function createWorkflowWorld(options: WorkflowOptions): WorkflowWorld {
   );
   const v3: Workflow = {
     ...base,
+    number: 3,
     version: fakeDigest("workflow:triage:v3"),
     createdAt: iso(now - 3 * HOUR),
     parent: v2.version,
@@ -297,6 +300,7 @@ export function createWorkflowWorld(options: WorkflowOptions): WorkflowWorld {
   const digestTest = store(DIGEST_TEST);
   const digest: Workflow = {
     name: "digest",
+    number: 1,
     version: options.digestVersion,
     description: "Post a weekly digest of the merged pull requests to a channel.",
     toolset: options.digestToolset,

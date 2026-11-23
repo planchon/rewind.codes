@@ -46,6 +46,7 @@ mod engine;
 mod export;
 pub mod failures;
 mod fork;
+pub mod handles;
 pub mod metrics;
 pub mod mock;
 mod payloads;

@@ -42,7 +42,8 @@ export interface ScriptTarget {
 export interface WorkflowTarget {
   /**
    * The workflow: `triage` for its latest version, `triage@<version>` (12 hex digits at least)
-   * for one version. The input is checked against its input schema (`invalid-input`).
+   * or `triage@v12` (its number) for one version. The input is checked against its input schema
+   * (`invalid-input`).
    */
   workflow: string;
   script?: undefined;
@@ -128,11 +129,11 @@ export interface ListRunsParams extends RequestOptions {
   /** Only runs whose calls failed with this kind, or that failed with this error name. */
   error?: string | undefined;
   quarantined?: boolean | undefined;
-  /** Only forks of this run. */
+  /** Only forks of this run: its handle or its id. */
   parent?: string | undefined;
   /** Only runs of this workflow, by name. */
   workflow?: string | undefined;
-  /** Only runs this run started (`triage.start(…)` in its script). */
+  /** Only runs this run started (`triage.start(…)` in its script): its handle or its id. */
   startedBy?: string | undefined;
   startedAfter?: Date | string | undefined;
   startedBefore?: Date | string | undefined;
@@ -179,6 +180,9 @@ export interface EventsParams extends RequestOptions {
 /**
  * Runs: start, follow, steer and read them. A client bound to a namespace, or holding an end user's token, reaches
  * that namespace's runs only; a key's client without one reads every namespace of the tenant.
+ *
+ * Every method that takes a run's `id` takes its handle too (`Run.handle`, `dana/triage/06bqx3k9f2mt`), which is
+ * percent-encoded in the path.
  */
 export class Runs {
   constructor(private readonly transport: Transport) {}

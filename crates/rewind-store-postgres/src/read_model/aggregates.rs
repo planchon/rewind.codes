@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rewind_core::{Digest, RunStatus, Timestamp, ToolFailureKind};
+use rewind_core::{Digest, RunHandle, RunStatus, Timestamp, ToolFailureKind};
 use rewind_engine::ports::{
     FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency, RunQuery,
     RunStats, ScriptFilter, ScriptSummary, StatsWindow, ToolStats, ToolStatsFilter, WaitingFor,
@@ -373,7 +373,8 @@ pub(super) async fn failure_groups(
     let buckets = Buckets::new(window.since, window.until, window.bucket_ms);
     let mut sql = Sql::new(
         "WITH m AS MATERIALIZED (SELECT s.run_id, s.script, s.status, s.ended_at, s.error, \
-             s.message, s.line, s.signature, s.fingerprint FROM run_summaries s WHERE ",
+             s.message, s.line, s.signature, s.fingerprint, s.namespace, s.origin, \
+             s.suffix_len FROM run_summaries s WHERE ",
     );
     push_matching(&mut sql, query);
     sql.push(" AND s.fingerprint IS NOT NULL AND s.ended_at IS NOT NULL");
@@ -393,7 +394,7 @@ pub(super) async fn failure_groups(
     .push_bind(limit(window.limit))
     .push(
         "), latest AS (SELECT DISTINCT ON (m.fingerprint) m.fingerprint, m.run_id, m.status, \
-             m.error, m.signature, m.message FROM m \
+             m.error, m.signature, m.message, m.namespace, m.origin, m.suffix_len FROM m \
              WHERE m.fingerprint IN (SELECT fingerprint FROM top) \
              ORDER BY m.fingerprint, m.ended_at DESC, m.run_id DESC), \
          lines AS (SELECT DISTINCT ON (fingerprint) fingerprint, line FROM ( \
@@ -439,7 +440,8 @@ pub(super) async fn failure_groups(
         " SELECT totals.runs, totals.fingerprints, top.fingerprint, top.runs, top.scripts, \
              top.first_ended_at, top.last_ended_at, latest.run_id, latest.status, latest.error, \
              latest.signature, latest.message, lines.line, series.buckets, series.runs, \
-             labels.labels, labels.runs \
+             labels.labels, labels.runs, latest.namespace, latest.origin, \
+             latest.suffix_len::bigint \
          FROM (SELECT count(*) AS runs, count(DISTINCT fingerprint) AS fingerprints FROM m) totals \
          LEFT JOIN top ON TRUE \
          LEFT JOIN latest ON latest.fingerprint = top.fingerprint \
@@ -481,6 +483,14 @@ pub(super) async fn failure_groups(
                 })
             })
             .collect::<Result<_, Error>>()?;
+        let latest = row.run_id(7)?;
+        let latest_handle = RunHandle::new(
+            &row.text(17)?,
+            &row.text(18)?,
+            latest,
+            usize::try_from(row.u64(19)?)
+                .map_err(|_| Error::Corrupt("a suffix's length".into()))?,
+        );
         groups.top.push(FailureGroup {
             fingerprint,
             signature: row.text(10)?,
@@ -492,7 +502,8 @@ pub(super) async fn failure_groups(
             last_ended_at: row.ts(6)?,
             line: row.opt_u32(12)?,
             labels,
-            latest: row.run_id(7)?,
+            latest,
+            latest_handle,
             latest_status: parse_status(&row.text(8)?)?,
             latest_message: row.text(11)?,
         });

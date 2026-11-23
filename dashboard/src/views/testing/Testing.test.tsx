@@ -5,7 +5,7 @@ import { SCRIPTS, WORKFLOWS } from "../../mocks/fixtures";
 import { renderApp, search, signedIn } from "../../test/app";
 
 const v2 = WORKFLOWS.triage.version;
-const v2Ref = `triage@${v2.slice(0, 12)}`;
+const v2Ref = "triage v2";
 
 /** The rows of the suite table, each as its text. */
 async function suiteRows(): Promise<string[]> {
@@ -368,7 +368,7 @@ describe("ScriptView", () => {
   it("shows the suite of the workflow versions the script belongs to", async () => {
     const { requested } = renderApp(`/scripts/${SCRIPTS.TRIAGE_REPO.digest}`);
     const section = await screen.findByRole("region", { name: "Tests of this script" });
-    const suite = await within(section).findByRole("region", { name: /^Suite of triage@/ });
+    const suite = await within(section).findByRole("region", { name: /^Suite of triage v/ });
     expect(await within(suite).findByText("latest")).toBeInTheDocument();
     expect(within(suite).getByText(/also the script of 2 older versions/)).toBeInTheDocument();
     expect(await within(suite).findByRole("table", { name: "Suite of triage" })).toBeVisible();

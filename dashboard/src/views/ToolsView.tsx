@@ -9,6 +9,7 @@ import { Empty, Loading, ProblemView, Time } from "../components/bits";
 import { Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
+import { TableScroll } from "../components/TableScroll";
 import { useTooltip } from "../components/Tooltip";
 import {
   legacyToolsQuery,
@@ -217,6 +218,15 @@ export function ToolsView() {
     <div className="page">
       <PageHeader
         title="Tools"
+        info={
+          stats.data && (
+            <p>
+              Latency, error rate and retries of the calls completed from{" "}
+              <Time ms={Date.parse(stats.data.since)} /> to{" "}
+              <Time ms={Date.parse(stats.data.until)} />.
+            </p>
+          )
+        }
         actions={
           <Seg<RangeKey>
             label="Window"
@@ -226,12 +236,6 @@ export function ToolsView() {
           />
         }
       />
-      {stats.data && (
-        <p className="page-intro">
-          Calls completed from <Time ms={Date.parse(stats.data.since)} /> to{" "}
-          <Time ms={Date.parse(stats.data.until)} />.
-        </p>
-      )}
       <QueryBar
         value={q}
         onSubmit={setQ}
@@ -284,7 +288,7 @@ export function ToolsView() {
               />
             )}
           </section>
-          <div className="table-wrap">
+          <TableScroll>
             <table className="grid tools-table">
               <thead>
                 <tr>
@@ -442,7 +446,7 @@ export function ToolsView() {
                 On a log scale. Latency runs from the call's schedule to its completion.
               </span>
             </div>
-          </div>
+          </TableScroll>
         </>
       )}
       {tip.view}

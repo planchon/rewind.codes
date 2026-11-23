@@ -67,6 +67,7 @@ use crate::webhooks::{
         operations::test_script,
         operations::list_scripts,
         operations::get_script,
+        operations::set_script_title,
         operations::start_run,
         operations::list_runs,
         operations::get_run_stats,
@@ -548,7 +549,7 @@ mod operations {
         RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
     };
     use crate::scripts::{
-        CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest,
+        CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, SetScriptTitle, TestRequest,
     };
     use crate::secrets::{
         Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
@@ -756,6 +757,24 @@ mod operations {
     )]
     pub(super) fn get_script() {}
 
+    /// Give a script a title
+    ///
+    /// The title and description people see for the script, for the whole organization, over
+    /// those of the comment at its top: the source does not change. `title: null` removes them,
+    /// and the comment's show again. A new run of the script takes its origin from the title.
+    /// Requires `scripts:write`.
+    #[utoipa::path(
+        patch, path = "/v1/scripts/{digest}", tag = "reading", operation_id = "setScriptTitle",
+        params(("digest" = String, Path, description = "SHA-256 of the source, lowercase hex.")),
+        request_body = SetScriptTitle,
+        responses(
+            (status = 200, description = "The script, with its title as it now is.", body = Script),
+            (status = 404, description = "No such script, or not one the caller sees.", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The title is empty or longer than 120 characters, or the description longer than 2,000 (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn set_script_title() {}
+
     // ---------------------------------------------------------------------------------------
     // Runs
 
@@ -824,7 +843,7 @@ mod operations {
     /// A run's state (`get_run`)
     #[utoipa::path(
         get, path = "/v1/runs/{id}", tag = "runs", operation_id = "getRun",
-        params(("id" = String, Path, description = "The run id."), GetRunQuery),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), GetRunQuery),
         responses(
             (status = 200, description = "The run.", body = Run),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
@@ -838,7 +857,7 @@ mod operations {
     /// is cancelled first.
     #[utoipa::path(
         delete, path = "/v1/runs/{id}", tag = "runs", operation_id = "deleteRun",
-        params(("id" = String, Path, description = "The run id.")),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).")),
         responses(
             (status = 204, description = "Erased."),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
@@ -849,7 +868,7 @@ mod operations {
     /// The run's trace, for a model
     #[utoipa::path(
         get, path = "/v1/runs/{id}/trace", tag = "runs", operation_id = "getRunTrace",
-        params(("id" = String, Path, description = "The run id."), TraceQuery),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), TraceQuery),
         responses(
             (status = 200, description = "The trace.", body = Trace),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
@@ -862,7 +881,7 @@ mod operations {
     /// Every payload of the entry has its value, whatever its size.
     #[utoipa::path(
         get, path = "/v1/runs/{id}/entries/{idx}", tag = "runs", operation_id = "getRunEntry",
-        params(("id" = String, Path, description = "The run id."), ("idx" = u64, Path, description = "The entry's index, from 0.")),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), ("idx" = u64, Path, description = "The entry's index, from 0.")),
         responses(
             (status = 200, description = "The entry.", body = Entry),
             (status = 404, description = "No such run or entry.", body = Problem, content_type = "application/problem+json"),
@@ -877,7 +896,7 @@ mod operations {
     #[utoipa::path(
         get, path = "/v1/runs/{id}/events", tag = "runs", operation_id = "streamRunEvents",
         params(
-            ("id" = String, Path, description = "The run id."),
+            ("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."),
             EventsQuery,
             ("Last-Event-ID" = Option<String>, Header, description = "Resume after this entry: the same as `from` set to it plus one."),
         ),
@@ -919,7 +938,7 @@ mod operations {
     #[utoipa::path(
         post, path = "/v1/runs/{id}/signals/{name}", tag = "runs", operation_id = "signalRun",
         params(
-            ("id" = String, Path, description = "The run id."),
+            ("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."),
             ("name" = String, Path, description = "The signal's name."),
             ("Idempotency-Key" = Option<String>, Header, description = "The same key sent twice to a run delivers one signal."),
         ),
@@ -937,7 +956,7 @@ mod operations {
     /// Cancel a run (`cancel_run`)
     #[utoipa::path(
         post, path = "/v1/runs/{id}/cancel", tag = "runs", operation_id = "cancelRun",
-        params(("id" = String, Path, description = "The run id.")),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).")),
         request_body(content = Option<CancelRun>, description = "Optional."),
         responses(
             (status = 202, description = "Cancellation requested; the run's state, after `wait` if given.", body = Run),
@@ -951,7 +970,7 @@ mod operations {
     #[utoipa::path(
         post, path = "/v1/runs/{id}/fork", tag = "runs", operation_id = "forkRun",
         params(
-            ("id" = String, Path, description = "The parent run's id."),
+            ("id" = String, Path, description = "The parent run's id, or its handle percent-encoded."),
             ("Idempotency-Key" = Option<String>, Header, description = "A request repeated with the same key returns the fork the first one started (200)."),
         ),
         request_body = ForkRun,
@@ -971,7 +990,7 @@ mod operations {
     /// A document of the stored format v1 (`archi/02-journal.md`).
     #[utoipa::path(
         get, path = "/v1/runs/{id}/journal", tag = "runs", operation_id = "exportRunJournal",
-        params(("id" = String, Path, description = "The run id."), JournalQuery),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), JournalQuery),
         responses(
             (status = 200, description = "The journal document or the cassette, stored format v1.", body = Object),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
@@ -984,7 +1003,7 @@ mod operations {
     /// The run is activated again, typically after a fix of the platform.
     #[utoipa::path(
         post, path = "/v1/runs/{id}/release", tag = "runs", operation_id = "releaseRun",
-        params(("id" = String, Path, description = "The run id.")),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).")),
         responses(
             (status = 200, description = "Released.", body = Run),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
@@ -999,7 +1018,7 @@ mod operations {
     /// failures.
     #[utoipa::path(
         post, path = "/v1/runs/{id}/give-up", tag = "runs", operation_id = "giveUpRun",
-        params(("id" = String, Path, description = "The run id.")),
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).")),
         responses(
             (status = 200, description = "Given up; the run is aborted.", body = Run),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),

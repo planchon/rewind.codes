@@ -5,14 +5,16 @@
 // `GET …/secrets/{name}/usage`. Writing needs `secrets:write`, and a namespace's secret a grant
 // that is not limited to labels.
 import { PenLine, Plus, Trash2 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
-import { Ago, Empty, LabelList, Loading, RunId, useNow } from "../../components/bits";
+import { runPath } from "../../app/runLinks";
+import { Ago, Empty, LabelList, Loading, RunHandle, RunId, useNow } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { HoverCard } from "../../components/HoverCard";
 import { NamespaceName } from "../../components/NamespaceName";
+import { TableScroll } from "../../components/TableScroll";
 import { formatLabels } from "../../model/access";
 import { formatCount } from "../../model/format";
 import {
@@ -38,11 +40,9 @@ export function useCanWriteSecrets(namespace: string | null): boolean {
 
 export function SecretList({
   namespace,
-  intro,
 }: {
   /** `null`: the organization's secrets. */
   namespace: string | null;
-  intro: ReactNode;
 }) {
   const list = useSecrets(namespace);
   const write = useCanWriteSecrets(namespace);
@@ -55,9 +55,8 @@ export function SecretList({
 
   return (
     <div className="org-section secrets">
-      <div className="section-bar">
-        <p className="section-intro dim">{intro}</p>
-        {write && (
+      {write && (
+        <div className="section-bar">
           <button
             type="button"
             className="btn"
@@ -68,8 +67,8 @@ export function SecretList({
           >
             <Plus size={12} /> New secret
           </button>
-        )}
-      </div>
+        </div>
+      )}
       {notice && (
         <div className="notice" role="status">
           {notice}
@@ -115,7 +114,7 @@ export function SecretList({
             : "No secret of this end user yet."}
         </Empty>
       ) : (
-        <div className="table-wrap">
+        <TableScroll>
           <table className="grid secrets-table">
             <thead>
               <tr>
@@ -132,8 +131,10 @@ export function SecretList({
               {list.data.map((s) => (
                 <tr key={s.reference}>
                   <td>
-                    <span className="key-name">{s.name}</span>{" "}
-                    <span className="mono muted">{s.reference}</span>
+                    <span className="two-lines">
+                      <span className="key-name">{s.name}</span>
+                      <span className="mono">{s.reference}</span>
+                    </span>
                   </td>
                   {org && (
                     <td className="wrap">
@@ -142,9 +143,10 @@ export function SecretList({
                   )}
                   <td className="dim">
                     <span
+                      className="two-lines"
                       title={`Created by ${s.createdBy} on ${new Date(Date.parse(s.createdAt)).toUTCString()}`}
                     >
-                      <PrincipalName text={s.updatedBy} names={names} />,{" "}
+                      <PrincipalName text={s.updatedBy} names={names} />
                       <Ago ms={Date.parse(s.updatedAt)} />
                     </span>
                   </td>
@@ -155,6 +157,7 @@ export function SecretList({
                         label={`Reads of ${s.reference} per day`}
                         width={90}
                         height={18}
+                        tone="neutral"
                       />
                       <span className="num">{formatCount(totalReads(s.reads))}</span>
                     </span>
@@ -170,25 +173,27 @@ export function SecretList({
                       <span className="row-actions">
                         <button
                           type="button"
-                          className="btn small"
+                          className="icon-btn"
                           aria-label={`Write a new value of ${s.reference}`}
                           onClick={() => {
                             setNotice(null);
                             setWriting({ existing: s });
                           }}
+                          title="Write a new value"
                         >
-                          <PenLine size={12} aria-hidden="true" /> New value
+                          <PenLine size={13} aria-hidden="true" />
                         </button>
                         <button
                           type="button"
-                          className="btn small"
+                          className="icon-btn danger"
                           aria-label={`Delete ${s.reference}`}
                           onClick={() => {
                             setNotice(null);
                             setDeleting(s);
                           }}
+                          title="Delete…"
                         >
-                          <Trash2 size={12} aria-hidden="true" /> Delete…
+                          <Trash2 size={13} aria-hidden="true" />
                         </button>
                       </span>
                     </td>
@@ -197,7 +202,7 @@ export function SecretList({
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </div>
   );
@@ -210,26 +215,32 @@ function LastRead({ secret, org }: { secret: Secret; org: boolean }) {
   // any run exists: no run to link to.
   if (!last.run)
     return (
-      <span className="secret-last-read">
-        <Ago ms={Date.parse(last.at)} />{" "}
+      <span className="two-lines">
+        <Ago ms={Date.parse(last.at)} />
         <span title="Read to list the tools of the MCP server it is attached for">
           at a toolset's registration
         </span>
       </span>
     );
   return (
-    <span className="secret-last-read">
+    <span className="two-lines">
       <Ago ms={Date.parse(last.at)} />
-      {" by "}
-      <Link to={`/runs/${last.run}`} title="The run that read it last">
-        <RunId id={last.run} />
-      </Link>
-      {org && last.namespace && (
-        <>
-          {" · "}
-          <NamespaceName name={last.namespace} />
-        </>
-      )}
+      <span className="wraps">
+        {"by "}
+        <Link to={runPath(last.runHandle ?? last.run)} title="The run that read it last">
+          {last.runHandle ? (
+            <RunHandle handle={last.runHandle} id={last.run} namespace={false} copy={false} />
+          ) : (
+            <RunId id={last.run} />
+          )}
+        </Link>
+        {org && last.namespace && (
+          <>
+            {" · "}
+            <NamespaceName name={last.namespace} />
+          </>
+        )}
+      </span>
     </span>
   );
 }

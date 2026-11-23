@@ -26,6 +26,7 @@ use crate::connections::{self, McpCaller};
 use crate::deliveries::{Background, Deliveries, PER_SUBSCRIPTION};
 use crate::embedded::Directory;
 use crate::oauth::OAuthServer;
+use crate::titles::ScriptTexts;
 use crate::wiring::blobs::Blobs;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
@@ -294,11 +295,13 @@ async fn start_wired(
     } else {
         WebhookEgress::public()
     };
+    let texts = Arc::new(ScriptTexts::default());
     let deliveries = Arc::new(Deliveries::new(
         HttpWebhooks::new(
             ServerRender {
                 store: store.clone(),
                 blobs: blobs.clone(),
+                texts: texts.clone(),
             },
             Retries::default(),
             webhook_egress.clone(),
@@ -372,6 +375,7 @@ async fn start_wired(
         tools,
         exporter,
         deliveries,
+        texts,
         settings,
         sign_in,
         oauth,

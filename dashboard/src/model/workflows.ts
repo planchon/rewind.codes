@@ -27,8 +27,10 @@ export function workflowCallOf(tool: string): { workflow: string; op: "start" | 
 }
 
 /** `triage@9f2c4e1a07b3`: a workflow's name and the first 12 hex digits of its version. */
-export function workflowRef(workflow: { name: string; version: string }): string {
-  return `${workflow.name}@${workflow.version.slice(0, 12)}`;
+export function workflowRef(workflow: { name: string; version: string; number?: number }): string {
+  return workflow.number
+    ? `${workflow.name} v${workflow.number}`
+    : `${workflow.name}@${workflow.version.slice(0, 12)}`;
 }
 
 /** A payload's value: inline, or read from its preview when it is whole JSON. */

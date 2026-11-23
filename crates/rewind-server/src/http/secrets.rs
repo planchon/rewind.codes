@@ -305,20 +305,6 @@ fn writes_namespaces(caller: &Caller) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Who writes: a principal (`user:…`, `key:…`, `connection:…`), `token:<namespace>` for an end
-/// user's token, `local` over the embedded server's socket.
-fn writer(caller: &Caller) -> String {
-    if caller.token.is_some()
-        && let Some(namespace) = &caller.namespace
-    {
-        return format!("token:{namespace}");
-    }
-    caller
-        .principal
-        .as_ref()
-        .map_or_else(|| "local".to_owned(), ToString::to_string)
-}
-
 /// The secret, if the caller sees it: an organization's carrying the caller's labels, or a
 /// namespace's. 404 otherwise.
 async fn seen(app: &App, caller: &Caller, id: &SecretId) -> Result<SecretMeta, ApiError> {
@@ -369,7 +355,7 @@ async fn write(
         id: id.clone(),
         value: Secret::new(secret.value),
         labels,
-        by: writer(caller),
+        by: caller.writer(),
     };
     let (put, resumed) = app.engine.put_secret(&caller.tenant, &new).await?;
     tracing::info!(tenant = %caller.tenant, secret = %id, resumed, "secret written");
@@ -475,8 +461,9 @@ fn carries(labels: &BTreeMap<String, String>, wanted: &BTreeMap<String, String>)
 }
 
 /// A secret as `caller` sees it: its last read left out when it was by a run the caller does not
-/// see (another label, another end user), which would otherwise name that run and its namespace.
-/// A registration's read names neither: every caller that sees the secret sees it.
+/// see (another label, another end user), which would otherwise name that run and its namespace;
+/// with the handle of that run while it is kept. A registration's read names neither: every
+/// caller that sees the secret sees it.
 async fn seen_by(app: &App, caller: &Caller, meta: &SecretMeta) -> Result<SecretView, ApiError> {
     let mut view = view(meta);
     let restricted = !caller.labels.is_empty() || caller.namespace.is_some();
@@ -485,14 +472,16 @@ async fn seen_by(app: &App, caller: &Caller, meta: &SecretMeta) -> Result<Secret
         .as_ref()
         .and_then(|last| last.by.run())
         .map(|(run, _)| run);
-    if restricted && let Some(last) = last_run {
+    if let Some(last) = last_run {
         let run = rewind_engine::ports::RunRef::new(caller.tenant.clone(), last);
-        let sees = match app.store.get_run(&run).await? {
-            Some(record) => caller.sees_run(&record),
-            None => false,
-        };
-        if !sees {
+        let record = app.store.get_run(&run).await?;
+        let sees = record
+            .as_ref()
+            .is_some_and(|record| caller.sees_run(record));
+        if restricted && !sees {
             view.last_read = None;
+        } else if let (Some(read), Some(record)) = (view.last_read.as_mut(), record) {
+            read.run_handle = Some(record.handle().to_string());
         }
     }
     Ok(view)
@@ -547,6 +536,8 @@ pub(crate) fn view(meta: &SecretMeta) -> SecretView {
             };
             LastRead {
                 run,
+                // The run's record names it: `seen_by` reads it.
+                run_handle: None,
                 namespace,
                 at: timestamp(last.at),
             }

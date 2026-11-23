@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import type { Payload, Run, Task, Toolset, Workflow } from "../src/types.js";
 
 export const RUN_ID = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10";
+/** The handle of the run `RUN_ID`. */
+export const HANDLE = "user_2fQ81/triage/06bqx3k9f2mt";
 export const TOOLSET = "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4";
 /** The end user the runs and tasks of the tests belong to. */
 export const NAMESPACE = "user_2fQ81";
@@ -23,6 +25,7 @@ export function payload(value: unknown, inline = true): Payload {
 export function run(overrides: Partial<Run> = {}): Run {
   return {
     id: RUN_ID,
+    handle: HANDLE,
     namespace: NAMESPACE,
     status: "completed",
     createdAt: "2026-11-12T10:00:00Z",
@@ -62,6 +65,7 @@ export function workflow(overrides: Partial<Workflow> = {}): Workflow {
   return {
     name: "triage",
     version: VERSION,
+    number: 3,
     description: "Triage the stale issues of a repository, after approval.",
     toolset: TOOLSET,
     script: "cd".repeat(32),

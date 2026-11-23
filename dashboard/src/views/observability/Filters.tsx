@@ -18,6 +18,7 @@ import {
 import type { Facets, FacetValue } from "../../model/types";
 import { useAccess } from "../../state/access";
 import { useNamespaceSuggestions } from "../../state/namespaces";
+import { useScriptTitles } from "../../state/scripts";
 import { WINDOW_WORDS, WINDOWS } from "../search";
 
 /** The window a query's `started:>now-…` term names, if it names one of the timeline's. */
@@ -69,12 +70,26 @@ export function Checkbox({ state }: { state: FacetState }) {
   );
 }
 
-/** The namespaces whose name starts with what is typed, the most active first. */
-export function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) {
-  const [typed, setTyped] = useState("");
+/**
+ * The search of a namespace, above the namespaces the counts list: what is typed narrows that list
+ * to the names (or display names) that start with it, and finds below it, the most active first,
+ * the namespaces it does not hold.
+ */
+export function NamespaceSearch({
+  typed,
+  onTyped,
+  listed,
+  onPick,
+}: {
+  typed: string;
+  onTyped: (typed: string) => void;
+  /** The namespaces the list under the search holds. */
+  listed: readonly string[];
+  onPick: (name: string) => void;
+}) {
   const prefix = useSettled(typed.trim() ? typed.trim() : null);
   const found = useNamespaceSuggestions(prefix);
-  const names = found.data?.namespaces ?? [];
+  const names = (found.data?.namespaces ?? []).filter((n) => !listed.includes(n.name));
   return (
     <div className="filter-search">
       <input
@@ -82,7 +97,7 @@ export function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) 
         aria-label="Find a namespace"
         placeholder="Find a namespace…"
         value={typed}
-        onChange={(e) => setTyped(e.target.value)}
+        onChange={(e) => onTyped(e.target.value)}
         spellCheck={false}
         autoComplete="off"
       />
@@ -95,7 +110,7 @@ export function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) 
                 className="filter-row"
                 onClick={() => {
                   onPick(n.name);
-                  setTyped("");
+                  onTyped("");
                 }}
               >
                 <Checkbox state={null} />
@@ -112,6 +127,20 @@ export function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) 
         </ul>
       )}
     </div>
+  );
+}
+
+/** The rows a search keeps: those whose value, or what shows for it, starts with what is typed. */
+export function rowsStartingWith(
+  rows: readonly FacetRow[],
+  typed: string,
+  show?: (value: string) => string,
+): readonly FacetRow[] {
+  const t = typed.trim().toLowerCase();
+  if (!t) return rows;
+  return rows.filter(
+    (r) =>
+      r.value.toLowerCase().startsWith(t) || (show?.(r.value) ?? "").toLowerCase().startsWith(t),
   );
 }
 
@@ -182,6 +211,7 @@ function FilterGroup({
   q: string;
   onToggle: (field: string, value: string) => void;
 }) {
+  const [typed, setTyped] = useState("");
   const rows = facetRows(q, group.field, group.values);
   if (rows.length === 0 && !group.search) return null;
   const picked = rows.filter((r) => r.state !== null).length;
@@ -193,17 +223,22 @@ function FilterGroup({
       </summary>
       {/* biome-ignore lint/a11y/useSemanticElements: a list of toggles named by its group */}
       <div className="filter-box" role="group" aria-label={group.title}>
+        {group.search === "namespace" && (
+          <NamespaceSearch
+            typed={typed}
+            onTyped={setTyped}
+            listed={rows.map((r) => r.value)}
+            onPick={(name) => onToggle("namespace", name)}
+          />
+        )}
         <FacetToggles
           title={group.title}
           field={group.field}
-          rows={rows}
+          rows={rowsStartingWith(rows, typed, group.show)}
           onToggle={onToggle}
           show={group.show}
           dot={group.dot ?? false}
         />
-        {group.search === "namespace" && (
-          <NamespaceSearch onPick={(name) => onToggle("namespace", name)} />
-        )}
       </div>
     </details>
   );
@@ -220,6 +255,7 @@ export function FilterGroups({
 }) {
   const access = useAccess();
   const label = useNamespaceLabel();
+  const titleOf = useScriptTitles();
   const groups: Group[] = [
     { field: "status", title: "Status", values: facets?.statuses ?? [], dot: true, open: true },
     {
@@ -240,7 +276,12 @@ export function FilterGroups({
     { field: "error", title: "Error", values: facets?.errors ?? [] },
     { field: "waiting", title: "Waiting for", values: facets?.waiting ?? [] },
     { field: "signal", title: "Signal", values: facets?.signals ?? [] },
-    { field: "script", title: "Script", values: facets?.scripts ?? [], show: shortDigest },
+    {
+      field: "script",
+      title: "Script",
+      values: facets?.scripts ?? [],
+      show: (digest: string) => titleOf(digest) ?? `Untitled · ${shortDigest(digest)}`,
+    },
   ];
   return (
     <div className="filters-list">

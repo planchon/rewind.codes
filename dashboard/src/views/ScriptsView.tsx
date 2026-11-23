@@ -4,11 +4,12 @@
 // namespace, sent as `Rewind-Namespace`: the scripts of one end user, counted over their runs.
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
-import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
+import { Ago, Empty, LabelList, Loading, ProblemView } from "../components/bits";
 import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
+import { TableScroll } from "../components/TableScroll";
 import { legacyScriptsQuery, RANGES, SCRIPTS_LANGUAGE, scriptsSearch } from "../model/filters";
 import { formatCount } from "../model/format";
 import { fieldTerm, joinQuery, labelTerm, queryLink, splitTerms, withTerm } from "../model/query";
@@ -16,7 +17,7 @@ import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../model/types
 import { useRunStats } from "../state/aggregates";
 import { type ScriptList, useScriptList } from "../state/scripts";
 import { useListQuery, useRunQueryValues } from "./search";
-import { TableToolbar } from "./TableTop";
+import { TableTop } from "./TableTop";
 
 const LEGACY_NAMES = ["label", "tool"] as const;
 
@@ -99,10 +100,22 @@ function ScriptRow({
       }}
     >
       <td className="script-cell">
-        <Link to={`/scripts/${script.digest}`} className="headline mono" title={script.headline}>
-          {script.headline || <span className="muted">(empty)</span>}
-        </Link>
-        <Digest digest={script.digest} />
+        {script.title ? (
+          <Link
+            to={`/scripts/${script.digest}`}
+            className="headline script-title"
+            title={script.description ?? script.title}
+          >
+            {script.title}
+          </Link>
+        ) : (
+          <Link to={`/scripts/${script.digest}`} className="headline" title={script.headline}>
+            <span className="muted">Untitled script</span>
+          </Link>
+        )}
+        <span className="cell-sub mono" title={script.digest}>
+          {script.headline || "(empty)"}
+        </span>
       </td>
       <td className="right">
         <Link
@@ -176,23 +189,13 @@ export function ScriptTable({
     return <ProblemView error={scripts.error} title="The scripts could not be read" />;
   const list = scripts.rows;
   return (
-    <>
-      <TableToolbar
+    <div className="live-table">
+      <TableTop
         pending={scripts.pending}
         onShow={scripts.showPending}
         setAtTop={scripts.setAtTop}
-      >
-        {list.length > 0 && (
-          <span className="num muted">
-            {formatCount(list.length)} script{list.length === 1 ? "" : "s"}
-            {scripts.hasMore ? " shown" : ""}
-          </span>
-        )}
-      </TableToolbar>
-      <div
-        className={`table-wrap${scripts.stale ? " is-stale" : ""}`}
-        aria-busy={scripts.stale || undefined}
-      >
+      />
+      <TableScroll stale={scripts.stale}>
         <table className="grid">
           <thead>
             <tr>
@@ -230,8 +233,8 @@ export function ScriptTable({
             </button>
           </div>
         )}
-      </div>
-    </>
+      </TableScroll>
+    </div>
   );
 }
 

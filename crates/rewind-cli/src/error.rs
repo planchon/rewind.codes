@@ -130,6 +130,7 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::InvalidInput
                 | ProblemType::InvalidTest
                 | ProblemType::InvalidSignal
+                | ProblemType::InvalidTitle
                 | ProblemType::SecretRequired,
             ) => Exit::Usage,
             Some(ProblemType::TestsFailed) => Exit::Failed,

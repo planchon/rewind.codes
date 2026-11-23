@@ -124,12 +124,17 @@ export function buildTimeScale(times: readonly number[], options: ScaleOptions =
     .filter((s) => s.isBreak)
     .map((s) => ({ from: s.from, to: s.to, x0: s.x0, x1: s.x1 }));
 
-  // Sections are the linear stretches between breaks; each gets its own ticks.
+  // Sections are the linear stretches between breaks; each gets its own ticks. A break that ends
+  // the axis, or follows another, has no stretch after it: its own label says how long it is.
   const ticks: Tick[] = [];
   let sectionStart = 0;
   for (let i = 0; i <= segments.length; i += 1) {
     const segment = segments[i];
     if (segment && !segment.isBreak) continue;
+    if (i === sectionStart && i > 0) {
+      sectionStart = i + 1;
+      continue;
+    }
     const from = segments[sectionStart]?.from ?? t0;
     const to = segments[i - 1]?.to ?? from;
     const xFrom = position(from);
@@ -148,6 +153,8 @@ export function buildTimeScale(times: readonly number[], options: ScaleOptions =
       for (let t = from + step; t <= to; t += step) {
         const tx = position(t);
         if (tx - xFrom < tickSpacing * 0.75 && ticks.length > 0) continue;
+        // The label of the break that ends the section sits there.
+        if (segment && xTo - tx < tickSpacing * 0.75) continue;
         ticks.push({ t, x: tx, label: `+${formatDuration(t - from)}`, major: false });
       }
     }

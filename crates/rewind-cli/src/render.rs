@@ -13,9 +13,9 @@ pub(crate) fn run(run: &Run) -> String {
         let level = format!("{:?}", log.level).to_lowercase();
         let _ = writeln!(text, "[{level}] {}", log.message);
     }
-    let _ = write!(text, "run {} {}", run.id, run.status);
+    let _ = write!(text, "run {} {}", run.handle, run.status);
     if let Some(parent) = &run.parent {
-        let _ = write!(text, " (fork of {}", parent.run);
+        let _ = write!(text, " (fork of {}", parent.handle);
         if let Some(at) = parent.at {
             let _ = write!(text, " at entry {at}");
         }
@@ -33,7 +33,7 @@ pub(crate) fn run(run: &Run) -> String {
         let _ = writeln!(
             text,
             "  `rewind release {}` retries it, `rewind release {} --give-up` aborts it",
-            run.id, run.id
+            run.handle, run.handle
         );
     }
     match run.status {
@@ -171,12 +171,16 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
             let _ = write!(status, " {error}");
         }
         rows.push([
-            run.id.clone(),
+            run.handle.clone(),
             status,
             run.started_at.to_string(),
             run.tool_calls.to_string(),
             run.errors.to_string(),
-            shorten(&run.headline, HEADLINE_CHARS),
+            // The script's title, else its first line.
+            shorten(
+                run.script_title.as_deref().unwrap_or(&run.headline),
+                HEADLINE_CHARS,
+            ),
             run.labels
                 .iter()
                 .map(|(key, value)| format!("{key}={value}"))
@@ -187,7 +191,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
     table(&rows)
 }
 
-/// Characters of a script's first line in `rewind runs`.
+/// Characters of a script's title or first line in `rewind runs`.
 const HEADLINE_CHARS: usize = 40;
 
 fn shorten(text: &str, chars: usize) -> String {
@@ -305,10 +309,12 @@ mod tests {
     fn active_run() -> Run {
         Run {
             id: "r1".into(),
+            handle: "local/script/06bqx3k9f2mt".into(),
             namespace: "local".parse().unwrap(),
             status: RunStatus::Active,
             quarantine: None,
             script: "s".into(),
+            script_title: None,
             toolset: "t".into(),
             epoch: 1,
             mode: RunMode::Live,
@@ -342,7 +348,7 @@ mod tests {
         let text = run(&active_run());
         assert_eq!(
             text,
-            "run r1 active\nwaiting for:\n  - signal \"approval\" (script.ts:4:9)\n"
+            "run local/script/06bqx3k9f2mt active\nwaiting for:\n  - signal \"approval\" (script.ts:4:9)\n"
         );
     }
 
@@ -362,7 +368,7 @@ mod tests {
         let text = run(&failed);
         assert!(
             text.contains(
-                "run r1 failed\nTypeError: x is undefined\n  at script.ts:7:3\n  7 | x.y"
+                "run local/script/06bqx3k9f2mt failed\nTypeError: x is undefined\n  at script.ts:7:3\n  7 | x.y"
             )
         );
 

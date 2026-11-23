@@ -10,9 +10,9 @@ use std::time::Duration;
 use rewind_core::{
     AbortKind, AbortReason, Annotation, Attachments, CancelReason, Command, Completion, Digest,
     Epoch, Event, HistoryEntry, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted,
-    RunStatus, Script, SecretName, SecretRef, Seed, Seq, Suite, SuiteTest, Timestamp, ToolFailure,
-    ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow, WorkflowSchemas,
-    end_signal_name,
+    RunStatus, SUFFIX_LEN, Script, SecretName, SecretRef, Seed, Seq, Suite, SuiteTest, Timestamp,
+    ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow,
+    WorkflowSchemas, end_signal_name, run_suffix, suffix_range,
 };
 use serde_json::json;
 
@@ -21,11 +21,11 @@ use crate::ports::{
     AcquireRunnable, Activation, CompiledScript, CreateRun, Enqueued, ExpiredRuns, FeedConsumer,
     ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
     ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
-    Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
-    SecretId, SecretUsage, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef,
-    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
-    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowAttaching,
-    WorkflowFilter, deferred_timeout_failure,
+    Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, ScriptTitle,
+    Secret, SecretId, SecretUsage, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter,
+    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord,
+    ToolDeclarations, TraceContext, Trigger, Watched, WebhookEventType, WebhookToken,
+    WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DeleteNamespace, DisplayName, DropNamespace, Month, NamespaceCursor, NamespaceFilter,
@@ -47,6 +47,17 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     );
     check!("journal", new_store(), create_run_enqueues_run_started);
     check!("journal", new_store(), run_ids_are_unique_across_tenants);
+    check!("journal", new_store(), runs_get_handles_no_other_run_shares);
+    check!(
+        "journal",
+        new_store(),
+        script_titles_are_given_and_taken_back
+    );
+    check!(
+        "journal",
+        new_store(),
+        workflow_versions_are_numbered_by_workflow
+    );
     check!(
         "journal",
         new_store(),
@@ -346,6 +357,7 @@ fn new_run(run: RunRef) -> NewRun {
     NewRun {
         run,
         namespace: alice(),
+        origin: "triage".into(),
         started: started(1, Timestamp(T0.0 + DAY)),
         metadata: RunMetadata::default(),
         created_at: T0,
@@ -359,6 +371,7 @@ fn new_run_of(run: RunRef, namespace: &NamespaceName, script: &[u8], at: Timesta
     NewRun {
         run,
         namespace: namespace.clone(),
+        origin: "script".into(),
         started,
         metadata: RunMetadata::default(),
         created_at: at,
@@ -5895,5 +5908,248 @@ pub async fn tests_of_an_erased_namespace_go_whatever_references_them<S: Journal
             .await
             .expect("unreferenced_tests"),
         [(acme(), bob.digest)]
+    );
+}
+
+// Handles, script titles and version numbers
+
+/// A UUIDv7 of millisecond `ms` whose 12 bits after it are `rand_a`.
+fn v7(ms: u64, rand_a: u16, rand_b: u64) -> RunId {
+    RunId::from_v7_parts(ms, rand_a, rand_b)
+}
+
+pub async fn runs_get_handles_no_other_run_shares<S: JournalStore>(store: &S) {
+    let create = |id: RunId, tenant: TenantId, origin: &str| {
+        let mut run = new_run(RunRef::new(tenant, id));
+        run.origin = origin.into();
+        async move {
+            store.create_run(run, None).await.expect("create_run");
+        }
+    };
+    let first = v7(1_795_383_896_000, 0x0c5, 1);
+    create(first, acme(), "triage").await;
+    let record = store
+        .get_run(&RunRef::new(acme(), first))
+        .await
+        .expect("get_run")
+        .expect("the run");
+    assert_eq!(record.origin, "triage");
+    assert_eq!(
+        usize::from(record.suffix_len),
+        SUFFIX_LEN,
+        "a run alone gets the short suffix"
+    );
+    assert_eq!(
+        record.handle().to_string(),
+        format!("alice/triage/{}", run_suffix(first, SUFFIX_LEN))
+    );
+
+    // Another tenant's run of the same first bits changes nothing for this one.
+    let elsewhere = v7(1_795_383_896_000, 0x0c5, 2);
+    create(elsewhere, tenant("other"), "triage").await;
+    let theirs = store
+        .get_run(&RunRef::new(tenant("other"), elsewhere))
+        .await
+        .expect("get_run")
+        .expect("the run");
+    assert_eq!(usize::from(theirs.suffix_len), SUFFIX_LEN);
+
+    // A run of this tenant whose first 60 bits are the first's gets a longer suffix.
+    let twin = v7(1_795_383_896_000, 0x0c5, 3);
+    create(twin, acme(), "digest").await;
+    let twin_record = store
+        .get_run(&RunRef::new(acme(), twin))
+        .await
+        .expect("get_run")
+        .expect("the run");
+    assert!(usize::from(twin_record.suffix_len) > SUFFIX_LEN);
+    assert_ne!(
+        run_suffix(first, usize::from(twin_record.suffix_len)),
+        run_suffix(twin, usize::from(twin_record.suffix_len)),
+        "its suffix tells it apart"
+    );
+    let first_record = store
+        .get_run(&RunRef::new(acme(), first))
+        .await
+        .expect("get_run")
+        .expect("the run");
+    assert_eq!(
+        usize::from(first_record.suffix_len),
+        SUFFIX_LEN,
+        "the first keeps its suffix"
+    );
+
+    // The runs a suffix names, by id, in their tenant only.
+    let (low, high) = suffix_range(&run_suffix(first, SUFFIX_LEN)).expect("a range");
+    let named = store
+        .runs_in_range(&acme(), low, high, 10)
+        .await
+        .expect("runs_in_range");
+    assert_eq!(
+        named.iter().map(|r| r.run.id).collect::<Vec<_>>(),
+        [first, twin]
+    );
+    let limited = store
+        .runs_in_range(&acme(), low, high, 1)
+        .await
+        .expect("runs_in_range");
+    assert_eq!(limited.len(), 1);
+    let other_ms = v7(1_795_383_896_001, 0, 9);
+    create(other_ms, acme(), "triage").await;
+    let (low, high) = suffix_range(&run_suffix(other_ms, SUFFIX_LEN)).expect("a range");
+    assert_eq!(
+        store
+            .runs_in_range(&acme(), low, high, 10)
+            .await
+            .expect("runs_in_range")
+            .iter()
+            .map(|r| r.run.id)
+            .collect::<Vec<_>>(),
+        [other_ms]
+    );
+    assert!(
+        store
+            .runs_in_range(&tenant("nobody"), low, high, 10)
+            .await
+            .expect("runs_in_range")
+            .is_empty()
+    );
+}
+
+pub async fn script_titles_are_given_and_taken_back<S: JournalStore>(store: &S) {
+    let script = Script::new("// Daily digest\nexport default async () => 1;");
+    let other = Script::new("export default async () => 2;");
+    for (tenant, script) in [
+        (acme(), &script),
+        (acme(), &other),
+        (tenant("other"), &script),
+    ] {
+        store
+            .put_script(
+                &tenant,
+                script,
+                &CompiledScript {
+                    javascript: "compiled".into(),
+                    source_map: String::new(),
+                },
+            )
+            .await
+            .expect("put_script");
+    }
+    let title = ScriptTitle {
+        title: "Triage new GitHub issues".into(),
+        description: Some("Labels each new issue.".into()),
+        updated_by: "user:user_01ADA".into(),
+        updated_at: T0,
+    };
+    assert!(
+        store
+            .set_script_title(&acme(), script.digest(), Some(&title))
+            .await
+            .expect("set_script_title")
+    );
+    assert!(
+        !store
+            .set_script_title(&acme(), Digest::of(b"no such script"), Some(&title))
+            .await
+            .expect("set_script_title"),
+        "a script the tenant does not have takes no title"
+    );
+    let digests = [script.digest(), other.digest()];
+    let titles = |tenant: TenantId| async move {
+        store
+            .script_titles(&tenant, &digests)
+            .await
+            .expect("script_titles")
+    };
+    assert_eq!(titles(acme()).await, [(script.digest(), title.clone())]);
+    assert!(
+        titles(tenant("other")).await.is_empty(),
+        "titles are the tenant's"
+    );
+
+    // Given again, it replaces the first; taken back, the script has none.
+    let again = ScriptTitle {
+        title: "Triage issues".into(),
+        description: None,
+        updated_by: "key:ci".into(),
+        updated_at: later(T0, 10),
+    };
+    store
+        .set_script_title(&acme(), script.digest(), Some(&again))
+        .await
+        .expect("set_script_title");
+    assert_eq!(titles(acme()).await, [(script.digest(), again)]);
+    assert!(
+        store
+            .set_script_title(&acme(), script.digest(), None)
+            .await
+            .expect("set_script_title")
+    );
+    assert!(titles(acme()).await.is_empty());
+}
+
+pub async fn workflow_versions_are_numbered_by_workflow<S: JournalStore>(store: &S) {
+    let put = |tenant: TenantId, workflow: Workflow, at: Timestamp| async move {
+        store
+            .put_workflow(&tenant, &workflow, at)
+            .await
+            .expect("put_workflow")
+    };
+    assert_eq!(put(acme(), workflow("triage", "v1"), T0).await.number, 1);
+    assert_eq!(
+        put(acme(), workflow("digest", "d1"), later(T0, 1))
+            .await
+            .number,
+        1
+    );
+    assert_eq!(
+        put(acme(), workflow("triage", "v2"), later(T0, 2))
+            .await
+            .number,
+        2
+    );
+    assert_eq!(
+        put(acme(), workflow("triage", "v1"), later(T0, 3))
+            .await
+            .number,
+        1,
+        "a version put again keeps its number"
+    );
+    assert_eq!(
+        put(acme(), workflow("triage", "v3"), later(T0, 4))
+            .await
+            .number,
+        3
+    );
+    assert_eq!(
+        put(tenant("other"), workflow("triage", "x"), later(T0, 5))
+            .await
+            .number,
+        1,
+        "numbers are the tenant's"
+    );
+    let second = store
+        .workflow_number(&acme(), "triage", 2)
+        .await
+        .expect("workflow_number")
+        .expect("version 2");
+    assert_eq!(second.workflow, workflow("triage", "v2"));
+    assert_eq!(second.number, 2);
+    assert_eq!(
+        store
+            .workflow_number(&acme(), "triage", 4)
+            .await
+            .expect("workflow_number"),
+        None
+    );
+    let versions = store
+        .workflow_versions(&acme(), "triage", &BTreeMap::new())
+        .await
+        .expect("workflow_versions");
+    assert_eq!(
+        versions.iter().map(|v| v.number).collect::<Vec<_>>(),
+        [3, 2, 1],
+        "listed newest first, each with its number"
     );
 }

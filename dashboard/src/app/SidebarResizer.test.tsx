@@ -1,20 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { SidebarFold, SidebarResizer } from "./SidebarResizer";
-import {
-  SIDEBAR_DEFAULT,
-  SIDEBAR_MAX,
-  SIDEBAR_MIN,
-  SIDEBAR_RAIL,
-  SidebarProvider,
-} from "./sidebar";
+import { SidebarResizer } from "./SidebarResizer";
+import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_RAIL, SidebarProvider } from "./sidebar";
 
 const width = () => document.documentElement.style.getPropertyValue("--sidebar-width");
 
 function Frame() {
   return (
     <SidebarProvider>
-      <SidebarFold />
       <SidebarResizer />
     </SidebarProvider>
   );
@@ -47,22 +40,26 @@ describe("the sidebar's size", () => {
     expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", String(SIDEBAR_MAX));
   });
 
-  it("gives the default width back on a double-click", () => {
+  it("resizes the sidebar by dragging its edge, without folding it", () => {
     render(<Frame />);
     const edge = screen.getByRole("separator");
-    fireEvent.keyDown(edge, { key: "Home" });
-    expect(edge).toHaveAttribute("aria-valuenow", String(SIDEBAR_MIN));
-    fireEvent.doubleClick(edge);
-    expect(edge).toHaveAttribute("aria-valuenow", String(SIDEBAR_DEFAULT));
-    expect(width()).toBe("");
+    fireEvent.pointerDown(edge, { button: 0, clientX: 256, pointerId: 1 });
+    fireEvent.pointerMove(edge, { clientX: 300, pointerId: 1 });
+    fireEvent.pointerUp(edge, { clientX: 300, pointerId: 1 });
+    expect(edge).toHaveAttribute("aria-valuenow", String(SIDEBAR_DEFAULT + 44));
+    expect(width()).toBe(`${SIDEBAR_DEFAULT + 44}px`);
+    expect(document.documentElement.dataset.sidebar).toBeUndefined();
   });
 
   it("folds to a rail of icons and back, and keeps it folded", () => {
     const { unmount } = render(<Frame />);
-    fireEvent.click(screen.getByRole("button", { name: /Collapse the sidebar/ }));
+    // A click on its edge, without moving, folds it.
+    const edge = screen.getByRole("separator", { name: "Resize the sidebar" });
+    fireEvent.pointerDown(edge, { button: 0, clientX: 256, pointerId: 1 });
+    fireEvent.pointerUp(edge, { clientX: 257, pointerId: 1 });
     expect(document.documentElement.dataset.sidebar).toBe("folded");
     expect(width()).toBe(`${SIDEBAR_RAIL}px`);
-    // Folded, it has no edge to drag.
+    // Folded, its edge is no longer dragged: a click on it unfolds it.
     expect(screen.queryByRole("separator")).toBeNull();
 
     unmount();

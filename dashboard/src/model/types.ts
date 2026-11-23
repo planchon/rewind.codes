@@ -27,6 +27,7 @@ export type AbortReason = Schemas["AbortReason"];
 export type CancelReason = Schemas["CancelReason"];
 export type Script = Schemas["Script"];
 export type ScriptSummary = Schemas["ScriptSummary"];
+export type SetScriptTitle = Schemas["SetScriptTitle"];
 export type ScriptPage = Schemas["ScriptPage"];
 export type ToolStats = Schemas["ToolStats"];
 export type ToolStatsPage = Schemas["ToolStatsPage"];
@@ -39,7 +40,6 @@ export type QuotaReached = Schemas["QuotaReached"];
  * into required fields: they are optional here, as on the wire.
  */
 export type Problem = Omit<Schemas["Problem"], keyof QuotaReached> & Partial<QuotaReached>;
-export type Trace = Schemas["Trace"];
 export type Quarantine = Schemas["Quarantine"];
 export type RunWait = Schemas["RunWait"];
 export type WaitKind = Schemas["WaitKind"];

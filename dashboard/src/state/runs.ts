@@ -1,9 +1,9 @@
 // Runs: the searches of runs and their tables, one run's details and journal, and the values its
 // journal holds. A run's new summary, from the change stream, shows at once in every table that
 // shows it; the searches are read again a second after the last change.
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import type { Entry, Run, RunSort, RunSummary, Trace } from "../model/types";
+import type { Entry, Run, RunSort, RunSummary } from "../model/types";
 import type { JournalSnapshot } from "./journal";
 import { type Read, useQueryRead, useResource } from "./read";
 import type { ReadStatus } from "./resource";
@@ -134,18 +134,6 @@ export function useRunEntry(id: string, idx: number, enabled: boolean): Read<Ent
       queryFn: ({ signal }) => api.entry(id, idx, signal),
       enabled,
       staleTime: Number.POSITIVE_INFINITY,
-    }),
-  );
-}
-
-/** The LLM trace, read again when the journal has grown to `historyLen` entries. */
-export function useRunTrace(id: string, historyLen: number): Read<Trace> {
-  const { api } = useStore();
-  return useQueryRead(
-    useQuery({
-      queryKey: ["trace", id, historyLen],
-      queryFn: ({ signal }) => api.trace(id, signal),
-      placeholderData: keepPreviousData,
     }),
   );
 }

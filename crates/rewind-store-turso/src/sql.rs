@@ -239,6 +239,12 @@ pub(crate) trait Columns {
             .transpose()
     }
 
+    /// The characters of the suffix of a run's handle.
+    fn suffix_len(&self, index: usize) -> Result<u8, Error> {
+        let len = self.u64(index)?;
+        u8::try_from(len).map_err(|_| Error::Corrupt(format!("suffix length {len}")))
+    }
+
     fn boolean(&self, index: usize) -> Result<bool, Error> {
         Ok(self.int(index)? != 0)
     }

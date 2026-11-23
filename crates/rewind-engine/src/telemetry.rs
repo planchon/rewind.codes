@@ -705,6 +705,8 @@ mod tests {
         RunRecord {
             run: RunRef::new(TenantId::local(), RunId::from_u128(0x0123_4567_89ab_cdef)),
             namespace: crate::ports::NamespaceName::migrated(),
+            origin: "script".into(),
+            suffix_len: 12,
             script: Digest::of(b"s"),
             toolset: Digest::of(b"t"),
             status: rewind_core::RunStatus::Active,

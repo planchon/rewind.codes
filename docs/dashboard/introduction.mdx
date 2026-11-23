@@ -30,7 +30,7 @@ A server of your own without WorkOS asks for an API key instead, kept for the ta
 
 The dashboard has one sidebar:
 
-- **At its top**: the organization picker, and **Find** (press <kbd>F</kbd>): a run by its id, a view, a saved search.
+- **At its top**: the organization picker, and **Find** (press <kbd>F</kbd>): a run by its handle or its id, a view, the runs a query matches.
 - **The views**: [Overview](/dashboard/overview), [Observability](/dashboard/observability), [Scripts](/dashboard/scripts),
   [Testing](/dashboard/testing), [Tools](/dashboard/tools) and [Namespaces](/dashboard/namespaces); then
   [Connect Claude](/claude), to use Rewind from Claude.
@@ -41,7 +41,7 @@ The dashboard has one sidebar:
 Observability, a run and the organization turn the sidebar into their own, under a **back** arrow: from a run, back
 returns to the list it was opened from.
 
-<Frame caption="Find: press F anywhere, then type a run id, a view or a saved search">
+<Frame caption="Find: press F anywhere, then type a run's handle, a view or a query">
   <img src="/images/dashboard/find-light.webp" alt="The Find palette over the Overview" className="block dark:hidden" />
   <img src="/images/dashboard/find-dark.webp" alt="The Find palette over the Overview" className="hidden dark:block" />
 </Frame>
@@ -59,8 +59,7 @@ filter and the term `namespace:` of the [query language](/dashboard/query-langua
 
 The dashboard follows your organization's runs as they change: a run that completes, fails or starts waiting shows it
 in every table and panel at once, the lists and counts follow within seconds, and a run that is still going follows its
-event stream as each step is committed. The dot beside the organization picker says whether the dashboard is live;
-while it reconnects, the views read again every 10 to 30 seconds.
+event stream as each step is committed. While the dashboard reconnects, the views read again every 10 to 30 seconds.
 
 Nothing on the screen moves on its own. A row changes its values in place; when new runs arrive or the order changes
 while you are scrolled down a table, they wait behind **N new · Show** at the top of the table, and enter at once when

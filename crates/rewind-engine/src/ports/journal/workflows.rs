@@ -18,6 +18,9 @@ pub struct StoredWorkflow {
     /// part of the version, which kept the labels of the key that saved it first.
     pub labels: BTreeMap<String, String>,
     pub created_at: Timestamp,
+    /// The version's number among the versions of its workflow, from 1 in the order they were
+    /// stored (`triage v12`): `put_workflow` gives it.
+    pub number: u32,
 }
 
 impl StoredWorkflow {

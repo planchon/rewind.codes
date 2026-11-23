@@ -1,6 +1,7 @@
 //! Runs: start, list, state, trace, entries, signals, cancellation, forks, export, quarantine,
 //! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -17,8 +18,8 @@ use rewind_api::runs::{
     TraceQuery,
 };
 use rewind_core::{
-    Attachments, Command, Event, JournalDocument, Lifecycle, Matching, RunMode, Script, SecretRef,
-    canonical_json,
+    Attachments, Command, Digest, Event, JournalDocument, Lifecycle, Matching, RunHandle, RunMode,
+    Script, SecretRef, canonical_json,
 };
 use rewind_engine::attachments::AttachRights;
 use rewind_engine::ports::{
@@ -32,6 +33,7 @@ use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
 use crate::http::{search, toolsets, workflows};
+use crate::titles::Title;
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most; failure groups likewise.
 const PAGE: u32 = 50;
@@ -135,9 +137,17 @@ pub(super) async fn start(
 pub(super) async fn list(
     State(app): State<Arc<App>>,
     caller: Caller,
-    Query(filter): Query<RunFilter>,
+    Query(mut filter): Query<RunFilter>,
 ) -> Result<Json<RunPage>, ApiError> {
     caller.require(Permission::RunsRead)?;
+    let parent = by_id(&app, &caller, &mut filter.parent).await?;
+    let started_by = by_id(&app, &caller, &mut filter.started_by).await?;
+    if !parent || !started_by {
+        return Ok(Json(RunPage {
+            runs: Vec::new(),
+            next_cursor: None,
+        }));
+    }
     let limit = usize::try_from(filter.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let query = search::run_query(&caller, filter.q.as_deref(), Some(&filter), app.now())?;
     let order = search::order(filter.sort);
@@ -154,21 +164,46 @@ pub(super) async fn list(
         .then(|| found.last())
         .flatten()
         .map(|last| search::encode_cursor(order, &last.cursor(order)));
+    let titles = app
+        .titles(&caller.tenant, found.iter().map(|found| found.script))
+        .await?;
     let mut runs = Vec::with_capacity(found.len());
     for found in &found {
-        runs.push(listed(&app, found).await?);
+        runs.push(listed(&app, found, &titles).await?);
     }
     Ok(Json(RunPage { runs, next_cursor }))
 }
 
-/// A run of the read model as `GET /v1/runs` lists it, and as the change stream sends it: the
-/// run's own record, which the read model follows by a moment, gives its status, quarantine and
-/// times as they are now.
+/// A filter's run (`parent`, `startedBy`) by its id, when the filter gives its handle: `false`
+/// when the handle names no run the caller sees, which no run of the list can then match. What
+/// is neither an id nor a handle is left for the filter to refuse.
+async fn by_id(app: &App, caller: &Caller, run: &mut Option<String>) -> Result<bool, ApiError> {
+    let Some(given) = run.as_deref() else {
+        return Ok(true);
+    };
+    if given.parse::<rewind_core::RunId>().is_ok() || given.parse::<RunHandle>().is_err() {
+        return Ok(true);
+    }
+    match app.run(caller, given).await {
+        Ok(record) => {
+            *run = Some(record.run.id.to_string());
+            Ok(true)
+        }
+        Err(error) if error.0.status == 404 => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// A run of the read model as `GET /v1/runs` lists it, and as the change stream sends it, with
+/// its script's title from `titles`: the run's own record, which the read model follows by a
+/// moment, gives its status, quarantine and times as they are now.
 pub(crate) async fn listed(
     app: &App,
     found: &rewind_engine::ports::RunSummary,
+    titles: &BTreeMap<Digest, Title>,
 ) -> Result<rewind_api::runs::RunSummary, ApiError> {
     let mut summary = search::summary(found);
+    summary.script_title = titles.get(&found.script).map(|title| title.title.clone());
     if let Some(record) = app.store.get_run(&found.run).await? {
         summary.status = record.status.into();
         summary.quarantined = record.quarantine.is_some();

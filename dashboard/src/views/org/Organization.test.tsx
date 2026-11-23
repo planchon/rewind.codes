@@ -83,7 +83,7 @@ describe("the Organization view", () => {
     const { callsTo } = renderApp("/organization/roles", { world });
     await user.click(await screen.findByRole("button", { name: /new role/i }));
     const editor = screen.getByRole("form", { name: "New role" });
-    expect(within(editor).getAllByRole("checkbox")).toHaveLength(25);
+    expect(within(editor).getAllByRole("checkbox")).toHaveLength(26);
     expect(within(editor).getByText("Erase a run, its payloads included.")).toBeInTheDocument();
 
     const name = within(editor).getByLabelText("Name");

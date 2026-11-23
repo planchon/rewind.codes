@@ -30,11 +30,11 @@ use crate::input::{
 };
 use crate::keys::{idempotency_key, run_key, sha256_hex};
 use crate::render::{
-    Limits, OUTPUT_LIMIT, RunExtras, SuiteEntry, WorkflowDetails, args, describe_check,
-    describe_matches, describe_page, describe_recorded, describe_refusal, describe_retry_refused,
-    describe_run, describe_runs, describe_save_refused, describe_secrets, describe_test_results,
-    describe_workflow, describe_workflow_details, describe_workflow_refusal, entry_text, json,
-    quoted, truncate_end, truncate_middle, workflow_ref,
+    Limits, OUTPUT_LIMIT, RunExtras, SuiteEntry, UNTITLED_NOTE, WorkflowDetails, args,
+    describe_check, describe_matches, describe_page, describe_recorded, describe_refusal,
+    describe_retry_refused, describe_run, describe_runs, describe_save_refused, describe_secrets,
+    describe_test_results, describe_workflow, describe_workflow_details, describe_workflow_refusal,
+    entry_text, json, quoted, truncate_end, truncate_middle, workflow_ref,
 };
 
 /// What a tool call returns to the model, and to the harness.
@@ -241,13 +241,17 @@ impl<A: Api> Session<'_, A> {
             toolset: self.toolset.clone(),
         };
         let checked = self.api.check(&check).await?;
+        let mut content = describe_check(&checked, &self.limits);
+        if rewind_core::script_doc(&check.script).is_none() {
+            content = format!("{content}\n{UNTITLED_NOTE}");
+        }
         Ok(AgentToolResult {
             script: Some(if checked.ok {
                 ScriptVerdict::Passed
             } else {
                 ScriptVerdict::Refused
             }),
-            ..result(describe_check(&checked, &self.limits), !checked.ok)
+            ..result(content, !checked.ok)
         })
     }
 
@@ -298,10 +302,12 @@ impl<A: Api> Session<'_, A> {
         if let (Some(wait), None) = (wait, entry) {
             run = self.api.get_run(&run_id, Some(wait.into())).await?;
         }
+        // The run is named by its handle from here on, whatever the model gave.
+        let handle = run.handle.clone();
         if let Some(index) = entry {
             let text = entry_text(&self.api.run_entry(&run_id, index).await?);
             let content = describe_page(
-                &format!("Entry {index} of run {run_id}"),
+                &format!("Entry {index} of run {handle}"),
                 &text,
                 usize::try_from(offset.unwrap_or(0)).unwrap_or(usize::MAX),
                 self.limits.output,
@@ -309,7 +315,7 @@ impl<A: Api> Session<'_, A> {
                     format!(
                         "get_run({})",
                         args(&[
-                            ("run_id", json!(run_id)),
+                            ("run_id", json!(handle)),
                             ("entry", json!(index)),
                             ("offset", json!(next)),
                         ])
@@ -324,20 +330,20 @@ impl<A: Api> Session<'_, A> {
         if let Some(offset) = offset {
             if run.status != RunStatus::Completed {
                 return Err(InputError::new(format!(
-                    "run {run_id} has no output to page through: it is {}.",
+                    "run {handle} has no output to page through: it is {}.",
                     run.status.as_str()
                 ))
                 .into());
             }
             let content = describe_page(
-                &format!("Output of run {run_id}"),
+                &format!("Output of run {handle}"),
                 &self.output_of(&run).await?,
                 usize::try_from(offset).unwrap_or(usize::MAX),
                 self.limits.output,
                 |next| {
                     format!(
                         "get_run({})",
-                        args(&[("run_id", json!(run_id)), ("offset", json!(next))])
+                        args(&[("run_id", json!(handle)), ("offset", json!(next))])
                     )
                 },
             );
@@ -384,30 +390,30 @@ impl<A: Api> Session<'_, A> {
         {
             Ok(accepted) => accepted,
             Err(ApiError::Problem(problem)) if problem.is(ProblemType::InvalidSignal) => {
+                let content = format!(
+                    "Run {} refused the signal {}: {}",
+                    run.handle,
+                    quoted(&name),
+                    truncate_end(&problem.detail, self.limits.value)
+                );
                 return Ok(AgentToolResult {
                     run: Some(run),
-                    ..result(
-                        format!(
-                            "Run {run_id} refused the signal {}: {}",
-                            quoted(&name),
-                            truncate_end(&problem.detail, self.limits.value)
-                        ),
-                        true,
-                    )
+                    ..result(content, true)
                 });
             }
             Err(error) => return Err(error.into()),
         };
+        let handle = &run.handle;
         let content = if accepted.duplicate {
             format!(
-                "This signal {} was already sent to run {run_id}: nothing was added.",
+                "This signal {} was already sent to run {handle}: nothing was added.",
                 quoted(&name)
             )
         } else {
             format!(
-                "Sent the signal {} to run {run_id}. Read what the run does next with get_run({}).",
+                "Sent the signal {} to run {handle}. Read what the run does next with get_run({}).",
                 quoted(&name),
-                args(&[("run_id", json!(run_id)), ("wait", json!("30s"))])
+                args(&[("run_id", json!(handle)), ("wait", json!("30s"))])
             )
         };
         Ok(AgentToolResult {
@@ -447,19 +453,17 @@ impl<A: Api> Session<'_, A> {
                     .workflow
                     .as_ref()
                     .map(|workflow| workflow_ref(&workflow.name, &workflow.version));
+                let content = describe_retry_refused(
+                    &parent.handle,
+                    &problem.detail,
+                    &problem.tests,
+                    workflow.as_deref(),
+                    &self.limits,
+                );
                 return Ok(AgentToolResult {
                     run: Some(parent),
                     tests: Some(problem.tests.clone()),
-                    ..result(
-                        describe_retry_refused(
-                            &run_id,
-                            &problem.detail,
-                            &problem.tests,
-                            workflow.as_deref(),
-                            &self.limits,
-                        ),
-                        true,
-                    )
+                    ..result(content, true)
                 });
             }
             Err(error) => return Err(error.into()),

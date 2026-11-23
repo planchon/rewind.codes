@@ -1,34 +1,59 @@
-// The edge of the sidebar, dragged to resize it. A double-click gives the default width back;
-// the arrows move it by 16 px, Home and End to its bounds. Folded, the sidebar has no edge.
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+// The edge of the sidebar: dragged, it resizes the sidebar; clicked, it folds the sidebar to its
+// icons, and clicked again, unfolds it. The arrows move it by 16 px, Home and End to its bounds,
+// Enter folds it. `[` folds or unfolds it from anywhere outside a field.
 import { type KeyboardEvent, type PointerEvent, useEffect, useRef } from "react";
-import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, useSidebar } from "./sidebar";
+import { SIDEBAR_MAX, SIDEBAR_MIN, useSidebar } from "./sidebar";
 
 const STEP = 16;
+/** A pointer that moved less than this, in px, between down and up clicked the edge. */
+const CLICK_SLOP = 3;
 
 export function SidebarResizer() {
-  const { width, setWidth, folded } = useSidebar();
-  const drag = useRef<{ x: number; width: number } | null>(null);
-  if (folded) return null;
+  const { width, setWidth, folded, setFolded } = useSidebar();
+  const drag = useRef<{ x: number; width: number; moved: boolean } | null>(null);
+
+  if (folded) {
+    return (
+      <button
+        type="button"
+        className="sidebar-resizer"
+        aria-label="Expand the sidebar"
+        title="Click to expand ([)"
+        onClick={() => setFolded(false)}
+      />
+    );
+  }
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, width };
-    document.documentElement.dataset.resizing = "";
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    drag.current = { x: e.clientX, width, moved: false };
   };
   const move = (e: PointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return;
-    setWidth(drag.current.width + e.clientX - drag.current.x, false);
+    const d = drag.current;
+    if (!d) return;
+    if (!d.moved && Math.abs(e.clientX - d.x) < CLICK_SLOP) return;
+    if (!d.moved) {
+      d.moved = true;
+      document.documentElement.dataset.resizing = "";
+    }
+    setWidth(d.width + e.clientX - d.x, false);
   };
   const up = (e: PointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return;
-    setWidth(drag.current.width + e.clientX - drag.current.x);
+    const d = drag.current;
+    if (!d) return;
     drag.current = null;
     delete document.documentElement.dataset.resizing;
+    if (d.moved) setWidth(d.width + e.clientX - d.x);
+    else if (e.type === "pointerup") setFolded(true);
   };
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setFolded(true);
+      return;
+    }
     const next =
       e.key === "ArrowLeft"
         ? width - STEP
@@ -55,32 +80,13 @@ export function SidebarResizer() {
       aria-valuenow={width}
       tabIndex={0}
       className="sidebar-resizer"
-      title="Drag to resize · double-click for the default width"
+      title="Drag to resize · click to collapse ([)"
       onPointerDown={down}
       onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={up}
       onKeyDown={key}
-      onDoubleClick={() => setWidth(SIDEBAR_DEFAULT)}
     />
-  );
-}
-
-/** Folds the sidebar to its icons, or unfolds it; `[` does the same. */
-export function SidebarFold() {
-  const { folded, setFolded } = useSidebar();
-  const label = folded ? "Expand the sidebar" : "Collapse the sidebar to its icons";
-  return (
-    <button
-      type="button"
-      className="icon-btn sidebar-fold"
-      aria-label={label}
-      aria-pressed={folded}
-      title={`${label} ([)`}
-      onClick={() => setFolded(!folded)}
-    >
-      {folded ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-    </button>
   );
 }
 

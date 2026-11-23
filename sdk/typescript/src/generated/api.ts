@@ -1525,7 +1525,14 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Give a script a title
+         * @description The title and description people see for the script, for the whole organization, over
+         *     those of the comment at its top: the source does not change. `title: null` removes them,
+         *     and the comment's show again. A new run of the script takes its origin from the title.
+         *     Requires `scripts:write`.
+         */
+        patch: operations["setScriptTitle"];
         trace?: never;
     };
     "/v1/secrets": {
@@ -2791,8 +2798,8 @@ export interface components {
             secrets?: components["schemas"]["BTreeMap"];
             /**
              * @description The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
-             *     version, `triage@<version>` one version. The versions are pinned: the toolset's scripts
-             *     are checked against them, and start them, for their whole life.
+             *     version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
+             *     toolset's scripts are checked against them, and start them, for their whole life.
              */
             workflows?: string[];
         };
@@ -2857,8 +2864,9 @@ export interface components {
             /** @description JSON Schema of what `main` returns. */
             output: Record<string, unknown>;
             /**
-             * @description The version it derives from, `name@<version>` or a version: the latest version of the
-             *     same name saved under the caller's labels when absent. Its suite is inherited.
+             * @description The version it derives from, `name@<version>`, `name@v<number>` or a version: the latest
+             *     version of the same name saved under the caller's labels when absent. Its suite is
+             *     inherited.
              */
             parent?: string | null;
             /** @description Inherited tests dropped, with a reason: they are deprecated. */
@@ -3244,6 +3252,8 @@ export interface components {
             until: string;
         };
         FailureSample: {
+            /** @description Its handle, `<namespace>/<origin>/<suffix>`. */
+            handle: string;
             id: string;
             message: string;
             status: components["schemas"]["RunStatus"];
@@ -3255,6 +3265,9 @@ export interface components {
              * @description The entry from which the fork was forced live, if the request gave one.
              */
             at?: number | null;
+            /** @description The parent's handle; its id once it is erased. */
+            handle: string;
+            /** @description The parent's id. */
             run: string;
         };
         /**
@@ -3423,6 +3436,8 @@ export interface components {
             namespace?: components["schemas"]["NamespaceName"] | null;
             /** @description The run that read it; `null` for a toolset's registration. */
             run?: string | null;
+            /** @description That run's handle, while the run is kept. */
+            runHandle?: string | null;
         };
         Latency: {
             /** Format: int64 */
@@ -3701,7 +3716,7 @@ export interface components {
          * @description A kind of action. Every endpoint requires one; a role is a set of them.
          * @enum {string}
          */
-        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "secrets:read" | "secrets:write" | "secrets:use" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
+        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "scripts:write" | "secrets:read" | "secrets:write" | "secrets:use" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
         /** @description A permission of the catalog, with what it lets the caller do. */
         PermissionInfo: {
             description: string;
@@ -4139,6 +4154,13 @@ export interface components {
              */
             expiresAt: string;
             /**
+             * @description The run's handle, `<namespace>/<origin>/<suffix>`: what people read, copy and type to
+             *     name it. Every path and query parameter that takes a run's id takes its handle too,
+             *     percent-encoded in a path (`dana%2Ftriage%2F06bqx3k9f2mt`).
+             * @example dana/triage/06bqx3k9f2mt
+             */
+            handle: string;
+            /**
              * Format: int64
              * @description Number of journal entries.
              */
@@ -4157,6 +4179,11 @@ export interface components {
             quarantine?: components["schemas"]["Quarantine"] | null;
             /** @description Digest of the TypeScript source (`GET /v1/scripts/{digest}`). */
             script: string;
+            /**
+             * @description The script's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the
+             *     first line of the comment at its top. Absent when it has neither.
+             */
+            scriptTitle?: string | null;
             /**
              * @description The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):
              *     names, never values.
@@ -4269,6 +4296,11 @@ export interface components {
             errors: number;
             /** @description With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query). */
             fingerprint?: string | null;
+            /**
+             * @description The run's handle, `<namespace>/<origin>/<suffix>`, as `Run.handle`.
+             * @example dana/triage/06bqx3k9f2mt
+             */
+            handle: string;
             /** @description The first line of the script that is not blank, for display. */
             headline: string;
             /** Format: int64 */
@@ -4281,6 +4313,8 @@ export interface components {
             parent?: string | null;
             quarantined: boolean;
             script: string;
+            /** @description The script's title, as `Run.scriptTitle`. Absent when it has none. */
+            scriptTitle?: string | null;
             /** Format: date-time */
             startedAt: string;
             /** @description For a run a script started, that run. */
@@ -4324,10 +4358,16 @@ export interface components {
         /** @description The workflow a run executes. */
         RunWorkflow: {
             name: string;
+            /**
+             * Format: int32
+             * @description The version's number among the versions of its workflow (`Workflow.number`).
+             */
+            number: number;
             version: string;
         };
         /** @description `GET /v1/scripts/{digest}`: one script's source, and what its runs did. */
         Script: {
+            description?: string | null;
             digest: string;
             /**
              * Format: date-time
@@ -4342,6 +4382,9 @@ export interface components {
             runs: components["schemas"]["RunCounts"];
             /** @description The TypeScript source, as submitted. */
             source: string;
+            /** @description The script's title, as in `ScriptSummary.title`. */
+            title?: string | null;
+            titleSource?: components["schemas"]["TitleSource"] | null;
             /** @description The tools its runs called. */
             tools: string[];
         };
@@ -4362,6 +4405,11 @@ export interface components {
         };
         /** @description A distinct script: content-addressed, so every run of the same source counts here. */
         ScriptSummary: {
+            /**
+             * @description The description that goes with the title: the person's with theirs, else the rest of
+             *     the comment.
+             */
+            description?: string | null;
             /** @description SHA-256 of the TypeScript source, lowercase hex. */
             digest: string;
             /** Format: date-time */
@@ -4376,6 +4424,12 @@ export interface components {
             lastRunAt: string;
             /** @description Runs of this script, by status. */
             runs: components["schemas"]["RunCounts"];
+            /**
+             * @description The script's title: the one a person gave it, else the first line of the comment at its
+             *     top. Absent when it has neither.
+             */
+            title?: string | null;
+            titleSource?: components["schemas"]["TitleSource"] | null;
             /** @description The tools its runs called. */
             tools: string[];
         };
@@ -4504,6 +4558,24 @@ export interface components {
         SetGrant: {
             allowedLabels?: components["schemas"]["Labels"];
             role: string;
+        };
+        /**
+         * @description `PATCH /v1/scripts/{digest}`: the title and description of a script, for the whole
+         *     organization, over those of the comment at its top. The source does not change: a script is
+         *     its digest.
+         * @example {
+         *       "description": "Labels each new issue, and asks for an approval before closing duplicates.",
+         *       "title": "Triage new GitHub issues"
+         *     }
+         */
+        SetScriptTitle: {
+            /** @description The description, trimmed: at most 2,000 characters. Absent, `null` or `""`: none. */
+            description?: string | null;
+            /**
+             * @description The title, trimmed: 1 to 120 characters. `null` removes the title and the description a
+             *     person gave: those of the comment show again.
+             */
+            title: string | null;
         };
         /** @enum {string} */
         Severity: "error" | "warning";
@@ -4640,8 +4712,9 @@ export interface components {
             wait?: components["schemas"]["Duration"] | null;
             /**
              * @description Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version
-             *     or `triage@<version>` (12 hex digits at least) for one version. Its input is checked
-             *     against the workflow's input schema (`invalid-input`); the script is not checked again.
+             *     or `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one
+             *     version. Its input is checked against the workflow's input schema (`invalid-input`); the
+             *     script is not checked again.
              */
             workflow?: string | null;
         };
@@ -4652,6 +4725,9 @@ export interface components {
              *     it, and cancels it if it fails or is cancelled.
              */
             detached: boolean;
+            /** @description That run's handle; its id once it is erased. */
+            handle: string;
+            /** @description The id of the run that started it. */
             run: string;
             /**
              * Format: int32
@@ -4896,7 +4972,10 @@ export interface components {
              *     when absent.
              */
             toolset?: string | null;
-            /** @description A workflow, `triage` (its latest version) or `triage@<version>`: its suite runs too. */
+            /**
+             * @description A workflow, `triage` (its latest version), `triage@<version>` or `triage@v12`: its suite
+             *     runs too.
+             */
             workflow?: string | null;
         };
         /** @description The outcome of a test. */
@@ -4951,6 +5030,11 @@ export interface components {
             reason: string;
             test?: components["schemas"]["TestInput"] | null;
         };
+        /**
+         * @description Where a script's title comes from.
+         * @enum {string}
+         */
+        TitleSource: "person" | "comment";
         /** @description An end user's opaque token. */
         Token: {
             /** Format: date-time */
@@ -5371,6 +5455,13 @@ export interface components {
              */
             labels: components["schemas"]["Labels"];
             name: string;
+            /**
+             * Format: int32
+             * @description The version's number among the versions of its workflow, from 1 in the order they were
+             *     saved (`triage v12`): `name@v<number>` names it too.
+             * @example 12
+             */
+            number: number;
             output: Record<string, unknown>;
             /** @description The version it derives from. */
             parent?: string | null;
@@ -10451,11 +10542,11 @@ export interface operations {
                 error?: string;
                 /** @description Only quarantined runs, or only runs that are not. */
                 quarantined?: boolean;
-                /** @description Only forks of this run. */
+                /** @description Only forks of this run: its id or its handle. */
                 parent?: string;
                 /** @description Only runs of this workflow. */
                 workflow?: string;
-                /** @description Only runs this run started. */
+                /** @description Only runs this run started: its id or its handle. */
                 startedBy?: string;
                 /** @description Only runs started at or after this time. */
                 startedAfter?: string;
@@ -10844,7 +10935,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -10926,7 +11017,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11006,7 +11097,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11102,7 +11193,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
                 /** @description The entry's index, from 0. */
                 idx: number;
@@ -11199,7 +11290,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11283,7 +11374,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The parent run's id. */
+                /** @description The parent run's id, or its handle percent-encoded. */
                 id: string;
             };
             cookie?: never;
@@ -11396,7 +11487,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11490,7 +11581,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11572,7 +11663,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11665,7 +11756,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
                 /** @description The signal's name. */
                 name: string;
@@ -11784,7 +11875,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The run id. */
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
             };
             cookie?: never;
@@ -11992,6 +12083,101 @@ export interface operations {
             };
             /** @description No such script. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setScriptTitle: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description SHA-256 of the source, lowercase hex. */
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetScriptTitle"];
+            };
+        };
+        responses: {
+            /** @description The script, with its title as it now is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Script"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such script, or not one the caller sees. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The title is empty or longer than 120 characters, or the description longer than 2,000 (`invalid-request`). */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

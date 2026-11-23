@@ -156,7 +156,7 @@ pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
     match run.status {
         RunStatus::Completed => {
             if let Some(output) = &extras.output {
-                lines.extend(output_section(&run.id, output, limits.output));
+                lines.extend(output_section(&run.handle, output, limits.output));
             }
         }
         RunStatus::Failed | RunStatus::Cancelled => {
@@ -191,7 +191,7 @@ pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
     if matches!(run.status, RunStatus::Active | RunStatus::Pending) {
         lines.push(format!(
             "Follow it with get_run({}), send it a signal with signal_run, or cancel it with cancel_run.",
-            args(&[("run_id", Value::from(run.id.clone()))])
+            args(&[("run_id", Value::from(run.handle.clone()))])
         ));
     }
     lines.join("\n")
@@ -210,7 +210,7 @@ fn headline(run: &Run, limits: &Limits) -> String {
     let about: Vec<String> = [
         run.parent
             .as_ref()
-            .map(|parent| format!("a fork of run {}", parent.run)),
+            .map(|parent| format!("a fork of run {}", parent.handle)),
         run.workflow.as_ref().map(|workflow| {
             format!(
                 "a run of the workflow {}",
@@ -220,7 +220,7 @@ fn headline(run: &Run, limits: &Limits) -> String {
         run.started_by.as_ref().map(|by| {
             format!(
                 "started by run {}{}",
-                by.run,
+                by.handle,
                 if by.detached { ", detached" } else { "" }
             )
         }),
@@ -229,9 +229,9 @@ fn headline(run: &Run, limits: &Limits) -> String {
     .flatten()
     .collect();
     let name = if about.is_empty() {
-        format!("Run {}", run.id)
+        format!("Run {}", run.handle)
     } else {
-        format!("Run {} ({})", run.id, about.join(", "))
+        format!("Run {} ({})", run.handle, about.join(", "))
     };
     match run.status {
         RunStatus::Completed => format!("{name} completed."),
@@ -501,6 +501,10 @@ pub fn describe_check(result: &CheckResult, limits: &Limits) -> String {
         diagnostics_text(&result.diagnostics, limits)
     )
 }
+
+/// What `check_script` adds to its answer for a script without the comment its title is read
+/// from.
+pub const UNTITLED_NOTE: &str = "Note: the script does not start with a comment that gives its title. Start it with:\n/** <title>\n *\n * <description> */\nIts title names what the script does in a few words: its runs are named after it.";
 
 /// A script refused before any run exists.
 pub fn describe_refusal(detail: &str, diagnostics: &[Diagnostic], limits: &Limits) -> String {
@@ -1025,7 +1029,7 @@ pub fn describe_runs(runs: &[RunSummary], more: bool, status: Option<RunStatus>)
             .as_ref()
             .map(|error| format!(" ({error})"))
             .unwrap_or_default();
-        let mut parts = vec![format!("{}: {}{error}", run.id, run.status.as_str())];
+        let mut parts = vec![format!("{}: {}{error}", run.handle, run.status.as_str())];
         if run.quarantined {
             parts.push("quarantined".to_owned());
         }
@@ -1438,7 +1442,7 @@ mod tests {
         let limits = Limits::for_output(64 * 1024);
         let long = "m".repeat(3_000_000);
         let run: Run = serde_json::from_value(json!({
-            "id": "r", "namespace": "alice", "status": "failed", "script": "s", "toolset": "t", "epoch": 1,
+            "id": "r", "handle": "alice/script/r", "namespace": "alice", "status": "failed", "script": "s", "toolset": "t", "epoch": 1,
             "mode": "live", "labels": {}, "traceId": "0", "historyLen": 3,
             "createdAt": "2026-11-12T00:00:00Z", "updatedAt": "2026-11-12T00:00:00Z",
             "expiresAt": "2026-11-13T00:00:00Z",
@@ -1521,6 +1525,7 @@ mod tests {
         let mut workflow = json!({
             "name": "triage",
             "version": VERSION,
+            "number": 3,
             "description": "Triage the stale issues of a repository, after approval.",
             "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
             "script": "cd".repeat(32),
@@ -1906,25 +1911,29 @@ mod tests {
     #[test]
     fn runs_say_which_workflow_they_execute_and_which_run_started_them() {
         let run: Run = serde_json::from_value(json!({
-            "id": RUN_ID, "namespace": "user_2fQ81", "status": "completed", "script": "ab".repeat(32),
+            "id": RUN_ID, "handle": "user_2fQ81/triage/06bqx3k9f2mt", "namespace": "user_2fQ81",
+            "status": "completed", "script": "ab".repeat(32),
             "toolset": "t", "epoch": 1, "mode": "live", "labels": {}, "traceId": "0", "historyLen": 4,
             "createdAt": "2026-11-12T10:00:00Z", "updatedAt": "2026-11-12T10:00:01Z",
             "expiresAt": "2026-12-12T10:00:00Z",
-            "workflow": { "name": "triage", "version": VERSION },
-            "startedBy": { "run": "parent-1", "seq": 2, "detached": true }
+            "workflow": { "name": "triage", "version": VERSION, "number": 3 },
+            "startedBy": {
+                "run": "parent-1", "handle": "user_2fQ81/digest/06bqx3k9f2ms", "seq": 2,
+                "detached": true
+            }
         }))
         .unwrap();
+        // A run is named by its handle, and so are the runs it names.
         assert_eq!(
             describe_run(&run, &RunExtras::default(), &Limits::default())
                 .lines()
                 .next()
                 .unwrap(),
-            format!(
-                "Run {RUN_ID} (a run of the workflow triage@4be1c07a9d3e, started by run parent-1, detached) completed."
-            )
+            "Run user_2fQ81/triage/06bqx3k9f2mt (a run of the workflow triage@4be1c07a9d3e, started by run user_2fQ81/digest/06bqx3k9f2ms, detached) completed."
         );
         let summary: RunSummary = serde_json::from_value(json!({
-            "id": "r2", "namespace": "user_2fQ81", "status": "active", "quarantined": false, "script": "s",
+            "id": "r2", "handle": "user_2fQ81/triage/06bqx3k9f2mv", "namespace": "user_2fQ81",
+            "status": "active", "quarantined": false, "script": "s",
             "headline": "", "toolset": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
             "lastActivityAt": "2026-11-12T10:00:00Z", "toolCalls": 1, "errors": 0, "historyLen": 3,
             "waitingFor": [], "workflow": "triage", "startedBy": "r1"
@@ -1934,7 +1943,7 @@ mod tests {
             describe_runs(&[summary], false, None),
             [
                 "1 run, most recent first:",
-                "- r2: active, started 2026-11-12T10:00:00Z, 1 tool call, a run of the workflow triage, started by r1",
+                "- user_2fQ81/triage/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 tool call, a run of the workflow triage, started by r1",
             ]
             .join("\n")
         );

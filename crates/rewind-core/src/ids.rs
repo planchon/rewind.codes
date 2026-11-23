@@ -22,6 +22,19 @@ impl RunId {
     pub const fn as_uuid(&self) -> Uuid {
         self.0
     }
+
+    /// The UUIDv7 of millisecond `ms` (its low 48 bits), whose 12 bits after the version are
+    /// `rand_a` and whose 62 bits after the variant are `rand_b` (their low bits). The engine
+    /// fills `rand_a` with a node's number and its counter within the millisecond, so that two
+    /// ids never share their first 60 bits ([`crate::RunHandle`]).
+    pub const fn from_v7_parts(ms: u64, rand_a: u16, rand_b: u64) -> Self {
+        let ms = (ms as u128) & ((1 << 48) - 1);
+        let rand_a = (rand_a as u128) & 0xfff;
+        let rand_b = (rand_b as u128) & ((1 << 62) - 1);
+        Self(Uuid::from_u128(
+            (ms << 80) | (0x7 << 76) | (rand_a << 64) | (0b10 << 62) | rand_b,
+        ))
+    }
 }
 
 impl fmt::Display for RunId {

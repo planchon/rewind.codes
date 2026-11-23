@@ -3,10 +3,11 @@
 // scripts models write. A group opens its runs; its latest run opens on the step that failed.
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
-import { useRunLinkState } from "../../app/runLinks";
-import { Ago, Empty, Loading, ProblemView, RunId } from "../../components/bits";
+import { runPath, useRunLinkState } from "../../app/runLinks";
+import { Ago, Empty, Loading, ProblemView, RunHandle } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { StatusBadge } from "../../components/Status";
+import { TableScroll } from "../../components/TableScroll";
 import { isCancellation } from "../../model/ending";
 import { RANGES, type RangeKey } from "../../model/filters";
 import { formatCount, formatDuration, splitLabel } from "../../model/format";
@@ -61,7 +62,7 @@ export function FailureGroups({
   } else {
     const page = failures.data;
     body = (
-      <div className={`table-wrap${failures.stale ? " is-stale" : ""}`}>
+      <TableScroll stale={failures.stale}>
         <table className="grid failures-table">
           <thead>
             <tr>
@@ -94,9 +95,7 @@ export function FailureGroups({
                   >
                     {g.signature}
                   </Link>
-                  <span className="muted ellipsis" title={g.latest.message}>
-                    {g.latest.message}
-                  </span>
+                  <span className="muted signature-message">{g.latest.message}</span>
                 </td>
                 <td>
                   <span className={`mono run-error${isCancellation(g.error) ? " cancelled" : ""}`}>
@@ -148,11 +147,11 @@ export function FailureGroups({
                   <span className="labels">
                     <StatusBadge status={g.latest.status} />
                     <Link
-                      to={`/runs/${g.latest.id}`}
+                      to={runPath(g.latest.handle)}
                       state={linkState}
                       title="The run that ended last, on the step that failed"
                     >
-                      <RunId id={g.latest.id} />
+                      <RunHandle handle={g.latest.handle} id={g.latest.id} copy={false} whole />
                     </Link>
                   </span>
                 </td>
@@ -165,7 +164,7 @@ export function FailureGroups({
             {formatCount(page.groups.length)} of {formatCount(page.totalGroups)} signatures shown
           </div>
         )}
-      </div>
+      </TableScroll>
     );
   }
 

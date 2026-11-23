@@ -128,16 +128,6 @@ export function labelPair(key: string, value: string): string {
 }
 
 /**
- * A label's value shortened for a chip: its start and its end, which tell ids apart
- * (`6afc64fdf…048836`). The chip's title and the run's hover card hold it whole.
- */
-export function shortLabelValue(value: string, max = 16): string {
-  if (value.length <= max) return value;
-  const end = 6;
-  return `${value.slice(0, max - end - 1)}…${value.slice(-end)}`;
-}
-
-/**
  * The labels a cell shows whole, in order, within `budget` characters (a chip's padding counts
  * two); the others are counted in a "+N". At least one is shown.
  */
@@ -148,7 +138,7 @@ export function fitLabels(
   const shown: [string, string][] = [];
   let used = 0;
   for (const [key, value] of pairs) {
-    const width = key.length + 1 + shortLabelValue(value).length + 2;
+    const width = key.length + 1 + value.length + 2;
     if (shown.length > 0 && used + width > budget) break;
     shown.push([key, value]);
     used += width;

@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Attachments, Digest, Epoch, RunId, RunStarted, RunStatus, Timestamp};
+use rewind_core::{
+    Attachments, Digest, Epoch, RunHandle, RunId, RunStarted, RunStatus, SUFFIX_LEN, Timestamp,
+};
 
 use super::workflows::{RunWorkflow, StartedBy};
 use crate::ports::namespaces::{NamespaceName, QuotaExceeded};
@@ -60,6 +62,10 @@ pub struct NewRun {
     /// The end user the run belongs to; a fork's is its parent's. Created with the tenant's
     /// defaults if it does not exist.
     pub namespace: NamespaceName,
+    /// What ran, the middle of the run's handle: its workflow's name, or its script's title as
+    /// a slug, or `script` (`archi/06-storage-and-scale.md`, "Run handles"). A fork's is its
+    /// parent's.
+    pub origin: String,
     pub started: RunStarted,
     pub metadata: RunMetadata,
     pub created_at: Timestamp,
@@ -146,6 +152,12 @@ pub struct Archive {
 pub struct RunRecord {
     pub run: RunRef,
     pub namespace: NamespaceName,
+    /// What ran, as `NewRun::origin` gave it; `script`, or the run's workflow, for a run stored
+    /// before handles.
+    pub origin: String,
+    /// The characters of the suffix of the run's handle: [`SUFFIX_LEN`] (its millisecond and the
+    /// 12 bits after it), more for a run that shares those with another run of its tenant.
+    pub suffix_len: u8,
     pub script: Digest,
     pub toolset: Digest,
     pub status: RunStatus,
@@ -170,6 +182,21 @@ pub struct RunRecord {
     pub ended_at: Option<Timestamp>,
     pub archive: Option<Archive>,
 }
+
+impl RunRecord {
+    /// The run's handle, `<namespace>/<origin>/<suffix>`.
+    pub fn handle(&self) -> RunHandle {
+        RunHandle::new(
+            self.namespace.as_str(),
+            &self.origin,
+            self.run.id,
+            usize::from(self.suffix_len),
+        )
+    }
+}
+
+/// The characters of the suffix of a new run's handle.
+pub const NEW_SUFFIX_LEN: u8 = SUFFIX_LEN as u8;
 
 /// Runs to list, in one tenant, oldest first (by `created_at`, then id).
 #[derive(Debug, Clone, PartialEq, Eq)]

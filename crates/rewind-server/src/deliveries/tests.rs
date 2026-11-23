@@ -207,6 +207,7 @@ async fn completed_run(journal: &MemoryJournal, n: u128) -> String {
             NewRun {
                 run: run.clone(),
                 namespace: rewind_engine::ports::NamespaceName::migrated(),
+                origin: rewind_core::SCRIPT_ORIGIN.to_owned(),
                 started: started.clone(),
                 metadata: RunMetadata::default(),
                 created_at: now,

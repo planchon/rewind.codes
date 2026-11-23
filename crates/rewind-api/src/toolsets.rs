@@ -56,8 +56,8 @@ pub struct CreateToolset {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: crate::secrets::Attachments,
     /// The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
-    /// version, `triage@<version>` one version. The versions are pinned: the toolset's scripts
-    /// are checked against them, and start them, for their whole life.
+    /// version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
+    /// toolset's scripts are checked against them, and start them, for their whole life.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<String>,
     /// Derives the toolset from a registered one: its servers, tools and workflows are kept as

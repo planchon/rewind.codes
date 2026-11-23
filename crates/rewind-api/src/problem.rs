@@ -72,6 +72,9 @@ pub enum ProblemType {
     /// 422: a signal the run does not take: a name starting with `rewind:`, or, for a run of a
     /// workflow, a signal it does not declare or a payload that does not match.
     InvalidSignal,
+    /// 422: a script's title that cannot be used: empty, or longer than 120 characters, or a
+    /// description longer than 2,000.
+    InvalidTitle,
     /// 422: a start, a fork or a workflow's save refused before anything exists: the script
     /// imports a server that needs a secret and none is attached, an attachment names a server
     /// that takes none or a secret that does not exist, or the caller may not attach it;
@@ -91,7 +94,7 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 27] = [
+    pub const ALL: [ProblemType; 28] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -113,6 +116,7 @@ impl ProblemType {
         ProblemType::InvalidTest,
         ProblemType::TestsFailed,
         ProblemType::InvalidSignal,
+        ProblemType::InvalidTitle,
         ProblemType::SecretRequired,
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
@@ -145,6 +149,7 @@ impl ProblemType {
             ProblemType::TestsFailed => "urn:rewind:problem:tests-failed",
             ProblemType::InvalidInput => "urn:rewind:problem:invalid-input",
             ProblemType::InvalidSignal => "urn:rewind:problem:invalid-signal",
+            ProblemType::InvalidTitle => "urn:rewind:problem:invalid-title",
             ProblemType::SecretRequired => "urn:rewind:problem:secret-required",
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
             ProblemType::Internal => "urn:rewind:problem:internal",
@@ -177,6 +182,7 @@ impl ProblemType {
             | ProblemType::TestsFailed
             | ProblemType::InvalidInput
             | ProblemType::InvalidSignal
+            | ProblemType::InvalidTitle
             | ProblemType::SecretRequired => 422,
             ProblemType::QuotaExceeded => 429,
             ProblemType::Internal => 500,
@@ -209,6 +215,7 @@ impl ProblemType {
             ProblemType::TestsFailed => "Tests did not pass",
             ProblemType::InvalidInput => "The input does not match the workflow",
             ProblemType::InvalidSignal => "The run does not take this signal",
+            ProblemType::InvalidTitle => "The script's title was refused",
             ProblemType::SecretRequired => "A secret is missing or cannot be attached",
             ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",

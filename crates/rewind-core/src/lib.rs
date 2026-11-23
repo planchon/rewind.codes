@@ -16,6 +16,8 @@
 //!   [`RunEnd`], how a run's end reaches the runs that watch it; its [`Suite`] of tests.
 //! - [`Test`]: the world a run meets and what the outside must see at the end; [`RunPath`],
 //!   the path a run took.
+//! - [`RunHandle`]: a run's readable name, `<namespace>/<origin>/<suffix>`, whose suffix is the
+//!   start of its UUIDv7; [`script_doc`], a script's title and description from its top comment.
 //!
 //! This crate is the domain and nothing else: no I/O, no async, no V8, no serde, no telemetry.
 //! It knows nothing about how events are stored or transported, nor where time, ids and seeds
@@ -27,7 +29,9 @@ mod artifacts;
 mod canonical;
 mod cassette;
 mod digest;
+mod doc;
 pub mod event;
+mod handle;
 mod history;
 mod ids;
 mod journal;
@@ -45,10 +49,15 @@ pub use artifacts::Script;
 pub use canonical::{canonical_json, canonicalize};
 pub use cassette::{Cassette, CassetteError, Matching, RecordedCall, RecordedSignal};
 pub use digest::{Digest, InvalidDigest};
+pub use doc::{MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, ScriptDoc, script_doc};
 pub use event::{
     AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Event,
     HistoryEntry, Lifecycle, LogLevel, RunMode, RunStarted, ScriptError, ToolFailure,
     ToolFailureKind, ToolOutcome,
+};
+pub use handle::{
+    InvalidRunHandle, MAX_ORIGIN_LEN, MAX_SUFFIX_LEN, RunHandle, SCRIPT_ORIGIN, SUFFIX_LEN,
+    is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours, suffix_range,
 };
 pub use history::{HistoryError, validate_history};
 pub use ids::{Epoch, RunId, Seed, Seq};

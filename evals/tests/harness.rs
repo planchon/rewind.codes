@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use evals::episode::{self, Episode, EpisodeConfig};
-use evals::model::scripted::{Scripted, first_uuid};
+use evals::model::scripted::{Scripted, first_run, first_uuid};
 use evals::model::{AssistantTurn, Conversation, Model, ToolCall, Turn};
 use evals::prompt::Rendering;
 use evals::task::Task;
@@ -90,7 +90,7 @@ fn digest_in(text: &str) -> Option<String> {
 
 /// The run of a line of `list_runs` that names `needle`.
 fn run_named(listing: &str, needle: &str) -> Option<String> {
-    first_uuid(listing.lines().find(|line| line.contains(needle))?)
+    first_run(listing.lines().find(|line| line.contains(needle))?)
 }
 
 /// `ship_orders` as `fix_workflow_regression` saves it, with `code` and these suite changes.
@@ -249,10 +249,10 @@ fn reference(id: &'static str) -> Model {
                 ("cancel_stuck_run", 1) => {
                     let listing = last.unwrap_or_default();
                     let line = listing.lines().find(|line| line.contains(": active"))?;
-                    Some(call("get_run", json!({ "run_id": first_uuid(line)? })))
+                    Some(call("get_run", json!({ "run_id": first_run(line)? })))
                 }
                 ("cancel_stuck_run", 2) => {
-                    let run_id = first_uuid(&last.unwrap_or_default())?;
+                    let run_id = first_run(&last.unwrap_or_default())?;
                     Some(call("cancel_run", json!({ "run_id": run_id })))
                 }
                 ("fix_failed_run", 0) => Some(call(
@@ -627,7 +627,7 @@ async fn the_gate_refuses_a_fix_that_breaks_the_suite_and_counts_it() {
     );
     let retried = &results[2];
     assert!(retried.is_error);
-    let failed = first_uuid(&retried.content).unwrap();
+    let failed = first_run(&retried.content).unwrap();
     assert!(
         retried.content.starts_with(&format!(
             "Run {failed} was not retried: 1 of 3 tests of the suite of ship_orders@"

@@ -435,6 +435,25 @@ A refused server fails the registration (`toolset-unavailable`), and a call with
 (`unavailable`), for good. The embedded server reaches any address, as it starts stdio servers:
 one developer names the servers of their own machine.
 
+## Script titles
+
+A script is named by its title wherever it shows, never by its digest
+([decisions](08-decisions.md#taken-for-script-titles-and-run-handles-november-2026)). Its
+title is, in order:
+
+1. the one a person gave it for the organization (`PATCH /v1/scripts/{digest}`,
+   `scripts:write`): 1 to 120 characters, with a description of at most 2,000; `null` removes
+   them;
+2. the first line of the comment at its top, a block (`/** … */`, `/* … */`) or a run of `//`
+   lines before any code: the lines after it are its description (tags such as `@ts-check`
+   are left out);
+3. without either, the workflow's name where a run of a workflow shows, else "Untitled script".
+
+The comment is part of the source, so the same source has the same title everywhere; a title a
+person gives renames the script for every run of it, past and future. `run_script` and
+`check_script` ask the model for the comment, and `check_script` says when a script has none.
+A run's handle takes the title when the run is created ([handles](06-storage-and-scale.md#run-handles)).
+
 ## Type-checking
 
 `rewind check` (and `POST /v1/check`) type-checks the script against the sandbox lib and the

@@ -18,8 +18,8 @@ import { changeStream } from "../test/streams";
 import { useRunSearch } from "./runs";
 import { StateProvider } from "./store";
 
-function summaryOf(fixture: RunFixture): RunSummary {
-  return publicSummary(summarize(fixture, NOW));
+function summaryOf(world: World, fixture: RunFixture): RunSummary {
+  return publicSummary(summarize(world, fixture, NOW));
 }
 
 /** The requests to `/v1/runs` the mocked API answered. */
@@ -111,7 +111,7 @@ describe("the state of the runs", () => {
     await waitFor(() => expect(changes.live).toBe(true));
     const reads = log.urls.length;
 
-    const summary = summaryOf(active);
+    const summary = summaryOf(world, active);
     changes.run({
       ...summary,
       status: "completed",
@@ -184,7 +184,7 @@ describe("a table scrolled down", () => {
 
     // A new run of the search: held back, since the view is still scrolled.
     const started = startRun(world, 3);
-    changes.run(summaryOf(started));
+    changes.run(summaryOf(world, started));
     await readAgain(log, reads);
     await waitFor(() => expect(within(list).getByText("1 new")).toBeVisible());
     expect(
@@ -278,7 +278,7 @@ describe("the table of runs", () => {
     await waitFor(() => expect(changes.live).toBe(true));
     const rows = tableRows();
     const target = world.runs.find((r) => r.id === idOf(rows[3])) as RunFixture;
-    const summary = summaryOf(target);
+    const summary = summaryOf(world, target);
     const reads = log.urls.length;
 
     changes.run({ ...summary, status: "failed", historyLen: summary.historyLen + 1 });
@@ -305,7 +305,7 @@ describe("the table of runs", () => {
     // At its top: the new run shows at once.
     const first = startRun(world, 1);
     let reads = log.urls.length;
-    changes.run(summaryOf(first));
+    changes.run(summaryOf(world, first));
     await readAgain(log, reads);
     await waitFor(() => expect(idOf(tableRows()[0])).toBe(first.id));
 
@@ -314,7 +314,7 @@ describe("the table of runs", () => {
     const shown = tableRows();
     const second = startRun(world, 2);
     reads = log.urls.length;
-    changes.run(summaryOf(second));
+    changes.run(summaryOf(world, second));
     await readAgain(log, reads);
     const show = await screen.findByRole("button", { name: "1 new · Show" });
     expect(tableRows()).toEqual(shown);

@@ -444,6 +444,7 @@ mod tests {
     fn a_change_event_is_the_summary_itself_or_an_empty_object() {
         let summary: RunSummary = serde_json::from_value(json!({
             "id": "0193a5c4-0000-7000-8000-000000000001",
+            "handle": "alice/script/06bqx3k9f2mt",
             "namespace": "alice",
             "status": "active",
             "quarantined": false,

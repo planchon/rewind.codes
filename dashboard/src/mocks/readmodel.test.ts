@@ -78,5 +78,7 @@ describe("the mocked read model", () => {
     const timeout = page.groups.find((g) => g.signature.includes("no answer within"));
     expect(timeout?.error).toBe("ToolError");
     expect(timeout?.line).toBe(5);
+    // Its latest run by its handle, as every reference to a run.
+    for (const g of page.groups) expect(g.latest.handle).toMatch(/^[^/]+\/[^/]+\/[0-9a-z]{12,25}$/);
   });
 });

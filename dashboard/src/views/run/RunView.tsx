@@ -1,24 +1,16 @@
-// Run: one run, analysed in depth (archi/05). Its sidebar holds its status, its sections and its
-// details; its sections are the debugger (the source with each tool call, timer, signal wait and
+// Run: one run, analysed in depth (archi/05). Its header holds its handle, its tags and its actions
+// (its controls in a menu beside "Forks"); its sidebar, its sections and its details, and no
+// action. Its sections are the debugger (the source with each tool call, timer, signal wait and
 // log next to the line that caused it; the timeline; the time cursor; payloads on demand), the
-// journal, the logs, the LLM trace and the runs it started. Live through the event stream while
-// the run goes on. The time cursor steps through the history: the source, its notes and the
+// journal, the logs and the runs it started. Live through the event stream while the run goes on. The time cursor steps through the history: the source, its notes and the
 // timeline show the run as it was after a step, and hovering a call or a variable shows its value
 // then. "Back" returns to the list of Observability the run was opened from.
-import {
-  Bug,
-  FileCode,
-  GitBranch,
-  MessageSquareText,
-  ScrollText,
-  Sparkles,
-  Terminal,
-} from "lucide-react";
+import { Bug, FileCode, GitBranch, MessageSquareText, ScrollText, Terminal } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router";
-import { runBackPath } from "../../app/runLinks";
+import { parseRunPath, runBackPath, runPath } from "../../app/runLinks";
 import { PageSidebar, useSidebarFolded } from "../../app/sidebar";
-import { Empty, Loading, ProblemView, RunId, useNow } from "../../components/bits";
+import { Empty, Loading, ProblemView, RunHandle, useNow } from "../../components/bits";
 import { CodeView, type LineMark } from "../../components/CodeView";
 import { PageHeader } from "../../components/PageHeader";
 import { OutcomeGlyph } from "../../components/Status";
@@ -33,9 +25,8 @@ import { useScript } from "../../state/scripts";
 import { CursorBar, StepPanel, useCursorKeys, useTimeCursor, ValuePopover } from "./Cursor";
 import { activityOutcome, activityTitle } from "./describe";
 import { Inspector, type Selection } from "./Inspector";
-import { JournalList, LlmTrace, Logs } from "./JournalPanel";
-import { RunControls } from "./RunControls";
-import { RunActions, RunBanners, RunCard, RunDetails } from "./RunHeader";
+import { JournalList, Logs } from "./JournalPanel";
+import { RunActions, RunBanners, RunDetails, RunTags } from "./RunHeader";
 import { StartedRuns } from "./StartedRuns";
 import { Timeline } from "./Timeline";
 import { buildTargets, sourceIndex } from "./targets";
@@ -260,18 +251,51 @@ function Notes({
   );
 }
 
-type Section = "debugger" | "journal" | "logs" | "trace" | "started";
+type Section = "debugger" | "journal" | "logs" | "started";
 
-const SECTIONS: readonly Section[] = ["debugger", "journal", "logs", "trace", "started"];
+const SECTIONS: readonly Section[] = ["debugger", "journal", "logs", "started"];
 
 /** A run's page, mounted again for another run: its details are never the previous run's. */
+/**
+ * A run's page, by its UUID or its handle (`/runs/dana/triage/06bqx3k9f2mt/journal`). A handle
+ * is read once into the run's id, which the page and its streams follow; the URL keeps the handle.
+ */
 export function RunPage() {
-  const { id = "" } = useParams();
-  return <RunView key={id} />;
+  const rest = useParams()["*"] ?? "";
+  const { run, section } = parseRunPath(rest);
+  const byHandle = run.includes("/");
+  const named = useRun(run, byHandle);
+  const location = useLocation();
+  if (!byHandle) return <RunView key={run} id={run} base={run} section={section} />;
+  if (named.isPending) return <Loading>Loading the run…</Loading>;
+  if (named.isError) {
+    const notFound = named.error instanceof ApiError && named.error.status === 404;
+    return (
+      <div className="page">
+        <ProblemView
+          error={named.error}
+          title={notFound ? "No such run" : "The run could not be read"}
+        />
+        <p>
+          <Link to={runBackPath(location.state)}>Back to the runs</Link>
+        </p>
+      </div>
+    );
+  }
+  return <RunView key={named.data.id} id={named.data.id} base={run} section={section} />;
 }
 
-function RunView() {
-  const { id = "", section: rawSection } = useParams();
+function RunView({
+  id,
+  base,
+  section: rawSection,
+}: {
+  /** The run's UUID. */
+  id: string;
+  /** How the URL names it: its handle, or its UUID. */
+  base: string;
+  section: string | null;
+}) {
   const section = (rawSection ?? "debugger") as Section;
   const location = useLocation();
   const folded = useSidebarFolded();
@@ -370,7 +394,7 @@ function RunView() {
     [atCursor, errorLine],
   );
 
-  if (!SECTIONS.includes(section)) return <Navigate to={`/runs/${id}`} replace />;
+  if (!SECTIONS.includes(section)) return <Navigate to={runPath(base)} replace />;
   if (run.isPending) return <Loading>Loading the run…</Loading>;
   if (run.isError) {
     const notFound = run.error instanceof ApiError && run.error.status === 404;
@@ -398,7 +422,7 @@ function RunView() {
   };
   const hovered = hover ? targets?.byKey.get(hover.key) : undefined;
   const sectionTo = (to: Section) => ({
-    pathname: to === "debugger" ? `/runs/${r.id}` : `/runs/${r.id}/${to}`,
+    pathname: runPath(base, to === "debugger" ? undefined : to),
     search: params.toString() ? `?${params.toString()}` : "",
   });
   const started = startedRuns(model).length;
@@ -426,7 +450,6 @@ function RunView() {
       icon: <Terminal size={16} />,
       end: <span className="count">{formatCount(model.logs.length)}</span>,
     },
-    { section: "trace", label: "LLM trace", icon: <Sparkles size={16} />, end: null },
     {
       section: "started",
       label: "Runs started",
@@ -449,8 +472,6 @@ function RunView() {
   return (
     <div className="page run-page">
       <PageSidebar title="Run" back={back} backLabel="Back to the runs">
-        <RunCard run={r} state={journal.state} />
-        <RunControls run={r} />
         <nav className="nav" aria-label="Run">
           {nav.map((n) => (
             <Link
@@ -476,7 +497,8 @@ function RunView() {
       </PageSidebar>
       <PageHeader
         crumbs={<Link to={back}>Observability</Link>}
-        title={<RunId id={r.id} />}
+        title={<RunHandle handle={r.handle} id={r.id} />}
+        meta={<RunTags run={r} />}
         actions={<RunActions run={r} />}
       />
       <div className="page-body">
@@ -643,16 +665,6 @@ function RunView() {
             </section>
             <div className="run-side">{inspector}</div>
           </div>
-        )}
-
-        {section === "trace" && (
-          <section className="panel" aria-label="LLM trace">
-            <header className="panel-head">
-              <h2>LLM trace</h2>
-              <span className="muted">what a model reads with get_run</span>
-            </header>
-            <LlmTrace runId={r.id} historyLen={model.entries.length} />
-          </section>
         )}
 
         {section === "started" &&

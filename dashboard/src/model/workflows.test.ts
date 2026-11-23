@@ -114,6 +114,7 @@ describe("workflows in a journal", () => {
 function version(id: string, overrides: Partial<Workflow> = {}): Workflow {
   return {
     name: "triage",
+    number: 1,
     version: id.repeat(64).slice(0, 64),
     toolset: "t",
     script: "s",

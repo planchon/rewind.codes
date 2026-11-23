@@ -8,7 +8,8 @@
 //! workflow versions; version 7 people's connections and the OAuth clients and codes; version 8
 //! the namespaces' display names; version 9 named secrets, their reads, the signing keys, the
 //! master key of each data key and the runs' attachments; version 10 when each run's summary last
-//! changed).
+//! changed; version 11 the runs' origins and handle suffixes, the scripts' titles and the numbers
+//! of workflow versions).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -20,7 +21,10 @@
 //!   query them. A run's `scope`, like its `labels`, is a JSON object;
 //! - `workflows.stored_order` numbers each workflow's versions (by tenant and name) in the
 //!   order they were stored, which breaks the ties of `created_at` when they are listed newest
-//!   first;
+//!   first; `workflows.number` is the version's number among them, as people name it
+//!   (`triage v12`), unique by tenant and name;
+//! - `runs.suffix_len` is how many characters the suffix of the run's handle has: the handle is
+//!   `<namespace>/<origin>/<suffix>`, its suffix read from the run's id;
 //! - a run keeps its oldest inbox item (`inbox_head`, received at `runnable_at`), and a task
 //!   when it can be claimed (`due_at`): the picks of `acquire_runnable` and `claim_tool_tasks`
 //!   read an index instead of grouping the inbox or scanning the tasks;
@@ -47,9 +51,10 @@
 //!
 //! - `run_summaries` keeps what the entries give (status, start and end, counts, history
 //!   length), the metadata of the latest `apply` (headline, labels as JSON, parent, the
-//!   workflow's name, `started_by`), and the kept snapshot's columns: its length
-//!   (`snapshot_len`), mode and ending, the ending's `fingerprint` among them. `wakes_at` is the
-//!   earliest `until` of its waits while the run is active, kept for the `wakes` order;
+//!   workflow's name, `started_by`, the origin and suffix length of the run's handle), and the
+//!   kept snapshot's columns: its length (`snapshot_len`), mode and ending, the ending's
+//!   `fingerprint` among them. `wakes_at` is the earliest `until` of its waits while the run is
+//!   active, kept for the `wakes` order;
 //!   `changed_at` when a write last changed the summary, in milliseconds of the system clock,
 //!   for the change stream (0 for the summaries of version 9, which no stream reads again);
 //! - `run_labels` holds one row per label, for equality, prefix and presence;
@@ -68,13 +73,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -801,6 +806,72 @@ ALTER TABLE run_summaries ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 "#;
 
+/// Run handles, script titles and the numbers of workflow versions
+/// (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script titles"). A run
+/// keeps its origin, the middle of its handle, and the characters of its handle's suffix. A run
+/// stored before handles takes its workflow's name, or `script`, and the short suffix, unless
+/// another run of its tenant shares the first 64 bits of its id (the first 18 characters of its
+/// text, `xxxxxxxx-xxxx-xxxx`): every run of such a group then takes the full suffix, which tells
+/// distinct ids apart. A summary takes its run's; a summary whose run the journal no longer holds
+/// follows the same rules among the summaries of its tenant. The versions of each workflow are
+/// numbered from 1 in the order they were created, ties in the order they were stored.
+///
+/// `+twin.tenant` keeps the planner from searching the twins by tenant (`runs_by_tenant`, a scan
+/// of the tenant's runs for each run) rather than by the range of their ids.
+const V11: &str = r#"
+ALTER TABLE runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'script';
+ALTER TABLE runs ADD COLUMN suffix_len INTEGER NOT NULL DEFAULT 12;
+UPDATE runs SET origin = workflow WHERE workflow IS NOT NULL;
+UPDATE runs SET suffix_len = 25 WHERE EXISTS (
+    SELECT 1 FROM runs twin
+    WHERE twin.id BETWEEN substr(runs.id, 1, 18) || '-0000-000000000000'
+                      AND substr(runs.id, 1, 18) || '-ffff-ffffffffffff'
+      AND +twin.tenant = runs.tenant AND twin.id <> runs.id
+);
+
+ALTER TABLE run_summaries ADD COLUMN origin TEXT NOT NULL DEFAULT 'script';
+ALTER TABLE run_summaries ADD COLUMN suffix_len INTEGER NOT NULL DEFAULT 12;
+UPDATE run_summaries SET origin = workflow WHERE workflow IS NOT NULL;
+UPDATE run_summaries SET suffix_len = 25 WHERE EXISTS (
+    SELECT 1 FROM run_summaries twin
+    WHERE twin.run_id BETWEEN substr(run_summaries.run_id, 1, 18) || '-0000-000000000000'
+                          AND substr(run_summaries.run_id, 1, 18) || '-ffff-ffffffffffff'
+      AND twin.tenant = run_summaries.tenant AND twin.run_id <> run_summaries.run_id
+);
+UPDATE run_summaries SET
+    origin = (SELECT runs.origin FROM runs WHERE runs.id = run_summaries.run_id),
+    suffix_len = (SELECT runs.suffix_len FROM runs WHERE runs.id = run_summaries.run_id)
+WHERE run_id IN (SELECT id FROM runs);
+
+CREATE TABLE script_titles (
+    tenant TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    updated_by TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant, digest)
+) STRICT;
+
+ALTER TABLE workflows ADD COLUMN number INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE workflow_numbers (
+    tenant TEXT NOT NULL,
+    version TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    PRIMARY KEY (tenant, version)
+) STRICT;
+INSERT INTO workflow_numbers (tenant, version, number)
+SELECT tenant, version,
+       row_number() OVER (PARTITION BY tenant, name ORDER BY created_at, stored_order)
+FROM workflows;
+UPDATE workflows SET number = (
+    SELECT n.number FROM workflow_numbers n
+    WHERE n.tenant = workflows.tenant AND n.version = workflows.version
+);
+DROP TABLE workflow_numbers;
+CREATE UNIQUE INDEX workflows_by_number ON workflows (tenant, name, number);
+"#;
+
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
 pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
     migrate_to(connection, SCHEMA_VERSION).await
@@ -1158,6 +1229,7 @@ mod tests {
         let new_run = |n: u128, namespace: NamespaceName| NewRun {
             run: RunRef::new(acme.clone(), rewind_core::RunId::from_u128(n)),
             namespace,
+            origin: "script".into(),
             started: started.clone(),
             metadata: RunMetadata::default(),
             created_at: at(3),
@@ -1350,6 +1422,8 @@ mod tests {
                 &ProjectedRun {
                     run: RunRef::new(tenant.clone(), started),
                     namespace: rewind_engine::ports::NamespaceName::migrated(),
+                    origin: "script".into(),
+                    suffix_len: 12,
                     script: Digest::of(b"script"),
                     headline: "a run".into(),
                     toolset: Digest::of(b"toolset"),
@@ -1394,5 +1468,261 @@ mod tests {
             found(RunQuery::new(tenant.clone()).with(Predicate::StartedBy(starter))).await,
             [started]
         );
+    }
+
+    /// A run as version 10 kept it: before handles.
+    async fn run_of_version_10(
+        connection: &turso::Connection,
+        id: RunId,
+        tenant: &str,
+        workflow: Option<&str>,
+    ) {
+        sql::execute(
+            connection,
+            "INSERT INTO runs (id, tenant, namespace, script, toolset, status, epoch, history_len, \
+             expires_at, expiry_enqueued, failures, attempts, fence, labels, created_at, \
+             updated_at, workflow, workflow_version) \
+             VALUES (?, ?, 'migrated', ?, ?, 'completed', 1, 0, ?, 0, 0, 0, 0, '{}', ?, ?, ?, ?)",
+            vec![
+                sql::run_id(id),
+                text(tenant),
+                digest(Digest::of(b"script")),
+                digest(Digest::of(b"toolset")),
+                ts(at(86_400 * 30)),
+                ts(T0),
+                ts(T0),
+                opt_text(workflow),
+                workflow.map_or(turso::Value::Null, |name| {
+                    digest(Digest::of(name.as_bytes()))
+                }),
+            ],
+        )
+        .await
+        .expect("a run of version 10");
+    }
+
+    /// A run's summary as version 10 kept it.
+    async fn summary_of_version_10(
+        connection: &turso::Connection,
+        id: RunId,
+        tenant: &str,
+        workflow: Option<&str>,
+    ) {
+        sql::execute(
+            connection,
+            "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
+             labels, last_activity_at, tool_calls, errors, history_len, snapshot_len, workflow) \
+             VALUES (?, ?, ?, 'a run', ?, 'completed', '{}', 5, 0, 0, 1, 1, ?)",
+            vec![
+                sql::run_id(id),
+                text(tenant),
+                digest(Digest::of(b"script")),
+                digest(Digest::of(b"toolset")),
+                opt_text(workflow),
+            ],
+        )
+        .await
+        .expect("a summary of version 10");
+    }
+
+    /// A workflow version as version 10 kept it: without its number.
+    async fn version_of_version_10(
+        connection: &turso::Connection,
+        tenant: &str,
+        workflow: &rewind_core::Workflow,
+        created_at: Timestamp,
+        stored_order: u64,
+    ) {
+        sql::execute(
+            connection,
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
+             stored_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                text(tenant),
+                digest(workflow.version()),
+                text(workflow.name()),
+                text(rewind_format::encode_workflow(workflow)),
+                text(encode_labels(workflow.labels())),
+                ts(created_at),
+                sql::int(stored_order),
+            ],
+        )
+        .await
+        .expect("a workflow version of version 10");
+    }
+
+    fn workflow(name: &str, script: &str) -> rewind_core::Workflow {
+        rewind_core::Workflow::new(
+            name,
+            None,
+            Digest::of(script.as_bytes()),
+            Digest::of(b"toolset"),
+            rewind_core::WorkflowSchemas {
+                input: serde_json::json!({ "type": "object" }),
+                output: serde_json::json!({}),
+                signals: BTreeMap::new(),
+            },
+        )
+        .expect("a valid workflow")
+    }
+
+    #[tokio::test]
+    async fn runs_and_versions_of_version_10_get_handles_and_numbers() {
+        use rewind_core::{RunHandle, SUFFIX_LEN, run_suffix, suffix_range};
+
+        let ms = 1_795_383_896_000;
+        // Two runs of `acme` whose first 64 bits are the same, a third apart from them, and a run
+        // of `beta` with the same first bits as the pair.
+        let (triage, plain) = (
+            RunId::from_v7_parts(ms, 0x0c5, 1),
+            RunId::from_v7_parts(ms, 0x0c5, 2),
+        );
+        let apart = RunId::from_v7_parts(ms + 1, 0x0c5, 1);
+        let theirs = RunId::from_v7_parts(ms, 0x0c5, 3);
+        assert_eq!(
+            run_suffix(triage, SUFFIX_LEN),
+            run_suffix(plain, SUFFIX_LEN),
+            "the short suffix does not tell the pair apart"
+        );
+        // Two summaries of runs the journal no longer holds, with the same first 64 bits.
+        let (gone, gone_twin) = (
+            RunId::from_v7_parts(ms + 2, 7, 1),
+            RunId::from_v7_parts(ms + 2, 7, 2),
+        );
+        // Versions created out of the order they were stored in, two of them at the same time.
+        let (late, early, tied) = (
+            workflow("triage", "v1"),
+            workflow("triage", "v2"),
+            workflow("triage", "v3"),
+        );
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("journal.db");
+        {
+            // The database as a build of version 10 left it.
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("create the file");
+            let connection = database.connect().expect("connect");
+            migrate_to(&connection, 10).await.expect("version 10");
+            run_of_version_10(&connection, triage, "acme", Some("triage")).await;
+            run_of_version_10(&connection, plain, "acme", None).await;
+            run_of_version_10(&connection, apart, "acme", None).await;
+            run_of_version_10(&connection, theirs, "beta", None).await;
+            summary_of_version_10(&connection, triage, "acme", Some("triage")).await;
+            summary_of_version_10(&connection, apart, "acme", None).await;
+            summary_of_version_10(&connection, gone, "acme", Some("digest")).await;
+            summary_of_version_10(&connection, gone_twin, "acme", None).await;
+            version_of_version_10(&connection, "acme", &late, at(5), 1).await;
+            version_of_version_10(&connection, "acme", &early, at(2), 2).await;
+            version_of_version_10(&connection, "acme", &tied, at(5), 3).await;
+            version_of_version_10(&connection, "acme", &workflow("digest", "d1"), at(1), 1).await;
+            version_of_version_10(&connection, "beta", &workflow("triage", "x"), at(1), 1).await;
+        }
+
+        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
+            .await
+            .expect("open and migrate");
+        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+        let (acme, beta) = (tenant_id("acme"), tenant_id("beta"));
+        let record = |tenant: &TenantId, id: RunId| {
+            let (store, run) = (&store, RunRef::new(tenant.clone(), id));
+            async move {
+                store
+                    .get_run(&run)
+                    .await
+                    .expect("get_run")
+                    .expect("the run is kept")
+            }
+        };
+        let handle =
+            |record: &rewind_engine::ports::RunRecord| (record.origin.clone(), record.suffix_len);
+        let (first, second) = (record(&acme, triage).await, record(&acme, plain).await);
+        assert_eq!(
+            handle(&first),
+            ("triage".to_owned(), 25),
+            "the workflow's name"
+        );
+        assert_eq!(handle(&second), ("script".to_owned(), 25));
+        assert_eq!(
+            handle(&record(&acme, apart).await),
+            ("script".to_owned(), 12)
+        );
+        assert_eq!(
+            handle(&record(&beta, theirs).await),
+            ("script".to_owned(), 12),
+            "another tenant's run does not lengthen a suffix"
+        );
+        // Each of the pair's full suffixes names it alone.
+        for record in [&first, &second] {
+            let RunHandle { suffix, .. } = record.handle();
+            let (low, high) = suffix_range(&suffix).expect("a range");
+            let named: Vec<RunId> = store
+                .runs_in_range(&acme, low, high, 10)
+                .await
+                .expect("runs_in_range")
+                .iter()
+                .map(|named| named.run.id)
+                .collect();
+            assert_eq!(named, [record.run.id]);
+        }
+
+        let summaries: BTreeMap<RunId, (String, u8)> = store
+            .search_runs(&RunQuery::new(acme.clone()), RunOrder::Started, None, 10)
+            .await
+            .expect("search_runs")
+            .into_iter()
+            .map(|summary| (summary.run.id, (summary.origin, summary.suffix_len)))
+            .collect();
+        assert_eq!(
+            summaries,
+            BTreeMap::from([
+                (triage, ("triage".to_owned(), 25)),
+                (apart, ("script".to_owned(), 12)),
+                (gone, ("digest".to_owned(), 25)),
+                (gone_twin, ("script".to_owned(), 25)),
+            ]),
+            "a summary takes its run's, or follows the rules among the summaries"
+        );
+
+        let none = BTreeMap::new();
+        let numbered: Vec<(Digest, u32)> = store
+            .workflow_versions(&acme, "triage", &none)
+            .await
+            .expect("workflow_versions")
+            .iter()
+            .map(|stored| (stored.workflow.version(), stored.number))
+            .collect();
+        assert_eq!(
+            numbered,
+            [
+                (tied.version(), 3),
+                (late.version(), 2),
+                (early.version(), 1)
+            ],
+            "numbered by creation, ties in the order they were stored"
+        );
+        let number = |tenant: &TenantId, name: &str| {
+            let (store, tenant, name) = (&store, tenant.clone(), name.to_owned());
+            async move {
+                store
+                    .workflow_number(&tenant, &name, 1)
+                    .await
+                    .expect("workflow_number")
+                    .map(|stored| stored.workflow.name().to_owned())
+            }
+        };
+        assert_eq!(number(&acme, "digest").await.as_deref(), Some("digest"));
+        assert_eq!(number(&beta, "triage").await.as_deref(), Some("triage"));
+        let next = store
+            .put_workflow(&acme, &workflow("triage", "v4"), at(6))
+            .await
+            .expect("put_workflow");
+        assert_eq!(next.number, 4, "a new version takes the next number");
+        let again = store
+            .put_workflow(&acme, &late, at(7))
+            .await
+            .expect("put_workflow");
+        assert_eq!(again.number, 2, "a version put again keeps its number");
     }
 }

@@ -10,6 +10,16 @@ export interface CheckParams extends RequestOptions {
   toolset?: string | undefined;
 }
 
+export interface ScriptTitleParams extends RequestOptions {
+  /**
+   * The title, trimmed: 1 to 120 characters. `null` removes the title and the description a person gave: those of the
+   * comment at the top of the source show again.
+   */
+  title: string | null;
+  /** The description, trimmed: at most 2,000 characters. Absent, `null` or `""`: none. */
+  description?: string | null | undefined;
+}
+
 export interface ListScriptsParams extends RequestOptions {
   /** Only scripts that ran with all these labels. */
   labels?: Labels | undefined;
@@ -43,9 +53,9 @@ export class Scripts {
    * must hold at the end; a call the world does not answer fails the test. No tool is really called.
    *
    * A test is given inline, by the digest of a stored test (one `workflows.record` recorded), or as
-   * `{ from: digest, expect }`. With `workflow` (`"triage"` or `"triage@<version>"`), that version's suite runs too,
-   * checked against its interface, and `script` and `toolset` default to the version's: give a corrected `script`, or
-   * a new `toolset`, to check a candidate before it is saved. The tests are not stored.
+   * `{ from: digest, expect }`. With `workflow` (`"triage"`, `"triage@<version>"` or `"triage@v12"`), that version's
+   * suite runs too, checked against its interface, and `script` and `toolset` default to the version's: give a
+   * corrected `script`, or a new `toolset`, to check a candidate before it is saved. The tests are not stored.
    *
    * Returns each test's outcome, in the order given, then the suite's. A test refused before running (an invalid test,
    * a digest that does not exist) is `invalid-test`. A key's client without a namespace is refused
@@ -93,7 +103,10 @@ export class Scripts {
     } while (cursor !== undefined);
   }
 
-  /** One script's source, by its digest. */
+  /**
+   * One script's source, by its digest, with its title: the one a person gave it (`titleSource: "person"`), else the
+   * first line of the comment at its top (`"comment"`).
+   */
   get(digest: string, options: RequestOptions = {}): Promise<Script> {
     return this.transport.send(
       () =>
@@ -102,6 +115,25 @@ export class Scripts {
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },
+    );
+  }
+
+  /**
+   * Gives the script a title and a description for the whole organization, over those of the comment at its top; the
+   * source does not change. `title: null` removes them. A new run of the script takes its handle's origin from the
+   * title. Needs `scripts:write`. A title out of bounds is refused with `invalid-title`; a script the caller cannot
+   * read is `not-found`.
+   */
+  setTitle(digest: string, params: ScriptTitleParams): Promise<Script> {
+    const { signal, title, description } = params;
+    return this.transport.send(
+      () =>
+        this.transport.api.PATCH("/v1/scripts/{digest}", {
+          params: { path: { digest } },
+          body: { title, ...(description === undefined ? {} : { description }) },
+          signal,
+        }),
+      { retry: true, signal },
     );
   }
 }

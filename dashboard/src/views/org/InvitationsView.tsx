@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { TableScroll } from "../../components/TableScroll";
 import type { Invitation, InvitationState } from "../../model/types";
 import { useAccess } from "../../state/access";
 import {
@@ -133,7 +134,7 @@ function Invitations() {
       ) : invitations.data.length === 0 ? (
         <Empty>No invitation sent yet.</Empty>
       ) : (
-        <div className="table-wrap">
+        <TableScroll>
           <table className="grid">
             <thead>
               <tr>
@@ -227,7 +228,7 @@ function Invitations() {
                 ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </section>
   );

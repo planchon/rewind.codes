@@ -13,8 +13,8 @@ use std::ops::Bound::{self, Excluded, Included, Unbounded};
 
 use rewind_core::{
     AbortKind, AbortReason, Annotation, Callsite, Command, Completion, Digest, Epoch, Event, Field,
-    HistoryEntry, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunStatus, ScriptError,
-    Seed, Seq, Shape, Timestamp, ToolFailure, ToolFailureKind,
+    HistoryEntry, Lifecycle, LogLevel, Payload, RunHandle, RunId, RunMode, RunStarted, RunStatus,
+    ScriptError, Seed, Seq, Shape, Timestamp, ToolFailure, ToolFailureKind,
 };
 use serde_json::json;
 
@@ -444,6 +444,8 @@ fn run(
     ProjectedRun {
         run: RunRef::new(tenant, id(n)),
         namespace: alice(),
+        origin: "triage".into(),
+        suffix_len: 12,
         script: script(script_n),
         headline: headline.into(),
         toolset: toolset(toolset_n),
@@ -1054,6 +1056,8 @@ pub async fn runs_are_summarized<S: ReadModel>(store: &S) {
         RunSummary {
             run: RunRef::new(acme(), id(4)),
             namespace: alice(),
+            origin: "triage".into(),
+            suffix_len: 12,
             script: script(2),
             headline: "// Ask before closing".into(),
             toolset: toolset(1),
@@ -1106,6 +1110,8 @@ pub async fn runs_are_summarized<S: ReadModel>(store: &S) {
         RunSummary {
             run: RunRef::new(acme(), id(2)),
             namespace: alice(),
+            origin: "triage".into(),
+            suffix_len: 12,
             script: script(1),
             headline: "// Deploy the release".into(),
             toolset: toolset(1),
@@ -2380,6 +2386,8 @@ fn group(
         line,
         labels: values(pairs),
         latest: id(latest),
+        // The failed runs are alice's runs of `triage` (`run`).
+        latest_handle: RunHandle::new(alice().as_str(), "triage", id(latest), 12),
         latest_status,
         latest_message: latest_message.into(),
     }

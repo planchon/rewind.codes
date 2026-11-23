@@ -1,14 +1,15 @@
 //! The state every request and every loop shares: the engine wired with this server's
 //! adapters, and what the HTTP API needs beside it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_api::admin::ServerRole;
-use rewind_core::{Digest, RunId, Timestamp, Toolset};
+use rewind_core::{Digest, Timestamp, Toolset};
 use rewind_engine::Engine;
 use rewind_engine::adapters::SystemEntropy;
+use rewind_engine::handles::find_run;
 use rewind_engine::ports::{
     Clock, JournalStore, ReadModel, Retention, RunRecord, RunRef, StoredToolset, TaskProgress,
     Tenant, TenantId, ToolDeclarations, ToolTask,
@@ -24,6 +25,7 @@ use crate::changes::Changes;
 use crate::deliveries::{Background, Deliveries};
 use crate::error::ApiError;
 use crate::oauth::OAuthServer;
+use crate::titles::{ScriptTexts, Title};
 use crate::views::Views;
 use crate::wake::{Activity, POLL, Wake, wait};
 use crate::wiring::blobs::Blobs;
@@ -92,8 +94,9 @@ pub(crate) struct App {
     /// The OAuth authorization server of people's connections: with a public URL and a
     /// sign-in only.
     pub(crate) oauth: Option<OAuthServer>,
-    /// Script headlines, by tenant and digest: a script never changes.
-    headlines: Mutex<HashMap<(TenantId, Digest), String>>,
+    /// What scripts' sources say of them, by tenant and digest: a script never changes. The
+    /// webhooks' rendering shares it.
+    pub(crate) texts: Arc<ScriptTexts>,
     /// Tenants known to have their record: a tenant is never deleted.
     tenants: Mutex<HashSet<TenantId>>,
 }
@@ -125,6 +128,7 @@ impl App {
         tools: Tools,
         exporter: Exporter,
         deliveries: Arc<Deliveries<ServerRender>>,
+        texts: Arc<ScriptTexts>,
         settings: Settings,
         sign_in: Option<SignIn>,
         oauth: Option<OAuthServer>,
@@ -144,7 +148,7 @@ impl App {
             stop: watch::Sender::new(false),
             sign_in,
             oauth,
-            headlines: Mutex::new(HashMap::new()),
+            texts,
             tenants: Mutex::new(HashSet::new()),
         }
     }
@@ -203,6 +207,7 @@ impl App {
         Views {
             store: &self.store,
             blobs: &self.blobs,
+            texts: &self.texts,
         }
     }
 
@@ -235,12 +240,11 @@ impl App {
         *self.stop.borrow()
     }
 
-    /// A run the caller sees: of its tenant, with its allowed labels, in the namespace its
-    /// request is bound to, if any. Any other is answered as missing.
+    /// A run the caller sees, named by its id or its handle: of its tenant, with its allowed
+    /// labels, in the namespace its request is bound to, if any. Any other is answered as
+    /// missing, by what the caller asked for.
     pub(crate) async fn run(&self, caller: &Caller, id: &str) -> Result<RunRecord, ApiError> {
-        let run_id: RunId = id.parse().map_err(|_| ApiError::run_not_found(id))?;
-        let run = RunRef::new(caller.tenant.clone(), run_id);
-        match self.store.get_run(&run).await? {
+        match find_run(&self.store, &caller.tenant, id).await? {
             Some(record) if caller.sees_run(&record) => Ok(record),
             _ => Err(ApiError::run_not_found(id)),
         }
@@ -297,26 +301,20 @@ impl App {
 
     /// The first non-blank line of a script.
     pub(crate) async fn headline(&self, tenant: &TenantId, digest: Digest) -> String {
-        let key = (tenant.clone(), digest);
-        if let Some(headline) = self
-            .headlines
-            .lock()
-            .ok()
-            .and_then(|headlines| headlines.get(&key).cloned())
-        {
-            return headline;
-        }
-        let headline = match self.store.get_script(tenant, digest).await {
-            Ok(Some(stored)) => rewind_api::scripts::headline(stored.script.source()),
-            _ => return String::new(),
-        };
-        if let Ok(mut headlines) = self.headlines.lock() {
-            if headlines.len() > 10_000 {
-                headlines.clear();
-            }
-            headlines.insert(key, headline.clone());
-        }
-        headline
+        self.texts
+            .text(&self.store, tenant, digest)
+            .await
+            .map(|text| text.headline.clone())
+            .unwrap_or_default()
+    }
+
+    /// The titles of these scripts of the tenant, for those that have one.
+    pub(crate) async fn titles(
+        &self,
+        tenant: &TenantId,
+        scripts: impl IntoIterator<Item = Digest>,
+    ) -> Result<BTreeMap<Digest, Title>, ApiError> {
+        Ok(self.texts.titles(&self.store, tenant, scripts).await?)
     }
 
     /// Records the state of a task the caller holds in the read model: a claim, a deferral.

@@ -162,8 +162,8 @@ async fn lock_summary(conn: &mut PgConnection, run: &ProjectedRun) -> Result<Loc
         let inserted = sqlx::query(
             "INSERT INTO run_summaries (run_id, tenant, script, toolset, headline, labels, \
                  status, last_activity_at, tool_calls, errors, history_len, snapshot_len, \
-                 namespace) \
-             VALUES ($1, $2, $3, $4, '', '{}', 'active', 0, 0, 0, 0, -1, $5) \
+                 namespace, origin, suffix_len) \
+             VALUES ($1, $2, $3, $4, '', '{}', 'active', 0, 0, 0, 0, -1, $5, $6, $7) \
              ON CONFLICT (run_id) DO NOTHING",
         )
         .bind(id)
@@ -171,6 +171,8 @@ async fn lock_summary(conn: &mut PgConnection, run: &ProjectedRun) -> Result<Loc
         .bind(bytes(run.script))
         .bind(bytes(run.toolset))
         .bind(run.namespace.as_str())
+        .bind(run.origin.as_str())
+        .bind(i16::from(run.suffix_len))
         .execute(&mut *conn)
         .await?
         .rows_affected();
@@ -348,7 +350,8 @@ pub(super) async fn apply_once(
              signature = CASE WHEN $16 THEN $22 ELSE signature END, \
              fingerprint = CASE WHEN $16 THEN $23 ELSE fingerprint END, \
              wakes_at = CASE WHEN COALESCE($13, status) = 'active' \
-                 THEN (SELECT min(until) FROM run_waits WHERE run_id = $1) END, {STAMP} \
+                 THEN (SELECT min(until) FROM run_waits WHERE run_id = $1) END, \
+             origin = $24, suffix_len = $25, {STAMP} \
          WHERE run_id = $1",
     );
     sqlx::query(&statement)
@@ -375,6 +378,8 @@ pub(super) async fn apply_once(
         .bind(ending.and_then(|ending| ending.line).map(i64::from))
         .bind(ending.map(|ending| ending.signature.as_str()))
         .bind(ending.map(|ending| ending.fingerprint.as_str()))
+        .bind(run.origin.as_str())
+        .bind(i16::from(run.suffix_len))
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -485,6 +490,8 @@ mod tests {
         let run = ProjectedRun {
             run: RunRef::new(TenantId::local(), RunId::from_u128(4)),
             namespace: rewind_engine::ports::NamespaceName::migrated(),
+            origin: "script".into(),
+            suffix_len: 12,
             script: Digest::of(b"s"),
             headline: "// Close THE Issues".into(),
             toolset: Digest::of(b"t"),

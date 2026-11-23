@@ -70,11 +70,11 @@ const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.headline, s.tools
      s.mode, s.labels, s.parent, s.workflow, s.started_by, s.started_at, s.ended_at, \
      s.last_activity_at, s.tool_calls, s.errors, s.history_len, s.wakes_at, s.ending_error, \
      s.ending_message, s.ending_line, s.ending_signature, s.fingerprint, q.kind, q.reason, \
-     q.since, s.namespace, s.changed_at \
+     q.since, s.namespace, s.origin, s.suffix_len, s.changed_at \
      FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
 
 /// The column of [`SUMMARY_COLUMNS`] that holds `changed_at`.
-const CHANGED_AT: usize = 27;
+const CHANGED_AT: usize = 29;
 
 /// Now, as `changed_at` is stamped: the system clock, never virtual time.
 fn now_ms() -> Value {
@@ -369,6 +369,8 @@ fn summary_of(row: &Row) -> Result<RunSummary, Error> {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: rewind_engine::ports::NamespaceName::new(namespace.clone())
             .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
+        origin: row.text(27)?,
+        suffix_len: row.suffix_len(28)?,
         script: row.digest(2)?,
         headline: row.text(3)?,
         toolset: row.digest(4)?,
@@ -541,13 +543,14 @@ impl ReadModel for TursoStore {
                 connection,
                 "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
                  labels, parent, workflow, started_by, last_activity_at, tool_calls, errors, \
-                 history_len, snapshot_len, namespace, changed_at) \
-                 VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?) \
+                 history_len, snapshot_len, namespace, origin, suffix_len, changed_at) \
+                 VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?) \
                  ON CONFLICT (run_id) DO UPDATE SET tenant = excluded.tenant, \
                  script = excluded.script, headline = excluded.headline, \
                  toolset = excluded.toolset, labels = excluded.labels, parent = excluded.parent, \
                  workflow = excluded.workflow, started_by = excluded.started_by, \
-                 namespace = excluded.namespace, \
+                 namespace = excluded.namespace, origin = excluded.origin, \
+                 suffix_len = excluded.suffix_len, \
                  changed_at = MAX(excluded.changed_at, run_summaries.changed_at + 1)",
                 vec![
                     id.clone(),
@@ -560,6 +563,8 @@ impl ReadModel for TursoStore {
                     opt_text(run.workflow.as_deref()),
                     run.started_by.map_or(Value::Null, run_id),
                     text(run.namespace.as_str()),
+                    text(run.origin.as_str()),
+                    int(u64::from(run.suffix_len)),
                     now_ms(),
                 ],
             )
@@ -1081,6 +1086,8 @@ mod tests {
         ProjectedRun {
             run: RunRef::new(TenantId::local(), RunId::from_u128(n)),
             namespace: rewind_engine::ports::NamespaceName::migrated(),
+            origin: "script".into(),
+            suffix_len: 12,
             script: Digest::of(b"s"),
             headline: String::new(),
             toolset: Digest::of(b"t"),

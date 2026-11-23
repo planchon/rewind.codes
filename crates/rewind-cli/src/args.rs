@@ -210,7 +210,8 @@ pub(crate) struct TestArgs {
     /// The tests: a JSON array of tests. Default: script.tests.json next to the script.
     #[arg(long, value_name = "FILE")]
     pub(crate) tests: Option<PathBuf>,
-    /// A workflow, `triage` or `triage@<version>`: its suite runs too, on the server, which
+    /// A workflow, `triage`, `triage@<version>` or `triage@v12`: its suite runs too, on the
+    /// server, which
     /// checks every test against its interface.
     #[arg(long, value_name = "NAME")]
     pub(crate) workflow: Option<String>,
@@ -226,6 +227,7 @@ pub(crate) struct TestArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SignalArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// The signal's name.
     pub(crate) name: String,
@@ -238,6 +240,7 @@ pub(crate) struct SignalArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct CancelArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// The message of the CancelledError the script sees.
     #[arg(long)]
@@ -249,6 +252,7 @@ pub(crate) struct CancelArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct StatusArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// Wait up to this long for the run to end.
     #[arg(long, value_name = "DURATION")]
@@ -257,7 +261,7 @@ pub(crate) struct StatusArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ReplayArgs {
-    /// A run id, or the path of an exported journal document.
+    /// A run, by its handle or its id, or the path of an exported journal document.
     pub(crate) run: String,
     /// Check whether this corrected script is compatible with the journal instead, and what a
     /// fork with it would reuse.
@@ -270,6 +274,7 @@ pub(crate) struct ReplayArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ForkArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// The corrected script.
     #[arg(long, value_name = "FILE")]
@@ -286,6 +291,7 @@ pub(crate) struct ForkArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TraceArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// One journal entry in full, its payload included.
     #[arg(long, value_name = "INDEX")]
@@ -321,7 +327,7 @@ pub(crate) struct RunsArgs {
     /// Only quarantined runs.
     #[arg(long)]
     pub(crate) quarantined: bool,
-    /// Only forks of this run.
+    /// Only forks of this run: its handle or its id.
     #[arg(long)]
     pub(crate) parent: Option<String>,
     /// At most this many runs.
@@ -380,6 +386,7 @@ impl From<StatusFilter> for RunStatus {
 
 #[derive(Debug, Args)]
 pub(crate) struct ReleaseArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// Give the run up instead: it is aborted.
     #[arg(long)]
@@ -388,6 +395,7 @@ pub(crate) struct ReleaseArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ExportArgs {
+    /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// What to export.
     #[arg(long = "as", value_enum, default_value = "journal")]

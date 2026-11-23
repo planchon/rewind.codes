@@ -44,8 +44,9 @@ pub struct StartRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolset: Option<String>,
     /// Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version
-    /// or `triage@<version>` (12 hex digits at least) for one version. Its input is checked
-    /// against the workflow's input schema (`invalid-input`); the script is not checked again.
+    /// or `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one
+    /// version. Its input is checked against the workflow's input schema (`invalid-input`); the
+    /// script is not checked again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     /// The input of `main`. `{}` when absent.
@@ -109,6 +110,11 @@ pub(crate) fn empty_object() -> Value {
 pub struct Run {
     /// The run id (a UUID v7).
     pub id: String,
+    /// The run's handle, `<namespace>/<origin>/<suffix>`: what people read, copy and type to
+    /// name it. Every path and query parameter that takes a run's id takes its handle too,
+    /// percent-encoded in a path (`dana%2Ftriage%2F06bqx3k9f2mt`).
+    #[schema(example = "dana/triage/06bqx3k9f2mt")]
+    pub handle: String,
     /// The end user the run belongs to. A fork has its parent's.
     pub namespace: NamespaceName,
     pub status: RunStatus,
@@ -118,6 +124,10 @@ pub struct Run {
     pub quarantine: Option<Quarantine>,
     /// Digest of the TypeScript source (`GET /v1/scripts/{digest}`).
     pub script: String,
+    /// The script's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the
+    /// first line of the comment at its top. Absent when it has neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_title: Option<String>,
     /// Digest of the pinned toolset.
     pub toolset: String,
     /// The determinism epoch the run started under.
@@ -196,7 +206,10 @@ pub enum QuarantineCause {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkParent {
+    /// The parent's id.
     pub run: String,
+    /// The parent's handle; its id once it is erased.
+    pub handle: String,
     /// The entry from which the fork was forced live, if the request gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<u64>,
@@ -351,13 +364,13 @@ pub struct RunFilter {
         skip_serializing_if = "Option::is_none"
     )]
     pub quarantined: Option<bool>,
-    /// Only forks of this run.
+    /// Only forks of this run: its id or its handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// Only runs of this workflow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
-    /// Only runs this run started.
+    /// Only runs this run started: its id or its handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<String>,
     /// Only runs started at or after this time.
@@ -424,10 +437,16 @@ impl RunSort {
 #[serde(rename_all = "camelCase")]
 pub struct RunSummary {
     pub id: String,
+    /// The run's handle, `<namespace>/<origin>/<suffix>`, as `Run.handle`.
+    #[schema(example = "dana/triage/06bqx3k9f2mt")]
+    pub handle: String,
     pub namespace: NamespaceName,
     pub status: RunStatus,
     pub quarantined: bool,
     pub script: String,
+    /// The script's title, as `Run.scriptTitle`. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_title: Option<String>,
     /// The first line of the script that is not blank, for display.
     pub headline: String,
     pub toolset: String,
@@ -697,6 +716,8 @@ pub struct FailureGroup {
 #[serde(rename_all = "camelCase")]
 pub struct FailureSample {
     pub id: String,
+    /// Its handle, `<namespace>/<origin>/<suffix>`.
+    pub handle: String,
     pub status: RunStatus,
     pub message: String,
 }

@@ -40,7 +40,9 @@ use crate::runs::{
     Run, RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
     TraceQuery,
 };
-use crate::scripts::{CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest};
+use crate::scripts::{
+    CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, SetScriptTitle, TestRequest,
+};
 use crate::secrets::{
     Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
 };
@@ -294,6 +296,18 @@ impl Client {
     /// `GET /v1/scripts/{digest}`.
     pub async fn get_script(&self, digest: &str) -> Result<Script, Error> {
         let request = self.request(Method::GET, routes::SCRIPT, &[digest])?;
+        self.json(request).await
+    }
+
+    /// `PATCH /v1/scripts/{digest}`.
+    pub async fn set_script_title(
+        &self,
+        digest: &str,
+        title: &SetScriptTitle,
+    ) -> Result<Script, Error> {
+        let request = self
+            .request(Method::PATCH, routes::SCRIPT, &[digest])?
+            .json(title);
         self.json(request).await
     }
 

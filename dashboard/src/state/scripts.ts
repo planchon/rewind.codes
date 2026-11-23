@@ -2,7 +2,9 @@
 // ran, each with its runs by outcome, is read again within 5 s of a run's change, every 60 s while
 // the change stream is open, and every 30 s while it is down.
 import { useQuery } from "@tanstack/react-query";
-import type { ListScriptsQuery, Script, ScriptSummary } from "../model/types";
+import { useCallback } from "react";
+import type { ListScriptsQuery, Script, ScriptSummary, SetScriptTitle } from "../model/types";
+import { type Action, useAction } from "./actions";
 import { type PagedRead, usePaged } from "./paged";
 import { type Read, useQueryRead } from "./read";
 import { useStore } from "./store";
@@ -48,4 +50,48 @@ export function useScriptList({ query, namespace, enabled = true }: ScriptListOp
       return { rows: page.scripts, next: page.nextCursor ?? null, head: null };
     },
   }));
+}
+
+const TITLES = ["script-titles"] as const;
+
+/**
+ * The title of each script the runs ran, by digest, for the menus that list scripts by their
+ * digest (a facet's values): a script without a title has none here.
+ */
+export function useScriptTitles(): (digest: string) => string | undefined {
+  const { api } = useStore();
+  const titles = useQuery({
+    queryKey: TITLES,
+    queryFn: async ({ signal }) => {
+      const page = await api.scripts({ limit: 500 }, signal);
+      return new Map(page.scripts.flatMap((s) => (s.title ? [[s.digest, s.title] as const] : [])));
+    },
+    staleTime: 60_000,
+  });
+  const data = titles.data;
+  return useCallback((digest: string) => data?.get(digest), [data]);
+}
+
+/**
+ * Gives a script a title and a description for the organization, or removes them (`title:
+ * null`): the comment's show again. The script, the lists of scripts and the runs are read again.
+ */
+export function useSetScriptTitle(digest: string): Action<SetScriptTitle, Script> {
+  const store = useStore();
+  return useAction(async (body: SetScriptTitle) => {
+    const script = await store.api.setScriptTitle(digest, body);
+    store.queryClient.setQueryData(["script", digest], script);
+    await Promise.all([
+      store.queryClient.invalidateQueries({ queryKey: TITLES }),
+      ...store
+        .resourcesUnder("scripts|")
+        .filter((r) => r.held)
+        .map((r) => r.refreshNow()),
+      ...store
+        .resourcesUnder("run|")
+        .filter((r) => r.held)
+        .map((r) => r.refreshNow()),
+    ]);
+    return script;
+  });
 }

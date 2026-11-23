@@ -181,12 +181,15 @@ export function Sparkline({
   label,
   width = 96,
   height = 20,
+  tone = "critical",
 }: {
   series: readonly number[];
   /** The accessible name: what the columns count. */
   label: string;
   width?: number;
   height?: number;
+  /** Red for what goes wrong (failures), gray for what is only counted (reads). */
+  tone?: "critical" | "neutral";
 }) {
   if (series.length === 0) return <span className="muted">–</span>;
   const max = Math.max(1, ...series);
@@ -195,7 +198,7 @@ export function Sparkline({
   const peak = Math.max(...series);
   return (
     <svg
-      className="sparkline"
+      className={`sparkline tone-${tone}`}
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}

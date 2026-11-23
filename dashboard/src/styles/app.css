@@ -127,6 +127,8 @@ strong {
 }
 
 /* The sidebar's edge: a 7 px grip over its border, a line when hovered, focused or dragged. */
+/* The sidebar's right edge: dragged, it resizes the sidebar; clicked, it folds it, and on the
+   rail of icons a click unfolds it (SidebarResizer.tsx). */
 .sidebar-resizer {
   position: absolute;
   top: 0;
@@ -134,8 +136,15 @@ strong {
   bottom: 0;
   width: 7px;
   z-index: 30;
+  padding: 0;
+  border: 0;
+  background: transparent;
   cursor: col-resize;
   touch-action: none;
+}
+
+button.sidebar-resizer {
+  cursor: e-resize;
 }
 
 .sidebar-resizer::after {
@@ -186,17 +195,6 @@ strong {
 .sidebar-top > :first-child {
   flex: 1;
   min-width: 0;
-}
-
-.sidebar-fold {
-  flex: none;
-  width: var(--row-height);
-  height: var(--row-height);
-  color: var(--ink-3);
-}
-
-.sidebar-fold:hover {
-  color: var(--ink);
 }
 
 .scope {
@@ -308,12 +306,13 @@ strong {
   overflow: hidden;
 }
 
+/* A pane scrolls without a scrollbar: one that takes room (a mouse plugged in) would leave more
+   space on the right of its content than on its left. */
 .sidebar-pane {
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: none;
   overscroll-behavior: none;
   padding: 2px 8px 16px;
   opacity: 0;
@@ -450,13 +449,6 @@ strong {
   letter-spacing: 0.04em;
 }
 
-.pane-hint {
-  margin: 0;
-  padding: 0 10px;
-  font-size: var(--text-body);
-  color: var(--ink-3);
-}
-
 .sidebar-foot {
   padding: 8px;
   border-top: 1px solid var(--line);
@@ -521,12 +513,14 @@ strong {
   min-width: 0;
 }
 
+/* Its title is centered while its actions leave room for it; actions wider than their third
+   push the title left rather than cover it. */
 .page-header {
   position: sticky;
   top: 0;
   z-index: 15;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(max-content, 1fr);
   align-items: center;
   gap: 12px;
   height: var(--header-height);
@@ -795,8 +789,9 @@ select.input {
 
 .seg {
   display: inline-flex;
+  align-items: center;
   gap: 2px;
-  padding: 2px;
+  padding: 3px;
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--line);
@@ -807,7 +802,7 @@ select.input {
 .seg .seg-item {
   height: 28px;
   min-width: 32px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -838,6 +833,67 @@ select.input {
   color: inherit;
 }
 
+/* A sliding segmented control (FilterBits.tsx): the choice's background slides to the new
+   choice, and a lighter one follows the pointer, as on Vercel's dashboard. 4px around the choice,
+   36px in all, the height of the query bar beside it. */
+.seg.sliding {
+  position: relative;
+  isolation: isolate;
+  padding: 4px;
+}
+
+.seg.sliding button,
+.seg.sliding button:hover,
+.seg.sliding button[aria-pressed="true"] {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  font-weight: inherit;
+  transition: color 0.15s ease;
+}
+
+.seg-thumb,
+.seg-hover {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+
+.seg-thumb {
+  background: var(--surface-3);
+  box-shadow: 0 0 0 1px var(--line);
+  transition:
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.seg-hover {
+  background: var(--surface-2);
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    width 0.15s ease;
+}
+
+.seg-hover[data-shown] {
+  opacity: 1;
+}
+
+.seg-hover[data-entered] {
+  transition: opacity 0.15s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seg-thumb,
+  .seg-hover {
+    transition: none;
+  }
+}
+
 .seg.small .seg-item {
   height: 24px;
   min-width: 28px;
@@ -847,7 +903,6 @@ select.input {
 
 fieldset.seg {
   margin: 0;
-  padding: 2px;
   min-inline-size: auto;
   border: 0;
 }
@@ -972,11 +1027,155 @@ fieldset.seg {
 
 /* Tables */
 
+/* A table's card (TableScroll.tsx). No cell is cut: each column is at least its width and holds
+   its content whole, and a table wider than its page scrolls sideways. Its corner cells round
+   themselves to the card's corners, the card not clipping a table that fits. */
 .table-wrap {
-  overflow-x: auto;
   background: var(--surface);
   box-shadow: var(--shadow-card);
   border-radius: var(--radius-md);
+}
+
+.table-wrap > table.grid tr:first-child > th:first-child {
+  border-top-left-radius: var(--radius-md);
+}
+
+.table-wrap > table.grid tr:first-child > th:last-child {
+  border-top-right-radius: var(--radius-md);
+}
+
+.table-wrap > table.grid:last-child tbody tr:last-child > td:first-child {
+  border-bottom-left-radius: var(--radius-md);
+}
+
+.table-wrap > table.grid:last-child tbody tr:last-child > td:last-child {
+  border-bottom-right-radius: var(--radius-md);
+}
+
+.table-wrap[data-wide] {
+  overflow-x: auto;
+}
+
+.table-wrap table.grid th {
+  position: relative;
+  top: auto;
+  z-index: auto;
+}
+
+/* The header follows the page under the page's header, whether the table scrolls sideways or
+   not: a scroll-driven animation moves it down as the table's top passes under the page's
+   header, up to the table's last row (`--head-travel`, measured by TableScroll.tsx), on the
+   compositor. Moved, it takes the card's ring on its top, and the card's corners round it
+   (`.table-corner`), drawn in the ring's solid color so that rows passing under never show
+   through. */
+.table-corner {
+  display: none;
+}
+
+@supports (animation-timeline: view()) {
+  .table-frame {
+    timeline-scope: --table;
+  }
+
+  /* 1px under the page's header, for the ring above the header to show. */
+  .table-wrap {
+    view-timeline: --table block;
+    view-timeline-inset: calc(var(--header-height) + 1px) 0px;
+  }
+
+  .table-wrap table.grid thead {
+    position: relative;
+    z-index: 2;
+    animation: table-head-follow linear both;
+    animation-timeline: --table;
+    animation-range: exit-crossing 0px exit-crossing var(--head-travel, 0px);
+  }
+
+  .table-wrap table.grid th {
+    animation: table-head-ring linear both;
+    animation-timeline: --table;
+    animation-range: exit-crossing 0px exit-crossing 1px;
+  }
+
+  .table-corner {
+    display: block;
+    position: absolute;
+    top: -1px;
+    z-index: 4;
+    width: calc(var(--radius-md) + 1px);
+    height: calc(var(--radius-md) + 1px);
+    pointer-events: none;
+    animation:
+      table-head-stuck linear both,
+      table-head-follow linear both;
+    animation-timeline: --table, --table;
+    animation-range:
+      exit-crossing 0px exit-crossing 1px,
+      exit-crossing 0px exit-crossing var(--head-travel, 0px);
+  }
+
+  .table-corner.start {
+    left: -1px;
+    background: radial-gradient(
+      circle at 100% 100%,
+      transparent calc(var(--radius-md) - 0.5px),
+      var(--card-ring-solid) var(--radius-md),
+      var(--card-ring-solid) calc(var(--radius-md) + 0.5px),
+      var(--bg) calc(var(--radius-md) + 1px)
+    );
+  }
+
+  .table-corner.end {
+    right: -1px;
+    background: radial-gradient(
+      circle at 0 100%,
+      transparent calc(var(--radius-md) - 0.5px),
+      var(--card-ring-solid) var(--radius-md),
+      var(--card-ring-solid) calc(var(--radius-md) + 0.5px),
+      var(--bg) calc(var(--radius-md) + 1px)
+    );
+  }
+}
+
+@keyframes table-head-follow {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: 0 var(--head-travel, 0px);
+  }
+}
+
+@keyframes table-head-ring {
+  from {
+    box-shadow: 0 0 0 transparent;
+  }
+  to {
+    box-shadow: 0 -1px 0 var(--card-ring-solid);
+  }
+}
+
+@keyframes table-head-stuck {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Without scroll-driven animations (Firefox), the header of a table that fits sticks under the
+   page's; that of a table that scrolls sideways, held by its box, does not. */
+@supports not (animation-timeline: view()) {
+  .table-wrap table.grid thead {
+    position: sticky;
+    top: var(--header-height);
+    z-index: 2;
+  }
+
+  .table-wrap[data-wide] table.grid thead {
+    position: static;
+  }
 }
 
 table.grid {
@@ -1225,10 +1424,13 @@ table.grid .row-link {
   align-items: center;
 }
 
+/* A label: one line, its value cut with an ellipsis where it would overflow (the whole pair is in
+   its title). A block, not a flex box, for the ellipsis to show. */
 .label {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  vertical-align: middle;
   height: 20px;
+  line-height: 20px;
   padding: 0 6px;
   border: 0;
   border-radius: 4px;
@@ -1241,6 +1443,11 @@ table.grid .row-link {
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* In a table, a label is whole: the table scrolls sideways rather than cut it. */
+table.grid .label {
+  max-width: none;
 }
 
 button.label {
@@ -1270,6 +1477,46 @@ button.label:hover {
   font-size: var(--text-body);
   color: var(--ink);
   white-space: nowrap;
+}
+
+/* A run's handle, `namespace/origin/suffix`: what ran reads first, the suffix in mono. */
+.run-handle {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--text-body);
+  color: var(--ink);
+}
+
+.run-handle .h-ns,
+.run-handle .h-sep {
+  color: var(--ink-3);
+}
+
+.run-handle .h-sep {
+  padding: 0 1px;
+}
+
+.run-handle .h-origin {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-medium);
+}
+
+/* In a table, a handle is whole. */
+table.grid .run-handle,
+table.grid .run-handle .h-origin {
+  min-width: auto;
+  overflow: visible;
+}
+
+.run-handle .h-suffix {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
 }
 
 .copyable {
@@ -2112,12 +2359,46 @@ button.label:hover {
 .payload-head .end {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 2px;
 }
 
-.payload-head .copy-btn,
-.value-dialog-head .copy-btn {
+/* The buttons of a value's head (unfold, fold, copy, open large, close): one size, one icon size,
+   centered on one line, whatever their kind. */
+:is(.payload-head, .value-dialog-head, .json-dialog-head, .json-card .panel-head)
+  .end
+  :is(.icon-btn, .copy-btn) {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
   opacity: 1;
+}
+
+:is(.value-dialog-head, .json-dialog-head) .end :is(.icon-btn, .copy-btn) {
+  width: 28px;
+  height: 28px;
+}
+
+:is(.payload-head, .value-dialog-head, .json-dialog-head, .json-card .panel-head)
+  .end
+  :is(.icon-btn, .copy-btn)
+  svg {
+  width: 14px;
+  height: 14px;
+}
+
+:is(.payload-head, .value-dialog-head, .json-dialog-head, .json-card .panel-head)
+  .end
+  :is(.icon-btn, .copy-btn):hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+:is(.payload-head, .value-dialog-head, .json-dialog-head, .json-card .panel-head)
+  .end
+  .copy-btn.done {
+  color: var(--good);
 }
 
 /* A JSON value at hand, with its button to open it large, shown on hover */
@@ -2424,8 +2705,7 @@ button.journal-row {
     border-bottom: 1px solid var(--line);
   }
 
-  .sidebar-resizer,
-  .sidebar-fold {
+  .sidebar-resizer {
     display: none;
   }
 

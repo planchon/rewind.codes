@@ -15,7 +15,7 @@ export type { RequestOptions } from "./resources/toolsets.js";
 export { Toolsets } from "./resources/toolsets.js";
 export { Workflows, type ListWorkflowsParams, type RecordTestsParams } from "./resources/workflows.js";
 export { Tests } from "./resources/tests.js";
-export { Scripts, type CheckParams, type ListScriptsParams } from "./resources/scripts.js";
+export { Scripts, type CheckParams, type ListScriptsParams, type ScriptTitleParams } from "./resources/scripts.js";
 export {
   MAX_REQUEST_WAIT_MS,
   Runs,

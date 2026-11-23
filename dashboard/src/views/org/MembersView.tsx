@@ -4,6 +4,7 @@ import { Fragment, useState } from "react";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { TableScroll } from "../../components/TableScroll";
 import { displayName } from "../../model/access";
 import type { Member, Role } from "../../model/types";
 import { useAccess } from "../../state/access";
@@ -110,7 +111,7 @@ function Members() {
       {list.length === 0 ? (
         <Empty>No member yet.</Empty>
       ) : (
-        <div className="table-wrap">
+        <TableScroll>
           <table className="grid">
             <thead>
               <tr>
@@ -218,7 +219,7 @@ function Members() {
               })}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
       <FormDialog open={editing} onOpenChange={setEditing}>
         {target && (

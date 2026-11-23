@@ -47,7 +47,15 @@ pub struct ToolDefinition {
 }
 
 fn run_id() -> Value {
-    json!({ "type": "string", "description": "The run id, as a previous tool result gave it." })
+    json!({ "type": "string", "description": "The run, by its handle (such as dana/triage/06bqx3k9f2mt) or its id, as a previous tool result gave it." })
+}
+
+/// What `run_script` and `check_script` ask of a script's first lines: the comment its title and
+/// description are read from.
+macro_rules! title_comment {
+    () => {
+        "Start the script with a comment that says what it does:\n/** <title>\n *\n * <description> */\nIts title names what the script does in a few words, such as \"Triage new GitHub issues\": its runs are named after it."
+    };
 }
 
 fn code() -> Value {
@@ -265,7 +273,10 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
     Some(match name {
         "run_script" => ToolDefinition {
             name: "run_script",
-            description: "Type-check a TypeScript script and run it. The script calls the tools declared in `rewind:tools` and runs durably: it can sleep for days and wait for signals. A script that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run id and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run.",
+            description: concat!(
+                "Type-check a TypeScript script and run it. The script calls the tools declared in `rewind:tools` and runs durably: it can sleep for days and wait for signals. A script that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
+                title_comment!()
+            ),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -280,7 +291,10 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "check_script" => ToolDefinition {
             name: "check_script",
-            description: "Type-check a TypeScript script against the sandbox and the tool declarations, without running it. Returns the diagnostics with their location and a code frame.",
+            description: concat!(
+                "Type-check a TypeScript script against the sandbox and the tool declarations, without running it. Returns the diagnostics with their location and a code frame, and a note when the script has no title. ",
+                title_comment!()
+            ),
             input_schema: json!({
                 "type": "object",
                 "properties": { "code": code() },
@@ -471,7 +485,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                         "type": "string",
                         "description": "Which runs, in the query language of the run lists, such as \"status:completed\". All the completed and failed runs of the workflow when absent."
                     },
-                    "runs": { "type": "array", "items": { "type": "string" }, "description": "These runs, by id, rather than a query." },
+                    "runs": { "type": "array", "items": { "type": "string" }, "description": "These runs, by handle or id, rather than a query." },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,

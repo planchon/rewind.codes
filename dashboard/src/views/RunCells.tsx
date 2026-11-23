@@ -1,35 +1,33 @@
-// Two cells of the table of runs that abbreviate, each with a card that says it whole: a run's
-// labels (those that fit, then "+N"), and how it ended (the error's name over its message).
+// Two cells of the table of runs, each with a card that says more: a run's labels (those that
+// fit, whole, then "+N"), and how it ended (the error's name over its message).
 import { useState } from "react";
 import { Link } from "react-router";
-import { useRunLinkState } from "../app/runLinks";
+import { runPath, useRunLinkState } from "../app/runLinks";
 import { useSettings } from "../app/settings";
 import { LabelList } from "../components/bits";
 import { HoverCard } from "../components/HoverCard";
 import { EndGlyph } from "../components/Status";
 import { cancelCause, causeText, endKindOf, endTitle } from "../model/ending";
-import {
-  fitLabels,
-  formatDuration,
-  formatRelative,
-  formatTime,
-  labelPair,
-  shortLabelValue,
-} from "../model/format";
+import { fitLabels, formatDuration, formatRelative, formatTime, labelPair } from "../model/format";
 import type { Labels, RunSummary } from "../model/types";
 import { useRun } from "../state/runs";
 
-/** A run's labels in a cell: those that fit, whole and readable, then "+N" for the rest. */
+/**
+ * A run's labels in a cell: those that fit, whole and readable, then "+N" for the rest. `budget`
+ * is the characters the cell holds (`labelBudget`).
+ */
 export function RunLabels({
   labels,
   onPick,
+  budget,
 }: {
   labels: Labels;
   onPick?: ((pair: string) => void) | undefined;
+  budget?: number;
 }) {
   const pairs = Object.entries(labels).sort(([a], [b]) => a.localeCompare(b));
   if (pairs.length === 0) return null;
-  const { shown, hidden } = fitLabels(pairs);
+  const { shown, hidden } = fitLabels(pairs, budget);
   return (
     <span className="run-labels">
       {shown.map(([key, value]) => {
@@ -37,7 +35,7 @@ export function RunLabels({
         const body = (
           <>
             <span className="k">{key}:</span>
-            {shortLabelValue(value)}
+            {value}
           </>
         );
         return onPick ? (
@@ -172,7 +170,7 @@ function EndCard({ run, open }: { run: RunSummary; open: boolean }) {
           </>
         )}
       </dl>
-      <Link className="card-link" to={`/runs/${run.id}`} state={linkState}>
+      <Link className="card-link" to={runPath(run.handle)} state={linkState}>
         Open the run, at the step it ended
       </Link>
     </>

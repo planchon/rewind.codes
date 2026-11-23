@@ -5,6 +5,7 @@
 import type { Labels, Quarantine, Run, Waiting } from "../model/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { type ConnectionWorld, createConnectionWorld } from "./connections";
+import { ensureHandles, type ScriptTitle } from "./handles";
 import { fakeDigest, JournalBuilder } from "./journal";
 import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
 import { createSecretWorld, type SecretWorld } from "./secrets";
@@ -33,7 +34,7 @@ export interface RunFixture {
   /** For a run of a workflow, the workflow and its version. */
   workflow?: NonNullable<Run["workflow"]>;
   /** For a run a script started, that run and the `seq` of its call. */
-  startedBy?: NonNullable<Run["startedBy"]>;
+  startedBy?: Omit<NonNullable<Run["startedBy"]>, "handle">;
   quarantine?: Quarantine;
   /** Where `fail_run` happened, for `Run.error.location`. */
   errorAt?: { line: number; column: number };
@@ -45,6 +46,9 @@ export interface RunFixture {
   retries?: Record<number, number>;
   /** The secrets it attached at start, by server (`ns/github`, `org/slack`). */
   secrets?: Record<string, string>;
+  /** What ran, the middle of its handle, and the characters of its suffix: given once. */
+  origin?: string;
+  suffixLen?: number;
 }
 
 /**
@@ -79,6 +83,8 @@ export interface World {
   connections: ConnectionWorld;
   /** The secrets of each tenant, the organization's and its namespaces', and its signing keys. */
   secrets: Map<string, SecretWorld>;
+  /** The titles people gave scripts, by digest. */
+  scriptTitles: Map<string, ScriptTitle>;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -298,11 +304,12 @@ export default async function main(input: { repos: string[] }) {
 
 /** The versions of the workflows the world's runs execute. */
 export const WORKFLOWS = {
-  triage: { name: "triage", version: fakeDigest("workflow:triage") },
-  digest: { name: "digest", version: fakeDigest("workflow:digest") },
+  triage: { name: "triage", version: fakeDigest("workflow:triage"), number: 2 },
+  digest: { name: "digest", version: fakeDigest("workflow:digest"), number: 1 },
   devNotifications: {
     name: "dev_notifications",
     version: fakeDigest("workflow:dev_notifications"),
+    number: 12,
   },
 };
 
@@ -1338,7 +1345,29 @@ export function createWorld(options: WorldOptions): World {
         }),
       ],
     ]),
+    // Titles people gave two scripts; the others have their comment's, or none.
+    scriptTitles: new Map([
+      [
+        TRIAGE.digest,
+        {
+          title: "Triage stale issues",
+          description: "Posts the stale issues of a repository, then closes them once approved.",
+          updatedBy: "user:user_01ADA",
+          updatedAt: now - 5 * DAY,
+        },
+      ],
+      [
+        DIGEST.digest,
+        {
+          title: "Daily digest",
+          description: null,
+          updatedBy: "user:user_01GRACE",
+          updatedAt: now - 2 * DAY,
+        },
+      ],
+    ]),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
+  ensureHandles(world);
   return world;
 }

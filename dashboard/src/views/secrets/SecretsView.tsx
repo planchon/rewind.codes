@@ -17,11 +17,10 @@ export function SecretsView() {
     );
   return (
     <div className="page">
-      <PageHeader title="Secrets" />
-      <SecretList
-        namespace={null}
-        intro={
-          <>
+      <PageHeader
+        title="Secrets"
+        info={
+          <p>
             The organization's secrets: a run reads one only when it attaches it at start, server by
             server (<code>{'secrets: { "zendesk": "org/zendesk" }'}</code>), and only Rewind's
             dispatcher reads its value. A key limited to labels sees and attaches only those
@@ -32,9 +31,10 @@ export function SecretsView() {
               "namespace's page"
             )}
             .
-          </>
+          </p>
         }
       />
+      <SecretList namespace={null} />
     </div>
   );
 }

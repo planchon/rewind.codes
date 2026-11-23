@@ -1,10 +1,12 @@
-// The run's controls, in its sidebar, for whoever holds `runs:control` (archi/05, "Run"): send it
-// a signal ("Send approval" when it waits for one, "Send a signal" for any name), cancel it while
-// it has not ended. A signal is written in a dialog, its payload as JSON: for a run of a workflow,
-// the signals its version declares, each payload started from its schema; the server's refusal
-// shows under the payload. A signal shows "sent" until its `signal_received` arrives on the run's
-// event stream; a cancellation, "Cancelling" until the run's summary arrives cancelled.
-import { Ban, Send } from "lucide-react";
+// The run's controls, a menu of its header beside "Forks", for whoever holds `runs:control`
+// (archi/05, "Run"): send it a signal ("Send approval" when it waits for one, "Send a signal" for
+// any name), cancel it while it has not ended. The sidebar holds no action. A signal is written in
+// a dialog, its payload as JSON: for a run of a workflow, the signals its version declares, each
+// payload started from its schema; the server's refusal shows under the payload. Beside the menu,
+// a signal shows "sent" until its `signal_received` arrives on the run's event stream; a
+// cancellation, "Cancelling…" until the run's summary arrives cancelled.
+import { Menu } from "@base-ui/react/menu";
+import { Ban, ChevronDown, Send } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
@@ -158,25 +160,87 @@ function SignalForm({
   );
 }
 
-function CancelControl({ run }: { run: Run }) {
+/** The run's controls, or nothing without `runs:control` or once the run has ended. */
+export function RunControls({ run }: { run: Run }) {
+  const access = useAccess();
+  if (!access.can("runs:control") || isEnded(run.status)) return null;
+  return <Controls run={run} />;
+}
+
+function Controls({ run }: { run: Run }) {
+  const signal = useSignalRun(run.id);
   const cancel = useCancelRun(run);
-  const [open, setOpen] = useState(false);
+  const { signals: declared } = useWorkflowSignals(run);
+  const awaited = useMemo(() => awaitedSignals(run), [run]);
+  const [form, setForm] = useState<{ preset: string | null } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const note = cancel.cancelling
+    ? "Cancelling…"
+    : signal.sent !== null
+      ? `Signal ${signal.sent} sent`
+      : "";
   return (
     <>
-      <button
-        type="button"
-        className="btn danger-ghost control-btn"
-        disabled={cancel.cancelling}
-        onClick={() => {
-          cancel.open();
-          setOpen(true);
-        }}
-      >
-        <Ban size={13} aria-hidden="true" /> {cancel.cancelling ? "Cancelling…" : "Cancel run"}
-      </button>
+      <span className="control-note muted" role="status">
+        {note}
+      </span>
+      <Menu.Root>
+        <Menu.Trigger className="btn" title="Send the run a signal, or cancel it">
+          Controls
+          <ChevronDown size={12} aria-hidden="true" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner className="menu-positioner" side="bottom" align="end" sideOffset={6}>
+            <Menu.Popup className="menu-popup run-controls-menu">
+              {awaited.map((name) => (
+                <Menu.Item
+                  key={name}
+                  className="menu-item"
+                  title={`The run waits for the signal "${name}"`}
+                  onClick={() => setForm({ preset: name })}
+                >
+                  <Send size={14} aria-hidden="true" />
+                  <span className="menu-item-text">Send {name}</span>
+                  <span className="menu-item-end muted" aria-hidden="true">
+                    awaited
+                  </span>
+                </Menu.Item>
+              ))}
+              <Menu.Item className="menu-item" onClick={() => setForm({ preset: null })}>
+                <Send size={14} aria-hidden="true" />
+                <span className="menu-item-text">Send a signal</span>
+              </Menu.Item>
+              <Menu.Separator className="menu-separator" />
+              <Menu.Item
+                className="menu-item danger"
+                disabled={cancel.cancelling}
+                onClick={() => {
+                  cancel.open();
+                  setConfirming(true);
+                }}
+              >
+                <Ban size={14} aria-hidden="true" />
+                <span className="menu-item-text">
+                  {cancel.cancelling ? "Cancelling…" : "Cancel run"}
+                </span>
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+      <FormDialog open={form !== null} onOpenChange={(o) => !o && setForm(null)}>
+        {form && (
+          <SignalForm
+            run={run}
+            preset={form.preset}
+            declared={declared}
+            onSent={() => setForm(null)}
+          />
+        )}
+      </FormDialog>
       <ConfirmDialog
-        open={open}
-        onOpenChange={setOpen}
+        open={confirming}
+        onOpenChange={setConfirming}
         title={`Cancel the run ${shortRunId(run.id)}?`}
         description={
           <>
@@ -190,58 +254,10 @@ function CancelControl({ run }: { run: Run }) {
         error={cancel.error}
         onConfirm={() => {
           void cancel.cancel().then((done) => {
-            if (done) setOpen(false);
+            if (done) setConfirming(false);
           });
         }}
       />
     </>
-  );
-}
-
-/** The run's controls, or nothing without `runs:control` or once the run has ended. */
-export function RunControls({ run }: { run: Run }) {
-  const access = useAccess();
-  if (!access.can("runs:control") || isEnded(run.status)) return null;
-  return <Controls run={run} />;
-}
-
-function Controls({ run }: { run: Run }) {
-  const signal = useSignalRun(run.id);
-  const { signals: declared } = useWorkflowSignals(run);
-  const awaited = useMemo(() => awaitedSignals(run), [run]);
-  const [form, setForm] = useState<{ preset: string | null } | null>(null);
-  return (
-    <section className="pane-section run-controls" aria-label="Controls">
-      <h2 className="pane-label">Controls</h2>
-      <div className="control-list">
-        {awaited.map((name) => (
-          <button
-            key={name}
-            type="button"
-            className="btn primary control-btn"
-            onClick={() => setForm({ preset: name })}
-          >
-            <Send size={13} aria-hidden="true" /> Send {name}
-          </button>
-        ))}
-        <button type="button" className="btn control-btn" onClick={() => setForm({ preset: null })}>
-          <Send size={13} aria-hidden="true" /> Send a signal
-        </button>
-        <CancelControl run={run} />
-      </div>
-      <p className="control-note muted" role="status">
-        {signal.sent !== null ? `Signal ${signal.sent} sent` : ""}
-      </p>
-      <FormDialog open={form !== null} onOpenChange={(o) => !o && setForm(null)}>
-        {form && (
-          <SignalForm
-            run={run}
-            preset={form.preset}
-            declared={declared}
-            onSent={() => setForm(null)}
-          />
-        )}
-      </FormDialog>
-    </section>
   );
 }

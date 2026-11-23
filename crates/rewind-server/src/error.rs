@@ -86,7 +86,7 @@ impl ApiError {
 
     pub(crate) fn run_not_found(run: &str) -> Self {
         Self::not_found(format!(
-            "no run {run}: check the id (runs are listed by GET /v1/runs)"
+            "no run {run}: check the id or the handle (runs are listed by GET /v1/runs)"
         ))
     }
 

@@ -149,6 +149,8 @@ impl Projected {
         RunSummary {
             run: self.run.run.clone(),
             namespace: self.run.namespace.clone(),
+            origin: self.run.origin.clone(),
+            suffix_len: self.run.suffix_len,
             script: self.run.script,
             headline: self.run.headline.clone(),
             toolset: self.run.toolset,
@@ -582,6 +584,7 @@ fn failure_group(rows: &[&Row], buckets: Option<Buckets>) -> Option<FailureGroup
         line,
         labels: ranked(labels, GROUP_LABELS),
         latest: latest.summary.run.id,
+        latest_handle: latest.summary.handle(),
         latest_status: latest.summary.status,
         latest_message: ending.message.clone(),
     })

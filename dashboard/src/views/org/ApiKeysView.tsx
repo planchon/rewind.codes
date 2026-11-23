@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { TableScroll } from "../../components/TableScroll";
 import type { ApiKey } from "../../model/types";
 import { useAccess } from "../../state/access";
 import { useApiKeys, useCreateApiKey, useRevokeApiKey, useRoles } from "../../state/organization";
@@ -187,7 +188,7 @@ function ApiKeys() {
       ) : keys.data.length === 0 ? (
         <Empty>No key yet.</Empty>
       ) : (
-        <div className="table-wrap">
+        <TableScroll>
           <table className="grid">
             <thead>
               <tr>
@@ -252,7 +253,7 @@ function ApiKeys() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </section>
   );

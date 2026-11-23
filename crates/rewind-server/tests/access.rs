@@ -14,7 +14,7 @@ use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
-use rewind_api::scripts::{CheckRequest, ScriptFilter};
+use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
 use rewind_api::tasks::{CompleteTask, TaskQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::workflows::WorkflowQuery;
@@ -88,12 +88,13 @@ enum Call {
     ListSubscriptions,
     DeleteSubscription,
     ListScripts,
+    SetScriptTitle,
     ToolStats,
     ListApiKeys,
     RevokeApiKey,
 }
 
-const CALLS: [Call; 18] = [
+const CALLS: [Call; 19] = [
     Call::ListToolsets,
     Call::CreateToolset,
     Call::ListWorkflows,
@@ -109,6 +110,7 @@ const CALLS: [Call; 18] = [
     Call::ListSubscriptions,
     Call::DeleteSubscription,
     Call::ListScripts,
+    Call::SetScriptTitle,
     Call::ToolStats,
     Call::ListApiKeys,
     Call::RevokeApiKey,
@@ -131,6 +133,7 @@ impl Call {
         match self {
             Call::ListToolsets | Call::ListWorkflows => Permission::ToolsetsRead,
             Call::CreateToolset => Permission::ToolsetsWrite,
+            Call::SetScriptTitle => Permission::ScriptsWrite,
             Call::Check | Call::ForkRun => Permission::RunsStart,
             Call::ListRuns | Call::ListScripts | Call::ToolStats => Permission::RunsRead,
             Call::CancelRun => Permission::RunsControl,
@@ -179,6 +182,17 @@ impl Call {
             Call::ListSubscriptions => outcome(client.list_subscriptions().await),
             Call::DeleteSubscription => outcome(client.delete_subscription("unknown").await),
             Call::ListScripts => outcome(client.list_scripts(&ScriptFilter::default()).await),
+            Call::SetScriptTitle => outcome(
+                client
+                    .set_script_title(
+                        &"00".repeat(32),
+                        &SetScriptTitle {
+                            title: Some("Count to one".into()),
+                            description: None,
+                        },
+                    )
+                    .await,
+            ),
             Call::ToolStats => outcome(client.tool_stats(&ToolStatsFilter::default()).await),
             Call::ListApiKeys => outcome(client.list_api_keys().await),
             Call::RevokeApiKey => outcome(client.revoke_api_key("unknown").await),

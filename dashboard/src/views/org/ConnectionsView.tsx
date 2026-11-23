@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
+import { TableScroll } from "../../components/TableScroll";
 import type { Connection } from "../../model/types";
 import { useAccess } from "../../state/access";
 import {
@@ -89,7 +90,7 @@ function OrganizationConnections() {
       ) : connections.data.length === 0 ? (
         <Empty>No connection opens {org}.</Empty>
       ) : (
-        <div className="table-wrap">
+        <TableScroll>
           <table className="grid">
             <thead>
               <tr>
@@ -138,7 +139,7 @@ function OrganizationConnections() {
               })}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </section>
   );

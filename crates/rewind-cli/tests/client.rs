@@ -52,13 +52,16 @@ fn at() -> Timestamp {
     "2026-11-09T10:02:11Z".parse().unwrap()
 }
 
+/// A run of the stub, whose handle is `local/script/<id>`.
 fn base_run(id: &str, status: RunStatus) -> Run {
     Run {
         id: id.into(),
+        handle: format!("local/script/{id}"),
         namespace: "local".parse().unwrap(),
         status,
         quarantine: None,
         script: "aa".repeat(32),
+        script_title: None,
         toolset: "bb".repeat(32),
         epoch: 1,
         mode: RunMode::Live,
@@ -191,6 +194,10 @@ async fn get_run(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
     see(&stub, format!("get {id}"), &headers, query, Value::Null);
+    // A run's handle names it as its id does.
+    let id = id
+        .strip_prefix("local/script/")
+        .map_or_else(|| id.clone(), str::to_owned);
     let mut stub = stub.lock().unwrap();
     let Some(run) = stub.runs.get(&id).cloned() else {
         return problem(ProblemType::NotFound, &format!("no run {id}"));
@@ -293,6 +300,7 @@ async fn fork(
         json!({"fixed": true}),
     );
     run.parent = Some(ForkParent {
+        handle: format!("local/script/{id}"),
         run: id,
         at: request.at,
     });
@@ -312,10 +320,12 @@ async fn list(
         .values()
         .map(|run| RunSummary {
             id: run.id.clone(),
+            handle: run.handle.clone(),
             namespace: run.namespace.clone(),
             status: run.status,
             quarantined: run.quarantine.is_some(),
             script: run.script.clone(),
+            script_title: run.script_title.clone(),
             headline: "export default async () => 1;".into(),
             toolset: run.toolset.clone(),
             labels: run.labels.clone(),
@@ -525,9 +535,9 @@ async fn run_starts_a_run_and_waits_for_it() {
         ])
         .await;
     assert_eq!(exit, Exit::Success, "{out}{err}");
-    assert!(out.contains("run run-1 completed"), "{out}");
+    assert!(out.contains("run local/script/run-1 completed"), "{out}");
     assert!(out.contains(r#"output: {"repo":"acme/api"}"#), "{out}");
-    assert!(err.contains("started run run-1"), "{err}");
+    assert!(err.contains("started run local/script/run-1"), "{err}");
 
     let requests = server.requests();
     let start = &requests[0];
@@ -721,13 +731,21 @@ async fn status_runs_trace_fork_and_release() {
     assert_eq!(exit, Exit::Waiting, "{out}");
     let (exit, out, _) = server.rewind(&["status", "run-1", "--wait", "1m"]).await;
     assert_eq!(exit, Exit::Success, "{out}");
+    // By its handle: one segment of the path, percent-encoded.
+    let (exit, out, _) = server.rewind(&["status", "local/script/run-1"]).await;
+    assert_eq!(exit, Exit::Success, "{out}");
+    assert!(out.starts_with("run local/script/run-1 completed"), "{out}");
+    assert_eq!(
+        server.requests().last().unwrap().what,
+        "get local/script/run-1"
+    );
 
     let (exit, out, err) = server
         .rewind(&["runs", "--label", "agent=triage", "--status", "completed"])
         .await;
     assert_eq!(exit, Exit::Success);
-    assert!(out.starts_with("RUN    STATUS"), "{out}");
-    assert!(out.contains("run-1  completed"), "{out}");
+    assert!(out.starts_with("RUN                 STATUS"), "{out}");
+    assert!(out.contains("local/script/run-1  completed"), "{out}");
     assert!(err.contains("--cursor page-2"), "{err}");
     let list = server.requests().last().unwrap().clone();
     assert_eq!(
@@ -776,7 +794,7 @@ async fn status_runs_trace_fork_and_release() {
         .await;
     assert_eq!(exit, Exit::Success, "{out}");
     assert!(
-        out.contains("run run-2 completed (fork of run-1 at entry 3)"),
+        out.contains("run local/script/run-2 completed (fork of local/script/run-1 at entry 3)"),
         "{out}"
     );
     let fork = server

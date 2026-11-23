@@ -589,6 +589,12 @@ Conventions:
   `urn:rewind:problem:<slug>`; the slugs are listed in `api/README.md`.
 - JSON fields are camelCase, enumerated values snake_case, times RFC 3339, durations `"30s"`
   or a number of milliseconds.
+- A run is named by its UUID or by its handle, `<namespace>/<origin>/<suffix>`, percent-encoded
+  in a path, wherever the API takes one ([handles](06-storage-and-scale.md#run-handles)). A run
+  answers with both: `id`, its UUID, and `handle`; with `scriptTitle`, its script's title; the
+  runs it names (`parent`, `startedBy`, a secret's `lastRead`) with their handles too. A workflow
+  version has its `number` among the versions of its workflow (`triage v12`), and the API takes
+  `<name>@v<number>` wherever it takes a version.
 - The OpenAPI document is generated from the DTOs of `rewind-api` (utoipa) and committed at
   `api/openapi.json`; a test fails when it is stale. The SDK's and the dashboard's types are
   generated from it (`api/README.md`).
@@ -634,7 +640,8 @@ Conventions:
 |  | `GET /v1/subscriptions` | `subscriptions:read` | Lists the subscriptions, without their secrets |
 |  | `DELETE /v1/subscriptions/{id}` | `subscriptions:write` | Deletes a subscription |
 | Reading (dashboard) | `GET /v1/scripts` | `runs:read` | Every distinct script, its runs, its tools |
-|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
+|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source, its title and description and where they come from (`titleSource`: `person`, `comment`) |
+|  | `PATCH /v1/scripts/{digest}` | `scripts:write` | Gives the script a title (1 to 120 characters) and a description (at most 2,000) for the organization, or removes them (`title: null`); 422 `invalid-title` out of bounds; answers the script ([titles](04-tools.md#script-titles)) |
 |  | `GET /v1/tools/stats` | `runs:read` | Latency, errors, retries |
 |  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a token, a header, or a grant limited to labels) |
 | Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user; for a connection, its id, person and client, and the organizations it opens with their access |

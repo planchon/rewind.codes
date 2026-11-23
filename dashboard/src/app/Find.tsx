@@ -1,21 +1,19 @@
-// Find (archi/08, "Find (`F`) opens a palette"): a run by its id, a view, a saved search, or the
+// Find (archi/08, "Find (`F`) opens a palette"): a run by its handle or its id, a view, or the
 // runs a query matches. Opened from the sidebar or with `F` anywhere but in a field.
 import { Dialog } from "@base-ui/react/dialog";
-import { ArrowRight, Bookmark, CornerDownLeft, Search } from "lucide-react";
+import { ArrowRight, CornerDownLeft, Search } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { queryLink } from "../model/query";
 import { useAccess } from "../state/access";
-import { savedSearchPath, useSavedSearches } from "./searches";
-
-const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isRunName, runPath } from "./runLinks";
 
 interface Choice {
   key: string;
   label: string;
   detail?: string;
   to: string;
-  kind: "run" | "view" | "saved" | "query";
+  kind: "run" | "view" | "query";
 }
 
 /** The views one may go to, as the caller's permissions allow. */
@@ -109,7 +107,6 @@ export function FindDialog({
 }) {
   const navigate = useNavigate();
   const views = useViews();
-  const { searches } = useSavedSearches();
   const access = useAccess();
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
@@ -118,22 +115,11 @@ export function FindDialog({
     const t = text.trim();
     const lower = t.toLowerCase();
     const out: Choice[] = [];
-    if (RUN_ID.test(t))
-      out.push({ key: "run", label: `Open the run ${t}`, to: `/runs/${t}`, kind: "run" });
+    if (isRunName(t))
+      out.push({ key: "run", label: `Open the run ${t}`, to: runPath(t), kind: "run" });
     const matches = (s: string) => s.toLowerCase().includes(lower);
-    out.push(
-      ...searches
-        .filter((s) => !t || matches(s.name) || matches(s.q))
-        .map<Choice>((s) => ({
-          key: `saved:${s.name}`,
-          label: s.name,
-          detail: s.q || "every run",
-          to: savedSearchPath(s),
-          kind: "saved",
-        })),
-    );
     out.push(...views.filter((v) => !t || matches(v.label) || matches(v.detail ?? "")));
-    if (t && !RUN_ID.test(t) && access.can("runs:read"))
+    if (t && !isRunName(t) && access.can("runs:read"))
       out.push({
         key: "query",
         label: `Search the runs for ${t}`,
@@ -141,7 +127,7 @@ export function FindDialog({
         kind: "query",
       });
     return out;
-  }, [text, views, searches, access]);
+  }, [text, views, access]);
 
   const go = (choice: Choice | undefined) => {
     if (!choice) return;
@@ -184,7 +170,7 @@ export function FindDialog({
                 setActive(0);
               }}
               onKeyDown={onKeyDown}
-              placeholder="A run's id, a view, a saved search…"
+              placeholder="A run, a view, a query…"
               aria-label="Find"
               aria-controls="find-choices"
               aria-activedescendant={choices[active] ? `find-${choices[active].key}` : undefined}
@@ -212,9 +198,7 @@ export function FindDialog({
                   go(c);
                 }}
               >
-                {c.kind === "saved" ? (
-                  <Bookmark size={14} aria-hidden="true" />
-                ) : c.kind === "query" ? (
+                {c.kind === "query" ? (
                   <Search size={14} aria-hidden="true" />
                 ) : (
                   <ArrowRight size={14} aria-hidden="true" />

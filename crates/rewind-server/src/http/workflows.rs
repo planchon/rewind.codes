@@ -2,7 +2,8 @@
 //! names (`archi/01-product.md`, "Workflows").
 //!
 //! A reference is a name, for the latest version the caller sees, or `name@<version>`, the
-//! version's digest or its first 12 hex digits at least.
+//! version's digest or its first 12 hex digits at least, or `name@v<number>`, the version's
+//! number among the versions of its workflow.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -240,7 +241,7 @@ pub(super) async fn versions(
 }
 
 /// The version a reference names, among those the caller sees: `name` for the latest,
-/// `name@<version>` for one.
+/// `name@<version>` or `name@v<number>` for one.
 pub(crate) async fn resolve(
     app: &App,
     tenant: &TenantId,
@@ -251,6 +252,24 @@ pub(crate) async fn resolve(
         Some((name, version)) => (name, Some(version.to_ascii_lowercase())),
         None => (reference, None),
     };
+    // A digest's hex digits hold no `v`: `v12` is a number.
+    if let Some(number) = version
+        .as_deref()
+        .and_then(|version| version.strip_prefix('v'))
+    {
+        let number: u32 = number.parse().map_err(|_| {
+            ApiError::invalid(format!(
+                "workflow {reference:?}: name a version by its number, as in triage@v12, or \
+                 by its digest or its first {MIN_VERSION_DIGITS} hex digits at least"
+            ))
+        })?;
+        return app
+            .store
+            .workflow_number(tenant, name, number)
+            .await?
+            .filter(|stored| stored.carries(labels))
+            .ok_or_else(|| not_found(reference));
+    }
     if let Some(version) = &version
         && (version.len() < MIN_VERSION_DIGITS
             || version.len() > 64
@@ -258,7 +277,8 @@ pub(crate) async fn resolve(
     {
         return Err(ApiError::invalid(format!(
             "workflow {reference:?}: name a version by its digest or its first \
-             {MIN_VERSION_DIGITS} hex digits at least, as in triage@9f2c4e1a07b3"
+             {MIN_VERSION_DIGITS} hex digits at least, as in triage@9f2c4e1a07b3, or by its \
+             number, as in triage@v12"
         )));
     }
     let versions = app.store.workflow_versions(tenant, name, labels).await?;
@@ -316,6 +336,7 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
     ApiWorkflow {
         name: workflow.name().to_owned(),
         version: workflow.version().to_hex(),
+        number: stored.number,
         description: workflow.description().map(str::to_owned),
         toolset: workflow.toolset().to_hex(),
         script: workflow.script().to_hex(),

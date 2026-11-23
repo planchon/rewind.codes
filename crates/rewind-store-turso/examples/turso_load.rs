@@ -259,6 +259,7 @@ async fn main() {
         let new_run = NewRun {
             run,
             namespace: rewind_engine::ports::NamespaceName::migrated(),
+            origin: "load".into(),
             started: started(),
             metadata: RunMetadata::default(),
             created_at: now(),

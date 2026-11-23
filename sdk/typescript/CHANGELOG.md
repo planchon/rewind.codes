@@ -2,6 +2,28 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+For runs named by their handles, scripts with titles, and workflow versions with numbers.
+
+- `Run` and `RunSummary` have `handle`, the run's readable name `<namespace>/<origin>/<suffix>`
+  (`dana/triage/06bqx3k9f2mt`), and `scriptTitle`; `id` stays the run's UUID. `Run.parent` and `Run.startedBy` have
+  the `handle` of the run they name, a secret's `lastRead` its run's `runHandle`, `PendingApproval` its
+  `runHandle`, and a failure group's `latest` (`FailureSample`) its `handle`. Every method of `rewind.runs` that
+  takes a run's id takes its handle too, percent-encoded in the path; so do the `parent` and `startedBy` filters of
+  `runs.list`.
+- `Script` and `ScriptSummary` have `title`, `description` and `titleSource` (`person` or `comment`): the title a
+  person gave the script, else the first line of the comment at its top.
+  `scripts.setTitle(digest, { title, description })` gives one for the whole organization, `{ title: null }` takes it
+  away; it needs the new permission `scripts:write`, which the built-in roles `owner` and `harness` hold. The problem
+  slug `invalid-title`.
+- `Workflow` and `Run.workflow` have `number`, the version's number among the versions of its workflow;
+  `triage@v12` names a version wherever `triage@<version>` does (`runs.start({ workflow })`, `scripts.test`, a
+  toolset's `workflows`, a workflow's `parent`).
+- The agent tools name runs by their handle and take one wherever they take a run's id. `run_script` and
+  `check_script` ask the model to start a script with a comment giving its title (`/** <title> … */`), and
+  `check_script` adds a note when the script has none.
+
 ## 0.4.0 (2026-11-22)
 
 For the live dashboard and the table of runs ordered from its headers.

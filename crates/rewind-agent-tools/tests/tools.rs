@@ -36,9 +36,11 @@ fn sha256(text: &str) -> String {
         .collect()
 }
 
+/// A run of the fake API: its handle is `alice/script/<id>`.
 fn run(id: &str, labels: Value, script: &str, status: &str) -> Run {
     serde_json::from_value(json!({
-        "id": id, "namespace": "alice", "status": status, "script": script, "toolset": "t",
+        "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
+        "status": status, "script": script, "toolset": "t",
         "epoch": 1, "mode": "live", "labels": labels, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
         "expiresAt": "2026-12-19T10:00:00Z",
@@ -136,7 +138,13 @@ impl Api for Fake {
                 ProblemType::NotFound,
                 "no run missing: check the id (runs are listed by GET /v1/runs)",
             )),
-            _ => Ok(run(id, json!({ "agent": "triage" }), "s", "failed")),
+            // A handle, `alice/script/<id>`, names the run `<id>`.
+            _ => Ok(run(
+                id.rsplit('/').next().unwrap_or(id),
+                json!({ "agent": "triage" }),
+                "s",
+                "failed",
+            )),
         }
     }
 
@@ -210,6 +218,7 @@ impl Api for Fake {
         );
         forked.parent = Some(rewind_api::runs::ForkParent {
             run: run.into(),
+            handle: format!("alice/script/{run}"),
             at: None,
         });
         Ok(forked)
@@ -271,7 +280,8 @@ impl Api for Fake {
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
         self.saw("create_workflow", workflow, None);
         Ok(serde_json::from_value(json!({
-            "name": workflow.name, "version": "9f2c4e1a07b3".repeat(5) + "9f2c", "toolset": workflow.toolset,
+            "name": workflow.name, "version": "9f2c4e1a07b3".repeat(5) + "9f2c", "number": 1,
+            "toolset": workflow.toolset,
             "script": sha256(&workflow.script), "input": workflow.input, "output": workflow.output,
             "signals": {}, "tests": [], "retired": [], "updated": [],
             "labels": { "agent": "triage" }, "createdAt": "2026-11-19T10:00:00Z",
@@ -364,7 +374,7 @@ async fn run_script_starts_the_run_with_the_agent_s_toolset_labels_wait_and_key(
     assert!(!result.is_error, "{}", result.content);
     assert_eq!(result.script, Some(ScriptVerdict::Passed));
     assert!(
-        result.content.starts_with("Run r1 completed"),
+        result.content.starts_with("Run alice/script/r1 completed"),
         "{}",
         result.content
     );
@@ -498,7 +508,7 @@ async fn a_run_without_the_agent_s_labels_is_not_one_of_its_runs() {
         .unwrap();
     assert_eq!(
         refused.content,
-        "Run r9 refused the signal \"nope\": the workflow declares no signal \"nope\""
+        "Run alice/script/r9 refused the signal \"nope\": the workflow declares no signal \"nope\""
     );
     // A signal's key is the tool call's id.
     assert_eq!(fake.seen().last().unwrap().key.as_deref(), Some("c2"));
@@ -627,7 +637,7 @@ async fn a_retry_carries_the_agent_s_labels_and_the_default_wait() {
     assert!(
         retried
             .content
-            .starts_with("Run r2 (a fork of run r1) completed"),
+            .starts_with("Run alice/script/r2 (a fork of run alice/script/r1) completed"),
         "{}",
         retried.content
     );
@@ -738,4 +748,47 @@ async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
         "{}",
         refused.content
     );
+}
+
+#[tokio::test]
+async fn a_run_is_named_by_its_handle_and_a_script_without_a_title_gets_a_note() {
+    let (tools, fake) = tools(None);
+    // The handle the model gives goes to the API as it is; the answer names the run by its
+    // handle.
+    let read = tools
+        .handle(
+            "get_run",
+            &json!({ "run_id": "alice/script/r7" }),
+            &call("c1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fake.seen()[0].body["id"], "alice/script/r7");
+    assert!(
+        read.content.starts_with("Run alice/script/r7 failed."),
+        "{}",
+        read.content
+    );
+
+    let untitled = tools
+        .handle("check_script", &json!({ "code": CODE }), &call("c2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        untitled.content,
+        format!(
+            "The script type-checks.\n{}",
+            rewind_agent_tools::render::UNTITLED_NOTE
+        )
+    );
+    assert!(!untitled.is_error, "a note, not an error");
+    let titled = tools
+        .handle(
+            "check_script",
+            &json!({ "code": format!("/** Count to one\n *\n * Returns 1. */\n{CODE}") }),
+            &call("c3"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(titled.content, "The script type-checks.");
 }

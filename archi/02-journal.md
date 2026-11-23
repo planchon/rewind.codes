@@ -40,7 +40,8 @@ Field notes:
   [quarantined](03-execution.md#non-determinism-and-quarantine) run.
 - `signal_awaited.timeout` is the `seq` of the timer that implements the timeout, if any.
 - Signal names starting with `rewind:` are reserved. A `signal_received` named
-  `rewind:ended:<run id>` is the end of a run this run started or watches
+  `rewind:ended:<run id>` is the end of a run this run started or watches (its UUID: a run's
+  handle is for people, never in the journal)
   ([workflows](03-execution.md#workflows-across-runs)). Its payload is
   `{ "status": "completed", "output" }`, `{ "status": "failed" | "cancelled", "error" }` with the
   error of its `fail_run`, or `{ "status": "aborted", "reason" }` with the reason of its

@@ -10,6 +10,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { PageHeader } from "../../components/PageHeader";
+import { TableScroll } from "../../components/TableScroll";
 import { formatLabels, parseLabels } from "../../model/access";
 import { ACCESS_INFO, ACCESSES } from "../../model/connections";
 import type { Connection, ConnectionAccess, Labels } from "../../model/types";
@@ -93,7 +94,7 @@ function Connections() {
           No connection yet. <Link to="/connect">Connect Claude</Link> to use Rewind from it.
         </Empty>
       ) : (
-        <div className="table-wrap">
+        <TableScroll>
           <table className="grid">
             <thead>
               <tr>
@@ -148,7 +149,7 @@ function Connections() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </section>
   );

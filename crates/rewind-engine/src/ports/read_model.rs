@@ -16,6 +16,10 @@ use crate::ports::tenancy::{RunRef, TenantId, TenantScope};
 pub struct ProjectedRun {
     pub run: RunRef,
     pub namespace: NamespaceName,
+    /// What ran, and the characters of its handle's suffix (`RunRecord::origin`,
+    /// `RunRecord::suffix_len`).
+    pub origin: String,
+    pub suffix_len: u8,
     pub script: Digest,
     /// The first line of the script that is not blank, trimmed: searched as text.
     pub headline: String,
@@ -211,6 +215,9 @@ impl From<&Quarantine> for QuarantineNote {
 pub struct RunSummary {
     pub run: RunRef,
     pub namespace: NamespaceName,
+    /// What ran, and the characters of its handle's suffix, as its record has them.
+    pub origin: String,
+    pub suffix_len: u8,
     pub script: Digest,
     pub headline: String,
     pub toolset: Digest,
@@ -244,6 +251,16 @@ pub struct RunSummary {
 }
 
 impl RunSummary {
+    /// The run's handle, `<namespace>/<origin>/<suffix>`.
+    pub fn handle(&self) -> rewind_core::RunHandle {
+        rewind_core::RunHandle::new(
+            self.namespace.as_str(),
+            &self.origin,
+            self.run.id,
+            usize::from(self.suffix_len),
+        )
+    }
+
     /// The cursor after this run, in `order`.
     pub fn cursor(&self, order: RunOrder) -> SearchCursor {
         SearchCursor {
@@ -567,8 +584,9 @@ pub struct FailureGroup {
     pub line: Option<u32>,
     /// Its runs' labels, as `key:value`, most frequent first, then by value; at most 5.
     pub labels: Vec<FacetValue>,
-    /// The run that ended last (the highest run id on a tie), its status and message.
+    /// The run that ended last (the highest run id on a tie), its handle, status and message.
     pub latest: RunId,
+    pub latest_handle: rewind_core::RunHandle,
     pub latest_status: RunStatus,
     pub latest_message: String,
 }

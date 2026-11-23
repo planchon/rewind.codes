@@ -66,4 +66,17 @@ describe("buildTimeScale", () => {
       expect(tick.x).toBeLessThanOrEqual(1);
     }
   });
+
+  it("labels nothing inside a break that ends the axis: a run idle until now", () => {
+    // Calls within the first second, then waiting for an hour.
+    const scale = buildTimeScale([0, 120, 480, 900, 3_600_000]);
+    expect(scale.breaks).toHaveLength(1);
+    const idle = scale.breaks[0];
+    expect(idle?.x1).toBe(1);
+    const inside = scale.ticks.filter((t) => idle && t.x > idle.x0 + 1e-9);
+    expect(inside).toEqual([]);
+    // The ticks of the calls leave room for the break's label.
+    const last = scale.ticks[scale.ticks.length - 1];
+    expect(idle && last ? idle.x0 - last.x : 0).toBeGreaterThan(0.08);
+  });
 });

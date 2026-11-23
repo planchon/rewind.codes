@@ -1,38 +1,29 @@
-// The run's card, details and actions (in its sidebar and its header), and its banners: how it
-// ended (RunEnd.tsx), why it is quarantined, what it waits for.
+// The run's status and actions (in its header), its details (in its sidebar), and its banners:
+// how it ended (RunEnd.tsx), why it is quarantined, what it waits for.
 import { Download, GitFork } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Ago, CopyButton, Digest, LabelList, RunId, useNow } from "../../components/bits";
+import { runPath } from "../../app/runLinks";
+import {
+  Ago,
+  CopyButton,
+  Digest,
+  LabelList,
+  RunHandle,
+  RunId,
+  useNow,
+} from "../../components/bits";
 import { NamespaceName } from "../../components/NamespaceName";
-import { MockTag, OutcomeBadge, QuarantineTag, StatusBadge } from "../../components/Status";
+import { MockTag, OutcomeBadge, QuarantineTag } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative, shortRunId } from "../../model/format";
 import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
 import type { Run, Waiting } from "../../model/types";
 import { endedRunOf, workflowRef } from "../../model/workflows";
 import { useAccess } from "../../state/access";
-import { type JournalState, useRunExport } from "../../state/runs";
+import { useRunExport } from "../../state/runs";
+import { RunControls } from "./RunControls";
 import { endingOf, RunEndBanner } from "./RunEnd";
-
-function LiveState({ state }: { state: JournalState }) {
-  const text = {
-    connecting: "connecting…",
-    live: "live",
-    retrying: "reconnecting…",
-    ended: "",
-    error: "stream failed",
-  }[state];
-  return (
-    <span
-      className={`live-state state-${state}`}
-      title="The journal, read from the run's event stream"
-    >
-      <span className={`dot${state === "live" ? " pulse" : ""}`} aria-hidden="true" />
-      {text}
-    </span>
-  );
-}
 
 function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette" }) {
   const download = useRunExport();
@@ -72,29 +63,22 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
   );
 }
 
-/** The run at the head of its sidebar: its status and its id, on one line. Tags follow only
- * when they say something: the stream while the run goes on, a mock run, a quarantine. When it
- * started and how long it lasted are in its details below. */
-export function RunCard({ run, state }: { run: Run; state: JournalState }) {
-  const live = state !== "ended";
+/** The run's tags beside its handle, in its header, when they say something: a mock run, a
+ * quarantine. Not its status: its sections and banners say how it goes. */
+export function RunTags({ run }: { run: Run }) {
+  if (run.mode !== "mock" && !run.quarantine) return null;
   return (
-    <div className="run-ident">
-      <div className="run-ident-line">
-        <StatusBadge status={run.status} />
-        <RunId id={run.id} />
-      </div>
-      {(live || run.mode === "mock" || run.quarantine) && (
-        <div className="run-ident-tags">
-          {live && <LiveState state={state} />}
-          {run.mode === "mock" && <MockTag />}
-          {run.quarantine && <QuarantineTag />}
-        </div>
-      )}
-    </div>
+    <span className="run-tags">
+      {run.mode === "mock" && <MockTag />}
+      {run.quarantine && <QuarantineTag />}
+    </span>
   );
 }
 
-/** The actions of the run's page: its forks, its journal and its cassette. */
+/**
+ * The actions of the run's page: its forks, the menu of its controls beside them, its journal and
+ * its cassette.
+ */
 export function RunActions({ run }: { run: Run }) {
   return (
     <>
@@ -105,6 +89,7 @@ export function RunActions({ run }: { run: Run }) {
       >
         <GitFork size={14} aria-hidden="true" /> Forks
       </Link>
+      <RunControls run={run} />
       <ExportButton runId={run.id} as="journal" />
       <ExportButton runId={run.id} as="cassette" />
     </>
@@ -168,14 +153,14 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
           <dt>Started by</dt>
           <dd>
             <Link
-              to={`/runs/${run.startedBy.run}`}
+              to={runPath(run.startedBy.handle)}
               title={`Started by the run ${run.startedBy.run}, at its call #${run.startedBy.seq}${
                 run.startedBy.detached
                   ? ": detached, it lives on its own"
                   : ": that run does not end before this one, and cancels it if it fails"
               }`}
             >
-              <span className="mono">{shortRunId(run.startedBy.run)}</span>
+              <RunHandle handle={run.startedBy.handle} copy={false} />
               {run.startedBy.detached && " · detached"}
             </Link>
           </dd>
@@ -186,10 +171,10 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
           <dt>Fork of</dt>
           <dd>
             <Link
-              to={`/runs/${run.parent.run}`}
+              to={runPath(run.parent.handle)}
               title={`Forked from ${run.parent.run}${run.parent.at != null ? ` at entry ${run.parent.at}` : ""}`}
             >
-              <span className="mono">{shortRunId(run.parent.run)}</span>
+              <RunHandle handle={run.parent.handle} copy={false} />
             </Link>
           </dd>
         </div>
@@ -197,8 +182,8 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
       <div>
         <dt>Script</dt>
         <dd>
-          <Link to={`/scripts/${run.script}`} title="The script's page">
-            <Digest digest={run.script} />
+          <Link to={`/scripts/${run.script}`} title={`The script's page · ${run.script}`}>
+            {run.scriptTitle ?? <span className="muted">Untitled script</span>}
           </Link>
         </dd>
       </div>
@@ -224,6 +209,12 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         <dt>Entries · epoch</dt>
         <dd className="num">
           {formatCount(run.historyLen)} · {run.epoch}
+        </dd>
+      </div>
+      <div>
+        <dt>Id</dt>
+        <dd>
+          <RunId id={run.id} />
         </dd>
       </div>
       <div>

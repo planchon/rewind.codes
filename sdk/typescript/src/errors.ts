@@ -23,6 +23,7 @@ export type ProblemSlug =
   | "tests-failed"
   | "invalid-input"
   | "invalid-signal"
+  | "invalid-title"
   | "secret-required"
   | "quota-exceeded"
   | "internal"

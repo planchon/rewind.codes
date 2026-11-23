@@ -4,15 +4,17 @@
 // (`useRunLinkState`).
 //
 // It shows a search of `state/` (archi/05, "Nothing moves on its own"): rows keyed by run, each
-// rendered again only when its run changes; cells of one size; the previous search's rows, dimmed,
+// rendered again only when its run changes; columns at least their widths, no cell cut; the
+// previous search's rows, dimmed,
 // while a new one loads; an answer that adds, drops or reorders rows held behind "N new · Show"
 // while the table is scrolled.
 import { memo, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { useRunLinkState } from "../app/runLinks";
-import { Ago, Digest, Empty, Loading, ProblemView, RunId, useNow } from "../components/bits";
+import { runPath, useRunLinkState } from "../app/runLinks";
+import { Ago, Empty, Loading, ProblemView, RunHandle, useNow } from "../components/bits";
 import { NamespaceName, useNamespaceLabel } from "../components/NamespaceName";
 import { ForkTag, QuarantineTag, StatusBadge } from "../components/Status";
+import { TableScroll } from "../components/TableScroll";
 import { formatCount, formatDuration, formatRelative } from "../model/format";
 import { countTerms, fieldTerm, queryLink } from "../model/query";
 import type { RunSummary } from "../model/types";
@@ -30,9 +32,41 @@ import {
   StatusHeader,
   WakesHeader,
 } from "./RunColumns";
-import { TableToolbar } from "./TableTop";
+import { TableTop } from "./TableTop";
 
 export type { RunTableControls } from "./RunColumns";
+
+/**
+ * The least widths of the columns, in px: each is wider when its rows hold more, nothing in a
+ * cell being cut. The run's column, and the error's when it shows, take what the table has left.
+ * A table wider than its page scrolls sideways (TableScroll.tsx), its header still following the
+ * page.
+ */
+const WIDTHS = {
+  status: 120,
+  namespace: 140,
+  script: 144,
+  started: 96,
+  duration: 100,
+  calls: 104,
+  wakes: 100,
+} as const;
+
+type Column = keyof typeof WIDTHS;
+
+/** The characters of labels a run's cell shows, then "+N". */
+const LABEL_BUDGET = 44;
+
+/** The optional columns a row shows. */
+interface Cols {
+  namespace: boolean;
+  script: boolean;
+  started: boolean;
+  duration: boolean;
+  calls: boolean;
+  wakes: boolean;
+  error: boolean;
+}
 
 export interface RunTableProps {
   search: RunSearchView;
@@ -67,13 +101,18 @@ function Plain({
   );
 }
 
+/** What a run ran, by name: its script's title, else its workflow, else "Untitled script". */
+function scriptName(run: RunSummary): string {
+  return run.scriptTitle ?? run.workflow ?? "Untitled script";
+}
+
 function Duration({ run, now }: { run: RunSummary; now: number }) {
   const start = Date.parse(run.startedAt);
   if (run.endedAt)
     return <span className="num">{formatDuration(Date.parse(run.endedAt) - start)}</span>;
   return (
     <span className="num dim" title="Still running">
-      {formatDuration(now - start)}…
+      {formatDuration(now - start)}
     </span>
   );
 }
@@ -106,25 +145,13 @@ interface RowProps {
   run: RunSummary;
   /** The time durations run to: 0 for a run that ended, whose row the clock does not touch. */
   now: number;
-  showNamespace: boolean;
-  hideScript: boolean;
-  showWakes: boolean;
-  showError: boolean;
+  cols: Cols;
   linkState: { from: string } | undefined;
   handlers: RowHandlers;
 }
 
 /** One run: rendered again only when the run, or a column, changes. */
-const RunRow = memo(function RunRow({
-  run,
-  now,
-  showNamespace,
-  hideScript,
-  showWakes,
-  showError,
-  linkState,
-  handlers,
-}: RowProps) {
+const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: RowProps) {
   const label = useNamespaceLabel();
   return (
     <tr
@@ -132,13 +159,19 @@ const RunRow = memo(function RunRow({
       data-run={run.id}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("a, button")) return;
-        handlers.open(run.id);
+        handlers.open(run.handle);
       }}
     >
       <td className="wrap run-cell">
         <span className="run-cell-id">
-          <Link to={`/runs/${run.id}`} state={linkState} className="row-link">
-            <RunId id={run.id} />
+          <Link to={runPath(run.handle)} state={linkState} className="row-link">
+            <RunHandle
+              handle={run.handle}
+              id={run.id}
+              namespace={!cols.namespace}
+              copy={false}
+              whole
+            />
           </Link>
           {run.parent && (
             <Link to={`/runs/${run.parent}`} title={`Forked from ${run.parent}`}>
@@ -154,7 +187,7 @@ const RunRow = memo(function RunRow({
             </Link>
           )}
         </span>
-        <RunLabels labels={run.labels} onPick={handlers.pickLabel} />
+        <RunLabels labels={run.labels} onPick={handlers.pickLabel} budget={LABEL_BUDGET} />
       </td>
       <td>
         <span className="labels">
@@ -162,7 +195,7 @@ const RunRow = memo(function RunRow({
           {run.quarantined && <QuarantineTag />}
         </span>
       </td>
-      {showNamespace && (
+      {cols.namespace && (
         <td>
           {handlers.pickNamespace ? (
             <button
@@ -180,40 +213,51 @@ const RunRow = memo(function RunRow({
           )}
         </td>
       )}
-      {!hideScript && (
+      {cols.script && (
         <td>
           {handlers.pickScript ? (
-            <Digest
-              digest={run.script}
-              onPick={() => handlers.pickScript?.(run.script)}
-              pickTitle="Only runs of this script"
-            />
+            <button
+              type="button"
+              className="link-btn script-cell-title"
+              title={`Only runs of this script · ${run.script}`}
+              onClick={() => handlers.pickScript?.(run.script)}
+            >
+              {scriptName(run)}
+            </button>
           ) : (
-            <Digest digest={run.script} />
+            <span className="script-cell-title" title={run.script}>
+              {scriptName(run)}
+            </span>
           )}
         </td>
       )}
-      <td className="dim">
-        <Ago ms={Date.parse(run.startedAt)} />
-      </td>
-      <td className="right">
-        <Duration run={run} now={now} />
-      </td>
-      <td className="right num">
-        {formatCount(run.toolCalls)}
-        {run.errors > 0 && (
-          <span className="tone-critical" title="Tool calls that failed">
-            {" "}
-            · {formatCount(run.errors)} failed
-          </span>
-        )}
-      </td>
-      {showWakes && (
+      {cols.started && (
+        <td className="dim">
+          <Ago ms={Date.parse(run.startedAt)} />
+        </td>
+      )}
+      {cols.duration && (
+        <td className="right">
+          <Duration run={run} now={now} />
+        </td>
+      )}
+      {cols.calls && (
+        <td className="right num">
+          {formatCount(run.toolCalls)}
+          {run.errors > 0 && (
+            <span className="tone-critical" title="Tool calls that failed">
+              {" "}
+              · {formatCount(run.errors)} failed
+            </span>
+          )}
+        </td>
+      )}
+      {cols.wakes && (
         <td className="num dim" title={run.wakesAt ?? undefined}>
           {run.wakesAt ? formatRelative(Date.parse(run.wakesAt), now || Date.now()) : ""}
         </td>
       )}
-      {showError && (
+      {cols.error && (
         <td className="end-td">
           <RunEnd run={run} />
         </td>
@@ -245,8 +289,8 @@ export function RunTable({
   const hasNamespace = Boolean(onPickNamespace);
   const handlers = useMemo<RowHandlers>(
     () => ({
-      open: (id) =>
-        void latest.current.navigate(`/runs/${id}`, { state: latest.current.linkState }),
+      open: (handle) =>
+        void latest.current.navigate(runPath(handle), { state: latest.current.linkState }),
       pickLabel: hasLabel ? (pair) => latest.current.onPickLabel?.(pair) : undefined,
       pickScript: hasScript ? (digest) => latest.current.onPickScript?.(digest) : undefined,
       pickNamespace: hasNamespace
@@ -269,66 +313,89 @@ export function RunTable({
     columnsKey,
   );
 
+  const shown: Column[] = [
+    "status",
+    ...(showNamespace ? (["namespace"] as const) : []),
+    ...(hideScript ? [] : (["script"] as const)),
+    "started",
+    "duration",
+    "calls",
+    ...(showWakes ? (["wakes"] as const) : []),
+  ];
+  // One object while the same columns show, so the rows are not rendered again for nothing.
+  const colsKey = [...shown, ...(showError ? ["error"] : [])].join(",");
+  const cols = useMemo<Cols>(() => {
+    const on = new Set(colsKey.split(","));
+    return {
+      namespace: on.has("namespace"),
+      script: on.has("script"),
+      started: on.has("started"),
+      duration: on.has("duration"),
+      calls: on.has("calls"),
+      wakes: on.has("wakes"),
+      error: on.has("error"),
+    };
+  }, [colsKey]);
+
   if (search.status === "pending") return <Loading>Loading runs…</Loading>;
   if (search.status === "error")
     return <ProblemView error={search.error} title="The runs could not be read" />;
 
   return (
     <div className="run-table">
-      <TableToolbar pending={search.pending} onShow={search.showPending} setAtTop={search.setAtTop}>
-        {runs.length > 0 && (
-          <span className="num muted">
-            {formatCount(runs.length)} run{runs.length === 1 ? "" : "s"}
-            {search.hasMore ? " shown" : ""}
-          </span>
-        )}
-      </TableToolbar>
-      <div
-        className={`table-wrap${search.stale ? " is-stale" : ""}`}
-        aria-busy={search.stale || undefined}
-      >
+      <TableTop pending={search.pending} onShow={search.showPending} setAtTop={search.setAtTop} />
+      <TableScroll stale={search.stale}>
         <table className="grid runs-table">
+          <colgroup>
+            <col className="col-run" />
+            {shown.map((c) => (
+              <col key={c} className={`col-${c}`} style={{ width: WIDTHS[c] }} />
+            ))}
+            {showError && <col className="col-error" />}
+          </colgroup>
           <thead>
             {controls ? (
               <tr>
                 <RunHeader controls={controls} />
                 <StatusHeader controls={controls} />
-                {showNamespace && <NamespaceHeader controls={controls} />}
-                {!hideScript && <ScriptHeader controls={controls} />}
-                <StartedHeader controls={controls} />
-                <DurationHeader controls={controls} />
-                <CallsHeader controls={controls} />
-                {showWakes && <WakesHeader controls={controls} />}
-                {showError && <ErrorHeader controls={controls} />}
+                {cols.namespace && <NamespaceHeader controls={controls} />}
+                {cols.script && <ScriptHeader controls={controls} />}
+                {cols.started && <StartedHeader controls={controls} />}
+                {cols.duration && <DurationHeader controls={controls} />}
+                {cols.calls && <CallsHeader controls={controls} />}
+                {cols.wakes && <WakesHeader controls={controls} />}
+                {cols.error && <ErrorHeader controls={controls} />}
               </tr>
             ) : (
               <tr>
                 <Plain title="Run" className="col-run" />
                 <Plain title="Status" className="col-status" />
-                {showNamespace && (
+                {cols.namespace && (
                   <Plain
                     title="Namespace"
                     hint="The end user the run acts for"
                     className="col-namespace"
                   />
                 )}
-                {!hideScript && <Plain title="Script" className="col-script" />}
-                <Plain title="Started" className="col-started" />
-                <Plain title="Duration" right className="col-duration" />
-                <Plain
-                  title="Calls"
-                  right
-                  hint="Tool calls, and those that failed"
-                  className="col-calls"
-                />
-                {showWakes && (
+                {cols.script && <Plain title="Script" className="col-script" />}
+                {cols.started && <Plain title="Started" className="col-started" />}
+                {cols.duration && <Plain title="Duration" right className="col-duration" />}
+                {cols.calls && (
+                  <Plain
+                    title="Calls"
+                    right
+                    hint="Tool calls, and those that failed"
+                    className="col-calls"
+                  />
+                )}
+                {cols.wakes && (
                   <Plain
                     title="Wakes"
                     hint="When a waiting run wakes by itself"
                     className="col-wakes"
                   />
                 )}
-                {showError && (
+                {cols.error && (
                   <Plain
                     title="Error"
                     hint="The error the run ended with: hover it for the cause"
@@ -344,10 +411,7 @@ export function RunTable({
                 key={run.id}
                 run={run}
                 now={run.endedAt ? 0 : now}
-                showNamespace={showNamespace}
-                hideScript={hideScript}
-                showWakes={showWakes}
-                showError={showError}
+                cols={cols}
                 linkState={linkState}
                 handlers={handlers}
               />
@@ -367,7 +431,7 @@ export function RunTable({
             </button>
           </div>
         )}
-      </div>
+      </TableScroll>
     </div>
   );
 }
