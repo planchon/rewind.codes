@@ -10,12 +10,12 @@ Every call takes an `AbortSignal` as `signal`. The types are those of the API, g
 | --- | --- |
 | `rewind.toolsets` | `create` (`mcp`, `apis` from OpenAPI documents, `host`, `http`, each server's `auth`; `workflows` pins workflows, `base` derives from a toolset), `declarations`, `search` |
 | `rewind.workflows` | `create` (`tests`, `update`, `retire`, `parent`: saved once its suite passes), `list` and `listAll` (the latest version of each), `versions` (newest first, with their suites and lineage), `record` (tests from past runs) |
-| `rewind.scripts` | `check`, `test` (tests in virtual time, and a workflow's suite), `list`, `listAll`, `get` (a script's source by its digest) |
+| `rewind.scripts` | `check`, `test` (tests in virtual time, and a workflow's suite), `list` and `listAll` (one `namespace:` term and a window), `get` (a script's source by its digest) |
 | `rewind.tests` | `get`: a stored test by its digest |
 | `rewind.runs` | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`, `sort`, `workflow`, `startedBy`…), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `delete`; `start` and `fork` take `secrets` |
-| `rewind.tasks` | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`: host-tool tasks at the level of the API |
+| `rewind.tasks` | `stream` (the [task stream](/sdk/host-tools#the-task-stream): `toolset`, `tools`, `namespace`, `slots`, `worker`), `defer`, `complete`, `fail`, `approve`, `reject`: host-tool tasks at the level of the API |
 | `rewind.approvals` | `pending(run)`, `args`, `approve`, `reject` |
-| `rewind.payloads` | `get`: a value left out above 256 KiB |
+| `rewind.payloads` | `get(digest, { run })`: a value left out above 256 KiB, read through the run that holds it |
 | `rewind.namespaces` | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `rename`, `delete`, `alerts` |
 | `rewind.namespaces.secrets` | `list`, `put`, `delete`, `usage`: an end user's own [secrets](/sdk/secrets), attached as `ns/<name>` |
 | `rewind.namespaces.defaults` | `get`, `put`: the default limits of every end user, and the ceiling |
@@ -25,9 +25,9 @@ Every call takes an `AbortSignal` as `signal`. The types are those of the API, g
 | `rewind.signingKeys` | `list` (with the `issuer` and the `jwksUrl`), `rotate`, `jwks`: the keys Rewind [signs its calls](/sdk/signed-calls) with |
 | `rewind.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete` |
 | `rewind.webhooks` | `verify` |
-| `rewind.tools` | `stats`: latency, errors and retries per tool |
+| `rewind.tools` | `stats`: latency, errors and retries per tool, of one end user or the organization, over a window |
 | `rewind.apiKeys` | `create`, `revoke` |
-| `rewind.server` | `info`, `stop` |
+| `rewind.server` | `info` (the version, the epochs, the node that answered, the deployment's partitions and nodes), `stop` |
 
 | Method | Returns |
 | --- | --- |
@@ -46,7 +46,7 @@ Every call takes an `AbortSignal` as `signal`. The types are those of the API, g
 | `anthropicTools`, `openaiChatTools`, `openaiResponsesTools` | The tool-format adapters, for definitions you filter yourself |
 | `runIdempotencyKey`, `idempotencyKeyOf` | How the agent tools derive their idempotency keys |
 | `formatDuration`, `toMillis`, `isNamespaceName` | Helpers |
-| `Run`, `Toolset`, `Task`, `WebhookEvent`, `Workflow`… | The API's types |
+| `Run`, `Toolset`, `HandedTask`, `WebhookEvent`, `Workflow`… | The API's types |
 | `paths`, `components`, `operations`, `webhooks` | The OpenAPI types, for a client of your own |
 
 ## The HTTP API

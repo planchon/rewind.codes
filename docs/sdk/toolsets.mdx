@@ -49,7 +49,7 @@ A toolset holds no secret: each server says in its `auth` how its calls prove wh
   APIs described by OpenAPI 3.0 or 3.1: one tool per operation, called by Rewind. `openapi` is the document in JSON, or
   its URL, read once at registration (at most 2 MiB); `baseUrl` is where the calls go (the document's first `servers[]`
   by default); `operations` keeps some `operationId`s only, for an API too large for the prompt; `concurrency` bounds
-  its calls in flight on each worker (8 by default). See [API tools](#api-tools).
+  its calls in flight across your organization (8 by default). See [API tools](#api-tools).
 </ParamField>
 
 <ParamField body="host" type="HostTool[]">
@@ -139,8 +139,8 @@ signal.
 
 <Tip>
   APIs and host tools are both first-class. With an API, Rewind calls your backend and signs each call; with
-  [host tools](/sdk/host-tools), your backend pulls its calls with a worker (a long poll), and nothing reaches it from
-  outside. Choose toolset by toolset.
+  [host tools](/sdk/host-tools), your backend's worker holds a stream open and is handed its calls, and nothing reaches
+  it from outside. Choose toolset by toolset.
 </Tip>
 
 ## Policies
@@ -152,7 +152,7 @@ Each tool has a policy. Every field is optional.
 | `onInterruption` | `"retry"` (`"at_most_once"` for an API's `POST` and `PATCH` without `Idempotency-Key`) | `"retry"`: a call interrupted mid-flight is sent again with the same idempotency key, up to 5 attempts. `"at_most_once"`: it fails with `outcomeUnknown` |
 | `approval` | `false` | Each call waits for your harness's approval before it is sent. See [Human in the loop](/sdk/human-in-the-loop#approve-a-tool-call) |
 | `timeout` | `"5m"` for MCP and API tools | How long one attempt may take |
-| `heartbeatTimeout` | `"60s"` | How long a host tool's worker may go without a heartbeat |
+| `heartbeatTimeout` | `"60s"` for host tools | The grace of a host tool: how long a call handed on a worker's stream that closed waits for that worker to open it again, before it is handed to another (see [the task stream](/sdk/host-tools#the-task-stream)) |
 | `concurrency` | | Calls of this tool in flight per run, under the run's limit of 16 |
 
 ## Declarations for the model

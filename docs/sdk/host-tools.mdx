@@ -6,9 +6,9 @@ description: "Functions of your harness that scripts call: the worker that execu
 A host tool is a function of your harness that scripts call like any tool: ask the end user, call another model, start
 a sub-agent, read your database. Declare it in the [toolset](/sdk/toolsets), then run a **worker** that executes it.
 
-The worker long-polls the calls to its tools, runs your handler, keeps the claim alive with heartbeats while it runs,
-and answers with the result, like a Temporal activity worker. It runs in your infrastructure; Rewind never connects to
-it.
+The worker holds a **task stream** open to Rewind and is handed each call to its tools as it becomes ready. It runs
+your handler and answers with the result, like a Temporal activity worker. It runs in your infrastructure; Rewind
+never connects to it: the stream is a request the worker makes.
 
 ```ts
 import { HostToolError, Rewind } from "@rewind.codes/sdk";
@@ -28,7 +28,7 @@ const worker = rewind.worker({
   },
 });
 
-process.on("SIGTERM", () => worker.stop()); // lets the claims in flight finish, then waits for the handlers
+process.on("SIGTERM", () => worker.stop()); // takes no new call, and waits for the handlers in flight to answer
 ```
 
 ## The handler's context
@@ -40,9 +40,8 @@ process.on("SIGTERM", () => worker.stop()); // lets the claims in flight finish,
 | `ctx.attempt` | From 1. Above 1, an earlier attempt was interrupted: the call may already have happened |
 | `ctx.runId`, `ctx.seq` | The run, and the call's position in it |
 | `ctx.labels` | The run's labels |
-| `ctx.signal` | Aborted when the claim is lost: the run ended, or the claim expired and another worker took the call. The result is then dropped |
+| `ctx.signal` | Aborted when the call stops waiting for its answer: its run ended, or its call timed out. The result is then dropped |
 | `ctx.traceparent` | The W3C trace context, with the tool call's span as parent |
-| `ctx.heartbeat()` | Sends a heartbeat now. The worker already sends them while the handler runs |
 | `ctx.defer()` | Answer later, by a token (below) |
 
 ## Failures
@@ -63,14 +62,15 @@ try {
 }
 ```
 
-A worker that dies mid-call loses its claim when the heartbeats stop (60 seconds by default). Under the `retry` policy,
-the call is given to another worker with the same idempotency key, up to 5 attempts. Under `at_most_once`, it fails
-with `outcomeUnknown: true`: declare it for a tool that must never run twice, such as asking the user a question.
+A worker that dies mid-call closes its stream. Its calls wait for it to come back for the tool's grace (60 seconds by
+default, [below](#the-task-stream)); after it, under the `retry` policy, each call is handed to another worker with the
+same idempotency key, up to 5 attempts. Under `at_most_once`, it fails with `outcomeUnknown: true`: declare it for a
+tool that must never run twice, such as asking the user a question.
 
 ## Answers that take days
 
-A handler can defer its answer: the call becomes `deferred`, needs no heartbeat, and is answered later by its token,
-from any process. The run waits durably meanwhile.
+A handler can defer its answer: the call becomes `deferred`, its slot on the stream is free, and it is answered later
+by its token, from any process, whether the worker's stream stays open or not. The run waits durably meanwhile.
 
 ```ts
 const worker = rewind.worker({
@@ -91,23 +91,46 @@ await rewind.tasks.complete(token, { answer: "yes" });
 
 The complete program is in [`examples/host-tools`](https://github.com/planchon/rewind.codes/tree/main/examples/host-tools).
 
+## The task stream
+
+The worker opens one stream, `GET /v1/tasks/stream`, with its tools, its toolset, its `slots` (its `concurrency`) and
+its `worker` id, drawn once when it starts (`worker.id`). The server sends a `task` event for each call as it becomes
+ready, with the call's token, up to `slots` in flight on the stream at once; and a `gone` event when a call handed on it
+stops waiting for its answer (its run ended, its call timed out), which aborts the handler's `ctx.signal`. Nothing is
+sent while a handler runs: the open stream is what keeps its calls alive.
+
+- **After a drop**, the worker opens the stream again with the same id, after a backoff (500 ms, doubled up to 30 s),
+  and its handlers go on. A stream opened again with the same `worker` within the grace keeps the calls handed on the
+  one that closed: they are not handed again. A stream silent for 45 seconds is taken as broken and opened again: the
+  server writes a comment at least every 15 seconds.
+- **The grace** is how long a call handed on a closed stream waits for its worker to come back: the tool's
+  `heartbeatTimeout` in its [policy](/sdk/toolsets#policies), 60 seconds by default. After it, the call is interrupted:
+  handed to another worker with `ctx.attempt` + 1 under `retry`, failed with `outcomeUnknown` under `at_most_once`.
+- **`stop()`** keeps the stream open with no slot while the handlers in flight answer: no new call is handed to the
+  worker, and the calls it holds stay alive.
+
+Any language can hold the stream without the SDK: it is server-sent events, `task` (the task, with its `token`) and
+`gone` (`{ token }`), each answered with `POST /v1/tasks/{token}/complete`, `/fail` or `/defer`. `rewind.tasks.stream`
+reads one stream at the level of the API.
+
 ## Options
 
 | Option | Default | What |
 | --- | --- | --- |
-| `tools` | | The handlers, by tool name as the toolset declares it (`"crm.find_customer"`). The worker claims only these tools |
+| `tools` | | The handlers, by tool name as the toolset declares it (`"crm.find_customer"`). The worker is handed only these tools |
 | `toolset` | | Only the calls of runs of this toolset. Leave it out to serve every toolset that declares these tools |
-| `concurrency` | 10 | Handlers running at once |
-| `pollWait` | `"30s"` | How long one claim request waits for a call. `stop()` takes up to this long |
-| `signal` | | Stops the worker when aborted |
-| `onError` | `console.error` | Called with what fails along the way: claims, heartbeats, answers, handlers |
+| `concurrency` | 10 | Handlers running at once: the slots of its stream, 100 at most |
+| `signal` | | Stops the worker when aborted, as `stop()` |
+| `onError` | `console.error` | Called with what fails along the way, and where: the `stream`, an `answer`, a `handler` |
+| `timings` | | The backoff after a drop (`backoffMs`, 500; `maxBackoffMs`, 30 000) and the silence after which a stream is taken as broken (`silenceMs`, 45 000) |
 
-A refused key (401, 403) stops the worker: `worker.done` rejects. Other failures are reported to `onError` and
-retried. A worker holding an end user's token, instead of a key, claims only the calls of that end user's runs.
+A refused request (a key refused with 401 or 403, an unknown toolset) stops the worker: `worker.done` rejects. Other
+failures are reported to `onError`, and the stream is opened again. A worker holding an end user's token, instead of a
+key, is handed only the calls of that end user's runs.
 
 ## One worker per environment
 
-A worker claims the calls of the runs its key sees. With a key limited to labels, those are the runs carrying them:
+A worker is handed the calls of the runs its key sees. With a key limited to labels, those are the runs carrying them:
 give each environment of your organization a key limited to its label, with the role `harness` or `worker`, and its
 worker answers only its own runs' calls, against its own database, even when every environment registers the same
 toolset.

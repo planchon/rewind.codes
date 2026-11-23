@@ -1,6 +1,6 @@
 ---
 title: "Self-hosting"
-description: "Run the Rewind server yourself: one binary for development, and a production-shaped deployment with Postgres, S3 and sandboxed workers."
+description: "Run the Rewind server yourself: one node for development, and a deployment of several nodes on Postgres and object storage."
 ---
 
 The hosted service is at `https://api.rewind.codes`, with its dashboard at [app.rewind.codes](https://app.rewind.codes).
@@ -30,13 +30,15 @@ after its release.
     export REWIND_MASTER_KEY="$(openssl rand -base64 32)"   # keep it: secrets are unreadable without it
     export REWIND_ADMIN_KEY="rewind_sk_$(openssl rand -hex 24)"
 
-    TZ=UTC ./target/release/rewind server \
-      --store turso:./rewind.db \
+    ./target/release/rewind server \
+      --store turso:./data/control.db \
       --public-url http://127.0.0.1:8080
     ```
 
-    The server listens on `127.0.0.1:8080`, runs both roles (API and workers) in one process, and keeps everything
-    in `rewind.db` and the files next to it.
+    The server listens on `127.0.0.1:8080`. It is one node: it serves the API and the dashboard, owns the one
+    partition its runs live in, and runs their scripts. It keeps the control plane (organizations, keys, toolsets,
+    workflows, secrets) in `data/control.db`, and the runs in the directory next to it: the partition, the journals of
+    ended runs and the large payloads.
   </Step>
   <Step title="Point the SDK at it">
     ```bash
@@ -49,6 +51,63 @@ after its release.
   </Step>
 </Steps>
 
+The sandbox requires the time zone UTC: `rewind` starts itself again with `TZ=UTC` when your shell has another one.
+
+## A deployment
+
+A deployment runs one kind of process, `rewind server`, as many times as it needs. Every process is both the HTTP
+edge, which serves the API, the dashboard and `/mcp`, and a **node**, which runs the runs.
+
+| Piece | Holds |
+| --- | --- |
+| Postgres (`--store postgres://…`) | The control plane only: organizations, keys, roles, end users, toolsets, workflows, secrets, subscriptions, and which node owns which partition. It never holds a run |
+| A bucket on R2 or any S3-compatible service (`--bucket s3://…`) | The runs: the partitions, the archive of the journals of ended runs, and the payloads above 64 KiB |
+| The nodes | Nothing of their own: each holds some partitions while it lives, runs their scripts, sends their tool calls and fires their timers |
+
+- **Partitions.** The runs of a deployment are spread over 64 partitions (`--partitions`). Every run of an end user
+  lives in the partition of its namespace. One node owns each partition at a time; the nodes share them out, and a
+  node that joins takes some, one that stops hands its own over.
+- **Nodes notice each other through Postgres.** Each node holds a lock on its own id in the database
+  `--cluster-database` (`postgres` by default) on the same server, where nothing else is stored. When a node dies, its
+  lock comes free, and its partitions go to the others; nothing is lost, since every fact is in the bucket.
+- **The node link.** A node reaches the owner of a run's partition over the node link: HTTP/2 on the private network,
+  on its own port (`--link-listen`, `0.0.0.0:7070`), authenticated by the secret every node shares
+  (`--cluster-secret`). `--link-address` is where the others dial it, `host:port`.
+- **Scaling.** Add nodes: they take more partitions and run more activations at once (`--executors` per node, the
+  machine's cores by default).
+
+Every node of a deployment takes the same options, but its id and link address:
+
+```bash
+export REWIND_STORE="postgres://rewind:…@postgres.internal:5432/rewind"
+export REWIND_BUCKET="s3://rewind"
+export REWIND_S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com"
+export REWIND_S3_REGION=auto
+export REWIND_S3_ACCESS_KEY_ID=… REWIND_S3_SECRET_ACCESS_KEY=…
+export REWIND_CLUSTER_SECRET=…        # openssl rand -hex 32, once: the same on every node
+export REWIND_MASTER_KEY=…            # the same on every node
+export REWIND_PUBLIC_URL=https://rewind.example.com
+
+rewind server --listen 0.0.0.0:8080 --link-address "$(hostname):7070"
+```
+
+Postgres and the bucket are the only state: back them up, and a node can be replaced at any time.
+
+### Sandboxed nodes and pools
+
+Every node runs code written by a model, so every node is sandboxed: run it under gVisor, give its container a memory
+limit, and let it reach the outside only through an egress proxy. Two options change what a node takes on:
+
+| Start | Runs |
+| --- | --- |
+| `rewind server` | The HTTP edge, the owners of its partitions, and executors |
+| `rewind server --executors-only` | Executors only: the activations other nodes send it, for the determinism epochs of its build. No HTTP route but the node link |
+| `rewind server --pool <name>` | A pool of executors of its own, for an organization that needs one: the owners send that organization's activations there. The other organizations share the default pool |
+
+After an upgrade that changes the [determinism epoch](/concepts/journal#determinism-epochs), keep a few nodes of the
+previous build up with `--executors-only`: the runs of that epoch are executed there, until they end, at their TTL
+(`--max-ttl`, 365 days at most).
+
 ## Options
 
 Every option of `rewind server` also reads an environment variable. `rewind server --help` lists them all.
@@ -56,20 +115,35 @@ Every option of `rewind server` also reads an environment variable. `rewind serv
 | Option | Variable | What |
 | --- | --- | --- |
 | `--listen` | `REWIND_LISTEN` | Where the HTTP API listens. `127.0.0.1:8080` by default |
-| `--store` | `REWIND_STORE` | `turso:<path>` for one machine, or `postgres://…` for a deployment |
-| `--blobs` | `REWIND_BLOBS` | Large payloads and archives: a directory, or `s3://<bucket>` (with `--s3-endpoint` and the access keys of MinIO or R2) |
+| `--store` | `REWIND_STORE` | The control plane: `turso:<path>` for a single node, or `postgres://…` for a deployment |
+| `--bucket` | `REWIND_BUCKET` | The partitions, the archive and the blobs: a directory, or `s3://<bucket>`. With Turso, the database's directory by default; required with Postgres |
+| `--s3-endpoint`, `--s3-region` | `REWIND_S3_ENDPOINT`, `REWIND_S3_REGION` | The S3-compatible service: R2's endpoint with the region `auto`, MinIO's… |
+| `--s3-access-key-id`, `--s3-secret-access-key` | `REWIND_S3_ACCESS_KEY_ID`, `REWIND_S3_SECRET_ACCESS_KEY` | Its keys; the standard AWS variables otherwise |
+| `--s3-allow-http` | `REWIND_S3_ALLOW_HTTP` | Allows an `http://` endpoint, on a trusted network only |
+| `--partitions` | `REWIND_PARTITIONS` | The partitions of the deployment: 64 by default, 1 on Turso. Fixed once the deployment holds runs: more only serve the end users created after them |
+| `--cluster-secret` | `REWIND_CLUSTER_SECRET` | The secret every node shares, at least 32 characters: it authenticates the node link. Required with Postgres |
+| `--cluster-database` | `REWIND_CLUSTER_DATABASE` | The database of the same Postgres server where the nodes take their locks: `postgres` by default |
+| `--link-listen` | `REWIND_LINK_LISTEN` | Where the node link listens, on the private network: `0.0.0.0:7070` by default |
+| `--link-address` | `REWIND_LINK_ADDRESS` | Where the other nodes reach this one, `host:port`: the host name and the port of `--link-listen` by default |
+| `--node-id` | `REWIND_NODE_ID` | This node's id, letters, digits, `-`, `_` and `.`: the host name and the process id by default |
+| `--executors-only` | `REWIND_EXECUTORS_ONLY` | Run the activations other nodes send, and own no partition ([sandboxed nodes](#sandboxed-nodes-and-pools)) |
+| `--pool` | `REWIND_POOL` | The pool of executors this node belongs to; the shared pool without it |
+| `--executors` | `REWIND_EXECUTORS` | Activations run at once on this node: the machine's cores by default |
+| `--calls` | `REWIND_CALLS` | Tool calls this node sends at once: 256 by default |
 | `--master-key` | `REWIND_MASTER_KEY` | 32 random bytes in base64. Required |
 | `--previous-master-keys` | `REWIND_PREVIOUS_MASTER_KEYS` | Master keys replaced, which only decrypt: while [rotating the master key](#rotate-the-master-key) |
-| `--admin-key` | `REWIND_ADMIN_KEY` | The first API key, registered at start |
+| `--admin-key`, `--admin-tenant` | `REWIND_ADMIN_KEY`, `REWIND_ADMIN_TENANT` | The first API key, registered at start, and its organization (`default`) |
 | `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, scripts cannot get a `webhook(name)` URL, and `/mcp` has no OAuth sign-in |
-| `--role` | | `api`, `worker`, or both (the default) |
-| `--virtual-time` | | Timers fire as soon as nothing else can advance: for tests and demos |
+| `--retention` | `REWIND_RETENTION` | How long an ended run (its summary, its journals, its payloads) is kept, for the organizations this server creates: 365 days by default |
+| `--default-ttl`, `--max-ttl` | `REWIND_DEFAULT_TTL`, `REWIND_MAX_TTL` | The TTL of a run started without one (30 days), and the longest one a run may ask for (365 days) |
+| `--cache-instances`, `--cache-memory` | `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | The scripts a node keeps in memory after their activation, so the next one needs no replay: 500 and `4GiB` by default |
+| `--virtual-time`, `--real-time` | | Timers fire as soon as nothing else can advance, for tests and demos; kept until `--real-time`. A single node on Turso only |
 | `--allow-private-webhooks` | `REWIND_ALLOW_PRIVATE_WEBHOOKS` | Deliver lifecycle webhooks to private addresses and `http://`, for local development |
 | `--allow-internal-tools` | `REWIND_ALLOW_INTERNAL_TOOLS` | Let toolsets reach MCP servers and APIs on these internal hosts (`mcp.internal.example`, `*.svc.cluster.local`) or networks (`10.20.0.0/16`); never the whole private network. What such a server answers is never quoted to the tenant: an error gives its status, not its body |
+| `--allow-stdio` | `REWIND_ALLOW_STDIO` | Accept toolsets with stdio MCP servers: processes the server starts |
 | `--quota-*` | `REWIND_QUOTA_*` | The ceiling of the tenants this server creates: active runs, runs and CPU per month, scripts, TTL, script length |
-| `--otlp-endpoint` | `REWIND_OTLP_ENDPOINT` | Export traces, metrics and logs over OTLP |
-
-The sandbox requires `TZ=UTC`: the server refuses to start otherwise.
+| `--otlp-endpoint`, `--otlp-protocol` | `REWIND_OTLP_ENDPOINT`, `REWIND_OTLP_PROTOCOL` | Export traces, metrics and logs over OTLP, `http` (the default) or `grpc` |
+| `--log` | `REWIND_LOG` | What is logged on standard error, as `RUST_LOG` writes it: `info` by default |
 
 ## Rotate the master key
 
@@ -84,21 +158,36 @@ so the master key can be replaced without encrypting a secret again:
     export REWIND_MASTER_KEY="$(openssl rand -base64 32)"
     ```
 
-    Restart every server with both: a previous key only decrypts, and anything encrypted from now on uses the new one.
+    Restart every node with both: a previous key only decrypts, and anything encrypted from now on uses the new one.
   </Step>
   <Step title="Encrypt the data keys again">
     ```bash
-    TZ=UTC rewind server --store "$REWIND_STORE" --rewrap-data-keys
+    rewind server --rewrap-data-keys    # with a node's variables: REWIND_STORE, REWIND_BUCKET…
     ```
 
     It encrypts each data key still held under a previous key with the current one, one organization at a time,
-    prints how many it changed, and exits. The secrets themselves are not touched.
+    prints how many it changed, and exits. The secrets themselves are not touched, and the nodes keep serving
+    meanwhile.
   </Step>
   <Step title="Drop the old key">
     Remove it from `REWIND_PREVIOUS_MASTER_KEYS` and restart. A server refuses to start (exit 70) while a data key is
     held under a master key it was not given, and names that key's id: the old key cannot be removed too early.
   </Step>
 </Steps>
+
+## Move runs into partitions
+
+A deployment whose runs are in its Postgres tables moves them once, at the deploy of the build that keeps runs in
+partitions. That build's Postgres migration moves the run tables into a schema `legacy`; then run, once, with the
+nodes' variables:
+
+```bash
+rewind server migrate-runs
+```
+
+It writes the ended runs to the archive, with their summaries and the end of their retention, and the live ones into
+their partitions, each with its payloads; then it drops `legacy`. Watch it: if it stops, run it again, and each run it
+already moved is skipped. A moved run keeps its id.
 
 ## Production
 
@@ -110,27 +199,26 @@ platform does differently.
 cd deploy
 ./init.sh                       # writes .env with fresh secrets, once
 docker compose up -d --build    # builds the image from the repository
-./check-walls.sh                # checks that the workers' network walls hold
+./check-walls.sh                # checks that the nodes' network walls hold
 ```
 
-| Service | Role |
+| Piece | Role |
 | --- | --- |
-| `edge` | The only published port, in front of the API |
-| `api` | `rewind server --role api`: the HTTP API, keys, the dashboard, each organization's public keys (`/organizations/{tenant}/jwks.json`, without authentication). No V8 |
-| `worker-1`, `worker-2` | `rewind server --role worker`: script execution, tool dispatch (with the secrets the runs attach, and the signature of signed calls), timers, projections. Their only way out is the egress proxy |
-| `egress` | Forwards the workers' traffic to the addresses of allowed names only |
-| `postgres` | The journal, the read model and the encrypted secrets |
-| `minio` | Large payloads and archived journals (S3) |
-| `otel-collector` | Traces, metrics and logs of the API and the workers |
+| An edge proxy | The only published port, in front of the nodes' API |
+| The nodes | `rewind server`, each the HTTP API, the dashboard and each organization's public keys (`/organizations/{tenant}/jwks.json`, without authentication), and a node: the owners of its partitions, script execution, tool calls (with the secrets the runs attach, and the signature of signed calls), timers, webhooks. Their only way out is the egress proxy |
+| The egress proxy | Forwards the nodes' traffic to the addresses of allowed names only |
+| Postgres | The control plane: organizations, keys, toolsets, workflows, the encrypted secrets, the partitions' owners |
+| MinIO | The bucket: the partitions, the archive and the large payloads (R2 or S3 in your platform) |
+| An OpenTelemetry Collector | Traces, metrics and logs of the nodes |
 
-Workers are stateless: add more to scale. The workers can run under gVisor (the `gvisor` Compose profile). The
-[deployment's README](https://github.com/planchon/rewind.codes/blob/main/deploy/README.md) covers configuration,
-upgrades across determinism epochs, backups and load tests.
+The nodes can run under gVisor. The
+[deployment's README](https://github.com/planchon/rewind.codes/blob/main/deploy/README.md) covers its services,
+configuration, upgrades across determinism epochs, backups and load tests.
 
 ## Connect Claude to your server
 
 Your server is an MCP server at `{public-url}/mcp`, as the hosted one is at `https://api.rewind.codes/mcp`: add it to
-Claude as [Use Rewind from Claude](/claude) explains, with your URL.
+Claude as [Use Rewind from Claude](/claude) explains, with your URL. Every node serves it.
 
 - **With a key, at once.** `/mcp` takes an API key as `Authorization: Bearer`. On the development server above:
 
@@ -143,16 +231,14 @@ Claude as [Use Rewind from Claude](/claude) explains, with your URL.
   organization; give a key of its own to each client, with the least role that works.
 - **With each person's own sign-in.** Claude's connectors and Claude Code sign in through Rewind's OAuth, which needs
   `--public-url` and [WorkOS](https://workos.com) for the dashboard's sign-in and the consent page: `WORKOS_API_KEY`,
-  `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD` and `WORKOS_REDIRECT_URI`, all four or none. The consent page is the
-  dashboard's, at the origin of `WORKOS_REDIRECT_URI`. claude.ai reaches your server from Anthropic's network: its
-  public URL must be `https://` and reachable from the internet. Claude Code reaches it from your machine, so
-  `http://127.0.0.1:8080` works for it.
-- **With the API and the workers apart.** `/mcp`, `/oauth/*` and `/.well-known/*` are served by the `api` role. What
-  runs a script's tests (`test_script`, a fork of a workflow's run) goes back to the workers through the public URL,
-  so the edge routes `POST /v1/test`, `POST /v1/workflows` and `POST /v1/runs/{id}/fork` to them, as `deploy/`'s does.
+  `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD` and `WORKOS_REDIRECT_URI`, all four or none, on every node that serves
+  HTTP. The consent page is the dashboard's, at the origin of `WORKOS_REDIRECT_URI`. claude.ai reaches your server from
+  Anthropic's network: its public URL must be `https://` and reachable from the internet. Claude Code reaches it from
+  your machine, so `http://127.0.0.1:8080` works for it.
 
 ## The embedded server
 
-The `rewind` CLI also starts a server of its own for local work, on demand, in a `.rewind/` directory: Turso and local
-files, its API on a unix socket, no key. `rewind run script.ts` uses it when no `--url` is given. It stops after 10
-minutes without work; a sleeping run resumes at the next command. See [the CLI](/sdk/cli).
+The `rewind` CLI also starts a server of its own for local work, on demand, in a `.rewind/` directory: one node with
+one partition, the same code as a deployment's, on local files, with its API on a unix socket and no key.
+`rewind run script.ts` uses it when no `--url` is given. It stops after 10 minutes without work; a sleeping run resumes
+at the next command. See [the CLI](/sdk/cli#the-embedded-server).

@@ -77,5 +77,5 @@ exhausts it. CPU time is also counted per end user each month, for [quotas](/con
   hosts, and refuses private, loopback, link-local and cloud-metadata addresses, at every redirect.
 - **Your permission gates stay yours.** A tool with the `approval` policy is not sent until your harness approves
   that exact call.
-- **Workers are sandboxed too.** In production, the workers that run scripts reach the network only through an egress
-  proxy, and can run under gVisor.
+- **The nodes are sandboxed too.** In production, the nodes that run scripts reach the network only through an egress
+  proxy and run under gVisor, and an organization that needs it gets its own pool of nodes.

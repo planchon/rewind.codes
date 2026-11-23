@@ -1,6 +1,6 @@
 ---
 title: "How it works"
-description: "The harness, the Rewind API, the workers and the journal: what happens from the model's run_script to the run's result."
+description: "The harness, the Rewind API, the nodes and the journal: what happens from the model's run_script to the run's result."
 ---
 
 ## The pieces
@@ -17,32 +17,37 @@ flowchart LR
     worker["Host-tool worker"]
     hooks["Webhook receiver"]
   end
-  subgraph rewind["Rewind"]
+  subgraph rewind["Rewind: nodes"]
     direction TB
-    api["API server /v1"]
-    workers["Workers<br/>V8 sandboxes"]
+    api["API /v1"]
+    owners["Partition owners<br/>timers, tasks"]
+    executors["Executors<br/>V8 sandboxes"]
     dispatcher["Tool dispatcher"]
-    store[("Journal<br/>Postgres + S3")]
+    store[("Runs and journals<br/>object storage")]
   end
   mcp["Your MCP servers"]
 
   model -- "runs.start" --> api
-  worker -- "long-poll tasks" --> api
-  api -- "signed webhooks" --> hooks
-  api --> store
-  workers <--> store
-  workers --> dispatcher
+  worker -- "task stream" --> api
+  owners -- "signed webhooks" --> hooks
+  api --> owners
+  owners <--> store
+  owners <--> executors
+  owners --> dispatcher
   dispatcher -- "MCP, http" --> mcp
 ```
 
+Rewind runs as a set of identical **nodes**: each serves the API and executes runs.
+
 | Piece | Role |
 | --- | --- |
-| API server | Registers toolsets and workflows, starts runs, takes signals and approvals, serves reads and the dashboard. |
-| Workers | Execute scripts in V8 isolates, one activation at a time, and commit each step to the journal. |
-| Tool dispatcher | Sends the calls Rewind makes itself: MCP tools, API tools and the built-in `http` tool. The secrets a run attached, or the signature of your organization's key, are added here, never in the sandbox. |
-| Scheduler | Fires durable timers: `sleep`, `setTimeout`, signal timeouts, run deadlines. |
-| Journal | Postgres holds every run's history; large payloads go to S3. It is the only source of truth. |
-| Host-tool worker | Part of your harness, from the SDK. Executes the tools that live in your code. |
+| API | Registers toolsets and workflows, starts runs, takes signals and approvals, serves reads and the dashboard. Every node serves it, and sends each request about a run to the owner of the run's partition. |
+| Partition owner | The runs of an end user live in one partition, and one node owns each partition at a time. The owner writes everything its runs record, in batches, and decides what happens next: which run to activate, which call to send, which timer to fire. |
+| Executors | Execute scripts in V8 isolates, one activation at a time; the owner commits what the activation recorded. |
+| Tool dispatcher | Sends the calls Rewind makes itself: MCP tools, API tools and the built-in `http` tool. The secrets a run attached, or the signature of your organization's key, are added here, never in the sandbox. Calls to host tools are handed to your worker's task stream. |
+| Timers | Durable: `sleep`, `setTimeout`, signal timeouts, call timeouts, run deadlines, each kept with its run and fired by its owner. |
+| Runs and journals | Object storage (S3, R2) holds every run: its history in its partition while it lives, its journal in the archive once it ended, and its large payloads. It is the only source of truth. Postgres holds what you configure: organizations, keys, toolsets, workflows, secrets. |
+| Host-tool worker | Part of your harness, from the SDK. Holds a stream open, and executes the tools that live in your code. |
 
 ## The life of a run
 
@@ -62,8 +67,9 @@ flowchart LR
     a refused script comes back to the model with its diagnostics.
   </Step>
   <Step title="The run executes">
-    A worker runs the script in a sandbox. Each tool call becomes a task: Rewind sends MCP and `http` calls itself,
-    and your worker claims the calls to host tools. If the run ends within `wait`, its output goes back to the model.
+    An executor runs the script in a sandbox. Each tool call becomes a task: Rewind sends MCP and `http` calls itself,
+    and hands the calls to host tools to your worker's stream. If the run ends within `wait`, its output goes back to
+    the model.
     Otherwise the model gets the run's id and what it waits for: "waiting for signal `approval`".
   </Step>
   <Step title="It resumes, possibly days later">
@@ -95,11 +101,12 @@ sequenceDiagram
 ## Why a run can wait for days
 
 A run in Rewind holds no memory while it waits. Each time something from the outside arrives (a tool's result, a timer,
-a signal), a worker **activates** the run: it delivers the event to the script, lets the script run until it waits
-again, and commits what happened to the journal in one transaction.
+a signal), its owner **activates** the run: an executor delivers the event to the script and lets the script run until
+it waits again, and the owner commits what happened to the journal in one atomic batch.
 
-If the worker still has the run's isolate in memory, it delivers the event directly. If not (another worker, a restart,
-a deploy, ten days later), it starts a fresh isolate and **replays** the script against the journal: every `await`
+If the node still has the run's isolate in memory, it delivers the event directly. If not (another node took the
+partition over, a restart, a deploy, ten days later), it starts a fresh isolate and **replays** the script against the
+journal: every `await`
 that already has a recorded result returns it at once, without calling anything, until the script reaches the new
 event. Determinism guarantees that the replay takes the same path. [The journal](/concepts/journal) explains how.
 

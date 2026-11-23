@@ -3,8 +3,8 @@ title: "Tools"
 description: "Latency, error rate and retries of every tool your scripts call."
 ---
 
-The Tools view measures the tools behind your runs over a window: the last hour, 24 hours, 7 or 30 days, optionally for
-one toolset.
+The Tools view measures the tools behind your runs over a window: the last hour, 24 hours, 7 or 30 days, for the
+organization or one end user.
 
 <Frame>
   <img src="/images/dashboard/tools-light.webp" alt="The Tools view: calls, failures, retries and latency percentiles per tool, grouped by server" className="block dark:hidden" />
@@ -15,11 +15,12 @@ Search with the same query bar as the runs, which reads here:
 
 | Term | Keeps |
 | --- | --- |
-| `tool:github.close_issue`, `tool:github.*` | These tools, or the tools of a server |
-| `toolset:079b3789` | The calls of the runs of one toolset (its digest). A run's **Toolset** detail opens it |
+| `namespace:alice` | The calls of one end user's runs |
+| `tool:github.close_issue`, `tool:github.*` | This tool, or the tools of a server |
 | `close_issue` | The tools whose name holds this text |
 
-A leading `-` excludes, as for runs: `-tool:workflows.*`.
+The figures come from hourly counters: one end user or the organization, and the tools whose name starts with what a
+`tool:` term names.
 
 At the top: the calls completed, how many failed, the retries, and the slowest tool. Then each tool, grouped by MCP
 server, group of host tools and built-ins; a group folds under its row:
@@ -28,7 +29,7 @@ server, group of host tools and built-ins; a group folds under its row:
 | --- | --- |
 | **Calls**, **Failed** | How many calls completed, and how many failed, with their share |
 | **By kind** | The failures by kind: an error, a timeout, an unavailable server, an unknown outcome |
-| **Retries** | Attempts beyond the first: calls sent again after a transient failure or a lost claim |
+| **Retries** | Attempts beyond the first: calls sent again after a transient failure or an interruption |
 | **p50**, **p95**, **p99**, **max** | Latency, from the call to its result |
 | **Latency** | The same on one log scale for every tool: a dot at p50, a bar to p95, a tick at p99, a line to the slowest call |
 

@@ -9,7 +9,7 @@ description: "MCP servers, APIs from OpenAPI, host tools and built-ins; how a to
 | --- | --- | --- |
 | **MCP tools** | Rewind's dispatcher, an MCP client over streamable HTTP | Every tool of the MCP servers you list |
 | **API tools** | Rewind's dispatcher, from the API's OpenAPI document | Every operation of your backend's API, or another's: Rewind calls it, your backend runs no worker |
-| **Host tools** | Your [worker](/sdk/host-tools), which long-polls their calls | Functions that live in your harness: ask the user, call another model, query your database |
+| **Host tools** | Your [worker](/sdk/host-tools), which holds a stream open and is handed their calls | Functions that live in your harness: ask the user, call another model, query your database |
 | **Built-ins** | Rewind itself | `http` (the script's only network), `webhook(name)`, and `workflows.<name>.start` and `.signal` for each workflow the toolset pins |
 
 Results go back to the script, never to the model. Your harness is on the path only for its host tools.
@@ -75,8 +75,11 @@ Each tool has a policy, set when the toolset is registered:
 | `onInterruption` | `retry`: an interrupted call is sent again with the same key, up to 5 attempts. `at_most_once`: it fails with `outcomeUnknown` | `retry` |
 | `approval` | The call waits for your harness to approve it before it is sent | Off |
 | `timeout` | How long one attempt may take | 5 minutes for MCP and API tools |
-| `heartbeatTimeout` | How long a host tool's worker may go without a heartbeat | 60 seconds |
+| `heartbeatTimeout` | The grace of a host tool: how long a call handed on a worker's stream that closed waits for that worker to come back | 60 seconds |
 | `concurrency` | Calls of this tool in flight per run | The run's limit, 16 |
+
+The calls to one MCP server or API are also bounded across your organization: 8 in flight, or an API's own
+`concurrency`. Limits are invisible to the journal: a call waiting for a slot just waits.
 
 Declare `at_most_once` for a tool that ignores the idempotency key and must not run twice: sending an email, a payment
 without a key. An API's `POST` and `PATCH` are `at_most_once` unless the operation declares an `Idempotency-Key` header;
@@ -129,7 +132,7 @@ A tool that lives in your backend can reach it two ways, and both are first-clas
 
 | | API tools | Host tools |
 | --- | --- | --- |
-| Who connects | Rewind calls your API, from its OpenAPI document | Your [worker](/sdk/host-tools) long-polls its calls from Rewind |
+| Who connects | Rewind calls your API, from its OpenAPI document | Your [worker](/sdk/host-tools) holds a stream open to Rewind and is handed its calls |
 | Your backend | Exposes HTTPS, and checks the signature | Opens no port: it only makes outgoing requests |
 | How long a call may take | Within the tool's timeout | Days: a worker may hand a call to a person and answer later |
 | For | Your product's API, called as any client calls it | What lives in the harness: the user's answer, Claude Code, a call that waits |
@@ -171,4 +174,4 @@ document, and at each call. On a deployed server these connections go through th
 private, loopback, link-local and cloud-metadata addresses refused, the connection to the checked address. A redirect
 is followed only within the server's origin (307 or 308), since the secret or the signature would follow it. A
 self-hosted server lets chosen internal hosts and networks through with
-[`--allow-internal-tools`](/self-hosting#configuration); the embedded server reaches any address.
+[`--allow-internal-tools`](/self-hosting#options); the embedded server reaches any address.

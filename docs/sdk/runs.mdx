@@ -76,7 +76,7 @@ run.namespace; // the end user
 ```
 
 Values (`input`, `output`, tool arguments and results) are payloads: `{ digest, bytes, preview, value }`. A value larger
-than 256 KiB is left out; read it with `rewind.payloads.get(digest)`.
+than 256 KiB is left out; read it through its run with `rewind.payloads.get(digest, { run: run.id })`.
 
 ## Follow a run live
 
@@ -124,8 +124,9 @@ CLI.
 const page = await rewind.runs.list({ q: "@agent:triage status:failed,aborted started:>now-24h", sort: "activity" });
 for await (const run of rewind.runs.listAll({ q: "waiting:approval" })) console.log(run.id);
 
-const stats = await rewind.runs.stats({ q: "@agent:triage" }); // counts by status, series, facets
-const failures = await rewind.runs.failures({ q: "@agent:triage" }); // failed runs grouped by fingerprint
+const since = new Date(Date.now() - 24 * 3600_000);
+const stats = await rewind.runs.stats({ q: "namespace:user_ada", since }); // counts by status, series, facets
+const failures = await rewind.runs.failures({ since }); // failed runs grouped by fingerprint
 ```
 
 `sort` orders them: `started` (the default, the most recently started first), `oldest`, `activity` (the most recent
@@ -133,6 +134,11 @@ activity first), `wakes` (the soonest to wake by itself first), `duration` (the 
 ended last) or `calls` (the most tool calls first). Filters also exist as parameters: `status`, `labels`, `tool`,
 `script`, `error`, `workflow`, `startedBy`, `parent`, `quarantined`. A query that cannot be read is refused with `invalid-query`, and the error says where the term at fault
 is.
+
+The statistics (`runs.stats`, `runs.failures`, `scripts.list`, `tools.stats`) come from hourly counters: their scope is
+one end user (a single `namespace:` term in `q`) or the whole organization, over a window of whole hours (`since`,
+`until`). Any other term is refused with `invalid-query`, and a key or a token limited to labels is refused (403):
+counters carry no labels.
 
 ## Cancel a run
 

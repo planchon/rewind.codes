@@ -75,8 +75,8 @@ of your own. The complete program is [`examples/quickstart`](https://github.com/
   </Step>
 
   <Step title="Serve the host tool">
-    A worker long-polls the calls to your host tools, runs the handler and answers. It runs in your infrastructure:
-    the handler can reach your database, your users, another model.
+    A worker holds a stream open to Rewind, is handed the calls to your host tools, runs the handler and answers. It
+    runs in your infrastructure: the handler can reach your database, your users, another model.
 
     ```ts index.ts
     const worker = rewind.worker({

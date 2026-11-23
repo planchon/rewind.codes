@@ -192,7 +192,7 @@ carrying them, and the server enforces the scope too.
 same agent tools use the derived toolset: `agentTools.toolset` is its id.
 
 If your harness creates the agent tools for each turn, keep `agentTools.toolset` with the conversation and pass it as
-`toolset` the next time. The derived toolset has a new id: a worker started with `toolset: <first id>` does not claim
+`toolset` the next time. The derived toolset has a new id: a worker started with `toolset: <first id>` is not handed
 the tasks of its runs (start it without `toolset`). The secrets its runs attach do not depend on the toolset.
 
 ## Tests and suites

@@ -27,5 +27,8 @@ Below them:
   the same failure across many different scripts is one row.
 - **Failing tools**: the tools whose calls failed in the window.
 
-The query bar at the top narrows everything to a [query](/dashboard/query-language), such as `@agent:triage` or
-`namespace:user_ada`. **Save** keeps it, and the query and the window follow you into Observability.
+The figures come from hourly counters, kept per end user: the query bar at the top narrows them to one end user,
+`namespace:user_ada`, and the organization's are shown otherwise. Every other term of a
+[query](/dashboard/query-language), such as `@agent:triage`, applies to the runs a figure opens. **Save** keeps the
+query, and the query and the window follow you into Observability. Counters carry no labels: the figures are not
+available to a member limited to labels.

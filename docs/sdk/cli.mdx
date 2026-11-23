@@ -39,7 +39,8 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file, prints its declarations, searches its tools |
 | `rewind secrets list\|put\|delete\|usage [name] [--namespace <name>]` | The organization's [secrets](/sdk/secrets), or a namespace's: `put` reads the value from standard input, never from an argument (`rewind secrets put github --namespace user_2fQ81 < token.txt`); `usage` says what deleting one would stop |
 | `rewind namespaces list\|show\|rename\|quotas\|delete` | The end users and their use, one end user, its display name (`rename user_2fQ81 "Acme Corp"`; without one, removes it), their limits (or the defaults with `--defaults`), erasure |
-| `rewind server` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
+| `rewind server [--embedded] [--executors-only] [--pool name] [--virtual-time]` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
+| `rewind server migrate-runs` | Once, at the deploy that moves runs to partitions: see [Self-hosting](/self-hosting#move-runs-into-partitions) |
 | `rewind mcp` | Serves the [agent tools](/sdk/agent-tools) over MCP on standard input and output, against the embedded server: to debug them with an MCP client, such as the MCP Inspector or Claude Code on this machine. Never a remote server: Claude reaches those [over HTTP](/claude) |
 
 A toolset file holds what `rewind.toolsets.create` takes, as JSON. A tests file is a JSON array of
@@ -74,13 +75,21 @@ Scripts in CI branch on the exit code:
 ## The embedded server
 
 Without `--url`, the CLI uses the server of the `.rewind/` directory (`--dir` picks another), and starts it when needed:
-Turso and local files, its API on a unix socket, no key, the end user `local` unless you name one. It stops after 10
-minutes without requests or work in progress; a sleeping run resumes at the next command.
+one node, which owns the one partition, on local files, with its API on a unix socket, no key, and the end user `local`
+unless you name one. It runs the code a deployment runs. It stops after 10 minutes without requests or work in
+progress; a sleeping run resumes at the next command.
 
 ```text
 project/
   script.ts
   script.tests.json   the tests of script.ts, for rewind test
   rewind.tools.json   static responses per tool, answered last in tests
-  .rewind/            created by the first command: journal.db, blobs/, server.sock…
+  .rewind/            created by the first command
+    server.sock       the API, mode 0600
+    control.db        the control plane: toolsets, workflows, secrets, end users
+    master.key        the key the secrets are encrypted with, made at the first start
+    partitions/0/     the partition: every run's records
+    runs/             the journals of ended runs
+    blobs/            payloads above 64 KiB
+    tests/            stored tests
 ```

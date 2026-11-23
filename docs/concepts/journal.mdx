@@ -18,7 +18,8 @@ A run's journal is the ordered list of everything that crossed the sandbox's wal
 
 Each entry carries its **callsite**, the line of the script that caused it, which is how the dashboard puts each call
 beside its line. Values (arguments, results, signals, the input and output) are identified by the SHA-256 of their
-canonical JSON; values above 64 KiB are stored apart, in S3.
+canonical JSON; values above 64 KiB are stored apart, as objects of the run in object storage. When a run ends, its
+journal is sealed into the archive, where it never changes.
 
 <Note>
   **The journal is the only source of truth.** The dashboard, the OpenTelemetry traces, the metrics and the webhooks
@@ -27,13 +28,13 @@ canonical JSON; values above 64 KiB are stored apart, in S3.
 
 ## Replay
 
-What runs inside the sandbox is computed again; what came from outside is read from the journal. To rebuild a run, a
-worker starts the script from the beginning with the run's input and seed. Each `await` that has a recorded outcome
+What runs inside the sandbox is computed again; what came from outside is read from the journal. To rebuild a run, an
+executor starts the script from the beginning with the run's input and seed. Each `await` that has a recorded outcome
 returns it immediately. When the script reaches the end of the journal, it continues live.
 
-This is how a run survives a crash, a deploy, or ten days of `sleep`: nothing but the journal is needed. Workers keep
-recently active runs in memory, so most activations need no replay at all; replay is what makes losing that memory
-harmless.
+This is how a run survives a crash, a deploy, or ten days of `sleep`: nothing but the journal is needed. Each node
+keeps recently active runs in memory, so most activations need no replay at all; replay is what makes losing that
+memory harmless.
 
 It also means that **any run can be re-executed**, anywhere, with the same result:
 
