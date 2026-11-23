@@ -1,6 +1,6 @@
 [package]
 name = "rewind-architecture-tests"
-description = "Checks the crate layering of Rewind (archi/07-code-architecture.md) from cargo metadata."
+description = "Checks the crate layering of Rewind (archi/07-code-architecture.md) from cargo metadata, and from the sources where unsafe code and timers may be."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
