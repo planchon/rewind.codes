@@ -253,10 +253,12 @@ pub(super) async fn runs(
                 .map(|(kind, runs)| (crate::http::search::wait_name(*kind).to_owned(), *runs)),
             top_n,
         ),
+        // What erased namespaces consumed counts in the totals, under no namespace.
         namespaces: top(
             counters
                 .namespaces
                 .iter()
+                .filter(|(namespace, _)| !namespace.is_erased())
                 .map(|(namespace, runs)| (namespace.to_string(), runs.started)),
             top_n,
         ),

@@ -373,11 +373,17 @@ pub enum Change {
         run: RunRef,
     },
     /// Erases what the partition keeps of a namespace beside its runs: its hourly counters, its
-    /// observed shapes and its start keys. A `Conflict` while a run of the namespace is kept
+    /// observed shapes and its start keys; what each hour's counters consumed
+    /// ([`Counters::consumed`]) is added to the tenant's `erased` for that hour
+    /// ([`NamespaceName::erased`]). A `Conflict` while a run of the namespace is kept
     /// (`archi/06-storage-and-scale.md`, "Retention and deletion").
+    ///
+    /// [`Counters::consumed`]: crate::ports::Counters::consumed
+    /// [`NamespaceName::erased`]: crate::ports::NamespaceName::erased
     EraseNamespace {
         tenant: TenantId,
         namespace: NamespaceName,
+        erased: NamespaceName,
     },
     /// Writes the run's summary in the index as it is now, outside an activation: what its
     /// waits' tool tasks became (approved, parked, deferred, in flight again). A change to a run

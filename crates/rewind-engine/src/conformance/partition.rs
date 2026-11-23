@@ -2113,7 +2113,9 @@ pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
     assert_eq!(summary.summary.status, RunStatus::Pending);
 }
 
-/// A namespace's counters, shapes and start keys go once the partition holds none of its runs.
+/// A namespace's counters, shapes and start keys go once the partition holds none of its runs;
+/// what it consumed stays in its tenant's counts, under the partition's
+/// [`NamespaceName::erased`], without its failures, tools or scripts.
 pub async fn erase_namespace_drops_its_counters_once_it_holds_no_run<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
     let kept = run(1);
@@ -2122,9 +2124,33 @@ pub async fn erase_namespace_drops_its_counters_once_it_holds_no_run<S: Partitio
         vec![create_with(head(&kept, &alice()), Some("start-1"))],
     )
     .await;
+    let mut consumed = created(2);
+    consumed.cpu = Duration::from_millis(5);
+    let mut counted = consumed.clone();
+    counted.failures.insert(
+        "TypeError: alice's message".into(),
+        FailureCounts {
+            signature: "TypeError: alice's message".into(),
+            error: "TypeError".into(),
+            runs: 1,
+            ..FailureCounts::default()
+        },
+    );
+    commit(
+        &log,
+        vec![Change::Counters(vec![hour_delta(
+            &acme(),
+            &alice(),
+            Hour::of(T0),
+            counted,
+        )])],
+    )
+    .await;
+    let erased = NamespaceName::erased(log.partition());
     let erase_alice = Change::EraseNamespace {
         tenant: acme(),
         namespace: alice(),
+        erased: erased.clone(),
     };
     let refused = log.commit(Batch::new().with(erase_alice.clone())).await;
     assert!(
@@ -2154,6 +2180,29 @@ pub async fn erase_namespace_drops_its_counters_once_it_holds_no_run<S: Partitio
         counters,
         Counters::default(),
         "nothing is left of alice's counters"
+    );
+    let erased = log
+        .counters(
+            &Scope::Namespace {
+                tenant: acme(),
+                namespace: erased,
+            },
+            window,
+        )
+        .await
+        .expect("counters");
+    assert_eq!(
+        (erased.created, erased.cpu, erased.failures.len()),
+        (consumed.created, consumed.cpu, 0),
+        "what alice consumed is the tenant's erased namespaces': {erased:?}"
+    );
+    let tenant = log
+        .counters(&Scope::Tenant(acme()), window)
+        .await
+        .expect("counters");
+    assert!(
+        tenant.created >= consumed.created && tenant.cpu >= consumed.cpu,
+        "the tenant's counts keep it: {tenant:?}"
     );
 }
 

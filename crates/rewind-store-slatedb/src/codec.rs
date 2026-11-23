@@ -35,7 +35,7 @@ pub(crate) fn tenant(text: String) -> Result<TenantId, PartitionError> {
 }
 
 pub(crate) fn namespace(text: String) -> Result<NamespaceName, PartitionError> {
-    NamespaceName::new(text).map_err(|err| corrupt(err.to_string()))
+    NamespaceName::stored(text).map_err(|err| corrupt(err.to_string()))
 }
 
 /// Encodes a record.

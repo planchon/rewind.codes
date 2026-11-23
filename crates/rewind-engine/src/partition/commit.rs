@@ -73,6 +73,11 @@ pub(crate) enum After<P: Plane> {
     Owner(OwnerMsg<P>),
     /// The run metrics of an activation's entries.
     Measure(Vec<crate::metrics::RunMeasurement>),
+    /// The run of a start key is created: the starts with the key that waited for it get it.
+    Started {
+        slot: (TenantId, NamespaceName, String),
+        run: RunRef,
+    },
 }
 
 impl<P: Plane> Unit<P> {
@@ -332,6 +337,11 @@ impl<P: Plane> Owner<P> {
                 After::Queue(run) | After::Idle(run) => {
                     self.dispatch(OwnerMsg::Internal(Internal::Queue(run)));
                 }
+                After::Started { slot, .. } => {
+                    for reply in self.starting.remove(&slot).unwrap_or_default() {
+                        self.reply(reply, PartitionReply::Started(Err(refusal.clone())));
+                    }
+                }
                 _ => {}
             }
         }
@@ -385,6 +395,17 @@ impl<P: Plane> Owner<P> {
             After::Measure(measurements) => {
                 for measurement in &measurements {
                     measurement.emit();
+                }
+            }
+            After::Started { slot, run } => {
+                for reply in self.starting.remove(&slot).unwrap_or_default() {
+                    self.reply(
+                        reply,
+                        PartitionReply::Started(Ok(crate::ports::Created {
+                            run: run.clone(),
+                            created: false,
+                        })),
+                    );
                 }
             }
         }

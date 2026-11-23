@@ -528,14 +528,20 @@ impl<P: Plane> Owner<P> {
         reply: ReplyTo,
         admission: Result<(), Refusal>,
     ) {
-        let waiting = self.starting_done(&start);
         if let Err(refusal) = admission {
+            let waiting = self.starting_done(&start);
             for reply in std::iter::once(reply).chain(waiting) {
                 self.reply(reply, PartitionReply::Started(Err(refusal.clone())));
             }
             return;
         }
         let run = start.run.clone();
+        // The starts with the same key, those that waited and those that come until the run is
+        // durable, get it once it is: until then the partition does not hold its start key.
+        let slot = start
+            .start_key
+            .clone()
+            .map(|key| (run.tenant.clone(), start.namespace.clone(), key));
         let mut unit = Unit::new();
         self.create(&mut unit, *start);
         let created = Created {
@@ -543,14 +549,8 @@ impl<P: Plane> Owner<P> {
             created: true,
         };
         unit.then(After::Reply(reply, PartitionReply::Started(Ok(created))));
-        for reply in waiting {
-            unit.then(After::Reply(
-                reply,
-                PartitionReply::Started(Ok(Created {
-                    run: run.clone(),
-                    created: false,
-                })),
-            ));
+        if let Some(slot) = slot {
+            unit.then(After::Started { slot, run });
         }
         self.push(unit);
     }
@@ -1741,9 +1741,19 @@ impl<P: Plane> Owner<P> {
         };
         if runs.is_empty() {
             let mut unit = Unit::new();
+            let erased = NamespaceName::erased(self.partition);
             unit.change(Change::EraseNamespace {
                 tenant: tenant.clone(),
                 namespace: name.clone(),
+                erased: erased.clone(),
+            });
+            // What the namespace consumed is the tenant's erased namespaces' now: its organization
+            // actor counts it in the tenant's ceiling.
+            unit.then(After::Report {
+                tenant: tenant.clone(),
+                namespace: erased,
+                included: Vec::new(),
+                abandoned: Vec::new(),
             });
             let plane = Arc::clone(&self.plane);
             let partition = self.partition;

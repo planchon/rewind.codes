@@ -3696,8 +3696,8 @@ export interface components {
         };
         /**
          * @description A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,
-         *     `-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: it stands for the tenant in
-         *     the store's usage and alerts.
+         *     `-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a name: it
+         *     stands for the tenant in the store's usage and alerts.
          * @example user_2fQ81
          */
         NamespaceName: string;

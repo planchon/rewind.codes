@@ -382,6 +382,20 @@ impl Counters {
             .add(&counts.runs);
     }
 
+    /// What the counts of an erased namespace leave in its tenant's: what it consumed (runs
+    /// created, started and ended, their durations, CPU time, the runs of each workflow), not
+    /// its failures, tools or scripts.
+    pub fn consumed(&self) -> Counters {
+        Counters {
+            created: self.created,
+            runs: self.runs.clone(),
+            durations: self.durations.clone(),
+            cpu: self.cpu,
+            workflows: self.workflows.clone(),
+            ..Counters::default()
+        }
+    }
+
     fn add_without_namespaces(&mut self, other: &Counters) {
         self.created += other.created;
         self.runs.add(&other.runs);

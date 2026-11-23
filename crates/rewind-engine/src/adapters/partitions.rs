@@ -246,7 +246,11 @@ impl PartitionState {
                 self.erase(&run);
                 Ok(())
             }
-            Change::EraseNamespace { tenant, namespace } => {
+            Change::EraseNamespace {
+                tenant,
+                namespace,
+                erased: into,
+            } => {
                 if self.runs.values().any(|records| {
                     records.head.run.tenant == tenant && records.head.namespace == namespace
                 }) {
@@ -254,8 +258,22 @@ impl PartitionState {
                         "the namespace {namespace} still holds runs in this partition"
                     )));
                 }
+                let erased: Vec<(Hour, Counters)> = self
+                    .hours
+                    .iter()
+                    .filter(|((of, name, _), _)| *of == tenant && *name == namespace)
+                    .map(|((_, _, hour), counts)| (*hour, counts.consumed()))
+                    .collect();
                 self.hours
                     .retain(|(of, name, _), _| !(*of == tenant && *name == namespace));
+                for (hour, counts) in erased {
+                    self.count(CounterDelta::Hour {
+                        tenant: tenant.clone(),
+                        namespace: into.clone(),
+                        hour,
+                        counts,
+                    });
+                }
                 self.shapes
                     .retain(|(of, name, _), _| !(*of == tenant && *name == namespace));
                 self.start_keys

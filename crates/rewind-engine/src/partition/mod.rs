@@ -883,6 +883,14 @@ impl<P: Plane> Owner<P> {
                 ));
             }
         }
+        for reply in std::mem::take(&mut self.starting).into_values().flatten() {
+            self.out.push(Effect::Reply(
+                reply,
+                NodeReply::NotOwner {
+                    partition: self.partition,
+                },
+            ));
+        }
         for unit in std::mem::take(&mut self.pending) {
             for reply in unit.replies() {
                 self.out.push(Effect::Reply(

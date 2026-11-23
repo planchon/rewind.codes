@@ -21,8 +21,8 @@ use crate::common::{Duration, Labels, Timestamp};
 // Names
 
 /// A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,
-/// `-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: it stands for the tenant in
-/// the store's usage and alerts.
+/// `-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a name: it
+/// stands for the tenant in the store's usage and alerts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(try_from = "String", into = "String")]
 #[schema(value_type = String, pattern = r"^[A-Za-z0-9._:@-]{1,128}$", example = "user_2fQ81")]
@@ -37,7 +37,7 @@ impl NamespaceName {
             return Err(Error::invalid(
                 "namespace",
                 format!(
-                    "{name:?}: expected 1 to {} ASCII letters, digits, -, _, ., : and @",
+                    "{name:?}: expected 1 to {} ASCII letters, digits, -, _, ., : and @, not starting with rewind:",
                     Self::MAX_LEN
                 ),
             ));
@@ -50,9 +50,10 @@ impl NamespaceName {
     }
 }
 
-/// Whether `name` is a valid namespace name.
+/// Whether `name` is a valid namespace name. `rewind:` starts the names Rewind keeps for itself.
 pub fn is_namespace_name(name: &str) -> bool {
     (1..=NamespaceName::MAX_LEN).contains(&name.len())
+        && !name.starts_with("rewind:")
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:@".contains(&byte))

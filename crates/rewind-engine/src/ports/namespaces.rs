@@ -16,13 +16,16 @@ use super::tenancy::{Tenant, TenantId};
 const DAY_MS: u64 = 86_400_000;
 
 /// A namespace: the customer's own id for one of its end users. 1 to 128 ASCII letters,
-/// digits, `-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: an alert of the
-/// tenant's ceiling names it in its id.
+/// digits, `-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a
+/// name: an alert of the tenant's ceiling names it in its id. [`Self::ERASED`] holds what erased
+/// namespaces consumed, in their tenant's counts ([`Self::erased`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NamespaceName(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid namespace {0:?}: expected 1 to 128 ASCII letters, digits, -, _, ., : and @")]
+#[error(
+    "invalid namespace {0:?}: expected 1 to 128 ASCII letters, digits, -, _, ., : and @, not starting with rewind:"
+)]
 pub struct InvalidNamespace(pub String);
 
 impl NamespaceName {
@@ -34,9 +37,16 @@ impl NamespaceName {
     /// The namespace the CLI uses against its own embedded server when none is given.
     pub const LOCAL: &'static str = "local";
 
+    /// The start of the names under which a partition keeps what its tenants' erased namespaces
+    /// consumed (`archi/06-storage-and-scale.md`, "Retention and deletion": deleting an end user
+    /// gives nothing back to the tenant's ceiling). No namespace can have one: names starting
+    /// with `rewind:` are refused.
+    pub const ERASED: &'static str = "rewind:erased:";
+
     pub fn new(name: impl Into<String>) -> Result<Self, InvalidNamespace> {
         let name = name.into();
         let valid = (1..=Self::MAX_LEN).contains(&name.len())
+            && !name.starts_with("rewind:")
             && name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:@".contains(&byte));
@@ -50,6 +60,28 @@ impl NamespaceName {
     /// [`Self::MIGRATED`].
     pub fn migrated() -> Self {
         Self(Self::MIGRATED.to_owned())
+    }
+
+    /// The name under which `partition` keeps what its tenants' erased namespaces consumed:
+    /// one per partition, as every namespace lives in one.
+    pub fn erased(partition: rewind_core::PartitionId) -> Self {
+        Self(format!("{}{partition}", Self::ERASED))
+    }
+
+    /// Whether the name is one of [`Self::erased`].
+    pub fn is_erased(&self) -> bool {
+        self.0.starts_with(Self::ERASED)
+    }
+
+    /// A name as a store keeps it: a namespace's, or one of [`Self::erased`].
+    pub fn stored(name: impl Into<String>) -> Result<Self, InvalidNamespace> {
+        let name = name.into();
+        if let Some(partition) = name.strip_prefix(Self::ERASED)
+            && partition.parse::<u16>().is_ok()
+        {
+            return Ok(Self(name));
+        }
+        Self::new(name)
     }
 
     pub fn as_str(&self) -> &str {

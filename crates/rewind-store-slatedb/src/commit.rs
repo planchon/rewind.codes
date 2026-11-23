@@ -440,7 +440,11 @@ impl Apply<'_> {
             }
             Change::Seal { run, attempt } => self.seal(&run, attempt).await,
             Change::Erase { run } => self.erase(&run).await,
-            Change::EraseNamespace { tenant, namespace } => {
+            Change::EraseNamespace {
+                tenant,
+                namespace,
+                erased,
+            } => {
                 let runs =
                     keys::index_family(keys::index_of(&tenant, Some(&namespace)), RunOrder::Oldest);
                 if self.any(&runs).await? {
@@ -449,14 +453,23 @@ impl Apply<'_> {
                     )));
                 }
                 let hours = keys::hours_of(&tenant, &namespace);
-                for (key, _) in self.scan(&hours).await? {
+                for (key, value) in self.scan(&hours).await? {
                     let hour = key
                         .get(hours.as_bytes().len()..)
                         .and_then(|rest| rest.try_into().ok())
                         .map(|bytes: [u8; 4]| rewind_engine::ports::Hour(u32::from_be_bytes(bytes)))
                         .ok_or_else(|| codec::corrupt("an hour's key"))?;
+                    let counts = codec::counters_of(decode::<record::Counters>(&value)?);
                     self.delete(&key)?;
                     self.delete(keys::tenant_hour(&tenant, hour, &namespace).as_bytes())?;
+                    // What the namespace consumed stays in its tenant's counts.
+                    self.count(CounterDelta::Hour {
+                        tenant: tenant.clone(),
+                        namespace: erased.clone(),
+                        hour,
+                        counts: counts.consumed(),
+                    })
+                    .await?;
                 }
                 self.delete_all(&keys::shapes_of(&tenant, Some(&namespace)))
                     .await?;
