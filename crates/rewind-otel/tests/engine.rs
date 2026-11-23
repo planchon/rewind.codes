@@ -105,8 +105,8 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         .collect();
     ids.sort();
     let mut expected = vec![
-        span_id(run.id, SpanKey::ActivationAt(0)).to_string(),
-        span_id(run.id, SpanKey::ActivationAt(2)).to_string(),
+        span_id(run.id, SpanKey::Activation(0)).to_string(),
+        span_id(run.id, SpanKey::Activation(2)).to_string(),
     ];
     expected.sort();
     assert_eq!(ids, expected);

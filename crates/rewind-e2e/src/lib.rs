@@ -44,7 +44,7 @@ use rewind_core::{
     McpServer, McpTransport, RunId, RunOutcome, RunState, Script, SecretPlacement, SecretRef,
     Timestamp, Tool, ToolAuth, ToolRoute, Toolset, Workflow, WorkflowSchemas,
 };
-use rewind_engine::adapters::{MemoryBlobs, SeededEntropy};
+use rewind_engine::adapters::SeededEntropy;
 use rewind_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_runtime::V8Executor;
@@ -505,7 +505,7 @@ pub async fn replay_journal(case: &Case, journal: &JournalDocument, script: &Scr
         toolset: &journal.toolset,
         history: &journal.entries,
     };
-    match replay::replay(&executor, &MemoryBlobs::new(), input).await {
+    match replay::replay(&executor, &replay::InJournal, input).await {
         Ok(rebuilt) => Replayed::Matches(rebuilt.end),
         Err(ReplayError::NonDeterminism(mismatch)) => Replayed::Fails(mismatch.to_string()),
         Err(err) => Replayed::Fails(err.to_string()),
