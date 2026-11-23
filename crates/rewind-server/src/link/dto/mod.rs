@@ -84,8 +84,10 @@ pub(crate) fn tenant(text: String) -> Result<TenantId, Invalid> {
     TenantId::new(text).map_err(Invalid::new)
 }
 
+/// A namespace as the owners send it: a namespace's name, or the name under which a partition
+/// keeps what its tenants' erased namespaces consumed ([`NamespaceName::erased`]).
 pub(crate) fn namespace(text: String) -> Result<NamespaceName, Invalid> {
-    NamespaceName::new(text).map_err(Invalid::new)
+    NamespaceName::stored(text).map_err(Invalid::new)
 }
 
 pub(crate) fn node(text: String) -> Result<NodeId, Invalid> {

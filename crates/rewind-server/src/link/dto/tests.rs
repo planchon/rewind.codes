@@ -912,6 +912,18 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             abandoned: vec![run_id(2)],
             at: T,
         }),
+        // What a partition keeps of its tenants' erased namespaces is reported as theirs.
+        OrgRequest::Counts(CountsReport {
+            partition: PartitionId::new(3),
+            epoch: PartitionEpoch(7),
+            namespace: NamespaceName::erased(PartitionId::new(3)),
+            gauges: gauges(),
+            created_this_month: 2,
+            cpu_this_month: Duration::new(1, 0),
+            included: Vec::new(),
+            abandoned: Vec::new(),
+            at: T,
+        }),
         OrgRequest::Slot(SlotRequest {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),

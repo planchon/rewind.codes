@@ -523,6 +523,46 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
     let _ = PartitionReply::Done(Ok(true));
 }
 
+/// A stream held at a node that dies is closed with it: no edge is left to say so, and the
+/// organization actor learns it from the members. Its tasks get their grace, then are handed to
+/// a stream of another node.
+#[tokio::test]
+async fn a_stream_at_a_node_that_dies_has_its_tasks_handed_again_after_the_grace() {
+    let (mut world, dying) = streams_world().await;
+    let survivor = node("node-a");
+    world.at = survivor.clone();
+    let mut first = world
+        .driver
+        .attach_stream(&dying, TenantId::local(), attach("s1", "worker-1", &dying))
+        .unwrap();
+    world.settle().await;
+    let run = world.run(host_call(Interruption::Retry)).await;
+    let handed = drain(&mut first);
+    assert_eq!(handed.len(), 1);
+
+    world.driver.kill(&dying);
+    world.settle().await;
+    let mut second = world
+        .driver
+        .attach_stream(
+            &survivor,
+            TenantId::local(),
+            attach("s2", "worker-2", &survivor),
+        )
+        .unwrap();
+    world.advance(61_000);
+    world.settle().await;
+    let again = drain(&mut second);
+    assert_eq!(again.len(), 1, "handed again to the live stream: {again:?}");
+    assert_eq!(again[0].task.run, run);
+    world
+        .complete(&again[0].token, json!({ "answer": 1 }))
+        .await
+        .unwrap();
+    world.settle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+}
+
 #[tokio::test]
 async fn a_tenant_s_activations_run_on_its_pool_and_the_others_on_the_shared_one() {
     let acme = TenantId::new("acme").unwrap();

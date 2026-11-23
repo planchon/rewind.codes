@@ -61,6 +61,9 @@ pub(crate) enum OrgMsg {
     Forget {
         namespace: Option<NamespaceName>,
     },
+    /// The nodes of the cluster: a stream held at a node that left is closed, as its edge would
+    /// have said had it lived; its tasks get their grace.
+    Members(Vec<crate::ports::NodeId>),
 }
 
 impl fmt::Debug for OrgMsg {
@@ -70,6 +73,7 @@ impl fmt::Debug for OrgMsg {
             OrgMsg::Limits { namespace, .. } => write!(f, "Limits({namespace})"),
             OrgMsg::Grace { stream } => write!(f, "Grace({stream:?})"),
             OrgMsg::Forget { namespace } => write!(f, "Forget({namespace:?})"),
+            OrgMsg::Members(nodes) => write!(f, "Members({})", nodes.len()),
         }
     }
 }
@@ -236,6 +240,17 @@ impl<P: Plane> OrgActor<P> {
                 (None, _) => self.limits = None,
                 (Some(_), None) => {}
             },
+            OrgMsg::Members(nodes) => {
+                let gone: Vec<StreamId> = self
+                    .streams
+                    .iter()
+                    .filter(|(_, stream)| stream.open && !nodes.contains(&stream.attach.node))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for stream in gone {
+                    self.detach(&stream, now, &mut out);
+                }
+            }
         }
         out
     }

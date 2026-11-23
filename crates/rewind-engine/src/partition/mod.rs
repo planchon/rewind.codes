@@ -551,6 +551,12 @@ impl<P: Plane> Owner<P> {
             OwnerMsg::Step(step) => self.step(*step),
             OwnerMsg::ControlPlane(change) => self.control_plane(change),
             OwnerMsg::Nodes(nodes) => {
+                // The streams of the nodes that left are closed for the organization actors.
+                let members: Vec<NodeId> = nodes.iter().map(|node| node.id.clone()).collect();
+                let tenants: Vec<TenantId> = self.orgs.keys().cloned().collect();
+                for tenant in tenants {
+                    self.org(tenant, OrgMsg::Members(members.clone()));
+                }
                 self.nodes = nodes;
                 let waiting: Vec<RunId> = self.awaiting_nodes.iter().copied().collect();
                 for run in waiting {
