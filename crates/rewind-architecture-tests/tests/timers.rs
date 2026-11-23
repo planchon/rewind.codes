@@ -25,9 +25,6 @@ enum Kind {
     Backoff,
     /// A clock that reads no store: it bounds a wait, or wakes what reads nothing on a timer.
     Clock,
-    /// A poll still in the sources: a finding to remove, listed so that the guard holds against
-    /// any new one. Its entry goes with it.
-    Poll,
 }
 
 /// A function of the workspace allowed its timers: its file, its name, what for, and why.
@@ -77,18 +74,18 @@ const EXCEPTIONS: &[Exception] = &[
                  again on a change of the control plane, never on this timer",
     },
     Exception {
+        file: "crates/rewind-server/src/wiring/jobs.rs",
+        function: "daily",
+        kind: Kind::Clock,
+        reason: "the control plane's daily jobs (tokens and connections to delete, tests no \
+                 version references): they read the store once a day, nothing between",
+    },
+    Exception {
         file: "crates/rewind-server/src/serve.rs",
         function: "control_plane",
         kind: Kind::Backoff,
         reason: "the control plane's change stream that cannot be listened to again is tried \
                  after a second",
-    },
-    Exception {
-        file: "crates/rewind-server/src/wiring/webhooks.rs",
-        function: "send_before",
-        kind: Kind::Backoff,
-        reason: "the wait between the attempts of one delivery after a failure (the server sends \
-                 one attempt: the owner tries a failed delivery again on a timer of its wheel)",
     },
     Exception {
         file: "crates/rewind-openapi/src/dispatch.rs",
@@ -135,14 +132,6 @@ const EXCEPTIONS: &[Exception] = &[
         kind: Kind::Backoff,
         reason: "a held read of a run that failed is sent again; the wait itself is held by the \
                  server",
-    },
-    Exception {
-        file: "crates/rewind-load/src/load.rs",
-        function: "await_projection",
-        kind: Kind::Poll,
-        reason: "reads every completed run again every 500 ms until its attempts show a retry, \
-                 as a read model lagging behind the journal needed: a run's attempts are durable \
-                 with the batch that changed them, so one read after the run ended suffices",
     },
 ];
 

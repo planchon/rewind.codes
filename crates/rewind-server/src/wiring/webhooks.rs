@@ -4,10 +4,9 @@
 //! Each delivery is a `POST` of the API's `WebhookEvent` (`{type, timestamp, data}`), signed
 //! following Standard Webhooks with the subscription's secret: `webhook-id` (the event's
 //! deterministic id, the same on every retry), `webhook-timestamp` and `webhook-signature`.
-//! A delivery that fails (a network error, a timeout, a 408, 429 or 5xx) is tried again within
-//! the sender's [`Retries`]; another 4xx, a redirect and a refused address are not. A node's
-//! sender makes one attempt: the owner of the run's partition keeps the delivery in its outbox
-//! and tries it again on a timer (`archi/06-storage-and-scale.md`, "The outbox").
+//! The sender makes one attempt per delivery, of at most [`DELIVERY_TIMEOUT`]: the owner of the
+//! run's partition keeps a delivery that failed in its outbox and tries it again on a timer
+//! (`archi/06-storage-and-scale.md`, "The outbox").
 //!
 //! Where a delivery may go is [`WebhookEgress`]: a deployed server sends only to `https://`
 //! URLs whose addresses are public, with the egress checks of the `http` tool (`rewind-mcp`'s
@@ -29,46 +28,12 @@ use rewind_engine::ports::{
     WebhookEventKind, WebhookSender,
 };
 use rewind_outbound::{Egress, NameResolver, SystemResolver};
-use tokio::time::Instant;
 
 use crate::app::App;
 use crate::views::task_id;
 
-/// How deliveries are retried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Retries {
-    /// Deliveries, the first included.
-    pub(crate) attempts: u32,
-    /// The wait before the second; each next wait is four times longer.
-    pub(crate) first_delay: Duration,
-    /// One delivery's timeout.
-    pub(crate) timeout: Duration,
-}
-
-impl Default for Retries {
-    /// 5 deliveries over at most 135 s: after 1 s, 4 s, 16 s and 64 s, 10 s each.
-    fn default() -> Self {
-        Self {
-            attempts: 5,
-            first_delay: Duration::from_secs(1),
-            timeout: Duration::from_secs(10),
-        }
-    }
-}
-
-impl Retries {
-    /// The longest every attempt and every wait between them take together.
-    pub(crate) fn window(&self) -> Duration {
-        let attempts = self.attempts.max(1);
-        let mut window = self.timeout.saturating_mul(attempts);
-        let mut delay = self.first_delay;
-        for _ in 1..attempts {
-            window = window.saturating_add(delay);
-            delay = delay.saturating_mul(4);
-        }
-        window
-    }
-}
+/// The longest one delivery takes, from its connection to the receiver's answer.
+pub(crate) const DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How the reason of a refused address ends.
 const REFUSAL: &str = "webhooks are not sent there";
@@ -146,12 +111,13 @@ pub(crate) trait Render: Send + Sync {
 pub(crate) struct HttpWebhooks<R> {
     client: reqwest::Client,
     render: R,
-    retries: Retries,
+    timeout: Duration,
     egress: WebhookEgress,
 }
 
 impl<R> HttpWebhooks<R> {
-    pub(crate) fn new(render: R, retries: Retries, egress: WebhookEgress) -> Self {
+    /// A sender whose deliveries last at most `timeout`.
+    pub(crate) fn new(render: R, timeout: Duration, egress: WebhookEgress) -> Self {
         let builder = reqwest::Client::builder()
             .user_agent(concat!("Rewind/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::none());
@@ -159,20 +125,19 @@ impl<R> HttpWebhooks<R> {
         Self {
             client,
             render,
-            retries,
+            timeout,
             egress,
         }
     }
 }
 
-impl<R: Render> HttpWebhooks<R> {
-    /// Sends `event` to `subscription` with the retries, and gives up at `deadline`: no attempt
-    /// starts after it, and none outlasts it.
-    pub(crate) async fn send_before(
+impl<R: Render> WebhookSender for HttpWebhooks<R> {
+    /// One delivery: a failure (a network error, the timeout, a 408, 429 or 5xx, another 4xx, a
+    /// redirect, a refused address) is an error the owner tries again later.
+    async fn send(
         &self,
         subscription: &Subscription,
         event: &WebhookEvent,
-        deadline: Instant,
     ) -> Result<(), WebhookError> {
         let failed = |message: String| WebhookError::Delivery {
             url: subscription.url.clone(),
@@ -182,80 +147,33 @@ impl<R: Render> HttpWebhooks<R> {
         let body = self.render.render(subscription, event).await?;
         let secret = WebhookSecret::parse(subscription.secret.expose())
             .map_err(|error| failed(format!("the subscription's secret is invalid: {error}")))?;
-        let attempts = self.retries.attempts.max(1);
-        let mut delay = self.retries.first_delay;
-        let mut last = String::from("no delivery could start before its deadline");
-        let mut sent = 0;
-        for attempt in 1..=attempts {
-            if attempt > 1 {
-                if Instant::now() + delay >= deadline {
-                    break;
-                }
-                tokio::time::sleep(delay).await;
-                delay = delay.saturating_mul(4);
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |elapsed| {
-                    i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
-                });
-            sent += 1;
-            let response = self
-                .client
-                .post(url.clone())
-                .timeout(self.retries.timeout.min(left))
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header(WEBHOOK_ID, &event.id)
-                .header(WEBHOOK_TIMESTAMP, now.to_string())
-                .header(WEBHOOK_SIGNATURE, secret.sign(&event.id, now, &body))
-                .body(body.clone())
-                .send()
-                .await;
-            match response {
-                Ok(response) if response.status().is_success() => return Ok(()),
-                Ok(response) => {
-                    let status = response.status();
-                    last = format!("the receiver answered {status}");
-                    let transient = status.is_server_error()
-                        || status == reqwest::StatusCode::REQUEST_TIMEOUT
-                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
-                    if !transient {
-                        return Err(failed(last));
-                    }
-                }
-                Err(error) => {
-                    if let Some(reason) = Egress::refusal_of(&error) {
-                        return Err(failed(reason));
-                    }
-                    last = format!("the delivery failed: {error}");
-                }
-            }
-            tracing::debug!(url = %subscription.url, event = %event.id, attempt, %last, "webhook delivery failed");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+            });
+        let response = self
+            .client
+            .post(url)
+            .timeout(self.timeout)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(WEBHOOK_ID, &event.id)
+            .header(WEBHOOK_TIMESTAMP, now.to_string())
+            .header(WEBHOOK_SIGNATURE, secret.sign(&event.id, now, &body))
+            .body(body)
+            .send()
+            .await;
+        match response {
+            Ok(response) if response.status().is_success() => Ok(()),
+            Ok(response) => Err(failed(format!(
+                "the receiver answered {}",
+                response.status()
+            ))),
+            Err(error) => Err(failed(
+                Egress::refusal_of(&error)
+                    .unwrap_or_else(|| format!("the delivery failed: {error}")),
+            )),
         }
-        let given_up = if sent < attempts {
-            "its window ended"
-        } else {
-            "no retry left"
-        };
-        Err(failed(format!(
-            "{last}, after {sent} deliveries: {given_up}"
-        )))
-    }
-}
-
-impl<R: Render> WebhookSender for HttpWebhooks<R> {
-    /// Every retry, without a deadline of its own.
-    async fn send(
-        &self,
-        subscription: &Subscription,
-        event: &WebhookEvent,
-    ) -> Result<(), WebhookError> {
-        let deadline = Instant::now() + self.retries.window() + Duration::from_secs(1);
-        self.send_before(subscription, event, deadline).await
     }
 }
 
@@ -421,7 +339,7 @@ mod tests {
         WebhookEventType, WebhookSender,
     };
 
-    use super::{HttpWebhooks, Render, Retries, WebhookEgress};
+    use super::{HttpWebhooks, Render, WebhookEgress};
 
     /// Writes the port's event as `{"id", "type"}`: what the receiver reads back.
     #[derive(Debug, Clone, Copy)]
@@ -565,14 +483,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_http_sender_conforms() {
-        let retries = Retries {
-            attempts: 3,
-            first_delay: Duration::from_millis(10),
-            timeout: Duration::from_secs(5),
-        };
         run_all(|| {
             (
-                HttpWebhooks::new(Plain, retries, WebhookEgress::Open),
+                HttpWebhooks::new(Plain, Duration::from_secs(5), WebhookEgress::Open),
                 HttpReceiver::start(),
             )
         })
@@ -580,9 +493,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_receiver_that_refuses_for_good_is_not_retried() {
-        let app =
-            axum::Router::new().route("/gone", axum::routing::post(|| async { StatusCode::GONE }));
+    async fn a_delivery_is_one_attempt_whatever_the_receiver_answers() {
+        let tried: Arc<Mutex<usize>> = Arc::default();
+        let counted = tried.clone();
+        let app = axum::Router::new()
+            .route("/gone", axum::routing::post(|| async { StatusCode::GONE }))
+            .route(
+                "/busy",
+                axum::routing::post(move || {
+                    if let Ok(mut tried) = counted.lock() {
+                        *tried += 1;
+                    }
+                    async { StatusCode::SERVICE_UNAVAILABLE }
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .unwrap_or_else(|error| panic!("{error}"));
@@ -590,43 +514,17 @@ mod tests {
             .local_addr()
             .unwrap_or_else(|error| panic!("{error}"));
         tokio::spawn(async move { axum::serve(listener, app).await });
-        let sender = HttpWebhooks::new(
-            Plain,
-            Retries {
-                attempts: 5,
-                first_delay: Duration::from_secs(60),
-                timeout: Duration::from_secs(5),
-            },
-            WebhookEgress::Open,
-        );
-        let subscription = Subscription {
-            tenant: TenantId::local(),
-            id: "s".into(),
-            url: format!("http://{addr}/gone"),
-            secret: Secret::new(
-                WebhookSecret::from_bytes([1u8; 32])
-                    .unwrap_or_else(|error| panic!("{error}"))
-                    .expose(),
-            ),
-            events: BTreeSet::new(),
-            labels: BTreeMap::new(),
-        };
-        let event = WebhookEvent {
-            id: "r/1".into(),
-            tenant: TenantId::local(),
-            namespace: None,
-            run: Some(rewind_core::RunId::from_u128(1)),
-            labels: BTreeMap::new(),
-            occurred_at: rewind_core::Timestamp(0),
-            kind: WebhookEventKind::RunQuarantined { reason: "x".into() },
-        };
-        let started = std::time::Instant::now();
-        let refused = sender.send(&subscription, &event).await;
-        assert!(matches!(refused, Err(WebhookError::Delivery { .. })));
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "a 410 is final"
-        );
+        let sender = HttpWebhooks::new(Plain, Duration::from_secs(5), WebhookEgress::Open);
+        for (path, status) in [("gone", "410 Gone"), ("busy", "503 Service Unavailable")] {
+            let refused = sender
+                .send(&subscription(format!("http://{addr}/{path}")), &event())
+                .await;
+            let Err(WebhookError::Delivery { message, .. }) = refused else {
+                panic!("{path} refuses the delivery");
+            };
+            assert_eq!(message, format!("the receiver answered {status}"));
+        }
+        assert_eq!(count(&tried), 1, "a 503 is not tried again by the sender");
     }
 
     /// Answers every name with the same addresses.
@@ -694,45 +592,24 @@ mod tests {
         accepted.lock().map(|count| *count).unwrap_or_default()
     }
 
-    #[test]
-    fn the_retry_window_sums_every_attempt_and_wait() {
-        assert_eq!(Retries::default().window(), Duration::from_secs(135));
-    }
-
     #[tokio::test]
-    async fn a_delivery_ends_by_its_deadline() {
+    async fn a_delivery_ends_by_its_timeout() {
         let (addr, accepted) = silent().await;
-        let sender = HttpWebhooks::new(
-            Plain,
-            Retries {
-                attempts: 5,
-                first_delay: Duration::from_millis(10),
-                timeout: Duration::from_secs(1),
-            },
-            WebhookEgress::Open,
-        );
+        let sender = HttpWebhooks::new(Plain, Duration::from_millis(500), WebhookEgress::Open);
         let started = tokio::time::Instant::now();
         let given_up = sender
-            .send_before(
-                &subscription(format!("http://{addr}/hook")),
-                &event(),
-                started + Duration::from_millis(1500),
-            )
+            .send(&subscription(format!("http://{addr}/hook")), &event())
             .await;
         let elapsed = started.elapsed();
         let Err(WebhookError::Delivery { message, .. }) = given_up else {
             panic!("the receiver never answers");
         };
-        assert!(message.ends_with("its window ended"), "{message}");
+        assert!(message.starts_with("the delivery failed"), "{message}");
         assert!(
-            elapsed >= Duration::from_millis(1400) && elapsed < Duration::from_millis(2500),
+            elapsed >= Duration::from_millis(450) && elapsed < Duration::from_millis(1500),
             "{elapsed:?}"
         );
-        assert_eq!(
-            count(&accepted),
-            2,
-            "the second attempt is cut at the deadline"
-        );
+        assert_eq!(count(&accepted), 1);
     }
 
     #[tokio::test]
@@ -744,15 +621,7 @@ mod tests {
                 127, 0, 0, 1,
             ])])))
         };
-        let sender = HttpWebhooks::new(
-            Plain,
-            Retries {
-                attempts: 3,
-                first_delay: Duration::from_millis(500),
-                timeout: Duration::from_secs(1),
-            },
-            egress(),
-        );
+        let sender = HttpWebhooks::new(Plain, Duration::from_secs(1), egress());
         for (url, reason) in [
             (
                 format!("https://hooks.test:{port}/hook"),

@@ -7,7 +7,7 @@
 //! | `flaky` | a JSON-RPC internal error (a transient failure) at the first call of each key, then `{ n, calls }` |
 //!
 //! The record shows how many times each call reached the server: the load compares it with the
-//! attempts the run reports, which proves no call was sent again beyond its retries.
+//! failures each call met, which proves no call was sent again beyond its retries.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

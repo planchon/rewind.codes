@@ -17,7 +17,7 @@ use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::reading::ToolStatsFilter;
-use rewind_api::runs::{CallAttempts, Run, StartRun};
+use rewind_api::runs::{Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskStreamEvent, TaskStreamQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool, McpServer};
 use serde_json::{Value, json};
@@ -89,8 +89,6 @@ pub(crate) struct Thresholds {
     pub(crate) min_runs_per_s: Option<f64>,
     pub(crate) max_p99_end_to_end: Option<Duration>,
     pub(crate) max_p99_activation: Option<Duration>,
-    /// The longest the read model may take, after the last run ended, to hold every run.
-    pub(crate) max_read_model_lag: Duration,
 }
 
 /// What the host-tool worker saw.
@@ -113,7 +111,6 @@ struct Outcome {
     ended: Option<Instant>,
     /// The final status, or `refused`, `unfinished`.
     status: String,
-    attempts: Vec<CallAttempts>,
     violations: Vec<String>,
     errors: Vec<String>,
 }
@@ -228,25 +225,6 @@ pub(crate) async fn run(
         payload_bytes: settings.payload_bytes,
         ..Report::default()
     };
-    // A run's attempts are read from the read model: wait until it holds every completed run
-    // before checking them.
-    let last_end = outcomes.iter().filter_map(|outcome| outcome.ended).max();
-    let unprojected = await_projection(
-        &harness,
-        &mut outcomes,
-        settings.thresholds.max_read_model_lag,
-    )
-    .await;
-    if let Some(last_end) = last_end {
-        report.read_model_lag_s = (last_end.elapsed().as_secs_f64() * 10.0).round() / 10.0;
-    }
-    if unprojected > 0 {
-        report.violation(format!(
-            "{unprojected} completed runs were still missing from the read model {:?} after the \
-             last run ended",
-            settings.thresholds.max_read_model_lag
-        ));
-    }
     for (kind, count) in errors.lock().unwrap_or_else(|p| p.into_inner()).iter() {
         *report.errors.entry(kind.clone()).or_default() += count;
     }
@@ -332,50 +310,6 @@ fn toolset(mcp_url: &str) -> CreateToolset {
             policy: None,
         }],
         ..CreateToolset::default()
-    }
-}
-
-/// Reads each completed run again until the read model holds it: its attempts then show the
-/// retry of `fake.flaky`. Returns how many runs it still lacked after `limit`.
-async fn await_projection(harness: &Client, outcomes: &mut [Outcome], limit: Duration) -> usize {
-    let deadline = Instant::now() + limit;
-    let mut pending: Vec<usize> = outcomes
-        .iter()
-        .enumerate()
-        .filter(|(_, outcome)| outcome.status == "completed" && outcome.run.is_some())
-        .map(|(index, _)| index)
-        .collect();
-    let permits = Arc::new(Semaphore::new(32));
-    loop {
-        let mut reads = tokio::task::JoinSet::new();
-        for &index in &pending {
-            let Some(run) = outcomes[index].run.clone() else {
-                continue;
-            };
-            let harness = harness.clone();
-            let permits = permits.clone();
-            reads.spawn(async move {
-                let _permit = permits.acquire_owned().await;
-                (index, harness.get_run(&run, None).await)
-            });
-        }
-        let mut still = Vec::new();
-        while let Some(read) = reads.join_next().await {
-            let Ok((index, state)) = read else {
-                continue;
-            };
-            match state {
-                Ok(state) if state.attempts.iter().any(|call| call.attempts >= 2) => {
-                    outcomes[index].attempts = state.attempts;
-                }
-                _ => still.push(index),
-            }
-        }
-        pending = still;
-        if pending.is_empty() || Instant::now() >= deadline {
-            return pending.len();
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -518,7 +452,6 @@ async fn drive(shared: &Shared, n: usize) -> Outcome {
         started: None,
         ended: None,
         status: "refused".into(),
-        attempts: Vec::new(),
         violations: Vec::new(),
         errors: Vec::new(),
     };
@@ -586,7 +519,6 @@ async fn drive(shared: &Shared, n: usize) -> Outcome {
         return outcome;
     };
     outcome.status = status_name(last.status).into();
-    outcome.attempts = last.attempts.clone();
     if last.status == RunStatus::Completed {
         let output = last
             .output
@@ -655,8 +587,10 @@ fn status_name(status: RunStatus) -> &'static str {
 /// Fills the report from the outcomes, and checks the invariants:
 ///
 /// - every run completed, with its expected output;
-/// - each tool call reached its tool exactly as many times as the run says it was attempted:
-///   once, or more after a retry (`flaky` at least twice), never more;
+/// - each tool call reached its tool as many times as its failures call for, never more: `echo`
+///   and the host call once, `flaky` twice (its transient failure, then the retry). A run's
+///   attempts live in its tool tasks, which its end clears (`archi/04-tools.md`): the load
+///   knows them from its tools;
 /// - every call belongs to a run of this load and carries an idempotency key.
 fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &HostRecord) {
     let mut start = Vec::new();
@@ -726,29 +660,15 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
         if let Some(ended) = outcome.ended {
             end_to_end.push(ended - outcome.sent);
         }
-        let attempts = |seq: u32| {
-            outcome
-                .attempts
-                .iter()
-                .find(|attempt| attempt.seq == seq)
-                .map_or(1, |attempt| attempt.attempts)
-        };
         let run_calls = calls.get(run).map(Vec::as_slice).unwrap_or_default();
         let mut tools: BTreeMap<&str, u32> = BTreeMap::new();
         for (seq, call) in run_calls {
             *tools.entry(call.tool.as_str()).or_default() += 1;
-            let expected = attempts(*seq);
+            let expected = if call.tool == "flaky" { 2 } else { 1 };
             if call.count != expected {
                 report.violation(format!(
-                    "run {run} (n={}): {} #{seq} reached the server {} times, attempted {expected} \
-                     times",
+                    "run {run} (n={}): {} #{seq} reached the server {} times, expected {expected}",
                     outcome.n, call.tool, call.count
-                ));
-            }
-            if call.tool == "flaky" && call.count < 2 {
-                report.violation(format!(
-                    "run {run} (n={}): flaky #{seq} was not retried after its transient failure",
-                    outcome.n
                 ));
             }
             match call.tool.as_str() {
@@ -781,11 +701,10 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
             ));
         }
         for (seq, count) in host_calls {
-            let expected = attempts(seq);
-            if count != expected {
+            if count != 1 {
                 report.violation(format!(
-                    "run {run} (n={}): host.square #{seq} was handed out {count} times, attempted \
-                     {expected} times",
+                    "run {run} (n={}): host.square #{seq} was handed out {count} times, expected \
+                     once",
                     outcome.n
                 ));
             }
@@ -848,7 +767,7 @@ mod tests {
         );
     }
 
-    fn completed(run: &str, n: usize, attempts: Vec<CallAttempts>) -> Outcome {
+    fn completed(run: &str, n: usize) -> Outcome {
         let now = Instant::now();
         Outcome {
             n,
@@ -857,7 +776,6 @@ mod tests {
             started: Some(now),
             ended: Some(now + Duration::from_secs(2)),
             status: "completed".into(),
-            attempts,
             violations: Vec::new(),
             errors: Vec::new(),
         }
@@ -870,20 +788,13 @@ mod tests {
     }
 
     #[test]
-    fn calls_matching_their_attempts_hold_the_invariants() {
+    fn calls_matching_their_failures_hold_the_invariants() {
         let server = FakeServer::default();
         calls(&server, "r1/1", "echo", 1);
         calls(&server, "r1/3", "flaky", 2);
         let mut host = HostRecord::default();
         host.handed.insert(("r1".into(), 2), 1);
-        let outcomes = [completed(
-            "r1",
-            1,
-            vec![CallAttempts {
-                seq: 3,
-                attempts: 2,
-            }],
-        )];
+        let outcomes = [completed("r1", 1)];
         let mut report = Report {
             runs: 1,
             ..Report::default()
@@ -908,7 +819,6 @@ mod tests {
                 min_runs_per_s: Some(5.0),
                 max_p99_end_to_end: Some(Duration::from_secs(15)),
                 max_p99_activation: Some(Duration::from_secs(1)),
-                max_read_model_lag: Duration::from_secs(60),
             },
         );
         assert_eq!(met.violation_count, 0);
@@ -918,28 +828,20 @@ mod tests {
                 min_runs_per_s: Some(10.0),
                 max_p99_end_to_end: Some(Duration::from_secs(10)),
                 max_p99_activation: Some(Duration::from_millis(500)),
-                max_read_model_lag: Duration::from_secs(60),
             },
         );
         assert_eq!(report.violation_count, 3, "{:?}", report.violations);
     }
 
     #[test]
-    fn a_call_sent_beyond_its_attempts_breaks_an_invariant() {
+    fn a_call_sent_beyond_its_failures_breaks_an_invariant() {
         let server = FakeServer::default();
         calls(&server, "r1/1", "echo", 2);
         calls(&server, "r1/3", "flaky", 2);
         calls(&server, "other/1", "echo", 1);
         let mut host = HostRecord::default();
         host.handed.insert(("r1".into(), 2), 2);
-        let outcomes = [completed(
-            "r1",
-            1,
-            vec![CallAttempts {
-                seq: 3,
-                attempts: 2,
-            }],
-        )];
+        let outcomes = [completed("r1", 1)];
         let mut report = Report {
             runs: 1,
             ..Report::default()

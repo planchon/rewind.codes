@@ -108,10 +108,6 @@ struct RunArgs {
     /// Fail when the 99th percentile of the activation latency is above this.
     #[arg(long, value_parser = parse_duration)]
     max_p99_activation: Option<Duration>,
-
-    /// Fail when the read model still lacks a completed run this long after the last ended.
-    #[arg(long, default_value = "3m", value_parser = parse_duration)]
-    max_read_model_lag: Duration,
 }
 
 #[derive(Debug, Args)]
@@ -204,7 +200,6 @@ async fn run(args: RunArgs) -> Result<bool, Error> {
             min_runs_per_s: args.min_runs_per_s,
             max_p99_end_to_end: args.max_p99_end_to_end,
             max_p99_activation: args.max_p99_activation,
-            max_read_model_lag: args.max_read_model_lag,
         },
     };
     eprintln!(

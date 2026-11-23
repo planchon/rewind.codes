@@ -31,8 +31,9 @@ pub(crate) async fn daily(app: Arc<App>) {
     let mut stop = app.stop.subscribe();
     while !app.stopping() {
         run(&app).await;
-        if tokio::time::timeout(DAY, stop.changed()).await.is_ok() {
-            return;
+        tokio::select! {
+            () = tokio::time::sleep(DAY) => {}
+            _ = stop.changed() => return,
         }
     }
 }

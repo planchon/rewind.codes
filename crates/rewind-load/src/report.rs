@@ -63,9 +63,7 @@ pub(crate) struct Report {
     /// Broken invariants, one line each (the first ones only).
     pub(crate) violations: Vec<String>,
     pub(crate) violation_count: usize,
-    /// From the last run's end until the read model held every completed run, in seconds.
-    pub(crate) read_model_lag_s: f64,
-    /// The calls of this load, as the server's read model counts them (`GET /v1/tools/stats`).
+    /// The calls of this load, as the server's counters count them (`GET /v1/tools/stats`).
     pub(crate) server_tool_stats: Vec<ToolStatsLine>,
 }
 
@@ -158,11 +156,6 @@ impl fmt::Display for Report {
                 .collect();
             writeln!(f, "errors: {}", errors.join(", "))?;
         }
-        writeln!(
-            f,
-            "read model: every run projected {:.1} s after the last ended",
-            self.read_model_lag_s
-        )?;
         if !self.server_tool_stats.is_empty() {
             writeln!(f, "server tool stats")?;
             for line in &self.server_tool_stats {

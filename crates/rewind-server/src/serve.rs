@@ -50,7 +50,7 @@ use crate::wiring::identity::Identity;
 use crate::wiring::link::ServerLink;
 use crate::wiring::telemetry::{self, Exporter};
 use crate::wiring::tools::Tools;
-use crate::wiring::webhooks::{HttpWebhooks, Retries, ServerRender, WebhookEgress};
+use crate::wiring::webhooks::{DELIVERY_TIMEOUT, HttpWebhooks, ServerRender, WebhookEgress};
 use crate::wiring::{bucket, jobs};
 
 /// The version of the `rewind` binary.
@@ -363,10 +363,7 @@ async fn start_wired(
             app: Arc::clone(&rendered),
         },
         // One attempt: the owner tries a failed delivery again on a timer.
-        Retries {
-            attempts: 1,
-            ..Retries::default()
-        },
+        DELIVERY_TIMEOUT,
         webhook_egress.clone(),
     );
     let plane = Arc::new(Wiring {
