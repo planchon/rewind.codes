@@ -26,8 +26,7 @@ use rewind_core::{
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CatalogStore, InvalidScript, NamespaceName, ParkKind, QuarantineKind, RunMetadata, RunRef,
-    StoredWorkflow,
+    CatalogStore, InvalidScript, NamespaceName, ParkKind, QuarantineKind, RunRef, StoredWorkflow,
 };
 
 use crate::world::World;
@@ -44,20 +43,6 @@ fn payload(payload: &rewind_core::Payload) -> Payload {
 
 fn unavailable(message: String) -> EdgeError {
     EdgeError::Unavailable(message)
-}
-
-/// The trace a run's spans belong to: its own, or the one its caller's `traceparent` names
-/// (`rewind_engine::telemetry::trace_of`).
-fn trace_id(run: &RunRef, metadata: &RunMetadata) -> String {
-    metadata
-        .trace_context
-        .as_ref()
-        .and_then(|context| {
-            let trace = context.traceparent.split('-').nth(1)?;
-            (trace.len() == 32 && trace.bytes().all(|b| b.is_ascii_hexdigit()))
-                .then(|| trace.to_ascii_lowercase())
-        })
-        .unwrap_or_else(|| format!("{:032x}", run.id.as_uuid().as_u128()))
 }
 
 /// `GET /v1/runs/{id}`.
@@ -129,7 +114,9 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
             .iter()
             .map(|(server, secret)| (server.to_owned(), secret.to_string()))
             .collect(),
-        trace_id: trace_id(run, &record.metadata),
+        trace_id: rewind_engine::telemetry::trace_of(run.id, &record.metadata)
+            .0
+            .to_string(),
         parent: record.metadata.parent.map(|parent| ForkParent {
             run: parent.run.to_string(),
             at: parent.at,
