@@ -75,7 +75,13 @@ mod tests {
         let mut queue = ReadyQueue::default();
         let (a, b) = (tenant("a"), tenant("b"));
         for n in 1..=3 {
-            queue.push(a.clone(), 0, Timestamp(n), RunId::from_u128(u128::from(n)), n);
+            queue.push(
+                a.clone(),
+                0,
+                Timestamp(n),
+                RunId::from_u128(u128::from(n)),
+                n,
+            );
         }
         queue.push(b.clone(), 0, Timestamp(9), RunId::from_u128(10), 10);
         // A run that killed its node twice waits behind those that never started.

@@ -31,7 +31,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 # The actors of a node run in tokio tasks in a process; the timer wheel sleeps until its earliest
 # timer; the SDK streams and the subscriptions are channels.
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 uuid = { workspace = true, features = ["std", "v7"] }
 

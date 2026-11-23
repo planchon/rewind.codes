@@ -40,8 +40,8 @@ use crate::ports::link::{HostTask, StartAtOwner};
 use crate::ports::{
     BlobOwner, CallAuth, CallClaims, CatalogStore, Clock, Dispatched, Entropy, ParkKind,
     ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata, RunRef, RunWorkflow,
-    ScriptExecutor, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord, TaskRef,
-    TaskToken, ToolCall, ToolDispatcher,
+    ScriptExecutor, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord, TaskRef, TaskToken,
+    ToolCall, ToolDispatcher,
 };
 use crate::tasks::dispatch::{redacted, secret_texts};
 use crate::workflows::{SignalArgs, StartArgs};
@@ -216,10 +216,16 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
     } = work;
     let record = &task.task;
     let run = &head.run;
-    let toolset = match plane.catalog().get_toolset(&run.tenant, record.toolset).await {
+    let toolset = match plane
+        .catalog()
+        .get_toolset(&run.tenant, record.toolset)
+        .await
+    {
         Ok(Some(stored)) => stored.toolset,
         Ok(None) => return failed(format!("toolset {} not found", record.toolset)),
-        Err(error) => return CallOutcome::NotSent(format!("the toolset could not be read: {error}")),
+        Err(error) => {
+            return CallOutcome::NotSent(format!("the toolset could not be read: {error}"));
+        }
     };
     let Some(tool) = toolset.tool(&record.tool).cloned() else {
         return failed(format!(
@@ -236,7 +242,15 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         Ok(args) => args,
         Err(error) => return CallOutcome::NotSent(error),
     };
-    let key = match call_key(plane, &*log, &head, record.task.seq, &record.tool, &record.args).await
+    let key = match call_key(
+        plane,
+        &*log,
+        &head,
+        record.task.seq,
+        &record.tool,
+        &record.args,
+    )
+    .await
     {
         Ok(key) => key,
         Err(error) => return CallOutcome::NotSent(error),
@@ -293,7 +307,12 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         ToolRoute::Builtin(Builtin::Workflow { workflow, op }) if live => {
             let workflow = workflow.clone();
             return match op {
-                WorkflowOp::Start => start_child(plane, config, &*log, partition, &call, &head, &toolset, &workflow).await,
+                WorkflowOp::Start => {
+                    start_child(
+                        plane, config, &*log, partition, &call, &head, &toolset, &workflow,
+                    )
+                    .await
+                }
                 WorkflowOp::Signal => signal_child(plane, &*log, &call, &head, &workflow).await,
             };
         }
@@ -316,7 +335,10 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         }
     };
     let texts = secret_texts(&auth);
-    CallOutcome::Dispatched(redacted(plane.dispatcher().dispatch(call, auth).await, &texts))
+    CallOutcome::Dispatched(redacted(
+        plane.dispatcher().dispatch(call, auth).await,
+        &texts,
+    ))
 }
 
 fn failed(message: String) -> CallOutcome {
@@ -623,13 +645,16 @@ async fn start_child<P: Plane>(
         return not_sent("this node supports no determinism epoch".into());
     };
     let now = plane.clock().now();
-    match checks::version_attachments(plane.secrets(), now, tenant, &head.namespace, &workflow).await
+    match checks::version_attachments(plane.secrets(), now, tenant, &head.namespace, &workflow)
+        .await
     {
         Ok(Ok(())) => {}
         Ok(Err(refused)) => {
             return unavailable(format!("no run of {workflow} was started: {refused}"));
         }
-        Err(error) => return not_sent(format!("the workflow's secrets could not be read: {error}")),
+        Err(error) => {
+            return not_sent(format!("the workflow's secrets could not be read: {error}"));
+        }
     }
     let metadata = RunMetadata {
         labels,

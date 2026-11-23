@@ -25,18 +25,20 @@ use crate::node::message::{Effect, Message, ReplyTo, Target};
 use crate::partition::commit::{After, Unit};
 use crate::partition::{Ask, Flight, Owner, OwnerMsg, tokens};
 use crate::plane::{HostTools, Plane};
+use crate::ports::PartitionLog as _;
 use crate::ports::link::{
     Decision, HostFailure, HostTaskOffer, NodeRequest, OrgRequest, PartitionReply, Refusal,
     SlotRequest, TaskAnswer,
 };
 use crate::ports::partition::Change;
-use crate::ports::PartitionLog as _;
 use crate::ports::{
     CredentialsExpiredReason, Dispatched, DueTimer, ParkKind, ParkReason, Projection, RunRef,
     SecretId, TaskChange, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, TimerChange,
     TimerKind, Trigger, Watcher, WebhookEvent, WebhookEventKind, deferred_timeout_failure,
 };
-use crate::tasks::calls::{CallDone, CallMsg, CallOutcome, CallWork, ChildStart, asked_wait, interrupted};
+use crate::tasks::calls::{
+    CallDone, CallMsg, CallOutcome, CallWork, ChildStart, asked_wait, interrupted,
+};
 
 /// The message of a rejection without one.
 const REJECTED: &str = "rejected by the harness";
@@ -152,17 +154,18 @@ impl<P: Plane> Owner<P> {
                 }
             },
         );
-        self.out.push(Effect::Local(Message::Calls(CallMsg::Dispatch(Box::new(
-            CallWork {
-                partition: self.partition,
-                log,
-                task: record,
-                head,
-                mode,
-                token,
-                hand_out,
-            },
-        )))));
+        self.out
+            .push(Effect::Local(Message::Calls(CallMsg::Dispatch(Box::new(
+                CallWork {
+                    partition: self.partition,
+                    log,
+                    task: record,
+                    head,
+                    mode,
+                    token,
+                    hand_out,
+                },
+            )))));
     }
 
     /// The organization actor granted the task's slot.
@@ -179,7 +182,11 @@ impl<P: Plane> Owner<P> {
             .slot(task.run.id)
             .and_then(|slot| slot.tasks.get(&task.seq).cloned());
         match record {
-            Some(record) if !self.slot(task.run.id).is_some_and(|slot| slot.head.is_ended()) => {
+            Some(record)
+                if !self
+                    .slot(task.run.id)
+                    .is_some_and(|slot| slot.head.is_ended()) =>
+            {
                 self.send(task, record, Some(server), false);
             }
             _ => {
@@ -279,7 +286,10 @@ impl<P: Plane> Owner<P> {
             // is dropped, and the slot it held goes back.
             tracing::debug!(%task, "tool outcome dropped");
             let mut unit = Unit::new();
-            if matches!(self.flights.get(&task), Some(Flight::Sent { .. } | Flight::Preparing)) {
+            if matches!(
+                self.flights.get(&task),
+                Some(Flight::Sent { .. } | Flight::Preparing)
+            ) {
                 self.drop_flight(&mut unit, &task);
             }
             self.push(unit);
@@ -445,14 +455,20 @@ impl<P: Plane> Owner<P> {
             change: TaskChange::Delete,
         });
         if matches!(record.task.state, TaskState::Deferred { .. }) {
-            unit.change(Change::Timer(TimerChange::Cancel(TimerKind::DeferredDeadline {
-                run: task.run.clone(),
-                seq: task.seq,
-            })));
+            unit.change(Change::Timer(TimerChange::Cancel(
+                TimerKind::DeferredDeadline {
+                    run: task.run.clone(),
+                    seq: task.seq,
+                },
+            )));
         }
         if let Some(slot) = self.slot(task.run.id)
-            && let Some(delta) =
-                derive::retries_counters(&slot.head, &record.task.tool, record.task.attempt, self.now())
+            && let Some(delta) = derive::retries_counters(
+                &slot.head,
+                &record.task.tool,
+                record.task.attempt,
+                self.now(),
+            )
         {
             unit.change(Change::Counters(vec![delta]));
         }
@@ -480,7 +496,13 @@ impl<P: Plane> Owner<P> {
 
     /// The task is ready again after the backoff of its attempt (at least `at_least`): attempt
     /// + 1 when it was sent.
-    fn backoff(&mut self, task: &TaskRef, mut record: TaskRecord, at_least: std::time::Duration, sent: bool) {
+    fn backoff(
+        &mut self,
+        task: &TaskRef,
+        mut record: TaskRecord,
+        at_least: std::time::Duration,
+        sent: bool,
+    ) {
         let key = crate::engine::idempotency_key(task.run.id, task.seq);
         let delay = self
             .config
@@ -539,7 +561,11 @@ impl<P: Plane> Owner<P> {
 
     /// The deadline of a deferred task: its execution timeout from now (and `requested`, when
     /// the handler asks for less), bounded by the run's deadline.
-    fn deferral_deadline(&self, record: &TaskRecord, requested: Option<std::time::Duration>) -> Timestamp {
+    fn deferral_deadline(
+        &self,
+        record: &TaskRecord,
+        requested: Option<std::time::Duration>,
+    ) -> Timestamp {
         let now = self.now();
         let expires_at = self
             .slot(record.task.task.run.id)
@@ -603,8 +629,11 @@ impl<P: Plane> Owner<P> {
         record.task.state = TaskState::Parked(reason.clone());
         let mut unit = Unit::new();
         if let Some(event) = self.parked_event(task, &record, &reason) {
-            let entry =
-                self.outbox_entry(task.run.tenant.clone(), Some(task.run.id), Projection::Webhooks(event));
+            let entry = self.outbox_entry(
+                task.run.tenant.clone(),
+                Some(task.run.id),
+                Projection::Webhooks(event),
+            );
             unit.project(entry);
         }
         tracing::warn!(%task, kind = reason.kind.as_str(), "tool call parked");
@@ -613,7 +642,12 @@ impl<P: Plane> Owner<P> {
         self.push(unit);
     }
 
-    fn parked_event(&self, task: &TaskRef, record: &TaskRecord, reason: &ParkReason) -> Option<WebhookEvent> {
+    fn parked_event(
+        &self,
+        task: &TaskRef,
+        record: &TaskRecord,
+        reason: &ParkReason,
+    ) -> Option<WebhookEvent> {
         let slot = self.slot(task.run.id)?;
         let (seq, tool, message) = (task.seq, record.task.tool.clone(), reason.message.clone());
         let credentials_expired = |reason| WebhookEventKind::CredentialsExpired {

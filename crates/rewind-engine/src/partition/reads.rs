@@ -71,7 +71,8 @@ impl<P: Plane> Owner<P> {
                                 .await
                                 .map_err(unavailable)?;
                             for entry in &mut entries {
-                                if let Some(payload) = crate::payloads::payload_mut(&mut entry.event)
+                                if let Some(payload) =
+                                    crate::payloads::payload_mut(&mut entry.event)
                                     && let rewind_core::Payload::Digest(digest) = payload
                                     && let Some(value) = log
                                         .payload(&run, *digest)

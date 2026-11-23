@@ -279,7 +279,11 @@ pub(crate) async fn offload_into_run<B: BlobStore>(
         if !in_table {
             match copied.get(&digest) {
                 Some(from) => blobs.copy(from, &owner, digest).await?,
-                None => blobs.put_in(&owner, digest, canonical.clone().into_bytes()).await?,
+                None => {
+                    blobs
+                        .put_in(&owner, digest, canonical.clone().into_bytes())
+                        .await?
+                }
             }
         }
         records.push(PayloadRecord {

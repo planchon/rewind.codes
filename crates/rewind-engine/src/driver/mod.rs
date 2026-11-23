@@ -21,9 +21,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel as unbounded};
 use futures_util::Stream;
 use rewind_core::{PartitionId, RunId, Timestamp};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel as unbounded};
 
 pub use faults::{Faults, Traffic};
 
@@ -192,7 +192,11 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
     }
 
     /// Joins a node to the cluster: it takes the partitions it wins.
-    pub async fn add_node(&mut self, plane: Arc<P>, config: NodeConfig) -> Result<NodeId, DriveError> {
+    pub async fn add_node(
+        &mut self,
+        plane: Arc<P>,
+        config: NodeConfig,
+    ) -> Result<NodeId, DriveError> {
         let id = config.node.clone();
         let epochs = config
             .epochs
@@ -527,7 +531,8 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
                 Effect::Wake { at, alone, message } => {
                     let id = self.next_id;
                     self.next_id += 1;
-                    self.wakes.insert((at, id), (origin.clone(), message, alone));
+                    self.wakes
+                        .insert((at, id), (origin.clone(), message, alone));
                 }
                 Effect::Activate {
                     node,
@@ -535,8 +540,8 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
                     asker,
                 } => {
                     let run = request.head.run.id;
-                    let unreachable = !self.nodes.contains_key(&node)
-                        || self.faults.cut_between(origin, &node);
+                    let unreachable =
+                        !self.nodes.contains_key(&node) || self.faults.cut_between(origin, &node);
                     if unreachable {
                         self.queue.push_back((
                             origin.clone(),
@@ -579,7 +584,11 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
     // The edge
 
     /// Sends a request to node `at`, as its edge does, and steps until it is answered.
-    pub async fn request(&mut self, at: &NodeId, request: NodeRequest) -> Result<NodeReply, DriveError> {
+    pub async fn request(
+        &mut self,
+        at: &NodeId,
+        request: NodeRequest,
+    ) -> Result<NodeReply, DriveError> {
         if !self.nodes.contains_key(at) {
             return Err(DriveError::NoNode(at.clone()));
         }
@@ -702,8 +711,6 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
     }
 }
 
-
-
 /// The edge of a node of the driver: requests go to the owner of their partition, through the
 /// driver's link when another node owns it, and the driver steps until they are answered.
 pub struct DriverGateway<'a, P: Plane, K: Cluster + 'static> {
@@ -713,7 +720,9 @@ pub struct DriverGateway<'a, P: Plane, K: Cluster + 'static> {
 
 impl<P: Plane, K: Cluster + 'static> fmt::Debug for DriverGateway<'_, P, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DriverGateway").field("at", &self.at).finish()
+        f.debug_struct("DriverGateway")
+            .field("at", &self.at)
+            .finish()
     }
 }
 

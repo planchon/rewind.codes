@@ -24,8 +24,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, AbortReason, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle,
-    RunEnd, RunOutcome, RunState, Timestamp, ToolFailure, ToolFailureKind,
+    AbortKind, AbortReason, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, RunEnd,
+    RunOutcome, RunState, Timestamp, ToolFailure, ToolFailureKind,
 };
 
 use crate::activation::{Batch, CountCpu, Grace, abort_reason};
@@ -195,7 +195,9 @@ async fn work<P: Plane>(
             if record.value.is_none() {
                 copied.insert(record.digest, from.clone());
             }
-            records.entry(record.digest).or_insert_with(|| record.clone());
+            records
+                .entry(record.digest)
+                .or_insert_with(|| record.clone());
         }
         if let Some(sealed) = &parent.sealed {
             for entry in &sealed.entries {
@@ -218,9 +220,11 @@ async fn work<P: Plane>(
         let Some(history) = history else {
             return Ok((ActivationResult::Miss, None));
         };
-        return give_up(plane, config, &source, head, inbox, history, &toolset, &script, &tasks)
-            .await
-            .map(|result| (result, None));
+        return give_up(
+            plane, config, &source, head, inbox, history, &toolset, &script, &tasks,
+        )
+        .await
+        .map(|result| (result, None));
     }
 
     let hit = warm.as_ref().is_some_and(|warm| {
@@ -266,7 +270,8 @@ async fn work<P: Plane>(
                         ));
                     }
                     Err(ReplayError::Executor(
-                        err @ (ExecutorError::InvalidScript(_) | ExecutorError::UnsupportedEpoch(_)),
+                        err
+                        @ (ExecutorError::InvalidScript(_) | ExecutorError::UnsupportedEpoch(_)),
                     )) => {
                         return Ok((
                             ActivationResult::Quarantined {
@@ -351,14 +356,8 @@ async fn work<P: Plane>(
                         compiled: &script.compiled,
                         toolset: &toolset.toolset,
                     };
-                    instance = start_fork(
-                        &with,
-                        clock,
-                        &mut batch,
-                        source_of_fork,
-                        parent_history,
-                    )
-                    .await?;
+                    instance = start_fork(&with, clock, &mut batch, source_of_fork, parent_history)
+                        .await?;
                     first_of_fork = true;
                     continue;
                 }
@@ -400,7 +399,15 @@ async fn work<P: Plane>(
                     now = now.max(*fire_at);
                 }
                 let recorded_at = batch.recorded_at(now);
-                deliver(&source, &tally, &mut batch, running, completion, recorded_at).await?;
+                deliver(
+                    &source,
+                    &tally,
+                    &mut batch,
+                    running,
+                    completion,
+                    recorded_at,
+                )
+                .await?;
             }
         }
     }

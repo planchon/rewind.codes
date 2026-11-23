@@ -72,7 +72,12 @@ async fn node(
         })
         .await
         .unwrap();
-    let handle = runtime::spawn(Arc::clone(plane), config.clone(), membership, Arc::clone(link));
+    let handle = runtime::spawn(
+        Arc::clone(plane),
+        config.clone(),
+        membership,
+        Arc::clone(link),
+    );
     link.register(handle.clone());
     (handle, config)
 }
@@ -98,15 +103,22 @@ async fn two_nodes_run_a_run_through_the_link_in_real_time() {
     let link = Arc::new(LocalLink::new());
     let (a, config) = node(&plane, &cluster, &link, "node-a").await;
     let (b, _) = node(&plane, &cluster, &link, "node-b").await;
-    let mut changed_a = a.subscribe(SubscriptionKey::Tenant(TenantId::local()), None).unwrap();
-    let mut changed_b = b.subscribe(SubscriptionKey::Tenant(TenantId::local()), None).unwrap();
+    let mut changed_a = a
+        .subscribe(SubscriptionKey::Tenant(TenantId::local()), None)
+        .unwrap();
+    let mut changed_b = b
+        .subscribe(SubscriptionKey::Tenant(TenantId::local()), None)
+        .unwrap();
 
     // The nodes take their partitions; an edge's request may wait for the map.
     let edge = Edge::new(Arc::clone(&plane), config);
     let mut gateway = a.clone();
     let created = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            match edge.start_run(&mut gateway, request("chain", json!({}))).await {
+            match edge
+                .start_run(&mut gateway, request("chain", json!({})))
+                .await
+            {
                 Ok(created) => return created,
                 Err(error) => {
                     assert!(error.to_string().contains("unavailable"), "{error}");
@@ -136,7 +148,11 @@ async fn two_nodes_run_a_run_through_the_link_in_real_time() {
     .await
     .unwrap();
     assert!(ended);
-    let view = edge.get_run(&mut gateway, &created.run).await.unwrap().unwrap();
+    let view = edge
+        .get_run(&mut gateway, &created.run)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(view.head.status, RunStatus::Completed);
 
     // The link carries requests to a node, and refuses a node it cannot reach.

@@ -65,7 +65,6 @@ pub use access::{
     Role, RoleDeletion, Token, TokenKey,
 };
 pub use archive::{ArchiveError, RunArchive, SealedAttempt};
-pub use link::{LinkError, NodeLink};
 pub use blob::{BlobError, BlobOwner, BlobStore};
 pub use catalog::{CatalogError, CatalogStore, TEST_DELETION_TIMEOUT};
 pub use checker::{
@@ -104,6 +103,7 @@ pub use journal::{
     TaskState, TaskToken, TaskUpdate, TestRecord, ToolTask, TraceContext, Trigger, Watched,
     WebhookTarget, WebhookToken, WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
+pub use link::{LinkError, NodeLink};
 pub use namespaces::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, InvalidDisplayName,
     InvalidNamespace, Month, Namespace, NamespaceCursor, NamespaceFilter, NamespaceName,

@@ -117,7 +117,9 @@ pub enum NodeReply {
     Done,
     /// This node does not hold the partition (or the home partition of the tenant) any more:
     /// the router reads the partition map again and retries.
-    NotOwner { partition: PartitionId },
+    NotOwner {
+        partition: PartitionId,
+    },
 }
 
 /// Why an owner refused a request (`archi/07-code-architecture.md`, "HTTP API `/v1`" maps each
@@ -227,6 +229,10 @@ pub enum PartitionRequest {
 
 /// What the owner of a partition answers.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a reply is moved once, to its caller: its size does not matter"
+)]
 pub enum PartitionReply {
     Started(Result<Created, Refusal>),
     Enqueued(Result<Enqueued, Refusal>),
@@ -545,7 +551,10 @@ pub enum ActivationResult {
     /// The changes to commit: the activation and what leaves the partition with it.
     Committed(Box<Committed>),
     /// Nothing is committed and the run is quarantined.
-    Quarantined { kind: QuarantineKind, reason: String },
+    Quarantined {
+        kind: QuarantineKind,
+        reason: String,
+    },
     /// A quarantined run replays again: it leaves quarantine. `nothing_to_do`: its inbox was
     /// empty.
     Released,

@@ -28,8 +28,7 @@ use crate::partition::OwnerMsg;
 use crate::plane::{InstanceOf, LogOf, NodeConfig, Plane};
 use crate::ports::link::{ActivationRequest, ActivationResult, ParentHistory, Purpose};
 use crate::ports::{
-    CatalogStore, IndexedSummary, PartitionLog, PayloadRecord, RunArchive, RunHead, RunRef,
-    Trigger,
+    CatalogStore, IndexedSummary, PartitionLog, PayloadRecord, RunArchive, RunHead, RunRef, Trigger,
 };
 pub(crate) use activation::Warm;
 use queue::ReadyQueue;
@@ -285,7 +284,8 @@ pub(crate) async fn prepare<P: Plane>(
     with_history: bool,
 ) -> Result<ActivationRequest, String> {
     let run = head.run.clone();
-    let failed = |what: &str, error: String| format!("{what} of run {} could not be read: {error}", run.id);
+    let failed =
+        |what: &str, error: String| format!("{what} of run {} could not be read: {error}", run.id);
     let inbox = log
         .inbox(&run)
         .await
@@ -364,10 +364,12 @@ async fn records<L: PartitionLog>(
 ) -> Result<Vec<PayloadRecord>, String> {
     let mut records = Vec::new();
     for digest in digests {
-        let record = log
-            .payload(run, digest)
-            .await
-            .map_err(|error| format!("the payload {digest} of run {} could not be read: {error}", run.id))?;
+        let record = log.payload(run, digest).await.map_err(|error| {
+            format!(
+                "the payload {digest} of run {} could not be read: {error}",
+                run.id
+            )
+        })?;
         records.extend(record);
     }
     Ok(records)
@@ -382,8 +384,17 @@ async fn parent_history<P: Plane>(
     parent: rewind_core::RunId,
 ) -> Result<Option<ParentHistory>, String> {
     let parent_ref = RunRef::new(run.tenant.clone(), parent);
-    let failed = |error: String| format!("the parent {parent} of run {} could not be read: {error}", run.id);
-    let Some(head) = log.run(&parent_ref).await.map_err(|e| failed(e.to_string()))? else {
+    let failed = |error: String| {
+        format!(
+            "the parent {parent} of run {} could not be read: {error}",
+            run.id
+        )
+    };
+    let Some(head) = log
+        .run(&parent_ref)
+        .await
+        .map_err(|e| failed(e.to_string()))?
+    else {
         return Ok(None);
     };
     if head.sealed == Some(head.attempt) {

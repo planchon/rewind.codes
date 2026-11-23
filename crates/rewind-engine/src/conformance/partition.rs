@@ -1262,7 +1262,10 @@ pub async fn a_summary_is_written_alone<S: PartitionStore>(store: &S) {
         }],
     )
     .await;
-    assert_eq!(log.summary(&run).await.expect("summary"), Some(summary.clone()));
+    assert_eq!(
+        log.summary(&run).await.expect("summary"),
+        Some(summary.clone())
+    );
     let parked = RunQuery {
         tenant: acme(),
         terms: vec![crate::ports::Term {
@@ -1279,7 +1282,11 @@ pub async fn a_summary_is_written_alone<S: PartitionStore>(store: &S) {
         )
         .await
         .expect("search");
-    assert_eq!(ids(&found.summaries), vec![run.clone()], "the search reads it");
+    assert_eq!(
+        ids(&found.summaries),
+        vec![run.clone()],
+        "the search reads it"
+    );
 
     let missing = run_of(&acme(), 99);
     let error = refused(

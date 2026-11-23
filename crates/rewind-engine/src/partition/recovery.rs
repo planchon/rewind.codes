@@ -18,8 +18,6 @@
 
 use std::sync::Arc;
 
-
-
 use crate::node::NodeMsg;
 use crate::node::message::{Effect, Message, job};
 use crate::partition::commit::{After, Unit};
@@ -27,8 +25,8 @@ use crate::partition::{Internal, Owner, OwnerMsg, Phase};
 use crate::plane::{LogOf, Plane};
 use crate::ports::partition::Change;
 use crate::ports::{
-    CatalogStore, NamespaceName, PartitionLog, PartitionStore, Recovery, TaskState,
-    TenantId, namespace_partition,
+    CatalogStore, NamespaceName, PartitionLog, PartitionStore, Recovery, TaskState, TenantId,
+    namespace_partition,
 };
 
 /// A partition opened and recovered.
@@ -192,9 +190,9 @@ impl<P: Plane> Owner<P> {
                 .and_then(|quarantine| quarantine.retried_by.as_deref())
                 == Some(self.config.build.as_str());
             if self.epochs.contains(&head.epoch) && !retried {
-                unit.then(After::Owner(OwnerMsg::Internal(Internal::RetryQuarantined(
-                    head.run.clone(),
-                ))));
+                unit.then(After::Owner(OwnerMsg::Internal(
+                    Internal::RetryQuarantined(head.run.clone()),
+                )));
             }
         }
         for (tenant, name) in deleting {
@@ -211,9 +209,10 @@ impl<P: Plane> Owner<P> {
     pub(crate) fn open_failed(&mut self, error: String) {
         tracing::error!(partition = %self.partition, %error, "the partition could not be opened");
         self.close();
-        self.out.push(Effect::Local(Message::Node(NodeMsg::OpenFailed(
-            self.partition,
-            error,
-        ))));
+        self.out
+            .push(Effect::Local(Message::Node(NodeMsg::OpenFailed(
+                self.partition,
+                error,
+            ))));
     }
 }

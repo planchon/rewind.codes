@@ -33,8 +33,8 @@ use crate::partition::OwnerMsg;
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    ActivationRequest, ActivationResult, Changed, HostTask, NodeReply, NodeRequest,
-    PartitionReply, PartitionRequest, StreamAttach, StreamId, SubscriptionKey,
+    ActivationRequest, ActivationResult, Changed, HostTask, NodeReply, NodeRequest, PartitionReply,
+    PartitionRequest, StreamAttach, StreamId, SubscriptionKey,
 };
 use crate::ports::{Clock, LinkError, NodeId, NodeLink, TenantId};
 
@@ -43,7 +43,11 @@ enum Input<P: Plane> {
     Message(Message<P>),
     Request(NodeRequest, oneshot::Sender<NodeReply>),
     /// An edge's request for the owner of a partition: routed by the node's map.
-    Route(PartitionId, PartitionRequest, oneshot::Sender<Result<NodeReply, EdgeError>>),
+    Route(
+        PartitionId,
+        PartitionRequest,
+        oneshot::Sender<Result<NodeReply, EdgeError>>,
+    ),
     Activation(Box<ActivationRequest>, oneshot::Sender<ActivationResult>),
     Subscribe(SubscriptionKey, Option<u64>, UnboundedSender<Changed>),
     Attach(TenantId, StreamAttach, UnboundedSender<HostTask>),
@@ -69,7 +73,9 @@ impl<P: Plane> Clone for NodeHandle<P> {
 
 impl<P: Plane> fmt::Debug for NodeHandle<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NodeHandle").field("node", &self.node).finish()
+        f.debug_struct("NodeHandle")
+            .field("node", &self.node)
+            .finish()
     }
 }
 
@@ -93,7 +99,10 @@ impl<P: Plane> NodeHandle<P> {
     }
 
     /// An activation a remote owner sent: run by the node's executors.
-    pub async fn serve_activation(&self, request: ActivationRequest) -> Result<ActivationResult, LinkError> {
+    pub async fn serve_activation(
+        &self,
+        request: ActivationRequest,
+    ) -> Result<ActivationResult, LinkError> {
         let (reply, answer) = oneshot::channel();
         self.inputs
             .send(Input::Activation(Box::new(request), reply))
@@ -181,7 +190,12 @@ impl Stream for Changes {
 
 /// Starts a node of the cluster `membership` joined, its remote requests carried by `link`.
 /// Returns its handle; the node's task runs until [`NodeHandle::stop`].
-pub fn spawn<P, M, L>(plane: Arc<P>, config: NodeConfig, membership: M, link: Arc<L>) -> NodeHandle<P>
+pub fn spawn<P, M, L>(
+    plane: Arc<P>,
+    config: NodeConfig,
+    membership: M,
+    link: Arc<L>,
+) -> NodeHandle<P>
 where
     P: Plane,
     M: Membership + 'static,
@@ -212,7 +226,10 @@ where
 
 /// The membership's events, to the node's task: the departure of the node it watches, and the
 /// changes of the control plane.
-fn watch_membership<P: Plane, M: Membership + 'static>(membership: Arc<M>, inputs: UnboundedSender<Input<P>>) {
+fn watch_membership<P: Plane, M: Membership + 'static>(
+    membership: Arc<M>,
+    inputs: UnboundedSender<Input<P>>,
+) {
     let watched = Arc::clone(&membership);
     let departures = inputs.clone();
     tokio::spawn(async move {

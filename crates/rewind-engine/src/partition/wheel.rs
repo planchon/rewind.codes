@@ -172,7 +172,10 @@ impl Wheel {
     }
 
     /// The earliest due time of the timers of the kinds `matching` takes.
-    pub(crate) fn timers_matching(&self, matching: impl Fn(&TimerKind) -> bool) -> Option<Timestamp> {
+    pub(crate) fn timers_matching(
+        &self,
+        matching: impl Fn(&TimerKind) -> bool,
+    ) -> Option<Timestamp> {
         self.timers
             .iter()
             .find(|timer| matching(&timer.kind))

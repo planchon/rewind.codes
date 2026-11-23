@@ -24,6 +24,10 @@ use crate::tasks::calls::CallMsg;
 pub(crate) type Job<P> = Pin<Box<dyn Future<Output = Message<P>> + Send + 'static>>;
 
 /// A message to an actor of the node.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a message is moved once per step: its size does not matter"
+)]
 pub(crate) enum Message<P: Plane> {
     /// To the owner of a partition held here (and the organization actors it hosts).
     Owner(PartitionId, OwnerMsg<P>),

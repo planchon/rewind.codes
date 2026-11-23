@@ -22,8 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use tokio::sync::mpsc::UnboundedSender;
 use rewind_core::{Digest, Epoch, PartitionId, Timestamp};
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::executors::{ExecMsg, Executors};
 use crate::org::OrgMsg;
@@ -226,10 +226,9 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                     let Some(winner) = rendezvous(*partition, live.iter().copied()) else {
                         continue;
                     };
-                    let gone = owner
-                        .node
-                        .as_ref()
-                        .is_none_or(|node| !alive.contains(node) || departed.as_ref() == Some(node));
+                    let gone = owner.node.as_ref().is_none_or(|node| {
+                        !alive.contains(node) || departed.as_ref() == Some(node)
+                    });
                     let mine = !executors_only && *winner == me && owner.node.as_ref() != Some(&me);
                     if gone || mine {
                         moves = moves.to(*partition, winner.clone());
@@ -324,11 +323,14 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     /// A request that reached the node.
     fn inbound(&mut self, request: NodeRequest, reply: ReplyTo) -> Vec<Effect<P>> {
         match request {
-            NodeRequest::Partition { partition, request } => match self.owners.get_mut(&partition)
-            {
-                Some(owner) if !owner.is_closed() => owner.handle(OwnerMsg::Request(request, reply)),
-                _ => vec![Effect::Reply(reply, NodeReply::NotOwner { partition })],
-            },
+            NodeRequest::Partition { partition, request } => {
+                match self.owners.get_mut(&partition) {
+                    Some(owner) if !owner.is_closed() => {
+                        owner.handle(OwnerMsg::Request(request, reply))
+                    }
+                    _ => vec![Effect::Reply(reply, NodeReply::NotOwner { partition })],
+                }
+            }
             NodeRequest::Organization { tenant, request } => {
                 let home = home_partition(&tenant, self.config.partitions);
                 match self.owners.get_mut(&home) {
@@ -336,7 +338,10 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                         tenant,
                         message: OrgMsg::Request(request, reply),
                     }),
-                    _ => vec![Effect::Reply(reply, NodeReply::NotOwner { partition: home })],
+                    _ => vec![Effect::Reply(
+                        reply,
+                        NodeReply::NotOwner { partition: home },
+                    )],
                 }
             }
             NodeRequest::Owner { partition, notice } => match self.owners.get_mut(&partition) {
@@ -472,9 +477,9 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             .owned_by(&me)
             .into_iter()
             .filter(|partition| {
-                self.owners
-                    .get(partition)
-                    .is_none_or(|owner| owner.is_closed() || previous.epoch(*partition) != self.map.epoch(*partition))
+                self.owners.get(partition).is_none_or(|owner| {
+                    owner.is_closed() || previous.epoch(*partition) != self.map.epoch(*partition)
+                })
             })
             .collect();
         let lost: Vec<PartitionId> = self
@@ -586,14 +591,18 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 effects.push(job(async move {
                     use crate::ports::PartitionLog;
                     if let Ok(Some(head)) = log.run(&run).await
-                        && let Ok(history) = crate::partition::history_of(&*plane, &*log, &head).await
+                        && let Ok(history) =
+                            crate::partition::history_of(&*plane, &*log, &head).await
                     {
                         let summary = log.summary(&run).await.ok().flatten();
                         let _ = sink.send(Changed {
                             run: run.clone(),
                             namespace: head.namespace.clone(),
                             summary: summary.map(|indexed| indexed.summary),
-                            entries: history.into_iter().filter(|entry| entry.index >= from).collect(),
+                            entries: history
+                                .into_iter()
+                                .filter(|entry| entry.index >= from)
+                                .collect(),
                         });
                     }
                     Message::Nothing
@@ -620,8 +629,10 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         attach: StreamAttach,
         sink: UnboundedSender<HostTask>,
     ) -> Vec<Effect<P>> {
-        self.streams
-            .insert(attach.stream.clone(), (tenant.clone(), attach.clone(), sink));
+        self.streams.insert(
+            attach.stream.clone(),
+            (tenant.clone(), attach.clone(), sink),
+        );
         self.route(vec![Effect::Request {
             to: Target::Home(tenant.clone()),
             request: NodeRequest::Organization {
@@ -696,4 +707,3 @@ fn refuse_missing_owner<P: Plane>(partition: PartitionId, message: OwnerMsg<P>) 
         _ => Vec::new(),
     }
 }
-

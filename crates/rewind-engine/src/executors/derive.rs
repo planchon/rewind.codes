@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunStatus, Seq,
-    Shape, Timestamp, Toolset,
+    Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunStatus, Seq, Shape,
+    Timestamp, Toolset,
 };
 
 use crate::ports::{
@@ -140,13 +140,7 @@ pub(crate) fn summary_of(
 
 /// The summary of a run created and not activated yet: `pending`.
 pub(crate) fn pending_summary(head: &RunHead, headline: &str) -> IndexedSummary {
-    let mut summary = summary_of(
-        head,
-        headline,
-        &[],
-        &Toolset::empty(),
-        &BTreeMap::new(),
-    );
+    let mut summary = summary_of(head, headline, &[], &Toolset::empty(), &BTreeMap::new());
     summary.summary.status = RunStatus::Pending;
     summary
 }
@@ -259,7 +253,11 @@ pub(crate) fn effects_of(
 }
 
 /// The shapes of the results of the new entries, before their payloads leave them.
-pub(crate) fn shapes_of(head: &RunHead, history: &[HistoryEntry], from: usize) -> Vec<CounterDelta> {
+pub(crate) fn shapes_of(
+    head: &RunHead,
+    history: &[HistoryEntry],
+    from: usize,
+) -> Vec<CounterDelta> {
     let mut tools: BTreeMap<Seq, &str> = BTreeMap::new();
     let mut deltas = Vec::new();
     for (index, entry) in history.iter().enumerate() {
@@ -308,7 +306,11 @@ pub(crate) fn counters_of(
                 let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
                 counters.runs.started += 1;
                 if let Some(workflow) = &workflow {
-                    counters.workflows.entry(workflow.clone()).or_default().started += 1;
+                    counters
+                        .workflows
+                        .entry(workflow.clone())
+                        .or_default()
+                        .started += 1;
                 }
                 let script = counters.scripts.entry(head.script).or_default();
                 script.runs.started += 1;
@@ -333,7 +335,9 @@ pub(crate) fn counters_of(
                     let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
                     let calls = counters.tools.entry((*tool).to_owned()).or_default();
                     calls.completed += 1;
-                    calls.latency.record(entry.recorded_at.0.saturating_sub(at.0));
+                    calls
+                        .latency
+                        .record(entry.recorded_at.0.saturating_sub(at.0));
                 }
             }
             Event::Completion(Completion::ToolCallFailed { seq, error }) if new => {
@@ -342,7 +346,9 @@ pub(crate) fn counters_of(
                     let calls = counters.tools.entry((*tool).to_owned()).or_default();
                     calls.failed += 1;
                     *calls.errors.entry(error.kind).or_default() += 1;
-                    calls.latency.record(entry.recorded_at.0.saturating_sub(at.0));
+                    calls
+                        .latency
+                        .record(entry.recorded_at.0.saturating_sub(at.0));
                 }
             }
             _ => {}

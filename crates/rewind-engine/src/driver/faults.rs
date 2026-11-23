@@ -59,7 +59,11 @@ impl Faults {
     }
 
     /// Drops the next `times` requests that match.
-    pub fn drop_next(&mut self, times: usize, matcher: impl Fn(&NodeRequest) -> bool + Send + 'static) {
+    pub fn drop_next(
+        &mut self,
+        times: usize,
+        matcher: impl Fn(&NodeRequest) -> bool + Send + 'static,
+    ) {
         self.rules.push(Rule {
             matcher: Box::new(matcher),
             traffic: Traffic::Drop,

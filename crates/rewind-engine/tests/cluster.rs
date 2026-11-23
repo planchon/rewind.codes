@@ -16,6 +16,7 @@ use rewind_core::{
     ToolPolicy, ToolRoute, Toolset,
 };
 use rewind_engine::edge::EdgeError;
+use rewind_engine::plane::HostTools;
 use rewind_engine::ports::link::{
     NodeReply, NodeRequest, OwnerNotice, PartitionReply, PartitionRequest, Refusal, SignalAtOwner,
     StreamAttach, StreamId,
@@ -24,7 +25,6 @@ use rewind_engine::ports::{
     Delivery, Enqueued, NamespaceName, NodeId, RunRef, TaskState, TenantId, home_partition,
     namespace_partition,
 };
-use rewind_engine::plane::HostTools;
 use serde_json::json;
 use support::plane::{TestDriver, World, config, node};
 use support::{FakeExecutor, RecordingDispatcher, request};
@@ -42,7 +42,10 @@ fn namespace_on(world: &World, owner: &NodeId) -> (NamespaceName, PartitionId) {
         .expect("the node owns a partition")
 }
 
-fn in_namespace(mut request: rewind_engine::StartRun, namespace: &NamespaceName) -> rewind_engine::StartRun {
+fn in_namespace(
+    mut request: rewind_engine::StartRun,
+    namespace: &NamespaceName,
+) -> rewind_engine::StartRun {
     request.namespace = namespace.clone();
     request
 }
@@ -68,11 +71,17 @@ fn waiter() -> FakeExecutor {
     )
 }
 
-fn drain(stream: &mut tokio::sync::mpsc::UnboundedReceiver<rewind_engine::ports::link::HostTask>) -> Vec<rewind_engine::ports::link::HostTask> {
+fn drain(
+    stream: &mut tokio::sync::mpsc::UnboundedReceiver<rewind_engine::ports::link::HostTask>,
+) -> Vec<rewind_engine::ports::link::HostTask> {
     TestDriver::drain(stream)
 }
 
-async fn two_nodes(programs: FakeExecutor, dispatcher: RecordingDispatcher, partitions: u16) -> World {
+async fn two_nodes(
+    programs: FakeExecutor,
+    dispatcher: RecordingDispatcher,
+    partitions: u16,
+) -> World {
     World::with(
         programs,
         dispatcher,
@@ -105,7 +114,11 @@ async fn a_node_killed_during_an_activation_is_taken_over_and_the_run_goes_on() 
     world.settle().await;
 
     let map = world.driver.map(&b).unwrap();
-    assert_eq!(map.owner(partition), Some(&b), "node b took the partition over");
+    assert_eq!(
+        map.owner(partition),
+        Some(&b),
+        "node b took the partition over"
+    );
     let view = world.view(&run).await;
     assert_eq!(view.head.status, RunStatus::Completed);
     assert_eq!(view.head.attempts, 0, "the commit reset the count");
@@ -117,7 +130,13 @@ async fn a_node_killed_during_an_activation_is_taken_over_and_the_run_goes_on() 
 
 #[tokio::test]
 async fn a_partition_moves_to_a_node_that_joins_and_its_runs_go_on() {
-    let mut world = World::with(waiter(), RecordingDispatcher::echo(), 8, &[config("node-a", 8)]).await;
+    let mut world = World::with(
+        waiter(),
+        RecordingDispatcher::echo(),
+        8,
+        &[config("node-a", 8)],
+    )
+    .await;
     let a = node("node-a");
     let mut runs = Vec::new();
     for n in 0..8 {
@@ -144,15 +163,24 @@ async fn a_partition_moves_to_a_node_that_joins_and_its_runs_go_on() {
     assert!(!moved.is_empty(), "node b takes the partitions it wins");
     assert_eq!(after.owned_by(&a).len() + moved.len(), 8);
     for partition in &moved {
-        assert!(after.epoch(*partition) > before.epoch(*partition), "a move raises the epoch");
+        assert!(
+            after.epoch(*partition) > before.epoch(*partition),
+            "a move raises the epoch"
+        );
     }
-    assert_eq!(world.driver.node(&a).unwrap().partitions().len(), 8 - moved.len());
+    assert_eq!(
+        world.driver.node(&a).unwrap().partitions().len(),
+        8 - moved.len()
+    );
     assert_eq!(world.driver.node(&b).unwrap().partitions(), moved);
 
     // Every run goes on, wherever its partition is now.
     for (run, _) in &runs {
         assert_eq!(
-            world.signal(run, "go", json!({ "moved": true }), None).await.unwrap(),
+            world
+                .signal(run, "go", json!({ "moved": true }), None)
+                .await
+                .unwrap(),
             Enqueued::Accepted
         );
     }
@@ -219,7 +247,10 @@ async fn a_lost_message_is_rebuilt_from_the_records_when_the_partition_moves() {
         .run;
     world.settle().await;
     assert_eq!(world.driver.faults().dropped, 1);
-    assert!(world.plane.dispatcher.calls().is_empty(), "the call waits for a grant it lost");
+    assert!(
+        world.plane.dispatcher.calls().is_empty(),
+        "the call waits for a grant it lost"
+    );
     assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
 
     // Nothing asks again: the call goes once the partition's next owner rebuilds it from the
@@ -252,7 +283,11 @@ async fn an_owner_cut_off_is_fenced_at_its_next_commit() {
     assert!(world.cluster.kill(&a));
     world.settle().await;
     assert_eq!(world.driver.map(&b).unwrap().owner(partition), Some(&b));
-    assert_eq!(world.driver.node(&a).unwrap().partitions(), held, "node a does not know");
+    assert_eq!(
+        world.driver.node(&a).unwrap().partitions(),
+        held,
+        "node a does not know"
+    );
 
     // An edge's request reaches node a's stale owner: its commit is refused as fenced, and the
     // owner drops the partition.
@@ -274,8 +309,19 @@ async fn an_owner_cut_off_is_fenced_at_its_next_commit() {
         .await
         .unwrap();
     assert!(matches!(reply, NodeReply::NotOwner { .. }), "{reply:?}");
-    assert!(!world.driver.node(&a).unwrap().partitions().contains(&partition));
-    assert_eq!(world.view(&run).await.head.status, RunStatus::Active, "nothing of it is visible");
+    assert!(
+        !world
+            .driver
+            .node(&a)
+            .unwrap()
+            .partitions()
+            .contains(&partition)
+    );
+    assert_eq!(
+        world.view(&run).await.head.status,
+        RunStatus::Active,
+        "nothing of it is visible"
+    );
 
     // Node b owns the run.
     world
@@ -298,17 +344,32 @@ async fn a_node_that_does_not_run_the_run_s_epoch_sends_its_activations_to_one_t
     remote.epochs = Some(BTreeSet::from([Epoch(1)]));
     let mut world = World::with(waiter(), RecordingDispatcher::echo(), 1, &[owner, remote]).await;
     let (a, b) = (node("node-a"), node("node-b"));
-    assert_eq!(world.driver.map(&a).unwrap().owned_by(&a).len(), 1, "an executor node owns nothing");
+    assert_eq!(
+        world.driver.map(&a).unwrap().owned_by(&a).len(),
+        1,
+        "an executor node owns nothing"
+    );
     let run = world.run(request("waiter", json!({}))).await;
     assert_eq!(world.events(&run).await, ["run_started", "signal_awaited"]);
     assert_eq!(world.driver.node(&a).unwrap().cached_instances(), 0);
-    assert_eq!(world.driver.node(&b).unwrap().cached_instances(), 1, "the instance stays warm there");
+    assert_eq!(
+        world.driver.node(&b).unwrap().cached_instances(),
+        1,
+        "the instance stays warm there"
+    );
     let starts = world.plane.executor.starts();
 
-    world.signal(&run, "go", json!({ "ok": true }), None).await.unwrap();
+    world
+        .signal(&run, "go", json!({ "ok": true }), None)
+        .await
+        .unwrap();
     world.settle().await;
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
-    assert_eq!(world.plane.executor.starts(), starts, "the same node, warm: no replay");
+    assert_eq!(
+        world.plane.executor.starts(),
+        starts,
+        "the same node, warm: no replay"
+    );
 }
 
 fn host_call(policy: Interruption) -> rewind_engine::StartRun {
@@ -387,8 +448,14 @@ async fn a_stream_that_comes_back_within_its_grace_keeps_its_tasks() {
         .unwrap();
     world.advance(60_000);
     world.settle().await;
-    assert!(drain(&mut second).is_empty(), "the task stays the worker's: not handed again");
-    world.complete(&handed[0].token, json!({ "answer": 42 })).await.unwrap();
+    assert!(
+        drain(&mut second).is_empty(),
+        "the task stays the worker's: not handed again"
+    );
+    world
+        .complete(&handed[0].token, json!({ "answer": 42 }))
+        .await
+        .unwrap();
     world.settle().await;
     let view = world.view(&run).await;
     assert_eq!(view.head.status, RunStatus::Completed);
@@ -415,7 +482,10 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
         .attach_stream(&edge, TenantId::local(), attach("s2", "worker-2", &edge))
         .unwrap();
     world.settle().await;
-    assert!(drain(&mut second).is_empty(), "within the grace, the tasks wait for their worker");
+    assert!(
+        drain(&mut second).is_empty(),
+        "within the grace, the tasks wait for their worker"
+    );
     world.advance(61_000);
     world.settle().await;
 
@@ -430,7 +500,10 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
         world.complete(&old.token, json!({})).await,
         Err(EdgeError::Refused(Refusal::TaskGone))
     ));
-    world.complete(&again[0].token, json!({ "answer": 7 })).await.unwrap();
+    world
+        .complete(&again[0].token, json!({ "answer": 7 }))
+        .await
+        .unwrap();
     world.settle().await;
     assert_eq!(world.view(&retried).await.head.status, RunStatus::Completed);
 

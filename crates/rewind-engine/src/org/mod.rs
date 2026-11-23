@@ -41,6 +41,10 @@ use crate::ports::{
 };
 
 /// A message to an organization actor.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a message is moved once per step: its size does not matter"
+)]
 pub(crate) enum OrgMsg {
     Request(Box<OrgRequest>, ReplyTo),
     /// The tenant's settings and a namespace's limits, read from the control plane.
@@ -49,10 +53,14 @@ pub(crate) enum OrgMsg {
         read: Result<(Tenant, Quotas), String>,
     },
     /// The grace of a closed stream is over.
-    Grace { stream: StreamId },
+    Grace {
+        stream: StreamId,
+    },
     /// A change of the control plane dropped what the actor cached of the tenant or a
     /// namespace.
-    Forget { namespace: Option<NamespaceName> },
+    Forget {
+        namespace: Option<NamespaceName>,
+    },
 }
 
 impl fmt::Debug for OrgMsg {
@@ -67,6 +75,10 @@ impl fmt::Debug for OrgMsg {
 }
 
 /// What an organization actor asks its host for.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "an effect is moved once per step: its size does not matter"
+)]
 pub(crate) enum OrgEffect<P: Plane> {
     /// Write the actor's state in its home partition, with an outbox entry per alert; then
     /// these effects.
@@ -320,10 +332,11 @@ impl<P: Plane> OrgActor<P> {
         let in_flight = &self.state.admissions;
         let of_namespace = |admission: &&Admission| admission.namespace == admit.namespace;
         let reported = self.reported.get(&admit.namespace);
-        let new_script = !reported.is_some_and(|counts| counts.gauges.scripts.contains_key(&admit.script))
-            && !in_flight
-                .iter()
-                .any(|admission| admission.namespace == admit.namespace && admission.script == admit.script);
+        let new_script = !reported
+            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admit.script))
+            && !in_flight.iter().any(|admission| {
+                admission.namespace == admit.namespace && admission.script == admit.script
+            });
         let active_namespace = reported.map_or(0, |counts| counts.gauges.active_runs)
             + in_flight.iter().filter(of_namespace).count() as u64;
         let active_tenant = self
@@ -434,7 +447,12 @@ impl<P: Plane> OrgActor<P> {
                 runs_namespace,
                 namespace_limits.runs_per_month,
             ),
-            (None, QuotaKind::RunsPerMonth, runs_tenant, ceiling.runs_per_month),
+            (
+                None,
+                QuotaKind::RunsPerMonth,
+                runs_tenant,
+                ceiling.runs_per_month,
+            ),
         ];
         for (namespace, quota, used, limit) in crossed {
             alerts.extend(self.crossed(namespace, quota, month, used, used + 1, limit, now));
@@ -532,7 +550,11 @@ impl<P: Plane> OrgActor<P> {
             changed |= before != self.state.admissions.len();
         }
         let month = Month::of(report.at);
-        let previous = self.reported.get(&report.namespace).cloned().unwrap_or_default();
+        let previous = self
+            .reported
+            .get(&report.namespace)
+            .cloned()
+            .unwrap_or_default();
         let previous_cpu = if previous.month == Some(month) {
             previous.cpu_this_month
         } else {
@@ -561,7 +583,8 @@ impl<P: Plane> OrgActor<P> {
                 .filter(|counts| counts.month == Some(month))
                 .map(|counts| counts.cpu_this_month)
                 .sum();
-            let tenant_before = tenant_cpu.saturating_sub(report.cpu_this_month.saturating_sub(previous_cpu));
+            let tenant_before =
+                tenant_cpu.saturating_sub(report.cpu_this_month.saturating_sub(previous_cpu));
             alerts.extend(self.crossed(
                 Some(report.namespace.clone()),
                 QuotaKind::CpuPerMonth,
@@ -592,7 +615,12 @@ impl<P: Plane> OrgActor<P> {
 
     /// Releases what an earlier owner of a partition held: its admissions not reported, its
     /// slots, its host tasks.
-    fn release_owner(&mut self, partition: PartitionId, epoch: PartitionEpoch, out: &mut Vec<OrgEffect<P>>) {
+    fn release_owner(
+        &mut self,
+        partition: PartitionId,
+        epoch: PartitionEpoch,
+        out: &mut Vec<OrgEffect<P>>,
+    ) {
         let partitions = self.partitions;
         let tenant = self.tenant.clone();
         let stale: BTreeSet<_> = self
@@ -676,7 +704,13 @@ impl<P: Plane> OrgActor<P> {
     }
 
     /// Records an alert once.
-    fn raise(&mut self, key: QuotaAlertKey, used: u64, limit: u64, now: Timestamp) -> Option<QuotaAlert> {
+    fn raise(
+        &mut self,
+        key: QuotaAlertKey,
+        used: u64,
+        limit: u64,
+        now: Timestamp,
+    ) -> Option<QuotaAlert> {
         if self.state.alerts.iter().any(|alert| alert.key == key) {
             return None;
         }
@@ -893,7 +927,9 @@ fn takes(stream: &StreamAttach, offer: &HostTaskOffer) -> bool {
             .labels
             .iter()
             .all(|(key, value)| task.labels.get(key) == Some(value))
-        && stream.toolset.is_none_or(|toolset| toolset == offer.toolset)
+        && stream
+            .toolset
+            .is_none_or(|toolset| toolset == offer.toolset)
         && (stream.tools.is_empty() || stream.tools.contains(&task.tool))
 }
 

@@ -60,7 +60,10 @@ impl Router {
 
     /// The map cached, if any.
     pub fn map(&self) -> Option<PartitionMap> {
-        self.map.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.map
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Caches a map read from the cluster, or received as a change.
@@ -99,7 +102,10 @@ mod tests {
         let catalog = MemoryCatalog::new();
         let router = Router::new(node.clone(), NonZeroU16::new(64).unwrap());
         let run = RunId::in_partition(PartitionId::new(7), Timestamp(1), 1);
-        assert_eq!(router.partition_of(&catalog, run).await.unwrap(), Some(PartitionId::new(7)));
+        assert_eq!(
+            router.partition_of(&catalog, run).await.unwrap(),
+            Some(PartitionId::new(7))
+        );
         let legacy = RunId::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001);
         assert_eq!(router.partition_of(&catalog, legacy).await.unwrap(), None);
         catalog.put_legacy_run(legacy, PartitionId::new(3)).unwrap();

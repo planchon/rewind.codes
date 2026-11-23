@@ -25,10 +25,10 @@ use crate::ports::link::{
 };
 use crate::ports::partition::{Change, CreateRun};
 use crate::ports::{
-    ArchiveError, Attempt, BlobStore, CatalogStore, Created, DueTimer, Enqueued,
-    InboxItem, LinkError, Namespace, NamespaceName, NodeId, PartitionLog, Projection,
-    Quarantine, QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, TenantId, TimerChange,
-    TimerKind, Trigger, Watcher, WebhookTarget,
+    ArchiveError, Attempt, BlobStore, CatalogStore, Created, DueTimer, Enqueued, InboxItem,
+    LinkError, Namespace, NamespaceName, NodeId, PartitionLog, Projection, Quarantine,
+    QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, TenantId, TimerChange, TimerKind,
+    Trigger, Watcher, WebhookTarget,
 };
 use crate::text;
 
@@ -351,12 +351,13 @@ impl<P: Plane> Owner<P> {
                 found,
             } => match found {
                 Ok(Some(namespace)) if namespace.deleting_since.is_some() => {
-                    if self.deleting.insert((tenant.clone(), name.clone())) {
-                        self.erase_namespace(tenant, name);
-                    }
+                    self.deleting.insert((tenant.clone(), name.clone()));
+                    self.erase_namespace(tenant, name);
                 }
                 Ok(_) => {}
-                Err(error) => tracing::error!(%tenant, %name, %error, "a namespace could not be read"),
+                Err(error) => {
+                    tracing::error!(%tenant, %name, %error, "a namespace could not be read")
+                }
             },
             Step::NamespaceRuns {
                 tenant,
@@ -399,15 +400,24 @@ impl<P: Plane> Owner<P> {
     /// actor admits it, then it is created.
     fn start(&mut self, start: Box<StartAtOwner>, reply: ReplyTo) {
         let tenant = start.run.tenant.clone();
-        if self.deleting.contains(&(tenant.clone(), start.namespace.clone())) {
-            self.reply(reply, PartitionReply::Started(Err(Refusal::NamespaceDeleting)));
+        if self
+            .deleting
+            .contains(&(tenant.clone(), start.namespace.clone()))
+        {
+            self.reply(
+                reply,
+                PartitionReply::Started(Err(Refusal::NamespaceDeleting)),
+            );
             return;
         }
         if let Some(parent) = start.metadata.parent
             && !self.runs.contains_key(&parent.run)
             && self.log.is_none()
         {
-            self.reply(reply, PartitionReply::Started(Err(Refusal::ParentNotStarted(parent.run))));
+            self.reply(
+                reply,
+                PartitionReply::Started(Err(Refusal::ParentNotStarted(parent.run))),
+            );
             return;
         }
         let Some(key) = start.start_key.clone() else {
@@ -508,7 +518,12 @@ impl<P: Plane> Owner<P> {
         self.ask(to, request, Ask::Start { start, reply });
     }
 
-    fn admitted(&mut self, start: Box<StartAtOwner>, reply: ReplyTo, admission: Result<(), Refusal>) {
+    fn admitted(
+        &mut self,
+        start: Box<StartAtOwner>,
+        reply: ReplyTo,
+        admission: Result<(), Refusal>,
+    ) {
         let waiting = self.starting_done(&start);
         if let Err(refusal) = admission {
             for reply in std::iter::once(reply).chain(waiting) {
@@ -636,15 +651,23 @@ impl<P: Plane> Owner<P> {
             return;
         };
         if is_reserved_signal(&signal.name) {
-            let refused = crate::workflows::SignalRefused::Reserved(signal.name.clone()).to_string();
-            self.reply(reply, PartitionReply::Enqueued(Err(Refusal::Signal(refused))));
+            let refused =
+                crate::workflows::SignalRefused::Reserved(signal.name.clone()).to_string();
+            self.reply(
+                reply,
+                PartitionReply::Enqueued(Err(Refusal::Signal(refused))),
+            );
             return;
         }
         if slot.head.is_ended() {
             self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::RunEnded)));
             return;
         }
-        if signal.key.as_ref().is_some_and(|key| slot.keys.contains(key)) {
+        if signal
+            .key
+            .as_ref()
+            .is_some_and(|key| slot.keys.contains(key))
+        {
             self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::Duplicate)));
             return;
         }
@@ -693,14 +716,22 @@ impl<P: Plane> Owner<P> {
 
     fn enqueue_signal(&mut self, signal: SignalAtOwner, reply: ReplyTo, checked: bool) {
         let Some(slot) = self.slot(signal.run.id) else {
-            self.reply(reply, PartitionReply::Enqueued(Err(Refusal::RunNotFound(signal.run.id))));
+            self.reply(
+                reply,
+                PartitionReply::Enqueued(Err(Refusal::RunNotFound(signal.run.id))),
+            );
             return;
         };
         if slot.head.is_ended() {
             self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::RunEnded)));
             return;
         }
-        if checked && signal.key.as_ref().is_some_and(|key| slot.keys.contains(key)) {
+        if checked
+            && signal
+                .key
+                .as_ref()
+                .is_some_and(|key| slot.keys.contains(key))
+        {
             self.reply(reply, PartitionReply::Enqueued(Ok(Enqueued::Duplicate)));
             return;
         }
@@ -720,7 +751,10 @@ impl<P: Plane> Owner<P> {
             }),
             key,
         );
-        unit.then(After::Reply(reply, PartitionReply::Enqueued(Ok(Enqueued::Accepted))));
+        unit.then(After::Reply(
+            reply,
+            PartitionReply::Enqueued(Ok(Enqueued::Accepted)),
+        ));
         self.push(unit);
     }
 
@@ -731,10 +765,7 @@ impl<P: Plane> Owner<P> {
         let hash = super::tokens::hash(token);
         let partition = self.partition;
         self.out.push(job(async move {
-            let target = log
-                .webhook(hash)
-                .await
-                .map_err(|error| error.to_string());
+            let target = log.webhook(hash).await.map_err(|error| error.to_string());
             step(
                 partition,
                 Step::Webhook {
@@ -749,7 +780,10 @@ impl<P: Plane> Owner<P> {
 
     pub(crate) fn cancel(&mut self, run: &RunRef, message: Option<String>, reply: ReplyTo) {
         let Some(slot) = self.slot(run.id) else {
-            self.reply(reply, PartitionReply::Enqueued(Err(Refusal::RunNotFound(run.id))));
+            self.reply(
+                reply,
+                PartitionReply::Enqueued(Err(Refusal::RunNotFound(run.id))),
+            );
             return;
         };
         if slot.head.is_ended() {
@@ -765,7 +799,10 @@ impl<P: Plane> Owner<P> {
             }),
             None,
         );
-        unit.then(After::Reply(reply, PartitionReply::Enqueued(Ok(Enqueued::Accepted))));
+        unit.then(After::Reply(
+            reply,
+            PartitionReply::Enqueued(Ok(Enqueued::Accepted)),
+        ));
         self.push(unit);
     }
 
@@ -857,16 +894,17 @@ impl<P: Plane> Owner<P> {
         let head = slot.head.clone();
         let summary = slot.summary.clone();
         if self.epochs.contains(&head.epoch) && local_pool {
-            self.out.push(Effect::Local(Message::Executors(ExecMsg::Runnable(
-                Box::new(LocalRun {
-                    partition,
-                    log,
-                    head,
-                    summary,
-                    purpose,
-                    oldest,
-                }),
-            ))));
+            self.out
+                .push(Effect::Local(Message::Executors(ExecMsg::Runnable(
+                    Box::new(LocalRun {
+                        partition,
+                        log,
+                        head,
+                        summary,
+                        purpose,
+                        oldest,
+                    }),
+                ))));
             return;
         }
         // A remote executor: the node used last while it lives, else the first that runs the
@@ -887,8 +925,9 @@ impl<P: Plane> Owner<P> {
             // A node may have joined since the members were read: they are read again once.
             if self.awaiting_nodes.insert(run.id) {
                 self.awaiting_purposes.insert(run.id, purpose);
-                self.out
-                    .push(Effect::Local(Message::Node(crate::node::NodeMsg::RefreshNodes)));
+                self.out.push(Effect::Local(Message::Node(
+                    crate::node::NodeMsg::RefreshNodes,
+                )));
                 return;
             }
             self.awaiting_nodes.remove(&run.id);
@@ -896,7 +935,8 @@ impl<P: Plane> Owner<P> {
                 "no node runs the epoch {} of run {}{}",
                 head.epoch,
                 run.id,
-                pool.map(|pool| format!(" in the pool {pool}")).unwrap_or_default()
+                pool.map(|pool| format!(" in the pool {pool}"))
+                    .unwrap_or_default()
             );
             self.activation_failed(run.id, error);
             return;
@@ -904,10 +944,16 @@ impl<P: Plane> Owner<P> {
         let plane = Arc::clone(&self.plane);
         let run_id = run.id;
         self.out.push(job(async move {
-            let request =
-                crate::executors::prepare(&*plane, &*log, head, summary, purpose, !warm || purpose != Purpose::Runnable)
-                    .await
-                    .map(Box::new);
+            let request = crate::executors::prepare(
+                &*plane,
+                &*log,
+                head,
+                summary,
+                purpose,
+                !warm || purpose != Purpose::Runnable,
+            )
+            .await
+            .map(Box::new);
             step(
                 partition,
                 Step::Prepared {
@@ -941,8 +987,8 @@ impl<P: Plane> Owner<P> {
             }
             ActivationResult::Quarantined { kind, reason } => {
                 let now = self.now();
-                let retried_by = (purpose == Purpose::QuarantineRetry)
-                    .then(|| self.config.build.clone());
+                let retried_by =
+                    (purpose == Purpose::QuarantineRetry).then(|| self.config.build.clone());
                 let quarantine = Quarantine {
                     kind,
                     reason,
@@ -971,7 +1017,10 @@ impl<P: Plane> Owner<P> {
             }
             ActivationResult::Released => {
                 let mut unit = Unit::new();
-                if self.slot(run).is_some_and(|slot| slot.head.quarantine.is_some()) {
+                if self
+                    .slot(run)
+                    .is_some_and(|slot| slot.head.quarantine.is_some())
+                {
                     self.release_in(&mut unit, &run_ref);
                 }
                 for reply in self
@@ -1007,9 +1056,10 @@ impl<P: Plane> Owner<P> {
                 let plane = Arc::clone(&self.plane);
                 let partition = self.partition;
                 self.out.push(job(async move {
-                    let request = crate::executors::prepare(&*plane, &*log, head, summary, purpose, true)
-                        .await
-                        .map(Box::new);
+                    let request =
+                        crate::executors::prepare(&*plane, &*log, head, summary, purpose, true)
+                            .await
+                            .map(Box::new);
                     step(partition, Step::Prepared { run, node, request })
                 }));
             }
@@ -1080,9 +1130,12 @@ impl<P: Plane> Owner<P> {
             .map(|slot| std::mem::take(&mut slot.give_up))
             .unwrap_or_default()
         {
-            unit.then(After::Reply(reply, PartitionReply::Done(Err(Refusal::Unavailable(
-                "the run could not be given up: try again".into(),
-            )))));
+            unit.then(After::Reply(
+                reply,
+                PartitionReply::Done(Err(Refusal::Unavailable(
+                    "the run could not be given up: try again".into(),
+                ))),
+            ));
         }
         // The run is tried again by its timer, not at once.
         unit.then(After::Rest(run_ref));
@@ -1105,7 +1158,11 @@ impl<P: Plane> Owner<P> {
                 reason: quarantine.reason.clone(),
             },
         };
-        let entry = self.outbox_entry(run.tenant.clone(), Some(run.id), Projection::Webhooks(event));
+        let entry = self.outbox_entry(
+            run.tenant.clone(),
+            Some(run.id),
+            Projection::Webhooks(event),
+        );
         unit.project(entry);
     }
 
@@ -1274,7 +1331,10 @@ impl<P: Plane> Owner<P> {
             unit.then(After::Forget(run_ref.clone()));
             unit.then(After::Seal(run_ref.clone()));
             for watcher in &reads.watchers {
-                unit.then(After::Queue(RunRef::new(run_ref.tenant.clone(), watcher.run)));
+                unit.then(After::Queue(RunRef::new(
+                    run_ref.tenant.clone(),
+                    watcher.run,
+                )));
             }
         } else {
             unit.then(After::Confirm(run_ref.clone(), head.history_len));
@@ -1359,7 +1419,9 @@ impl<P: Plane> Owner<P> {
             attempt,
         });
         if self.deleting.contains(&(run.tenant.clone(), namespace)) {
-            unit.then(After::Owner(OwnerMsg::Internal(Internal::Erase(run.clone()))));
+            unit.then(After::Owner(OwnerMsg::Internal(Internal::Erase(
+                run.clone(),
+            ))));
         } else {
             unit.change(Change::Timer(TimerChange::Set(DueTimer {
                 at: ended_at.saturating_add(retention),
@@ -1545,7 +1607,10 @@ impl<P: Plane> Owner<P> {
         let (from, to) = self.wheel.advance();
         let partition = self.partition;
         self.out.push(job(async move {
-            let read = log.timers(from, to).await.map_err(|error| error.to_string());
+            let read = log
+                .timers(from, to)
+                .await
+                .map_err(|error| error.to_string());
             Message::Owner(partition, OwnerMsg::HorizonRead(read))
         }));
     }
@@ -1647,7 +1712,8 @@ impl<P: Plane> Owner<P> {
             let run = summary.run.clone();
             if summary.status.is_terminal() {
                 self.dispatch(OwnerMsg::Internal(Internal::Erase(run)));
-            } else {
+            } else if self.cancelling.insert(run.id) {
+                // Cancelled once, through the normal path: its end erases it.
                 self.dispatch(OwnerMsg::Internal(Internal::Cancel(
                     run,
                     "the namespace is being erased".into(),
@@ -1869,8 +1935,10 @@ async fn drop_namespace<P: Plane>(
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        let rows: Vec<(TenantId, Digest)> =
-            tests.into_iter().map(|digest| (tenant.clone(), digest)).collect();
+        let rows: Vec<(TenantId, Digest)> = tests
+            .into_iter()
+            .map(|digest| (tenant.clone(), digest))
+            .collect();
         catalog
             .drop_tests(&rows, true)
             .await

@@ -23,7 +23,10 @@ use crate::ports::{
 impl<P: Plane> Owner<P> {
     /// Hands a durable outbox entry to its projection.
     pub(crate) fn project(&mut self, entry: OutboxEntry) {
-        let attempts = self.outbox.get(&entry.id).map_or(0, |(_, attempts)| *attempts);
+        let attempts = self
+            .outbox
+            .get(&entry.id)
+            .map_or(0, |(_, attempts)| *attempts);
         self.outbox.insert(entry.id, (entry.clone(), attempts));
         self.consume(entry);
     }

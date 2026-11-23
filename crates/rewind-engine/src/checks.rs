@@ -35,7 +35,8 @@ pub(crate) async fn bounds<C: CatalogStore>(
     tenant: &TenantId,
     namespace: &NamespaceName,
 ) -> Result<NamespaceBounds, BoundsError> {
-    let unavailable = |error: crate::ports::CatalogError| BoundsError::Unavailable(error.to_string());
+    let unavailable =
+        |error: crate::ports::CatalogError| BoundsError::Unavailable(error.to_string());
     let record = catalog
         .get_tenant(tenant)
         .await
@@ -63,7 +64,10 @@ pub(crate) async fn bounds<C: CatalogStore>(
 }
 
 /// The TTL a run asks for, within its bounds.
-pub(crate) fn ttl(requested: Option<Duration>, bounds: &NamespaceBounds) -> Result<Duration, Duration> {
+pub(crate) fn ttl(
+    requested: Option<Duration>,
+    bounds: &NamespaceBounds,
+) -> Result<Duration, Duration> {
     let ttl = requested.unwrap_or(bounds.default_ttl);
     if ttl.is_zero() || ttl > bounds.max_ttl {
         return Err(ttl);

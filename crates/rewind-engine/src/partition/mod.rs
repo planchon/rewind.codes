@@ -55,6 +55,10 @@ pub(crate) use runs::history_of;
 use wheel::Wheel;
 
 /// A message to the owner of a partition.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a message is moved once per step: its size does not matter"
+)]
 pub(crate) enum OwnerMsg<P: Plane> {
     /// The partition is open and recovered.
     Opened(Box<Opened<P>>),
@@ -115,7 +119,15 @@ impl<P: Plane> fmt::Debug for OwnerMsg<P> {
             OwnerMsg::Org { tenant, message } => write!(f, "Org({tenant}, {message:?})"),
             OwnerMsg::Answer { tag, answer } => write!(f, "Answer({tag}, {answer:?})"),
             OwnerMsg::Loaded { run, loaded } => {
-                write!(f, "Loaded({run}, {})", loaded.as_ref().map_or("error", |l| if l.is_some() { "found" } else { "missing" }))
+                write!(
+                    f,
+                    "Loaded({run}, {})",
+                    loaded.as_ref().map_or("error", |l| if l.is_some() {
+                        "found"
+                    } else {
+                        "missing"
+                    })
+                )
             }
             OwnerMsg::Durable(result) => write!(f, "Durable({result:?})"),
             OwnerMsg::Activated { run, .. } => write!(f, "Activated({run})"),
@@ -141,7 +153,10 @@ pub(crate) enum Internal {
     /// Send the task on its way if it is ready.
     Dispatch(TaskRef),
     /// A host task handed on a stream that did not come back: interrupt it.
-    Lost { task: TaskRef, token: crate::ports::TaskToken },
+    Lost {
+        task: TaskRef,
+        token: crate::ports::TaskToken,
+    },
     /// The organization actor granted the task's slot.
     Granted(TaskRef),
     /// Try the quarantined run once, as a node of a new build does.
@@ -149,7 +164,10 @@ pub(crate) enum Internal {
     /// A signal checked and ready: a webhook's.
     Signal(Box<crate::ports::link::SignalAtOwner>, ReplyTo),
     /// Resume the task parked for the secret put again.
-    Resume { task: TaskRef, secret: crate::ports::SecretId },
+    Resume {
+        task: TaskRef,
+        secret: crate::ports::SecretId,
+    },
     /// Seal the ended attempt.
     Seal(RunRef),
     /// Erase the run: its retention ended, or its namespace is erased.
@@ -316,6 +334,8 @@ pub(crate) struct Owner<P: Plane> {
     /// epoch.
     pub(crate) awaiting_nodes: BTreeSet<RunId>,
     pub(crate) awaiting_purposes: BTreeMap<RunId, Purpose>,
+    /// The runs of erased namespaces this owner cancelled.
+    pub(crate) cancelling: BTreeSet<RunId>,
     pub(crate) epochs: BTreeSet<Epoch>,
     pub(crate) nodes: Vec<NodeInfo>,
     /// Runs erased by this owner: what arrives for them is dropped.
@@ -375,6 +395,7 @@ impl<P: Plane> Owner<P> {
             remote: BTreeMap::new(),
             awaiting_nodes: BTreeSet::new(),
             awaiting_purposes: BTreeMap::new(),
+            cancelling: BTreeSet::new(),
             epochs,
             nodes,
             erased: BTreeSet::new(),
@@ -542,8 +563,9 @@ impl<P: Plane> Owner<P> {
                 | PartitionRequest::GiveUp { run }
                 | PartitionRequest::Erase { run } => Some(run.clone()),
                 PartitionRequest::Decide { task, .. } => Some(task.run.clone()),
-                PartitionRequest::Answer { tenant, token, .. } => tokens::run_of(&token.0)
-                    .map(|run| RunRef::new(tenant.clone(), run)),
+                PartitionRequest::Answer { tenant, token, .. } => {
+                    tokens::run_of(&token.0).map(|run| RunRef::new(tenant.clone(), run))
+                }
                 _ => None,
             },
             OwnerMsg::CallDone(done) => Some(done.task.run.clone()),
@@ -606,7 +628,10 @@ impl<P: Plane> Owner<P> {
             Err(error) => {
                 tracing::error!(partition = %self.partition, %run, %error, "a run could not be read");
                 for message in waiting {
-                    self.fail(message, Refusal::Unavailable(format!("run {run} could not be read: {error}")));
+                    self.fail(
+                        message,
+                        Refusal::Unavailable(format!("run {run} could not be read: {error}")),
+                    );
                 }
                 return;
             }
@@ -656,7 +681,11 @@ impl<P: Plane> Owner<P> {
 
     fn refuse_closed(&mut self, message: OwnerMsg<P>) {
         match message {
-            OwnerMsg::Request(_, reply) | OwnerMsg::Org { message: OrgMsg::Request(_, reply), .. } => {
+            OwnerMsg::Request(_, reply)
+            | OwnerMsg::Org {
+                message: OrgMsg::Request(_, reply),
+                ..
+            } => {
                 self.out.push(Effect::Reply(
                     reply,
                     NodeReply::NotOwner {
@@ -669,7 +698,12 @@ impl<P: Plane> Owner<P> {
     }
 
     /// Asks a request; its answer comes back by its tag.
-    pub(crate) fn ask(&mut self, to: crate::node::message::Target, request: crate::ports::link::NodeRequest, ask: Ask) {
+    pub(crate) fn ask(
+        &mut self,
+        to: crate::node::message::Target,
+        request: crate::ports::link::NodeRequest,
+        ask: Ask,
+    ) {
         let tag = self.next_tag;
         self.next_tag += 1;
         self.asks.insert(tag, ask);
@@ -684,7 +718,11 @@ impl<P: Plane> Owner<P> {
     }
 
     /// Sends a notice nobody answers.
-    pub(crate) fn tell(&mut self, to: crate::node::message::Target, request: crate::ports::link::NodeRequest) {
+    pub(crate) fn tell(
+        &mut self,
+        to: crate::node::message::Target,
+        request: crate::ports::link::NodeRequest,
+    ) {
         self.out.push(Effect::Request {
             to,
             request,
@@ -742,7 +780,11 @@ impl<P: Plane> Owner<P> {
                         state,
                     });
                     for alert in alerts {
-                        let entry = self.outbox_entry(tenant.clone(), None, crate::ports::Projection::QuotaAlert(alert));
+                        let entry = self.outbox_entry(
+                            tenant.clone(),
+                            None,
+                            crate::ports::Projection::QuotaAlert(alert),
+                        );
                         unit.project(entry);
                     }
                     for effect in then {

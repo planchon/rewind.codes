@@ -13,9 +13,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{
-    PartitionId, RunId, RunMode, RunState, Seed, SecretRef, parse_duration,
-};
+use rewind_core::{PartitionId, RunId, RunMode, RunState, SecretRef, Seed, parse_duration};
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
     MemoryPartitions, MemorySecrets, MemorySpanExporter, MemoryWebhooks, SeededEntropy,
@@ -26,9 +24,9 @@ use rewind_engine::edge::Edge;
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
 use rewind_engine::ports::link::{HostFailure, HostTask, StreamAttach, StreamId};
 use rewind_engine::ports::{
-    CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind, Predicate,
-    RunOrder, RunQuery, RunRef, ScriptExecutor, Secret, SecretId, SecretStore, Scope, TaskRef,
-    TaskState, TenantId, Term, ToolDeclarations, VirtualTime,
+    CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind, Predicate, RunOrder,
+    RunQuery, RunRef, Scope, ScriptExecutor, Secret, SecretId, SecretStore, TaskRef, TaskState,
+    TenantId, Term, ToolDeclarations, VirtualTime,
 };
 use rewind_engine::{ForkRun, Limits, ReplayVerdict, StartRun};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -160,7 +158,10 @@ impl World {
 
     /// A worker opens an SDK stream at the edge.
     fn open_stream(&mut self) {
-        let generation = self.worker.as_ref().map_or(0, |worker| worker.generation + 1);
+        let generation = self
+            .worker
+            .as_ref()
+            .map_or(0, |worker| worker.generation + 1);
         let stream = StreamId(format!("stream-{generation}"));
         let attach = StreamAttach {
             stream: stream.clone(),
@@ -223,10 +224,10 @@ impl World {
                 data: failure.data,
                 retryable,
             };
-            let answer = self
-                .plane
-                .dispatcher
-                .answer(&task.tool, &task.args, &task.idempotency_key);
+            let answer =
+                self.plane
+                    .dispatcher
+                    .answer(&task.tool, &task.args, &task.idempotency_key);
             let mut gateway = self.driver.gateway(&self.at);
             let answered = match answer {
                 Answer::Result(result) => {
@@ -268,10 +269,6 @@ impl World {
         }
         Ok(tasks.len())
     }
-
-    fn gateway(&mut self) -> rewind_engine::driver::DriverGateway<'_, CorpusPlane, MemoryCluster> {
-        self.driver.gateway(&self.at)
-    }
 }
 
 /// Runs a case live on the run plane: starts the run, drives it, applies the steps, drives it
@@ -300,7 +297,9 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         request.ttl = Some(parse_duration(ttl).map_err(|err| format!("ttl {ttl:?}: {err}"))?);
     }
     let started = {
-        let World { edge, driver, at, .. } = &mut world;
+        let World {
+            edge, driver, at, ..
+        } = &mut world;
         let mut gateway = driver.gateway(at);
         edge.start_run(&mut gateway, request).await
     };
@@ -317,7 +316,9 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         request.at = fork.at;
         request.input = fork.input.clone();
         let forked = {
-            let World { edge, driver, at, .. } = &mut world;
+            let World {
+                edge, driver, at, ..
+            } = &mut world;
             let mut gateway = driver.gateway(at);
             edge.fork(&mut gateway, request).await
         };
@@ -332,7 +333,9 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
 
     // The engine's own replay, from its records, must agree with the live run.
     let verdict = {
-        let World { edge, driver, at, .. } = &mut world;
+        let World {
+            edge, driver, at, ..
+        } = &mut world;
         let mut gateway = driver.gateway(at);
         edge.replay(&mut gateway, &run, None).await.map_err(fail)?
     };
@@ -341,9 +344,13 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         other => return Err(format!("the engine's replay of the live run: {other:?}")),
     }
     let journal = {
-        let World { edge, driver, at, .. } = &mut world;
+        let World {
+            edge, driver, at, ..
+        } = &mut world;
         let mut gateway = driver.gateway(at);
-        edge.export_journal(&mut gateway, &run).await.map_err(fail)?
+        edge.export_journal(&mut gateway, &run)
+            .await
+            .map_err(fail)?
     };
     let state = RunState::from_history(&journal.entries).map_err(|err| err.to_string())?;
     let children = children(&mut world, &run).await?;
@@ -370,7 +377,9 @@ async fn children(world: &mut World, run: &RunRef) -> Result<Vec<String>, String
         }],
     };
     let found = {
-        let World { edge, driver, at, .. } = world;
+        let World {
+            edge, driver, at, ..
+        } = world;
         let mut gateway = driver.gateway(at);
         edge.search(
             &mut gateway,
@@ -385,9 +394,13 @@ async fn children(world: &mut World, run: &RunRef) -> Result<Vec<String>, String
     let mut children = Vec::new();
     for summary in found.summaries {
         let view = {
-            let World { edge, driver, at, .. } = &mut *world;
+            let World {
+                edge, driver, at, ..
+            } = &mut *world;
             let mut gateway = driver.gateway(at);
-            edge.get_run(&mut gateway, &summary.run).await.map_err(fail)?
+            edge.get_run(&mut gateway, &summary.run)
+                .await
+                .map_err(fail)?
         };
         let Some(view) = view else { continue };
         let seq = view
@@ -464,14 +477,24 @@ async fn apply_steps(world: &mut World, run: &RunRef, steps: &[Step]) -> Result<
     for step in steps {
         match step {
             Step::Signal { name, payload, key } => {
-                let World { edge, driver, at, .. } = &mut *world;
+                let World {
+                    edge, driver, at, ..
+                } = &mut *world;
                 let mut gateway = driver.gateway(at);
-                edge.signal(&mut gateway, run, name.clone(), payload.clone(), key.clone())
-                    .await
-                    .map_err(fail)?;
+                edge.signal(
+                    &mut gateway,
+                    run,
+                    name.clone(),
+                    payload.clone(),
+                    key.clone(),
+                )
+                .await
+                .map_err(fail)?;
             }
             Step::Cancel { message } => {
-                let World { edge, driver, at, .. } = &mut *world;
+                let World {
+                    edge, driver, at, ..
+                } = &mut *world;
                 let mut gateway = driver.gateway(at);
                 edge.cancel(&mut gateway, run, message.clone())
                     .await
@@ -484,13 +507,17 @@ async fn apply_steps(world: &mut World, run: &RunRef, steps: &[Step]) -> Result<
             }
             Step::Approve(tool) => {
                 let task = waiting_task(world, run, tool).await?;
-                let World { edge, driver, at, .. } = &mut *world;
+                let World {
+                    edge, driver, at, ..
+                } = &mut *world;
                 let mut gateway = driver.gateway(at);
                 edge.approve_task(&mut gateway, &task).await.map_err(fail)?;
             }
             Step::Reject { tool, message } => {
                 let task = waiting_task(world, run, tool).await?;
-                let World { edge, driver, at, .. } = &mut *world;
+                let World {
+                    edge, driver, at, ..
+                } = &mut *world;
                 let mut gateway = driver.gateway(at);
                 edge.reject_task(&mut gateway, &task, message.clone())
                     .await
@@ -540,8 +567,13 @@ async fn apply_steps(world: &mut World, run: &RunRef, steps: &[Step]) -> Result<
     Ok(())
 }
 
-async fn view_of(world: &mut World, run: &RunRef) -> Result<rewind_engine::ports::link::RunView, String> {
-    let World { edge, driver, at, .. } = world;
+async fn view_of(
+    world: &mut World,
+    run: &RunRef,
+) -> Result<rewind_engine::ports::link::RunView, String> {
+    let World {
+        edge, driver, at, ..
+    } = world;
     let mut gateway = driver.gateway(at);
     edge.get_run(&mut gateway, run)
         .await
@@ -549,8 +581,13 @@ async fn view_of(world: &mut World, run: &RunRef) -> Result<rewind_engine::ports
         .ok_or_else(|| format!("run {} not found", run.id))
 }
 
-async fn tasks_of(world: &mut World, run: &RunRef) -> Result<Vec<rewind_engine::ports::ToolTask>, String> {
-    let World { edge, driver, at, .. } = world;
+async fn tasks_of(
+    world: &mut World,
+    run: &RunRef,
+) -> Result<Vec<rewind_engine::ports::ToolTask>, String> {
+    let World {
+        edge, driver, at, ..
+    } = world;
     let mut gateway = driver.gateway(at);
     edge.tool_tasks(&mut gateway, run).await.map_err(fail)
 }
@@ -558,7 +595,12 @@ async fn tasks_of(world: &mut World, run: &RunRef) -> Result<Vec<rewind_engine::
 /// The harness makes `server` accept the run's calls again: it puts the secret the run
 /// attached for it again, which resumes the calls parked by a refusal or a missing secret; for
 /// a server whose run attaches no secret, it approves the refused calls.
-async fn accept_again(world: &mut World, run: &RunRef, server: &str, value: String) -> Result<(), String> {
+async fn accept_again(
+    world: &mut World,
+    run: &RunRef,
+    server: &str,
+    value: String,
+) -> Result<(), String> {
     let view = view_of(world, run).await?;
     if let Some(attached) = view.head.metadata.secrets.get(server) {
         let secret = NewSecret {
@@ -585,7 +627,9 @@ async fn accept_again(world: &mut World, run: &RunRef, server: &str, value: Stri
         .map(|task| task.task)
         .collect();
     for task in refused {
-        let World { edge, driver, at, .. } = &mut *world;
+        let World {
+            edge, driver, at, ..
+        } = &mut *world;
         let mut gateway = driver.gateway(at);
         edge.approve_task(&mut gateway, &task).await.map_err(fail)?;
     }

@@ -34,7 +34,10 @@ pub struct LocalLink<P: Plane> {
 impl<P: Plane> fmt::Debug for LocalLink<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalLink")
-            .field("nodes", &self.lock_nodes().keys().cloned().collect::<Vec<_>>())
+            .field(
+                "nodes",
+                &self.lock_nodes().keys().cloned().collect::<Vec<_>>(),
+            )
             .finish_non_exhaustive()
     }
 }

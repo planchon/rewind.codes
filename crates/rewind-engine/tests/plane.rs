@@ -17,12 +17,12 @@ use rewind_core::{
     ToolFailure, ToolFailureKind, ToolPolicy, Toolset,
 };
 use rewind_engine::edge::EdgeError;
+use rewind_engine::plane::HostTools;
 use rewind_engine::ports::link::{HostFailure, Refusal, StreamAttach, StreamId};
 use rewind_engine::ports::{
     CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind, Quotas,
     RunArchive, RunOrder, RunQuery, Scope, TaskState, TenantId, Window,
 };
-use rewind_engine::plane::HostTools;
 use serde_json::json;
 use support::plane::{World, config};
 use support::{DAY, FakeExecutor, HOUR, RecordingDispatcher, request, result_of};
@@ -71,7 +71,10 @@ fn one_call() -> FakeExecutor {
 }
 
 /// The toolset of `request`, with `a` under `policy`.
-fn with_policy(mut request: rewind_engine::StartRun, policy: ToolPolicy) -> rewind_engine::StartRun {
+fn with_policy(
+    mut request: rewind_engine::StartRun,
+    policy: ToolPolicy,
+) -> rewind_engine::StartRun {
     let mut tools: Vec<rewind_core::Tool> = request.toolset.tools().to_vec();
     for tool in &mut tools {
         if tool.name == "a" {
@@ -124,7 +127,9 @@ async fn a_run_calls_its_tools_ends_and_is_sealed() {
         .collect();
     assert_eq!(
         keys,
-        ["1", "2", "3"].map(|seq| format!("{}/{seq}", run.id)).to_vec()
+        ["1", "2", "3"]
+            .map(|seq| format!("{}/{seq}", run.id))
+            .to_vec()
     );
 }
 
@@ -145,12 +150,22 @@ async fn a_start_key_starts_one_run_and_a_signal_key_is_taken_once() {
     assert_eq!(world.now(), support::T0);
 
     let accepted = world
-        .signal(&run, "approval", json!({ "by": "paul" }), Some("approval-1"))
+        .signal(
+            &run,
+            "approval",
+            json!({ "by": "paul" }),
+            Some("approval-1"),
+        )
         .await
         .unwrap();
     assert_eq!(accepted, Enqueued::Accepted);
     let duplicate = world
-        .signal(&run, "approval", json!({ "by": "paul" }), Some("approval-1"))
+        .signal(
+            &run,
+            "approval",
+            json!({ "by": "paul" }),
+            Some("approval-1"),
+        )
         .await
         .unwrap();
     assert_eq!(duplicate, Enqueued::Duplicate);
@@ -158,7 +173,12 @@ async fn a_start_key_starts_one_run_and_a_signal_key_is_taken_once() {
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
     assert_eq!(
         world.events(&run).await,
-        ["run_started", "signal_awaited", "signal_received", "complete_run"]
+        [
+            "run_started",
+            "signal_awaited",
+            "signal_received",
+            "complete_run"
+        ]
     );
     let ended = world
         .signal(&run, "approval", json!(null), None)
@@ -166,8 +186,13 @@ async fn a_start_key_starts_one_run_and_a_signal_key_is_taken_once() {
         .unwrap();
     assert_eq!(ended, Enqueued::RunEnded);
     // A name Rewind keeps is refused.
-    let reserved = world.signal(&run, "rewind:ended:x", json!(null), None).await;
-    assert!(matches!(reserved, Err(EdgeError::Refused(Refusal::Signal(_)))), "{reserved:?}");
+    let reserved = world
+        .signal(&run, "rewind:ended:x", json!(null), None)
+        .await;
+    assert!(
+        matches!(reserved, Err(EdgeError::Refused(Refusal::Signal(_)))),
+        "{reserved:?}"
+    );
 }
 
 #[tokio::test]
@@ -186,7 +211,10 @@ async fn a_ten_day_sleep_takes_no_wall_clock_time() {
     let run = world.run(request("sleeper", json!({}))).await;
     let history = world.history(&run).await;
     assert_eq!(
-        history.iter().map(|entry| entry.event.name()).collect::<Vec<_>>(),
+        history
+            .iter()
+            .map(|entry| entry.event.name())
+            .collect::<Vec<_>>(),
         ["run_started", "start_timer", "timer_fired", "complete_run"]
     );
     assert_eq!(history[2].recorded_at, Timestamp(support::T0.0 + 10 * DAY));
@@ -231,8 +259,16 @@ async fn cancellation_gives_the_script_one_grace_delivery() {
             },
         );
     let mut world = World::new(programs, RecordingDispatcher::echo()).await;
-    let polite = world.start(request("cleans_up", json!({}))).await.unwrap().run;
-    let stubborn = world.start(request("lingers", json!({}))).await.unwrap().run;
+    let polite = world
+        .start(request("cleans_up", json!({})))
+        .await
+        .unwrap()
+        .run;
+    let stubborn = world
+        .start(request("lingers", json!({})))
+        .await
+        .unwrap()
+        .run;
     world.settle().await;
     for run in [&polite, &stubborn] {
         assert_eq!(world.cancel(run).await.unwrap(), Enqueued::Accepted);
@@ -241,7 +277,12 @@ async fn cancellation_gives_the_script_one_grace_delivery() {
     assert_eq!(world.view(&polite).await.head.status, RunStatus::Completed);
     assert_eq!(
         world.events(&stubborn).await,
-        ["run_started", "start_timer", "cancel_requested", "run_aborted"]
+        [
+            "run_started",
+            "start_timer",
+            "cancel_requested",
+            "run_aborted"
+        ]
     );
     let history = world.history(&stubborn).await;
     let Event::Lifecycle(Lifecycle::RunAborted(reason)) = &history[3].event else {
@@ -276,16 +317,26 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     let mut world = World::with(non_deterministic(), RecordingDispatcher::echo(), 1, &[node]).await;
     let run = world.run(request("flaky_platform", json!({}))).await;
     // The second activation replays, diverges, and commits nothing.
-    assert_eq!(world.events(&run).await, ["run_started", "schedule_tool_call"]);
+    assert_eq!(
+        world.events(&run).await,
+        ["run_started", "schedule_tool_call"]
+    );
     let view = world.view(&run).await;
-    assert_eq!(view.head.status, RunStatus::Active, "quarantine is not a status");
+    assert_eq!(
+        view.head.status,
+        RunStatus::Active,
+        "quarantine is not a status"
+    );
     let quarantine = view.head.quarantine.clone().unwrap();
     assert_eq!(quarantine.kind, QuarantineKind::NonDeterminism);
     assert_eq!(
         quarantine.reason,
         "history entry 1 is tool call #1 a({\"n\":0}), but the script emitted tool call #1 a({\"n\":1})"
     );
-    assert!(view.summary.unwrap().quarantine.is_some(), "the index shows it");
+    assert!(
+        view.summary.unwrap().quarantine.is_some(),
+        "the index shows it"
+    );
 
     // Released after a fix that fixes nothing: quarantined again at its next activation.
     assert!(world.release(&run).await);
@@ -332,7 +383,9 @@ async fn failing_activations_are_tried_again_by_a_timer_then_quarantined() {
         "unlucky",
         move |run| {
             if starts.fetch_add(1, Ordering::SeqCst) > 0 {
-                run.refuse(rewind_engine::ports::ExecutorError::Internal("out of threads".into()));
+                run.refuse(rewind_engine::ports::ExecutorError::Internal(
+                    "out of threads".into(),
+                ));
                 return;
             }
             run.timer(1_000);
@@ -346,7 +399,11 @@ async fn failing_activations_are_tried_again_by_a_timer_then_quarantined() {
     let view = world.view(&run).await;
     let quarantine = view.head.quarantine.unwrap();
     assert_eq!(quarantine.kind, QuarantineKind::Failures);
-    assert!(quarantine.reason.contains("out of threads"), "{}", quarantine.reason);
+    assert!(
+        quarantine.reason.contains("out of threads"),
+        "{}",
+        quarantine.reason
+    );
     assert_eq!(view.head.failures, 5);
     // Each failure waited for its timer: 30 s apart.
     assert_eq!(world.now(), Timestamp(support::T0.0 + 1_000 + 4 * 30_000));
@@ -358,8 +415,12 @@ async fn a_call_under_approval_waits_for_the_harness() {
     let mut world = World::new(one_call(), RecordingDispatcher::echo()).await;
     let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
     policy.approval = true;
-    let approved = world.run(with_policy(request("one_call", json!({})), policy)).await;
-    let rejected = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    let approved = world
+        .run(with_policy(request("one_call", json!({})), policy))
+        .await;
+    let rejected = world
+        .run(with_policy(request("one_call", json!({})), policy))
+        .await;
     for run in [&approved, &rejected] {
         let tasks = world.tasks(run).await;
         assert_eq!(tasks.len(), 1);
@@ -371,11 +432,17 @@ async fn a_call_under_approval_waits_for_the_harness() {
             "the index shows what the call waits for"
         );
     }
-    assert!(world.plane.dispatcher.calls().is_empty(), "nothing was sent");
+    assert!(
+        world.plane.dispatcher.calls().is_empty(),
+        "nothing was sent"
+    );
     let task = world.tasks(&approved).await[0].task.clone();
     world.approve(&task).await.unwrap();
     world.idle().await;
-    assert_eq!(world.view(&approved).await.head.status, RunStatus::Completed);
+    assert_eq!(
+        world.view(&approved).await.head.status,
+        RunStatus::Completed
+    );
 
     let task = world.tasks(&rejected).await[0].task.clone();
     world.reject(&task, "not today").await.unwrap();
@@ -416,7 +483,11 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
         [1, 2, 3],
         "each try is an attempt more"
     );
-    assert!(calls.iter().all(|call| call.idempotency_key == calls[0].idempotency_key));
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.idempotency_key == calls[0].idempotency_key)
+    );
     // The backoff of the first two attempts passed, in virtual time.
     assert!(world.now() > Timestamp(support::T0.0 + 2_000));
 
@@ -434,7 +505,9 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
     let mut world = World::new(one_call(), dispatcher).await;
     let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
     policy.on_interruption = Interruption::AtMostOnce;
-    let run = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    let run = world
+        .run(with_policy(request("one_call", json!({})), policy))
+        .await;
     assert_eq!(world.view(&run).await.head.status, RunStatus::Failed);
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
@@ -445,9 +518,15 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
     let mut world = World::new(one_call(), dispatcher).await;
     let answered = world.run(request("one_call", json!({}))).await;
     let tasks = world.tasks(&answered).await;
-    assert!(matches!(tasks[0].state, TaskState::Deferred { .. }), "{tasks:?}");
+    assert!(
+        matches!(tasks[0].state, TaskState::Deferred { .. }),
+        "{tasks:?}"
+    );
     let token = world.plane.dispatcher.calls()[0].token.clone();
-    world.complete(&token, json!({ "later": true })).await.unwrap();
+    world
+        .complete(&token, json!({ "later": true }))
+        .await
+        .unwrap();
     world.idle().await;
     let view = world.view(&answered).await;
     assert_eq!(view.head.status, RunStatus::Completed);
@@ -461,7 +540,9 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
     // timeout.
     let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
     policy.execution_timeout = Some(Duration::from_secs(60));
-    let late = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    let late = world
+        .run(with_policy(request("one_call", json!({})), policy))
+        .await;
     assert_eq!(world.view(&late).await.head.status, RunStatus::Active);
     world.advance(61_000);
     world.settle().await;
@@ -496,20 +577,32 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
         )
         .unwrap();
     let run = world.run(request("one_call", json!({}))).await;
-    let handed = rewind_engine::driver::Driver::<support::plane::TestPlane, rewind_engine::adapters::MemoryCluster>::drain(&mut stream);
+    let handed = rewind_engine::driver::Driver::<
+        support::plane::TestPlane,
+        rewind_engine::adapters::MemoryCluster,
+    >::drain(&mut stream);
     assert_eq!(handed.len(), 1);
     let task = &handed[0];
     assert_eq!(task.tool, "a");
     assert_eq!(task.attempt, 1);
     assert_eq!(task.idempotency_key, format!("{}/1", run.id));
-    assert!(world.plane.dispatcher.calls().is_empty(), "a host tool is not dispatched");
-    world.complete(&task.token, json!({ "from": "harness" })).await.unwrap();
+    assert!(
+        world.plane.dispatcher.calls().is_empty(),
+        "a host tool is not dispatched"
+    );
+    world
+        .complete(&task.token, json!({ "from": "harness" }))
+        .await
+        .unwrap();
     world.idle().await;
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
 
     // A failure the handler says is transient is tried again, handed out with a new token.
     let again = world.run(request("one_call", json!({}))).await;
-    let first = rewind_engine::driver::Driver::<support::plane::TestPlane, rewind_engine::adapters::MemoryCluster>::drain(&mut stream);
+    let first = rewind_engine::driver::Driver::<
+        support::plane::TestPlane,
+        rewind_engine::adapters::MemoryCluster,
+    >::drain(&mut stream);
     world
         .fail(
             &first[0].token,
@@ -522,7 +615,10 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
         .await
         .unwrap();
     world.idle().await;
-    let second = rewind_engine::driver::Driver::<support::plane::TestPlane, rewind_engine::adapters::MemoryCluster>::drain(&mut stream);
+    let second = rewind_engine::driver::Driver::<
+        support::plane::TestPlane,
+        rewind_engine::adapters::MemoryCluster,
+    >::drain(&mut stream);
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].attempt, 2);
     assert_ne!(second[0].token, first[0].token);
@@ -543,7 +639,13 @@ async fn a_start_above_the_active_runs_limit_is_refused() {
     world
         .plane
         .catalog
-        .put_namespace(&tenant, &local, Some(&quotas), world.partitions, world.now())
+        .put_namespace(
+            &tenant,
+            &local,
+            Some(&quotas),
+            world.partitions,
+            world.now(),
+        )
         .await
         .unwrap();
     let first = world.run(request("approval", json!({}))).await;
@@ -566,7 +668,15 @@ async fn an_erased_run_leaves_nothing_and_retention_erases_an_ended_one() {
     assert!(world.erase(&run).await);
     let mut gateway = world.driver.gateway(&world.at.clone());
     assert_eq!(world.edge.get_run(&mut gateway, &run).await.unwrap(), None);
-    assert_eq!(world.plane.archive.get(&run, Default::default()).await.unwrap(), None);
+    assert_eq!(
+        world
+            .plane
+            .archive
+            .get(&run, Default::default())
+            .await
+            .unwrap(),
+        None
+    );
     assert!(!world.erase(&run).await);
 
     // The retention of the tenant, a year by default, erases an ended run.
@@ -598,13 +708,186 @@ async fn webhooks_and_spans_leave_through_the_outbox() {
     let run = world.run(request).await;
     let delivered = world.plane.webhooks.deliveries();
     assert!(
-        delivered
-            .iter()
-            .any(|(_, event)| event.run == Some(run.id) && event.kind.event_type().as_str() == "run.completed"),
+        delivered.iter().any(|(_, event)| event.run == Some(run.id)
+            && event.kind.event_type().as_str() == "run.completed"),
         "{delivered:?}"
     );
     let spans = world.plane.spans.spans();
     assert!(!spans.is_empty(), "the run's spans are exported");
+}
+
+fn subscription(url: &str) -> rewind_engine::ports::Subscription {
+    rewind_engine::ports::Subscription {
+        tenant: TenantId::local(),
+        id: format!("sub-{url}"),
+        url: url.into(),
+        secret: rewind_engine::ports::Secret::new("whsec".to_owned()),
+        events: Default::default(),
+        labels: BTreeMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_namespace_erased_has_its_runs_cancelled_and_erased_then_is_dropped() {
+    let programs = approval().with("chain", |run| run.complete(json!("done")), |_, _| {});
+    let mut world = World::new(programs, RecordingDispatcher::echo()).await;
+    let gone = NamespaceName::new("gone").unwrap();
+    let mut active = request("approval", json!({}));
+    active.namespace = gone.clone();
+    let mut ended = request("chain", json!({}));
+    ended.namespace = gone.clone();
+    let active = world.run(active).await;
+    let ended = world.run(ended).await;
+    assert_eq!(world.view(&ended).await.head.status, RunStatus::Completed);
+
+    let tenant = TenantId::local();
+    world
+        .plane
+        .catalog
+        .delete_namespace(&tenant, &gone, world.now())
+        .await
+        .unwrap();
+    world.settle().await;
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    assert_eq!(
+        world.edge.get_run(&mut gateway, &active).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        world.edge.get_run(&mut gateway, &ended).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        world
+            .plane
+            .catalog
+            .get_namespace(&tenant, &gone)
+            .await
+            .unwrap(),
+        None,
+        "the control plane drops the namespace once its partition holds nothing of it"
+    );
+}
+
+#[tokio::test]
+async fn a_quota_crossed_raises_its_alert_once_through_the_outbox() {
+    let programs = FakeExecutor::new().with("quick", |run| run.complete(json!("done")), |_, _| {});
+    let mut world = World::new(programs, RecordingDispatcher::echo()).await;
+    let tenant = TenantId::local();
+    world
+        .plane
+        .catalog
+        .put_subscription(&subscription("https://harness.example.com/hooks"))
+        .await
+        .unwrap();
+    let quotas = Quotas {
+        runs_per_month: Some(5),
+        ..Quotas::default()
+    };
+    let local = NamespaceName::new("local").unwrap();
+    world
+        .plane
+        .catalog
+        .put_namespace(
+            &tenant,
+            &local,
+            Some(&quotas),
+            world.partitions,
+            world.now(),
+        )
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        world.run(request("quick", json!({}))).await;
+    }
+    let alerts: Vec<String> = world
+        .plane
+        .webhooks
+        .deliveries()
+        .into_iter()
+        .filter(|(_, event)| event.kind.event_type().as_str() == "quota.alert")
+        .map(|(_, event)| event.id)
+        .collect();
+    assert_eq!(alerts.len(), 2, "80 % and 100 %, once each: {alerts:?}");
+    let refused = world.start(request("quick", json!({}))).await;
+    let Err(rewind_engine::StartError::QuotaExceeded(exceeded)) = refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!(
+        exceeded.quota,
+        rewind_engine::ports::QuotaKind::RunsPerMonth
+    );
+    assert!(exceeded.resets_at.is_some());
+}
+
+#[tokio::test]
+async fn a_webhook_refused_is_tried_again_by_timers_until_given_up() {
+    let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
+    let url = "https://down.example.com/hooks";
+    world
+        .plane
+        .catalog
+        .put_subscription(&subscription(url))
+        .await
+        .unwrap();
+    world.plane.webhooks.refuse(url);
+    let mut request = request("chain", json!({}));
+    request.mode = rewind_core::RunMode::Live;
+    world.run(request).await;
+    // Every try failed: the retries waited for their backoff, in virtual time.
+    assert!(
+        world.now() > Timestamp(support::T0.0 + 60_000),
+        "{:?}",
+        world.now()
+    );
+    assert!(world.plane.webhooks.deliveries().is_empty());
+}
+
+#[tokio::test]
+async fn a_search_across_partitions_pages_through_every_run_in_order() {
+    let mut world = World::with(
+        chain(),
+        RecordingDispatcher::echo(),
+        4,
+        &[config("node-a", 4)],
+    )
+    .await;
+    let mut started = Vec::new();
+    for n in 0..8 {
+        for _ in 0..2 {
+            let mut request = request("chain", json!({}));
+            request.namespace = NamespaceName::new(format!("user-{n}")).unwrap();
+            started.push(world.run(request).await);
+        }
+    }
+    let tenant = TenantId::local();
+    let mut seen = Vec::new();
+    let mut page = Page::first(3);
+    loop {
+        let mut gateway = world.driver.gateway(&world.at.clone());
+        let found = world
+            .edge
+            .search(
+                &mut gateway,
+                &Scope::Tenant(tenant.clone()),
+                &RunQuery::new(tenant.clone()),
+                RunOrder::Started,
+                &page,
+            )
+            .await
+            .unwrap();
+        seen.extend(found.summaries.iter().map(|summary| summary.run.id));
+        match found.cursor {
+            Some(cursor) => page = Page::after(cursor, 3),
+            None => break,
+        }
+    }
+    let mut expected: Vec<_> = started.iter().map(|run| run.id).collect();
+    expected.sort_by(|a, b| b.cmp(a));
+    assert_eq!(
+        seen, expected,
+        "newest first, each once, across the partitions"
+    );
 }
 
 #[tokio::test]
@@ -650,7 +933,10 @@ async fn searches_and_statistics_read_the_partitions_of_the_scope() {
     assert_eq!(counters.runs.started, 3);
     assert_eq!(counters.runs.ended[&RunStatus::Completed], 3);
     assert_eq!(counters.tools["a"].calls, 3);
-    assert!(counters.cpu > Duration::ZERO, "the CPU of the calls that executed is counted");
+    assert!(
+        counters.cpu > Duration::ZERO,
+        "the CPU of the calls that executed is counted"
+    );
     assert_eq!(gauges.active_runs, 0);
     let _ = Seq(1);
 }

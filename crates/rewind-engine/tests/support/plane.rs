@@ -118,7 +118,9 @@ impl World {
     /// Moves the clock by `ms`.
     pub fn advance(&self, ms: u64) {
         use rewind_engine::ports::VirtualTime;
-        self.plane.clock.advance_to(self.now().saturating_add(Duration::from_millis(ms)));
+        self.plane
+            .clock
+            .advance_to(self.now().saturating_add(Duration::from_millis(ms)));
     }
 
     /// Steps until nothing is left to do now.
@@ -200,7 +202,11 @@ impl World {
             .await
     }
 
-    pub async fn complete(&mut self, token: &TaskToken, result: JsonValue) -> Result<(), EdgeError> {
+    pub async fn complete(
+        &mut self,
+        token: &TaskToken,
+        result: JsonValue,
+    ) -> Result<(), EdgeError> {
         let mut gateway = self.driver.gateway(&self.at);
         self.edge
             .complete_task(&mut gateway, &TenantId::local(), token, result)

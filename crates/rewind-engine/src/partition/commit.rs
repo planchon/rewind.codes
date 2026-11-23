@@ -37,6 +37,10 @@ pub(crate) struct Unit<P: Plane> {
 }
 
 /// What follows a durable unit.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a unit's follow-ups are moved once, after its batch: their size does not matter"
+)]
 pub(crate) enum After<P: Plane> {
     Effect(Effect<P>),
     /// The reply to a request.
@@ -105,7 +109,11 @@ impl<P: Plane> Unit<P> {
 
     /// The runs the unit changes.
     fn runs(&self) -> BTreeSet<RunId> {
-        self.changes.iter().filter_map(changed_run).map(|run| run.id).collect()
+        self.changes
+            .iter()
+            .filter_map(changed_run)
+            .map(|run| run.id)
+            .collect()
     }
 }
 
@@ -238,8 +246,9 @@ impl<P: Plane> Owner<P> {
                     }
                 }
                 self.close();
-                self.out
-                    .push(Effect::Local(Message::Node(NodeMsg::Fenced(self.partition))));
+                self.out.push(Effect::Local(Message::Node(NodeMsg::Fenced(
+                    self.partition,
+                ))));
             }
             Err(PartitionError::Conflict(message)) if units.len() > 1 => {
                 tracing::warn!(partition = %self.partition, %message, "a batch was refused: its units are committed one by one");
@@ -250,7 +259,12 @@ impl<P: Plane> Owner<P> {
             Err(PartitionError::Conflict(message)) => {
                 tracing::error!(partition = %self.partition, %message, "a change was refused");
                 for unit in units {
-                    self.refuse(unit, Refusal::Unavailable(format!("the partition refused the change: {message}")));
+                    self.refuse(
+                        unit,
+                        Refusal::Unavailable(format!(
+                            "the partition refused the change: {message}"
+                        )),
+                    );
                 }
             }
             Err(error) => {
@@ -342,9 +356,13 @@ impl<P: Plane> Owner<P> {
                 included,
                 abandoned,
             } => self.report(tenant, namespace, included, abandoned),
-            After::Confirm(run, history_len) => self.out.push(Effect::Local(Message::Executors(
-                ExecMsg::Durable { run, history_len },
-            ))),
+            After::Confirm(run, history_len) => {
+                self.out
+                    .push(Effect::Local(Message::Executors(ExecMsg::Durable {
+                        run,
+                        history_len,
+                    })))
+            }
             After::Forget(run) => self
                 .out
                 .push(Effect::Local(Message::Executors(ExecMsg::Forget { run }))),

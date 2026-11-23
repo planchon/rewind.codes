@@ -747,7 +747,12 @@ where
 
 /// Whether a history scheduled the call `seq` to `tool` with `args`, and recorded no outcome for
 /// it before its cancellation.
-pub(crate) fn left_without_outcome(history: &[HistoryEntry], seq: Seq, tool: &str, args: &Payload) -> bool {
+pub(crate) fn left_without_outcome(
+    history: &[HistoryEntry],
+    seq: Seq,
+    tool: &str,
+    args: &Payload,
+) -> bool {
     let mut scheduled = false;
     for entry in history {
         match &entry.event {

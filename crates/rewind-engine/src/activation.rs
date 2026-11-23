@@ -329,7 +329,7 @@ where
                             history: Vec::new(),
                         },
                     )
-                        .await;
+                    .await;
                 }
                 return Ok(ActivationOutcome::NothingToDo);
             }
@@ -439,14 +439,14 @@ where
             && let Some(instance) = instance
         {
             self.keep_instance(
-                        run.clone(),
-                        Cached {
-                            instance,
-                            state,
-                            history: Vec::new(),
-                        },
-                    )
-                .await;
+                run.clone(),
+                Cached {
+                    instance,
+                    state,
+                    history: Vec::new(),
+                },
+            )
+            .await;
         }
         tracing::debug!(entries, status = %status, "activation committed");
         Ok(ActivationOutcome::Committed { entries, status })

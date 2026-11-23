@@ -39,9 +39,9 @@ use crate::ports::link::{
 };
 use crate::ports::{
     BlobOwner, CatalogStore, Clock, Counters, Created, Enqueued, Entropy, Found, Gauges,
-    NamespaceName, NamespaceWrite, Page, RunOrder, RunQuery, RunRef, RunWorkflow,
-    ScriptExecutor, SearchPosition, Scope, StoreError, TaskRecord, TaskRef, TaskToken, TenantId,
-    ToolTask, TypeChecker, Window, namespace_partition,
+    NamespaceName, NamespaceWrite, Page, RunOrder, RunQuery, RunRef, RunWorkflow, Scope,
+    ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken, TenantId, ToolTask,
+    TypeChecker, Window, namespace_partition,
 };
 use crate::text::{self, NulCharacter};
 use crate::workflows::StartWorkflow;
@@ -166,8 +166,12 @@ impl<P: Plane> Edge<P> {
         gateway: &mut G,
         request: StartRun,
     ) -> Result<Created, StartError> {
-        self.start(gateway, request, None::<&crate::adapters::StaticTypeChecker>)
-            .await
+        self.start(
+            gateway,
+            request,
+            None::<&crate::adapters::StaticTypeChecker>,
+        )
+        .await
     }
 
     /// [`start_run`](Self::start_run), type-checked first against the toolset's declarations.
@@ -186,14 +190,13 @@ impl<P: Plane> Edge<P> {
         request: StartRun,
         checker: Option<&K>,
     ) -> Result<Created, StartError> {
-        let namespace = self
-            .namespace(&request.tenant, &request.namespace)
-            .await?;
+        let namespace = self.namespace(&request.tenant, &request.namespace).await?;
         let bounds = self.bounds(&request.tenant, &request.namespace).await?;
-        let ttl = checks::ttl(request.ttl, &bounds).map_err(|requested| StartError::InvalidTtl {
-            requested,
-            max: bounds.max_ttl,
-        })?;
+        let ttl =
+            checks::ttl(request.ttl, &bounds).map_err(|requested| StartError::InvalidTtl {
+                requested,
+                max: bounds.max_ttl,
+            })?;
         bounds.check_lines(&request.script)?;
         let input = self.bounded_input(request.input)?;
         text::refuse_nul("the script", request.script.source())?;
@@ -282,10 +285,11 @@ impl<P: Plane> Edge<P> {
         }
         let partition = self.namespace(&request.tenant, &request.namespace).await?;
         let bounds = self.bounds(&request.tenant, &request.namespace).await?;
-        let ttl = checks::ttl(request.ttl, &bounds).map_err(|requested| StartError::InvalidTtl {
-            requested,
-            max: bounds.max_ttl,
-        })?;
+        let ttl =
+            checks::ttl(request.ttl, &bounds).map_err(|requested| StartError::InvalidTtl {
+                requested,
+                max: bounds.max_ttl,
+            })?;
         let script = catalog
             .get_script(&request.tenant, workflow.script())
             .await
@@ -318,7 +322,10 @@ impl<P: Plane> Edge<P> {
             .epochs()
             .last()
             .ok_or(StartError::NoEpoch)?;
-        let run = RunRef::new(request.tenant.clone(), self.plane.entropy().run_id_in(partition));
+        let run = RunRef::new(
+            request.tenant.clone(),
+            self.plane.entropy().run_id_in(partition),
+        );
         let seed = self.plane.entropy().seed();
         self.create(
             gateway,
@@ -346,9 +353,17 @@ impl<P: Plane> Edge<P> {
 
     /// Forks a run with a corrected script (`POST /v1/runs/{id}/fork`). The fork lives in its
     /// parent's namespace, and so in its partition.
-    pub async fn fork<G: Gateway>(&self, gateway: &mut G, request: ForkRun) -> Result<Created, ForkError> {
-        self.fork_with(gateway, request, None::<&crate::adapters::StaticTypeChecker>)
-            .await
+    pub async fn fork<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        request: ForkRun,
+    ) -> Result<Created, ForkError> {
+        self.fork_with(
+            gateway,
+            request,
+            None::<&crate::adapters::StaticTypeChecker>,
+        )
+        .await
     }
 
     /// [`fork`](Self::fork), type-checked first against the parent's toolset.
@@ -370,7 +385,10 @@ impl<P: Plane> Edge<P> {
         let parent = request.parent.clone();
         let start_failed = |error: StartError| ForkError::Start(error);
         let edge_failed = |error: EdgeError| ForkError::Start(start_unavailable(error));
-        let partition = self.partition_of(parent.id).await.map_err(|_| ForkError::ParentNotFound(parent.id))?;
+        let partition = self
+            .partition_of(parent.id)
+            .await
+            .map_err(|_| ForkError::ParentNotFound(parent.id))?;
         let view = self
             .get_run(gateway, &parent)
             .await
@@ -382,8 +400,7 @@ impl<P: Plane> Edge<P> {
             .map_err(edge_failed)?
             .unwrap_or_default();
         let Some(HistoryEntry {
-            event:
-                rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(parent_started)),
+            event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(parent_started)),
             ..
         }) = history.first()
         else {
@@ -425,7 +442,12 @@ impl<P: Plane> Edge<P> {
             .get_toolset(&parent.tenant, head.toolset)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?
-            .ok_or_else(|| start_failed(start_unavailable(format!("toolset {} not found", head.toolset))))?;
+            .ok_or_else(|| {
+                start_failed(start_unavailable(format!(
+                    "toolset {} not found",
+                    head.toolset
+                )))
+            })?;
         let toolset = stored.toolset;
         let compiled = self
             .plane
@@ -468,7 +490,10 @@ impl<P: Plane> Edge<P> {
             .put_script(&parent.tenant, &request.script, &compiled)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?;
-        let run = RunRef::new(parent.tenant.clone(), self.plane.entropy().run_id_in(partition));
+        let run = RunRef::new(
+            parent.tenant.clone(),
+            self.plane.entropy().run_id_in(partition),
+        );
         let start = StartAtOwner {
             run,
             namespace: head.namespace.clone(),
@@ -511,7 +536,11 @@ impl<P: Plane> Edge<P> {
     }
 
     /// The namespace's partition, the namespace created at its first use.
-    async fn namespace(&self, tenant: &TenantId, name: &NamespaceName) -> Result<PartitionId, StartError> {
+    async fn namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> Result<PartitionId, StartError> {
         match self
             .plane
             .catalog()
@@ -626,9 +655,10 @@ impl<P: Plane> Edge<P> {
         payload: JsonValue,
         key: Option<String>,
     ) -> Result<Enqueued, EdgeError> {
-        let (_, partition) = self.partition_of_token(token).await.map_err(|_| {
-            EdgeError::Unavailable("this webhook is bound to no run".into())
-        })?;
+        let (_, partition) = self
+            .partition_of_token(token)
+            .await
+            .map_err(|_| EdgeError::Unavailable("this webhook is bound to no run".into()))?;
         let request = PartitionRequest::Webhook {
             token: token.to_owned(),
             payload,
@@ -638,18 +668,33 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Lifts a quarantine; returns whether the run was quarantined.
-    pub async fn release<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<bool, EdgeError> {
-        self.done(gateway, run, PartitionRequest::Release { run: run.clone() }).await
+    pub async fn release<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<bool, EdgeError> {
+        self.done(gateway, run, PartitionRequest::Release { run: run.clone() })
+            .await
     }
 
     /// Ends a quarantined run; returns whether it was quarantined.
-    pub async fn give_up<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<bool, EdgeError> {
-        self.done(gateway, run, PartitionRequest::GiveUp { run: run.clone() }).await
+    pub async fn give_up<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<bool, EdgeError> {
+        self.done(gateway, run, PartitionRequest::GiveUp { run: run.clone() })
+            .await
     }
 
     /// Erases a run now (`DELETE /v1/runs/{id}`); returns whether it existed.
-    pub async fn erase<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<bool, EdgeError> {
-        self.done(gateway, run, PartitionRequest::Erase { run: run.clone() }).await
+    pub async fn erase<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<bool, EdgeError> {
+        self.done(gateway, run, PartitionRequest::Erase { run: run.clone() })
+            .await
     }
 
     async fn done<G: Gateway>(
@@ -676,7 +721,8 @@ impl<P: Plane> Edge<P> {
         token: &TaskToken,
         result: JsonValue,
     ) -> Result<(), EdgeError> {
-        self.answer(gateway, tenant, token, TaskAnswer::Complete(result)).await
+        self.answer(gateway, tenant, token, TaskAnswer::Complete(result))
+            .await
     }
 
     /// A handler's failure (`POST /v1/tasks/{token}/fail`).
@@ -687,7 +733,8 @@ impl<P: Plane> Edge<P> {
         token: &TaskToken,
         failure: HostFailure,
     ) -> Result<(), EdgeError> {
-        self.answer(gateway, tenant, token, TaskAnswer::Fail(failure)).await
+        self.answer(gateway, tenant, token, TaskAnswer::Fail(failure))
+            .await
     }
 
     /// The handler answers later (`POST /v1/tasks/{token}/defer`).
@@ -698,7 +745,8 @@ impl<P: Plane> Edge<P> {
         token: &TaskToken,
         timeout: Option<Duration>,
     ) -> Result<(), EdgeError> {
-        self.answer(gateway, tenant, token, TaskAnswer::Defer { timeout }).await
+        self.answer(gateway, tenant, token, TaskAnswer::Defer { timeout })
+            .await
     }
 
     async fn answer<G: Gateway>(
@@ -721,7 +769,11 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Lets a task that waits for the harness go on.
-    pub async fn approve_task<G: Gateway>(&self, gateway: &mut G, task: &TaskRef) -> Result<(), EdgeError> {
+    pub async fn approve_task<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        task: &TaskRef,
+    ) -> Result<(), EdgeError> {
         self.decide(gateway, task, Decision::Approve).await
     }
 
@@ -753,7 +805,11 @@ impl<P: Plane> Edge<P> {
     }
 
     /// The run's tool tasks, by seq.
-    pub async fn tool_tasks<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<Vec<ToolTask>, EdgeError> {
+    pub async fn tool_tasks<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<Vec<ToolTask>, EdgeError> {
         Ok(self
             .task_records(gateway, run)
             .await?
@@ -763,9 +819,19 @@ impl<P: Plane> Edge<P> {
     }
 
     /// The run's tool tasks as its partition keeps them.
-    pub async fn task_records<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<Vec<TaskRecord>, EdgeError> {
+    pub async fn task_records<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<Vec<TaskRecord>, EdgeError> {
         let partition = self.partition_of(run.id).await?;
-        match ask(gateway, partition, PartitionRequest::Tasks { run: run.clone() }).await? {
+        match ask(
+            gateway,
+            partition,
+            PartitionRequest::Tasks { run: run.clone() },
+        )
+        .await?
+        {
             PartitionReply::Tasks(tasks) => tasks?.ok_or(Refusal::RunNotFound(run.id).into()),
             other => Err(unexpected(&other)),
         }
@@ -775,9 +841,19 @@ impl<P: Plane> Edge<P> {
     // Reads
 
     /// The run, live or sealed.
-    pub async fn get_run<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<Option<RunView>, EdgeError> {
+    pub async fn get_run<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<Option<RunView>, EdgeError> {
         let partition = self.partition_of(run.id).await?;
-        match ask(gateway, partition, PartitionRequest::GetRun { run: run.clone() }).await? {
+        match ask(
+            gateway,
+            partition,
+            PartitionRequest::GetRun { run: run.clone() },
+        )
+        .await?
+        {
             PartitionReply::Run(view) => Ok(view?),
             other => Err(unexpected(&other)),
         }
@@ -804,7 +880,11 @@ impl<P: Plane> Edge<P> {
     }
 
     /// The run's journal with every payload loaded: a self-contained document.
-    pub async fn export_journal<G: Gateway>(&self, gateway: &mut G, run: &RunRef) -> Result<JournalDocument, EdgeError> {
+    pub async fn export_journal<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        run: &RunRef,
+    ) -> Result<JournalDocument, EdgeError> {
         let view = self
             .get_run(gateway, run)
             .await?
@@ -864,16 +944,18 @@ impl<P: Plane> Edge<P> {
             blobs,
             owners: vec![BlobOwner::Run(run.clone())],
         };
-        Ok(match crate::replay::replay(executor, &source, input).await {
-            Ok(rebuilt) => crate::engine::ReplayVerdict::Matches(rebuilt.end),
-            Err(crate::replay::ReplayError::NonDeterminism(mismatch)) => {
-                crate::engine::ReplayVerdict::Diverges(mismatch)
-            }
-            Err(crate::replay::ReplayError::Executor(error)) => {
-                crate::engine::ReplayVerdict::Fails(error)
-            }
-            Err(error) => return Err(unavailable(error)),
-        })
+        Ok(
+            match crate::replay::replay(executor, &source, input).await {
+                Ok(rebuilt) => crate::engine::ReplayVerdict::Matches(rebuilt.end),
+                Err(crate::replay::ReplayError::NonDeterminism(mismatch)) => {
+                    crate::engine::ReplayVerdict::Diverges(mismatch)
+                }
+                Err(crate::replay::ReplayError::Executor(error)) => {
+                    crate::engine::ReplayVerdict::Fails(error)
+                }
+                Err(error) => return Err(unavailable(error)),
+            },
+        )
     }
 
     /// The partitions that hold a scope: a namespace's, or every one for a tenant.
@@ -1020,6 +1102,8 @@ pub(crate) fn partition_reply(reply: NodeReply) -> Result<PartitionReply, EdgeEr
         NodeReply::NotOwner { partition } => Err(EdgeError::Unavailable(format!(
             "partition {partition} is moving: try again"
         ))),
-        other => Err(EdgeError::Unavailable(format!("unexpected reply {other:?}"))),
+        other => Err(EdgeError::Unavailable(format!(
+            "unexpected reply {other:?}"
+        ))),
     }
 }
