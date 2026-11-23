@@ -321,7 +321,20 @@ async fn start_wired(
     }
     let sign_in = sign_in(&config, memory)?;
     let directory = match &config.listen {
-        Listen::Embedded { dir } => Some(Directory::open(dir)?),
+        Listen::Embedded { dir } => {
+            let directory = Directory::open(dir)?;
+            // A `.rewind/` of the journal store: its runs move first.
+            if dir.join("journal.db").exists() && !dir.join("control.db").exists() {
+                return Err(StartupError::Setup(format!(
+                    "{} holds the runs of the journal store (journal.db), which this server does \
+                     not read: move them with `rewind server migrate-runs --embedded --dir {}`, \
+                     then start the server again",
+                    dir.display(),
+                    dir.display()
+                )));
+            }
+            Some(directory)
+        }
         Listen::Tcp { .. } => None,
     };
     let master_keys = match (&directory, &config.master_keys) {

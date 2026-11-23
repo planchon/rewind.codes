@@ -13,12 +13,13 @@ use std::path::PathBuf;
 
 use rewind_blob::{
     CachedArchive, CachedBlobs, DEFAULT_ARCHIVE_CACHE_CAPACITY, DEFAULT_CACHE_CAPACITY,
-    FileArchive, FileBlobs, S3Archive, S3Blobs, S3Config,
+    FileArchive, FileBlobs, LegacyFiles, LegacyS3, S3Archive, S3Blobs, S3Config,
 };
-use rewind_core::Digest;
+use rewind_core::{Digest, HistoryEntry};
+use rewind_engine::ports::legacy::{LegacyBlobs, LegacyError};
 use rewind_engine::ports::partition::Attempt;
 use rewind_engine::ports::{
-    ArchiveError, BlobError, BlobOwner, BlobStore, RunArchive, RunRef, SealedAttempt,
+    ArchiveError, BlobError, BlobOwner, BlobStore, RunArchive, RunRef, SealedAttempt, TenantId,
 };
 use rewind_store_slatedb::{Bucket, Options, S3Bucket, SlatePartitions};
 
@@ -229,6 +230,49 @@ impl BlobStore for Blobs {
         match self {
             Blobs::Files(files) => files.delete(owner, digest).await,
             Blobs::S3(s3) => s3.delete(owner, digest).await,
+        }
+    }
+}
+
+/// The tenant-keyed blobs the runs `migrate-runs` moves reference: under a directory (the
+/// embedded server's `.rewind/blobs`, a server's `--blobs` directory) or in a bucket.
+#[derive(Debug, Clone)]
+pub(crate) enum LegacyBlobStore {
+    Files(LegacyFiles),
+    S3(LegacyS3),
+}
+
+impl LegacyBlobStore {
+    pub(crate) fn open(location: &BucketLocation) -> Result<Self, ConfigError> {
+        match location {
+            BucketLocation::Files(root) => Ok(Self::Files(LegacyFiles::new(root.clone()))),
+            BucketLocation::S3(s3) => LegacyS3::new(s3.blobs())
+                .map(Self::S3)
+                .map_err(|error| ConfigError::new(format!("--blobs: {error}"))),
+        }
+    }
+}
+
+impl LegacyBlobs for LegacyBlobStore {
+    async fn payload(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, LegacyError> {
+        match self {
+            Self::Files(files) => files.payload(tenant, digest).await,
+            Self::S3(s3) => s3.payload(tenant, digest).await,
+        }
+    }
+
+    async fn journal(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
+        match self {
+            Self::Files(files) => files.journal(tenant, digest).await,
+            Self::S3(s3) => s3.journal(tenant, digest).await,
         }
     }
 }

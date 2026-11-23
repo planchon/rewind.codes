@@ -14,8 +14,15 @@
 //!   and deadlines, the projector, the retention jobs (`worker`).
 //! - The node link over HTTP/2 (`link`): its DTOs, the `NodeLink` that sends them to another
 //!   node, and the listener that serves a node's side, authenticated by the cluster's secret.
-//! - The embedded server of a `.rewind/` directory: its lock, its unix socket, its idle stop
-//!   (`embedded`).
+//! - The dashboard's sign-in `/auth`, through WorkOS (`rewind-workos`), with its sealed
+//!   cookies; a member's first grant in an organization.
+//! - Outbound lifecycle webhooks, signed following Standard Webhooks, never to the private
+//!   network of a deployed server: the sender of the owners' outboxes.
+//! - The embedded server of a `.rewind/` directory: one node, one partition, its lock, its unix
+//!   socket, its idle stop (`embedded`).
+//! - The control plane's daily jobs.
+//! - `rewind server migrate-runs`: the runs of the journal store moved onto the run plane, once
+//!   (`migrate`).
 //! - The dashboard's build, embedded in the binary and served under `/`.
 //!
 //! The adapters are wired by configuration, each in its own module of `wiring`. The `rewind`
@@ -35,6 +42,7 @@ mod grants;
 mod http;
 pub mod link;
 mod mcp;
+mod migrate;
 mod oauth;
 mod serve;
 mod streams;
@@ -50,6 +58,7 @@ use clap::Parser;
 
 pub use config::{ConfigError, OtlpArg, ServerArgs};
 pub use connections::{McpCaller, McpOrganization, McpPrincipal};
+pub use migrate::{MigrateArgs, migrate_runs};
 pub use serve::{
     Rewrapped, Running, StartupError, VERSION, rewrap_data_keys, start, start_in_memory,
     start_with_identity,
@@ -79,8 +88,13 @@ pub fn exit_code(error: &StartupError) -> u8 {
 
 /// `rewind server …`: `args` are the arguments after `server`. Runs until a signal (SIGINT,
 /// SIGTERM), `POST /v1/server/stop` or the idle timeout stops the server. With
-/// `--rewrap-data-keys`, rewraps the data keys, prints how many it changed, and exits.
+/// `--rewrap-data-keys`, rewraps the data keys, prints how many it changed, and exits;
+/// `rewind server migrate-runs …` moves the runs of the journal store onto the run plane, prints
+/// what it moved, and exits ([`migrate_runs`]).
 pub fn main(args: Vec<OsString>) -> ExitCode {
+    if args.first().is_some_and(|first| first == "migrate-runs") {
+        return migrate::main(args.into_iter().skip(1).collect());
+    }
     let args = match ServerArgs::try_parse_from(
         std::iter::once(OsString::from("rewind server")).chain(args),
     ) {
