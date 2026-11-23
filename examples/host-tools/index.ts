@@ -55,7 +55,7 @@ const worker = rewind.worker({
       return { id: `inv_${email.split("@")[0]}` };
     },
     ask_user: async ({ question }: { question: string }, ctx) => {
-      // Answer later: the task is deferred, needs no heartbeat, and is answered by its token,
+      // Answer later: the task is deferred, leaves the stream, and is answered by its token,
       // from any process, possibly days from now.
       const later = await ctx.defer({ timeout: "3d" });
       inbox.set(ctx.runId, { question, token: later.token });

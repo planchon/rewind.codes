@@ -339,8 +339,9 @@ specified.
 
 ## 0.1 is done when
 
-- A harness drives runs through the SDK, with several workers on one Postgres. Each run
-  appears as one trace under the harness's span, and runs can be searched by label and tool.
+- A harness drives runs through the SDK, on several nodes sharing one Postgres and one bucket.
+  Each run appears as one trace under the harness's span, and runs can be searched by label and
+  tool.
 - Locally, `rewind run`, `rewind signal`, `rewind replay` and `rewind trace` work on a run that sleeps,
   is interrupted, and resumes in another process. A forgotten `await`, an unhandled
   rejection and a deadlock each end as specified.
