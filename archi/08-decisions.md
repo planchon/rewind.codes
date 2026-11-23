@@ -1770,3 +1770,11 @@ object-storage rewrite was rebased on them (23 November 2026).
 | Main's Postgres migration 13 and Turso version 11 stay as released; the control plane's migration and the move of the run tables aside are Postgres 14 and 15, Turso 12 and 13. The fixtures of `migrate-runs` are a Postgres database of version 12 and a Turso database of version 10: the server applies the handles' migration, then the run plane's | Renumbering main's migrations | Production ran migration 13. |
 | `migrate-runs` moves a run with the origin and the suffix its tables gave it | New suffixes for moved runs | A handle someone copied keeps naming its run. |
 | The journal's range read of a tenant's runs, and Turso's `+tenant = ?` for it, go: a range of ids is read in a partition | Keeping them for the runs set aside | `migrate-runs` reads the runs set aside by id, in pages. |
+
+### Taken while bringing main's CI to green after the release (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A run's signal keys survive the seal of its attempt and go with its erasure: a late retry of a delivered signal is acknowledged for the life of the run, a new signal refused | Keys deleted with the attempt's inbox at the seal | 06 promises a second request with the same key is acknowledged; the seal came first on CI's slower runner, and a client retrying a signal it had sent read 409. |
+| In virtual time, a node's task reads the work in flight before its channel, and the end of the last piece of work wakes it | Waiting on the channel alone | A piece of work sends its answer, then ends its count: the task that took the answer first waited on a channel nothing filled again, and the clock stood still (the corpus's `durable_sleep` on CI). Read after the channel, the count let the clock jump past an answer not yet taken. |
+| The load generator runs with `--no-deps`, and a node restarts with its network holder (`restart: true`) | `docker compose run` bringing the edge's dependencies up | `--profile load` replaces `COMPOSE_PROFILES`: the run brought the holders up again without the nodes and recreated them, their image rebuilt three times under one name, under nodes that kept the removed namespace. |
