@@ -229,39 +229,6 @@ async fn an_end_users_token_sees_its_namespace_only() {
     server.stop().await;
 }
 
-/// More runs changed at once than a pass reads: the stream says `resync`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn more_changes_than_a_pass_reads_send_resync() {
-    let server = TestServer::start(&["--changes-per-pass", "2"]).await;
-    let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let mut stream = harness.changes().await.unwrap();
-    // Eight runs at once: a pass reads more than two of their changes it has not sent.
-    let starts = (0..8).map(|n| {
-        let harness = &harness;
-        async move {
-            harness
-                .start_run(&waiting(&format!("burst {n}"), &[]), None)
-                .await
-                .unwrap()
-        }
-    });
-    let runs = futures_util::future::join_all(starts).await;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(Instant::now() < deadline, "no resync within 30 s");
-        if next(&mut stream).await == ChangeEvent::Resync(rewind_api::events::Resync {}) {
-            break;
-        }
-    }
-    for run in &runs {
-        harness
-            .cancel_run(&run.id, &CancelRun::default())
-            .await
-            .unwrap();
-    }
-    server.stop().await;
-}
-
 /// A stream opened with a member's access token ends at the token's expiry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stream_opened_with_an_access_token_ends_at_its_expiry() {

@@ -4,7 +4,7 @@
 //! The CLI is a client of the API `/v1`: every command about runs goes through `rewind-api`'s
 //! client, to the remote server of `--url` (`REWIND_URL`, with `REWIND_API_KEY`), or to the embedded
 //! server of the state directory (`.rewind/`, or `--dir`), which [`embedded::Launcher`] starts on
-//! demand as `rewind server --embedded`. The CLI never opens `journal.db`.
+//! demand as `rewind server --embedded`. The CLI never opens what `.rewind/` stores.
 //!
 //! Three commands run in this process, without a server, wiring the adapters themselves:
 //! `rewind check` (the runtime's checks at start, tsgo and the checker's rules), `rewind test` (a

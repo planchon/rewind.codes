@@ -1,5 +1,6 @@
-//! Stopping a server: the tool calls in flight finish and commit before it stops, so a stop
-//! (a deploy, the CLI replacing its embedded server) neither fails nor repeats them.
+//! Stopping a server: its node hands its partitions over at once, and the next owner rebuilds
+//! the tool calls in flight from the records, as after a crash: a call under `retry` is sent
+//! again with its idempotency key, so the handler recognizes it, and the run goes on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -92,7 +93,7 @@ async fn serve(slow: Slow) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_call_in_flight_finishes_and_commits_before_the_server_stops() {
+async fn a_call_in_flight_at_a_stop_is_sent_again_by_the_next_owner() {
     let slow = Slow::default();
     let url = serve(slow.clone()).await;
     let dir = tempfile::tempdir().unwrap();
@@ -116,11 +117,9 @@ async fn a_call_in_flight_finishes_and_commits_before_the_server_stops() {
             let server =
                 TestServer::start_in(&path, &first_store, &first_blobs, INTERNAL_MCP).await;
             let harness = server.key(BuiltInRole::Harness, &[]).await;
-            // At most once: a call abandoned by the stop ends with its outcome unknown once its
-            // claim expires, and the script fails with a ToolError.
+            // Retried: a call interrupted by the stop is sent again by the next owner.
             let policy = ToolPolicy {
-                on_interruption: Some(OnInterruption::AtMostOnce),
-                heartbeat_timeout: Some("3s".parse().unwrap()),
+                on_interruption: Some(OnInterruption::Retry),
                 ..ToolPolicy::default()
             };
             let toolset = harness
@@ -154,14 +153,10 @@ export default async function main() {
     })
     .join()
     .unwrap();
-    assert_eq!(
-        *slow.calls.lock().unwrap(),
-        (1, 1),
-        "the call in flight was answered before the server stopped"
-    );
+    assert_eq!(slow.calls.lock().unwrap().0, 1, "one call before the stop");
 
-    // Another server on the same store finishes the run with the call's result, without
-    // calling the tool again.
+    // Another server on the same store sends the call again and finishes the run with its
+    // result.
     let server = TestServer::start_in(dir.path(), &store, &blobs, INTERNAL_MCP).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let ended = harness.get_run(&run, wait("30s")).await.unwrap();
@@ -170,6 +165,10 @@ export default async function main() {
         ended.output.and_then(|output| output.value),
         Some(json!("done"))
     );
-    assert_eq!(slow.calls.lock().unwrap().0, 1, "the call was not repeated");
+    assert_eq!(
+        slow.calls.lock().unwrap().0,
+        2,
+        "the call was sent again once"
+    );
     server.stop().await;
 }

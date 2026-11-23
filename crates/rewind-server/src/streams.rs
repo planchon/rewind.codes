@@ -24,6 +24,9 @@ pub(crate) struct Rights {
     control: broadcast::Receiver<Control>,
     stop: watch::Receiver<bool>,
     deadline: Option<tokio::time::Instant>,
+    /// A change concerned the caller and its rights are not read again yet: kept across the
+    /// waits a stream drops for another event.
+    recheck: bool,
 }
 
 impl Rights {
@@ -50,6 +53,7 @@ impl Rights {
             caller,
             permission,
             deadline,
+            recheck: false,
         }
     }
 
@@ -62,6 +66,12 @@ impl Rights {
         loop {
             if *self.stop.borrow() {
                 return;
+            }
+            if self.recheck {
+                if !auth::still_holds(&self.app, &self.caller, self.permission).await {
+                    return;
+                }
+                self.recheck = false;
             }
             let deadline = self.deadline;
             let expired = async move {
@@ -79,9 +89,7 @@ impl Rights {
                         Ok(Control::Lost) | Err(broadcast::error::RecvError::Lagged(_)) => true,
                         Err(broadcast::error::RecvError::Closed) => return,
                     };
-                    if concerned && !auth::still_holds(&self.app, &self.caller, self.permission).await {
-                        return;
-                    }
+                    self.recheck |= concerned;
                 }
             }
         }

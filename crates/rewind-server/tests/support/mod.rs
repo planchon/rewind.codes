@@ -346,6 +346,15 @@ impl TestServer {
             "--calls",
             "4",
         ];
+        if store.starts_with("postgres") {
+            // A node on Postgres links to the other nodes of its deployment.
+            args.extend_from_slice(&[
+                "--cluster-secret",
+                "the-cluster-secret-of-the-tests-0123456789",
+                "--link-listen",
+                "127.0.0.1:0",
+            ]);
+        }
         args.extend_from_slice(extra);
         if identity.is_some() {
             args.extend_from_slice(&WORKOS);

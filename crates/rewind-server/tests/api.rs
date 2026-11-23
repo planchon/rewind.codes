@@ -1168,7 +1168,21 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
     );
     let tenant_reader = server.tenant_key("acme", "reader").await;
     assert_eq!(
-        tenant_reader.get_payload(&their_input, None).await.unwrap(),
+        problem(
+            tenant_reader
+                .get_payload(&their_input, None)
+                .await
+                .unwrap_err()
+        )
+        .kind(),
+        Some(ProblemType::InvalidRequest),
+        "a payload belongs to its run, which every caller names"
+    );
+    assert_eq!(
+        tenant_reader
+            .get_payload(&their_input, Some(&theirs.id))
+            .await
+            .unwrap(),
         json!({ "text": "t".repeat(2048) })
     );
     assert_eq!(

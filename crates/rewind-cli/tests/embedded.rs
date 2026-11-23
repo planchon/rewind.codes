@@ -295,7 +295,7 @@ fn a_server_that_cannot_start_is_reported(state: &Path) -> Result<(), Failed> {
         format!("not started: {message}"),
     )?;
     check(
-        message.contains("cannot open journal.db: the disk is full"),
+        message.contains("cannot open control.db: the disk is full"),
         format!("the server's log is quoted: {message}"),
     )?;
     Ok(())
@@ -324,7 +324,7 @@ fn stub_server(args: &[String]) -> ExitCode {
         }
     };
     if dir.join("stub-fail").exists() {
-        eprintln!("stub: cannot open journal.db: the disk is full");
+        eprintln!("stub: cannot open control.db: the disk is full");
         return ExitCode::from(70);
     }
     let lock = match std::fs::OpenOptions::new()

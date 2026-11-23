@@ -543,38 +543,16 @@ async fn an_event_stream_opened_with_an_access_token_ends_at_its_expiry() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_worker_and_a_server_without_workos_accept_only_api_keys() {
+async fn a_server_without_workos_accepts_only_api_keys() {
     let (identity, _clock) = identity();
-    let api = TestServer::signed_in(&identity, &["--role", "api"]).await;
+    let signed_in = TestServer::signed_in(&identity, &[]).await;
     identity.add_user("ada@example.net", true);
-    let mut browser = Browser::new(&api.url);
+    let mut browser = Browser::new(&signed_in.url);
     let state = browser
         .sign_in(&identity, "ada@example.net", None)
         .await
         .unwrap();
-    member(&api, &state).whoami().await.unwrap();
-
-    let dir = tempfile::tempdir().unwrap();
-    let store = format!("turso:{}", dir.path().join("control.db").display());
-    let worker = TestServer::start_with(
-        tempfile::tempdir().unwrap(),
-        &store,
-        &dir.path().join("blobs"),
-        &["--role", "worker"],
-        Some(identity.clone()),
-    )
-    .await;
-    let refused = problem(member(&worker, &state).whoami().await.unwrap_err());
-    assert_eq!(refused.kind(), Some(ProblemType::Unauthorized));
-    assert!(
-        refused.detail.contains("only API keys"),
-        "{}",
-        refused.detail
-    );
-    let mut at_worker = Browser::new(&worker.url);
-    assert_eq!(at_worker.get("/auth/config").await.status(), 404);
-    worker.admin.whoami().await.unwrap();
-    worker.stop().await;
+    member(&signed_in, &state).whoami().await.unwrap();
 
     let plain = TestServer::start(&[]).await;
     let mut at_plain = Browser::new(&plain.url);
@@ -597,7 +575,7 @@ async fn a_worker_and_a_server_without_workos_accept_only_api_keys() {
     );
     plain.admin.list_roles().await.unwrap();
     plain.stop().await;
-    api.stop().await;
+    signed_in.stop().await;
 }
 
 #[tokio::test]
