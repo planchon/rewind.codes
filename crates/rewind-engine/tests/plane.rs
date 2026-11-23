@@ -12,13 +12,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use rewind_core::PartitionId;
 use rewind_core::{
     AbortKind, CancelReason, Completion, Event, Interruption, Lifecycle, RunStatus, Seq, Timestamp,
     ToolFailure, ToolFailureKind, ToolPolicy, Toolset,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HostTools;
-use rewind_engine::ports::link::{HostFailure, Refusal, StreamAttach, StreamId};
+use rewind_engine::ports::link::{
+    HostFailure, NodeReply, NodeRequest, PartitionRequest, Refusal, StreamAttach, StreamId,
+};
 use rewind_engine::ports::{
     BlobStore, CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind,
     Quotas, RunArchive, RunOrder, RunQuery, Scope, SecretStore, TaskState, TenantId, Window,
@@ -206,6 +209,43 @@ async fn a_read_that_finds_the_partition_opened_elsewhere_drops_it_and_the_node_
     assert_eq!(view.head.status, RunStatus::Completed);
     assert_eq!(store.opens(), 2, "the partition was opened again");
     assert_eq!(world.events(&run).await.len(), 8);
+}
+
+/// Two reads in flight when the first finds the partition opened by another node: the owner
+/// drops the partition at the first, and the second, which comes back to an owner that closed,
+/// is answered `NotOwner` too, never left waiting (a toolset's creation, which reads every
+/// partition, waited forever for a read that came back during a hand-over).
+#[tokio::test]
+async fn reads_in_flight_when_the_partition_is_dropped_are_answered_not_owner() {
+    let store = Interleaved::new();
+    let mut world = World::over(
+        store.clone(),
+        chain(),
+        RecordingDispatcher::echo(),
+        1,
+        &[config("node-a", 1)],
+    )
+    .await;
+    let run = world.run(request("chain", json!({}))).await;
+    store.fence_next_reads(2);
+    let read = || NodeRequest::Partition {
+        partition: PartitionId::new(0),
+        request: Box::new(PartitionRequest::GetRun { run: run.clone() }),
+    };
+    let at = world.at.clone();
+    let replies = world
+        .driver
+        .requests(&at, vec![read(), read()])
+        .await
+        .unwrap();
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, NodeReply::NotOwner { .. })),
+        "{replies:?}"
+    );
+    // The node opened the partition again, and the run is read.
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
 }
 
 #[tokio::test]

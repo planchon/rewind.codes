@@ -820,14 +820,12 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     }
 }
 
-/// A message for an owner the node does not have: its requests are answered `NotOwner`.
+/// A message for an owner the node does not have: whoever waits for its answer is answered
+/// `NotOwner`.
 fn refuse_missing_owner<P: Plane>(partition: PartitionId, message: OwnerMsg<P>) -> Vec<Effect<P>> {
-    match message {
-        OwnerMsg::Request(_, reply)
-        | OwnerMsg::Org {
-            message: OrgMsg::Request(_, reply),
-            ..
-        } => vec![Effect::Reply(reply, NodeReply::NotOwner { partition })],
-        _ => Vec::new(),
-    }
+    message
+        .into_reply()
+        .map(|reply| Effect::Reply(reply, NodeReply::NotOwner { partition }))
+        .into_iter()
+        .collect()
 }

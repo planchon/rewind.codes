@@ -5,7 +5,7 @@
 //! - **A seal between two reads.** The batch that seals an attempt is held once it is committed,
 //!   and applied at the next read of a history: a job that reads a run's head, then its entries,
 //!   sees the seal committed between the two, as when the sealer's batch and a read run at once.
-//! - **A read that finds the partition opened elsewhere.** The next read of a head answers
+//! - **A read that finds the partition opened elsewhere.** The next reads of a head answer
 //!   `Fenced`, as SlateDB does once another node opened the partition.
 
 use std::collections::BTreeMap;
@@ -29,8 +29,8 @@ struct Interleavings {
     held: Option<Batch>,
     /// How many held batches were applied.
     applied: usize,
-    /// The next read of a head answers `Fenced`.
-    fence_read: bool,
+    /// How many of the next reads of a head answer `Fenced`.
+    fence_reads: usize,
     /// How many times a partition was opened.
     opens: usize,
 }
@@ -64,7 +64,12 @@ impl Interleaved {
 
     /// The next read of a run's head answers that another node opened the partition.
     pub fn fence_next_read(&self) {
-        self.state.lock().unwrap().fence_read = true;
+        self.fence_next_reads(1);
+    }
+
+    /// The next `count` reads of a run's head answer that another node opened the partition.
+    pub fn fence_next_reads(&self, count: usize) {
+        self.state.lock().unwrap().fence_reads = count;
     }
 
     /// How many times a partition was opened.
@@ -107,7 +112,12 @@ impl PartitionLog for InterleavedLog {
     }
 
     async fn run(&self, run: &RunRef) -> Result<Option<RunHead>, PartitionError> {
-        let fenced = std::mem::take(&mut self.state.lock().unwrap().fence_read);
+        let fenced = {
+            let mut state = self.state.lock().unwrap();
+            let fenced = state.fence_reads > 0;
+            state.fence_reads = state.fence_reads.saturating_sub(1);
+            fenced
+        };
         if fenced {
             return Err(PartitionError::Fenced {
                 partition: self.partition(),

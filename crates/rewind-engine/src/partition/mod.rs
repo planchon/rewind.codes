@@ -114,6 +114,31 @@ pub(crate) enum OwnerMsg<P: Plane> {
     RetryCommit,
 }
 
+impl<P: Plane> OwnerMsg<P> {
+    /// Who waits for an answer to this message: a request, the job of a request (a read, a
+    /// start's key, a checked signal, a webhook), or a signal queued for its run. An owner that
+    /// closed, or that the node no longer has, answers it `NotOwner`, and the asker finds the
+    /// owner the map names; dropped, the asker would wait forever.
+    pub(crate) fn into_reply(self) -> Option<ReplyTo> {
+        match self {
+            OwnerMsg::Request(_, reply)
+            | OwnerMsg::Org {
+                message: OrgMsg::Request(_, reply),
+                ..
+            }
+            | OwnerMsg::Fenced(Some(reply))
+            | OwnerMsg::Internal(Internal::Signal(_, reply)) => Some(reply),
+            OwnerMsg::Step(step) => match *step {
+                runs::Step::StartKey { reply, .. }
+                | runs::Step::SignalChecked { reply, .. }
+                | runs::Step::Webhook { reply, .. } => Some(reply),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 impl<P: Plane> fmt::Debug for OwnerMsg<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -712,20 +737,13 @@ impl<P: Plane> Owner<P> {
     }
 
     fn refuse_closed(&mut self, message: OwnerMsg<P>) {
-        match message {
-            OwnerMsg::Request(_, reply)
-            | OwnerMsg::Org {
-                message: OrgMsg::Request(_, reply),
-                ..
-            } => {
-                self.out.push(Effect::Reply(
-                    reply,
-                    NodeReply::NotOwner {
-                        partition: self.partition,
-                    },
-                ));
-            }
-            _ => {}
+        if let Some(reply) = message.into_reply() {
+            self.out.push(Effect::Reply(
+                reply,
+                NodeReply::NotOwner {
+                    partition: self.partition,
+                },
+            ));
         }
     }
 
