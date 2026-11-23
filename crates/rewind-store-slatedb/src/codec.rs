@@ -3,6 +3,11 @@
 //!
 //! Writing never fails; reading a record that names something the engine refuses (a tenant, a
 //! namespace, an event that is no trigger) is [`PartitionError::Corrupt`].
+//!
+//! The conversions are public: `rewind-server`, a composition root, writes the records the
+//! stored format already defines (a run head, a history entry, a summary, …) in the DTOs of its
+//! node link rather than defining them a second time. `*_record` writes a record, `*_of` reads
+//! one back.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -46,7 +51,7 @@ pub(crate) fn decode<R: record::Record>(bytes: &[u8]) -> Result<R, PartitionErro
 // -------------------------------------------------------------------------------------------
 // Run heads
 
-pub(crate) fn head_record(head: &RunHead) -> record::RunHead {
+pub fn head_record(head: &RunHead) -> record::RunHead {
     record::RunHead {
         run: head.run.id,
         tenant: head.run.tenant.to_string(),
@@ -71,7 +76,7 @@ pub(crate) fn head_record(head: &RunHead) -> record::RunHead {
     }
 }
 
-pub(crate) fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError> {
+pub fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError> {
     Ok(RunHead {
         run: RunRef::new(tenant(record.tenant)?, record.run),
         namespace: namespace(record.namespace)?,
@@ -95,7 +100,7 @@ pub(crate) fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError
     })
 }
 
-fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
+pub fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
     record::Metadata {
         labels: metadata.labels.clone(),
         trace_context: metadata
@@ -126,7 +131,7 @@ fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
     }
 }
 
-fn metadata_of(record: record::Metadata) -> RunMetadata {
+pub fn metadata_of(record: record::Metadata) -> RunMetadata {
     RunMetadata {
         labels: record.labels,
         trace_context: record.trace_context.map(|context| TraceContext {
@@ -151,14 +156,14 @@ fn metadata_of(record: record::Metadata) -> RunMetadata {
     }
 }
 
-fn quarantine_kind_record(kind: QuarantineKind) -> record::QuarantineKind {
+pub fn quarantine_kind_record(kind: QuarantineKind) -> record::QuarantineKind {
     match kind {
         QuarantineKind::NonDeterminism => record::QuarantineKind::NonDeterminism,
         QuarantineKind::Failures => record::QuarantineKind::Failures,
     }
 }
 
-fn quarantine_kind_of(kind: record::QuarantineKind) -> QuarantineKind {
+pub fn quarantine_kind_of(kind: record::QuarantineKind) -> QuarantineKind {
     match kind {
         record::QuarantineKind::NonDeterminism => QuarantineKind::NonDeterminism,
         record::QuarantineKind::Failures => QuarantineKind::Failures,
@@ -238,7 +243,7 @@ fn wait_of(record: record::Wait) -> Wait {
 // -------------------------------------------------------------------------------------------
 // History, inbox, tasks, timers, payloads, watchers, webhook tokens
 
-pub(crate) fn entry_record(entry: &rewind_core::HistoryEntry) -> record::Entry {
+pub fn entry_record(entry: &rewind_core::HistoryEntry) -> record::Entry {
     record::Entry {
         index: entry.index,
         recorded_at: entry.recorded_at.0,
@@ -246,7 +251,7 @@ pub(crate) fn entry_record(entry: &rewind_core::HistoryEntry) -> record::Entry {
     }
 }
 
-pub(crate) fn entry_of(record: record::Entry) -> rewind_core::HistoryEntry {
+pub fn entry_of(record: record::Entry) -> rewind_core::HistoryEntry {
     rewind_core::HistoryEntry {
         index: record.index,
         recorded_at: Timestamp(record.recorded_at),
@@ -254,7 +259,7 @@ pub(crate) fn entry_of(record: record::Entry) -> rewind_core::HistoryEntry {
     }
 }
 
-pub(crate) fn inbox_record(item: &InboxItem) -> record::InboxItem {
+pub fn inbox_record(item: &InboxItem) -> record::InboxItem {
     record::InboxItem {
         id: item.id,
         received_at: item.received_at.0,
@@ -267,7 +272,7 @@ pub(crate) fn inbox_record(item: &InboxItem) -> record::InboxItem {
     }
 }
 
-pub(crate) fn inbox_of(record: record::InboxItem) -> Result<InboxItem, PartitionError> {
+pub fn inbox_of(record: record::InboxItem) -> Result<InboxItem, PartitionError> {
     let trigger = match record.trigger {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => Trigger::RunStarted(started),
         Event::Completion(completion) => Trigger::Completion(completion),
@@ -285,7 +290,7 @@ pub(crate) fn inbox_of(record: record::InboxItem) -> Result<InboxItem, Partition
     })
 }
 
-pub(crate) fn task_record(task: &TaskRecord) -> record::Task {
+pub fn task_record(task: &TaskRecord) -> record::Task {
     let tool = &task.task;
     record::Task {
         tenant: tool.task.run.tenant.to_string(),
@@ -322,7 +327,7 @@ pub(crate) fn task_record(task: &TaskRecord) -> record::Task {
     }
 }
 
-pub(crate) fn task_of(record: record::Task) -> Result<TaskRecord, PartitionError> {
+pub fn task_of(record: record::Task) -> Result<TaskRecord, PartitionError> {
     Ok(TaskRecord {
         task: ToolTask {
             task: TaskRef {
@@ -363,8 +368,17 @@ pub(crate) fn task_of(record: record::Task) -> Result<TaskRecord, PartitionError
     })
 }
 
-pub(crate) fn timer_record(timer: &DueTimer) -> record::Timer {
-    let kind = match &timer.kind {
+pub fn timer_record(timer: &DueTimer) -> record::Timer {
+    record::Timer {
+        at: timer.at.0,
+        tenant: timer.kind.tenant().to_string(),
+        kind: timer_kind_record(&timer.kind),
+    }
+}
+
+/// A timer's kind, without its tenant: [`TimerKind::tenant`] is written beside it.
+pub fn timer_kind_record(kind: &TimerKind) -> record::TimerKind {
+    match kind {
         TimerKind::Script { run, seq } => record::TimerKind::Script {
             run: run.id,
             seq: seq.0,
@@ -385,18 +399,20 @@ pub(crate) fn timer_record(timer: &DueTimer) -> record::Timer {
         TimerKind::ActivationRetry { run } => record::TimerKind::ActivationRetry { run: run.id },
         TimerKind::RetentionEnd { run } => record::TimerKind::RetentionEnd { run: run.id },
         TimerKind::WebhookRetry { entry, .. } => record::TimerKind::WebhookRetry { entry: entry.0 },
-    };
-    record::Timer {
-        at: timer.at.0,
-        tenant: timer.kind.tenant().to_string(),
-        kind,
     }
 }
 
-pub(crate) fn timer_of(record: record::Timer) -> Result<DueTimer, PartitionError> {
-    let tenant = tenant(record.tenant)?;
+pub fn timer_of(record: record::Timer) -> Result<DueTimer, PartitionError> {
+    Ok(DueTimer {
+        at: Timestamp(record.at),
+        kind: timer_kind_of(tenant(record.tenant)?, record.kind),
+    })
+}
+
+/// A timer's kind, of `tenant`.
+pub fn timer_kind_of(tenant: TenantId, kind: record::TimerKind) -> TimerKind {
     let run = |id| RunRef::new(tenant.clone(), id);
-    let kind = match record.kind {
+    match kind {
         record::TimerKind::Script { run: id, seq } => TimerKind::Script {
             run: run(id),
             seq: Seq(seq),
@@ -422,14 +438,10 @@ pub(crate) fn timer_of(record: record::Timer) -> Result<DueTimer, PartitionError
             tenant: tenant.clone(),
             entry: OutboxId(entry),
         },
-    };
-    Ok(DueTimer {
-        at: Timestamp(record.at),
-        kind,
-    })
+    }
 }
 
-pub(crate) fn payload_record(payload: &PayloadRecord) -> record::PayloadValue {
+pub fn payload_record(payload: &PayloadRecord) -> record::PayloadValue {
     record::PayloadValue {
         digest: payload.digest,
         size: payload.size,
@@ -438,7 +450,7 @@ pub(crate) fn payload_record(payload: &PayloadRecord) -> record::PayloadValue {
     }
 }
 
-pub(crate) fn payload_of(record: record::PayloadValue) -> PayloadRecord {
+pub fn payload_of(record: record::PayloadValue) -> PayloadRecord {
     PayloadRecord {
         digest: record.digest,
         size: record.size,
@@ -447,7 +459,7 @@ pub(crate) fn payload_of(record: record::PayloadValue) -> PayloadRecord {
     }
 }
 
-pub(crate) fn watcher_record(watcher: &Watcher) -> record::Watcher {
+pub fn watcher_record(watcher: &Watcher) -> record::Watcher {
     record::Watcher {
         run: watcher.run,
         seq: watcher.seq.0,
@@ -455,7 +467,7 @@ pub(crate) fn watcher_record(watcher: &Watcher) -> record::Watcher {
     }
 }
 
-pub(crate) fn watcher_of(record: record::Watcher) -> Watcher {
+pub fn watcher_of(record: record::Watcher) -> Watcher {
     Watcher {
         run: record.run,
         seq: Seq(record.seq),
@@ -463,7 +475,7 @@ pub(crate) fn watcher_of(record: record::Watcher) -> Watcher {
     }
 }
 
-pub(crate) fn webhook_record(run: &RunRef, name: &str) -> record::WebhookToken {
+pub fn webhook_record(run: &RunRef, name: &str) -> record::WebhookToken {
     record::WebhookToken {
         tenant: run.tenant.to_string(),
         run: run.id,
@@ -471,7 +483,7 @@ pub(crate) fn webhook_record(run: &RunRef, name: &str) -> record::WebhookToken {
     }
 }
 
-pub(crate) fn webhook_of(record: record::WebhookToken) -> Result<WebhookTarget, PartitionError> {
+pub fn webhook_of(record: record::WebhookToken) -> Result<WebhookTarget, PartitionError> {
     Ok(WebhookTarget {
         run: RunRef::new(tenant(record.tenant)?, record.run),
         name: record.name,
@@ -481,7 +493,7 @@ pub(crate) fn webhook_of(record: record::WebhookToken) -> Result<WebhookTarget, 
 // -------------------------------------------------------------------------------------------
 // Summaries
 
-pub(crate) fn summary_record(indexed: &IndexedSummary) -> record::Summary {
+pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
     let summary = &indexed.summary;
     record::Summary {
         tenant: summary.run.tenant.to_string(),
@@ -528,7 +540,7 @@ pub(crate) fn summary_record(indexed: &IndexedSummary) -> record::Summary {
     }
 }
 
-pub(crate) fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionError> {
+pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionError> {
     Ok(IndexedSummary {
         summary: RunSummary {
             run: RunRef::new(tenant(record.tenant)?, record.run),
@@ -571,7 +583,7 @@ pub(crate) fn summary_of(record: record::Summary) -> Result<IndexedSummary, Part
 // -------------------------------------------------------------------------------------------
 // Counters, gauges
 
-fn runs_record(runs: &RunCounts) -> record::RunCounts {
+pub fn runs_record(runs: &RunCounts) -> record::RunCounts {
     record::RunCounts {
         started: runs.started,
         ended: runs
@@ -582,7 +594,7 @@ fn runs_record(runs: &RunCounts) -> record::RunCounts {
     }
 }
 
-fn runs_of(record: record::RunCounts) -> RunCounts {
+pub fn runs_of(record: record::RunCounts) -> RunCounts {
     RunCounts {
         started: record.started,
         ended: record
@@ -613,7 +625,7 @@ fn sketch_of(record: record::Sketch) -> Sketch {
 
 /// The counters of one namespace and hour; their `namespaces` are the store's to fill, never
 /// stored.
-pub(crate) fn counters_record(counters: &Counters) -> record::Counters {
+pub fn counters_record(counters: &Counters) -> record::Counters {
     record::Counters {
         created: counters.created,
         runs: runs_record(&counters.runs),
@@ -683,7 +695,7 @@ pub(crate) fn counters_record(counters: &Counters) -> record::Counters {
     }
 }
 
-pub(crate) fn counters_of(record: record::Counters) -> Counters {
+pub fn counters_of(record: record::Counters) -> Counters {
     Counters {
         created: record.created,
         runs: runs_of(record.runs),
@@ -754,7 +766,7 @@ pub(crate) fn counters_of(record: record::Counters) -> Counters {
     }
 }
 
-fn waiting_record(kind: WaitingFor) -> record::WaitingFor {
+pub fn waiting_record(kind: WaitingFor) -> record::WaitingFor {
     match kind {
         WaitingFor::Signal => record::WaitingFor::Signal,
         WaitingFor::Timer => record::WaitingFor::Timer,
@@ -766,7 +778,7 @@ fn waiting_record(kind: WaitingFor) -> record::WaitingFor {
     }
 }
 
-fn waiting_of(kind: record::WaitingFor) -> WaitingFor {
+pub fn waiting_of(kind: record::WaitingFor) -> WaitingFor {
     match kind {
         record::WaitingFor::Signal => WaitingFor::Signal,
         record::WaitingFor::Timer => WaitingFor::Timer,
@@ -778,7 +790,7 @@ fn waiting_of(kind: record::WaitingFor) -> WaitingFor {
     }
 }
 
-pub(crate) fn gauges_record(gauges: &Gauges) -> record::Gauges {
+pub fn gauges_record(gauges: &Gauges) -> record::Gauges {
     record::Gauges {
         active_runs: gauges.active_runs,
         waiting: gauges
@@ -791,7 +803,7 @@ pub(crate) fn gauges_record(gauges: &Gauges) -> record::Gauges {
     }
 }
 
-pub(crate) fn gauges_of(record: record::Gauges) -> Gauges {
+pub fn gauges_of(record: record::Gauges) -> Gauges {
     Gauges {
         active_runs: record.active_runs,
         waiting: record
@@ -1070,45 +1082,52 @@ fn webhook_event_of(record: record::WebhookEvent) -> Result<WebhookEvent, Partit
     })
 }
 
-pub(crate) fn outbox_record(entry: &OutboxEntry) -> record::Outbox {
+pub fn outbox_record(entry: &OutboxEntry) -> record::Outbox {
     record::Outbox {
         id: entry.id.0,
         tenant: entry.tenant.to_string(),
         run: entry.run,
-        projection: match &entry.projection {
-            Projection::Otel { spans, logs } => record::Projection::Otel {
-                spans: spans.iter().map(span_record).collect(),
-                logs: logs.iter().map(log_record).collect(),
-            },
-            Projection::Webhooks(event) => record::Projection::Webhooks {
-                event: webhook_event_record(event),
-            },
-            Projection::QuotaAlert(alert) => record::Projection::QuotaAlert {
-                alert: alert_record(alert),
-            },
+        projection: projection_record(&entry.projection),
+    }
+}
+
+/// What an outbox entry delivers.
+pub fn projection_record(projection: &Projection) -> record::Projection {
+    match projection {
+        Projection::Otel { spans, logs } => record::Projection::Otel {
+            spans: spans.iter().map(span_record).collect(),
+            logs: logs.iter().map(log_record).collect(),
+        },
+        Projection::Webhooks(event) => record::Projection::Webhooks {
+            event: webhook_event_record(event),
+        },
+        Projection::QuotaAlert(alert) => record::Projection::QuotaAlert {
+            alert: alert_record(alert),
         },
     }
 }
 
-pub(crate) fn outbox_of(record: record::Outbox) -> Result<OutboxEntry, PartitionError> {
+pub fn outbox_of(record: record::Outbox) -> Result<OutboxEntry, PartitionError> {
     Ok(OutboxEntry {
         id: OutboxId(record.id),
         tenant: tenant(record.tenant)?,
         run: record.run,
-        projection: match record.projection {
-            record::Projection::Otel { spans, logs } => Projection::Otel {
-                spans: spans.into_iter().map(span_of).collect(),
-                logs: logs.into_iter().map(log_of).collect(),
-            },
-            record::Projection::Webhooks { event } => {
-                Projection::Webhooks(webhook_event_of(event)?)
-            }
-            record::Projection::QuotaAlert { alert } => Projection::QuotaAlert(alert_of(alert)?),
-        },
+        projection: projection_of(record.projection)?,
     })
 }
 
-pub(crate) fn organization_record(state: &OrganizationState) -> record::Organization {
+pub fn projection_of(record: record::Projection) -> Result<Projection, PartitionError> {
+    Ok(match record {
+        record::Projection::Otel { spans, logs } => Projection::Otel {
+            spans: spans.into_iter().map(span_of).collect(),
+            logs: logs.into_iter().map(log_of).collect(),
+        },
+        record::Projection::Webhooks { event } => Projection::Webhooks(webhook_event_of(event)?),
+        record::Projection::QuotaAlert { alert } => Projection::QuotaAlert(alert_of(alert)?),
+    })
+}
+
+pub fn organization_record(state: &OrganizationState) -> record::Organization {
     record::Organization {
         alerts: state.alerts.iter().map(alert_record).collect(),
         admissions: state
@@ -1124,9 +1143,7 @@ pub(crate) fn organization_record(state: &OrganizationState) -> record::Organiza
     }
 }
 
-pub(crate) fn organization_of(
-    record: record::Organization,
-) -> Result<OrganizationState, PartitionError> {
+pub fn organization_of(record: record::Organization) -> Result<OrganizationState, PartitionError> {
     Ok(OrganizationState {
         alerts: record
             .alerts

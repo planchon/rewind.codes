@@ -27,10 +27,13 @@ rewind-outbound.workspace = true
 rewind-otel.workspace = true
 rewind-runtime.workspace = true
 rewind-store-postgres.workspace = true
+# The node link writes the partition records the stored format defines, through the store's
+# conversions (`rewind_store_slatedb::codec`).
 rewind-store-slatedb.workspace = true
 rewind-store-turso.workspace = true
 rewind-workos.workspace = true
-axum.workspace = true
+# HTTP/2 without TLS (prior knowledge): the node link's listener.
+axum = { workspace = true, features = ["http2"] }
 base64.workspace = true
 clap = { workspace = true }
 fs4 = { workspace = true }
@@ -46,6 +49,10 @@ serde.workspace = true
 serde_html_form.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# The subscriptions of the node link, read as server-sent events.
+sse-stream.workspace = true
+# The cluster secret, compared in constant time.
+subtle = "2.6"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true

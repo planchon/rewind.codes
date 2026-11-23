@@ -1,23 +1,21 @@
 //! `rewind server`: a node of Rewind's run plane and its HTTP edge, in one process
 //! (`archi/07-code-architecture.md`, "Crates", "Inside a node").
 //!
-//! - The node: the owners of the partitions it holds (on SlateDB), the organization actors they
-//!   host, its executors (V8) and its call executor, driven by `rewind-engine`'s runtime; its
-//!   membership of the cluster on the control plane (Postgres, or Turso for a single node);
-//!   `--executors-only` and `--pool`.
-//! - The edge: the HTTP API `/v1` of `rewind-api` on the engine's `Edge`, with axum: API keys
-//!   hashed in the control plane and members' access tokens, grants, roles and label scopes,
-//!   organizations, members and invitations, tenants and their quotas, `Idempotency-Key`,
-//!   problem+json errors; the event stream of a run, the change stream and the task stream
-//!   (server-sent events pushed by the owners); held waits; inbound webhooks that become
-//!   signals; `/mcp` and the OAuth authorization server of people's connections.
-//! - The dashboard's sign-in `/auth`, through WorkOS (`rewind-workos`), with its sealed
-//!   cookies; a member's first grant in an organization.
-//! - Outbound lifecycle webhooks, signed following Standard Webhooks, never to the private
-//!   network of a deployed server: the sender of the owners' outboxes.
-//! - The embedded server of a `.rewind/` directory: one node, one partition, its lock, its unix
-//!   socket, its idle stop (`embedded`).
-//! - The control plane's daily jobs.
+//! - The HTTP API `/v1` of `rewind-api`, with axum: API keys hashed in the store and members'
+//!   access tokens, grants, roles and label scopes, organizations, members and invitations,
+//!   tenants and their quotas, `Idempotency-Key`, problem+json errors; the event stream
+//!   of a run and the change stream of the runs (server-sent events, `changes`); host-tool tasks long-polled by the harness's worker; inbound
+//!   webhooks that become signals; outbound lifecycle webhooks signed following Standard
+//!   Webhooks, sent concurrently and bounded per subscription (`deliveries`), never to the
+//!   private network of a deployed server.
+//! - The dashboard's sign-in `/auth` on the api role, through WorkOS (`rewind-workos`), with its
+//!   sealed cookies; a member's first grant in an organization.
+//! - The worker role: activations with the sticky cache, tool dispatch, the scheduler of timers
+//!   and deadlines, the projector, the retention jobs (`worker`).
+//! - The node link over HTTP/2 (`link`): its DTOs, the `NodeLink` that sends them to another
+//!   node, and the listener that serves a node's side, authenticated by the cluster's secret.
+//! - The embedded server of a `.rewind/` directory: its lock, its unix socket, its idle stop
+//!   (`embedded`).
 //! - The dashboard's build, embedded in the binary and served under `/`.
 //!
 //! The adapters are wired by configuration, each in its own module of `wiring`. The `rewind`
@@ -35,7 +33,7 @@ mod extract;
 mod follow;
 mod grants;
 mod http;
-mod idle;
+pub mod link;
 mod mcp;
 mod oauth;
 mod serve;
