@@ -24,6 +24,9 @@
 //! transaction at `READ COMMITTED`, and the rows it competes for are locked in a fixed order; a
 //! deadlock or a serialization failure, should one happen anyway, is retried.
 //!
+//! [`PostgresLegacy`] ([`PostgresStore::legacy`]) reads the runs migration 14 set aside in the
+//! schema `legacy`, for `rewind server migrate-runs`, and drops them once they moved.
+//!
 //! The schema is versioned: its migrations are embedded in the binary and applied when the store
 //! connects, under an advisory lock so that servers starting together migrate once; a database
 //! migrated by a newer build is refused ([`Error::NewerSchema`]).
@@ -36,6 +39,7 @@ mod changes;
 mod cluster;
 mod codec;
 mod connections;
+mod legacy;
 mod namespaces;
 mod schema;
 mod secrets;
@@ -50,6 +54,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 pub use catalog::PostgresCatalog;
 pub use cluster::{PostgresChanges, PostgresCluster, PostgresMembership};
+pub use legacy::PostgresLegacy;
 pub use schema::SCHEMA_VERSION;
 pub use secrets::{MasterKey, MasterKeys};
 

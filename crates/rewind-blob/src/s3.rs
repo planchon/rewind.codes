@@ -141,7 +141,11 @@ impl S3Blobs {
         Path::from(Self::key(owner, digest))
     }
 
-    async fn read(&self, location: &Path, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+    pub(crate) async fn read(
+        &self,
+        location: &Path,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
         let object = match self.store.get(location).await {
             Ok(object) => object,
             Err(object_store::Error::NotFound { .. }) => return Ok(None),

@@ -134,7 +134,7 @@ impl BlobStore for FileBlobs {
 }
 
 /// Reads a blob and checks its digest.
-fn read(digest: Digest, path: &Path) -> Result<Option<Vec<u8>>, BlobError> {
+pub(crate) fn read(digest: Digest, path: &Path) -> Result<Option<Vec<u8>>, BlobError> {
     match fs::read(path) {
         Ok(bytes) => {
             verify(digest, &bytes, "stored bytes")?;

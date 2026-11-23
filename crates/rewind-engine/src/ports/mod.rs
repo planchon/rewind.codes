@@ -22,6 +22,7 @@
 //! | [`SpanExporter`] | memory, `rewind-otel` |
 //! | [`SecretStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`WebhookSender`] | memory, HTTP (`rewind-server`) |
+//! | [`legacy::LegacyRuns`], [`legacy::LegacyBlobs`] | memory; `rewind-store-turso`, `rewind-store-postgres`; `rewind-blob` (files, S3) |
 //! | [`Clock`], [`Entropy`] | system, virtual or seeded |
 //!
 //! The ports with state ([`CatalogStore`], [`PartitionStore`], [`RunArchive`], [`Cluster`],
@@ -34,7 +35,9 @@
 //! are re-exported here. The modules [`catalog`], [`partition`], [`archive`], [`cluster`] and
 //! [`link`] are public: the names they share with other modules ([`partition::CreateRun`],
 //! [`partition::Activation`], [`cluster::Membership`], [`link::HostTask`]) are read through
-//! them; every other name is also re-exported here. A span exporter and a
+//! them; every other name is also re-exported here. The ports of `rewind server migrate-runs`
+//! are read through [`legacy`] alone, and have no suite: the migration's tests load a database
+//! the journal store filled. A span exporter and a
 //! webhook sender have no read side: their suites read the backend through a collector or a
 //! receiver the adapter's test provides. An identity provider's contract is not observable
 //! through the port alone: its adapters test it.
@@ -52,6 +55,7 @@ mod executor;
 pub mod identity;
 
 mod journal;
+pub mod legacy;
 pub mod link;
 mod namespaces;
 pub mod partition;
