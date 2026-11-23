@@ -156,7 +156,7 @@ impl Views<'_> {
         Ok(self
             .app
             .blobs()
-            .get_in(&BlobOwner::Run(run.clone()), digest)
+            .get(&BlobOwner::Run(run.clone()), digest)
             .await?)
     }
 

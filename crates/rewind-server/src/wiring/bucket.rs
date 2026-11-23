@@ -18,7 +18,7 @@ use rewind_blob::{
 use rewind_core::Digest;
 use rewind_engine::ports::partition::Attempt;
 use rewind_engine::ports::{
-    ArchiveError, BlobError, BlobOwner, BlobStore, RunArchive, RunRef, SealedAttempt, TenantId,
+    ArchiveError, BlobError, BlobOwner, BlobStore, RunArchive, RunRef, SealedAttempt,
 };
 use rewind_store_slatedb::{Bucket, Options, S3Bucket, SlatePartitions};
 
@@ -189,50 +189,20 @@ pub(crate) enum Blobs {
 impl BlobStore for Blobs {
     async fn put(
         &self,
-        tenant: &TenantId,
-        digest: Digest,
-        bytes: Vec<u8>,
-    ) -> Result<(), BlobError> {
-        match self {
-            Blobs::Files(files) => files.put(tenant, digest, bytes).await,
-            Blobs::S3(s3) => s3.put(tenant, digest, bytes).await,
-        }
-    }
-
-    async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        match self {
-            Blobs::Files(files) => files.get(tenant, digest).await,
-            Blobs::S3(s3) => s3.get(tenant, digest).await,
-        }
-    }
-
-    async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        match self {
-            Blobs::Files(files) => files.delete(tenant, digest).await,
-            Blobs::S3(s3) => s3.delete(tenant, digest).await,
-        }
-    }
-
-    async fn put_in(
-        &self,
         owner: &BlobOwner,
         digest: Digest,
         bytes: Vec<u8>,
     ) -> Result<(), BlobError> {
         match self {
-            Blobs::Files(files) => files.put_in(owner, digest, bytes).await,
-            Blobs::S3(s3) => s3.put_in(owner, digest, bytes).await,
+            Blobs::Files(files) => files.put(owner, digest, bytes).await,
+            Blobs::S3(s3) => s3.put(owner, digest, bytes).await,
         }
     }
 
-    async fn get_in(
-        &self,
-        owner: &BlobOwner,
-        digest: Digest,
-    ) -> Result<Option<Vec<u8>>, BlobError> {
+    async fn get(&self, owner: &BlobOwner, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
         match self {
-            Blobs::Files(files) => files.get_in(owner, digest).await,
-            Blobs::S3(s3) => s3.get_in(owner, digest).await,
+            Blobs::Files(files) => files.get(owner, digest).await,
+            Blobs::S3(s3) => s3.get(owner, digest).await,
         }
     }
 
@@ -255,10 +225,10 @@ impl BlobStore for Blobs {
         }
     }
 
-    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+    async fn delete(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
         match self {
-            Blobs::Files(files) => files.delete_in(owner, digest).await,
-            Blobs::S3(s3) => s3.delete_in(owner, digest).await,
+            Blobs::Files(files) => files.delete(owner, digest).await,
+            Blobs::S3(s3) => s3.delete(owner, digest).await,
         }
     }
 }
