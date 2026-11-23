@@ -85,6 +85,8 @@ pub struct RunState {
     mode: Option<RunMode>,
     pending_tool_calls: BTreeMap<Seq, String>,
     pending_timers: BTreeMap<Seq, Timestamp>,
+    /// The index of the entry that opened each pending call and timer.
+    opened: BTreeMap<Seq, u64>,
     awaited_signals: Vec<AwaitedSignal>,
     outcome: Option<RunOutcome>,
     started_at: Option<Timestamp>,
@@ -109,6 +111,7 @@ impl RunState {
             mode: None,
             pending_tool_calls: BTreeMap::new(),
             pending_timers: BTreeMap::new(),
+            opened: BTreeMap::new(),
             awaited_signals: Vec::new(),
             outcome: None,
             started_at: None,
@@ -147,7 +150,7 @@ impl RunState {
                     reason: reason.clone(),
                 },
             ),
-            Event::Command(command) => self.apply_command(command),
+            Event::Command(command) => self.apply_command(entry.index, command),
             Event::Completion(completion) => self.apply_completion(completion),
             Event::Annotation(Annotation::SignalAwaited { name, timeout, .. }) => {
                 self.awaited_signals.push(AwaitedSignal {
@@ -161,16 +164,20 @@ impl RunState {
         Ok(())
     }
 
-    fn apply_command(&mut self, command: &Command) {
+    fn apply_command(&mut self, index: u64, command: &Command) {
         match command {
             Command::ScheduleToolCall { seq, tool, .. } => {
                 self.pending_tool_calls.insert(*seq, tool.clone());
+                self.opened.insert(*seq, index);
             }
             Command::StartTimer { seq, fire_at, .. } => {
                 self.pending_timers.insert(*seq, *fire_at);
+                self.opened.insert(*seq, index);
             }
             Command::CancelTimer { seq } => {
-                self.pending_timers.remove(seq);
+                if self.pending_timers.remove(seq).is_some() {
+                    self.opened.remove(seq);
+                }
             }
             Command::CompleteRun { output } => self.end(
                 RunStatus::Completed,
@@ -197,10 +204,14 @@ impl RunState {
     fn apply_completion(&mut self, completion: &Completion) {
         match completion {
             Completion::ToolCallCompleted { seq, .. } | Completion::ToolCallFailed { seq, .. } => {
-                self.pending_tool_calls.remove(seq);
+                if self.pending_tool_calls.remove(seq).is_some() {
+                    self.opened.remove(seq);
+                }
             }
             Completion::TimerFired { seq } => {
-                self.pending_timers.remove(seq);
+                if self.pending_timers.remove(seq).is_some() {
+                    self.opened.remove(seq);
+                }
                 self.awaited_signals
                     .retain(|wait| wait.timeout != Some(*seq));
             }
@@ -223,6 +234,7 @@ impl RunState {
         self.outcome = Some(outcome);
         self.pending_tool_calls.clear();
         self.pending_timers.clear();
+        self.opened.clear();
         self.awaited_signals.clear();
     }
 
@@ -256,6 +268,13 @@ impl RunState {
     /// Timers started and neither fired nor cancelled, by `seq`, with their `fire_at`.
     pub fn pending_timers(&self) -> &BTreeMap<Seq, Timestamp> {
         &self.pending_timers
+    }
+
+    /// The index of the entry that opened the pending call or timer `seq`
+    /// (`schedule_tool_call`, `start_timer`): what is derived from a pending call or timer
+    /// reads its opening entry without walking the history.
+    pub fn opened_by(&self, seq: Seq) -> Option<u64> {
+        self.opened.get(&seq).copied()
     }
 
     pub fn awaited_signals(&self) -> &[AwaitedSignal] {

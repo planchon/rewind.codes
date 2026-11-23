@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rewind_core::{
     Annotation, Callsite, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload,
-    RunId, RunMode, Seq, Timestamp, canonical_json,
+    RunId, RunMode, RunState, Seq, Timestamp, canonical_json,
 };
 
 use crate::metrics::RunMeasurement;
@@ -37,7 +37,7 @@ const PREVIEW_CHARS: usize = 120;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelemetryConfig {
     /// The share of runs whose telemetry is exported, in millionths, decided from the trace id.
-    /// 1,000,000 (every run) by default. The read model is never sampled.
+    /// 1,000,000 (every run) by default. Run summaries and metrics are never sampled.
     pub sampled_per_million: u32,
     /// The run labels exported as span attributes (`rewind.label.<key>`). Labels may name end
     /// users: the others are never exported. None by default.
@@ -194,29 +194,40 @@ impl RunTelemetry<'_> {
         !mock || self.config.export_mock_runs
     }
 
-    /// What the entries within `from..to` measure, given the history up to `to` at least: the
-    /// run's start and end, and the tool calls that end within the range, timed as their spans
-    /// are.
-    pub(crate) fn measurements(
+    /// What the entries within `from..to` measure, given the history up to `to` at least and
+    /// `before`, the run's state after the entries before `from`: the run's start and end, and
+    /// the tool calls that end within the range, timed as their spans are. The calls pending
+    /// before the range are read at their opening entry: the cost is the range's.
+    pub(crate) fn measurements<'h>(
         &self,
-        history: &[HistoryEntry],
+        history: &'h [HistoryEntry],
+        before: &RunState,
         from: u64,
         to: u64,
     ) -> Vec<RunMeasurement> {
-        let mut scheduled: BTreeMap<Seq, (Timestamp, &str)> = BTreeMap::new();
+        let mut scheduled: BTreeMap<Seq, (Timestamp, &'h str)> = before
+            .pending_tool_calls()
+            .keys()
+            .filter_map(|seq| {
+                let entry = crate::projector::opening(history, before, *seq)?;
+                match &entry.event {
+                    Event::Command(Command::ScheduleToolCall { tool, .. }) => {
+                        Some((*seq, (entry.recorded_at, tool.as_str())))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
         let mut measurements = Vec::new();
-        for entry in history.iter().take_while(|entry| entry.index < to) {
-            let within = (from..to).contains(&entry.index);
+        for entry in range(history, from, to) {
             let at = entry.recorded_at;
             let mut call = |seq: &Seq, outcome: &'static str, error_kind: Option<&'static str>| {
-                if let Some((start, tool)) = scheduled.remove(seq)
-                    && within
-                {
+                if let Some((start, tool)) = scheduled.remove(seq) {
                     measurements.push(tool_call(tool, outcome, error_kind, start, at));
                 }
             };
             match &entry.event {
-                Event::Lifecycle(Lifecycle::RunStarted(_)) if within => {
+                Event::Lifecycle(Lifecycle::RunStarted(_)) => {
                     measurements.push(RunMeasurement::Started);
                 }
                 Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
@@ -231,33 +242,37 @@ impl RunTelemetry<'_> {
                 _ => {}
             }
             if entry.event.is_terminal() {
-                let open = std::mem::take(&mut scheduled);
-                if within {
-                    for (start, tool) in open.into_values() {
-                        measurements.push(tool_call(tool, "no_outcome", None, start, at));
-                    }
-                    measurements.push(RunMeasurement::Ended {
-                        outcome: run_outcome(&entry.event).to_owned(),
-                    });
+                for (start, tool) in std::mem::take(&mut scheduled).into_values() {
+                    measurements.push(tool_call(tool, "no_outcome", None, start, at));
                 }
+                measurements.push(RunMeasurement::Ended {
+                    outcome: run_outcome(&entry.event).to_owned(),
+                });
             }
         }
         measurements
     }
 
-    /// The spans that end within `from..to`, given the history up to `to` at least. Each is
-    /// derived from the whole history before it, so a feed item applied twice, or late, gives
-    /// the same spans.
-    pub(crate) fn spans(&self, history: &[HistoryEntry], from: u64, to: u64) -> Vec<Span> {
-        let mut derivation = Derivation::new(self);
-        for entry in history.iter().take_while(|entry| entry.index < to) {
-            derivation.apply(entry, (from..to).contains(&entry.index));
+    /// The spans that end within `from..to`, given the history up to `to` at least and
+    /// `before`, the run's state after the entries before `from`. A span is the same whichever
+    /// range it is derived in: what was open before the range (calls, timers, signal waits) is
+    /// read at its opening entry, so the cost is the range's.
+    pub(crate) fn spans(
+        &self,
+        history: &[HistoryEntry],
+        before: &RunState,
+        from: u64,
+        to: u64,
+    ) -> Vec<Span> {
+        let mut derivation = Derivation::at(self, history, before);
+        for entry in range(history, from, to) {
+            derivation.apply(entry, true);
         }
         derivation.spans
     }
 
     /// The `console.*` logs within `from..to`, as log records of the activation span
-    /// `H(run, fence)`.
+    /// `activation`.
     pub(crate) fn logs(
         &self,
         history: &[HistoryEntry],
@@ -267,9 +282,8 @@ impl RunTelemetry<'_> {
     ) -> Vec<LogRecord> {
         let (trace, _) = self.trace();
         let run = self.head.run.id;
-        history
+        range(history, from, to)
             .iter()
-            .filter(|entry| (from..to).contains(&entry.index))
             .filter_map(|entry| match &entry.event {
                 Event::Annotation(Annotation::Log {
                     level,
@@ -436,6 +450,79 @@ impl<'t, 'a> Derivation<'t, 'a> {
         }
     }
 
+    /// The walk as it stands after the entries `before` folds: the run's start, and what is
+    /// open (calls, timers, signal waits), each read at the entry that opened it.
+    fn at(run: &'t RunTelemetry<'a>, history: &[HistoryEntry], before: &RunState) -> Self {
+        let mut derivation = Self::new(run);
+        if let Some(first) = history.first()
+            && before.history_len() > 0
+            && matches!(first.event, Event::Lifecycle(Lifecycle::RunStarted(_)))
+        {
+            derivation.started_at = first.recorded_at;
+        }
+        let opening = |seq: &Seq| crate::projector::opening(history, before, *seq);
+        for seq in before.pending_tool_calls().keys() {
+            if let Some(entry) = opening(seq)
+                && let Event::Command(Command::ScheduleToolCall {
+                    tool,
+                    args,
+                    callsite,
+                    ..
+                }) = &entry.event
+            {
+                derivation.calls.insert(
+                    *seq,
+                    OpenCall {
+                        start: entry.recorded_at,
+                        tool: tool.clone(),
+                        args: args.clone(),
+                        callsite: *callsite,
+                    },
+                );
+            }
+        }
+        for seq in before.pending_timers().keys() {
+            if let Some(entry) = opening(seq)
+                && let Event::Command(Command::StartTimer {
+                    duration_ms,
+                    callsite,
+                    ..
+                }) = &entry.event
+            {
+                derivation.timers.insert(
+                    *seq,
+                    OpenTimer {
+                        start: entry.recorded_at,
+                        duration_ms: *duration_ms,
+                        callsite: *callsite,
+                    },
+                );
+            }
+        }
+        for wait in before.awaited_signals() {
+            let entry = usize::try_from(wait.since)
+                .ok()
+                .and_then(|index| history.get(index))
+                .filter(|entry| entry.index == wait.since);
+            if let Some(entry) = entry
+                && let Event::Annotation(Annotation::SignalAwaited {
+                    name,
+                    timeout,
+                    callsite,
+                }) = &entry.event
+            {
+                derivation.waits.push_back(OpenWait {
+                    index: entry.index,
+                    start: entry.recorded_at,
+                    name: name.clone(),
+                    timeout: *timeout,
+                    callsite: *callsite,
+                });
+            }
+        }
+        derivation
+    }
+
     fn span(
         &mut self,
         key: SpanKey,
@@ -519,12 +606,24 @@ impl<'t, 'a> Derivation<'t, 'a> {
             }
             Event::Completion(Completion::TimerFired { seq }) => {
                 self.close_timer(*seq, at, "fired", export);
-                if let Some(position) = self.waits.iter().position(|w| w.timeout == Some(*seq)) {
-                    let wait = self.waits.remove(position);
-                    if let Some(wait) = wait
-                        && export
-                    {
+                let (timed_out, waiting): (VecDeque<OpenWait>, VecDeque<OpenWait>) =
+                    std::mem::take(&mut self.waits)
+                        .into_iter()
+                        .partition(|wait| wait.timeout == Some(*seq));
+                self.waits = waiting;
+                if export {
+                    for wait in timed_out {
                         self.wait_span(wait, at, "timed_out");
+                    }
+                }
+            }
+            // Every pending await is rejected, signal waits included: the run ends with its
+            // grace delivery.
+            Event::Completion(Completion::CancelRequested { .. }) => {
+                let waits = std::mem::take(&mut self.waits);
+                if export {
+                    for wait in waits {
+                        self.wait_span(wait, at, "ended");
                     }
                 }
             }
@@ -697,6 +796,13 @@ impl<'t, 'a> Derivation<'t, 'a> {
     }
 }
 
+/// The entries `from..to` of an attempt's history, whose entries sit at their index.
+fn range(history: &[HistoryEntry], from: u64, to: u64) -> &[HistoryEntry] {
+    let to = usize::try_from(to).map_or(history.len(), |to| to.min(history.len()));
+    let from = usize::try_from(from).map_or(to, |from| from.min(to));
+    &history[from..to]
+}
+
 fn string(text: &str) -> AttributeValue {
     AttributeValue::String(text.to_owned())
 }
@@ -812,6 +918,17 @@ mod tests {
             .collect()
     }
 
+    /// What the entries `from..to` measure, the run's state before them folded.
+    fn measure(
+        telemetry: &RunTelemetry<'_>,
+        entries: &[HistoryEntry],
+        from: usize,
+        to: usize,
+    ) -> Vec<RunMeasurement> {
+        let before = RunState::from_history(&entries[..from]).unwrap();
+        telemetry.measurements(&entries[..to], &before, from as u64, to as u64)
+    }
+
     fn schedule(seq: u32, tool: &str) -> Event {
         Event::Command(Command::ScheduleToolCall {
             seq: Seq(seq),
@@ -879,11 +996,11 @@ mod tests {
         assert!(telemetry.measured(&entries));
         // The first activation committed the start and the calls; the next ones, the rest.
         assert_eq!(
-            telemetry.measurements(&entries, 0, 4),
+            measure(&telemetry, &entries, 0, 4),
             vec![RunMeasurement::Started]
         );
         assert_eq!(
-            telemetry.measurements(&entries, 4, 6),
+            measure(&telemetry, &entries, 4, 6),
             vec![
                 call("github.list_issues", "completed", None, 1.5),
                 call("slack.post", "failed", Some("timeout"), 4.0),
@@ -891,7 +1008,7 @@ mod tests {
         );
         // The call still open when the run ends ends with it.
         assert_eq!(
-            telemetry.measurements(&entries, 6, 7),
+            measure(&telemetry, &entries, 6, 7),
             vec![
                 call("slack.post", "no_outcome", None, 5.0),
                 RunMeasurement::Ended {
@@ -901,8 +1018,8 @@ mod tests {
         );
         // Applied again, an item measures the same.
         assert_eq!(
-            telemetry.measurements(&entries, 6, 7),
-            telemetry.measurements(&entries, 6, 7)
+            measure(&telemetry, &entries, 6, 7),
+            measure(&telemetry, &entries, 6, 7)
         );
 
         // Mock runs are not measured unless their telemetry is exported; sampling does not

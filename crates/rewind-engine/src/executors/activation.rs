@@ -182,7 +182,7 @@ async fn work<P: Plane>(
     let ActivationRequest {
         partition: _,
         head,
-        summary: _,
+        summary: previous,
         inbox,
         history,
         payloads,
@@ -446,9 +446,18 @@ async fn work<P: Plane>(
     }
 
     let from = history.len();
-    let (entries, consumed, state) = batch.finish();
+    let crate::batch::Finished {
+        entries,
+        consumed,
+        before,
+        after: state,
+    } = batch.finish();
     history.extend(entries);
     let end = end_of(&source, &run.tenant, &state).await?;
+    // The summary the owner holds describes the history before the new entries, unless the
+    // activation copied a fork's parent: then the summary is derived from every entry.
+    let previous =
+        previous.filter(|previous| !first_of_fork && previous.summary.history_len == from as u64);
     let committed = commit(
         plane,
         config,
@@ -457,7 +466,9 @@ async fn work<P: Plane>(
             head: &head,
             history: &mut history,
             from,
+            before: &before,
             state: &state,
+            previous: previous.as_ref(),
             consumed,
             released,
             copied: &copied,
@@ -490,8 +501,12 @@ async fn work<P: Plane>(
 struct CommitOf<'a> {
     head: &'a RunHead,
     history: &'a mut Vec<HistoryEntry>,
+    /// The new entries are `history[from..]`: they take the run from `before` to `state`.
     from: usize,
+    before: &'a RunState,
     state: &'a RunState,
+    /// The summary of `history[..from]`, when there is one to count the new entries from.
+    previous: Option<&'a crate::ports::IndexedSummary>,
     consumed: Vec<u64>,
     released: bool,
     copied: &'a BTreeMap<Digest, BlobOwner>,
@@ -514,7 +529,9 @@ async fn commit<P: Plane, B: BlobStore>(
         head,
         history,
         from,
+        before,
         state,
+        previous,
         consumed,
         released,
         copied,
@@ -527,7 +544,12 @@ async fn commit<P: Plane, B: BlobStore>(
     } = of;
     let run = &head.run;
     let now = plane.clock().now();
-    let shapes = derive::shapes_of(head, history, from);
+    let shapes = derive::shapes_of(
+        head,
+        history,
+        from,
+        &derive::Openings::new(history, from, before),
+    );
     let records = payloads::offload_into_run(
         plane.blobs(),
         run,
@@ -552,25 +574,32 @@ async fn commit<P: Plane, B: BlobStore>(
     if released {
         summary_head.quarantine = None;
     }
-    let summary = derive::summary_of(&summary_head, headline, history, toolset, &by_seq);
+    let summary = derive::summary_of(
+        &summary_head,
+        headline,
+        history,
+        state,
+        toolset,
+        &by_seq,
+        previous,
+    );
     let next = derive::head_after(head, history, &summary, released);
     let summary = derive::with_quarantine(summary, next.quarantine.as_ref());
-    let mut counters = derive::counters_of(&next, history, from, &summary, cpu, now);
+    let openings = derive::Openings::new(history, from, before);
+    let mut counters = derive::counters_of(&next, history, from, &openings, &summary, cpu, now);
     counters.extend(shapes);
     let mut all_records = source.records.clone();
     for record in &records {
         all_records.insert(record.digest, record.clone());
     }
-    let projections = derive::projections_of(
-        &next,
+    let new = derive::NewEntries {
         history,
         from,
-        toolset,
-        &all_records,
-        &config.telemetry,
-    );
-    let measurements =
-        derive::measurements_of(&next, history, from, &all_records, &config.telemetry);
+        before,
+        after: state,
+    };
+    let projections = derive::projections_of(&next, new, toolset, &all_records, &config.telemetry);
+    let measurements = derive::measurements_of(&next, new, &all_records, &config.telemetry);
     let children = if state.is_terminal() || first_of_fork {
         derive::children_of(history)
     } else {
@@ -744,6 +773,7 @@ async fn give_up<P: Plane, B: BlobStore>(
     };
     events.push(Event::Lifecycle(Lifecycle::RunAborted(abort)));
     let from = history.len();
+    let before = state.clone();
     for event in events {
         let entry = HistoryEntry {
             index: state.history_len(),
@@ -765,7 +795,9 @@ async fn give_up<P: Plane, B: BlobStore>(
             head: &head,
             history: &mut history,
             from,
+            before: &before,
             state: &state,
+            previous: None,
             consumed: inbox.iter().map(|item| item.id).collect(),
             released: false,
             copied: &BTreeMap::new(),

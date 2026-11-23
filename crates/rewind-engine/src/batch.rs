@@ -103,6 +103,15 @@ pub(crate) trait CountCpu {
     );
 }
 
+/// What a batch appended: its entries, the inbox items it consumed, the run's state before the
+/// entries and after them.
+pub(crate) struct Finished {
+    pub(crate) entries: Vec<HistoryEntry>,
+    pub(crate) consumed: Vec<u64>,
+    pub(crate) before: RunState,
+    pub(crate) after: RunState,
+}
+
 /// The entries of one activation, folded into the run's state as they are appended.
 pub(crate) struct Batch<'l> {
     pub(crate) run_id: rewind_core::RunId,
@@ -160,9 +169,15 @@ impl<'l> Batch<'l> {
         }
     }
 
-    /// The entries appended, the inbox items consumed, and the run's state after them.
-    pub(crate) fn finish(self) -> (Vec<HistoryEntry>, Vec<u64>, RunState) {
-        (self.entries, self.consumed, self.state)
+    /// The entries appended, the inbox items consumed, and the run's state before and after
+    /// them.
+    pub(crate) fn finish(self) -> Finished {
+        Finished {
+            entries: self.entries,
+            consumed: self.consumed,
+            before: self.initial,
+            after: self.state,
+        }
     }
 
     /// `max(now, last recorded_at)`: monotonic per run.

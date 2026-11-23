@@ -10,10 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunStatus, Seq, Shape,
-    Timestamp, Toolset,
+    Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunState, RunStatus,
+    Seq, Shape, Timestamp, Toolset,
 };
 
+use crate::failures;
 use crate::metrics::RunMeasurement;
 use crate::ports::{
     CounterDelta, Counters, DueTimer, FailureCounts, Hour, IndexedSummary, LatestRun,
@@ -34,17 +35,28 @@ pub(crate) fn phase_of(task: &TaskRecord) -> TaskPhase {
     }
 }
 
-/// The run's summary from its whole history: its status, its waits (each call's with its
-/// task's phase), its ending, its counts, the tools it called.
+/// The run's summary after `history`, which leaves the run in `state`: its status, its waits
+/// (each call's with its task's phase), its ending, its counts, the tools it called.
+///
+/// The counts are those of `previous`, the summary of the history up to its `history_len`,
+/// with the entries after it: an activation counts its new entries only, and its derivation
+/// costs what it appends and what the run holds pending, never the length of the history.
+/// Without a previous summary (a fork's first activation, a run given up) every entry is
+/// counted.
 pub(crate) fn summary_of(
     head: &RunHead,
     headline: &str,
     history: &[HistoryEntry],
+    state: &RunState,
     toolset: &Toolset,
     tasks: &BTreeMap<Seq, TaskRecord>,
+    previous: Option<&IndexedSummary>,
 ) -> IndexedSummary {
-    let snapshot = projector::run_snapshot(history, Some(toolset));
-    let mut waits = snapshot.waits;
+    let mut waits = if state.status() == RunStatus::Active {
+        projector::waits(history, state, Some(toolset))
+    } else {
+        Vec::new()
+    };
     for wait in &mut waits {
         if matches!(wait.kind, WaitKind::Call | WaitKind::Host)
             && let Some(seq) = wait.seq
@@ -53,10 +65,19 @@ pub(crate) fn summary_of(
         }
     }
     let wakes_at = waits.iter().filter_map(|wait| wait.until).min();
-    let mut tools = BTreeSet::new();
-    let mut call_errors = BTreeSet::new();
-    let (mut tool_calls, mut errors) = (0, 0);
-    for entry in history {
+    let counted = previous
+        .and_then(|previous| usize::try_from(previous.summary.history_len).ok())
+        .filter(|counted| *counted <= history.len());
+    let (mut tools, mut call_errors, mut tool_calls, mut errors) = match previous.zip(counted) {
+        Some((previous, _)) => (
+            previous.tools.clone(),
+            previous.call_errors.clone(),
+            previous.summary.tool_calls,
+            previous.summary.errors,
+        ),
+        None => (BTreeSet::new(), BTreeSet::new(), 0, 0),
+    };
+    for entry in &history[counted.unwrap_or(0)..] {
         match &entry.event {
             Event::Command(Command::ScheduleToolCall { tool, .. }) => {
                 tool_calls += 1;
@@ -73,10 +94,10 @@ pub(crate) fn summary_of(
         Event::Lifecycle(Lifecycle::RunStarted(_)) => Some(entry.recorded_at),
         _ => None,
     });
+    // Nothing follows the terminal entry of an attempt.
     let ended_at = history
-        .iter()
-        .rev()
-        .find(|entry| entry.event.is_terminal())
+        .last()
+        .filter(|entry| entry.event.is_terminal())
         .map(|entry| entry.recorded_at);
     let metadata = &head.metadata;
     IndexedSummary {
@@ -89,9 +110,9 @@ pub(crate) fn summary_of(
             status: if history.is_empty() {
                 RunStatus::Pending
             } else {
-                snapshot.status
+                state.status()
             },
-            mode: snapshot.mode,
+            mode: state.mode(),
             labels: metadata.labels.clone(),
             parent: metadata.parent.map(|parent| parent.run),
             workflow: metadata.workflow.as_ref().map(|of| of.name.clone()),
@@ -106,7 +127,7 @@ pub(crate) fn summary_of(
             history_len: history.len() as u64,
             waits,
             wakes_at,
-            ending: snapshot.ending,
+            ending: state.outcome().and_then(failures::ending),
             quarantine: head.quarantine.as_ref().map(QuarantineNote::from),
         },
         tools,
@@ -116,9 +137,64 @@ pub(crate) fn summary_of(
 
 /// The summary of a run created and not activated yet: `pending`.
 pub(crate) fn pending_summary(head: &RunHead, headline: &str) -> IndexedSummary {
-    let mut summary = summary_of(head, headline, &[], &Toolset::empty(), &BTreeMap::new());
+    let mut summary = summary_of(
+        head,
+        headline,
+        &[],
+        &RunState::new(),
+        &Toolset::empty(),
+        &BTreeMap::new(),
+        None,
+    );
     summary.summary.status = RunStatus::Pending;
     summary
+}
+
+/// The entries that opened the calls and timers the new entries (`from` on) end or read:
+/// pending before them, read at their index, or opened among them.
+pub(crate) struct Openings<'h> {
+    history: &'h [HistoryEntry],
+    before: &'h RunState,
+    new: BTreeMap<Seq, &'h HistoryEntry>,
+}
+
+impl<'h> Openings<'h> {
+    /// `before` is the run's state after the entries before `from`.
+    pub(crate) fn new(history: &'h [HistoryEntry], from: usize, before: &'h RunState) -> Self {
+        let new = history[from.min(history.len())..]
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                Event::Command(
+                    Command::ScheduleToolCall { seq, .. } | Command::StartTimer { seq, .. },
+                ) => Some((*seq, entry)),
+                _ => None,
+            })
+            .collect();
+        Self {
+            history,
+            before,
+            new,
+        }
+    }
+
+    /// The entry that opened the call or timer `seq`.
+    pub(crate) fn of(&self, seq: Seq) -> Option<&'h HistoryEntry> {
+        self.new
+            .get(&seq)
+            .copied()
+            .or_else(|| projector::opening(self.history, self.before, seq))
+    }
+
+    /// The call `seq`: when it was scheduled, and its tool.
+    pub(crate) fn call(&self, seq: Seq) -> Option<(Timestamp, &'h str)> {
+        let entry = self.of(seq)?;
+        match &entry.event {
+            Event::Command(Command::ScheduleToolCall { tool, .. }) => {
+                Some((entry.recorded_at, tool.as_str()))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The run's head after an activation that left it in `status`.
@@ -233,28 +309,22 @@ pub(crate) fn shapes_of(
     head: &RunHead,
     history: &[HistoryEntry],
     from: usize,
+    openings: &Openings<'_>,
 ) -> Vec<CounterDelta> {
-    let mut tools: BTreeMap<Seq, &str> = BTreeMap::new();
     let mut deltas = Vec::new();
-    for (index, entry) in history.iter().enumerate() {
-        match &entry.event {
-            Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
-                tools.insert(*seq, tool);
-            }
-            Event::Completion(Completion::ToolCallCompleted {
-                seq,
-                result: Payload::Value(value),
-            }) if index >= from => {
-                if let Some(tool) = tools.get(seq) {
-                    deltas.push(CounterDelta::Shape {
-                        tenant: head.run.tenant.clone(),
-                        namespace: head.namespace.clone(),
-                        tool: (*tool).to_owned(),
-                        shape: Shape::of(value),
-                    });
-                }
-            }
-            _ => {}
+    for entry in &history[from.min(history.len())..] {
+        if let Event::Completion(Completion::ToolCallCompleted {
+            seq,
+            result: Payload::Value(value),
+        }) = &entry.event
+            && let Some((_, tool)) = openings.call(*seq)
+        {
+            deltas.push(CounterDelta::Shape {
+                tenant: head.run.tenant.clone(),
+                namespace: head.namespace.clone(),
+                tool: tool.to_owned(),
+                shape: Shape::of(value),
+            });
         }
     }
     deltas
@@ -267,18 +337,17 @@ pub(crate) fn counters_of(
     head: &RunHead,
     history: &[HistoryEntry],
     from: usize,
+    openings: &Openings<'_>,
     summary: &IndexedSummary,
     cpu: Duration,
     now: Timestamp,
 ) -> Vec<CounterDelta> {
     let mut hours: BTreeMap<Hour, Counters> = BTreeMap::new();
     let workflow = head.metadata.workflow.as_ref().map(|of| of.name.clone());
-    let mut scheduled: BTreeMap<Seq, (Timestamp, &str)> = BTreeMap::new();
     let started_at = summary.summary.started_at;
-    for (index, entry) in history.iter().enumerate() {
-        let new = index >= from;
+    for entry in &history[from.min(history.len())..] {
         match &entry.event {
-            Event::Lifecycle(Lifecycle::RunStarted(_)) if new => {
+            Event::Lifecycle(Lifecycle::RunStarted(_)) => {
                 let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
                 counters.runs.started += 1;
                 if let Some(workflow) = &workflow {
@@ -293,33 +362,30 @@ pub(crate) fn counters_of(
                 script.first_started_at = Some(entry.recorded_at);
                 script.last_started_at = Some(entry.recorded_at);
             }
-            Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
-                scheduled.insert(*seq, (entry.recorded_at, tool));
-                if new {
-                    let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
-                    counters.tools.entry(tool.clone()).or_default().calls += 1;
-                    counters
-                        .scripts
-                        .entry(head.script)
-                        .or_default()
-                        .tools
-                        .insert(tool.clone());
-                }
+            Event::Command(Command::ScheduleToolCall { tool, .. }) => {
+                let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
+                counters.tools.entry(tool.clone()).or_default().calls += 1;
+                counters
+                    .scripts
+                    .entry(head.script)
+                    .or_default()
+                    .tools
+                    .insert(tool.clone());
             }
-            Event::Completion(Completion::ToolCallCompleted { seq, .. }) if new => {
-                if let Some((at, tool)) = scheduled.get(seq) {
+            Event::Completion(Completion::ToolCallCompleted { seq, .. }) => {
+                if let Some((at, tool)) = openings.call(*seq) {
                     let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
-                    let calls = counters.tools.entry((*tool).to_owned()).or_default();
+                    let calls = counters.tools.entry(tool.to_owned()).or_default();
                     calls.completed += 1;
                     calls
                         .latency
                         .record(entry.recorded_at.0.saturating_sub(at.0));
                 }
             }
-            Event::Completion(Completion::ToolCallFailed { seq, error }) if new => {
-                if let Some((at, tool)) = scheduled.get(seq) {
+            Event::Completion(Completion::ToolCallFailed { seq, error }) => {
+                if let Some((at, tool)) = openings.call(*seq) {
                     let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
-                    let calls = counters.tools.entry((*tool).to_owned()).or_default();
+                    let calls = counters.tools.entry(tool.to_owned()).or_default();
                     calls.failed += 1;
                     *calls.errors.entry(error.kind).or_default() += 1;
                     calls
@@ -329,7 +395,7 @@ pub(crate) fn counters_of(
             }
             _ => {}
         }
-        if new && entry.event.is_terminal() {
+        if entry.event.is_terminal() {
             let status = summary.summary.status;
             let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
             *counters.runs.ended.entry(status).or_default() += 1;
@@ -431,17 +497,32 @@ pub(crate) fn retries_counters(
     })
 }
 
-/// What the new entries (`from` on) feed the projections: the spans and logs that end in them,
-/// the log records named by the activation span `H(run, "activation", from)`, and the lifecycle
+/// The new entries of an activation: `history[from..]`, which take the run from the state
+/// `before` to the state `after`.
+#[derive(Clone, Copy)]
+pub(crate) struct NewEntries<'h> {
+    pub(crate) history: &'h [HistoryEntry],
+    pub(crate) from: usize,
+    pub(crate) before: &'h RunState,
+    pub(crate) after: &'h RunState,
+}
+
+/// What the new entries feed the projections: the spans and logs that end in them, the log
+/// records named by the activation span `H(run, "activation", from)`, and the lifecycle
 /// webhooks.
 pub(crate) fn projections_of(
     head: &RunHead,
-    history: &[HistoryEntry],
-    from: usize,
+    new: NewEntries<'_>,
     toolset: &Toolset,
     payloads: &BTreeMap<rewind_core::Digest, PayloadRecord>,
     telemetry: &TelemetryConfig,
 ) -> Vec<Projection> {
+    let NewEntries {
+        history,
+        from,
+        before,
+        after,
+    } = new;
     if history.len() <= from {
         return Vec::new();
     }
@@ -453,27 +534,32 @@ pub(crate) fn projections_of(
     let (start, end) = (from as u64, history.len() as u64);
     let mut projections = Vec::new();
     if run_telemetry.exported(history) {
-        let spans = run_telemetry.spans(history, start, end);
+        let spans = run_telemetry.spans(history, before, start, end);
         let logs = run_telemetry.logs(history, start, end, SpanKey::Activation(start));
         if !spans.is_empty() || !logs.is_empty() {
             projections.push(Projection::Otel { spans, logs });
         }
     }
-    for event in projector::lifecycle_events(head, Some(toolset), history, from) {
+    for event in projector::lifecycle_events(head, Some(toolset), history, from, after) {
         projections.push(Projection::Webhooks(event));
     }
     projections
 }
 
-/// What the new entries (`from` on) measure: the run metrics recorded once their batch is
-/// durable, for every run but a mock run whose telemetry is not exported.
+/// What the new entries measure: the run metrics recorded once their batch is durable, for
+/// every run but a mock run whose telemetry is not exported.
 pub(crate) fn measurements_of(
     head: &RunHead,
-    history: &[HistoryEntry],
-    from: usize,
+    new: NewEntries<'_>,
     payloads: &BTreeMap<rewind_core::Digest, PayloadRecord>,
     telemetry: &TelemetryConfig,
 ) -> Vec<RunMeasurement> {
+    let NewEntries {
+        history,
+        from,
+        before,
+        ..
+    } = new;
     if history.len() <= from {
         return Vec::new();
     }
@@ -485,7 +571,7 @@ pub(crate) fn measurements_of(
     if !run_telemetry.measured(history) {
         return Vec::new();
     }
-    run_telemetry.measurements(history, from as u64, history.len() as u64)
+    run_telemetry.measurements(history, before, from as u64, history.len() as u64)
 }
 
 /// The runs a history started with a workflow's `start` and whose end it does not hold, by
@@ -537,4 +623,297 @@ pub(crate) fn with_phases(
         }
     }
     summary
+}
+
+#[cfg(test)]
+mod tests {
+    use rewind_core::{
+        Annotation, Callsite, CancelReason, Digest, Epoch, LogLevel, McpServer, McpTransport,
+        RunId, RunMode, RunStarted, ScriptError, Seed, Tool, ToolFailure, ToolFailureKind,
+        ToolRoute,
+    };
+    use serde_json::json;
+
+    use super::*;
+    use crate::ports::{Attempt, NamespaceName, RunMetadata, RunRef, TenantId};
+
+    fn head() -> RunHead {
+        RunHead {
+            run: RunRef::new(TenantId::local(), RunId::from_u128(7)),
+            namespace: NamespaceName::new("alice").unwrap(),
+            script: Digest::of(b"script"),
+            toolset: Digest::of(b"toolset"),
+            status: RunStatus::Active,
+            epoch: Epoch(1),
+            attempt: Attempt::FIRST,
+            sealed: None,
+            failures: 0,
+            attempts: 0,
+            quarantine: None,
+            waits: Vec::new(),
+            expires_at: Timestamp(u64::MAX),
+            history_len: 0,
+            metadata: RunMetadata::default(),
+            idempotency_key: None,
+            created_at: Timestamp(0),
+            updated_at: Timestamp(0),
+            ended_at: None,
+        }
+    }
+
+    /// `ask` is a host tool, `github.get` a server's.
+    fn toolset() -> Toolset {
+        let server = McpServer::new(
+            "github",
+            McpTransport::Http {
+                url: "https://mcp.example.com/github".into(),
+            },
+        );
+        let get = Tool::new(
+            "github.get",
+            ToolRoute::Mcp {
+                server: "github".into(),
+            },
+            json!({}),
+        );
+        let ask = Tool::new("ask", ToolRoute::Host { group: None }, json!({}));
+        Toolset::new([server], [get, ask]).unwrap()
+    }
+
+    /// A long history of every kind of entry: calls completed, failed and left pending; timers
+    /// fired, cancelled, used as a signal's timeout, timed out, left pending; signals received
+    /// and left awaited; logs; then a cancellation the script ends with.
+    fn varied_history(rounds: u32) -> Vec<HistoryEntry> {
+        let mut events = vec![Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
+            script: Digest::of(b"script"),
+            toolset: Digest::of(b"toolset"),
+            input: json!({}).into(),
+            seed: Seed::from_bytes([1; 32]),
+            epoch: Epoch(1),
+            expires_at: Timestamp(u64::MAX),
+            mode: RunMode::Live,
+        }))];
+        let callsite = |line| Some(Callsite { line, column: 1 });
+        let mut next = 0;
+        let mut seq = || {
+            next += 1;
+            Seq(next)
+        };
+        for round in 0..rounds {
+            let (ask, get, sleep, timeout) = (seq(), seq(), seq(), seq());
+            let at = 1_000 * u64::from(round);
+            events.push(Event::Command(Command::ScheduleToolCall {
+                seq: ask,
+                tool: "ask".into(),
+                args: json!({ "round": round }).into(),
+                callsite: callsite(ask.0),
+            }));
+            events.push(Event::Command(Command::ScheduleToolCall {
+                seq: get,
+                tool: "github.get".into(),
+                args: json!({ "issue": round }).into(),
+                callsite: callsite(get.0),
+            }));
+            events.push(Event::Command(Command::StartTimer {
+                seq: sleep,
+                duration_ms: 500,
+                fire_at: Timestamp(at + 500),
+                callsite: callsite(sleep.0),
+            }));
+            events.push(Event::Command(Command::StartTimer {
+                seq: timeout,
+                duration_ms: 900,
+                fire_at: Timestamp(at + 900),
+                callsite: None,
+            }));
+            events.push(Event::Annotation(Annotation::SignalAwaited {
+                name: "go".into(),
+                timeout: Some(timeout),
+                callsite: callsite(timeout.0),
+            }));
+            events.push(Event::Annotation(Annotation::Log {
+                level: LogLevel::Info,
+                message: format!("round {round}"),
+                callsite: None,
+            }));
+            events.push(Event::Completion(Completion::ToolCallCompleted {
+                seq: ask,
+                result: json!({ "answer": round }).into(),
+            }));
+            events.push(if round % 2 == 0 {
+                Event::Command(Command::CancelTimer { seq: sleep })
+            } else {
+                Event::Completion(Completion::TimerFired { seq: sleep })
+            });
+            match round % 3 {
+                0 => events.push(Event::Completion(Completion::TimerFired { seq: timeout })),
+                1 => {
+                    events.push(Event::Completion(Completion::SignalReceived {
+                        name: "go".into(),
+                        payload: json!({ "round": round }).into(),
+                    }));
+                    events.push(Event::Command(Command::CancelTimer { seq: timeout }));
+                }
+                // Received, its timeout left to run: a timer of its own from then on.
+                _ => events.push(Event::Completion(Completion::SignalReceived {
+                    name: "go".into(),
+                    payload: json!(null).into(),
+                })),
+            }
+            if round % 5 != 0 {
+                events.push(Event::Completion(Completion::ToolCallFailed {
+                    seq: get,
+                    error: ToolFailure {
+                        kind: if round % 2 == 0 {
+                            ToolFailureKind::Timeout
+                        } else {
+                            ToolFailureKind::Error
+                        },
+                        message: "no".into(),
+                        data: None,
+                    },
+                }));
+            }
+            events.push(Event::Annotation(Annotation::SignalAwaited {
+                name: "next".into(),
+                timeout: None,
+                callsite: None,
+            }));
+            if round % 4 != 0 {
+                events.push(Event::Completion(Completion::SignalReceived {
+                    name: "next".into(),
+                    payload: json!(round).into(),
+                }));
+            }
+        }
+        events.push(Event::Completion(Completion::CancelRequested {
+            reason: CancelReason::Requested(None),
+        }));
+        events.push(Event::Command(Command::FailRun {
+            error: ScriptError {
+                name: ScriptError::CANCELLED.into(),
+                message: "cancelled".into(),
+                stack: None,
+            },
+        }));
+        events
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| HistoryEntry {
+                index: index as u64,
+                recorded_at: Timestamp(10 * index as u64),
+                event,
+            })
+            .collect()
+    }
+
+    fn hours(deltas: Vec<CounterDelta>, into: &mut BTreeMap<Hour, Counters>) {
+        for delta in deltas {
+            if let CounterDelta::Hour { hour, counts, .. } = delta {
+                into.entry(hour).or_default().add(&counts);
+            }
+        }
+    }
+
+    /// What one activation derives from the entries `from..to`.
+    struct Derived {
+        summary: IndexedSummary,
+        spans: Vec<crate::ports::Span>,
+        measurements: Vec<RunMeasurement>,
+        shapes: Vec<CounterDelta>,
+        counters: Vec<CounterDelta>,
+    }
+
+    fn derive(
+        history: &[HistoryEntry],
+        from: usize,
+        to: usize,
+        previous: Option<&IndexedSummary>,
+    ) -> Derived {
+        let (head, toolset) = (head(), toolset());
+        let history = &history[..to];
+        let before = RunState::from_history(&history[..from]).unwrap();
+        let after = RunState::from_history(history).unwrap();
+        let summary = summary_of(
+            &head,
+            "headline",
+            history,
+            &after,
+            &toolset,
+            &BTreeMap::new(),
+            previous,
+        );
+        let openings = Openings::new(history, from, &before);
+        let config = TelemetryConfig::default();
+        let payloads = BTreeMap::new();
+        let telemetry = RunTelemetry {
+            head: &head,
+            config: &config,
+            payloads: &payloads,
+        };
+        Derived {
+            spans: telemetry.spans(history, &before, from as u64, to as u64),
+            measurements: telemetry.measurements(history, &before, from as u64, to as u64),
+            shapes: shapes_of(&head, history, from, &openings),
+            counters: counters_of(
+                &head,
+                history,
+                from,
+                &openings,
+                &summary,
+                Duration::ZERO,
+                Timestamp(0),
+            ),
+            summary,
+        }
+    }
+
+    #[test]
+    fn an_activation_derives_from_its_new_entries_what_the_whole_history_gives() {
+        let history = varied_history(60);
+        let whole = derive(&history, 0, history.len(), None);
+        let mut whole_hours = BTreeMap::new();
+        hours(whole.counters, &mut whole_hours);
+        let mut sizes = 0x2545_f491_u64;
+        for chunking in ["one entry", "three entries", "varied"] {
+            let mut previous = Some(pending_summary(&head(), "headline"));
+            let (mut spans, mut measurements, mut shapes) = (Vec::new(), Vec::new(), Vec::new());
+            let mut chunked_hours = BTreeMap::new();
+            let mut from = 0;
+            while from < history.len() {
+                let size = match chunking {
+                    "one entry" => 1,
+                    "three entries" => 3,
+                    _ => {
+                        sizes = sizes
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1);
+                        1 + (sizes >> 60) as usize
+                    }
+                };
+                let to = (from + size).min(history.len());
+                let derived = derive(&history, from, to, previous.as_ref());
+                assert_eq!(
+                    derived.summary,
+                    derive(&history, from, to, None).summary,
+                    "{chunking}: the summary at {to} counted from the previous one"
+                );
+                spans.extend(derived.spans);
+                measurements.extend(derived.measurements);
+                shapes.extend(derived.shapes);
+                hours(derived.counters, &mut chunked_hours);
+                previous = Some(derived.summary);
+                from = to;
+            }
+            assert_eq!(previous.as_ref(), Some(&whole.summary), "{chunking}");
+            assert_eq!(spans, whole.spans, "{chunking}: the spans");
+            assert_eq!(
+                measurements, whole.measurements,
+                "{chunking}: the measurements"
+            );
+            assert_eq!(shapes, whole.shapes, "{chunking}: the shapes");
+            assert_eq!(chunked_hours, whole_hours, "{chunking}: the counters");
+        }
+        assert!(whole.spans.len() > 200, "{}", whole.spans.len());
+    }
 }

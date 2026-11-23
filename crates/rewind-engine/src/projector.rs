@@ -20,7 +20,7 @@
 //! Lifecycle events carry a deterministic id for receivers to deduplicate: `{run}/{index}` of
 //! the entry they are projected from.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use rewind_core::{
     Annotation, Callsite, Command, Event, HistoryEntry, Lifecycle, RunState, RunStatus,
@@ -33,15 +33,16 @@ use crate::ports::{
     WebhookEvent, WebhookEventKind,
 };
 
-/// The lifecycle events of the entries from `from` to the end of `history`: the run's end
-/// (`run.completed`, `run.failed`), or, when the range leaves the run waiting for the outside
-/// world only (signals, host tools), `run.suspended`. Each is named by the index of the entry
-/// it is projected from.
+/// The lifecycle events of the entries from `from` to the end of `history`, which leave the
+/// run in `state`: the run's end (`run.completed`, `run.failed`), or, when the range leaves the
+/// run waiting for the outside world only (signals, host tools), `run.suspended`. Each is named
+/// by the index of the entry it is projected from.
 pub(crate) fn lifecycle_events(
     head: &RunHead,
     toolset: Option<&Toolset>,
     history: &[HistoryEntry],
     from: usize,
+    state: &RunState,
 ) -> Vec<WebhookEvent> {
     let event = |index: u64, occurred_at: Timestamp, kind: WebhookEventKind| WebhookEvent {
         id: format!("{}/{index}", head.run.id),
@@ -82,10 +83,7 @@ pub(crate) fn lifecycle_events(
     if let Some(ended) = ended {
         return vec![ended];
     }
-    let Ok(state) = RunState::from_history(history) else {
-        return Vec::new();
-    };
-    let waiting_for = waiting_for(&state, toolset);
+    let waiting_for = waiting_for(state, toolset);
     if waiting_for.is_empty() {
         return Vec::new();
     }
@@ -172,19 +170,36 @@ pub fn run_snapshot(history: &[HistoryEntry], toolset: Option<&Toolset>) -> RunS
     }
 }
 
-/// The waits of an active run, by `since`, then kind, then seq and name.
-fn waits(history: &[HistoryEntry], state: &RunState, toolset: Option<&Toolset>) -> Vec<Wait> {
-    // The entry that opened each timer and call: when, and where in the script.
-    let mut opened: BTreeMap<Seq, (Timestamp, Option<Callsite>)> = BTreeMap::new();
-    for entry in history {
-        if let Event::Command(
-            Command::ScheduleToolCall { seq, callsite, .. }
-            | Command::StartTimer { seq, callsite, .. },
-        ) = &entry.event
-        {
-            opened.insert(*seq, (entry.recorded_at, *callsite));
+/// The entry that opened the call or timer `seq`, pending in `state`, read at its index in
+/// `history`.
+pub(crate) fn opening<'h>(
+    history: &'h [HistoryEntry],
+    state: &RunState,
+    seq: Seq,
+) -> Option<&'h HistoryEntry> {
+    let index = state.opened_by(seq)?;
+    history
+        .get(usize::try_from(index).ok()?)
+        .filter(|entry| entry.index == index)
+}
+
+/// The waits of an active run, by `since`, then kind, then seq and name: what `state` holds
+/// pending, each read at the entry that opened it.
+pub(crate) fn waits(
+    history: &[HistoryEntry],
+    state: &RunState,
+    toolset: Option<&Toolset>,
+) -> Vec<Wait> {
+    // The entry that opened a timer or a call: when, and where in the script.
+    let opened = |seq: &Seq| -> Option<(Timestamp, Option<Callsite>)> {
+        let entry = opening(history, state, *seq)?;
+        match &entry.event {
+            Event::Command(
+                Command::ScheduleToolCall { callsite, .. } | Command::StartTimer { callsite, .. },
+            ) => Some((entry.recorded_at, *callsite)),
+            _ => None,
         }
-    }
+    };
     let timers = state.pending_timers();
     let timeouts: BTreeSet<Seq> = state
         .awaited_signals()
@@ -217,21 +232,21 @@ fn waits(history: &[HistoryEntry], state: &RunState, toolset: Option<&Toolset>) 
         if timeouts.contains(seq) {
             continue;
         }
-        let Some((since, callsite)) = opened.get(seq) else {
+        let Some((since, callsite)) = opened(seq) else {
             continue;
         };
         waits.push(Wait {
             kind: WaitKind::Timer,
             seq: Some(*seq),
             name: None,
-            since: *since,
+            since,
             until: Some(*fire_at),
-            callsite: *callsite,
+            callsite,
             task: None,
         });
     }
     for (seq, tool) in state.pending_tool_calls() {
-        let Some((since, callsite)) = opened.get(seq) else {
+        let Some((since, callsite)) = opened(seq) else {
             continue;
         };
         let host = toolset
@@ -241,9 +256,9 @@ fn waits(history: &[HistoryEntry], state: &RunState, toolset: Option<&Toolset>) 
             kind: if host { WaitKind::Host } else { WaitKind::Call },
             seq: Some(*seq),
             name: Some(tool.clone()),
-            since: *since,
+            since,
             until: None,
-            callsite: *callsite,
+            callsite,
             task: None,
         });
     }
