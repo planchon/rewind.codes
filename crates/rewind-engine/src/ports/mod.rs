@@ -49,7 +49,9 @@ pub mod connections;
 mod dispatcher;
 mod executor;
 pub mod identity;
+
 mod journal;
+pub mod link;
 mod namespaces;
 pub mod partition;
 mod read_model;
@@ -63,6 +65,7 @@ pub use access::{
     Role, RoleDeletion, Token, TokenKey,
 };
 pub use archive::{ArchiveError, RunArchive, SealedAttempt};
+pub use link::{LinkError, NodeLink};
 pub use blob::{BlobError, BlobOwner, BlobStore};
 pub use catalog::{CatalogError, CatalogStore, TEST_DELETION_TIMEOUT};
 pub use checker::{

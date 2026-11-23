@@ -238,6 +238,60 @@ pub(crate) async fn offload<J: JournalStore, B: BlobStore>(
     Ok(records)
 }
 
+/// Moves the values above the inline tier out of the entries of a run of the run plane, keeping
+/// their digests (`archi/06-storage-and-scale.md`, "Payloads"): those up to the table tier go to
+/// the run's payload records, committed with the batch; the larger ones to blobs under the run
+/// (`BlobOwner::Run`), put before the batch. A blob listed in `copied` (a fork's, from its
+/// parent) is copied from its owner instead of written again. Returns the records, one per
+/// digest.
+pub(crate) async fn offload_into_run<B: BlobStore>(
+    blobs: &B,
+    run: &crate::ports::RunRef,
+    entries: &mut [HistoryEntry],
+    tiers: PayloadTiers,
+    copied: &std::collections::BTreeMap<Digest, crate::ports::BlobOwner>,
+) -> Result<Vec<PayloadRecord>, BlobError> {
+    let owner = crate::ports::BlobOwner::Run(run.clone());
+    let mut records = Vec::new();
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let Some(payload) = payload_mut(&mut entry.event) else {
+            continue;
+        };
+        let canonical = match &*payload {
+            Payload::Value(value) => canonical_json(value),
+            Payload::Digest(_) => continue,
+        };
+        if canonical.len() <= tiers.inline {
+            continue;
+        }
+        let preview = payload.preview(PREVIEW_CHARS);
+        let Payload::Value(value) = payload else {
+            continue;
+        };
+        let value = std::mem::take(value);
+        let digest = Payload::digest_of(&value);
+        *payload = Payload::Digest(digest);
+        if !seen.insert(digest) {
+            continue;
+        }
+        let in_table = canonical.len() <= tiers.table;
+        if !in_table {
+            match copied.get(&digest) {
+                Some(from) => blobs.copy(from, &owner, digest).await?,
+                None => blobs.put_in(&owner, digest, canonical.clone().into_bytes()).await?,
+            }
+        }
+        records.push(PayloadRecord {
+            digest,
+            size: canonical.len() as u64,
+            preview,
+            value: in_table.then(|| canonicalize(&value)),
+        });
+    }
+    Ok(records)
+}
+
 /// The value of a payload, loaded from `source` if only its digest is held, with its keys in
 /// canonical order: a script observes the same value live and on replay, wherever it was loaded
 /// from. A loaded value is checked against its digest.

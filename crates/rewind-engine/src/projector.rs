@@ -444,7 +444,12 @@ where
         if !spans.is_empty() {
             self.exporter.export(spans).await?;
         }
-        let logs = telemetry.logs(history, item.from_idx, item.to_idx, item.fence);
+        let logs = telemetry.logs(
+            history,
+            item.from_idx,
+            item.to_idx,
+            crate::telemetry::SpanKey::Activation(item.fence),
+        );
         if !logs.is_empty() {
             self.exporter.export_logs(logs).await?;
         }

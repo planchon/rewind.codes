@@ -255,6 +255,15 @@ impl PartitionState {
                     .retain(|(of, name, _), _| !(*of == tenant && *name == namespace));
                 Ok(())
             }
+            Change::Summary { run, summary } => {
+                if summary.summary.run != run {
+                    return Err(conflict(format!(
+                        "the summary of run {run} names another run"
+                    )));
+                }
+                self.records_mut(&run)?.summary = Some(*summary);
+                Ok(())
+            }
             Change::Outbox(OutboxChange::Add(entry)) => self.add_outbox(*entry),
             Change::Outbox(OutboxChange::Remove(id)) => {
                 if let Some(entry) = self.outbox.remove(&id) {

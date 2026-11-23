@@ -51,6 +51,7 @@ pub async fn run_all<S: PartitionStore>(new_store: impl Fn() -> S) {
     partition_check!(a_signal_key_is_taken_once_per_run);
     partition_check!(a_terminal_activation_clears_the_attempt);
     partition_check!(an_activation_writes_its_records);
+    partition_check!(a_summary_is_written_alone);
     partition_check!(failures_and_interruptions_are_counted);
     partition_check!(watchers_are_kept_once);
     partition_check!(webhook_tokens_resolve_to_their_run);
@@ -1236,6 +1237,61 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
 
 // -------------------------------------------------------------------------------------------
 // Failures, quarantine, watchers, webhook tokens
+
+/// `Summary` writes the run's summary as it is given, outside an activation: what its tasks
+/// became shows in the index and in the search. Refused for a run that does not exist.
+pub async fn a_summary_is_written_alone<S: PartitionStore>(store: &S) {
+    let log = open(store, "a").await;
+    let run = run(1);
+    let mut summary = summary_of(&run, &alice(), RunStatus::Active);
+    index(&log, &run, &alice(), summary.summary.clone()).await;
+    summary.summary.waits = vec![Wait {
+        kind: WaitKind::Call,
+        seq: Some(Seq(1)),
+        name: Some("github.close_issue".into()),
+        since: T0,
+        until: None,
+        callsite: None,
+        task: Some(TaskPhase::Parked),
+    }];
+    commit(
+        &log,
+        vec![Change::Summary {
+            run: run.clone(),
+            summary: Box::new(summary.clone()),
+        }],
+    )
+    .await;
+    assert_eq!(log.summary(&run).await.expect("summary"), Some(summary.clone()));
+    let parked = RunQuery {
+        tenant: acme(),
+        terms: vec![crate::ports::Term {
+            predicate: Predicate::Waiting([WaitingFor::Parked].into()),
+            negated: false,
+        }],
+    };
+    let found = log
+        .search(
+            &Scope::Tenant(acme()),
+            &parked,
+            RunOrder::Started,
+            &Page::first(10),
+        )
+        .await
+        .expect("search");
+    assert_eq!(ids(&found.summaries), vec![run.clone()], "the search reads it");
+
+    let missing = run_of(&acme(), 99);
+    let error = refused(
+        &log,
+        vec![Change::Summary {
+            run: missing.clone(),
+            summary: Box::new(summary_of(&missing, &alice(), RunStatus::Active)),
+        }],
+    )
+    .await;
+    assert!(is_conflict(&error), "{error:?}");
+}
 
 pub async fn failures_and_interruptions_are_counted<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;

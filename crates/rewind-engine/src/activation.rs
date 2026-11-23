@@ -321,7 +321,14 @@ where
             if inbox.is_empty() {
                 self.journal.release(lease).await?;
                 if let Some(instance) = instance {
-                    self.keep_instance(run.clone(), Cached { instance, state })
+                    self.keep_instance(
+                        run.clone(),
+                        Cached {
+                            instance,
+                            state,
+                            history: Vec::new(),
+                        },
+                    )
                         .await;
                 }
                 return Ok(ActivationOutcome::NothingToDo);
@@ -431,7 +438,14 @@ where
         if !state.is_terminal()
             && let Some(instance) = instance
         {
-            self.keep_instance(run.clone(), Cached { instance, state })
+            self.keep_instance(
+                        run.clone(),
+                        Cached {
+                            instance,
+                            state,
+                            history: Vec::new(),
+                        },
+                    )
                 .await;
         }
         tracing::debug!(entries, status = %status, "activation committed");
@@ -635,6 +649,38 @@ pub(crate) fn abort_reason(err: ExecutorError) -> AbortReason {
     AbortReason { kind, message }
 }
 
+/// Where the CPU time of the calls into a script that execute is counted, toward a namespace's
+/// `cpuPerMonth` (`archi/06-storage-and-scale.md`, "Quotas").
+pub(crate) trait CountCpu {
+    fn count_cpu(
+        &self,
+        tenant: &crate::ports::TenantId,
+        namespace: &crate::ports::NamespaceName,
+        cpu: Duration,
+    );
+}
+
+impl<J, B, X, D, C, E, S, W> CountCpu for Engine<J, B, X, D, C, E, S, W>
+where
+    J: JournalStore,
+    B: BlobStore,
+    X: ScriptExecutor,
+    D: ToolDispatcher,
+    C: Clock,
+    E: Entropy,
+    S: SecretStore,
+    W: WebhookSender,
+{
+    fn count_cpu(
+        &self,
+        tenant: &crate::ports::TenantId,
+        namespace: &crate::ports::NamespaceName,
+        cpu: Duration,
+    ) {
+        Engine::count_cpu(self, tenant, namespace, cpu);
+    }
+}
+
 /// The entries of one activation, folded into the run's state as they are appended.
 pub(crate) struct Batch<'l> {
     pub(crate) run_id: rewind_core::RunId,
@@ -654,7 +700,7 @@ pub(crate) struct Batch<'l> {
 }
 
 impl<'l> Batch<'l> {
-    fn new(
+    pub(crate) fn new(
         run: &RunRef,
         namespace: Option<crate::ports::NamespaceName>,
         state: RunState,
@@ -683,23 +729,15 @@ impl<'l> Batch<'l> {
 
     /// Counts the CPU time of a call into the script that executed, toward the namespace of
     /// the run: never a call of a replay (`archi/06-storage-and-scale.md`, "Quotas").
-    pub(crate) fn count_cpu<J, B, X, D, C, E, S, W>(
-        &self,
-        engine: &Engine<J, B, X, D, C, E, S, W>,
-        cpu: Duration,
-    ) where
-        J: JournalStore,
-        B: BlobStore,
-        X: ScriptExecutor,
-        D: ToolDispatcher,
-        C: Clock,
-        E: Entropy,
-        S: SecretStore,
-        W: WebhookSender,
-    {
+    pub(crate) fn count_cpu(&self, sink: &impl CountCpu, cpu: Duration) {
         if let Some(namespace) = &self.namespace {
-            engine.count_cpu(&self.tenant, namespace, cpu);
+            sink.count_cpu(&self.tenant, namespace, cpu);
         }
+    }
+
+    /// The entries appended, the inbox items consumed, and the run's state after them.
+    pub(crate) fn finish(self) -> (Vec<HistoryEntry>, Vec<u64>, RunState) {
+        (self.entries, self.consumed, self.state)
     }
 
     /// `max(now, last recorded_at)`: monotonic per run.

@@ -38,6 +38,9 @@ pub(crate) struct Cached<I> {
     pub(crate) instance: I,
     /// The run's state after the last commit: its history length tells a hit from a miss.
     pub(crate) state: RunState,
+    /// The run's history as committed, kept by the run plane's executors: a hit derives the
+    /// run's summary and spans without reading it again. Empty on the journal's path.
+    pub(crate) history: Vec<rewind_core::HistoryEntry>,
 }
 
 /// A least-recently-used cache of instances, by run.
@@ -156,6 +159,7 @@ mod tests {
         Cached {
             instance: Sized(bytes),
             state: RunState::new(),
+            history: Vec::new(),
         }
     }
 

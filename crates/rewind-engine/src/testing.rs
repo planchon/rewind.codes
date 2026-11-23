@@ -29,7 +29,7 @@ use rewind_core::{
 use crate::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
-use crate::driver::DriveOptions;
+use crate::drive::DriveOptions;
 use crate::engine::{Adapters, Engine, EngineConfig, EngineError, StartError, StartRun};
 use crate::mock::{MockDispatcher, Mocks, NoMocks};
 use crate::ports::{Enqueued, Entropy, ScriptExecutor, ToolDispatcher};

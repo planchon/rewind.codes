@@ -30,7 +30,7 @@ use rewind_core::{
 use serde_json::json;
 
 use super::InFlight;
-use crate::driver::ToolOrder;
+use crate::drive::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
     BlobStore, CallAuth, CallClaims, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched,
@@ -786,7 +786,7 @@ const REDACTED: &str = "[secret]";
 
 /// The texts of the attached secret an answer must not carry: its value, and its base64 form
 /// when its header encodes it (HTTP basic).
-fn secret_texts(auth: &CallAuth) -> Vec<String> {
+pub(crate) fn secret_texts(auth: &CallAuth) -> Vec<String> {
     let CallAuth::Secret { value, placement } = auth else {
         return Vec::new();
     };
@@ -809,7 +809,7 @@ fn secret_texts(auth: &CallAuth) -> Vec<String> {
 /// `dispatched` without the attached secret's texts: a server that echoes its credential (an
 /// error quoting the key, a debug endpoint) must not bring it into the journal and the script
 /// (`archi/04-tools.md`, "Secrets": secrets never enter the journal nor the isolate).
-fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
+pub(crate) fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
     if texts.is_empty() {
         return dispatched;
     }

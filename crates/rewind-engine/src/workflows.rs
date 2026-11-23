@@ -936,7 +936,7 @@ where
 
 /// The runs started by the calls of `entries` whose end `entries` does not hold, with the `seq`
 /// of their call.
-fn started_runs(entries: &[HistoryEntry]) -> Vec<(Seq, RunId)> {
+pub(crate) fn started_runs(entries: &[HistoryEntry]) -> Vec<(Seq, RunId)> {
     let mut starts = BTreeSet::new();
     let mut ended = BTreeSet::new();
     let mut runs = Vec::new();
@@ -987,15 +987,15 @@ pub enum SignalRefused {
 }
 
 /// The args of `workflows.<name>.start`, as the op checked them.
-struct StartArgs {
-    input: JsonValue,
-    detached: bool,
-    labels: BTreeMap<String, String>,
-    ttl: Option<Duration>,
+pub(crate) struct StartArgs {
+    pub(crate) input: JsonValue,
+    pub(crate) detached: bool,
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) ttl: Option<Duration>,
 }
 
 impl StartArgs {
-    fn parse(args: &JsonValue) -> Result<Self, String> {
+    pub(crate) fn parse(args: &JsonValue) -> Result<Self, String> {
         let input = args
             .get("input")
             .cloned()
@@ -1038,14 +1038,14 @@ impl StartArgs {
 }
 
 /// The args of `workflows.<name>.signal`, as the op checked them.
-struct SignalArgs {
-    run: RunId,
-    name: String,
-    payload: JsonValue,
+pub(crate) struct SignalArgs {
+    pub(crate) run: RunId,
+    pub(crate) name: String,
+    pub(crate) payload: JsonValue,
 }
 
 impl SignalArgs {
-    fn parse(args: &JsonValue) -> Result<Self, String> {
+    pub(crate) fn parse(args: &JsonValue) -> Result<Self, String> {
         let run = args
             .get("run")
             .and_then(JsonValue::as_str)

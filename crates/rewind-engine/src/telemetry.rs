@@ -63,6 +63,9 @@ pub enum SpanKey {
     Run,
     /// An activation: the fence of its lease.
     Activation(u64),
+    /// An activation of the run plane: the index of the first entry it committed
+    /// (`archi/08-decisions.md`, "Taken while writing the object-storage spec").
+    ActivationAt(u64),
     /// A tool call or a timer: its `seq`.
     Command(Seq),
     /// A signal wait: the index of its `signal_awaited`.
@@ -75,6 +78,7 @@ pub fn span_id(run: RunId, key: SpanKey) -> SpanId {
     let (tag, n): (&[u8], u64) = match key {
         SpanKey::Run => (b"run", 0),
         SpanKey::Activation(fence) => (b"fence", fence),
+        SpanKey::ActivationAt(index) => (b"activation", index),
         SpanKey::Command(seq) => (b"seq", u64::from(seq.0)),
         SpanKey::Entry(index) => (b"idx", index),
     };
@@ -258,7 +262,7 @@ impl RunTelemetry<'_> {
         history: &[HistoryEntry],
         from: u64,
         to: u64,
-        fence: u64,
+        activation: SpanKey,
     ) -> Vec<LogRecord> {
         let (trace, _) = trace_of(self.record);
         let run = self.record.run.id;
@@ -278,7 +282,7 @@ impl RunTelemetry<'_> {
                     }
                     Some(LogRecord {
                         trace_id: trace,
-                        span_id: Some(span_id(run, SpanKey::Activation(fence))),
+                        span_id: Some(span_id(run, activation)),
                         time: entry.recorded_at,
                         level: *level,
                         message: message.clone(),

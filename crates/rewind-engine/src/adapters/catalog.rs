@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 use std::sync::{Mutex, MutexGuard};
 
-use rewind_core::{Digest, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
 
 use crate::adapters::ControlPlaneChanges;
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
@@ -37,6 +37,8 @@ struct State {
     subscriptions: BTreeMap<(TenantId, String), Subscription>,
     tenants: BTreeMap<TenantId, Tenant>,
     namespaces: BTreeMap<(TenantId, NamespaceName), Namespace>,
+    /// `legacy_runs`: where the runs of the previous design live.
+    legacy: BTreeMap<RunId, PartitionId>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +92,13 @@ impl MemoryCatalog {
             state: Mutex::default(),
             changes,
         }
+    }
+
+    /// Records where a run of the previous design lives, as `migrate-runs` does: its version 7 id
+    /// names no partition.
+    pub fn put_legacy_run(&self, run: RunId, partition: PartitionId) -> Result<(), CatalogError> {
+        self.lock()?.legacy.insert(run, partition);
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, State>, CatalogError> {
@@ -702,5 +711,9 @@ impl CatalogStore for MemoryCatalog {
         state.namespaces.remove(&key);
         self.namespace_changed(tenant, name);
         Ok(DropNamespace::Dropped)
+    }
+
+    async fn legacy_partition(&self, run: RunId) -> Result<Option<PartitionId>, CatalogError> {
+        Ok(self.lock()?.legacy.get(&run).copied())
     }
 }

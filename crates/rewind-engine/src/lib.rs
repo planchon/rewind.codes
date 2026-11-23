@@ -41,22 +41,31 @@ mod activation;
 pub mod adapters;
 pub mod attachments;
 mod cache;
+mod checks;
 #[cfg(any(test, feature = "conformance"))]
 pub mod conformance;
-mod driver;
+mod drive;
+pub mod driver;
+pub mod edge;
 mod engine;
+mod executors;
 mod export;
 pub mod failures;
 mod fork;
 pub mod handles;
 pub mod metrics;
 pub mod mock;
+pub mod node;
+mod org;
+mod partition;
 mod payloads;
+pub mod plane;
 pub mod ports;
 pub mod projector;
 pub mod quotas;
 pub mod replay;
 pub mod retention;
+pub mod router;
 pub mod schema;
 pub mod suites;
 mod tasks;
@@ -67,7 +76,7 @@ pub mod trace;
 mod workflows;
 
 pub use cache::CacheConfig;
-pub use driver::{DriveOptions, DriveReport, ToolOrder};
+pub use drive::{DriveOptions, DriveReport, ToolOrder};
 pub use engine::{
     ActivationOutcome, ActivationReport, Adapters, Engine, EngineConfig, EngineError, Limits,
     ReplayVerdict, StartError, StartRun, idempotency_key,

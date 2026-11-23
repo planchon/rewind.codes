@@ -12,7 +12,7 @@ use std::future::Future;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use rewind_core::{Digest, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
 
 use crate::ports::checker::ToolDeclarations;
 use crate::ports::executor::CompiledScript;
@@ -347,4 +347,19 @@ pub trait CatalogStore: Send + Sync {
         tenant: &TenantId,
         name: &NamespaceName,
     ) -> impl Future<Output = Result<DropNamespace, CatalogError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // Runs of the previous design
+
+    /// The partition a run moved from the tables of the previous design lives in: its id is a
+    /// version 7 UUID, whose bits name no partition (`archi/06-storage-and-scale.md`,
+    /// "Partitions, owners and nodes": `legacy_runs`). `None` for a run `migrate-runs` did not
+    /// move. A catalog that holds no such run answers `None`, which is the default.
+    fn legacy_partition(
+        &self,
+        run: RunId,
+    ) -> impl Future<Output = Result<Option<PartitionId>, CatalogError>> + Send {
+        let _ = run;
+        std::future::ready(Ok(None))
+    }
 }

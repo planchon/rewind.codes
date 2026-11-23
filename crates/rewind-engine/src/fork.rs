@@ -30,7 +30,7 @@ use rewind_core::{
     Script, Seq, ToolFailure, ToolFailureKind, Toolset,
 };
 
-use crate::activation::{Batch, Grace, abort_reason};
+use crate::activation::{Batch, CountCpu, Grace, abort_reason};
 use crate::adapters::StaticTypeChecker;
 use crate::attachments::AttachRights;
 use crate::engine::{
@@ -182,12 +182,20 @@ pub(crate) struct ForkSource<'a> {
 }
 
 /// What following a parent's history gave.
-struct Followed<I> {
-    instance: Option<I>,
-    point: ForkPoint,
-    reused: Vec<Completion>,
-    redispatched: Vec<Seq>,
-    unknown: Vec<Seq>,
+pub(crate) struct Followed<I> {
+    pub(crate) instance: Option<I>,
+    pub(crate) point: ForkPoint,
+    pub(crate) reused: Vec<Completion>,
+    pub(crate) redispatched: Vec<Seq>,
+    pub(crate) unknown: Vec<Seq>,
+}
+
+/// What following a parent's history runs on: the executor, where the payloads are loaded
+/// from, and what counts the CPU time of the calls into the script.
+pub(crate) struct FollowWith<'a, X, S, C> {
+    pub(crate) executor: &'a X,
+    pub(crate) payloads: &'a S,
+    pub(crate) cpu: &'a C,
 }
 
 impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
@@ -393,20 +401,26 @@ where
             ..started.clone()
         };
         let mut batch = Batch::for_check(run, &self.config.limits);
-        let followed = self
-            .follow_parent(
-                &mut batch,
-                &mut NoHeartbeat,
-                ForkSource {
-                    run,
-                    parent: ForkParent { run: run.id, at },
-                    started,
-                    compiled: &compiled,
-                    toolset: &toolset,
-                },
-                &history,
-            )
-            .await?;
+        let payloads = self.payloads();
+        let with = FollowWith {
+            executor: &self.executor,
+            payloads: &payloads,
+            cpu: self,
+        };
+        let followed = follow_parent(
+            &with,
+            &mut batch,
+            &mut NoHeartbeat,
+            ForkSource {
+                run,
+                parent: ForkParent { run: run.id, at },
+                started,
+                compiled: &compiled,
+                toolset: &toolset,
+            },
+            &history,
+        )
+        .await?;
         let mut reused: Vec<Seq> = followed.reused.iter().filter_map(completion_seq).collect();
         reused.sort();
         Ok(Compatibility {
@@ -429,9 +443,13 @@ where
         let parent = RunRef::new(source.run.tenant.clone(), source.parent.run);
         let fork = source.run.clone();
         let history = self.journal.load_history(&parent, 0).await?;
-        let followed = self
-            .follow_parent(batch, heartbeat, source, &history)
-            .await?;
+        let payloads = self.payloads();
+        let with = FollowWith {
+            executor: &self.executor,
+            payloads: &payloads,
+            cpu: self,
+        };
+        let followed = follow_parent(&with, batch, heartbeat, source, &history).await?;
         tracing::info!(parent = %parent, point = %followed.point, "the fork goes live");
         // The runs the copied history started stay the parent's: the fork receives their end.
         self.watch_inherited(&fork, batch.entries()).await?;
@@ -460,16 +478,24 @@ where
         }
         Ok(Some(instance))
     }
+}
 
-    /// Runs the fork's script against the parent's history, copying the parent's triggers into
-    /// `batch` while the script's commands match the parent's.
-    async fn follow_parent<H: Heartbeat>(
-        &self,
-        batch: &mut Batch<'_>,
-        heartbeat: &mut H,
-        source: ForkSource<'_>,
-        history: &[HistoryEntry],
-    ) -> Result<Followed<X::Instance>, EngineError> {
+/// Runs the fork's script against the parent's history, copying the parent's triggers into
+/// `batch` while the script's commands match the parent's.
+pub(crate) async fn follow_parent<X, S, C, H>(
+    with: &FollowWith<'_, X, S, C>,
+    batch: &mut Batch<'_>,
+    heartbeat: &mut H,
+    source: ForkSource<'_>,
+    history: &[HistoryEntry],
+) -> Result<Followed<X::Instance>, EngineError>
+where
+    X: ScriptExecutor,
+    S: payloads::PayloadSource,
+    C: CountCpu,
+    H: Heartbeat,
+{
+    {
         let parent_id = source.parent.run;
         let tenant = &source.run.tenant;
         // A parent's cancellation is where its history ends for the fork.
@@ -498,7 +524,7 @@ where
         // The fork starts when its parent started: its logical time is the parent's while it
         // follows it.
         let recorded_at = batch.recorded_at(cursor.started_at());
-        let input = self.load_payload(tenant, &source.started.input).await?;
+        let input = payloads::load(with.payloads, tenant, &source.started.input).await?;
         let start = StartScript {
             run_id: source.run.id,
             compiled: source.compiled.clone(),
@@ -511,11 +537,11 @@ where
         let trigger = Event::Lifecycle(Lifecycle::RunStarted(source.started));
         let mut inherited = BTreeSet::new();
         heartbeat.beat().await?;
-        let (mut instance, mut point) = match self.executor.start(start).await {
+        let (mut instance, mut point) = match with.executor.start(start).await {
             Ok((instance, emitted)) => {
                 // The fork's script runs for the first time: its calls execute, though they
                 // follow the parent's history.
-                batch.count_cpu(self, instance.cpu_time());
+                batch.count_cpu(with.cpu, instance.cpu_time());
                 let followed = follow(&mut cursor, &emitted, at, &mut inherited);
                 batch
                     .respond(recorded_at, trigger, emitted, Grace::No)
@@ -579,13 +605,13 @@ where
             };
             // The parent's trigger is copied with its value, so that the fork references its
             // payloads itself, and with its `recorded_at`.
-            let completion = self.with_values(tenant, completion).await?;
+            let completion = with_values(with.payloads, tenant, completion).await?;
             let recorded_at = batch.recorded_at(cursor.logical_now());
-            let delivery = payloads::delivery(&self.payloads(), tenant, &completion).await?;
+            let delivery = payloads::delivery(with.payloads, tenant, &completion).await?;
             heartbeat.beat().await?;
             let trigger = Event::Completion(completion);
             let delivered = instance.deliver(delivery, recorded_at).await;
-            batch.count_cpu(self, instance.cpu_time());
+            batch.count_cpu(with.cpu, instance.cpu_time());
             match delivered {
                 Ok(emitted) => {
                     let followed = follow(&mut cursor, &emitted, at, &mut inherited);
@@ -626,7 +652,7 @@ where
             }
             for seq in order {
                 if let Some(completion) = outcomes.remove(&seq) {
-                    reused.push(self.with_values(tenant, &completion).await?);
+                    reused.push(with_values(with.payloads, tenant, &completion).await?);
                 }
             }
             for (seq, tool) in &pending {
@@ -653,26 +679,38 @@ where
             unknown,
         })
     }
+}
 
-    /// A completion with its payload loaded: a fork's history holds its own values.
-    async fn with_values(
-        &self,
-        tenant: &crate::ports::TenantId,
-        completion: &Completion,
-    ) -> Result<Completion, EngineError> {
-        Ok(match completion {
-            Completion::ToolCallCompleted { seq, result } => Completion::ToolCallCompleted {
-                seq: *seq,
-                result: Payload::Value(self.load_payload(tenant, result).await?),
-            },
-            Completion::SignalReceived { name, payload } => Completion::SignalReceived {
-                name: name.clone(),
-                payload: Payload::Value(self.load_payload(tenant, payload).await?),
-            },
-            other => other.clone(),
-        })
-    }
+/// A completion with its payload loaded: a fork's history holds its own values.
+pub(crate) async fn with_values<S: payloads::PayloadSource>(
+    payloads: &S,
+    tenant: &crate::ports::TenantId,
+    completion: &Completion,
+) -> Result<Completion, EngineError> {
+    Ok(match completion {
+        Completion::ToolCallCompleted { seq, result } => Completion::ToolCallCompleted {
+            seq: *seq,
+            result: Payload::Value(payloads::load(payloads, tenant, result).await?),
+        },
+        Completion::SignalReceived { name, payload } => Completion::SignalReceived {
+            name: name.clone(),
+            payload: Payload::Value(payloads::load(payloads, tenant, payload).await?),
+        },
+        other => other.clone(),
+    })
+}
 
+impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
+where
+    J: JournalStore,
+    B: BlobStore,
+    X: ScriptExecutor,
+    D: ToolDispatcher,
+    C: Clock,
+    E: Entropy,
+    S: SecretStore,
+    W: WebhookSender,
+{
     /// The idempotency key of the call `seq` of a run: `{run_id}/{seq}`, except for a call a
     /// fork inherited from its parent without an outcome. That call carries its parent's key,
     /// so that the tool recognizes a duplicate: a fork's call carries its parent's key when the
@@ -709,7 +747,7 @@ where
 
 /// Whether a history scheduled the call `seq` to `tool` with `args`, and recorded no outcome for
 /// it before its cancellation.
-fn left_without_outcome(history: &[HistoryEntry], seq: Seq, tool: &str, args: &Payload) -> bool {
+pub(crate) fn left_without_outcome(history: &[HistoryEntry], seq: Seq, tool: &str, args: &Payload) -> bool {
     let mut scheduled = false;
     for entry in history {
         match &entry.event {
@@ -731,7 +769,7 @@ fn left_without_outcome(history: &[HistoryEntry], seq: Seq, tool: &str, args: &P
     scheduled
 }
 
-fn completion_seq(completion: &Completion) -> Option<Seq> {
+pub(crate) fn completion_seq(completion: &Completion) -> Option<Seq> {
     match completion {
         Completion::ToolCallCompleted { seq, .. } | Completion::ToolCallFailed { seq, .. } => {
             Some(*seq)

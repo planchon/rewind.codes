@@ -46,6 +46,7 @@
 //! - **Tenants.** Every use case is scoped by the tenant: a token or a task of another tenant
 //!   is treated as gone.
 
+pub(crate) mod calls;
 mod dispatch;
 mod harness;
 mod host;

@@ -371,6 +371,13 @@ pub enum Change {
         tenant: TenantId,
         namespace: NamespaceName,
     },
+    /// Writes the run's summary in the index as it is now, outside an activation: what its
+    /// waits' tool tasks became (approved, parked, deferred, in flight again). A change to a run
+    /// that does not exist or has been erased is refused, as any other.
+    Summary {
+        run: RunRef,
+        summary: Box<IndexedSummary>,
+    },
     Outbox(OutboxChange),
     Counters(Vec<CounterDelta>),
     /// Binds a webhook token, by its SHA-256, to the run's signal `name`.
