@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use futures_util::Stream;
@@ -31,7 +32,7 @@ use crate::ports::journal::{
     Created, Enqueued, InboxItem, PayloadRecord, QuarantineKind, RunMetadata, StoredScript,
     StoredToolset, TaskRef, TaskToken, TraceContext,
 };
-use crate::ports::namespaces::{NamespaceName, QuotaExceeded};
+use crate::ports::namespaces::{Month, NamespaceName, QuotaAlert, QuotaExceeded, Usage};
 use crate::ports::partition::{
     Activation, Counters, Found, Gauges, IndexedSummary, Page, Projection, RunHead, Scope,
     TaskRecord, Window,
@@ -208,7 +209,8 @@ pub enum PartitionRequest {
         from: u64,
         values: bool,
     },
-    /// The run's tool tasks: answered `Tasks`.
+    /// The run's tool tasks, as recorded but for those in flight (sent by the owner's node and
+    /// not answered, or handed on an SDK stream), which read `claimed`: answered `Tasks`.
     Tasks { run: RunRef },
     /// A page of the partition's summaries: answered `Found`.
     Search {
@@ -217,8 +219,30 @@ pub enum PartitionRequest {
         order: RunOrder,
         page: Page,
     },
-    /// The partition's counters over a window and its gauges: answered `Counted`.
-    Counters { scope: Scope, window: Window },
+    /// The partition's counters over a window, in buckets of `bucket` whole hours from the
+    /// window's start (the last one cut at its end), or as one bucket when `None`, and its
+    /// gauges: answered `Counted`, one `Counters` per bucket.
+    Counters {
+        scope: Scope,
+        window: Window,
+        bucket: Option<NonZeroU32>,
+    },
+    /// The use in a month of each namespace of the scope the partition holds: CPU time and runs
+    /// created over the month, with its days when `days`; active runs and distinct scripts now.
+    /// Answered `Used`; a namespace that used nothing is left out.
+    Usage {
+        scope: Scope,
+        month: Month,
+        days: bool,
+    },
+    /// The quota alerts of a month the tenant's organization actor recorded: of one namespace,
+    /// or every alert of the tenant (its own included), the newest first. To the owner of the
+    /// tenant's home partition: answered `Alerts`.
+    QuotaAlerts {
+        tenant: TenantId,
+        namespace: Option<NamespaceName>,
+        month: Month,
+    },
     /// The shapes observed for some tools: answered `Shapes`.
     Shapes {
         tenant: TenantId,
@@ -242,8 +266,10 @@ pub enum PartitionReply {
     History(Result<Option<Vec<HistoryEntry>>, Refusal>),
     Tasks(Result<Option<Vec<TaskRecord>>, Refusal>),
     Found(Result<Found, Refusal>),
-    Counted(Result<(Counters, Gauges), Refusal>),
+    Counted(Result<(Vec<Counters>, Gauges), Refusal>),
     Shapes(Result<BTreeMap<String, Shape>, Refusal>),
+    Used(Result<BTreeMap<NamespaceName, Usage>, Refusal>),
+    Alerts(Result<Vec<QuotaAlert>, Refusal>),
 }
 
 /// A run as its owner knows it: its head and its summary.
@@ -330,9 +356,10 @@ pub enum OrgRequest {
     SlotFreed { task: TaskRef, server: String },
     /// A host task to hand to an SDK stream: answered `Done`.
     HostTask(Box<HostTaskOffer>),
-    /// A host task is answered, or no longer exists: its stream's slot is free. Answered
-    /// `Done`.
-    HostTaskDone { task: TaskRef },
+    /// A host task is answered, or no longer exists: its stream's slot is free. `gone`: it was
+    /// not answered through the stream it was handed on (its run ended, its call timed out or
+    /// was cancelled), and the stream hears it. Answered `Done`.
+    HostTaskDone { task: TaskRef, gone: bool },
     /// An SDK stream opened at an edge: answered `Done`.
     Attach(StreamAttach),
     /// An SDK stream closed: its tasks wait for its worker for their grace. Answered `Done`.
@@ -462,9 +489,30 @@ pub enum OwnerNotice {
 
 /// What an organization actor tells the edge that holds an SDK stream.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a notice is boxed in its request, and moved once: its size does not matter"
+)]
 pub enum EdgeNotice {
     /// A host task handed on the stream.
     HandOut { stream: StreamId, task: HostTask },
+    /// A task handed on the stream no longer waits for its handler's answer, under this token:
+    /// its run ended, its call timed out or was cancelled, or it was handed out again. Its slot
+    /// on the stream is free.
+    Gone { stream: StreamId, token: TaskToken },
+}
+
+/// What an SDK stream receives (`GET /v1/tasks/stream`, its events `task` and `gone`).
+#[derive(Clone, Debug, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "an event is moved once, to its stream: its size does not matter"
+)]
+pub enum StreamEvent {
+    /// A host task handed on the stream.
+    Task(HostTask),
+    /// The task handed with this token no longer waits for an answer.
+    Gone(TaskToken),
 }
 
 // -------------------------------------------------------------------------------------------

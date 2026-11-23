@@ -26,7 +26,7 @@ use rewind_engine::ports::{
     namespace_partition,
 };
 use serde_json::json;
-use support::plane::{TestDriver, World, config, node};
+use support::plane::{World, config, node};
 use support::{FakeExecutor, RecordingDispatcher, request};
 
 /// A namespace whose partition the node `owner` holds.
@@ -71,10 +71,8 @@ fn waiter() -> FakeExecutor {
     )
 }
 
-fn drain(
-    stream: &mut tokio::sync::mpsc::UnboundedReceiver<rewind_engine::ports::link::HostTask>,
-) -> Vec<rewind_engine::ports::link::HostTask> {
-    TestDriver::drain(stream)
+fn drain(stream: &mut support::plane::Stream) -> Vec<rewind_engine::ports::link::HostTask> {
+    support::plane::received(stream).0
 }
 
 async fn two_nodes(

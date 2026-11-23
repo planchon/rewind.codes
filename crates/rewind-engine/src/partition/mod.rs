@@ -50,6 +50,7 @@ use crate::ports::{
 };
 use crate::tasks::calls::CallDone;
 use commit::Unit;
+pub(crate) use reads::buckets;
 pub(crate) use recovery::Opened;
 pub(crate) use runs::history_of;
 use wheel::Wheel;
@@ -272,6 +273,9 @@ pub(crate) enum Flight {
     },
     /// Handed to the organization actor for an SDK stream, with this token.
     Handed { token: Digest },
+    /// Handed, and answered through its token: what follows frees its stream's slot without
+    /// telling the stream it is gone.
+    Answered,
 }
 
 /// A request the owner asked and waits for the answer of.

@@ -242,12 +242,16 @@ impl<P: Plane> Owner<P> {
                     asker: None,
                 }));
             }
-            Some(Flight::Handed { .. }) | Some(Flight::Preparing) => {
+            Some(flight @ (Flight::Handed { .. } | Flight::Answered | Flight::Preparing)) => {
+                let gone = matches!(flight, Flight::Handed { .. });
                 unit.then(After::Effect(Effect::Request {
                     to: Target::Home(tenant.clone()),
                     request: NodeRequest::Organization {
                         tenant: tenant.clone(),
-                        request: Box::new(OrgRequest::HostTaskDone { task: task.clone() }),
+                        request: Box::new(OrgRequest::HostTaskDone {
+                            task: task.clone(),
+                            gone,
+                        }),
                     },
                     asker: None,
                 }));
@@ -597,25 +601,40 @@ impl<P: Plane> Owner<P> {
                 seq: task.seq,
             },
         })));
-        // A deferred call holds no slot; its token stays known.
+        // A deferred call holds no slot, nor a stream's; its token stays known.
         let flight = self.flights.remove(task);
-        if let Some(Flight::Sent {
-            server: Some(server),
-            ..
-        }) = flight
-        {
-            let tenant = task.run.tenant.clone();
-            unit.then(After::Effect(Effect::Request {
-                to: Target::Home(tenant.clone()),
-                request: NodeRequest::Organization {
-                    tenant,
-                    request: Box::new(OrgRequest::SlotFreed {
-                        task: task.clone(),
-                        server,
-                    }),
-                },
-                asker: None,
-            }));
+        let tenant = task.run.tenant.clone();
+        match flight {
+            Some(Flight::Sent {
+                server: Some(server),
+                ..
+            }) => {
+                unit.then(After::Effect(Effect::Request {
+                    to: Target::Home(tenant.clone()),
+                    request: NodeRequest::Organization {
+                        tenant,
+                        request: Box::new(OrgRequest::SlotFreed {
+                            task: task.clone(),
+                            server,
+                        }),
+                    },
+                    asker: None,
+                }));
+            }
+            Some(flight @ (Flight::Handed { .. } | Flight::Answered)) => {
+                unit.then(After::Effect(Effect::Request {
+                    to: Target::Home(tenant.clone()),
+                    request: NodeRequest::Organization {
+                        tenant,
+                        request: Box::new(OrgRequest::HostTaskDone {
+                            task: task.clone(),
+                            gone: matches!(flight, Flight::Handed { .. }),
+                        }),
+                    },
+                    asker: None,
+                }));
+            }
+            _ => {}
         }
         if let Some(reply) = reply {
             unit.then(After::Reply(reply, PartitionReply::Answered(Ok(()))));
@@ -854,6 +873,7 @@ impl<P: Plane> Owner<P> {
                 let Payload::Value(result) = payload else {
                     return;
                 };
+                self.answered(&task);
                 let mut unit = Unit::new();
                 self.finish_in(&mut unit, &task, &record, Ok(result));
                 unit.then(After::Reply(reply, PartitionReply::Answered(Ok(()))));
@@ -873,6 +893,7 @@ impl<P: Plane> Owner<P> {
                     message,
                     data,
                 };
+                self.answered(&task);
                 if retryable
                     && record.task.policy.on_interruption == Interruption::Retry
                     && record.task.attempt < self.config.max_tool_attempts
@@ -887,6 +908,7 @@ impl<P: Plane> Owner<P> {
                 self.push(unit);
             }
             TaskAnswer::Defer { timeout } => {
+                self.answered(&task);
                 let until = self.deferral_deadline(&record, timeout);
                 self.defer(&task, record, Some(hash), until, Some(reply));
             }
@@ -941,6 +963,14 @@ impl<P: Plane> Owner<P> {
         }
         unit.then(After::Reply(reply, PartitionReply::Answered(Ok(()))));
         self.push(unit);
+    }
+
+    /// A task handed on a stream is answered through its token: what follows frees the stream's
+    /// slot without telling it the task is gone.
+    fn answered(&mut self, task: &TaskRef) {
+        if let Some(flight @ Flight::Handed { .. }) = self.flights.get_mut(task) {
+            *flight = Flight::Answered;
+        }
     }
 
     /// A host task handed on a stream that closed and did not come back within its grace: sent

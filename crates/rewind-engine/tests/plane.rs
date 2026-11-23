@@ -65,6 +65,7 @@ fn one_call() -> FakeExecutor {
         |run, delivery| match delivery {
             Delivery::ToolCallCompleted { result, .. } => run.complete(result.clone()),
             Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+            Delivery::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
             other => panic!("unexpected {other:?}"),
         },
     )
@@ -577,10 +578,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
         )
         .unwrap();
     let run = world.run(request("one_call", json!({}))).await;
-    let handed = rewind_engine::driver::Driver::<
-        support::plane::TestPlane,
-        rewind_engine::adapters::MemoryCluster,
-    >::drain(&mut stream);
+    let handed = support::plane::handed(&mut stream);
     assert_eq!(handed.len(), 1);
     let task = &handed[0];
     assert_eq!(task.tool, "a");
@@ -599,10 +597,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
 
     // A failure the handler says is transient is tried again, handed out with a new token.
     let again = world.run(request("one_call", json!({}))).await;
-    let first = rewind_engine::driver::Driver::<
-        support::plane::TestPlane,
-        rewind_engine::adapters::MemoryCluster,
-    >::drain(&mut stream);
+    let first = support::plane::handed(&mut stream);
     world
         .fail(
             &first[0].token,
@@ -615,16 +610,72 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
         .await
         .unwrap();
     world.idle().await;
-    let second = rewind_engine::driver::Driver::<
-        support::plane::TestPlane,
-        rewind_engine::adapters::MemoryCluster,
-    >::drain(&mut stream);
+    let second = support::plane::handed(&mut stream);
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].attempt, 2);
     assert_ne!(second[0].token, first[0].token);
     world.complete(&second[0].token, json!({})).await.unwrap();
     world.idle().await;
     assert_eq!(world.view(&again).await.head.status, RunStatus::Completed);
+    assert!(
+        support::plane::handed(&mut stream).is_empty(),
+        "an answered task is not gone"
+    );
+
+    // A run cancelled while its task is handed: the task no longer waits for an answer, and the
+    // stream hears it is gone; its token answers nothing.
+    let cancelled = world.run(request("one_call", json!({}))).await;
+    let handed = support::plane::handed(&mut stream);
+    assert_eq!(handed.len(), 1);
+    world.cancel(&cancelled).await.unwrap();
+    world.idle().await;
+    let (tasks, gone) = support::plane::received(&mut stream);
+    assert!(tasks.is_empty());
+    assert_eq!(gone, [handed[0].token.clone()]);
+    assert!(matches!(
+        world.complete(&handed[0].token, json!({})).await,
+        Err(EdgeError::Refused(Refusal::TaskGone))
+    ));
+}
+
+#[tokio::test]
+async fn tasks_in_flight_read_claimed() {
+    let mut node = config("node-a", 1);
+    node.host_tools = HostTools::Streams;
+    let mut world = World::with(one_call(), RecordingDispatcher::echo(), 1, &[node]).await;
+    let at = world.at.clone();
+    // Recorded `ready`, it is in flight once its owner handed it to the organization actor for
+    // a stream: it reads `claimed`, from the owner's memory.
+    let run = world.run(request("one_call", json!({}))).await;
+    let claimed =
+        |state: &TaskState| matches!(state, TaskState::Claimed { owner, .. } if owner == "node-a");
+    let tasks = world.tasks(&run).await;
+    assert!(claimed(&tasks[0].state), "{:?}", tasks[0].state);
+    let mut stream = world
+        .driver
+        .attach_stream(
+            &at,
+            TenantId::local(),
+            StreamAttach {
+                stream: StreamId("s1".into()),
+                worker: "w1".into(),
+                node: at.clone(),
+                namespace: None,
+                labels: BTreeMap::new(),
+                toolset: None,
+                tools: Default::default(),
+                slots: 1,
+            },
+        )
+        .unwrap();
+    world.settle().await;
+    let handed = support::plane::handed(&mut stream);
+    assert_eq!(handed.len(), 1);
+    let tasks = world.tasks(&run).await;
+    assert!(claimed(&tasks[0].state), "{:?}", tasks[0].state);
+    world.complete(&handed[0].token, json!({})).await.unwrap();
+    world.idle().await;
+    assert!(world.tasks(&run).await.is_empty());
 }
 
 #[tokio::test]
@@ -869,6 +920,51 @@ async fn a_quota_crossed_raises_its_alert_once_through_the_outbox() {
         .map(|(_, event)| event.id)
         .collect();
     assert_eq!(alerts.len(), 2, "80 % and 100 %, once each: {alerts:?}");
+    // The organization actor answers the alerts of the month, the newest first.
+    let month = rewind_engine::ports::Month::of(world.now());
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let recorded = world
+        .edge
+        .quota_alerts(&mut gateway, &tenant, Some(&local), month)
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|alert| alert.key.threshold)
+            .collect::<Vec<_>>(),
+        [
+            rewind_engine::ports::Threshold::Reached,
+            rewind_engine::ports::Threshold::Near
+        ]
+    );
+    assert!(recorded.iter().all(|alert| alert.key.period == month));
+    let other = NamespaceName::new("other").unwrap();
+    assert!(
+        world
+            .edge
+            .quota_alerts(&mut gateway, &tenant, Some(&other), month)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        world
+            .edge
+            .quota_alerts(&mut gateway, &tenant, None, month)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        world
+            .edge
+            .quota_alerts(&mut gateway, &tenant, None, month.next())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let refused = world.start(request("quick", json!({}))).await;
     let Err(rewind_engine::StartError::QuotaExceeded(exceeded)) = refused else {
         panic!("{refused:?}")
@@ -999,4 +1095,120 @@ async fn searches_and_statistics_read_the_partitions_of_the_scope() {
     );
     assert_eq!(gauges.active_runs, 0);
     let _ = Seq(1);
+}
+
+#[tokio::test]
+async fn a_series_and_the_namespaces_use_are_one_request_per_partition() {
+    let programs = approval().with("chain", |run| run.complete(json!("done")), |_, _| {});
+    let mut world = World::with(
+        programs,
+        RecordingDispatcher::echo(),
+        4,
+        &[config("node-a", 4)],
+    )
+    .await;
+    let tenant = TenantId::local();
+    let alice = NamespaceName::new("alice").unwrap();
+    let bob = NamespaceName::new("bob").unwrap();
+    let in_namespace = |name: &str, namespace: &NamespaceName| {
+        let mut start = request(name, json!({}));
+        start.namespace = namespace.clone();
+        start
+    };
+    // Alice runs twice in the first hour and once two hours later, and one run of hers waits;
+    // Bob once.
+    world.run(in_namespace("chain", &alice)).await;
+    world.run(in_namespace("chain", &alice)).await;
+    world.run(in_namespace("approval", &alice)).await;
+    world.advance(2 * HOUR);
+    world.run(in_namespace("chain", &alice)).await;
+    world.run(in_namespace("chain", &bob)).await;
+
+    let window = Window::covering(support::T0, Timestamp(support::T0.0 + 4 * HOUR));
+    let steps = world.driver.steps();
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let series = world
+        .edge
+        .series(
+            &mut gateway,
+            &Scope::Tenant(tenant.clone()),
+            window,
+            std::num::NonZeroU32::new(1).unwrap(),
+        )
+        .await
+        .unwrap();
+    let created: Vec<u64> = series
+        .iter()
+        .map(|(_, counters)| counters.created)
+        .collect();
+    assert_eq!(created, [3, 0, 2, 0], "one bucket per hour");
+    assert_eq!(
+        series[2].0,
+        Window::hours(series[2].0.from, series[2].0.from.next())
+    );
+    let messages = world.driver.steps().messages - steps.messages;
+    // Two buckets of three hours: the last one is cut at the window's end.
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let series = world
+        .edge
+        .series(
+            &mut gateway,
+            &Scope::Tenant(tenant.clone()),
+            window,
+            std::num::NonZeroU32::new(3).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(series.len(), 2);
+    assert_eq!(series[0].1.created, 5);
+    assert_eq!(series[1].0.to, window.to);
+    assert_eq!(
+        world.driver.steps().messages - steps.messages,
+        2 * messages,
+        "a series is one request per partition, whatever its buckets"
+    );
+
+    // The use of the month, by namespace, then by day for one.
+    let month = rewind_engine::ports::Month::of(world.now());
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let used = world
+        .edge
+        .usage(&mut gateway, &Scope::Tenant(tenant.clone()), month, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        used.keys().cloned().collect::<Vec<_>>(),
+        [alice.clone(), bob.clone()]
+    );
+    let of_alice = &used[&alice];
+    assert_eq!(of_alice.runs_started, 4);
+    assert_eq!(of_alice.active_runs, 1);
+    assert_eq!(of_alice.scripts, 2);
+    assert!(of_alice.cpu > Duration::ZERO);
+    assert!(of_alice.days.is_empty());
+    assert_eq!(used[&bob].runs_started, 1);
+    let scope = Scope::Namespace {
+        tenant: tenant.clone(),
+        namespace: alice.clone(),
+    };
+    let used = world
+        .edge
+        .usage(&mut gateway, &scope, month, true)
+        .await
+        .unwrap();
+    assert_eq!(used.len(), 1);
+    let days = &used[&alice].days;
+    assert_eq!(days.len(), 1, "one day of use");
+    assert_eq!(days[0].0, rewind_engine::ports::Day::of(support::T0));
+    assert_eq!(days[0].1.runs_started, 4);
+    assert!(
+        world
+            .edge
+            .usage(&mut gateway, &scope, month.next(), true)
+            .await
+            .unwrap()
+            .get(&alice)
+            .is_none_or(|next| next.runs_started == 0 && next.cpu == Duration::ZERO),
+        "the next month used nothing yet"
+    );
 }

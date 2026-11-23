@@ -33,7 +33,7 @@ use crate::partition::OwnerMsg;
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    ActivationResult, Changed, HostTask, NodeReply, NodeRequest, StreamAttach, StreamId,
+    ActivationResult, Changed, NodeReply, NodeRequest, StreamAttach, StreamEvent, StreamId,
     SubscriptionKey,
 };
 use crate::ports::{
@@ -668,13 +668,14 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
         Some(changes)
     }
 
-    /// Opens an SDK stream at node `at`: the host tasks it is handed arrive on the receiver.
+    /// Opens an SDK stream at node `at`: the host tasks it is handed, and those that no longer
+    /// wait for an answer, arrive on the receiver.
     pub fn attach_stream(
         &mut self,
         at: &NodeId,
         tenant: crate::ports::TenantId,
         attach: StreamAttach,
-    ) -> Option<UnboundedReceiver<HostTask>> {
+    ) -> Option<UnboundedReceiver<StreamEvent>> {
         let (sink, tasks) = unbounded();
         let effects = self
             .nodes

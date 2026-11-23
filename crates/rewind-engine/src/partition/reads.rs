@@ -3,15 +3,24 @@
 //!
 //! A read answers what the partition's last durable batch left: a run's head and summary, its
 //! history (from its partition while its attempt is live, from the archive once sealed), its
-//! tasks, a page of a search, counters and gauges, shapes. Each read is a job of its own.
+//! tasks (those in flight from the owner's memory), a page of a search, counters and gauges by
+//! bucket, the use of its namespaces, shapes. Each read is a job of its own; the quota alerts of
+//! a tenant homed here are answered from its organization actor's state.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use rewind_core::{Seq, Timestamp};
+
 use crate::node::message::{Message, ReplyTo, job};
-use crate::partition::Owner;
+use crate::partition::{Flight, Owner};
 use crate::plane::Plane;
 use crate::ports::link::{NodeReply, PartitionReply, PartitionRequest, Refusal, RunView};
-use crate::ports::{PartitionLog, RunArchive};
+use crate::ports::{
+    Day, DayUsage, Hour, Month, NamespaceName, PartitionError, PartitionLog, QuotaAlert,
+    RunArchive, Scope, TaskState, TenantId, Usage, Window,
+};
 
 /// A refusal in the shape of the request's reply.
 pub(crate) fn refused(request: &PartitionRequest, refusal: Refusal) -> PartitionReply {
@@ -32,6 +41,8 @@ pub(crate) fn refused(request: &PartitionRequest, refusal: Refusal) -> Partition
         PartitionRequest::Search { .. } => PartitionReply::Found(Err(refusal)),
         PartitionRequest::Counters { .. } => PartitionReply::Counted(Err(refusal)),
         PartitionRequest::Shapes { .. } => PartitionReply::Shapes(Err(refusal)),
+        PartitionRequest::Usage { .. } => PartitionReply::Used(Err(refusal)),
+        PartitionRequest::QuotaAlerts { .. } => PartitionReply::Alerts(Err(refusal)),
     }
 }
 
@@ -41,9 +52,43 @@ fn unavailable(error: impl ToString) -> Refusal {
 
 impl<P: Plane> Owner<P> {
     pub(crate) fn read(&mut self, request: PartitionRequest, reply: ReplyTo) {
+        if let PartitionRequest::QuotaAlerts {
+            tenant,
+            namespace,
+            month,
+        } = &request
+        {
+            let alerts = self.quota_alerts(tenant, namespace.as_ref(), *month);
+            self.reply(reply, PartitionReply::Alerts(Ok(alerts)));
+            return;
+        }
         let Some(log) = self.log.clone() else {
             return;
         };
+        // What the records never say: the tasks in flight, and the namespaces counted here.
+        let in_flight: BTreeSet<Seq> = match &request {
+            PartitionRequest::Tasks { run } => self
+                .flights
+                .iter()
+                .filter(|(task, flight)| {
+                    task.run == *run
+                        && matches!(flight, Flight::Sent { .. } | Flight::Handed { .. })
+                })
+                .map(|(task, _)| task.seq)
+                .collect(),
+            _ => BTreeSet::new(),
+        };
+        let counted: Vec<(TenantId, NamespaceName)> = match &request {
+            PartitionRequest::Usage { scope, .. } => self
+                .counted
+                .iter()
+                .filter(|(tenant, namespace)| scope.contains(tenant, namespace))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        };
+        let node = self.node.to_string();
+        let now = self.now();
         let plane = Arc::clone(&self.plane);
         self.out.push(job(async move {
             let answer = match request {
@@ -111,7 +156,18 @@ impl<P: Plane> Owner<P> {
                         if log.run(&run).await.map_err(unavailable)?.is_none() {
                             return Ok(None);
                         }
-                        log.tasks(&run).await.map(Some).map_err(unavailable)
+                        let mut tasks = log.tasks(&run).await.map_err(unavailable)?;
+                        for record in &mut tasks {
+                            if let TaskState::Ready { next_attempt_at } = record.task.state
+                                && in_flight.contains(&record.task.task.seq)
+                            {
+                                record.task.state = TaskState::Claimed {
+                                    owner: node.clone(),
+                                    until: next_attempt_at,
+                                };
+                            }
+                        }
+                        Ok(Some(tasks))
                     }
                     .await,
                 ),
@@ -125,13 +181,25 @@ impl<P: Plane> Owner<P> {
                         .await
                         .map_err(unavailable),
                 ),
-                PartitionRequest::Counters { scope, window } => PartitionReply::Counted(
+                PartitionRequest::Counters {
+                    scope,
+                    window,
+                    bucket,
+                } => PartitionReply::Counted(
                     async {
-                        let counters = log.counters(&scope, window).await.map_err(unavailable)?;
+                        let mut counters = Vec::new();
+                        for bucket in buckets(window, bucket) {
+                            counters.push(log.counters(&scope, bucket).await.map_err(unavailable)?);
+                        }
                         let gauges = log.gauges(&scope).await.map_err(unavailable)?;
                         Ok((counters, gauges))
                     }
                     .await,
+                ),
+                PartitionRequest::Usage { month, days, .. } => PartitionReply::Used(
+                    usage(&*log, &counted, month, days, now)
+                        .await
+                        .map_err(unavailable),
                 ),
                 PartitionRequest::Shapes {
                     tenant,
@@ -147,4 +215,100 @@ impl<P: Plane> Owner<P> {
             Message::Reply(reply, NodeReply::Partition(Box::new(answer)))
         }));
     }
+}
+
+impl<P: Plane> Owner<P> {
+    /// The alerts of a month an organization actor homed here recorded: of one namespace, or
+    /// every alert of the tenant, the newest first. A tenant whose actor has not started yet
+    /// answers from the state the partition kept of it.
+    fn quota_alerts(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+    ) -> Vec<QuotaAlert> {
+        let recorded = match self.orgs.get(tenant) {
+            Some(actor) => actor.alerts(),
+            None => self
+                .org_states
+                .get(tenant)
+                .map_or(&[][..], |state| state.alerts.as_slice()),
+        };
+        let mut alerts: Vec<QuotaAlert> = recorded
+            .iter()
+            .filter(|alert| {
+                alert.key.period == month
+                    && namespace.is_none_or(|only| alert.key.namespace.as_ref() == Some(only))
+            })
+            .cloned()
+            .collect();
+        // The newest first; of those raised at once, the one recorded last.
+        alerts.reverse();
+        alerts.sort_by_key(|alert| std::cmp::Reverse(alert.raised_at));
+        alerts
+    }
+}
+
+/// The windows of `bucket` whole hours that cover `window`, from its start, the last one cut at
+/// its end; the window itself without a bucket.
+pub(crate) fn buckets(window: Window, bucket: Option<NonZeroU32>) -> Vec<Window> {
+    let Some(width) = bucket else {
+        return vec![window];
+    };
+    let mut windows = Vec::new();
+    let mut from = window.from;
+    while from < window.to {
+        let to = Hour(from.0.saturating_add(width.get())).min(window.to);
+        windows.push(Window::hours(from, to));
+        from = to;
+    }
+    windows
+}
+
+/// The use in `month` of each namespace counted here: CPU time and runs created over the month,
+/// with its days up to `now` when `days`; its active runs and distinct scripts now. A namespace
+/// that used nothing is left out.
+async fn usage<L: PartitionLog>(
+    log: &L,
+    counted: &[(TenantId, NamespaceName)],
+    month: Month,
+    days: bool,
+    now: Timestamp,
+) -> Result<BTreeMap<NamespaceName, Usage>, PartitionError> {
+    let mut used = BTreeMap::new();
+    for (tenant, namespace) in counted {
+        let scope = Scope::Namespace {
+            tenant: tenant.clone(),
+            namespace: namespace.clone(),
+        };
+        let counters = log.counters(&scope, Window::of_month(month)).await?;
+        let gauges = log.gauges(&scope).await?;
+        let mut usage = Usage {
+            cpu: counters.cpu,
+            runs_started: counters.created,
+            active_runs: gauges.active_runs,
+            scripts: gauges.distinct_scripts(),
+            days: Vec::new(),
+        };
+        if days && !counters.is_empty() {
+            let mut day = month.first_day();
+            while month.contains(day) && day.start() <= now {
+                let of_day = log.counters(&scope, Window::of_day(day)).await?;
+                if of_day.cpu > std::time::Duration::ZERO || of_day.created > 0 {
+                    usage.days.push((
+                        day,
+                        DayUsage {
+                            cpu: of_day.cpu,
+                            runs_started: of_day.created,
+                        },
+                    ));
+                }
+                day = Day(day.0.saturating_add(1));
+            }
+        }
+        if usage != Usage::default() {
+            used.insert(namespace.clone(), usage);
+        }
+    }
+    Ok(used)
 }

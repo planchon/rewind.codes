@@ -156,6 +156,8 @@ fn refused(reply: &PartitionReply, refusal: Refusal) -> PartitionReply {
         PartitionReply::Found(_) => PartitionReply::Found(Err(refusal)),
         PartitionReply::Counted(_) => PartitionReply::Counted(Err(refusal)),
         PartitionReply::Shapes(_) => PartitionReply::Shapes(Err(refusal)),
+        PartitionReply::Used(_) => PartitionReply::Used(Err(refusal)),
+        PartitionReply::Alerts(_) => PartitionReply::Alerts(Err(refusal)),
     }
 }
 

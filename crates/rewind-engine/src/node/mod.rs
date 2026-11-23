@@ -31,7 +31,7 @@ use crate::partition::{Owner, OwnerMsg};
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    Changed, EdgeNotice, HostTask, NodeReply, NodeRequest, OrgRequest, StreamAttach, StreamId,
+    Changed, EdgeNotice, NodeReply, NodeRequest, OrgRequest, StreamAttach, StreamEvent, StreamId,
     SubscriptionKey,
 };
 use crate::ports::{
@@ -83,7 +83,7 @@ pub struct Node<P: Plane, M: Membership + 'static> {
     pub(crate) calls: Calls<P>,
     epochs: BTreeSet<Epoch>,
     subscriptions: BTreeMap<SubscriptionKey, Vec<UnboundedSender<Changed>>>,
-    streams: BTreeMap<StreamId, (TenantId, StreamAttach, UnboundedSender<HostTask>)>,
+    streams: BTreeMap<StreamId, (TenantId, StreamAttach, UnboundedSender<StreamEvent>)>,
 }
 
 impl<P: Plane, M: Membership + 'static> fmt::Debug for Node<P, M> {
@@ -353,16 +353,23 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 _ => vec![Effect::Reply(reply, NodeReply::NotOwner { partition })],
             },
             NodeRequest::Edge(notice) => {
-                let EdgeNotice::HandOut { stream, task } = *notice;
+                let (stream, event) = match *notice {
+                    EdgeNotice::HandOut { stream, task } => (stream, StreamEvent::Task(task)),
+                    EdgeNotice::Gone { stream, token } => (stream, StreamEvent::Gone(token)),
+                };
                 let mut effects = vec![Effect::Reply(reply, NodeReply::Done)];
+                let tenant = match (&event, self.streams.get(&stream)) {
+                    (_, Some((tenant, _, _))) => Some(tenant.clone()),
+                    (StreamEvent::Task(task), None) => Some(task.task.run.tenant.clone()),
+                    (StreamEvent::Gone(_), None) => None,
+                };
                 let delivered = self
                     .streams
                     .get(&stream)
-                    .is_some_and(|(_, _, sink)| sink.send(task.clone()).is_ok());
-                if !delivered {
+                    .is_some_and(|(_, _, sink)| sink.send(event).is_ok());
+                if !delivered && let Some(tenant) = tenant {
                     // The stream closed: its organization actor gives its tasks their grace.
                     self.streams.remove(&stream);
-                    let tenant = task.task.run.tenant.clone();
                     effects.push(Effect::Request {
                         to: Target::Home(tenant.clone()),
                         request: NodeRequest::Organization {
@@ -627,7 +634,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         &mut self,
         tenant: TenantId,
         attach: StreamAttach,
-        sink: UnboundedSender<HostTask>,
+        sink: UnboundedSender<StreamEvent>,
     ) -> Vec<Effect<P>> {
         self.streams.insert(
             attach.stream.clone(),

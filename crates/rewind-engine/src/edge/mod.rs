@@ -16,7 +16,8 @@
 //! | [`Edge::release`], [`Edge::give_up`], [`Edge::erase`] | | the quarantine, the archive, the records |
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
 //! | [`Edge::get_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::tool_tasks`] | | the partition, or the archive |
-//! | [`Edge::search`], [`Edge::statistics`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
+//! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
+//! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its organization actor |
 //! | [`Edge::trace`], [`Edge::trace_entry`] | | the run's head and history |
 //! | [`Edge::record_tests`] | the tests stored in the control plane | the runs searched, their history |
 //! | [`Edge::register_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
@@ -29,6 +30,7 @@ pub use test_runs::{RecordFrom, Recording, RecordingError};
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,10 +49,10 @@ use crate::ports::link::{
     SignalAtOwner, StartAtOwner, TaskAnswer,
 };
 use crate::ports::{
-    BlobOwner, CatalogStore, Clock, Counters, Created, Enqueued, Entropy, Found, Gauges,
-    NamespaceName, NamespaceWrite, Page, RunOrder, RunQuery, RunRef, RunWorkflow, Scope,
-    ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken, TenantId, ToolTask,
-    TypeChecker, Window, namespace_partition,
+    BlobOwner, CatalogStore, Clock, Counters, Created, Enqueued, Entropy, Found, Gauges, Month,
+    NamespaceName, NamespaceWrite, Page, QuotaAlert, RunOrder, RunQuery, RunRef, RunWorkflow,
+    Scope, ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken, TenantId,
+    ToolTask, TypeChecker, Usage, Window, home_partition, namespace_partition,
 };
 use crate::text::{self, NulCharacter};
 use crate::workflows::StartWorkflow;
@@ -1035,23 +1037,105 @@ impl<P: Plane> Edge<P> {
         scope: &Scope,
         window: Window,
     ) -> Result<(Counters, Gauges), EdgeError> {
-        let mut counters = Counters::default();
+        let (mut buckets, gauges) = self.counted(gateway, scope, window, None).await?;
+        let counters = buckets
+            .pop()
+            .map(|(_, counters)| counters)
+            .unwrap_or_default();
+        Ok((counters, gauges))
+    }
+
+    /// The counters of a scope over a window in buckets of `bucket` whole hours from the
+    /// window's start, the last one cut at the window's end, each added up from the partitions
+    /// that hold the scope: one request per partition, whatever the number of buckets.
+    pub async fn series<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        scope: &Scope,
+        window: Window,
+        bucket: NonZeroU32,
+    ) -> Result<Vec<(Window, Counters)>, EdgeError> {
+        Ok(self.counted(gateway, scope, window, Some(bucket)).await?.0)
+    }
+
+    async fn counted<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        scope: &Scope,
+        window: Window,
+        bucket: Option<NonZeroU32>,
+    ) -> Result<(Vec<(Window, Counters)>, Gauges), EdgeError> {
+        let mut buckets: Vec<(Window, Counters)> = crate::partition::buckets(window, bucket)
+            .into_iter()
+            .map(|of| (of, Counters::default()))
+            .collect();
         let mut gauges = Gauges::default();
         for partition in self.partitions_of(scope).await? {
             let request = PartitionRequest::Counters {
                 scope: scope.clone(),
                 window,
+                bucket,
             };
             match ask(gateway, partition, request).await? {
                 PartitionReply::Counted(counted) => {
                     let (partition_counters, partition_gauges) = counted?;
-                    counters.add(&partition_counters);
+                    for ((_, sum), counters) in buckets.iter_mut().zip(&partition_counters) {
+                        sum.add(counters);
+                    }
                     gauges.add(&partition_gauges);
                 }
                 other => return Err(unexpected(&other)),
             }
         }
-        Ok((counters, gauges))
+        Ok((buckets, gauges))
+    }
+
+    /// The use in a month of each namespace of the scope, from the partitions that hold it: CPU
+    /// time and runs created over the month, with its days when `days`; active runs and distinct
+    /// scripts now (`GET /v1/namespaces`, `GET /v1/namespaces/{name}`). A namespace that used
+    /// nothing is left out; the tenant's use is the sum of its namespaces'.
+    pub async fn usage<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        scope: &Scope,
+        month: Month,
+        days: bool,
+    ) -> Result<BTreeMap<NamespaceName, Usage>, EdgeError> {
+        let mut used = BTreeMap::new();
+        for partition in self.partitions_of(scope).await? {
+            let request = PartitionRequest::Usage {
+                scope: scope.clone(),
+                month,
+                days,
+            };
+            match ask(gateway, partition, request).await? {
+                PartitionReply::Used(partition_used) => used.extend(partition_used?),
+                other => return Err(unexpected(&other)),
+            }
+        }
+        Ok(used)
+    }
+
+    /// The quota alerts of a month, of one namespace or every alert of the tenant (its own
+    /// included), the newest first, from the organization actor on the owner of the tenant's
+    /// home partition (`GET /v1/organization/quota-alerts`).
+    pub async fn quota_alerts<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+    ) -> Result<Vec<QuotaAlert>, EdgeError> {
+        let home = home_partition(tenant, self.config.partitions);
+        let request = PartitionRequest::QuotaAlerts {
+            tenant: tenant.clone(),
+            namespace: namespace.cloned(),
+            month,
+        };
+        match ask(gateway, home, request).await? {
+            PartitionReply::Alerts(alerts) => Ok(alerts?),
+            other => Err(unexpected(&other)),
+        }
     }
 
     /// The shapes observed for some tools, merged from the partitions of the scope.

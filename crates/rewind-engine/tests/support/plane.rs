@@ -15,7 +15,7 @@ use rewind_engine::adapters::{
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
-use rewind_engine::ports::link::{HostFailure, RunView};
+use rewind_engine::ports::link::{HostFailure, HostTask, RunView, StreamEvent};
 use rewind_engine::ports::{
     Clock, Created, Enqueued, NodeId, RunRef, TaskRef, TaskToken, TenantId, ToolTask,
 };
@@ -47,6 +47,30 @@ pub struct World {
     /// The node the edge's requests enter.
     pub at: NodeId,
     pub partitions: NonZeroU16,
+}
+
+/// What an SDK stream receives.
+pub type Stream = tokio::sync::mpsc::UnboundedReceiver<StreamEvent>;
+
+/// What a stream received since it was last read: the tasks handed, and the tokens of those
+/// gone.
+pub fn received(stream: &mut Stream) -> (Vec<HostTask>, Vec<TaskToken>) {
+    let mut tasks = Vec::new();
+    let mut gone = Vec::new();
+    for event in TestDriver::drain(stream) {
+        match event {
+            StreamEvent::Task(task) => tasks.push(task),
+            StreamEvent::Gone(token) => gone.push(token),
+        }
+    }
+    (tasks, gone)
+}
+
+/// The tasks a stream was handed since it was last read; none of its tasks is gone.
+pub fn handed(stream: &mut Stream) -> Vec<HostTask> {
+    let (tasks, gone) = received(stream);
+    assert!(gone.is_empty(), "no task is gone: {gone:?}");
+    tasks
 }
 
 pub fn node(id: &str) -> NodeId {

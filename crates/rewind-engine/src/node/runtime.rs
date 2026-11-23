@@ -33,8 +33,8 @@ use crate::partition::OwnerMsg;
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    ActivationRequest, ActivationResult, Changed, HostTask, NodeReply, NodeRequest, PartitionReply,
-    PartitionRequest, StreamAttach, StreamId, SubscriptionKey,
+    ActivationRequest, ActivationResult, Changed, NodeReply, NodeRequest, PartitionReply,
+    PartitionRequest, StreamAttach, StreamEvent, StreamId, SubscriptionKey,
 };
 use crate::ports::{Clock, LinkError, NodeId, NodeLink, TenantId};
 
@@ -50,7 +50,7 @@ enum Input<P: Plane> {
     ),
     Activation(Box<ActivationRequest>, oneshot::Sender<ActivationResult>),
     Subscribe(SubscriptionKey, Option<u64>, UnboundedSender<Changed>),
-    Attach(TenantId, StreamAttach, UnboundedSender<HostTask>),
+    Attach(TenantId, StreamAttach, UnboundedSender<StreamEvent>),
     Detach(StreamId),
     /// Hand the partitions over and stop.
     Stop(oneshot::Sender<()>),
@@ -119,14 +119,15 @@ impl<P: Plane> NodeHandle<P> {
         Ok(Changes(changes))
     }
 
-    /// An SDK stream opened at this edge: the host tasks it is handed arrive on the receiver.
+    /// An SDK stream opened at this edge: the host tasks it is handed, and those that no longer
+    /// wait for an answer, arrive on the receiver.
     /// Dropping the receiver does not close the stream: [`detach_stream`](Self::detach_stream)
     /// does, once the response it feeds ends.
     pub fn attach_stream(
         &self,
         tenant: TenantId,
         attach: StreamAttach,
-    ) -> Result<UnboundedReceiver<HostTask>, LinkError> {
+    ) -> Result<UnboundedReceiver<StreamEvent>, LinkError> {
         let (sink, tasks) = unbounded_channel();
         self.inputs
             .send(Input::Attach(tenant, attach, sink))

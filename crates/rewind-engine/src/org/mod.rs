@@ -267,24 +267,17 @@ impl<P: Plane> OrgActor<P> {
             OrgRequest::HostTask(offer) => {
                 done(out, reply);
                 let task = offer.task.task.clone();
-                // An owner that sends a task again (a new owner, a new attempt) replaces it.
+                // An owner that sends a task again (a new owner, a new attempt) replaces it: the
+                // token it was handed with no longer answers it.
                 self.offers.retain(|queued| queued.task.task != task);
-                if let Some((stream, _)) = self.handed.remove(&task)
-                    && let Some(stream) = self.streams.get_mut(&stream)
-                {
-                    stream.held.remove(&task);
-                }
+                self.release(&task, true, out);
                 self.offers.push_back(*offer);
                 self.hand_out(out);
             }
-            OrgRequest::HostTaskDone { task } => {
+            OrgRequest::HostTaskDone { task, gone } => {
                 done(out, reply);
                 self.offers.retain(|queued| queued.task.task != task);
-                if let Some((stream, _)) = self.handed.remove(&task)
-                    && let Some(stream) = self.streams.get_mut(&stream)
-                {
-                    stream.held.remove(&task);
-                }
+                self.release(&task, gone, out);
                 self.hand_out(out);
             }
             OrgRequest::Attach(attach) => {
@@ -661,11 +654,7 @@ impl<P: Plane> OrgActor<P> {
             .map(|(task, _)| task.clone())
             .collect();
         for task in gone {
-            if let Some((stream, _)) = self.handed.remove(&task)
-                && let Some(stream) = self.streams.get_mut(&stream)
-            {
-                stream.held.remove(&task);
-            }
+            self.release(&task, true, out);
         }
     }
 
@@ -879,6 +868,33 @@ impl<P: Plane> OrgActor<P> {
     }
 
     /// Hands the queued tasks to the open streams that take them and have a free slot, in turn.
+    /// A task handed on a stream leaves it: its slot is free. `gone`: its token no longer
+    /// answers it, and the stream, if open, hears `gone`.
+    fn release(&mut self, task: &TaskRef, gone: bool, out: &mut Vec<OrgEffect<P>>) {
+        let Some((id, offer)) = self.handed.remove(task) else {
+            return;
+        };
+        let Some(stream) = self.streams.get_mut(&id) else {
+            return;
+        };
+        stream.held.remove(task);
+        if gone && stream.open {
+            out.push(OrgEffect::Effect(Effect::Request {
+                to: Target::Node(stream.attach.node.clone()),
+                request: NodeRequest::Edge(Box::new(EdgeNotice::Gone {
+                    stream: id,
+                    token: offer.task.token,
+                })),
+                asker: None,
+            }));
+        }
+    }
+
+    /// The alerts it recorded.
+    pub(crate) fn alerts(&self) -> &[QuotaAlert] {
+        &self.state.alerts
+    }
+
     fn hand_out(&mut self, out: &mut Vec<OrgEffect<P>>) {
         let mut kept = VecDeque::new();
         while let Some(offer) = self.offers.pop_front() {
