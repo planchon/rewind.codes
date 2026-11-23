@@ -825,7 +825,7 @@ async fn the_daily_job_deletes_the_tests_no_version_references_after_their_grace
         world
             .plane
             .blobs
-            .get_in(
+            .get(
                 &rewind_engine::ports::BlobOwner::Tests(tenant.clone()),
                 loose
             )

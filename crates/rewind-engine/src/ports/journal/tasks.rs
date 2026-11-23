@@ -17,16 +17,13 @@
 //! the run's inbox. Attempts, backoff, leases, approvals and tokens live in the task, never in
 //! the journal.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use rewind_core::{
     Digest, Payload, Seq, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy, ToolRoute,
 };
 
-use crate::ports::namespaces::NamespaceName;
-use crate::ports::secrets::SecretId;
-use crate::ports::tenancy::{RunRef, TenantId, TenantScope};
+use crate::ports::tenancy::RunRef;
 
 /// A tool task: the call `seq` of a run.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -141,99 +138,6 @@ pub struct ToolTask {
     /// schema, and the dispatcher no longer checks it. It stays set for the task's life.
     pub schema_change_approved: bool,
     pub created_at: Timestamp,
-}
-
-/// A task handed out by `claim_tool_tasks`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ClaimedTask {
-    /// The task, in state `claimed`, its attempt incremented.
-    pub task: ToolTask,
-    pub token: TaskToken,
-    /// The previous claim expired without an outcome: its holder died mid-call, and the call
-    /// may or may not have taken effect. Under `at_most_once`, the engine fails the call with
-    /// `outcome_unknown` instead of calling the tool again.
-    pub previous_claim_expired: bool,
-}
-
-/// Which tasks a claim may hand out.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskFilter {
-    /// Every task, whatever its route and tenant: an engine in mock mode, where every call goes
-    /// to the mocks.
-    All,
-    /// The tasks Rewind calls itself (MCP tools and built-ins), of the tenants in scope: the
-    /// dispatcher's claim.
-    Dispatched { tenants: TenantScope },
-    /// The host tools of one tenant, optionally of one toolset and of some tools only: what a
-    /// harness's worker long-polls through `GET /v1/tasks`.
-    Host {
-        tenant: TenantId,
-        /// The tasks of this namespace's runs only: an end user's token.
-        namespace: Option<NamespaceName>,
-        /// The tasks of the runs carrying all of these labels only: a grant limited to labels.
-        /// Empty: every run.
-        labels: BTreeMap<String, String>,
-        toolset: Option<Digest>,
-        /// Empty: every host tool.
-        tools: BTreeSet<String>,
-    },
-    /// The host tools, of the tenants in scope, whose claim expired and that cannot be handed
-    /// out again: `at_most_once`, or `retry` with `max_attempts` claims made. The worker role
-    /// claims them to fail them with `outcome_unknown` at once, so that a run does not wait for
-    /// a harness's worker that may never poll again (`archi/04-tools.md`).
-    Interrupted {
-        tenants: TenantScope,
-        max_attempts: u32,
-    },
-}
-
-/// What an update of a task did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskUpdate {
-    Applied,
-    /// No such task, or not for this token: the task is done, its run ended, or it was claimed
-    /// again since. An outcome reported for it is dropped.
-    NotFound,
-    /// The task is in a state the update does not apply to.
-    InvalidState(TaskState),
-}
-
-/// The tasks `resume_parked` makes ready again.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParkedScope {
-    /// A secret was put again: the tasks parked by
-    /// [`CredentialsRefused`](ParkKind::CredentialsRefused) or
-    /// [`SecretMissing`](ParkKind::SecretMissing) whose run attaches it for the task's server or
-    /// API: `org/<name>` for an organization's secret, in every namespace; `ns/<name>` for a
-    /// namespace's, in the runs of that namespace only.
-    Secret { tenant: TenantId, secret: SecretId },
-}
-
-/// What reads a secret (`archi/04-tools.md`, "Secrets": who reads what), as
-/// `secret_usage` answers it before a deletion.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SecretUsage {
-    /// The active runs that attach it, oldest first, at most the `limit` given.
-    pub active_runs: Vec<RunRef>,
-    /// How many active runs attach it, all of them.
-    pub active_total: u64,
-    /// Those of the active runs with a call to a server or an API it serves that is parked or
-    /// not yet sent, oldest first, at most the `limit` given.
-    pub waiting_runs: Vec<RunRef>,
-    /// How many of them, all of them.
-    pub waiting_total: u64,
-    /// The latest version of each workflow of the tenant that attaches it, by workflow name. A
-    /// version attaching `ns/<name>` counts for the secret `<name>` of every namespace.
-    pub versions: Vec<WorkflowAttaching>,
-}
-
-/// The latest version of a workflow, which attaches a secret.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkflowAttaching {
-    pub name: String,
-    pub version: Digest,
-    /// The servers and APIs it attaches the secret for, sorted.
-    pub servers: Vec<String>,
 }
 
 /// The failure a deferred task ends with when no answer came before its deadline. Every store

@@ -1,6 +1,6 @@
 //! The conformance suites of the ports (feature `conformance`): `CatalogStore`,
-//! `PartitionStore`, `RunArchive`, `Cluster`, `JournalStore`, `AccessStore`, `BlobStore`,
-//! `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender`.
+//! `PartitionStore`, `RunArchive`, `Cluster`, `AccessStore`, `BlobStore`, `SecretStore`,
+//! `SpanExporter` and `WebhookSender`.
 //!
 //! Every adapter of a port passes its suite: they check the contract of the port, not a table
 //! layout. Each suite is deterministic: time is always passed in, never read, and the only
@@ -9,8 +9,8 @@
 //!
 //! ```ignore
 //! #[tokio::test]
-//! async fn journal_conformance() {
-//!     rewind_engine::conformance::journal::run_all(|| MyStore::new_empty()).await;
+//! async fn access_conformance() {
+//!     rewind_engine::conformance::access::run_all(|| MyStore::new_empty()).await;
 //! }
 //! ```
 //!
@@ -28,9 +28,7 @@ pub mod archive;
 pub mod blobs;
 pub mod catalog;
 pub mod cluster;
-pub mod journal;
 pub mod partition;
-pub mod read_model;
 pub mod secrets;
 pub mod spans;
 pub mod webhooks;

@@ -22,7 +22,9 @@ use rewind_blob::{
 };
 use rewind_core::{Digest, Epoch, Script, Toolset, canonical_json};
 use rewind_engine::conformance::{archive, blobs, tenant};
-use rewind_engine::ports::{ArchiveError, Attempt, BlobError, BlobStore, RunArchive, RunRef};
+use rewind_engine::ports::{
+    ArchiveError, Attempt, BlobError, BlobOwner, BlobStore, RunArchive, RunRef,
+};
 use serde_json::json;
 
 const MINIO_IMAGE: &str = "cgr.dev/chainguard/minio:latest";
@@ -68,14 +70,14 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
         .expect("raw client");
     let bytes = canonical_json(&json!({ "text": "corrupt" })).into_bytes();
     let digest = Digest::of(&bytes);
-    let key = S3Blobs::key(&tenant("acme"), digest);
+    let key = S3Blobs::key(&BlobOwner::Tests(tenant("acme")), digest);
     raw.put(
         &Path::from(key.as_str()),
         PutPayload::from(b"{\"text\":\"tampered\"}".to_vec()),
     )
     .await
     .expect("tamper");
-    let read = store.get(&tenant("acme"), digest).await;
+    let read = store.get(&BlobOwner::Tests(tenant("acme")), digest).await;
     assert!(
         matches!(read, Err(BlobError::Corrupt { digest: d, .. }) if d == digest),
         "{read:?}"

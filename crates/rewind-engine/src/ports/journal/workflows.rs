@@ -57,14 +57,6 @@ pub struct WorkflowFilter {
     pub limit: Option<usize>,
 }
 
-/// What `watch_run` found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Watched {
-    /// The run has already ended: its end was not enqueued for the new watcher, which the
-    /// caller does itself.
-    pub ended: bool,
-}
-
 /// A run a script started: that run, the call, and whether it is detached
 /// (`archi/03-execution.md`, "Workflows across runs").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

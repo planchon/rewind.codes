@@ -15,7 +15,6 @@ use rewind_api::runs::JournalExport;
 use rewind_core::{
     Command, Completion, Event, HistoryEntry, JournalDocument, NonDeterminism, Script, Seq,
 };
-use rewind_engine::adapters::MemoryBlobs;
 use rewind_engine::ports::{RunRef, ScriptExecutor, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_engine::{Compatibility, ForkError, ForkPoint, Limits};
@@ -170,7 +169,7 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
         toolset: &journal.toolset,
         history: &journal.entries,
     };
-    match replay::replay(&executor, &MemoryBlobs::new(), input).await {
+    match replay::replay(&executor, &replay::InJournal, input).await {
         Ok(rebuilt) => {
             report.matches = true;
             report.verdict = match rebuilt.end {

@@ -14,7 +14,6 @@ use std::time::Duration;
 use rewind_core::Epoch;
 
 use crate::cache::CacheConfig;
-use crate::engine::Limits;
 use crate::payloads::PayloadTiers;
 use crate::ports::{
     BlobStore, CatalogStore, Clock, Entropy, NodeId, PartitionStore, RunArchive, ScriptExecutor,
@@ -147,6 +146,28 @@ pub enum HostTools {
     /// To the dispatcher, as every other call: mock mode and the engine's tests, where the
     /// mocks answer every tool.
     Dispatched,
+}
+
+/// Resource limits an activation enforces (`archi/03-execution.md`, "Resource limits"). CPU
+/// time and heap size are enforced by the executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    /// Entries in a run's history.
+    pub max_history_len: u64,
+    /// Commands the script may emit in one activation.
+    pub max_commands_per_activation: usize,
+    /// Size of one payload the script emits (tool args, output), as canonical JSON.
+    pub max_payload_bytes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_history_len: 50_000,
+            max_commands_per_activation: 10_000,
+            max_payload_bytes: 8 * 1024 * 1024,
+        }
+    }
 }
 
 /// How a node runs (`archi/07-code-architecture.md`, "Inside a node").

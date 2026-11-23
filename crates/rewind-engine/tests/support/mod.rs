@@ -1,5 +1,6 @@
-//! Test support: a fake executor whose "scripts" are Rust programs, a recording dispatcher,
-//! and an engine wired with in-memory adapters and a virtual clock.
+//! Test support: a fake executor whose "scripts" are Rust programs, a recording dispatcher, and
+//! the stored format of tests; [`plane`] wires them as nodes stepped by the driver in virtual
+//! time.
 
 #![allow(dead_code, unreachable_pub)]
 
@@ -13,14 +14,11 @@ use rewind_core::{
     Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId, Script, ScriptError, Seq,
     Timestamp, ToolFailure, Toolset,
 };
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
-};
+use rewind_engine::StartRun;
 use rewind_engine::ports::{
     CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
     ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
 };
-use rewind_engine::{Adapters, Engine, EngineConfig, StartRun};
 
 /// 2026-01-01T00:00:00Z
 pub const T0: Timestamp = Timestamp(1_767_225_600_000);
@@ -30,48 +28,6 @@ pub const DAY: u64 = 24 * HOUR;
 /// The CPU time a call into a fake script reports, unless its program says otherwise
 /// ([`FakeRun::spend`]).
 pub const CALL_CPU: Duration = Duration::from_millis(2);
-
-pub type TestEngine = Engine<
-    MemoryJournal,
-    MemoryBlobs,
-    FakeExecutor,
-    RecordingDispatcher,
-    VirtualClock,
-    SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
->;
-
-pub fn engine(programs: FakeExecutor, dispatcher: RecordingDispatcher) -> TestEngine {
-    engine_with(programs, dispatcher, EngineConfig::default())
-}
-
-pub fn engine_with(
-    programs: FakeExecutor,
-    dispatcher: RecordingDispatcher,
-    config: EngineConfig,
-) -> TestEngine {
-    Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor: programs,
-            dispatcher,
-            clock: VirtualClock::new(T0),
-            entropy: SeededEntropy::new(42),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        config,
-    )
-}
-
-/// The default configuration without the instance cache: every activation replays.
-pub fn replaying() -> EngineConfig {
-    let mut config = EngineConfig::default();
-    config.cache.max_instances = 0;
-    config
-}
 
 /// A run of the program named `name`.
 pub fn request(name: &str, input: JsonValue) -> StartRun {

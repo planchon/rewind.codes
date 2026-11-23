@@ -38,8 +38,7 @@
 //! Runs by status are the started runs less the ended ones, and the ended ones by outcome; a
 //! tool's error rate is the share of its calls whose outcome is not `completed`.
 
-use crate::engine::{ActivationOutcome, EngineError};
-use crate::ports::{Dispatched, QuarantineKind, StoreError};
+use crate::ports::{Dispatched, QuarantineKind};
 use crate::replay::{ReplayEnd, ReplayError};
 
 pub const ACTIVATION_DURATION: &str = "rewind.activation.duration";
@@ -56,17 +55,6 @@ pub const TOOL_CALL_DURATION: &str = "rewind.tool_call.duration";
 
 /// The attribute of an activation's, a replay's or an attempt's outcome.
 pub const OUTCOME: &str = "rewind.outcome";
-
-/// How an activation ended.
-pub(crate) fn activation_outcome(outcome: &ActivationOutcome) -> &'static str {
-    match outcome {
-        ActivationOutcome::Committed { .. } => "committed",
-        ActivationOutcome::NothingToDo => "nothing_to_do",
-        ActivationOutcome::Quarantined { .. } => "quarantined",
-        ActivationOutcome::Failed(EngineError::Store(StoreError::Fenced { .. })) => "lease_lost",
-        ActivationOutcome::Failed(_) => "failed",
-    }
-}
 
 /// How a replay ended.
 pub(crate) fn replay_outcome<I>(
@@ -185,45 +173,10 @@ impl RunMeasurement {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{RunId, RunStatus, ToolFailure, ToolFailureKind};
+    use rewind_core::{ToolFailure, ToolFailureKind};
 
     use super::*;
     use crate::ports::{ParkKind, ParkReason};
-
-    #[test]
-    fn a_lost_lease_is_its_own_outcome() {
-        let fenced = EngineError::Store(StoreError::Fenced {
-            run_id: RunId::from_u128(1),
-            fence: 3,
-        });
-        let other = EngineError::Store(StoreError::Backend("down".into()));
-        let committed = ActivationOutcome::Committed {
-            entries: 2,
-            status: RunStatus::Active,
-        };
-        let quarantined = ActivationOutcome::Quarantined {
-            kind: QuarantineKind::Failures,
-            reason: "x".into(),
-        };
-        let outcomes = [
-            committed,
-            ActivationOutcome::NothingToDo,
-            quarantined,
-            ActivationOutcome::Failed(fenced),
-            ActivationOutcome::Failed(other),
-        ]
-        .map(|outcome| activation_outcome(&outcome));
-        assert_eq!(
-            outcomes,
-            [
-                "committed",
-                "nothing_to_do",
-                "quarantined",
-                "lease_lost",
-                "failed"
-            ]
-        );
-    }
 
     #[test]
     fn every_answer_of_a_dispatcher_has_its_outcome() {

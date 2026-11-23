@@ -1,8 +1,8 @@
 //! Adapters that need no infrastructure: the in-memory control plane (catalog, cluster and the
-//! broadcast of its changes), run plane (partitions) and archive; in-memory storage, access,
-//! read model, secrets, telemetry and webhooks; a fake identity provider; static tool
-//! responses, routing of tool calls by route, and type-checking; system and virtual time;
-//! system and seeded entropy.
+//! broadcast of its changes, access, secrets), run plane (partitions), archive and blobs, and the
+//! link between the nodes of one process; in-memory telemetry and webhooks; a fake identity
+//! provider; static tool responses, routing of tool calls by route, and type-checking; system
+//! and virtual time; system and seeded entropy.
 //! Wired together with a virtual clock, they make the engine's mock mode and its test harness
 //! (`archi/07-code-architecture.md`, principle 6), and the server's tests. Each adapter of a
 //! port with a conformance suite passes it: they are the reference implementations of the
@@ -17,10 +17,8 @@ mod cluster;
 mod dispatcher;
 mod entropy;
 mod identity;
-mod journal;
 mod link;
 mod partitions;
-mod read_model;
 mod routing;
 mod secrets;
 mod telemetry;
@@ -36,10 +34,8 @@ pub use cluster::{ChangeStream, ControlPlaneChanges, MemoryCluster, MemoryMember
 pub use dispatcher::{StaticDispatcher, StaticResponsesError};
 pub use entropy::{SeededEntropy, SystemEntropy};
 pub use identity::{ACCESS_TOKEN_LIFETIME, INVITATION_LIFETIME, MemoryIdentity};
-pub use journal::MemoryJournal;
 pub use link::LocalLink;
 pub use partitions::{MemoryPartitionLog, MemoryPartitions};
-pub use read_model::MemoryReadModel;
 pub use routing::{RoutingDispatcher, Unrouted};
 pub use secrets::MemorySecrets;
 pub use telemetry::MemorySpanExporter;

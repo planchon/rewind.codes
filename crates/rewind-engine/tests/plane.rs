@@ -859,7 +859,7 @@ async fn a_namespace_erased_has_its_runs_cancelled_and_erased_then_is_dropped() 
         world
             .plane
             .blobs
-            .get_in(
+            .get(
                 &rewind_engine::ports::BlobOwner::Tests(tenant.clone()),
                 test
             )

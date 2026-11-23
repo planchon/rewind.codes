@@ -29,9 +29,7 @@ use rewind_core::{
 use serde_json::json;
 
 use crate::checks::{self, SignalCheck};
-use crate::engine::idempotency_key;
 use crate::executors::activation::Carried;
-use crate::executors::derive::record_of;
 use crate::fork::left_without_outcome;
 use crate::node::message::{Effect, JobClass, Message, job_of};
 use crate::partition::OwnerMsg;
@@ -43,7 +41,8 @@ use crate::ports::{
     ScriptExecutor, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord, TaskRef, TaskToken,
     ToolCall, ToolDispatcher,
 };
-use crate::tasks::dispatch::{redacted, secret_texts};
+use crate::tasks::idempotency_key;
+use crate::tasks::{redacted, secret_texts};
 use crate::workflows::{SignalArgs, StartArgs};
 use crate::{payloads, text};
 
@@ -268,7 +267,8 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         Err(error) => return CallOutcome::NotSent(error),
     };
     let trace_context = Some(crate::telemetry::tool_call_trace_context(
-        &record_of(&head),
+        head.run.id,
+        &head.metadata,
         record.task.seq,
         &config.telemetry,
     ));
@@ -688,7 +688,7 @@ async fn start_child<P: Plane>(
         secrets: workflow.secrets().clone(),
     };
     let key = format!("rewind:{}", call.idempotency_key);
-    if let Err(nul) = crate::engine::refuse_nul_in_metadata(&metadata, Some(&key)) {
+    if let Err(nul) = crate::start::refuse_nul_in_metadata(&metadata, Some(&key)) {
         return failed(nul.to_string());
     }
     // The child's id and seed are drawn before its key is looked up, as every start draws them.

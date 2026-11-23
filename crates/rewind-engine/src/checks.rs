@@ -9,13 +9,13 @@ use std::time::Duration;
 use rewind_core::{JsonValue, Workflow, is_reserved_signal};
 
 use crate::attachments::{self, AttachRights, AttachmentCheck, RefusedAttachments};
-use crate::engine::NamespaceBounds;
 use crate::plane::NodeConfig;
 use crate::ports::{
     CatalogStore, NamespaceName, RunHead, SecretError, SecretStore, Tenant, TenantId,
     limits as namespace_limits,
 };
 use crate::schema::Validator;
+use crate::start::NamespaceBounds;
 use crate::workflows::{SignalRefused, refused_message};
 
 /// Why the bounds of a namespace could not be given.

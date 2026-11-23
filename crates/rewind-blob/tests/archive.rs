@@ -105,7 +105,7 @@ async fn a_sealed_attempt_is_a_journal_document_beside_the_run_s_blobs() {
     let bytes = canonical_json(&json!({ "large": "x" })).into_bytes();
     let digest = Digest::of(&bytes);
     let owner = BlobOwner::Run(run.clone());
-    blobs.put_in(&owner, digest, bytes).await.expect("put_in");
+    blobs.put(&owner, digest, bytes).await.expect("put");
     let hex = digest.to_hex();
     let blob = root
         .join("blobs")
@@ -114,7 +114,7 @@ async fn a_sealed_attempt_is_a_journal_document_beside_the_run_s_blobs() {
         .join("sha256")
         .join(&hex[..2])
         .join(&hex);
-    assert_eq!(blobs.path_in(&owner, digest), blob);
+    assert_eq!(blobs.path(&owner, digest), blob);
     assert!(blob.exists());
 
     archive.erase(&run).await.expect("erase");

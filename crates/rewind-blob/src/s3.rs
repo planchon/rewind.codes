@@ -7,7 +7,7 @@ use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path;
 use object_store::{ObjectStore as _, ObjectStoreExt as _, PutMode};
 use rewind_core::Digest;
-use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef};
 
 use crate::{Error, verify};
 
@@ -122,19 +122,9 @@ impl S3Blobs {
         &self.store
     }
 
-    /// The key of a tenant's blob: `{tenant}/sha256/{hex digest}`.
-    pub fn key(tenant: &TenantId, digest: Digest) -> String {
-        format!("{tenant}/sha256/{}", digest.to_hex())
-    }
-
-    fn location(tenant: &TenantId, digest: Digest) -> Path {
-        // Tenant ids and hex digests hold no character a path would encode.
-        Path::from(Self::key(tenant, digest))
-    }
-
     /// The key of an owner's blob: `blobs/{tenant}/{run}/sha256/{hex digest}` or
     /// `tests/{tenant}/sha256/{hex digest}`.
-    pub fn key_in(owner: &BlobOwner, digest: Digest) -> String {
+    pub fn key(owner: &BlobOwner, digest: Digest) -> String {
         match owner {
             BlobOwner::Run(run) => format!("{}/sha256/{}", Self::run_prefix(run), digest.to_hex()),
             BlobOwner::Tests(tenant) => format!("tests/{tenant}/sha256/{}", digest.to_hex()),
@@ -146,9 +136,9 @@ impl S3Blobs {
         format!("blobs/{}/{}", run.tenant, run.id)
     }
 
-    fn location_in(owner: &BlobOwner, digest: Digest) -> Path {
+    fn location(owner: &BlobOwner, digest: Digest) -> Path {
         // Tenant ids, run ids and hex digests hold no character a path would encode.
-        Path::from(Self::key_in(owner, digest))
+        Path::from(Self::key(owner, digest))
     }
 
     async fn read(&self, location: &Path, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
@@ -200,38 +190,16 @@ impl S3Blobs {
 impl BlobStore for S3Blobs {
     async fn put(
         &self,
-        tenant: &TenantId,
-        digest: Digest,
-        bytes: Vec<u8>,
-    ) -> Result<(), BlobError> {
-        self.write(&Self::location(tenant, digest), digest, bytes)
-            .await
-    }
-
-    async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        self.read(&Self::location(tenant, digest), digest).await
-    }
-
-    async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        self.remove(&Self::location(tenant, digest)).await
-    }
-
-    async fn put_in(
-        &self,
         owner: &BlobOwner,
         digest: Digest,
         bytes: Vec<u8>,
     ) -> Result<(), BlobError> {
-        self.write(&Self::location_in(owner, digest), digest, bytes)
+        self.write(&Self::location(owner, digest), digest, bytes)
             .await
     }
 
-    async fn get_in(
-        &self,
-        owner: &BlobOwner,
-        digest: Digest,
-    ) -> Result<Option<Vec<u8>>, BlobError> {
-        self.read(&Self::location_in(owner, digest), digest).await
+    async fn get(&self, owner: &BlobOwner, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+        self.read(&Self::location(owner, digest), digest).await
     }
 
     async fn copy(
@@ -240,10 +208,7 @@ impl BlobStore for S3Blobs {
         to: &BlobOwner,
         digest: Digest,
     ) -> Result<(), BlobError> {
-        let (source, target) = (
-            Self::location_in(from, digest),
-            Self::location_in(to, digest),
-        );
+        let (source, target) = (Self::location(from, digest), Self::location(to, digest));
         match self.store.copy(&source, &target).await {
             Ok(()) => Ok(()),
             Err(object_store::Error::NotFound { .. }) => Err(BlobError::Missing(digest)),
@@ -264,8 +229,8 @@ impl BlobStore for S3Blobs {
         Ok(())
     }
 
-    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
-        self.remove(&Self::location_in(owner, digest)).await
+    async fn delete(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        self.remove(&Self::location(owner, digest)).await
     }
 }
 
@@ -276,15 +241,7 @@ fn failed(action: &str, location: &Path, error: &object_store::Error) -> BlobErr
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn keys_start_with_the_tenant() {
-        let tenant = TenantId::new("acme").expect("tenant");
-        let digest = Digest::of(b"{}");
-        let key = S3Blobs::key(&tenant, digest);
-        assert_eq!(key, format!("acme/sha256/{}", digest.to_hex()));
-        assert_eq!(S3Blobs::location(&tenant, digest).as_ref(), key);
-    }
+    use rewind_engine::ports::TenantId;
 
     #[test]
     fn owned_keys_are_the_buckets_layout() {
@@ -298,11 +255,11 @@ mod tests {
         let digest = Digest::of(b"{}");
         let hex = digest.to_hex();
         assert_eq!(
-            S3Blobs::key_in(&BlobOwner::Run(run.clone()), digest),
+            S3Blobs::key(&BlobOwner::Run(run.clone()), digest),
             format!("blobs/Acme/01930000-0000-7000-8000-000000000001/sha256/{hex}")
         );
         assert_eq!(
-            S3Blobs::key_in(&BlobOwner::Tests(tenant), digest),
+            S3Blobs::key(&BlobOwner::Tests(tenant), digest),
             format!("tests/Acme/sha256/{hex}")
         );
         assert_eq!(

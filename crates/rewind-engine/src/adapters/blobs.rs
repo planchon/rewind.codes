@@ -3,16 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use rewind_core::Digest;
 
-use crate::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
+use crate::ports::{BlobError, BlobOwner, BlobStore, RunRef};
 
-/// Where a blob is kept: under a tenant alone, or under its owner.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum Key {
-    Tenant(TenantId, Digest),
-    Owned(BlobOwner, Digest),
-}
-
-type Blobs = BTreeMap<Key, Vec<u8>>;
+type Blobs = BTreeMap<(BlobOwner, Digest), Vec<u8>>;
 
 /// `BlobStore` in memory. It passes the conformance suite. Its clones share their blobs: a
 /// [`MemoryArchive`](crate::adapters::MemoryArchive) erases a run's blobs through one.
@@ -26,7 +19,7 @@ impl MemoryBlobs {
         Self::default()
     }
 
-    /// Number of blobs stored, across tenants and owners.
+    /// Number of blobs stored, across owners.
     pub fn len(&self) -> usize {
         self.lock().map_or(0, |blobs| blobs.len())
     }
@@ -41,22 +34,20 @@ impl MemoryBlobs {
             .map_err(|_| BlobError::Backend("the memory blob store's lock is poisoned".into()))
     }
 
-    /// Replaces a blob's bytes without any check: for tests of corruption detection.
-    pub fn corrupt(&self, tenant: &TenantId, digest: Digest, bytes: Vec<u8>) {
-        if let Ok(mut blobs) = self.lock() {
-            blobs.insert(Key::Tenant(tenant.clone(), digest), bytes);
-        }
-    }
-
     /// Replaces the bytes of an owner's blob without any check: for tests of corruption
     /// detection.
-    pub fn corrupt_in(&self, owner: &BlobOwner, digest: Digest, bytes: Vec<u8>) {
+    pub fn corrupt(&self, owner: &BlobOwner, digest: Digest, bytes: Vec<u8>) {
         if let Ok(mut blobs) = self.lock() {
-            blobs.insert(Key::Owned(owner.clone(), digest), bytes);
+            blobs.insert((owner.clone(), digest), bytes);
         }
     }
 
-    fn insert(&self, key: Key, digest: Digest, bytes: Vec<u8>) -> Result<(), BlobError> {
+    fn insert(
+        &self,
+        key: (BlobOwner, Digest),
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
         if Digest::of(&bytes) != digest {
             return Err(BlobError::Corrupt {
                 digest,
@@ -67,7 +58,11 @@ impl MemoryBlobs {
         Ok(())
     }
 
-    fn read(&self, key: &Key, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+    fn read(
+        &self,
+        key: &(BlobOwner, Digest),
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
         let bytes = self.lock()?.get(key).cloned();
         match bytes {
             Some(bytes) if Digest::of(&bytes) != digest => Err(BlobError::Corrupt {
@@ -81,7 +76,7 @@ impl MemoryBlobs {
     /// Deletes every blob of a run: what [`BlobStore::delete_run`] does.
     pub(crate) fn remove_run(&self, run: &RunRef) -> Result<(), BlobError> {
         self.lock()?
-            .retain(|key, _| !matches!(key, Key::Owned(BlobOwner::Run(of), _) if of == run));
+            .retain(|(owner, _), _| !matches!(owner, BlobOwner::Run(of) if of == run));
         Ok(())
     }
 }
@@ -89,39 +84,15 @@ impl MemoryBlobs {
 impl BlobStore for MemoryBlobs {
     async fn put(
         &self,
-        tenant: &TenantId,
-        digest: Digest,
-        bytes: Vec<u8>,
-    ) -> Result<(), BlobError> {
-        self.insert(Key::Tenant(tenant.clone(), digest), digest, bytes)
-    }
-
-    async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        self.read(&Key::Tenant(tenant.clone(), digest), digest)
-    }
-
-    async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        Ok(self
-            .lock()?
-            .remove(&Key::Tenant(tenant.clone(), digest))
-            .is_some())
-    }
-
-    async fn put_in(
-        &self,
         owner: &BlobOwner,
         digest: Digest,
         bytes: Vec<u8>,
     ) -> Result<(), BlobError> {
-        self.insert(Key::Owned(owner.clone(), digest), digest, bytes)
+        self.insert((owner.clone(), digest), digest, bytes)
     }
 
-    async fn get_in(
-        &self,
-        owner: &BlobOwner,
-        digest: Digest,
-    ) -> Result<Option<Vec<u8>>, BlobError> {
-        self.read(&Key::Owned(owner.clone(), digest), digest)
+    async fn get(&self, owner: &BlobOwner, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+        self.read(&(owner.clone(), digest), digest)
     }
 
     async fn copy(
@@ -132,10 +103,10 @@ impl BlobStore for MemoryBlobs {
     ) -> Result<(), BlobError> {
         let mut blobs = self.lock()?;
         let bytes = blobs
-            .get(&Key::Owned(from.clone(), digest))
+            .get(&(from.clone(), digest))
             .cloned()
             .ok_or(BlobError::Missing(digest))?;
-        blobs.entry(Key::Owned(to.clone(), digest)).or_insert(bytes);
+        blobs.entry((to.clone(), digest)).or_insert(bytes);
         Ok(())
     }
 
@@ -143,10 +114,7 @@ impl BlobStore for MemoryBlobs {
         self.remove_run(run)
     }
 
-    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
-        Ok(self
-            .lock()?
-            .remove(&Key::Owned(owner.clone(), digest))
-            .is_some())
+    async fn delete(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        Ok(self.lock()?.remove(&(owner.clone(), digest)).is_some())
     }
 }

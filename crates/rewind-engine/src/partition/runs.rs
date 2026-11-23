@@ -1961,7 +1961,7 @@ async fn drop_namespace<P: Plane>(
         for digest in &tests {
             plane
                 .blobs()
-                .delete_in(&owner, *digest)
+                .delete(&owner, *digest)
                 .await
                 .map_err(|error| error.to_string())?;
         }

@@ -4,7 +4,6 @@
 //! The tenant is run metadata, never part of the core: it lives here, with the ports. It is
 //! part of every storage key, and every method of a store is scoped by it.
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::time::Duration;
 
@@ -74,26 +73,6 @@ impl fmt::Display for RunRef {
     /// `{tenant}/{run_id}`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.tenant, self.id)
-    }
-}
-
-/// Which tenants a worker serves. Workers run in pools per tenant when needed, and trusted
-/// tenants share a pool (`archi/06-storage-and-scale.md`, "Sandboxed workers").
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub enum TenantScope {
-    #[default]
-    All,
-    Only(BTreeSet<TenantId>),
-    Except(BTreeSet<TenantId>),
-}
-
-impl TenantScope {
-    pub fn contains(&self, tenant: &TenantId) -> bool {
-        match self {
-            TenantScope::All => true,
-            TenantScope::Only(tenants) => tenants.contains(tenant),
-            TenantScope::Except(tenants) => !tenants.contains(tenant),
-        }
     }
 }
 
@@ -167,16 +146,5 @@ mod tests {
             );
         }
         assert_eq!(TenantId::local().to_string(), "local");
-    }
-
-    #[test]
-    fn scopes_select_tenants() {
-        let acme = TenantId::new("acme").unwrap();
-        let other = TenantId::new("other").unwrap();
-        assert!(TenantScope::All.contains(&acme));
-        let only = TenantScope::Only(BTreeSet::from([acme.clone()]));
-        assert!(only.contains(&acme) && !only.contains(&other));
-        let except = TenantScope::Except(BTreeSet::from([acme.clone()]));
-        assert!(!except.contains(&acme) && except.contains(&other));
     }
 }

@@ -157,10 +157,7 @@ pub async fn erase_deletes_every_attempt_and_blob_of_the_run<A: RunArchive, B: B
         BlobOwner::Run(kept.clone()),
         tests.clone(),
     ] {
-        blobs
-            .put_in(&owner, digest, bytes.clone())
-            .await
-            .expect("put_in");
+        blobs.put(&owner, digest, bytes.clone()).await.expect("put");
     }
 
     archive.erase(&erased).await.expect("erase");
@@ -169,9 +166,9 @@ pub async fn erase_deletes_every_attempt_and_blob_of_the_run<A: RunArchive, B: B
     }
     assert_eq!(
         blobs
-            .get_in(&BlobOwner::Run(erased.clone()), digest)
+            .get(&BlobOwner::Run(erased.clone()), digest)
             .await
-            .expect("get_in"),
+            .expect("get"),
         None,
         "the run's blobs go with it"
     );
@@ -185,7 +182,7 @@ pub async fn erase_deletes_every_attempt_and_blob_of_the_run<A: RunArchive, B: B
     );
     for owner in [BlobOwner::Run(kept.clone()), tests] {
         assert_eq!(
-            blobs.get_in(&owner, digest).await.expect("get_in"),
+            blobs.get(&owner, digest).await.expect("get"),
             Some(bytes.clone()),
             "the blobs of {owner} stay"
         );

@@ -26,25 +26,21 @@ use std::time::Duration;
 
 use rewind_core::{
     Attachments, Command, Completion, Event, HistoryEntry, Interruption, JournalDocument,
-    JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunMode,
-    RunStarted, RunStatus, Script, Seq, ToolFailure, ToolFailureKind, Toolset,
+    JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted,
+    RunStatus, Script, Seq, Toolset,
 };
 
-use crate::activation::{Batch, CountCpu, Grace, abort_reason};
-use crate::adapters::StaticTypeChecker;
 use crate::attachments::AttachRights;
-use crate::engine::{
-    AttachedScript, Engine, EngineError, Limits, StartError, idempotency_key,
-    refuse_nul_in_metadata, type_check,
-};
+use crate::batch::EngineError;
+use crate::batch::{Batch, CountCpu, Grace, abort_reason};
 use crate::payloads;
+use crate::plane::Limits;
 use crate::ports::{
-    BlobStore, Clock, CompiledScript, CreateRun, Created, Emitted, Entropy, ForkParent,
-    JournalStore, NewRun, RunMetadata, RunRecord, RunRef, ScriptExecutor, ScriptInstance,
-    SecretStore, StartScript, StoreError, ToolDispatcher, TraceContext, TypeChecker, WebhookSender,
+    CompiledScript, Emitted, ForkParent, RunRef, ScriptExecutor, ScriptInstance, StartScript,
+    StoreError, TraceContext,
 };
 use crate::replay::{Heartbeat, NoHeartbeat};
-use crate::text;
+use crate::start::StartError;
 
 /// A request to fork a run (`POST /v1/runs/{id}/fork`, `rewind fork`, `retry_run`).
 #[derive(Debug, Clone)]
@@ -198,288 +194,6 @@ pub(crate) struct FollowWith<'a, X, S, C> {
     pub(crate) cpu: &'a C,
 }
 
-impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
-where
-    J: JournalStore,
-    B: BlobStore,
-    X: ScriptExecutor,
-    D: ToolDispatcher,
-    C: Clock,
-    E: Entropy,
-    S: SecretStore,
-    W: WebhookSender,
-{
-    /// Starts a fork of a run with a corrected script. The fork's first activation copies what
-    /// it can of the parent's history, then goes live.
-    pub async fn fork(&self, request: ForkRun) -> Result<Created, ForkError> {
-        self.fork_with(request, None::<&StaticTypeChecker>).await
-    }
-
-    /// [`fork`](Self::fork), with the corrected script type-checked first against the parent's
-    /// toolset, as a start is: a script with a type error is refused before the fork exists.
-    pub async fn fork_checked<K: TypeChecker>(
-        &self,
-        request: ForkRun,
-        checker: &K,
-    ) -> Result<Created, ForkError> {
-        self.fork_with(request, Some(checker)).await
-    }
-
-    async fn fork_with<K: TypeChecker>(
-        &self,
-        request: ForkRun,
-        checker: Option<&K>,
-    ) -> Result<Created, ForkError> {
-        let parent = &request.parent;
-        let record = self
-            .journal
-            .get_run(parent)
-            .await?
-            .ok_or(ForkError::ParentNotFound(parent.id))?;
-        if record.archive.is_some() {
-            return Err(ForkError::ParentArchived(parent.id));
-        }
-        let history = match self.journal.load_history(parent, 0).await {
-            Err(StoreError::Archived(id)) => return Err(ForkError::ParentArchived(id)),
-            other => other?,
-        };
-        let Some(HistoryEntry {
-            event: Event::Lifecycle(Lifecycle::RunStarted(parent_started)),
-            ..
-        }) = history.first()
-        else {
-            return Err(ForkError::ParentNotStarted(parent.id));
-        };
-
-        // A fork stays in its parent's namespace, and passes its bounds.
-        let bounds = self
-            .namespace_bounds(&parent.tenant, &record.namespace)
-            .await
-            .map_err(ForkError::Start)?;
-        let ttl = request.ttl.unwrap_or(bounds.default_ttl);
-        if ttl.is_zero() || ttl > bounds.max_ttl {
-            return Err(ForkError::Start(StartError::InvalidTtl {
-                requested: ttl,
-                max: bounds.max_ttl,
-            }));
-        }
-        bounds
-            .check_lines(&request.script)
-            .map_err(ForkError::Start)?;
-        let refused = |nul| ForkError::Start(StartError::NulCharacter(nul));
-        text::refuse_nul("the script", request.script.source()).map_err(refused)?;
-        let metadata = RunMetadata {
-            labels: request.labels.unwrap_or(record.metadata.labels),
-            trace_context: request.trace_context,
-            parent: Some(ForkParent {
-                run: parent.id,
-                at: request.at,
-            }),
-            // A fork runs a corrected script: it is no run of the parent's workflow, and no
-            // script started it. Its scripts reach what the parent's reached.
-            workflow: None,
-            started_by: None,
-            scope: record.metadata.scope.clone(),
-            secrets: request
-                .secrets
-                .clone()
-                .unwrap_or_else(|| record.metadata.secrets.clone()),
-        };
-        refuse_nul_in_metadata(&metadata, request.idempotency_key.as_deref()).map_err(refused)?;
-        let stored = self.toolset(&parent.tenant, record.toolset).await?;
-        let toolset = stored.toolset;
-        let compiled = self
-            .executor
-            .compile(&request.script, &toolset)
-            .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
-        // The script is new code: even the parent's attachments are checked against the caller
-        // (`archi/04-tools.md`, "Secrets"). A fork of a test reads no secret.
-        if parent_started.mode == RunMode::Live {
-            self.check_script_attachments(AttachedScript {
-                tenant: &parent.tenant,
-                namespace: &record.namespace,
-                script: &request.script,
-                toolset: &toolset,
-                attachments: &metadata.secrets,
-                rights: &request.attach,
-            })
-            .await
-            .map_err(ForkError::Start)?;
-        }
-        if let Some(checker) = checker {
-            type_check(checker, &request.script, &stored.declarations)
-                .await
-                .map_err(ForkError::Start)?;
-        }
-        let input = match request.input {
-            Some(input) => input,
-            None => self
-                .load_payload(&parent.tenant, &parent_started.input)
-                .await
-                .map_err(EngineError::from)?,
-        };
-        let input = Payload::Value(input);
-        let size = payloads::value_size(&input).unwrap_or_default();
-        if size > self.config.limits.max_payload_bytes {
-            return Err(ForkError::Start(StartError::InputTooLarge {
-                size,
-                max: self.config.limits.max_payload_bytes,
-            }));
-        }
-        self.journal
-            .put_script(&parent.tenant, &request.script, &compiled)
-            .await?;
-
-        let now = self.clock.now();
-        let fork = NewRun {
-            run: RunRef::new(parent.tenant.clone(), self.entropy.run_id()),
-            namespace: record.namespace.clone(),
-            // A fork is the run of what its parent ran.
-            origin: record.origin.clone(),
-            started: RunStarted {
-                script: request.script.digest(),
-                toolset: record.toolset,
-                input,
-                seed: parent_started.seed,
-                // The parent's epoch: the fork must compute what the parent computed to follow
-                // it.
-                epoch: parent_started.epoch,
-                expires_at: now.saturating_add(ttl),
-                mode: parent_started.mode,
-            },
-            metadata,
-            created_at: now,
-        };
-        match self
-            .journal
-            .create_run(fork, request.idempotency_key)
-            .await?
-        {
-            CreateRun::Created(created) => {
-                tracing::debug!(run = %created.run, parent = %parent, "fork started");
-                Ok(created)
-            }
-            CreateRun::QuotaExceeded(exceeded) => {
-                Err(ForkError::Start(StartError::QuotaExceeded(exceeded)))
-            }
-            CreateRun::NamespaceDeleting => Err(ForkError::Start(StartError::NamespaceDeleting)),
-        }
-    }
-
-    /// Whether `script` is compatible with the run's history, and if not, where it diverges;
-    /// and what a fork with it would reuse. The script is replayed as the run itself (it reads
-    /// the run's id). Nothing is written and no tool is called.
-    pub async fn compatibility(
-        &self,
-        run: &RunRef,
-        script: &Script,
-        at: Option<u64>,
-    ) -> Result<Compatibility, ForkError> {
-        let record = self
-            .journal
-            .get_run(run)
-            .await?
-            .ok_or(ForkError::ParentNotFound(run.id))?;
-        let history = match self.journal.load_history(run, 0).await {
-            Err(StoreError::Archived(id)) => return Err(ForkError::ParentArchived(id)),
-            other => other?,
-        };
-        let Some(HistoryEntry {
-            event: Event::Lifecycle(Lifecycle::RunStarted(started)),
-            ..
-        }) = history.first()
-        else {
-            return Err(ForkError::ParentNotStarted(run.id));
-        };
-        let toolset = self.toolset(&run.tenant, record.toolset).await?.toolset;
-        let compiled = self
-            .executor
-            .compile(script, &toolset)
-            .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
-        let started = RunStarted {
-            script: script.digest(),
-            ..started.clone()
-        };
-        let mut batch = Batch::for_check(run, &self.config.limits);
-        let payloads = self.payloads();
-        let with = FollowWith {
-            executor: &self.executor,
-            payloads: &payloads,
-            cpu: self,
-        };
-        let followed = follow_parent(
-            &with,
-            &mut batch,
-            &mut NoHeartbeat,
-            ForkSource {
-                run,
-                parent: ForkParent { run: run.id, at },
-                started,
-                compiled: &compiled,
-                toolset: &toolset,
-            },
-            &history,
-        )
-        .await?;
-        let mut reused: Vec<Seq> = followed.reused.iter().filter_map(completion_seq).collect();
-        reused.sort();
-        Ok(Compatibility {
-            point: followed.point,
-            reused,
-            redispatched: followed.redispatched,
-            unknown: followed.unknown,
-            status: batch.state.status(),
-        })
-    }
-
-    /// The first activation of a fork: follows the parent's history, then delivers the
-    /// outcomes of the inherited calls. Returns the fork's instance.
-    pub(crate) async fn start_fork<H: Heartbeat>(
-        &self,
-        batch: &mut Batch<'_>,
-        heartbeat: &mut H,
-        source: ForkSource<'_>,
-    ) -> Result<Option<X::Instance>, EngineError> {
-        let parent = RunRef::new(source.run.tenant.clone(), source.parent.run);
-        let fork = source.run.clone();
-        let history = self.journal.load_history(&parent, 0).await?;
-        let payloads = self.payloads();
-        let with = FollowWith {
-            executor: &self.executor,
-            payloads: &payloads,
-            cpu: self,
-        };
-        let followed = follow_parent(&with, batch, heartbeat, source, &history).await?;
-        tracing::info!(parent = %parent, point = %followed.point, "the fork goes live");
-        // The runs the copied history started stay the parent's: the fork receives their end.
-        self.watch_inherited(&fork, batch.entries()).await?;
-        let Some(mut instance) = followed.instance else {
-            return Ok(None);
-        };
-        let unknown = followed.unknown.into_iter().map(|seq| {
-            let error = ToolFailure {
-                kind: ToolFailureKind::OutcomeUnknown,
-                message: format!(
-                    "the parent run {} left this call without an outcome, and the tool's policy \
-                     is at_most_once: it may or may not have taken effect",
-                    parent.id
-                ),
-                data: None,
-            };
-            Completion::ToolCallFailed { seq, error }
-        });
-        for completion in followed.reused.into_iter().chain(unknown) {
-            if batch.state.is_terminal() {
-                break;
-            }
-            let recorded_at = batch.recorded_at(self.clock.now());
-            self.deliver(batch, heartbeat, &mut instance, completion, recorded_at)
-                .await?;
-        }
-        Ok(Some(instance))
-    }
-}
-
 /// Whether `script` is compatible with a run's journal, and if not, where it diverges; and what
 /// a fork of the run with it would reuse (`rewind replay <run> --script fixed.ts`,
 /// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The script is
@@ -509,11 +223,9 @@ pub async fn compatibility<X: ScriptExecutor>(
     };
     let run = RunRef::new(crate::ports::TenantId::local(), journal.run);
     let mut batch = Batch::for_check(&run, limits);
-    // Every payload is in the journal: nothing is read from elsewhere.
-    let nowhere = crate::adapters::MemoryBlobs::new();
     let with = FollowWith {
         executor,
-        payloads: &nowhere,
+        payloads: &crate::replay::InJournal,
         cpu: &Uncounted,
     };
     let followed = follow_parent(
@@ -775,51 +487,6 @@ pub(crate) async fn with_values<S: payloads::PayloadSource>(
         },
         other => other.clone(),
     })
-}
-
-impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
-where
-    J: JournalStore,
-    B: BlobStore,
-    X: ScriptExecutor,
-    D: ToolDispatcher,
-    C: Clock,
-    E: Entropy,
-    S: SecretStore,
-    W: WebhookSender,
-{
-    /// The idempotency key of the call `seq` of a run: `{run_id}/{seq}`, except for a call a
-    /// fork inherited from its parent without an outcome. That call carries its parent's key,
-    /// so that the tool recognizes a duplicate: a fork's call carries its parent's key when the
-    /// parent scheduled the same call (same `seq`, tool and args) and recorded no outcome for it
-    /// before its cancellation, and the parent's own key follows the same rule.
-    pub(crate) async fn call_key(
-        &self,
-        record: &RunRecord,
-        seq: Seq,
-        tool: &str,
-        args: &Payload,
-    ) -> Result<String, EngineError> {
-        let mut owner = record.run.id;
-        let mut parent = record.metadata.parent;
-        while let Some(link) = parent {
-            let parent_ref = RunRef::new(record.run.tenant.clone(), link.run);
-            let Some(parent_record) = self.journal.get_run(&parent_ref).await? else {
-                break;
-            };
-            let history = match self.journal.load_history(&parent_ref, 0).await {
-                Ok(history) => history,
-                Err(StoreError::Archived(_)) => break,
-                Err(err) => return Err(err.into()),
-            };
-            if !left_without_outcome(&history, seq, tool, args) {
-                break;
-            }
-            owner = link.run;
-            parent = parent_record.metadata.parent;
-        }
-        Ok(idempotency_key(owner, seq))
-    }
 }
 
 /// Whether a history scheduled the call `seq` to `tool` with `args`, and recorded no outcome for

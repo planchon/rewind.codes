@@ -28,9 +28,9 @@ use rewind_core::{
     RunOutcome, RunState, Timestamp, ToolFailure, ToolFailureKind,
 };
 
-use crate::activation::{Batch, CountCpu, Grace, abort_reason};
+use crate::batch::EngineError;
+use crate::batch::{Batch, CountCpu, Grace, abort_reason};
 use crate::cache::Cached;
-use crate::engine::EngineError;
 use crate::executors::derive;
 use crate::fork::{FollowWith, ForkSource, follow_parent};
 use crate::payloads::{self, PayloadSource};
@@ -57,14 +57,14 @@ pub(crate) async fn activate<P: Plane>(
     warm: Option<Warm<P>>,
 ) -> (ActivationResult, Option<Warm<P>>) {
     let run = request.head.run.clone();
-    let (trace, _) = crate::telemetry::trace_of(&derive::record_of(&request.head));
+    let (trace, _) = crate::telemetry::trace_of(request.head.run.id, &request.head.metadata);
     let first = request.head.history_len;
     let triggers = request.inbox.len();
     let span = tracing::info_span!(
         "activation",
         rewind.run_id = %run.id,
         trace_id = %trace,
-        span_id = %crate::telemetry::span_id(run.id, crate::telemetry::SpanKey::ActivationAt(first)),
+        span_id = %crate::telemetry::span_id(run.id, crate::telemetry::SpanKey::Activation(first)),
         parent_span_id = %crate::telemetry::span_id(run.id, crate::telemetry::SpanKey::Run),
         histogram.rewind.activation.duration = tracing::field::Empty,
         rewind.outcome = tracing::field::Empty,
@@ -137,7 +137,7 @@ impl<B: BlobStore> PayloadSource for Carried<'_, B> {
             return Ok(Some(value));
         }
         for owner in &self.owners {
-            if let Some(bytes) = self.blobs.get_in(owner, digest).await? {
+            if let Some(bytes) = self.blobs.get(owner, digest).await? {
                 let value = serde_json::from_slice(&bytes).map_err(|err| BlobError::Corrupt {
                     digest,
                     message: err.to_string(),

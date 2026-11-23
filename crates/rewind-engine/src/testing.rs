@@ -37,11 +37,11 @@ use crate::adapters::{
 };
 use crate::driver::{DriveError, Driver, PlaneClock, Steps};
 use crate::edge::Edge;
-use crate::engine::{StartError, StartRun};
 use crate::mock::{MockDispatcher, Mocks, NoMocks};
 use crate::plane::{HostTools, NodeConfig, Wiring};
 use crate::ports::{Enqueued, Entropy, NodeId, QuarantineKind, ScriptExecutor, ToolDispatcher};
 use crate::schema::{Refused, Validator};
+use crate::start::{StartError, StartRun};
 
 /// When a test starts when it does not say: 2026-01-01T00:00:00Z, so that a report is the same
 /// on every run.

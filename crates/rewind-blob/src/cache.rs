@@ -7,14 +7,10 @@ use std::sync::Arc;
 use quick_cache::sync::Cache;
 use quick_cache::{OptionsBuilder, Weighter};
 use rewind_core::Digest;
-use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef};
 
-/// A cached blob: a tenant's, or an owner's.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Key {
-    Tenant(TenantId, Digest),
-    Owned(BlobOwner, Digest),
-}
+/// A cached blob: its owner and its digest.
+type Key = (BlobOwner, Digest);
 
 type Bytes = Arc<Vec<u8>>;
 
@@ -87,18 +83,9 @@ impl<S> CachedBlobs<S> {
         self.cache.len()
     }
 
-    /// Whether the cache holds a tenant's blob.
-    pub fn is_cached(&self, tenant: &TenantId, digest: Digest) -> bool {
-        self.cache
-            .peek(&Key::Tenant(tenant.clone(), digest))
-            .is_some()
-    }
-
     /// Whether the cache holds an owner's blob.
-    pub fn is_cached_in(&self, owner: &BlobOwner, digest: Digest) -> bool {
-        self.cache
-            .peek(&Key::Owned(owner.clone(), digest))
-            .is_some()
+    pub fn is_cached(&self, owner: &BlobOwner, digest: Digest) -> bool {
+        self.cache.peek(&(owner.clone(), digest)).is_some()
     }
 
     async fn read(
@@ -143,56 +130,18 @@ impl<S: fmt::Debug> fmt::Debug for CachedBlobs<S> {
 impl<S: BlobStore> BlobStore for CachedBlobs<S> {
     async fn put(
         &self,
-        tenant: &TenantId,
-        digest: Digest,
-        bytes: Vec<u8>,
-    ) -> Result<(), BlobError> {
-        // Always written through: the blob may have been cleaned up from the inner store since
-        // this cache kept it.
-        self.inner.put(tenant, digest, bytes.clone()).await?;
-        self.cache
-            .insert(Key::Tenant(tenant.clone(), digest), Arc::new(bytes));
-        Ok(())
-    }
-
-    async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        self.read(
-            Key::Tenant(tenant.clone(), digest),
-            self.inner.get(tenant, digest),
-        )
-        .await
-    }
-
-    async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        self.remove(
-            Key::Tenant(tenant.clone(), digest),
-            self.inner.delete(tenant, digest),
-        )
-        .await
-    }
-
-    async fn put_in(
-        &self,
         owner: &BlobOwner,
         digest: Digest,
         bytes: Vec<u8>,
     ) -> Result<(), BlobError> {
-        self.inner.put_in(owner, digest, bytes.clone()).await?;
-        self.cache
-            .insert(Key::Owned(owner.clone(), digest), Arc::new(bytes));
+        self.inner.put(owner, digest, bytes.clone()).await?;
+        self.cache.insert((owner.clone(), digest), Arc::new(bytes));
         Ok(())
     }
 
-    async fn get_in(
-        &self,
-        owner: &BlobOwner,
-        digest: Digest,
-    ) -> Result<Option<Vec<u8>>, BlobError> {
-        self.read(
-            Key::Owned(owner.clone(), digest),
-            self.inner.get_in(owner, digest),
-        )
-        .await
+    async fn get(&self, owner: &BlobOwner, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+        self.read((owner.clone(), digest), self.inner.get(owner, digest))
+            .await
     }
 
     async fn copy(
@@ -205,19 +154,16 @@ impl<S: BlobStore> BlobStore for CachedBlobs<S> {
     }
 
     async fn delete_run(&self, run: &RunRef) -> Result<(), BlobError> {
-        let of_run = |key: &Key| matches!(key, Key::Owned(BlobOwner::Run(of), _) if of == run);
+        let of_run = |(owner, _): &Key| matches!(owner, BlobOwner::Run(of) if of == run);
         self.cache.retain(|key, _| !of_run(key));
         self.inner.delete_run(run).await?;
         self.cache.retain(|key, _| !of_run(key));
         Ok(())
     }
 
-    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
-        self.remove(
-            Key::Owned(owner.clone(), digest),
-            self.inner.delete_in(owner, digest),
-        )
-        .await
+    async fn delete(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        self.remove((owner.clone(), digest), self.inner.delete(owner, digest))
+            .await
     }
 }
 

@@ -17,36 +17,11 @@ use rewind_core::{
 use crate::metrics::RunMeasurement;
 use crate::ports::{
     CounterDelta, Counters, DueTimer, FailureCounts, Hour, IndexedSummary, LatestRun,
-    PayloadRecord, Projection, QuarantineNote, RunHead, RunRecord, RunSummary, TaskPhase,
-    TaskRecord, TaskRef, TaskState, TimerChange, TimerKind, ToolCounts, ToolTask, WaitKind,
+    PayloadRecord, Projection, QuarantineNote, RunHead, RunSummary, TaskPhase, TaskRecord, TaskRef,
+    TaskState, TimerChange, TimerKind, ToolCounts, ToolTask, WaitKind,
 };
 use crate::projector;
 use crate::telemetry::{RunTelemetry, SpanKey, TelemetryConfig};
-
-/// A run's head as the old record type, for the derivations shared with the journal path
-/// (spans, lifecycle events, trace contexts).
-pub(crate) fn record_of(head: &RunHead) -> RunRecord {
-    RunRecord {
-        run: head.run.clone(),
-        namespace: head.namespace.clone(),
-        script: head.script,
-        toolset: head.toolset,
-        status: head.status,
-        epoch: head.epoch,
-        expires_at: head.expires_at,
-        history_len: head.history_len,
-        quarantine: head.quarantine.clone(),
-        failures: head.failures,
-        attempts: head.attempts,
-        sticky_worker: None,
-        metadata: head.metadata.clone(),
-        idempotency_key: head.idempotency_key.clone(),
-        created_at: head.created_at,
-        updated_at: head.updated_at,
-        ended_at: head.ended_at,
-        archive: None,
-    }
-}
 
 /// The phase a task's records give it, as the summary shows it.
 pub(crate) fn phase_of(task: &TaskRecord) -> TaskPhase {
@@ -470,9 +445,8 @@ pub(crate) fn projections_of(
     if history.len() <= from {
         return Vec::new();
     }
-    let record = record_of(head);
     let run_telemetry = RunTelemetry {
-        record: &record,
+        head,
         config: telemetry,
         payloads,
     };
@@ -480,12 +454,12 @@ pub(crate) fn projections_of(
     let mut projections = Vec::new();
     if run_telemetry.exported(history) {
         let spans = run_telemetry.spans(history, start, end);
-        let logs = run_telemetry.logs(history, start, end, SpanKey::ActivationAt(start));
+        let logs = run_telemetry.logs(history, start, end, SpanKey::Activation(start));
         if !spans.is_empty() || !logs.is_empty() {
             projections.push(Projection::Otel { spans, logs });
         }
     }
-    for event in projector::lifecycle_events(&record, Some(toolset), history, from) {
+    for event in projector::lifecycle_events(head, Some(toolset), history, from) {
         projections.push(Projection::Webhooks(event));
     }
     projections
@@ -503,9 +477,8 @@ pub(crate) fn measurements_of(
     if history.len() <= from {
         return Vec::new();
     }
-    let record = record_of(head);
     let run_telemetry = RunTelemetry {
-        record: &record,
+        head,
         config: telemetry,
         payloads,
     };

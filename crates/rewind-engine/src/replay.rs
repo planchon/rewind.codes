@@ -15,7 +15,22 @@ use rewind_core::{
     AbortReason, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor, Replayed, Toolset,
 };
 
-pub use crate::payloads::{PayloadSource, StoredPayloads};
+pub use crate::payloads::PayloadSource;
+
+/// Where the payloads of a journal document are: in the document, every one a value. A replay
+/// of an exported journal reads nothing from elsewhere.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InJournal;
+
+impl PayloadSource for InJournal {
+    async fn fetch(
+        &self,
+        _tenant: &crate::ports::TenantId,
+        _digest: rewind_core::Digest,
+    ) -> Result<Option<rewind_core::JsonValue>, BlobError> {
+        Ok(None)
+    }
+}
 
 use crate::ports::{
     BlobError, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef, ScriptExecutor,
@@ -220,4 +235,15 @@ fn aborted<I>(instance: Option<I>, reason: &AbortReason) -> Rebuilt<I> {
         instance,
         end: ReplayEnd::Aborted(reason.clone()),
     }
+}
+
+/// The verdict of a replay of a run with its script, or another one ([`Edge::replay`](crate::edge::Edge::replay)).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReplayVerdict {
+    /// The script reproduces the history.
+    Matches(ReplayEnd),
+    /// The script diverges from the history, at the entry the error names.
+    Diverges(NonDeterminism),
+    /// The script could not go on where the original run went on.
+    Fails(ExecutorError),
 }

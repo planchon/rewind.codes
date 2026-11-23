@@ -507,7 +507,7 @@ impl<P: Plane> Owner<P> {
         at_least: std::time::Duration,
         sent: bool,
     ) {
-        let key = crate::engine::idempotency_key(task.run.id, task.seq);
+        let key = crate::tasks::idempotency_key(task.run.id, task.seq);
         let delay = self
             .config
             .backoff

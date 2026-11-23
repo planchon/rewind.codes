@@ -21,11 +21,7 @@ use rewind_core::{
     RunId, RunState, RunStatus, Seq, Timestamp, canonical_json,
 };
 
-use crate::engine::{Engine, EngineError};
-use crate::ports::{
-    BlobStore, Clock, Entropy, ForkParent, JournalStore, PayloadRecord, Quarantine, RunHead,
-    RunRecord, RunRef, ScriptExecutor, SecretStore, ToolDispatcher, WebhookSender,
-};
+use crate::ports::{ForkParent, PayloadRecord, Quarantine, RunHead};
 
 /// Characters of a payload in a trace line.
 const PREVIEW_CHARS: usize = 60;
@@ -37,94 +33,23 @@ const EVENT_WIDTH: usize = 58;
 /// What a trace is rendered from.
 #[derive(Debug, Clone, Copy)]
 pub struct TraceInput<'a> {
-    pub record: &'a RunRecord,
+    pub head: &'a RunHead,
+    /// The history of the run's attempt.
     pub history: &'a [HistoryEntry],
-    /// The rows of the payloads the history holds by digest: their size and preview.
+    /// The records of the payloads the history holds by digest: their size and preview.
     pub payloads: &'a BTreeMap<Digest, PayloadRecord>,
     /// For the time left before a deadline.
     pub now: Timestamp,
 }
 
-impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
-where
-    J: JournalStore,
-    B: BlobStore,
-    X: ScriptExecutor,
-    D: ToolDispatcher,
-    C: Clock,
-    E: Entropy,
-    S: SecretStore,
-    W: WebhookSender,
-{
-    /// The run's LLM trace.
-    pub async fn trace(&self, run: &RunRef) -> Result<String, EngineError> {
-        let record = self.run_record(run).await?;
-        let history = self.journal.load_history(run, 0).await?;
-        let mut payloads = BTreeMap::new();
-        for entry in &history {
-            if let Some(Payload::Digest(digest)) = crate::payloads::payload_of(&entry.event)
-                && !payloads.contains_key(digest)
-                && let Some(row) = self.journal.get_payload(&run.tenant, *digest).await?
-            {
-                payloads.insert(*digest, row);
-            }
-        }
-        Ok(render_trace(TraceInput {
-            record: &record,
-            history: &history,
-            payloads: &payloads,
-            now: self.clock.now(),
-        }))
-    }
-
-    /// One entry of the run's journal in full, its payload loaded (`rewind trace <run> --entry
-    /// n`). `None` past the end of the history.
-    pub async fn trace_entry(
-        &self,
-        run: &RunRef,
-        index: u64,
-    ) -> Result<Option<String>, EngineError> {
-        self.run_record(run).await?;
-        let history = self.journal.load_history(run, 0).await?;
-        let Some(entry) = history.iter().find(|entry| entry.index == index) else {
-            return Ok(None);
-        };
-        let value = match crate::payloads::payload_of(&entry.event) {
-            Some(payload) => Some(self.load_payload(&run.tenant, payload).await?),
-            None => None,
-        };
-        let started_at = history.first().map_or(entry.recorded_at, |e| e.recorded_at);
-        Ok(Some(render_entry(entry, value.as_ref(), started_at)))
-    }
-}
-
-/// The trace of a run, from its record and history.
+/// The trace of a run, from its head and the history of its attempt.
 pub fn render_trace(input: TraceInput<'_>) -> String {
     let TraceInput {
-        record,
+        head,
         history,
         payloads,
         now,
     } = input;
-    let shown = Shown {
-        run: record.run.id,
-        script: record.script,
-        toolset: record.toolset,
-        status: record.status,
-        quarantine: record.quarantine.as_ref(),
-        parent: record.metadata.parent.as_ref(),
-    };
-    render(&shown, history, payloads, now)
-}
-
-/// The trace of a run, from its head and history: the history of its attempt, with the rows of
-/// the payloads it holds by digest (their size and preview).
-pub fn render_run(
-    head: &RunHead,
-    history: &[HistoryEntry],
-    payloads: &BTreeMap<Digest, PayloadRecord>,
-    now: Timestamp,
-) -> String {
     let shown = Shown {
         run: head.run.id,
         script: head.script,

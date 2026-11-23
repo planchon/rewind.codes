@@ -41,7 +41,6 @@ use rewind_core::{
 
 use crate::attachments::{self, AttachmentCheck};
 use crate::checks::{self, BoundsError};
-use crate::engine::{StartError, StartRun, refuse_nul_in_metadata, type_check};
 use crate::fork::{ForkError, ForkRun};
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::link::{
@@ -54,6 +53,7 @@ use crate::ports::{
     Scope, ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken, TenantId,
     ToolTask, TypeChecker, Usage, Window, home_partition, namespace_partition,
 };
+use crate::start::{StartError, StartRun, refuse_nul_in_metadata, type_check};
 use crate::text::{self, NulCharacter};
 use crate::workflows::StartWorkflow;
 use crate::{payloads, projector};
@@ -556,7 +556,7 @@ impl<P: Plane> Edge<P> {
         &self,
         tenant: &TenantId,
         namespace: &NamespaceName,
-    ) -> Result<crate::engine::NamespaceBounds, StartError> {
+    ) -> Result<crate::start::NamespaceBounds, StartError> {
         checks::bounds(self.plane.catalog(), &self.config, tenant, namespace)
             .await
             .map_err(|error| match error {
@@ -923,7 +923,7 @@ impl<P: Plane> Edge<P> {
         gateway: &mut G,
         run: &RunRef,
         script: Option<&Script>,
-    ) -> Result<crate::engine::ReplayVerdict, EdgeError> {
+    ) -> Result<crate::replay::ReplayVerdict, EdgeError> {
         let journal = self.export_journal(gateway, run).await?;
         let script = script.cloned().unwrap_or(journal.script.clone());
         let executor = self.plane.executor();
@@ -942,12 +942,12 @@ impl<P: Plane> Edge<P> {
         };
         Ok(
             match crate::replay::replay(executor, &source, input).await {
-                Ok(rebuilt) => crate::engine::ReplayVerdict::Matches(rebuilt.end),
+                Ok(rebuilt) => crate::replay::ReplayVerdict::Matches(rebuilt.end),
                 Err(crate::replay::ReplayError::NonDeterminism(mismatch)) => {
-                    crate::engine::ReplayVerdict::Diverges(mismatch)
+                    crate::replay::ReplayVerdict::Diverges(mismatch)
                 }
                 Err(crate::replay::ReplayError::Executor(error)) => {
-                    crate::engine::ReplayVerdict::Fails(error)
+                    crate::replay::ReplayVerdict::Fails(error)
                 }
                 Err(error) => return Err(unavailable(error)),
             },

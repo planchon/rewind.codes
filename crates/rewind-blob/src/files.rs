@@ -10,8 +10,8 @@ use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
 
 use crate::{Error, verify};
 
-/// The directory of staging files, next to the tenants' directories. A tenant id never starts
-/// with a dot, so it cannot collide with a tenant.
+/// The directory of staging files, next to `blobs` and `tests`. Its name starts with a dot, so
+/// it cannot collide with them.
 const STAGING: &str = ".staging";
 
 /// A staging file older than this was left by a crash: no put takes that long.
@@ -19,8 +19,7 @@ const STALE_STAGING: Duration = Duration::from_secs(60 * 60);
 
 /// `BlobStore` on local files.
 ///
-/// A tenant's blob lives at `{root}/{tenant}/sha256/{first two hex digits}/{hex digest}`. An
-/// owner's blob lives under the keys of the bucket (`archi/06-storage-and-scale.md`, "The
+/// A blob lives under the keys of the bucket (`archi/06-storage-and-scale.md`, "The
 /// archive and the blobs"), as paths under the root, the first two hex digits a directory of
 /// their own (`archi/07-code-architecture.md`, "Embedded server and CLI"): a run's at
 /// `{root}/blobs/{tenant}/{run}/sha256/{ab}/{hex digest}`, a tenant's test at
@@ -58,20 +57,9 @@ impl FileBlobs {
         &self.root
     }
 
-    /// The path of a tenant's blob: `{root}/{tenant}/sha256/{ab}/{abcdef…}`, the tenant's
-    /// capital letters escaped.
-    pub fn path(&self, tenant: &TenantId, digest: Digest) -> PathBuf {
-        let hex = digest.to_hex();
-        self.root
-            .join(tenant_directory(tenant))
-            .join("sha256")
-            .join(&hex[..2])
-            .join(hex)
-    }
-
     /// The path of an owner's blob: `{root}/blobs/{tenant}/{run}/sha256/{ab}/{abcdef…}` or
     /// `{root}/tests/{tenant}/sha256/{ab}/{abcdef…}`, the tenant's capital letters escaped.
-    pub fn path_in(&self, owner: &BlobOwner, digest: Digest) -> PathBuf {
+    pub fn path(&self, owner: &BlobOwner, digest: Digest) -> PathBuf {
         let directory = match owner {
             BlobOwner::Run(run) => self.run_directory(run),
             BlobOwner::Tests(tenant) => self.root.join("tests").join(tenant_directory(tenant)),
@@ -96,11 +84,11 @@ impl FileBlobs {
 impl BlobStore for FileBlobs {
     async fn put(
         &self,
-        tenant: &TenantId,
+        owner: &BlobOwner,
         digest: Digest,
         bytes: Vec<u8>,
     ) -> Result<(), BlobError> {
-        let path = self.path(tenant, digest);
+        let path = self.path(owner, digest);
         let staging = self.staging();
         blocking(move || {
             verify(digest, &bytes, "bytes")?;
@@ -109,37 +97,8 @@ impl BlobStore for FileBlobs {
         .await
     }
 
-    async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        let path = self.path(tenant, digest);
-        blocking(move || read(digest, &path)).await
-    }
-
-    async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        let path = self.path(tenant, digest);
-        blocking(move || remove(&path).map_err(|error| failed("delete", &path, &error))).await
-    }
-
-    async fn put_in(
-        &self,
-        owner: &BlobOwner,
-        digest: Digest,
-        bytes: Vec<u8>,
-    ) -> Result<(), BlobError> {
-        let path = self.path_in(owner, digest);
-        let staging = self.staging();
-        blocking(move || {
-            verify(digest, &bytes, "bytes")?;
-            write(&staging, &path, &bytes).map_err(|error| failed("write", &path, &error))
-        })
-        .await
-    }
-
-    async fn get_in(
-        &self,
-        owner: &BlobOwner,
-        digest: Digest,
-    ) -> Result<Option<Vec<u8>>, BlobError> {
-        let path = self.path_in(owner, digest);
+    async fn get(&self, owner: &BlobOwner, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+        let path = self.path(owner, digest);
         blocking(move || read(digest, &path)).await
     }
 
@@ -149,7 +108,7 @@ impl BlobStore for FileBlobs {
         to: &BlobOwner,
         digest: Digest,
     ) -> Result<(), BlobError> {
-        let (source, target) = (self.path_in(from, digest), self.path_in(to, digest));
+        let (source, target) = (self.path(from, digest), self.path(to, digest));
         blocking(move || match link(&source, &target) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound && !source.exists() => {
@@ -168,8 +127,8 @@ impl BlobStore for FileBlobs {
         .await
     }
 
-    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
-        let path = self.path_in(owner, digest);
+    async fn delete(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        let path = self.path(owner, digest);
         blocking(move || remove(&path).map_err(|error| failed("delete", &path, &error))).await
     }
 }

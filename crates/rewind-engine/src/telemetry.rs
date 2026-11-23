@@ -9,13 +9,13 @@
 //! | Span | Id | From → to |
 //! | --- | --- | --- |
 //! | Run | `H(run, "run")` | `run_started` → the terminal entry |
-//! | Activation (service telemetry) | `H(run, fence)` | lease → commit |
+//! | Activation (service telemetry) | `H(run, "activation", index of its first entry)` | leaving the ready queue → its batch durable |
 //! | Tool call | `H(run, seq)` | `schedule_tool_call` → its completion |
 //! | Timer | `H(run, seq)` | `start_timer` → `timer_fired` or `cancel_timer` |
 //! | Signal wait | `H(run, index of signal_awaited)` | → `signal_received` or its timeout |
 //!
 //! Payloads appear as digest, size and preview, never as values. Sampling is decided per run
-//! from the trace id, so every worker agrees without coordination.
+//! from the trace id, so every node agrees without coordination.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -26,8 +26,8 @@ use rewind_core::{
 
 use crate::metrics::RunMeasurement;
 use crate::ports::{
-    AttributeValue, LogRecord, PayloadRecord, RunRecord, Span, SpanId, SpanKind, SpanStatus,
-    TraceContext, TraceId,
+    AttributeValue, LogRecord, PayloadRecord, RunHead, RunMetadata, Span, SpanId, SpanKind,
+    SpanStatus, TraceContext, TraceId,
 };
 
 /// Characters of a payload's preview in a span attribute.
@@ -61,11 +61,9 @@ impl Default for TelemetryConfig {
 pub enum SpanKey {
     /// The run span.
     Run,
-    /// An activation: the fence of its lease.
+    /// An activation: the index of the first entry it committed (`archi/08-decisions.md`,
+    /// "Taken while writing the object-storage spec").
     Activation(u64),
-    /// An activation of the run plane: the index of the first entry it committed
-    /// (`archi/08-decisions.md`, "Taken while writing the object-storage spec").
-    ActivationAt(u64),
     /// A tool call or a timer: its `seq`.
     Command(Seq),
     /// A signal wait: the index of its `signal_awaited`.
@@ -73,12 +71,11 @@ pub enum SpanKey {
 }
 
 /// `H(run, key)`: the first 8 bytes of a SHA-256 over the run id and the key, with a tag per
-/// kind of key so that a `seq`, a fence and an index never give the same id.
+/// kind of key so that a `seq` and an index never give the same id.
 pub fn span_id(run: RunId, key: SpanKey) -> SpanId {
     let (tag, n): (&[u8], u64) = match key {
         SpanKey::Run => (b"run", 0),
-        SpanKey::Activation(fence) => (b"fence", fence),
-        SpanKey::ActivationAt(index) => (b"activation", index),
+        SpanKey::Activation(index) => (b"activation", index),
         SpanKey::Command(seq) => (b"seq", u64::from(seq.0)),
         SpanKey::Entry(index) => (b"idx", index),
     };
@@ -126,20 +123,19 @@ fn hex<const N: usize>(text: &str) -> Option<[u8; N]> {
 
 /// The run's trace: the harness's trace id and span when it gave a valid `traceparent`, the run
 /// id and no parent otherwise.
-pub fn trace_of(record: &RunRecord) -> (TraceId, Option<SpanId>) {
-    record
-        .metadata
+pub fn trace_of(run: RunId, metadata: &RunMetadata) -> (TraceId, Option<SpanId>) {
+    metadata
         .trace_context
         .as_ref()
         .and_then(|context| parse_traceparent(&context.traceparent))
         .map_or(
-            (TraceId(*record.run.id.as_uuid().as_bytes()), None),
+            (TraceId(*run.as_uuid().as_bytes()), None),
             |(trace, parent)| (trace, Some(parent)),
         )
 }
 
 /// Whether a trace's telemetry is exported. Decided from the right 7 bytes of the trace id,
-/// which are random in a UUID v7 and in W3C trace ids: every worker agrees.
+/// which are random in a run id and in W3C trace ids: every node agrees.
 pub fn sampled(trace: TraceId, config: &TelemetryConfig) -> bool {
     let mut low = [0u8; 8];
     low[1..].copy_from_slice(&trace.0[9..]);
@@ -150,17 +146,17 @@ pub fn sampled(trace: TraceId, config: &TelemetryConfig) -> bool {
 /// The trace context a tool call carries to its server (`_meta`) or host-tool handler: the run's
 /// trace, with the tool call span `H(run, seq)` as parent.
 pub fn tool_call_trace_context(
-    record: &RunRecord,
+    run: RunId,
+    metadata: &RunMetadata,
     seq: Seq,
     config: &TelemetryConfig,
 ) -> TraceContext {
-    let (trace, _) = trace_of(record);
-    let span = span_id(record.run.id, SpanKey::Command(seq));
+    let (trace, _) = trace_of(run, metadata);
+    let span = span_id(run, SpanKey::Command(seq));
     let flags = if sampled(trace, config) { "01" } else { "00" };
     TraceContext {
         traceparent: format!("00-{trace}-{span}-{flags}"),
-        tracestate: record
-            .metadata
+        tracestate: metadata
             .trace_context
             .as_ref()
             .and_then(|context| context.tracestate.clone()),
@@ -170,7 +166,7 @@ pub fn tool_call_trace_context(
 /// What the span derivation knows of a run besides its entries.
 #[derive(Debug, Clone)]
 pub(crate) struct RunTelemetry<'a> {
-    pub(crate) record: &'a RunRecord,
+    pub(crate) head: &'a RunHead,
     pub(crate) config: &'a TelemetryConfig,
     /// The rows of the payloads held by digest: their size and preview.
     pub(crate) payloads: &'a BTreeMap<Digest, PayloadRecord>,
@@ -180,7 +176,12 @@ impl RunTelemetry<'_> {
     /// Whether this run's spans and logs are exported: sampled, and not a mock run unless the
     /// configuration asks for it.
     pub(crate) fn exported(&self, history: &[HistoryEntry]) -> bool {
-        self.measured(history) && sampled(trace_of(self.record).0, self.config)
+        self.measured(history) && sampled(self.trace().0, self.config)
+    }
+
+    /// The run's trace.
+    pub(crate) fn trace(&self) -> (TraceId, Option<SpanId>) {
+        trace_of(self.head.run.id, &self.head.metadata)
     }
 
     /// Whether this run's metrics are recorded: not a mock run, whose times are virtual, unless
@@ -264,8 +265,8 @@ impl RunTelemetry<'_> {
         to: u64,
         activation: SpanKey,
     ) -> Vec<LogRecord> {
-        let (trace, _) = trace_of(self.record);
-        let run = self.record.run.id;
+        let (trace, _) = self.trace();
+        let run = self.head.run.id;
         history
             .iter()
             .filter(|entry| (from..to).contains(&entry.index))
@@ -298,7 +299,7 @@ impl RunTelemetry<'_> {
         let mut attributes = BTreeMap::new();
         attributes.insert(
             "rewind.run_id".into(),
-            AttributeValue::String(self.record.run.id.to_string()),
+            AttributeValue::String(self.head.run.id.to_string()),
         );
         attributes
     }
@@ -421,12 +422,12 @@ struct Derivation<'t, 'a> {
 
 impl<'t, 'a> Derivation<'t, 'a> {
     fn new(run: &'t RunTelemetry<'a>) -> Self {
-        let (trace, harness_span) = trace_of(run.record);
+        let (trace, harness_span) = run.trace();
         Self {
             run,
             trace,
             harness_span,
-            run_span: span_id(run.record.run.id, SpanKey::Run),
+            run_span: span_id(run.head.run.id, SpanKey::Run),
             started_at: Timestamp(0),
             calls: BTreeMap::new(),
             timers: BTreeMap::new(),
@@ -446,7 +447,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
     ) {
         self.spans.push(Span {
             trace_id: self.trace,
-            span_id: span_id(self.run.record.run.id, key),
+            span_id: span_id(self.run.head.run.id, key),
             parent: Some(self.run_span),
             name,
             kind,
@@ -654,7 +655,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
             self.wait_span(wait, at, "ended");
         }
 
-        let record = self.run.record;
+        let record = self.run.head;
         let mut attributes = self.run.base_attributes();
         attributes.insert("rewind.script".into(), string(&record.script.to_hex()));
         attributes.insert("rewind.toolset".into(), string(&record.toolset.to_hex()));
@@ -703,10 +704,10 @@ fn string(text: &str) -> AttributeValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{RunMetadata, RunRef, TenantId};
+    use crate::ports::{RunRef, TenantId};
 
-    fn record(traceparent: Option<&str>) -> RunRecord {
-        RunRecord {
+    fn record(traceparent: Option<&str>) -> RunHead {
+        RunHead {
             run: RunRef::new(TenantId::local(), RunId::from_u128(0x0123_4567_89ab_cdef)),
             namespace: crate::ports::NamespaceName::migrated(),
             origin: "script".into(),
@@ -715,12 +716,14 @@ mod tests {
             toolset: Digest::of(b"t"),
             status: rewind_core::RunStatus::Active,
             epoch: rewind_core::Epoch(1),
-            expires_at: Timestamp(0),
-            history_len: 0,
-            quarantine: None,
+            attempt: crate::ports::Attempt::FIRST,
+            sealed: None,
             failures: 0,
             attempts: 0,
-            sticky_worker: None,
+            quarantine: None,
+            waits: Vec::new(),
+            expires_at: Timestamp(0),
+            history_len: 0,
             metadata: RunMetadata {
                 trace_context: traceparent.map(|traceparent| TraceContext {
                     traceparent: traceparent.into(),
@@ -732,7 +735,6 @@ mod tests {
             created_at: Timestamp(0),
             updated_at: Timestamp(0),
             ended_at: None,
-            archive: None,
         }
     }
 
@@ -759,7 +761,7 @@ mod tests {
         let harness = record(Some(
             "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
         ));
-        let (trace, parent) = trace_of(&harness);
+        let (trace, parent) = trace_of(harness.run.id, &harness.metadata);
         assert_eq!(trace.to_string(), "0af7651916cd43dd8448eb211c80319c");
         assert_eq!(parent.unwrap().to_string(), "b7ad6b7169203331");
 
@@ -770,12 +772,17 @@ mod tests {
         ] {
             let own = record(invalid);
             assert_eq!(
-                trace_of(&own),
+                trace_of(own.run.id, &own.metadata),
                 (TraceId(*own.run.id.as_uuid().as_bytes()), None)
             );
         }
 
-        let context = tool_call_trace_context(&harness, Seq(2), &TelemetryConfig::default());
+        let context = tool_call_trace_context(
+            harness.run.id,
+            &harness.metadata,
+            Seq(2),
+            &TelemetryConfig::default(),
+        );
         let span = span_id(harness.run.id, SpanKey::Command(Seq(2)));
         assert_eq!(
             context.traceparent,
@@ -857,7 +864,7 @@ mod tests {
         let payloads = BTreeMap::new();
         let record = record(None);
         let telemetry = RunTelemetry {
-            record: &record,
+            head: &record,
             config: &config,
             payloads: &payloads,
         };

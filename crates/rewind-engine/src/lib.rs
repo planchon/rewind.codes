@@ -6,66 +6,57 @@
 //!   host, its executors, its call executor, the node actor), as state machines that take a
 //!   message and return effects; [`node::runtime`] drives them with tokio in a process.
 //! - [`driver`]: the same actors of every node stepped on one thread in virtual time: the
-//!   engine's tests and mock mode.
+//!   engine's tests, mock mode and the runs of tests.
 //! - [`edge`]: the use cases at the edge (start, fork, signal, cancel, tasks, reads, searches,
 //!   statistics, traces, tests recorded from runs), through a [`edge::Gateway`] to the owner of
 //!   the run's partition; workflow versions saved through their gate, in the control plane.
 //! - [`router`]: where a run's partition and its owner are.
 //! - [`plane`]: the adapters a node is wired with, and its configuration.
-//! - [`ports::link`]: what nodes send each other (`NodeLink`).
-//!
-//! The engine over the journal store:
-//!
 //! - [`ports`]: what the engine needs from the outside world, as traits. Adapters implement
-//!   them; the engine never names Postgres, S3, V8, MCP or OpenTelemetry.
-//! - [`Engine`]: the use cases (start, signal, cancel, activate with sticky execution, fire
-//!   timers, expire runs, quarantine, replay, fork, export), the tool tasks' (dispatch,
-//!   host-tool workers, approvals, parked tasks and the secrets that resume them, backoff), and
-//!   the driver (`run_until_idle`, in real or virtual time).
+//!   them; the engine never names Postgres, SlateDB, R2, V8, MCP or OpenTelemetry.
+//!
+//! What the actors share:
+//!
+//! - [`fork`]: following a parent's history with a corrected script, and whether a script is
+//!   compatible with a journal; [`replay`]: rebuilding a script from its history.
+//! - [`projector`]: what committed entries project (a run's summary, its lifecycle events);
+//!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
+//!   signatures and fingerprints that group failed, cancelled and aborted runs.
 //! - [`attachments`]: the secrets a run attaches, and who may attach them.
-//! - [`replay`]: rebuilding a script from its history.
-//! - [`projector`]: the feed's consumers: read model, run telemetry ([`telemetry`]) and
-//!   lifecycle webhooks, projected from committed entries; the snapshot of a run and the
-//!   service state (task states, quarantine) the read model keeps.
-//! - [`failures`]: the signatures and fingerprints that group failed, cancelled and aborted runs.
+//! - [`quotas`]: the alerts of the quotas the organization actors keep.
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
-//! - [`retention`]: archives, deletion, payload cleanup, the erasure of deleted namespaces.
-//! - [`quotas`]: the CPU time a worker counts per namespace and writes about every 10 s, and the
-//!   sending of quota alerts.
 //! - [`mock`]: mock mode: the dispatcher that answers from a test's rules, mock handlers,
 //!   cassette and static responses.
 //! - [`suites`]: the suites of workflow versions, composed from their parent's and stored as
-//!   blobs; tests recorded from runs.
-//! - [`testing`]: tests run in virtual time against a script, several at once; the checks of a
-//!   test against its toolset and its workflow's interface.
+//!   blobs in the control plane; tests recorded from runs.
+//! - [`testing`]: tests run in virtual time against a script, several at once, each on a run
+//!   plane of its own in the driver; the checks of a test against its toolset and its
+//!   workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
-//! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions) and
-//!   archive; in-memory storage, access, read model, secrets, telemetry and webhooks; a fake
+//! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions),
+//!   archive, link between nodes, blobs, access, secrets, telemetry and webhooks; a fake
 //!   identity provider; static tool responses and type-checking; system and virtual time;
 //!   system and seeded entropy. With a virtual clock they make mock mode and the test harness.
 //! - `conformance` (feature): the suites every adapter of `CatalogStore`, `PartitionStore`,
-//!   `RunArchive`, `Cluster`, `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel`,
-//!   `SecretStore`, `SpanExporter` and `WebhookSender` must pass.
+//!   `RunArchive`, `Cluster`, `AccessStore`, `BlobStore`, `SecretStore`, `SpanExporter` and
+//!   `WebhookSender` must pass.
 //!
 //! The engine is deterministic given its ports. Service telemetry (spans, logs and measurements)
-//! goes through the `tracing` facade; what a script did is recorded in the journal, never
+//! goes through the `tracing` facade; what a script did is recorded in its history, never
 //! emitted from here.
 
 #![forbid(unsafe_code)]
 
-mod activation;
 pub mod adapters;
 pub mod attachments;
+mod batch;
 mod cache;
 mod checks;
 #[cfg(any(test, feature = "conformance"))]
 pub mod conformance;
-mod drive;
 pub mod driver;
 pub mod edge;
-mod engine;
 mod executors;
-mod export;
 pub mod failures;
 pub mod fork;
 pub mod metrics;
@@ -79,9 +70,9 @@ pub mod ports;
 pub mod projector;
 pub mod quotas;
 pub mod replay;
-pub mod retention;
 pub mod router;
 pub mod schema;
+mod start;
 pub mod suites;
 mod tasks;
 pub mod telemetry;
@@ -90,14 +81,13 @@ pub mod text;
 pub mod trace;
 mod workflows;
 
+pub use batch::EngineError;
 pub use cache::CacheConfig;
-pub use drive::{DriveOptions, DriveReport, ToolOrder};
-pub use engine::{
-    ActivationOutcome, ActivationReport, Adapters, Engine, EngineConfig, EngineError, Limits,
-    ReplayVerdict, StartError, StartRun, idempotency_key,
-};
 pub use fork::{Compatibility, ForkError, ForkPoint, ForkRun};
 pub use payloads::PayloadTiers;
-pub use tasks::{Backoff, HostClaim, HostFailure, HostTask};
+pub use plane::Limits;
+pub use replay::ReplayVerdict;
+pub use start::{StartError, StartRun};
+pub use tasks::{Backoff, idempotency_key};
 pub use text::NulCharacter;
 pub use workflows::{RegisterError, RegisterWorkflow, SignalRefused, StartWorkflow};

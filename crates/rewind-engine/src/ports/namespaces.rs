@@ -442,23 +442,6 @@ impl Namespace {
     }
 }
 
-/// Whose use to read.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum UsageOf {
-    Namespace(NamespaceName),
-    /// The tenant's totals, across its namespaces.
-    Tenant,
-}
-
-/// CPU time a worker counted for a namespace on a day, to add to its use.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UsageDelta {
-    pub tenant: TenantId,
-    pub namespace: NamespaceName,
-    pub day: Day,
-    pub cpu: Duration,
-}
-
 /// One day of use.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DayUsage {
@@ -492,61 +475,6 @@ impl Usage {
             QuotaKind::MaxTtl | QuotaKind::MaxScriptLines => None,
         }
     }
-}
-
-/// How `list_namespaces` orders: by a use of the month, the largest first, then by name; or by
-/// name.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum NamespaceOrder {
-    #[default]
-    Cpu,
-    Runs,
-    Scripts,
-    Name,
-}
-
-/// A position in a listing of namespaces: the last one of the previous page, and its key in
-/// the order (0 when ordered by name).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NamespaceCursor {
-    pub key: u64,
-    pub name: NamespaceName,
-}
-
-/// Namespaces to list, in one tenant.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NamespaceFilter {
-    pub tenant: TenantId,
-    /// This namespace alone.
-    pub name: Option<NamespaceName>,
-    /// Names starting with this, or display names starting with it case aside
-    /// ([`DisplayName::starts_with`]).
-    pub prefix: Option<String>,
-    /// Only those that used at least this many percent of one of their counted limits
-    /// (`cpu_per_month`, `active_runs`, `runs_per_month`, `scripts`) in `month`.
-    pub above_percent: Option<u32>,
-    pub order: NamespaceOrder,
-    /// The month whose use is read.
-    pub month: Month,
-    pub after: Option<NamespaceCursor>,
-    pub limit: usize,
-}
-
-/// A page of [`JournalStore::list_namespaces`](super::JournalStore::list_namespaces).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct NamespacePage {
-    pub namespaces: Vec<NamespaceUsage>,
-    /// How many namespaces match the filter, across every page: `after` and `limit` aside.
-    pub total: u64,
-}
-
-/// A namespace with the limits that apply to it and its use of a month (without days).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NamespaceUsage {
-    pub namespace: Namespace,
-    /// Its exceptions over the tenant's defaults.
-    pub limits: Quotas,
-    pub usage: Usage,
 }
 
 /// The share of a limit an alert is about.

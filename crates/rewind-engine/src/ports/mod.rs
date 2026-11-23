@@ -13,28 +13,28 @@
 //! | [`RunArchive`] | memory, `rewind-blob` (files, S3, and a cache in front of either) |
 //! | [`Cluster`] / [`cluster::Membership`] | memory, `rewind-store-turso` (one node), `rewind-store-postgres` |
 //! | [`NodeLink`] | in process ([`LocalLink`](crate::adapters::LocalLink)), HTTP/2 (`rewind-server`) |
-//! | [`JournalStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`AccessStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
 //! | [`BlobStore`] | memory, `rewind-blob` (files, S3) |
 //! | [`ScriptExecutor`] / [`ScriptInstance`] | `rewind-runtime` (V8) |
 //! | [`ToolDispatcher`] | static responses (memory), mocks, `rewind-mcp`, `rewind-openapi` |
 //! | [`TypeChecker`] | static (memory), `rewind-check` (tsgo) |
-//! | [`ReadModel`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`SpanExporter`] | memory, `rewind-otel` |
 //! | [`SecretStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`WebhookSender`] | memory, HTTP (`rewind-server`) |
 //! | [`Clock`], [`Entropy`] | system, virtual or seeded |
 //!
 //! The ports with state ([`CatalogStore`], [`PartitionStore`], [`RunArchive`], [`Cluster`],
-//! [`JournalStore`], [`AccessStore`], [`BlobStore`], [`ReadModel`], [`SecretStore`]),
-//! [`SpanExporter`] and [`WebhookSender`] have a conformance suite in the module `conformance`
-//! (feature `conformance`) that every adapter passes.
+//! [`AccessStore`], [`BlobStore`], [`SecretStore`]), [`SpanExporter`] and [`WebhookSender`]
+//! have a conformance suite in the module `conformance` (feature `conformance`) that every
+//! adapter passes.
 //!
-//! The modules [`catalog`], [`partition`], [`archive`] and [`cluster`] are public: the names
-//! they share with other ports ([`partition::CreateRun`], [`partition::Activation`],
-//! [`catalog::NamespaceFilter`], [`catalog::NamespacePage`], [`cluster::Membership`]) are read
-//! through them; every other name is also re-exported here. A span exporter and a
+//! What a run's history, inbox and tool tasks are made of lives in `journal`, what a search and
+//! a summary are in `read_model` (`archi/05-testing-and-observability.md`, "Read model"): both
+//! are re-exported here. The modules [`catalog`], [`partition`], [`archive`], [`cluster`] and
+//! [`link`] are public: the names they share with other modules ([`partition::CreateRun`],
+//! [`partition::Activation`], [`cluster::Membership`], [`link::HostTask`]) are read through
+//! them; every other name is also re-exported here. A span exporter and a
 //! webhook sender have no read side: their suites read the backend through a collector or a
 //! receiver the adapter's test provides. An identity provider's contract is not observable
 //! through the port alone: its adapters test it.
@@ -67,7 +67,9 @@ pub use access::{
 };
 pub use archive::{ArchiveError, RunArchive, SealedAttempt};
 pub use blob::{BlobError, BlobOwner, BlobStore};
-pub use catalog::{CatalogError, CatalogStore, TEST_DELETION_TIMEOUT};
+pub use catalog::{
+    CatalogError, CatalogStore, NamespaceFilter, NamespacePage, TEST_DELETION_TIMEOUT,
+};
 pub use checker::{
     CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
     WorkflowDeclarations,
@@ -95,21 +97,17 @@ pub use identity::{
     Organization, OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
 };
 pub use journal::{
-    AcquireRunnable, Activation, Archive, ClaimedTask, CreateRun, Created, Enqueued, ExpiredRuns,
-    Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore, Lease, NEW_SUFFIX_LEN,
-    NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope,
-    PayloadRecord, QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter,
-    RunMetadata, RunRecord, RunWorkflow, STICKY_GRACE, ScriptTitle, SecretUsage, StartedBy,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, TEST_GRACE, TaskFilter, TaskRef,
-    TaskState, TaskToken, TaskUpdate, TestRecord, ToolTask, TraceContext, Trigger, Watched,
-    WebhookTarget, WebhookToken, WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
+    Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, StartedBy,
+    StoreError, StoredScript, StoredToolset, StoredWorkflow, TEST_GRACE, TaskRef, TaskState,
+    TaskToken, TestRecord, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
+    WorkflowFilter, deferred_timeout_failure,
 };
 pub use link::{LinkError, NodeLink};
 pub use namespaces::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, InvalidDisplayName,
-    InvalidNamespace, Month, Namespace, NamespaceCursor, NamespaceFilter, NamespaceName,
-    NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey,
-    QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta, UsageOf, limits,
+    InvalidNamespace, Month, Namespace, NamespaceName, NamespaceWrite, QuotaAlert, QuotaAlertKey,
+    QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, limits,
 };
 pub use partition::{
     Admission, Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters, DueTimer,
@@ -120,11 +118,8 @@ pub use partition::{
     home_partition, namespace_partition,
 };
 pub use read_model::{
-    ChangedRun, Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet,
-    Latency, Predicate, ProjectedRun, QuarantineNote, Range, ReadModel, ReadModelError, RunOrder,
-    RunQuery, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor,
-    StatsWindow, TaskPhase, TaskProgress, Term, TextMatch, ToolStats, ToolStatsFilter, Wait,
-    WaitKind, WaitingFor,
+    Ending, Latency, Predicate, QuarantineNote, Range, RunOrder, RunQuery, RunSnapshot, RunSummary,
+    SearchCursor, TaskPhase, TaskProgress, Term, TextMatch, Wait, WaitKind, WaitingFor,
 };
 pub use secrets::{
     DailyReads, LastRead, MasterKeyId, NewSecret, PrivateKey, PublicKey, PutSecret,
@@ -135,7 +130,7 @@ pub use telemetry::{
     AttributeValue, ExportError, LogRecord, Span, SpanExporter, SpanId, SpanKind, SpanStatus,
     TraceId,
 };
-pub use tenancy::{InvalidTenant, Retention, RunRef, Tenant, TenantId, TenantScope};
+pub use tenancy::{InvalidTenant, Retention, RunRef, Tenant, TenantId};
 pub use webhooks::{
     CredentialsExpiredReason, Subscription, WebhookError, WebhookEvent, WebhookEventKind,
     WebhookEventType, WebhookSender,

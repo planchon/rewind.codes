@@ -31,7 +31,12 @@ impl<P: Plane> Edge<P> {
             .ok_or(Refusal::RunNotFound(run.id))?;
         let history = self.traced_history(gateway, run).await?;
         let rows = self.blob_rows(run, &history).await?;
-        Ok(trace::render_run(&view.head, &history, &rows, self.now()))
+        Ok(trace::render_trace(trace::TraceInput {
+            head: &view.head,
+            history: &history,
+            payloads: &rows,
+            now: self.now(),
+        }))
     }
 
     /// One entry of the run's history in full, its payload loaded (`rewind trace <run> --entry
@@ -100,7 +105,7 @@ impl<P: Plane> Edge<P> {
             let Some(bytes) = self
                 .plane
                 .blobs()
-                .get_in(&owner, *digest)
+                .get(&owner, *digest)
                 .await
                 .map_err(unavailable)?
             else {

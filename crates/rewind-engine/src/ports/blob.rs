@@ -52,52 +52,29 @@ impl fmt::Display for BlobOwner {
 /// their canonical JSON (RFC 8785), so a payload's blob is keyed by the payload's digest; or a
 /// tenant's tests, whose documents are blobs. A payload belongs to its run: the same value
 /// carried by two runs is stored twice, and a fork copies the blobs it references under its own
-/// run. Blobs keyed by a tenant alone serve the payload values and archived journals of the
-/// journal store. Where blobs live (S3 keys, files, memory) is the adapter's business.
+/// run. Where blobs live (S3 keys, files, memory) is the adapter's business.
 ///
 /// The contract, checked by the conformance suite:
 ///
-/// - `put` and `put_in` refuse bytes that do not hash to `digest`. Blobs are immutable: a second
-///   put of a digest changes nothing.
-/// - `get` and `get_in` check the digest of what they read, and report a mismatch as `Corrupt`.
+/// - `put` refuses bytes that do not hash to `digest`. Blobs are immutable: a second put of a
+///   digest changes nothing.
+/// - `get` checks the digest of what it reads, and reports a mismatch as `Corrupt`.
 /// - `copy` puts a blob of one owner under another, without the bytes leaving the backend when
 ///   it can (a fork). A missing source is [`BlobError::Missing`]; a target already there is
 ///   kept.
-/// - `delete_run` deletes every blob of a run (its erasure); `delete` and `delete_in` remove one
-///   blob (the cleanup of tests, of unreferenced payloads, of expired archives). Deleting a
-///   missing blob is not an error.
-/// - Blobs of one tenant are never visible to another, nor blobs of one owner to another.
+/// - `delete_run` deletes every blob of a run (its erasure); `delete` removes one blob (the
+///   cleanup of tests). Deleting a missing blob is not an error.
+/// - Blobs of one owner are never visible to another, nor those of one tenant to another.
 pub trait BlobStore: Send + Sync {
-    /// Stores a tenant's blob.
-    fn put(
-        &self,
-        tenant: &TenantId,
-        digest: Digest,
-        bytes: Vec<u8>,
-    ) -> impl Future<Output = Result<(), BlobError>> + Send;
-
-    fn get(
-        &self,
-        tenant: &TenantId,
-        digest: Digest,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>, BlobError>> + Send;
-
-    /// Returns whether the blob existed.
-    fn delete(
-        &self,
-        tenant: &TenantId,
-        digest: Digest,
-    ) -> impl Future<Output = Result<bool, BlobError>> + Send;
-
     /// Stores a blob of `owner`.
-    fn put_in(
+    fn put(
         &self,
         owner: &BlobOwner,
         digest: Digest,
         bytes: Vec<u8>,
     ) -> impl Future<Output = Result<(), BlobError>> + Send;
 
-    fn get_in(
+    fn get(
         &self,
         owner: &BlobOwner,
         digest: Digest,
@@ -115,7 +92,7 @@ pub trait BlobStore: Send + Sync {
     fn delete_run(&self, run: &RunRef) -> impl Future<Output = Result<(), BlobError>> + Send;
 
     /// Deletes a blob of `owner`; returns whether it existed.
-    fn delete_in(
+    fn delete(
         &self,
         owner: &BlobOwner,
         digest: Digest,

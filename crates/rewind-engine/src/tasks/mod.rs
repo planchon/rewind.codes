@@ -1,69 +1,51 @@
-//! The tool tasks' use cases (`archi/04-tools.md`, "Tool task lifecycle", "Policies",
-//! "Authenticating calls", "When a toolset changes during a run").
+//! Tool tasks (`archi/04-tools.md`, "Tool task lifecycle", "Policies", "Authenticating calls",
+//! "When a toolset changes during a run").
 //!
-//! Each `schedule_tool_call` an activation commits becomes a tool task in the store. Attempts,
-//! backoff, claims, approvals and tokens live in the task; the journal only gets the final
-//! outcome, as a completion in the run's inbox.
-//!
-//! | Who | Use cases |
-//! | --- | --- |
-//! | The engine's dispatcher loop: MCP tools, API tools and built-ins (every tool in mock mode) | `claim_tool_tasks`, `run_tool_task`, `heartbeat_tool_claims`, `expire_deferred_tool_tasks` |
-//! | The harness's SDK worker, for host tools (`/v1/tasks`) | `claim_host_tasks`, `heartbeat_task`, `defer_task`, `complete_task`, `fail_task` |
-//! | The worker role's scheduler, for host tools whose worker died | `fail_interrupted_host_tasks` |
-//! | The harness, for a task that waits for it | `approve_task`, `reject_task`, `put_secret` |
+//! Each `schedule_tool_call` an activation commits becomes a tool task in the run's partition.
+//! Its attempts, backoff, approval, deferral and park live in the task; the journal only gets
+//! the final outcome, as a completion in the run's inbox. The owner of the partition keeps the
+//! lifecycle (`partition::tasks`), the call executor of the node sends the calls ([`calls`]).
 //!
 //! ```text
-//!              approve_task                 claim                 answered, failed for good
-//!   approval ──────────────► ready ───────────────────► claimed ──────────────────────────► done
+//!              approve_task                sent, or handed                answered, failed for good
+//!   approval ──────────────► ready ───────────────────► in flight ──────────────────────────► done
 //!      │ reject_task          ▲ ▲ ▲                      │ │ │ │
-//!      ▼                      │ │ │  transient failure   │ │ │ │ claim expired, claimed again:
-//!    done                     │ │ └── (retry, backoff) ──┘ │ │ │ attempt + 1 up to 5 (retry),
-//!                             │ │                          │ │ │ else done, outcome_unknown
+//!      ▼                      │ │ │  transient failure   │ │ │ │ interrupted (a node died, a
+//!    done                     │ │ └── (retry, backoff) ──┘ │ │ │ stream gone): attempt + 1 up to
+//!                             │ │                          │ │ │ 5 (retry), else outcome_unknown
 //!          approve_task,      │ └──── parked ◄─────────────┘ │ └──► deferred ── complete, fail,
-//!          put_secret         │         │ schema changed, 401│        (token)    late ──► done
+//!          a secret put again │         │ schema changed, 401│        (token)    late ──► done
 //!                             │         │ secret missing     │
 //!                             │         └── reject_task ──► done
 //! ```
 //!
 //! - **Policies.** Under `retry`, a transient failure goes back to `ready` after a
-//!   [`Backoff`], and a claim that expired is claimed again with the same idempotency key, up
-//!   to [`EngineConfig::max_tool_attempts`](crate::EngineConfig) claims in all. Under
-//!   `at_most_once`, a transient failure is delivered, and a claim that expired fails the call
-//!   with `outcome_unknown` at once.
-//! - **Claims and heartbeats.** A claim lasts the tool's heartbeat timeout. The harness's
-//!   worker renews it with `heartbeat_task`; the engine renews the claims of the calls it is
-//!   dispatching with `heartbeat_tool_claims`, until their execution timeout.
-//! - **Authentication** is resolved when an MCP or API call is dispatched, from its server's
-//!   `auth`: the secret the run attached, read from the `SecretStore` in the run's namespace, or
-//!   the tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]): never to the
-//!   journal.
+//!   [`Backoff`], and an interrupted call is sent again with the same idempotency key, up to the
+//!   node's maximum of attempts. Under `at_most_once`, a transient failure is delivered, and an
+//!   interrupted call fails with `outcome_unknown`.
+//! - **Authentication** is resolved when an MCP or API call is sent, from its server's `auth`:
+//!   the secret the run attached, read from the `SecretStore` in the run's namespace, or the
+//!   tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]), and its texts are
+//!   taken out of the answer ([`redacted`]): never in the journal.
 //! - **Parked tasks.** A schema change, a 401 or a missing secret parks the task and sends
 //!   `tool.schema_changed` or `credentials.expired` (reason `refused` or `missing`) to the
 //!   tenant's subscriptions. Approved after a schema change, the call goes on against the new
 //!   schema; the secret put again makes it ready again; rejected, it fails with a `ToolError`.
 //!
 //! [`CallAuth`]: crate::ports::CallAuth
-//! - **Tenants.** Every use case is scoped by the tenant: a token or a task of another tenant
-//!   is treated as gone.
 
 pub(crate) mod calls;
-mod dispatch;
-mod harness;
-mod host;
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rewind_core::{Digest, RunMode, Timestamp};
+use rewind_core::{Digest, JsonValue, RunId, SecretEncoding, SecretPlacement, Seq, ToolFailure};
 
-use crate::ports::{RunRef, TaskToken};
+use crate::ports::{CallAuth, Dispatched};
 
-/// The most runs whose mode an engine keeps in memory; past it, it forgets them all and reads
-/// each one again from its history.
-const MODES_KEPT: usize = 10_000;
-
-pub use host::{HostClaim, HostFailure, HostTask};
+/// `"{run_id}/{seq}"`, the key every attempt of a tool call carries.
+pub fn idempotency_key(run_id: RunId, seq: Seq) -> String {
+    format!("{run_id}/{}", seq.0)
+}
 
 /// The delay before a call that failed transiently is attempted again: `initial ×
 /// factor^(n − 1)` after the n-th attempt, at most `max`, of which the upper half is jitter.
@@ -117,92 +99,85 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// What the engine keeps about its own tool calls, between the store's calls: the claims of
-/// the calls it is dispatching, which it heartbeats. When a retried call is due is the store's
-/// (`next_tool_attempt`): an engine restarted during a backoff still wakes up for it.
-#[derive(Debug, Default)]
-pub(crate) struct ToolTasks {
-    in_flight: Mutex<BTreeMap<TaskToken, InFlight>>,
-    /// The mode each run started in, from its `run_started`. It never changes, so an
-    /// authenticated call reads a run's history once on this engine, not at every attempt.
-    modes: Mutex<HashMap<RunRef, RunMode>>,
+/// The shortest secret whose value is taken out of answers: a shorter one would match ordinary
+/// text.
+const MIN_REDACTED_SECRET: usize = 4;
+
+/// What replaces a secret's value in an answer.
+const REDACTED: &str = "[secret]";
+
+/// The texts of the attached secret an answer must not carry: its value, and its base64 form
+/// when its header encodes it (HTTP basic).
+pub(crate) fn secret_texts(auth: &CallAuth) -> Vec<String> {
+    let CallAuth::Secret { value, placement } = auth else {
+        return Vec::new();
+    };
+    let value = value.expose();
+    if value.len() < MIN_REDACTED_SECRET {
+        return Vec::new();
+    }
+    let mut texts = vec![value.to_owned()];
+    if let SecretPlacement::Header {
+        encoding: SecretEncoding::Base64,
+        ..
+    } = placement
+    {
+        use base64::Engine as _;
+        texts.push(base64::engine::general_purpose::STANDARD.encode(value));
+    }
+    texts
 }
 
-/// While it lives, the engine renews the claim of a call being dispatched.
-#[derive(Debug)]
-struct Dispatching<'a> {
-    tasks: &'a ToolTasks,
-    token: &'a TaskToken,
-}
-
-impl Drop for Dispatching<'_> {
-    fn drop(&mut self) {
-        self.tasks.dispatched(self.token);
+/// `dispatched` without the attached secret's texts: a server that echoes its credential (an
+/// error quoting the key, a debug endpoint) must not bring it into the journal and the script
+/// (`archi/04-tools.md`, "Secrets": secrets never enter the journal nor the isolate).
+pub(crate) fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
+    if texts.is_empty() {
+        return dispatched;
+    }
+    let failure = |mut failure: ToolFailure| {
+        failure.message = redacted_text(failure.message, texts);
+        failure.data = failure.data.map(|data| redacted_json(data, texts));
+        failure
+    };
+    match dispatched {
+        Dispatched::Result(value) => Dispatched::Result(redacted_json(value, texts)),
+        Dispatched::Failed(failed) => Dispatched::Failed(failure(failed)),
+        Dispatched::Transient(failed) => Dispatched::Transient(failure(failed)),
+        Dispatched::Park(mut reason) => {
+            reason.message = redacted_text(reason.message, texts);
+            Dispatched::Park(reason)
+        }
+        Dispatched::Deferred => Dispatched::Deferred,
     }
 }
 
-/// A call being dispatched, under a claim the engine renews.
-#[derive(Debug, Clone, Copy)]
-struct InFlight {
-    heartbeat_timeout: Duration,
-    renewed_at: Timestamp,
-    /// The end of its execution timeout: past it, the claim is no longer renewed.
-    deadline: Option<Timestamp>,
-}
-
-impl ToolTasks {
-    fn in_flight(&self) -> MutexGuard<'_, BTreeMap<TaskToken, InFlight>> {
-        // The maps stay consistent whatever panicked while holding the lock.
-        self.in_flight
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Registers a call being dispatched until the returned guard is dropped: when the
-    /// dispatcher answers, or when the dispatch is abandoned (its future dropped).
-    fn dispatching<'a>(&'a self, token: &'a TaskToken, call: InFlight) -> Dispatching<'a> {
-        self.in_flight().insert(token.clone(), call);
-        Dispatching { tasks: self, token }
-    }
-
-    fn dispatched(&self, token: &TaskToken) {
-        self.in_flight().remove(token);
-    }
-
-    /// The claims to renew at `now`: a third of their heartbeat timeout has passed since their
-    /// last renewal, and their execution timeout has not.
-    fn due_heartbeats(&self, now: Timestamp) -> Vec<TaskToken> {
-        self.in_flight()
+fn redacted_text(text: String, texts: &[String]) -> String {
+    if texts.iter().any(|secret| text.contains(secret.as_str())) {
+        texts
             .iter()
-            .filter(|(_, call)| {
-                let renew_at = call.renewed_at.saturating_add(call.heartbeat_timeout / 3);
-                renew_at <= now && call.deadline.is_none_or(|deadline| now < deadline)
-            })
-            .map(|(token, _)| token.clone())
-            .collect()
+            .fold(text, |text, secret| text.replace(secret.as_str(), REDACTED))
+    } else {
+        text
     }
+}
 
-    fn renewed(&self, token: &TaskToken, now: Timestamp) {
-        if let Some(call) = self.in_flight().get_mut(token) {
-            call.renewed_at = now;
-        }
-    }
-
-    fn modes(&self) -> MutexGuard<'_, HashMap<RunRef, RunMode>> {
-        self.modes.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The mode `run` started in, if this engine read it already.
-    fn mode(&self, run: &RunRef) -> Option<RunMode> {
-        self.modes().get(run).copied()
-    }
-
-    fn remember_mode(&self, run: &RunRef, mode: RunMode) {
-        let mut modes = self.modes();
-        if modes.len() >= MODES_KEPT {
-            modes.clear();
-        }
-        modes.insert(run.clone(), mode);
+fn redacted_json(value: JsonValue, texts: &[String]) -> JsonValue {
+    match value {
+        JsonValue::String(text) => JsonValue::String(redacted_text(text, texts)),
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .into_iter()
+                .map(|item| redacted_json(item, texts))
+                .collect(),
+        ),
+        JsonValue::Object(fields) => JsonValue::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| (redacted_text(key, texts), redacted_json(value, texts)))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -247,40 +222,6 @@ mod tests {
         assert!(
             delays.len() > 15,
             "calls that failed together come back apart"
-        );
-    }
-
-    #[test]
-    fn claims_are_renewed_until_their_execution_deadline() {
-        let tasks = ToolTasks::default();
-        let token = TaskToken("t".into());
-        let dispatching = tasks.dispatching(
-            &token,
-            InFlight {
-                heartbeat_timeout: Duration::from_secs(60),
-                renewed_at: Timestamp(0),
-                deadline: Some(Timestamp(100_000)),
-            },
-        );
-        assert!(tasks.due_heartbeats(Timestamp(19_999)).is_empty());
-        assert_eq!(
-            tasks.due_heartbeats(Timestamp(20_000)),
-            std::slice::from_ref(&token)
-        );
-        tasks.renewed(&token, Timestamp(20_000));
-        assert!(tasks.due_heartbeats(Timestamp(39_999)).is_empty());
-        assert_eq!(
-            tasks.due_heartbeats(Timestamp(40_000)),
-            std::slice::from_ref(&token)
-        );
-        assert!(
-            tasks.due_heartbeats(Timestamp(100_000)).is_empty(),
-            "past its execution timeout, the claim is left to expire"
-        );
-        drop(dispatching);
-        assert!(
-            tasks.due_heartbeats(Timestamp(50_000)).is_empty(),
-            "an answered or abandoned call is no longer renewed"
         );
     }
 }
