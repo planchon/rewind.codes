@@ -1,6 +1,6 @@
 [package]
 name = "rewind-blob"
-description = "BlobStore adapters of Rewind: local files, S3, and the workers' local cache."
+description = "BlobStore and RunArchive adapters of Rewind: local files, S3, and the local caches in front of them."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,8 @@ license.workspace = true
 [dependencies]
 rewind-core.workspace = true
 rewind-engine.workspace = true
+# The journal document of a sealed attempt (`crate::archive`).
+rewind-format.workspace = true
 # The objects of a run's prefix, listed as a stream to delete them (`object_store`'s own).
 futures-util = { workspace = true, features = ["alloc"] }
 object_store.workspace = true

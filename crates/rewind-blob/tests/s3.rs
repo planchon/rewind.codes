@@ -1,5 +1,6 @@
-//! `S3Blobs` against MinIO in Docker: the conformance suite of `BlobStore`, alone and behind
-//! the workers' cache, and corruption detection.
+//! `S3Blobs` and `S3Archive` against MinIO in Docker: the conformance suites of `BlobStore` and
+//! `RunArchive`, alone and behind the local caches, the archive's keys, and corruption
+//! detection.
 //!
 //! The test starts a MinIO container with a unique name on a free local port, creates its
 //! buckets with the MinIO client, and removes the container when it ends. MinIO no longer
@@ -15,19 +16,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path;
 use object_store::{ObjectStoreExt as _, PutPayload};
-use rewind_blob::{CachedBlobs, DEFAULT_CACHE_CAPACITY, S3Blobs, S3Config};
-use rewind_core::{Digest, canonical_json};
-use rewind_engine::conformance::{blobs, tenant};
-use rewind_engine::ports::{BlobError, BlobStore};
+use rewind_blob::{
+    CachedArchive, CachedBlobs, DEFAULT_ARCHIVE_CACHE_CAPACITY, DEFAULT_CACHE_CAPACITY, S3Archive,
+    S3Blobs, S3Config,
+};
+use rewind_core::{Digest, Epoch, Script, Toolset, canonical_json};
+use rewind_engine::conformance::{archive, blobs, tenant};
+use rewind_engine::ports::{ArchiveError, Attempt, BlobError, BlobStore, RunArchive, RunRef};
 use serde_json::json;
 
 const MINIO_IMAGE: &str = "cgr.dev/chainguard/minio:latest";
 const MC_IMAGE: &str = "cgr.dev/chainguard/minio-client:latest";
 const USER: &str = "rewindblob";
 const PASSWORD: &str = "rewindblob-secret";
-/// One bucket per store the suites create (12 checks, alone and behind the cache), and one for
-/// the corruption test.
-const BUCKETS: usize = 25;
+/// One bucket per store the suites create (12 checks of the blobs and 4 of the archive, alone
+/// and behind the caches), one for the corruption test and one for the archive's keys.
+const BUCKETS: usize = 34;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s3_blobs_pass_the_conformance_suite_on_minio() {
@@ -76,6 +80,84 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
         matches!(read, Err(BlobError::Corrupt { digest: d, .. }) if d == digest),
         "{read:?}"
     );
+
+    archive::run_all(|| {
+        let blobs = S3Blobs::new(next_bucket()).expect("s3");
+        (S3Archive::new(blobs.clone()), blobs)
+    })
+    .await;
+    archive::run_all(|| {
+        let blobs = S3Blobs::new(next_bucket()).expect("s3");
+        (
+            CachedArchive::new(
+                S3Archive::new(blobs.clone()),
+                DEFAULT_ARCHIVE_CACHE_CAPACITY,
+            ),
+            blobs,
+        )
+    })
+    .await;
+
+    // A sealed attempt is the journal document at its key.
+    let config = next_bucket();
+    let store = S3Archive::new(S3Blobs::new(config.clone()).expect("s3"));
+    let raw = AmazonS3Builder::new()
+        .with_bucket_name(&config.bucket)
+        .with_region("us-east-1")
+        .with_endpoint(config.endpoint.clone().expect("endpoint"))
+        .with_access_key_id(USER)
+        .with_secret_access_key(PASSWORD)
+        .with_allow_http(true)
+        .build()
+        .expect("raw client");
+    let run = RunRef::new(
+        tenant("Acme"),
+        "01930000-0000-7000-8000-000000000001"
+            .parse()
+            .expect("run id"),
+    );
+    let sealed = rewind_engine::ports::SealedAttempt {
+        run: run.clone(),
+        attempt: Attempt::FIRST,
+        script: Script::new("export default () => 1"),
+        toolset: Toolset::from_host_tools(["a"]).expect("toolset"),
+        entries: vec![rewind_core::HistoryEntry {
+            index: 0,
+            recorded_at: rewind_core::Timestamp(1),
+            event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(
+                rewind_core::RunStarted {
+                    script: Script::new("export default () => 1").digest(),
+                    toolset: Toolset::from_host_tools(["a"]).expect("toolset").digest(),
+                    input: json!({}).into(),
+                    seed: rewind_core::Seed::from_bytes([1; 32]),
+                    epoch: Epoch(1),
+                    expires_at: rewind_core::Timestamp(2),
+                    mode: rewind_core::RunMode::Live,
+                },
+            )),
+        }],
+    };
+    store.put(&sealed).await.expect("put");
+    let key = S3Archive::key(&run, Attempt::FIRST);
+    assert_eq!(key, "runs/Acme/01930000-0000-7000-8000-000000000001/1.json");
+    let object = raw
+        .get(&Path::from(key.as_str()))
+        .await
+        .expect("the object")
+        .bytes()
+        .await
+        .expect("its bytes");
+    let document =
+        rewind_format::decode_journal(std::str::from_utf8(&object).expect("utf-8")).expect("v1");
+    assert_eq!(document, sealed.document());
+    raw.put(
+        &Path::from(key.as_str()),
+        PutPayload::from(b"{\"v\":1}".to_vec()),
+    )
+    .await
+    .expect("tamper");
+    let read = store.get(&run, Attempt::FIRST).await;
+    assert!(matches!(read, Err(ArchiveError::Corrupt(_))), "{read:?}");
 }
 
 /// A MinIO container, removed on drop.

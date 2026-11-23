@@ -117,6 +117,11 @@ impl S3Blobs {
         Ok(Self { store })
     }
 
+    /// The bucket's client, which the archive shares.
+    pub(crate) fn store(&self) -> &AmazonS3 {
+        &self.store
+    }
+
     /// The key of a tenant's blob: `{tenant}/sha256/{hex digest}`.
     pub fn key(tenant: &TenantId, digest: Digest) -> String {
         format!("{tenant}/sha256/{}", digest.to_hex())

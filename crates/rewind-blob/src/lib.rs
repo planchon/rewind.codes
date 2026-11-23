@@ -1,5 +1,10 @@
-//! `BlobStore` adapters of Rewind (`archi/06-storage-and-scale.md`, "Payloads", "The archive
-//! and the blobs").
+//! `BlobStore` and `RunArchive` adapters of Rewind (`archi/06-storage-and-scale.md`,
+//! "Payloads", "The archive and the blobs").
+//!
+//! The archive: [`FileArchive`] and [`S3Archive`] keep the sealed attempts of ended runs beside
+//! the blobs, `runs/{tenant}/{run}/{attempt}.json`, each the attempt's journal document
+//! (`rewind-format`); erasing a run deletes its attempts and its blobs. [`CachedArchive`] is the
+//! local cache every process puts in front of it: a sealed attempt never changes.
 //!
 //! The `BlobStore` port holds immutable bytes by their SHA-256: under a run, its payload values
 //! above 64 KiB; under a tenant's tests, their documents; under a tenant alone, the payload
@@ -20,6 +25,7 @@
 
 #![forbid(unsafe_code)]
 
+mod archive;
 mod cache;
 mod files;
 mod s3;
@@ -27,6 +33,7 @@ mod s3;
 use std::io;
 use std::path::PathBuf;
 
+pub use archive::{CachedArchive, DEFAULT_ARCHIVE_CACHE_CAPACITY, FileArchive, S3Archive};
 pub use cache::{CachedBlobs, DEFAULT_CACHE_CAPACITY};
 pub use files::FileBlobs;
 pub use s3::{S3Blobs, S3Config};

@@ -119,7 +119,9 @@ async fn departs_within(member: &PostgresMembership, node: &str, kill: impl FnOn
             node: NodeId::new(node).expect("node id")
         }
     );
-    killed.elapsed()
+    let elapsed = killed.elapsed();
+    eprintln!("{node} departed {elapsed:?} after it was killed");
+    elapsed
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

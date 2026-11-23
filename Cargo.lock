@@ -4465,6 +4465,7 @@ dependencies = [
  "quick_cache",
  "rewind-core",
  "rewind-engine",
+ "rewind-format",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

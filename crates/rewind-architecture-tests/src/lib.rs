@@ -207,10 +207,11 @@ fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str
         Layer::Adapter => {
             let allowed = match to_layer {
                 Layer::Domain | Layer::Application => true,
-                // Stores write the stored journal format; the tool dispatchers send through
-                // rewind-outbound.
+                // Stores and the archive (rewind-blob) write the stored journal format; the
+                // tool dispatchers send through rewind-outbound.
                 Layer::AdapterSupport => {
-                    to == "rewind-format" && from.starts_with("rewind-store-")
+                    to == "rewind-format"
+                        && (from.starts_with("rewind-store-") || from == "rewind-blob")
                         || to == "rewind-codegen"
                             && matches!(from, "rewind-runtime" | "rewind-check")
                         || to == "rewind-outbound"
@@ -308,6 +309,13 @@ mod tests {
             (
                 "rewind-store-turso",
                 vec![dependency("rewind-format", None)],
+            ),
+            (
+                "rewind-blob",
+                vec![
+                    dependency("rewind-engine", None),
+                    dependency("rewind-format", None),
+                ],
             ),
             ("rewind-outbound", vec![dependency("rewind-core", None)]),
             (
@@ -427,6 +435,11 @@ mod tests {
             (
                 "rewind-store-turso",
                 vec![dependency("rewind-blob", None)],
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
+            ),
+            (
+                "rewind-blob",
+                vec![dependency("rewind-codegen", None)],
                 "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (

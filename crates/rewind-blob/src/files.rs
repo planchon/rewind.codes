@@ -21,9 +21,10 @@ const STALE_STAGING: Duration = Duration::from_secs(60 * 60);
 ///
 /// A tenant's blob lives at `{root}/{tenant}/sha256/{first two hex digits}/{hex digest}`. An
 /// owner's blob lives under the keys of the bucket (`archi/06-storage-and-scale.md`, "The
-/// archive and the blobs"), as paths under the root: a run's at
-/// `{root}/blobs/{tenant}/{run}/sha256/{hex digest}`, a tenant's test at
-/// `{root}/tests/{tenant}/sha256/{hex digest}`. Tenant ids are case-sensitive and file systems
+/// archive and the blobs"), as paths under the root, the first two hex digits a directory of
+/// their own (`archi/07-code-architecture.md`, "Embedded server and CLI"): a run's at
+/// `{root}/blobs/{tenant}/{run}/sha256/{ab}/{hex digest}`, a tenant's test at
+/// `{root}/tests/{tenant}/sha256/{ab}/{hex digest}`. Tenant ids are case-sensitive and file systems
 /// may not be (macOS, Windows), so a capital letter of a tenant id is written `+` and the
 /// letter in lowercase: `Acme` lives in `+acme`, apart from `acme`. A put writes a staging file
 /// in `{root}/.staging`, syncs it, then renames it to its path without replacing an existing
@@ -68,14 +69,15 @@ impl FileBlobs {
             .join(hex)
     }
 
-    /// The path of an owner's blob: `{root}/blobs/{tenant}/{run}/sha256/{abcdef…}` or
-    /// `{root}/tests/{tenant}/sha256/{abcdef…}`, the tenant's capital letters escaped.
+    /// The path of an owner's blob: `{root}/blobs/{tenant}/{run}/sha256/{ab}/{abcdef…}` or
+    /// `{root}/tests/{tenant}/sha256/{ab}/{abcdef…}`, the tenant's capital letters escaped.
     pub fn path_in(&self, owner: &BlobOwner, digest: Digest) -> PathBuf {
         let directory = match owner {
             BlobOwner::Run(run) => self.run_directory(run),
             BlobOwner::Tests(tenant) => self.root.join("tests").join(tenant_directory(tenant)),
         };
-        directory.join("sha256").join(digest.to_hex())
+        let hex = digest.to_hex();
+        directory.join("sha256").join(&hex[..2]).join(hex)
     }
 
     /// The directory of a run's blobs: `{root}/blobs/{tenant}/{run}`.
@@ -86,7 +88,7 @@ impl FileBlobs {
             .join(run.id.to_string())
     }
 
-    fn staging(&self) -> PathBuf {
+    pub(crate) fn staging(&self) -> PathBuf {
         self.root.join(STAGING)
     }
 }
@@ -200,7 +202,7 @@ fn link(source: &Path, target: &Path) -> io::Result<()> {
 }
 
 /// Removes a directory and everything under it, durably; a missing directory is not an error.
-fn remove_directory(dir: &Path) -> io::Result<()> {
+pub(crate) fn remove_directory(dir: &Path) -> io::Result<()> {
     match fs::remove_dir_all(dir) {
         Ok(()) => sync_dir(parent(dir)?),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -211,7 +213,7 @@ fn remove_directory(dir: &Path) -> io::Result<()> {
 /// The directory of a tenant: its id, each capital letter written `+` and the letter in
 /// lowercase. Two tenants never share a directory, even on a file system that ignores case: the
 /// name holds no capital letter, and a tenant id holds no `+`.
-fn tenant_directory(tenant: &TenantId) -> String {
+pub(crate) fn tenant_directory(tenant: &TenantId) -> String {
     let mut directory = String::with_capacity(tenant.as_str().len());
     for letter in tenant.as_str().chars() {
         if letter.is_ascii_uppercase() {
@@ -224,8 +226,8 @@ fn tenant_directory(tenant: &TenantId) -> String {
     directory
 }
 
-/// Writes a blob atomically and durably, unless it is already there.
-fn write(staging: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Writes a file atomically and durably, unless it is already there.
+pub(crate) fn write(staging: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     if path.try_exists()? {
         // Blobs are immutable: a second put changes nothing.
         return Ok(());
@@ -313,7 +315,7 @@ fn failed(action: &str, path: &Path, error: &io::Error) -> BlobError {
 }
 
 /// Runs file I/O on Tokio's blocking threads.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, BlobError> + Send + 'static,
 ) -> Result<T, BlobError> {
     tokio::task::spawn_blocking(work)
