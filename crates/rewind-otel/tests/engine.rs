@@ -1,10 +1,13 @@
 //! The engine's service telemetry through `rewind-otel`, on the SDK's in-memory exporters: an
 //! activation is a child of its run span, a tool attempt a child of its tool call span, and
-//! every instrument of `rewind_engine::metrics` is recorded, the projector's run metrics included.
+//! every instrument of `rewind_engine::metrics` is recorded, the run metrics of the outbox's
+//! projections included.
 //!
-//! The engine runs with in-memory adapters, a virtual clock and a fake executor whose scripts
-//! are Rust closures, on this thread, under the layer of `ServiceTelemetry`.
+//! The run plane runs in the engine's driver: one node of one partition over the memory
+//! adapters, a virtual clock and a fake executor whose scripts are Rust closures, on this
+//! thread, under the layer of `ServiceTelemetry`.
 
+use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,17 +21,20 @@ use rewind_core::{
     ToolFailure, ToolFailureKind, ToolRoute, Toolset,
 };
 use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemorySpanExporter, MemoryWebhooks,
-    SeededEntropy, VirtualClock,
+    ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
+    MemoryPartitions, MemorySecrets, MemorySpanExporter, MemoryWebhooks, SeededEntropy,
+    VirtualClock,
 };
+use rewind_engine::driver::{Driver, PlaneClock};
+use rewind_engine::edge::Edge;
 use rewind_engine::metrics;
+use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::{
-    CallAuth, Clock as _, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError,
-    InvalidScript, ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
+    CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript, NodeId,
+    QuarantineKind, RunRef, ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
 };
-use rewind_engine::projector::{Projector, ProjectorConfig};
 use rewind_engine::telemetry::{SpanKey, TelemetryConfig, span_id};
-use rewind_engine::{ActivationOutcome, Adapters, DriveOptions, Engine, EngineConfig, StartRun};
+use rewind_engine::{CacheConfig, StartRun};
 use rewind_otel::{ServiceConfig, ServiceTelemetry};
 use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -56,17 +62,9 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
             Dispatched::Result(json!({ "title": "Flaky" }))
         }
     });
-    let engine = engine(Programs::default(), flaky, EngineConfig::default());
-    let run = engine
-        .start_run(request("flow"))
-        .await
-        .expect("started")
-        .run;
-    engine
-        .run_until_idle_virtual(&DriveOptions::default())
-        .await
-        .expect("driven");
-    project(&engine).await;
+    let mut world = World::new(Programs::default(), flaky, CacheConfig::default()).await;
+    let run = world.start(request("flow")).await;
+    world.driver.run_until_idle_virtual().await.expect("driven");
     drop(_default);
     backend.telemetry.flush().expect("flush");
 
@@ -99,11 +97,19 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
                 .all(|kv| kv.key.as_str() != "run")
         );
     }
-    let fences: Vec<String> = activations
+    // An activation's id is `H(run, "activation", index of its first entry)`: the start's
+    // `run_started` and `schedule_tool_call`, then the call's result at 2.
+    let mut ids: Vec<String> = activations
         .iter()
         .map(|span| span.span_context.span_id().to_string())
         .collect();
-    assert!(fences.contains(&span_id(run.id, SpanKey::Activation(1)).to_string()));
+    ids.sort();
+    let mut expected = vec![
+        span_id(run.id, SpanKey::ActivationAt(0)).to_string(),
+        span_id(run.id, SpanKey::ActivationAt(2)).to_string(),
+    ];
+    expected.sort();
+    assert_eq!(ids, expected);
     // Each attempt is a child of the tool call span.
     let attempts = backend.spans("tool_attempt");
     assert_eq!(attempts.len(), 2);
@@ -149,7 +155,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         backend.series(metrics::TOOL_ATTEMPT_RETRIES),
         vec![(vec![label("rewind.tool", ISSUE)], 1)]
     );
-    // Run metrics, projected from the journal.
+    // Run metrics, from the outbox's projections of the committed entries.
     assert_eq!(backend.series(metrics::RUNS_STARTED), vec![(vec![], 1)]);
     assert_eq!(
         backend.series(metrics::RUNS_ENDED),
@@ -182,34 +188,44 @@ async fn replays_cache_misses_and_quarantines_are_measured() {
     let _default = tracing::subscriber::set_default(subscriber);
 
     // No instance is kept: every activation replays the history.
-    let mut config = EngineConfig::default();
-    config.cache.max_instances = 0;
     let programs = Programs::default();
-    let engine = engine(
+    let mut world = World::new(
         programs.clone(),
         Dispatcher::new(|_| Dispatched::Result(json!({ "title": "Stable" }))),
-        config,
-    );
-    let run = engine
-        .start_run(request("diverge"))
-        .await
-        .expect("started")
-        .run;
-    engine
-        .run_until_idle_virtual(&DriveOptions::default())
-        .await
-        .expect("driven");
+        CacheConfig {
+            max_instances: 0,
+            ..CacheConfig::default()
+        },
+    )
+    .await;
+    let run = world.start(request("diverge")).await;
+    world.driver.run_until_idle_virtual().await.expect("driven");
     // The script changes under the run: its next replay diverges.
     programs.changed.store(true, Ordering::SeqCst);
-    engine
-        .signal(&run, "go", json!(null), None)
-        .await
-        .expect("signalled");
-    let report = engine.activate_next().await.expect("activated");
-    assert!(matches!(
-        report.map(|report| report.outcome),
-        Some(ActivationOutcome::Quarantined { .. })
-    ));
+    {
+        let World {
+            edge, driver, at, ..
+        } = &mut world;
+        let mut gateway = driver.gateway(at);
+        edge.signal(&mut gateway, &run, "go", json!(null), None)
+            .await
+            .expect("signalled");
+    }
+    world.driver.run_until_idle().await.expect("driven");
+    let view = {
+        let World {
+            edge, driver, at, ..
+        } = &mut world;
+        let mut gateway = driver.gateway(at);
+        edge.get_run(&mut gateway, &run)
+            .await
+            .expect("read")
+            .expect("a run")
+    };
+    assert_eq!(
+        view.head.quarantine.map(|quarantine| quarantine.kind),
+        Some(QuarantineKind::NonDeterminism)
+    );
     drop(_default);
     backend.telemetry.flush().expect("flush");
 
@@ -329,33 +345,69 @@ fn label(key: &str, value: &str) -> (String, String) {
 }
 
 // -------------------------------------------------------------------------------------------
-// The engine
+// The run plane
 
-type TestEngine = Engine<
-    MemoryJournal,
+type TestPlane = Wiring<
+    MemoryCatalog,
+    MemoryPartitions,
+    MemoryArchive,
     MemoryBlobs,
     Programs,
     Dispatcher,
+    MemorySecrets,
+    MemorySpanExporter,
+    MemoryWebhooks,
     VirtualClock,
     SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
 >;
 
-fn engine(programs: Programs, dispatcher: Dispatcher, config: EngineConfig) -> TestEngine {
-    Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
+/// One node of one partition, its edge, and the driver that steps it.
+struct World {
+    driver: Driver<TestPlane, MemoryCluster>,
+    edge: Edge<TestPlane>,
+    at: NodeId,
+}
+
+impl World {
+    async fn new(programs: Programs, dispatcher: Dispatcher, cache: CacheConfig) -> Self {
+        let changes = ControlPlaneChanges::new();
+        let cluster = MemoryCluster::with_changes(1, changes.clone());
+        let blobs = MemoryBlobs::new();
+        let plane = Arc::new(Wiring {
+            catalog: MemoryCatalog::with_changes(changes.clone()),
+            partitions: MemoryPartitions::new(),
+            archive: MemoryArchive::with_blobs(blobs.clone()),
+            blobs,
             executor: programs,
             dispatcher,
+            secrets: MemorySecrets::with_changes(changes),
+            spans: MemorySpanExporter::new(),
+            webhooks: MemoryWebhooks::new(),
             clock: VirtualClock::new(T0),
             entropy: SeededEntropy::new(7),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        config,
-    )
+        });
+        let node = NodeId::new("otel").expect("a node id");
+        let mut config = NodeConfig::new(node, NonZeroU16::MIN);
+        config.horizon = std::time::Duration::from_secs(100 * 365 * 86_400);
+        config.cache = cache;
+        let mut driver = Driver::new(cluster, Arc::new(PlaneClock(Arc::clone(&plane))));
+        let at = driver
+            .add_node(Arc::clone(&plane), config.clone())
+            .await
+            .expect("a node");
+        driver.run_until_idle().await.expect("started");
+        let edge = Edge::new(plane, config);
+        Self { driver, edge, at }
+    }
+
+    async fn start(&mut self, request: StartRun) -> RunRef {
+        let mut gateway = self.driver.gateway(&self.at);
+        self.edge
+            .start_run(&mut gateway, request)
+            .await
+            .expect("started")
+            .run
+    }
 }
 
 /// A run of the script `name`, with the MCP tool `github.get_issue`.
@@ -375,24 +427,6 @@ fn request(name: &str) -> StartRun {
     );
     let toolset = Toolset::new([server], [issue]).expect("a toolset");
     StartRun::new(Script::new(name), toolset, json!({}))
-}
-
-/// Applies every feed item: the run metrics are measured once acknowledged.
-async fn project(engine: &TestEngine) {
-    let read_model = MemoryReadModel::new();
-    let exporter = MemorySpanExporter::new();
-    let webhooks = MemoryWebhooks::new();
-    let projector = Projector {
-        journal: engine.journal(),
-        read_model: &read_model,
-        exporter: &exporter,
-        webhooks: &webhooks,
-        config: ProjectorConfig::default(),
-    };
-    projector
-        .project_all(engine.clock().now())
-        .await
-        .expect("projected");
 }
 
 /// Answers each call with a function of it.
