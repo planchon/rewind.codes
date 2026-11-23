@@ -222,6 +222,41 @@ async fn a_ten_day_sleep_takes_no_wall_clock_time() {
 }
 
 #[tokio::test]
+async fn thousands_of_timers_due_at_once_fire_until_the_history_is_full() {
+    // `await Promise.all(Array.from({ length: 9000 }, () => sleep(1)))`, again and again: each
+    // batch of timers fires in the activations of a few commits, and each delivery costs what
+    // it appends, not the size of the run's state.
+    const AT_ONCE: u32 = 9_000;
+    let programs = FakeExecutor::new().with(
+        "bursts",
+        |run| {
+            for _ in 0..AT_ONCE {
+                run.timer(1);
+            }
+        },
+        |run, delivery| {
+            let Delivery::TimerFired { seq } = delivery else {
+                panic!("unexpected {delivery:?}");
+            };
+            if seq.0 % AT_ONCE == 0 {
+                for _ in 0..AT_ONCE {
+                    run.timer(1);
+                }
+            }
+        },
+    );
+    let mut world = World::new(programs, RecordingDispatcher::echo()).await;
+    let run = world.run(request("bursts", json!({}))).await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Aborted);
+    let history = world.history(&run).await;
+    let Event::Lifecycle(Lifecycle::RunAborted(reason)) = &history.last().unwrap().event else {
+        panic!("the run is aborted");
+    };
+    assert_eq!(reason.kind, AbortKind::LimitExceeded);
+    assert_eq!(reason.message, "the history would exceed 50000 entries");
+}
+
+#[tokio::test]
 async fn the_deadline_cancels_a_run_through_the_normal_path() {
     let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
     let mut request = request("approval", json!({}));

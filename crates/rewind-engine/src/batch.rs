@@ -111,6 +111,8 @@ pub(crate) struct Batch<'l> {
     /// they run nothing of a run's, as a fork's compatibility check.
     namespace: Option<crate::ports::NamespaceName>,
     pub(crate) state: RunState,
+    /// The state before the batch's first entry: what a refused response is undone from.
+    initial: RunState,
     last_recorded_at: Timestamp,
     entries: Vec<HistoryEntry>,
     pub(crate) consumed: Vec<u64>,
@@ -133,6 +135,7 @@ impl<'l> Batch<'l> {
             run_id: run.id,
             tenant: run.tenant.clone(),
             namespace,
+            initial: state.clone(),
             state,
             last_recorded_at,
             entries: Vec::new(),
@@ -187,39 +190,54 @@ impl<'l> Batch<'l> {
             return self.abort(at, trigger, reason);
         }
 
-        let mut state = self.state.clone();
-        let mut group = Vec::with_capacity(response.len() + 1);
+        // Folded in place: a copy of the state for each response would cost the size of the
+        // state (every pending timer and call) at each delivery. A response refused is undone.
+        let start = self.entries.len();
+        let mut refused = None;
         for event in std::iter::once(trigger.clone()).chain(response) {
             let entry = HistoryEntry {
-                index: state.history_len(),
+                index: self.state.history_len(),
                 recorded_at: at,
                 event,
             };
-            if let Err(err) = state.apply(&entry) {
-                let reason = AbortReason {
+            if let Err(err) = self.state.apply(&entry) {
+                refused = Some(AbortReason {
                     kind: AbortKind::Internal,
                     message: format!("the executor emitted an invalid response: {err}"),
-                };
-                return self.abort(at, trigger, reason);
+                });
+                break;
             }
-            group.push(entry);
+            self.entries.push(entry);
         }
-        if grace == Grace::Ends && !state.is_terminal() {
-            let reason = AbortReason {
+        if refused.is_none() && grace == Grace::Ends && !self.state.is_terminal() {
+            refused = Some(AbortReason {
                 kind: AbortKind::Cancelled,
                 message: "the script did not end within its cancellation grace".into(),
-            };
+            });
+        }
+        if let Some(reason) = refused {
+            self.undo(start)?;
             return self.abort(at, trigger, reason);
         }
 
         if !self.copying {
-            self.commands += group
+            self.commands += self.entries[start..]
                 .iter()
                 .filter(|entry| matches!(entry.event, Event::Command(_)))
                 .count();
         }
+        Ok(())
+    }
+
+    /// Drops the entries appended from `start` on, and folds the state again without them,
+    /// from the state the batch began with.
+    fn undo(&mut self, start: usize) -> Result<(), HistoryError> {
+        self.entries.truncate(start);
+        let mut state = self.initial.clone();
+        for entry in &self.entries {
+            state.apply(entry)?;
+        }
         self.state = state;
-        self.entries.extend(group);
         Ok(())
     }
 

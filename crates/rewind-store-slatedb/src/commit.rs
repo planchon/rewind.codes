@@ -9,8 +9,9 @@
 //! the attempts not sealed, the timers by kind, the back references of a run's webhook tokens,
 //! outbox entries and start key, and the gauges of each namespace.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, PoisonError};
 
 use rewind_core::HistoryEntry;
 use rewind_engine::ports::partition::{Activation, CreateRun};
@@ -54,6 +55,7 @@ pub(crate) async fn commit(log: &SlateLog, batch: Batch) -> Result<(), Partition
     let apply = Apply {
         log,
         txn: &transaction,
+        runs: Mutex::new(HashMap::new()),
     };
     for change in batch.changes {
         apply.change(change).await?;
@@ -101,6 +103,13 @@ impl RunState {
 struct Apply<'a> {
     log: &'a SlateLog,
     txn: &'a DbTransaction,
+    /// The runs the transaction read or wrote, as they are in it: `None` for one that does not
+    /// exist.
+    runs: Mutex<HashMap<RunRef, Option<RunState>>>,
+}
+
+fn missing(run: &RunRef) -> PartitionError {
+    conflict(format!("run {run} does not exist or has been erased"))
 }
 
 impl Apply<'_> {
@@ -186,28 +195,53 @@ impl Apply<'_> {
     // ---------------------------------------------------------------------------------------
     // Runs
 
+    /// Reads the run into the transaction's memory, unless a change before read or wrote it:
+    /// the changes of a batch to one run (its thousands of timers set, fired) decode its head
+    /// and its summary, which hold every wait of the run, once.
+    async fn remember(&self, run: &RunRef) -> Result<(), PartitionError> {
+        if self.runs().contains_key(run) {
+            return Ok(());
+        }
+        let state = match self.get::<record::RunHead>(&keys::head(run.id)).await? {
+            Some(head) if head.tenant == run.tenant.as_str() => {
+                let head = codec::head_of(head)?;
+                let summary = self
+                    .get::<record::Summary>(&keys::summary(run))
+                    .await?
+                    .map(codec::summary_of)
+                    .transpose()?;
+                Some(RunState { head, summary })
+            }
+            _ => None,
+        };
+        self.runs().insert(run.clone(), state);
+        Ok(())
+    }
+
+    fn runs(&self) -> std::sync::MutexGuard<'_, HashMap<RunRef, Option<RunState>>> {
+        self.runs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The run, when it exists and is the tenant's.
     async fn load(&self, run: &RunRef) -> Result<Option<RunState>, PartitionError> {
-        let Some(head) = self.get::<record::RunHead>(&keys::head(run.id)).await? else {
-            return Ok(None);
-        };
-        if head.tenant != run.tenant.as_str() {
-            return Ok(None);
-        }
-        let head = codec::head_of(head)?;
-        let summary = self
-            .get::<record::Summary>(&keys::summary(run))
-            .await?
-            .map(codec::summary_of)
-            .transpose()?;
-        Ok(Some(RunState { head, summary }))
+        self.remember(run).await?;
+        Ok(self.runs().get(run).cloned().flatten())
     }
 
     /// The run a change is about: refused when it does not exist or has been erased.
     async fn existing(&self, run: &RunRef) -> Result<RunState, PartitionError> {
-        self.load(run)
-            .await?
-            .ok_or_else(|| conflict(format!("run {run} does not exist or has been erased")))
+        self.load(run).await?.ok_or_else(|| missing(run))
+    }
+
+    /// Whether the attempt of the run a change is about has ended: refused when the run does
+    /// not exist or has been erased.
+    async fn existing_ended(&self, run: &RunRef) -> Result<bool, PartitionError> {
+        self.remember(run).await?;
+        self.runs()
+            .get(run)
+            .and_then(Option::as_ref)
+            .map(|state| state.head.is_ended())
+            .ok_or_else(|| missing(run))
     }
 
     /// Writes what changed of a run, `before` as it was and `after` as it is (`None`: erased):
@@ -221,6 +255,7 @@ impl Apply<'_> {
             return Ok(());
         };
         let run = state.head.run.clone();
+        self.runs().insert(run.clone(), after.cloned());
         match after {
             Some(after) => {
                 let head = codec::head_record(&after.head);
@@ -299,8 +334,8 @@ impl Apply<'_> {
                 item,
                 signal_key,
             } => {
-                let state = self.existing(&run).await?;
-                if state.head.is_ended() {
+                let ended = self.existing_ended(&run).await?;
+                if ended {
                     return Ok(());
                 }
                 if let Some(key) = &signal_key
@@ -323,8 +358,8 @@ impl Apply<'_> {
             }
             Change::Activation(activation) => self.activate(*activation).await,
             Change::Task { run, seq, change } => {
-                let state = self.existing(&run).await?;
-                if state.head.is_ended() {
+                let ended = self.existing_ended(&run).await?;
+                if ended {
                     return Ok(());
                 }
                 match change {
@@ -389,7 +424,7 @@ impl Apply<'_> {
                 self.write_run(Some(&before), Some(&after)).await
             }
             Change::Watch { run, watcher } => {
-                self.existing(&run).await?;
+                self.existing_ended(&run).await?;
                 let at = keys::watcher(&run, watcher.run);
                 if !self.exists(&at).await? {
                     self.put(&at, &codec::watcher_record(&watcher))?;
@@ -447,8 +482,8 @@ impl Apply<'_> {
                 Ok(())
             }
             Change::WebhookToken { run, name, hash } => {
-                let state = self.existing(&run).await?;
-                if state.head.is_ended() {
+                let ended = self.existing_ended(&run).await?;
+                if ended {
                     return Ok(());
                 }
                 if let Some(bound) = self
@@ -642,7 +677,7 @@ impl Apply<'_> {
                     }
                     other => {
                         if let Some(run) = other.run() {
-                            self.existing(run).await?;
+                            self.existing_ended(run).await?;
                         }
                     }
                 }
