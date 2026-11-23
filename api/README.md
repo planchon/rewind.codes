@@ -77,7 +77,7 @@ The problem types:
 | `role-in-use` | 409 | Deleting a role that a grant still points to |
 | `namespace-deleting` | 409 | Starting a run in, or minting a token for, a namespace being erased |
 | `last-owner` | 409 | Changing or removing a grant that would leave the organization without an `owner` |
-| `task-gone` | 410 | The task no longer exists: its run ended, it was answered, or it was handed again after the stream it was handed on stayed closed past its grace (or, on the long-poll, its claim was lost) |
+| `task-gone` | 410 | The task no longer exists: its run ended, it was answered, or it was handed again after the stream it was handed on stayed closed past its grace |
 | `payload-too-large` | 413 | A body or payload above the server's limits; a host-tool failure above 64 KiB |
 | `unsupported-media-type` | 415 | A body that is not JSON where JSON is expected |
 | `invalid-script` | 422 | The script was refused before any run exists |

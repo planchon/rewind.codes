@@ -14,17 +14,22 @@ against recorded runs, and observability.
 - Architecture: [archi/](archi/README.md), the specification the code follows.
 - TypeScript SDK: [sdk/typescript/](sdk/typescript/README.md), the client, the host-tool worker and the agent tools.
 - Dashboard: [dashboard/](dashboard/README.md), the operator's view of every run, served by `rewind-server`.
+- Self-hosting: [deploy/](deploy/README.md), a deployment of nodes on Postgres (the control plane) and a bucket on R2
+  or S3 (the runs).
 
 ## Crates
 
 | Crate | Layer | Role |
 | --- | --- | --- |
 | [`rewind-core`](crates/rewind-core) | domain | The journal, payload identity (RFC 8785), run state, the determinism check. Pure: no I/O, no serde. |
-| [`rewind-engine`](crates/rewind-engine) | application | Use cases, ports, activation, replay, driver, in-memory adapters, store conformance suite. |
-| [`rewind-format`](crates/rewind-format) | adapter support | The stored journal, format v1. |
+| [`rewind-engine`](crates/rewind-engine) | application | Use cases, ports, the actors of a node (partition owners, executors, organizations, router, edge), replay, the deterministic driver, in-memory adapters, conformance suites. |
+| [`rewind-format`](crates/rewind-format) | adapter support | The stored formats, v1: journals, partition records, cassettes, pinned toolsets. |
 | [`rewind-runtime`](crates/rewind-runtime) | adapter | The V8 sandbox behind the `ScriptExecutor` port. |
-| [`rewind-blob`](crates/rewind-blob) | adapter | The `BlobStore` on local files and on S3, and the workers' blob cache. |
-| [`rewind-architecture-tests`](crates/rewind-architecture-tests) | tooling | The dependency rules between crates. |
+| [`rewind-store-slatedb`](crates/rewind-store-slatedb) | adapter | The partitions on SlateDB, in a bucket or a directory. |
+| [`rewind-store-postgres`](crates/rewind-store-postgres), [`rewind-store-turso`](crates/rewind-store-turso) | adapter | The control plane: the catalog, access, secrets, and the cluster's members. |
+| [`rewind-blob`](crates/rewind-blob) | adapter | The `BlobStore` and the run archive on local files and on S3, and their cache. |
+| [`rewind-server`](crates/rewind-server) | composition root | `rewind server`: one process is the HTTP edge and a node; the embedded server of a `.rewind/` directory. |
+| [`rewind-architecture-tests`](crates/rewind-architecture-tests) | tooling | The dependency rules between crates, no timer outside the timer wheel, the backoff helpers and the clocks that read no store, and `unsafe` only where it is allowed. |
 | [`rewind-e2e`](crates/rewind-e2e) | tooling | The end-to-end corpus, recorded and replayed. |
 | [`evals`](evals) | tooling | The eval suite: models solve tasks end to end against fake MCP servers ([evals/README.md](evals/README.md)). |
 
