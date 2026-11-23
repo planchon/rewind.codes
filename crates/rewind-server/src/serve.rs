@@ -393,6 +393,11 @@ async fn start_wired(
     node_config.public_url.clone_from(&config.public_url);
     node_config.default_ttl = config.default_ttl;
     node_config.max_ttl = config.max_ttl;
+    if plane.clock.is_virtual() {
+        // In virtual time the node jumps to its next timer: the wheel holds them all, as the
+        // driver's does.
+        node_config.horizon = Duration::from_secs(100 * 365 * 86_400);
+    }
     // The node link's listener is bound before the node joins: its address is the node's.
     let linked = match &config.listen {
         Listen::Tcp {

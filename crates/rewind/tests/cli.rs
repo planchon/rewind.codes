@@ -261,8 +261,12 @@ fn a_signal_from_another_process_ends_a_waiting_run() {
     assert!(stdout.contains(&format!("run {id} completed")), "{stdout}");
     assert!(stdout.contains(r#"output: {"ok":true}"#), "{stdout}");
 
-    // The same key again: not delivered twice, and the run has ended anyway.
+    // The same key again: acknowledged and not delivered twice, though the run has ended; a
+    // new signal is refused, the run having ended.
     let ran = project.rewind(&["signal", &id, "approval", "{}", "--key", "d-1"]);
+    assert_eq!(ran.code, 0, "{ran:?}");
+    assert!(ran.stdout.contains("not sent again"), "{ran:?}");
+    let ran = project.rewind(&["signal", &id, "approval", "{}", "--key", "d-2"]);
     assert_eq!(ran.code, 6, "{ran:?}");
 }
 
@@ -681,18 +685,22 @@ fn work(
             .unix_socket(socket)
             .build()
             .unwrap();
+        let mut tasks = Tasks::open(&client, toolset).await;
         while child.try_wait().unwrap().is_none() {
-            let Ok(response) = client
-                .get(format!(
-                    "http://localhost/v1/tasks?toolset={toolset}&wait=500ms"
-                ))
-                .send()
+            // What the stream hands at once, answered in the order the script called it.
+            let mut handed: Vec<Value> = tasks
+                .next(std::time::Duration::from_millis(500))
                 .await
-            else {
-                continue;
-            };
-            let batch: Value = response.json().await.unwrap_or(Value::Null);
-            for task in batch["tasks"].as_array().cloned().unwrap_or_default() {
+                .into_iter()
+                .collect();
+            while !handed.is_empty() {
+                match tasks.next(std::time::Duration::from_millis(100)).await {
+                    Some(task) => handed.push(task),
+                    None => break,
+                }
+            }
+            handed.sort_by_key(|task| task["seq"].as_u64());
+            for task in handed {
                 let tool = task["tool"].as_str().unwrap().to_owned();
                 let token = task["token"].as_str().unwrap();
                 let count = answered.entry(tool.clone()).or_default();
@@ -827,7 +835,58 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     assert_eq!(fork["parent"]["run"], id.as_str());
 }
 
-/// Claims the one host-tool task of the embedded server and completes it, as an SDK worker
+/// The task stream of a toolset over the embedded server's socket, as an SDK worker holds it:
+/// each `task` event's data.
+struct Tasks {
+    response: reqwest::Response,
+    buffer: String,
+}
+
+impl Tasks {
+    async fn open(client: &reqwest::Client, toolset: &str) -> Self {
+        let response = client
+            .get(format!(
+                "http://localhost/v1/tasks/stream?toolset={toolset}&slots=100"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "{response:?}");
+        Self {
+            response,
+            buffer: String::new(),
+        }
+    }
+
+    /// The next task handed, `None` when none comes within `wait`.
+    async fn next(&mut self, wait: std::time::Duration) -> Option<Value> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            if let Some(end) = self.buffer.find("\n\n") {
+                let event: String = self.buffer.drain(..end + 2).collect();
+                let mut name = None;
+                let mut data = String::new();
+                for line in event.lines() {
+                    if let Some(value) = line.strip_prefix("event:") {
+                        name = Some(value.trim().to_owned());
+                    } else if let Some(value) = line.strip_prefix("data:") {
+                        data.push_str(value.trim_start());
+                    }
+                }
+                if name.as_deref() == Some("task") {
+                    return serde_json::from_str(&data).ok();
+                }
+                continue;
+            }
+            match tokio::time::timeout_at(deadline, self.response.chunk()).await {
+                Ok(Ok(Some(chunk))) => self.buffer.push_str(&String::from_utf8_lossy(&chunk)),
+                _ => return None,
+            }
+        }
+    }
+}
+
+/// Takes the one host-tool task of the embedded server and completes it, as an SDK worker
 /// would, over the server's socket.
 fn complete_host_task(project: &Project, toolset: &str, result: Value) {
     let socket = project.state().join("server.sock");
@@ -840,20 +899,12 @@ fn complete_host_task(project: &Project, toolset: &str, result: Value) {
             .unix_socket(socket)
             .build()
             .unwrap();
-        let batch: Value = client
-            .get(format!(
-                "http://localhost/v1/tasks?toolset={toolset}&wait=10s"
-            ))
-            .send()
+        let mut tasks = Tasks::open(&client, toolset).await;
+        let task = tasks
+            .next(std::time::Duration::from_secs(10))
             .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let token = batch["tasks"][0]["token"]
-            .as_str()
-            .expect("a task")
-            .to_owned();
+            .expect("a task");
+        let token = task["token"].as_str().expect("a task's token").to_owned();
         let response = client
             .post(format!("http://localhost/v1/tasks/{token}/complete"))
             .json(&json!({ "result": result }))

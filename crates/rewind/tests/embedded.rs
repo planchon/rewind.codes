@@ -114,7 +114,10 @@ async fn one_server_holds_the_directory_until_it_is_asked_to_stop() {
     let mut server = start(&dir, &[]);
     let info = ready(&server).await;
     assert_eq!(info["embedded"], true);
-    assert_eq!(info["roles"], json!(["api", "worker"]));
+    assert_eq!(
+        (info["partitions"].clone(), info["nodes"].clone()),
+        (json!(1), json!(1))
+    );
     let mode = std::fs::metadata(&server.socket)
         .unwrap()
         .permissions()
