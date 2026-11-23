@@ -231,7 +231,7 @@ pub(super) async fn runs(
                 .map(|(tool, calls)| (tool.clone(), calls.calls)),
             top_n,
         ),
-        errors: top(failure_errors(&counters).into_iter(), top_n),
+        errors: top(failure_errors(&counters), top_n),
         scripts: top(
             counters
                 .scripts

@@ -526,29 +526,27 @@ export default async function main() {
         ..TaskStreamQuery::default()
     };
     let mut devs = support::TaskWorker::open(&dev, &query).await;
-    let ours = vec![devs.task().await];
-    assert_eq!(ours[0].run_id, dev_run.id);
-    assert_eq!(ours[0].labels, Labels::from_iter([("env", "dev")]));
+    let ours = devs.task().await;
+    assert_eq!(ours.run_id, dev_run.id);
+    assert_eq!(ours.labels, Labels::from_iter([("env", "dev")]));
     assert!(
         devs.none_within(std::time::Duration::from_millis(300))
             .await,
         "the prod run's task is not dev's"
     );
-    let theirs = vec![support::TaskWorker::open(&prod, &query).await.task().await];
-    assert_eq!(theirs[0].run_id, prod_run.id);
+    let theirs = support::TaskWorker::open(&prod, &query).await.task().await;
+    assert_eq!(theirs.run_id, prod_run.id);
 
     // A token of the other scope's task is answered as a task that no longer exists.
     let answer = CompleteTask {
         result: serde_json::json!("from dev"),
     };
-    for refused in [dev.complete_task(&theirs[0].token, &answer).await] {
-        let refused = problem(refused.unwrap_err());
-        assert_eq!(
-            (refused.status, refused.kind()),
-            (410, Some(ProblemType::TaskGone))
-        );
-    }
-    dev.complete_task(&ours[0].token, &answer).await.unwrap();
+    let refused = problem(dev.complete_task(&theirs.token, &answer).await.unwrap_err());
+    assert_eq!(
+        (refused.status, refused.kind()),
+        (410, Some(ProblemType::TaskGone))
+    );
+    dev.complete_task(&ours.token, &answer).await.unwrap();
     let ended = dev_harness
         .get_run(&dev_run.id, support::wait("20s"))
         .await
@@ -557,7 +555,7 @@ export default async function main() {
         ended.output.and_then(|output| output.value),
         Some(serde_json::json!("from dev"))
     );
-    prod.complete_task(&theirs[0].token, &answer).await.unwrap();
+    prod.complete_task(&theirs.token, &answer).await.unwrap();
     server.stop().await;
 }
 

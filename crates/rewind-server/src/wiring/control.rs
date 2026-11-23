@@ -1102,8 +1102,10 @@ impl CatalogStore for ControlPlane {
     }
 }
 
-/// The cluster of this server's control plane.
+/// The cluster of this server's control plane. One value per process: its size does not
+/// matter.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ServerCluster {
     Turso(TursoCluster),
     Postgres(PostgresCluster),
@@ -1124,8 +1126,10 @@ impl Cluster for ServerCluster {
     }
 }
 
-/// The membership of this node in the cluster.
+/// The membership of this node in the cluster. One value per process: its size does not
+/// matter.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ServerMembership {
     Turso(TursoMembership),
     Postgres(PostgresMembership),

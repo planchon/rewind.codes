@@ -104,15 +104,11 @@ impl Tail {
                 }
                 continue;
             }
-            let Some(changes) = self.changes.as_mut() else {
-                return None;
-            };
+            let changes = self.changes.as_mut()?;
             tokio::select! {
                 () = self.rights.lost() => return None,
                 changed = changes.recv() => {
-                    let Some(changed) = changed else {
-                        return None;
-                    };
+                    let changed = changed?;
                     if let Err(error) = self.changed(changed).await {
                         tracing::warn!(run = %self.run, detail = %error.0.detail, "the event stream stops");
                         return None;
