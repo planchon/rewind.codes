@@ -1,11 +1,11 @@
 //! The engine's state as the HTTP API `/v1` shows it (`rewind-api`'s DTOs), built as `rewind-server`
-//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`, `http/toolsets.rs`), so that the
-//! agent tools render what they render from the server's answers.
+//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`, `http/toolsets.rs`,
+//! `http/search.rs`), so that the agent tools render what they render from the server's answers:
+//! a run from its head and its history, a run of a list from its summary.
 //!
 //! The evals cannot depend on `rewind-server`, a composition root: what follows repeats its
-//! rules. Two differences: `attempts` stays empty (the server reads it from the read model,
-//! which the world does not project, and the SDK's texts do not show it), and the call whose
-//! `ToolError` failed the run is found by the message the runtime writes, `{tool} failed:
+//! rules. Two differences: `attempts` stays empty (the SDK's texts do not show it), and the call
+//! whose `ToolError` failed the run is found by the message the runtime writes, `{tool} failed:
 //! {message}`.
 
 use std::collections::BTreeMap;
@@ -23,9 +23,11 @@ use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunOutcome, RunState, Seq,
 };
-use rewind_engine::EngineError;
+use rewind_engine::edge::EdgeError;
+use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    InvalidScript, JournalStore, ParkKind, QuarantineKind, RunRef, StoredWorkflow,
+    CatalogStore, InvalidScript, NamespaceName, ParkKind, QuarantineKind, RunMetadata, RunRef,
+    StoredWorkflow,
 };
 
 use crate::world::World;
@@ -40,18 +42,35 @@ fn payload(payload: &rewind_core::Payload) -> Payload {
     }
 }
 
+fn unavailable(message: String) -> EdgeError {
+    EdgeError::Unavailable(message)
+}
+
+/// The trace a run's spans belong to: its own, or the one its caller's `traceparent` names
+/// (`rewind_engine::telemetry::trace_of`).
+fn trace_id(run: &RunRef, metadata: &RunMetadata) -> String {
+    metadata
+        .trace_context
+        .as_ref()
+        .and_then(|context| {
+            let trace = context.traceparent.split('-').nth(1)?;
+            (trace.len() == 32 && trace.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| trace.to_ascii_lowercase())
+        })
+        .unwrap_or_else(|| format!("{:032x}", run.id.as_uuid().as_u128()))
+}
+
 /// `GET /v1/runs/{id}`.
-pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
-    let engine = &world.engine;
-    let record = engine
-        .get_run(run)
+pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
+    let record = world
+        .run_view(run)
         .await?
-        .ok_or(EngineError::RunNotFound(run.id))?;
+        .ok_or(Refusal::RunNotFound(run.id))?
+        .head;
     // Every payload loaded, as the server loads those it shows.
-    let history = engine.export_history(run).await?;
-    let state = RunState::from_history(&history).map_err(|error| EngineError::CorruptHistory {
-        run_id: run.id,
-        error,
+    let history = world.history(run).await?;
+    let state = RunState::from_history(&history).map_err(|error| {
+        unavailable(format!("the history of run {} is corrupt: {error}", run.id))
     })?;
     let status = if history.is_empty() {
         RunStatus::Pending
@@ -68,10 +87,11 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
     match state.outcome() {
         Some(RunOutcome::Completed { output: value }) => output = Some(payload(value)),
         Some(RunOutcome::Failed { error: failure }) => {
-            let source = engine
-                .journal()
+            let source = world
+                .catalog()
                 .get_script(&run.tenant, record.script)
-                .await?
+                .await
+                .map_err(|error| unavailable(error.to_string()))?
                 .map(|stored| stored.script.source().to_owned())
                 .unwrap_or_default();
             error = Some(run_error(failure, &history, &source));
@@ -84,43 +104,9 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
     } else {
         waiting(world, run, &history, &state).await?
     };
-    let (trace, _) = rewind_engine::telemetry::trace_of(&record);
-    let script_title = script_title(world, &run.tenant, record.script)
-        .await?
-        .map(|(title, _, _)| title);
-    let parent = match record.metadata.parent {
-        Some(parent) => Some(ForkParent {
-            run: parent.run.to_string(),
-            handle: handle_of(world, &run.tenant, parent.run).await?,
-            at: parent.at,
-        }),
-        None => None,
-    };
-    let started_by = match record.metadata.started_by {
-        Some(by) => Some(rewind_api::workflows::StartedBy {
-            run: by.run.to_string(),
-            handle: handle_of(world, &run.tenant, by.run).await?,
-            seq: by.seq.0,
-            detached: by.detached,
-        }),
-        None => None,
-    };
-    let workflow = match &record.metadata.workflow {
-        Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
-            name: workflow.name.clone(),
-            version: workflow.version.to_hex(),
-            number: engine
-                .journal()
-                .get_workflow(&run.tenant, workflow.version)
-                .await?
-                .map_or(0, |stored| stored.number),
-        }),
-        None => None,
-    };
     Ok(Run {
         id: run.id.to_string(),
-        handle: record.handle().to_string(),
-        namespace: namespace_of(&record)?,
+        namespace: namespace_of(run, &record.namespace)?,
         status,
         quarantine: record.quarantine.as_ref().map(|quarantine| Quarantine {
             cause: match quarantine.kind {
@@ -143,10 +129,25 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
             .iter()
             .map(|(server, secret)| (server.to_owned(), secret.to_string()))
             .collect(),
-        trace_id: trace.to_string(),
-        parent,
-        workflow,
-        started_by,
+        trace_id: trace_id(run, &record.metadata),
+        parent: record.metadata.parent.map(|parent| ForkParent {
+            run: parent.run.to_string(),
+            at: parent.at,
+        }),
+        workflow: record.metadata.workflow.as_ref().map(|workflow| {
+            rewind_api::workflows::RunWorkflow {
+                name: workflow.name.clone(),
+                version: workflow.version.to_hex(),
+            }
+        }),
+        started_by: record
+            .metadata
+            .started_by
+            .map(|by| rewind_api::workflows::StartedBy {
+                run: by.run.to_string(),
+                seq: by.seq.0,
+                detached: by.detached,
+            }),
         input: started.map(|started| payload(&started.input)),
         output,
         error,
@@ -203,7 +204,7 @@ async fn waiting(
     run: &RunRef,
     history: &[HistoryEntry],
     state: &RunState,
-) -> Result<Vec<Waiting>, EngineError> {
+) -> Result<Vec<Waiting>, EdgeError> {
     let mut calls = BTreeMap::new();
     let mut timers = BTreeMap::new();
     for entry in history {
@@ -223,7 +224,6 @@ async fn waiting(
         }
     }
     let tasks: BTreeMap<Seq, _> = world
-        .engine
         .tool_tasks(run)
         .await?
         .into_iter()
@@ -321,88 +321,44 @@ fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
     lines
 }
 
-/// A run in `GET /v1/runs`.
-pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineError> {
-    let record = world
-        .engine
-        .get_run(run)
-        .await?
-        .ok_or(EngineError::RunNotFound(run.id))?;
-    let history = world.engine.history(run).await?;
-    let state = RunState::from_history(&history).ok();
-    let mut tool_calls = 0;
-    let mut errors = 0;
-    for entry in &history {
-        match &entry.event {
-            Event::Command(Command::ScheduleToolCall { .. }) => tool_calls += 1,
-            Event::Completion(Completion::ToolCallFailed { .. }) => errors += 1,
-            _ => {}
-        }
-    }
-    let ending = state
-        .as_ref()
-        .and_then(RunState::outcome)
-        .and_then(rewind_engine::failures::ending);
-    let toolset = world
-        .engine
-        .journal()
-        .get_toolset(&run.tenant, record.toolset)
-        .await?
-        .map(|stored| stored.toolset);
-    let snapshot = rewind_engine::projector::run_snapshot(&history, toolset.as_ref());
-    let waiting_for: Vec<RunWait> = snapshot
-        .waits
-        .iter()
-        .map(|wait| RunWait {
-            kind: wait_kind(wait.waiting_for()),
-            seq: wait.seq.map(|seq| seq.0),
-            name: wait.name.clone(),
-            since: timestamp(wait.since),
-            until: wait.until.map(timestamp),
-            callsite: wait.callsite.map(Into::into),
-        })
-        .collect();
-    let wakes_at = snapshot.waits.iter().filter_map(|wait| wait.until).min();
-    let headline = world
-        .engine
-        .journal()
-        .get_script(&run.tenant, record.script)
-        .await?
-        .map(|stored| rewind_api::scripts::headline(stored.script.source()))
-        .unwrap_or_default();
-    let script_title = script_title(world, &run.tenant, record.script)
-        .await?
-        .map(|(title, _, _)| title);
+/// A run in `GET /v1/runs`, from its summary (`rewind-server`'s `http/search.rs`, `summary`).
+pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, EdgeError> {
+    let ending = run.ending.as_ref();
     Ok(RunSummary {
-        id: run.id.to_string(),
-        handle: record.handle().to_string(),
-        namespace: namespace_of(&record)?,
-        status: record.status.into(),
-        quarantined: record.quarantine.is_some(),
-        script: record.script.to_hex(),
-        script_title,
-        headline,
-        toolset: record.toolset.to_hex(),
-        labels: Labels::from(record.metadata.labels.clone()),
-        started_at: timestamp(record.created_at),
-        ended_at: record.ended_at.map(timestamp),
-        last_activity_at: timestamp(record.updated_at),
-        tool_calls,
-        errors,
-        history_len: record.history_len,
-        error: ending.as_ref().map(|ending| ending.error.clone()),
-        error_message: ending.as_ref().map(|ending| ending.message.clone()),
-        error_line: ending.as_ref().and_then(|ending| ending.line),
-        fingerprint: ending.map(|ending| ending.fingerprint),
-        waiting_for,
-        wakes_at: wakes_at.map(timestamp),
-        parent: record.metadata.parent.map(|parent| parent.run.to_string()),
-        workflow: record
-            .metadata
-            .workflow
-            .as_ref()
-            .map(|workflow| workflow.name.clone()),
-        started_by: record.metadata.started_by.map(|by| by.run.to_string()),
+        id: run.run.id.to_string(),
+        namespace: namespace_of(&run.run, &run.namespace)?,
+        status: run.status.into(),
+        quarantined: run.quarantine.is_some(),
+        script: run.script.to_hex(),
+        headline: run.headline.clone(),
+        toolset: run.toolset.to_hex(),
+        labels: Labels::from(run.labels.clone()),
+        started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
+        ended_at: run.ended_at.map(timestamp),
+        last_activity_at: timestamp(run.last_activity_at),
+        tool_calls: run.tool_calls,
+        errors: run.errors,
+        history_len: run.history_len,
+        error: ending.map(|ending| ending.error.clone()),
+        error_message: ending.map(|ending| ending.message.clone()),
+        error_line: ending.and_then(|ending| ending.line),
+        fingerprint: ending.map(|ending| ending.fingerprint.clone()),
+        waiting_for: run
+            .waits
+            .iter()
+            .map(|wait| RunWait {
+                kind: wait_kind(wait.waiting_for()),
+                seq: wait.seq.map(|seq| seq.0),
+                name: wait.name.clone(),
+                since: timestamp(wait.since),
+                until: wait.until.map(timestamp),
+                callsite: wait.callsite.map(Callsite::from),
+            })
+            .collect(),
+        wakes_at: run.wakes_at.map(timestamp),
+        parent: run.parent.map(|parent| parent.to_string()),
+        workflow: run.workflow.clone(),
+        started_by: run.started_by.map(|run| run.to_string()),
     })
 }
 
@@ -555,14 +511,11 @@ pub fn check_result(diagnostics: &[rewind_engine::ports::Diagnostic]) -> CheckRe
 
 /// The run's namespace as the API names it: the engine and the API check the same rule.
 fn namespace_of(
-    record: &rewind_engine::ports::RunRecord,
-) -> Result<rewind_api::namespaces::NamespaceName, EngineError> {
-    rewind_api::namespaces::NamespaceName::new(record.namespace.as_str()).map_err(|_| {
-        EngineError::Store(rewind_engine::ports::StoreError::Backend(format!(
-            "run {} has an invalid namespace",
-            record.run.id
-        )))
-    })
+    run: &RunRef,
+    namespace: &NamespaceName,
+) -> Result<rewind_api::namespaces::NamespaceName, EdgeError> {
+    rewind_api::namespaces::NamespaceName::new(namespace.as_str())
+        .map_err(|_| unavailable(format!("run {} has an invalid namespace", run.id)))
 }
 
 /// A workflow version, as `GET /v1/workflows/{name}` shows it (`rewind-server`'s

@@ -1,13 +1,13 @@
-//! The world as the API `/v1` answers the agent tools: [`Api`] with the engine in process
+//! The world as the API `/v1` answers the agent tools: [`Api`] with the run plane in process
 //! (`archi/08-decisions.md`, "Taken while building the evals").
 //!
-//! Each operation does what `rewind-server`'s handler does (`crates/rewind-server/src/http/`),
-//! its answers and problems repeated, for one caller: an API key of the tenant `local`, acting in
-//! the namespace `local`, limited to the episode's labels. A run without them is not found; the
-//! runs and the workflows it creates carry them; its runs' scripts reach only runs carrying them.
-//! A wait is virtual time: the world is driven until the run ends or the wait elapses. A signal
-//! or a cancellation is taken at once, at the current virtual time, as the server's workers take
-//! them.
+//! Each operation does what `rewind-server`'s handler does (`crates/rewind-server/src/http/`) at
+//! the node's edge, its answers and problems repeated, for one caller: an API key of the tenant
+//! `local`, acting in the namespace `local`, limited to the episode's labels. A run without them
+//! is not found; the runs and the workflows it creates carry them; its runs' scripts reach only
+//! runs carrying them. A wait is virtual time: the world is driven until the run ends or the
+//! wait elapses. A signal or a cancellation is taken at once, at the current virtual time, as
+//! the owner of the run's partition takes them.
 //!
 //! The world answers what the agent tools ask, and refuses with a problem what it cannot answer
 //! as the server would: a run list filtered otherwise than by labels and status, a record query
@@ -35,19 +35,21 @@ use rewind_api::workflows::{
 };
 use rewind_api::{Problem, ProblemType};
 use rewind_core::{
-    Cassette, Command, Digest, Event, Script, Test, TestOrigin, Timestamp, WorkflowSchemas,
+    Cassette, Command, Digest, Event, RunId, Script, Test, Timestamp, WorkflowSchemas,
     canonical_json,
 };
+use rewind_engine::edge::{EdgeError, RecordingError};
+use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CheckerError, Enqueued, JournalStore, RunRecord, RunRef, StoreError, StoredToolset,
+    CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunRef, StoreError, StoredToolset,
     StoredWorkflow, TenantId, ToolDeclarations, TraceContext, TypeChecker, WorkflowDeclarations,
 };
 use rewind_engine::suites::{
-    DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, Recorder, SuiteChanges, SuiteError,
+    DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, SuiteChanges, SuiteError,
     SuiteLoadError, TestInput, TestRetirement, TestUpdate, UpdateWith,
 };
-use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport, run_tests};
-use rewind_engine::{EngineError, ForkError, RegisterError, RegisterWorkflow, StartError};
+use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
+use rewind_engine::{ForkError, RegisterError, RegisterWorkflow, StartError};
 use rewind_runtime::TsMockLoader;
 use serde_json::Value;
 
@@ -87,28 +89,33 @@ fn fault(error: impl Into<WorldError>) -> ApiError {
     ApiError::fault(error.into())
 }
 
-/// An engine error, as the server answers it (`rewind-server`'s `error.rs`).
-fn engine_error(error: EngineError) -> ApiError {
+/// What the edge answered, as the server answers it (`rewind-server`'s `error.rs`).
+fn edge_error(error: EdgeError) -> ApiError {
     match error {
-        EngineError::RunNotFound(run) => run_not_found(&run.to_string()),
-        EngineError::RunEnded(run) => problem(
+        EdgeError::Refused(Refusal::RunNotFound(run)) => run_not_found(&run.to_string()),
+        EdgeError::Refused(Refusal::RunEnded(run)) => problem(
             ProblemType::RunEnded,
             format!("run {run} has ended: nothing can be sent to it any more"),
         ),
-        EngineError::ScriptNotFound(digest) => {
-            not_found(format!("no script {digest} for this tenant"))
+        EdgeError::Refused(Refusal::Signal(message)) => {
+            problem(ProblemType::InvalidSignal, message)
         }
-        EngineError::ToolsetNotFound(digest) => not_found(format!(
-            "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
-        )),
-        EngineError::NulCharacter(error) => invalid(error.to_string()),
-        EngineError::SignalRefused(message) => problem(ProblemType::InvalidSignal, message),
+        EdgeError::Refused(Refusal::NamespaceDeleting) => problem(
+            ProblemType::NamespaceDeleting,
+            "this namespace is being erased: it takes no run",
+        ),
+        EdgeError::NulCharacter(error) => invalid(error.to_string()),
         other => fault(other),
     }
 }
 
+/// What a store answered: never the caller's fault.
 fn store_error(error: StoreError) -> ApiError {
-    engine_error(error.into())
+    fault(WorldError::Engine(error.to_string()))
+}
+
+fn catalog_error(error: CatalogError) -> ApiError {
+    fault(error)
 }
 
 fn checker_error(error: &CheckerError) -> ApiError {
@@ -169,7 +176,7 @@ fn start_error(error: StartError) -> ApiError {
             not_found(format!("no workflow version {version} for this tenant"))
         }
         StartError::InvalidInput(message) => problem(ProblemType::InvalidInput, message),
-        other => fault(EngineError::Store(StoreError::Backend(other.to_string()))),
+        other => fault(WorldError::Engine(other.to_string())),
     }
 }
 
@@ -178,7 +185,7 @@ fn fork_error(error: ForkError) -> ApiError {
         ForkError::ParentNotFound(run) => run_not_found(&run.to_string()),
         ForkError::ParentNotStarted(_) | ForkError::ParentArchived(_) => invalid(error.to_string()),
         ForkError::Start(error) => start_error(error),
-        ForkError::Engine(error) => engine_error(error),
+        other => fault(WorldError::Engine(other.to_string())),
     }
 }
 
@@ -191,15 +198,14 @@ fn suite_error(error: SuiteLoadError) -> ApiError {
         )),
         SuiteLoadError::Suite(error) => problem(ProblemType::InvalidTest, error.to_string()),
         SuiteLoadError::Store(error) => store_error(error),
-        other => fault(EngineError::Store(StoreError::Backend(other.to_string()))),
+        other => fault(WorldError::Engine(other.to_string())),
     }
 }
 
 fn test_error(error: TestError) -> ApiError {
     match error {
         TestError::Start(error) => start_error(error),
-        TestError::Unavailable(message) => fault(EngineError::Store(StoreError::Backend(message))),
-        TestError::Mocks(message) => fault(EngineError::Store(StoreError::Backend(message))),
+        other => fault(WorldError::Engine(other.to_string())),
     }
 }
 
@@ -222,7 +228,17 @@ fn register_error(error: RegisterError) -> ApiError {
             problem(ProblemType::InvalidWorkflow, message)
         }
         RegisterError::Store(error) => store_error(error),
-        other => fault(EngineError::Store(StoreError::Backend(other.to_string()))),
+        other => fault(WorldError::Engine(other.to_string())),
+    }
+}
+
+/// A recording refused, as the server answers it.
+fn recording_error(error: RecordingError) -> ApiError {
+    match error {
+        RecordingError::RunNotFound(run) => run_not_found(&run.to_string()),
+        RecordingError::NotOfWorkflow { .. } => invalid(error.to_string()),
+        RecordingError::Edge(error) => edge_error(error),
+        RecordingError::Suite(error) => suite_error(error),
     }
 }
 
@@ -414,20 +430,20 @@ pub fn search(stored: &StoredToolset, query: &str, limit: usize) -> Option<Vec<T
 impl World {
     /// The run, if it exists and carries the caller's labels; otherwise 404, as the server
     /// answers a key limited to labels.
-    async fn visible_run(&self, id: &str) -> Result<(RunRef, RunRecord), ApiError> {
-        let found = rewind_engine::handles::find_run(self.engine.journal(), &TenantId::local(), id)
-            .await
-            .map_err(store_error)?;
-        match found {
-            Some(record) if self.sees(&record) => Ok((record.run.clone(), record)),
-            _ => Err(run_not_found(id)),
+    async fn visible_run(&self, id: &str) -> Result<(RunRef, RunHead), ApiError> {
+        let run_id: RunId = id.parse().map_err(|_| run_not_found(id))?;
+        let run = self.run_ref(run_id);
+        match self.run_view(&run).await {
+            Ok(Some(view)) if self.sees(&view.head.metadata.labels) => Ok((run, view.head)),
+            Ok(_) | Err(EdgeError::Refused(Refusal::RunNotFound(_))) => Err(run_not_found(id)),
+            Err(error) => Err(edge_error(error)),
         }
     }
 
-    fn sees(&self, record: &RunRecord) -> bool {
+    fn sees(&self, labels: &BTreeMap<String, String>) -> bool {
         self.labels
             .iter()
-            .all(|(key, value)| record.metadata.labels.get(key) == Some(value))
+            .all(|(key, value)| labels.get(key) == Some(value))
     }
 
     /// The caller's labels added to those given: a contradicting one is refused.
@@ -481,11 +497,10 @@ impl World {
                 "no toolset {id:?}: a toolset's id is the digest POST /v1/toolsets returned"
             ))
         })?;
-        self.engine
-            .journal()
+        self.catalog()
             .get_toolset(&tenant, digest)
             .await
-            .map_err(store_error)?
+            .map_err(catalog_error)?
             .ok_or_else(|| {
                 not_found(format!(
                     "no toolset {id} for this tenant: register it with POST /v1/toolsets"
@@ -506,7 +521,7 @@ impl World {
     }
 
     async fn view(&self, run: &RunRef) -> Result<Run, ApiError> {
-        view::run(self, run).await.map_err(engine_error)
+        view::run(self, run).await.map_err(edge_error)
     }
 
     /// The version a reference names, among those the caller sees: `name` for the latest,
@@ -543,8 +558,9 @@ impl World {
     /// The tests of a version's suite, those of an erased namespace left out.
     async fn suite(&self, stored: &StoredWorkflow) -> Result<Vec<Test>, ApiError> {
         Ok(self
-            .engine
-            .load_suite(&TenantId::local(), &stored.workflow, test_format())
+            .edge
+            .suites(test_format())
+            .load_suite(&TenantId::local(), &stored.workflow)
             .await
             .map_err(suite_error)?
             .into_iter()
@@ -552,36 +568,31 @@ impl World {
             .collect())
     }
 
-    /// Runs tests against a subject with the engine's executor, as a worker does.
+    /// Runs tests against a subject on the node's executor, as the server does.
     async fn run_suite(
         &self,
         subject: &Subject<'_>,
         tests: &[Test],
     ) -> Result<Vec<TestReport>, ApiError> {
         let loader = TsMockLoader::default();
-        run_tests(
-            self.engine.executor(),
-            &loader,
-            subject,
-            tests,
-            &TestOptions::default(),
-        )
-        .await
-        .map_err(test_error)
+        self.edge
+            .run_tests(&loader, subject, tests, &TestOptions::default())
+            .await
+            .map_err(test_error)
     }
 
     /// Before a fork of a run of a workflow: its version's suite must pass against the
     /// corrected script (`rewind-server`'s `testing::gate_fork`).
-    async fn gate_fork(&self, parent: &RunRecord, script: &Script) -> Result<(), ApiError> {
+    async fn gate_fork(&self, parent: &RunHead, script: &Script) -> Result<(), ApiError> {
         let Some(of) = &parent.metadata.workflow else {
             return Ok(());
         };
         let tenant = &parent.run.tenant;
-        let journal = self.engine.journal();
-        let Some(stored) = journal
+        let catalog = self.catalog();
+        let Some(stored) = catalog
             .get_workflow(tenant, of.version)
             .await
-            .map_err(store_error)?
+            .map_err(catalog_error)?
         else {
             return Ok(());
         };
@@ -589,10 +600,10 @@ impl World {
         if tests.is_empty() {
             return Ok(());
         }
-        let toolset = journal
+        let toolset = catalog
             .get_toolset(tenant, stored.workflow.toolset())
             .await
-            .map_err(store_error)?
+            .map_err(catalog_error)?
             .ok_or_else(|| {
                 fault(WorldError::Toolset(format!(
                     "the toolset of {} is not stored",
@@ -677,12 +688,10 @@ impl Api for World {
         // What the run's scripts reach: the runs carrying the caller's labels.
         request.metadata.scope = self.labels.clone();
         request.idempotency_key = key.map(|key| key.as_str().to_owned());
-        let created = if start.check == Some(false) {
-            self.engine.start_run(request).await
-        } else {
-            self.engine.start_run_checked(request, &*self.checker).await
-        }
-        .map_err(start_error)?;
+        let created = self
+            .start(request, start.check == Some(false))
+            .await
+            .map_err(start_error)?;
         self.wait_for_end(&created.run, start.wait).await?;
         self.view(&created.run).await
     }
@@ -707,7 +716,7 @@ impl Api for World {
             || filter.started_before.is_some();
         if unsupported {
             return Err(invalid(
-                "the evals' world lists runs by label and status only: it projects no read model",
+                "the evals' world lists runs by label and status only",
             ));
         }
         let limit = usize::try_from(filter.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
@@ -718,27 +727,22 @@ impl Api for World {
             None => 0,
         };
         let wanted = label_filters(&filter.labels)?;
-        let mut query = rewind_engine::ports::RunFilter::new(TenantId::local());
-        query.labels = self.labels.clone();
-        let mut records = self.engine.list_runs(&query).await.map_err(engine_error)?;
-        records.retain(|record| {
-            wanted
-                .iter()
-                .all(|(key, value)| record.metadata.labels.get(key) == Some(value))
+        let mut summaries = self.summaries().await.map_err(edge_error)?;
+        summaries.retain(|summary| {
+            self.sees(&summary.labels)
+                && wanted
+                    .iter()
+                    .all(|(key, value)| summary.labels.get(key) == Some(value))
                 && filter
                     .status
-                    .is_none_or(|status| ApiRunStatus::from(record.status) == status)
+                    .is_none_or(|status| ApiRunStatus::from(summary.status) == status)
         });
         // Most recently started first.
-        records.reverse();
-        let more = records.len() > offset + limit;
+        summaries.reverse();
+        let more = summaries.len() > offset + limit;
         let mut runs = Vec::new();
-        for record in records.iter().skip(offset).take(limit) {
-            runs.push(
-                view::summary(self, &record.run)
-                    .await
-                    .map_err(engine_error)?,
-            );
+        for summary in summaries.iter().skip(offset).take(limit) {
+            runs.push(view::summary(summary).map_err(edge_error)?);
         }
         Ok(RunPage {
             runs,
@@ -748,7 +752,7 @@ impl Api for World {
 
     async fn run_trace(&self, run: &str) -> Result<Trace, ApiError> {
         let (run, _) = self.visible_run(run).await?;
-        let text = self.engine.trace(&run).await.map_err(engine_error)?;
+        let text = self.trace(&run).await.map_err(edge_error)?;
         Ok(Trace {
             run_id: run.id.to_string(),
             format: TraceFormat::Llm,
@@ -759,11 +763,7 @@ impl Api for World {
     async fn run_entry(&self, run: &str, idx: u64) -> Result<Entry, ApiError> {
         let id = run;
         let (run, _) = self.visible_run(id).await?;
-        let history = self
-            .engine
-            .export_history(&run)
-            .await
-            .map_err(engine_error)?;
+        let history = self.history(&run).await.map_err(edge_error)?;
         let Some(found) = history.iter().find(|entry| entry.index == idx) else {
             return Err(not_found(format!(
                 "run {id} has no entry {idx}: its entries are numbered from 0 to {}",
@@ -785,7 +785,7 @@ impl Api for World {
     ) -> Result<SignalAccepted, ApiError> {
         let (run, _) = self.visible_run(run).await?;
         let size = canonical_json(payload).len();
-        let max = self.engine.config().limits.max_payload_bytes;
+        let max = self.config.limits.max_payload_bytes;
         if size > max {
             return Err(problem(
                 ProblemType::PayloadTooLarge,
@@ -793,21 +793,20 @@ impl Api for World {
             ));
         }
         let enqueued = self
-            .engine
             .signal(
                 &run,
-                name.to_owned(),
+                name,
                 payload.clone(),
                 key.map(|key| key.as_str().to_owned()),
             )
             .await
-            .map_err(engine_error)?;
+            .map_err(edge_error)?;
         let duplicate = match enqueued {
             Enqueued::Accepted => false,
             Enqueued::Duplicate => true,
             Enqueued::RunEnded => return Err(self.run_ended(&run, "a signal").await),
         };
-        // The server's workers take the signal at once.
+        // The owner takes the signal at once.
         self.drive(None, Some(self.now())).await.map_err(fault)?;
         Ok(SignalAccepted {
             run_id: run.id.to_string(),
@@ -819,10 +818,9 @@ impl Api for World {
     async fn cancel_run(&self, run: &str, cancel: &CancelRun) -> Result<Run, ApiError> {
         let (run, _) = self.visible_run(run).await?;
         let enqueued = self
-            .engine
             .cancel(&run, cancel.reason.clone())
             .await
-            .map_err(engine_error)?;
+            .map_err(edge_error)?;
         if enqueued == Enqueued::RunEnded {
             return Err(self.run_ended(&run, "a cancellation").await);
         }
@@ -851,12 +849,10 @@ impl Api for World {
         request.labels = labels;
         request.trace_context = trace_context(fork.traceparent.as_ref(), fork.tracestate.as_ref())?;
         request.idempotency_key = key.map(|key| key.as_str().to_owned());
-        let created = if fork.check == Some(false) {
-            self.engine.fork(request).await
-        } else {
-            self.engine.fork_checked(request, &*self.checker).await
-        }
-        .map_err(fork_error)?;
+        let created = self
+            .fork(request, fork.check == Some(false))
+            .await
+            .map_err(fork_error)?;
         self.wait_for_end(&created.run, fork.wait).await?;
         self.view(&created.run).await
     }
@@ -865,7 +861,7 @@ impl Api for World {
         use rewind_engine::ports::ScriptExecutor as _;
         let stored = self.stored_toolset(check.toolset.as_deref()).await?;
         let script = Script::new(check.script.clone());
-        if let Err(invalid) = self.engine.executor().compile(&script, &stored.toolset) {
+        if let Err(invalid) = self.plane.executor.compile(&script, &stored.toolset) {
             return Ok(CheckResult {
                 ok: false,
                 diagnostics: vec![view::invalid_script_diagnostic(&invalid)],
@@ -897,12 +893,13 @@ impl Api for World {
             }
             (given, _) => self.stored_toolset(given.as_deref()).await?,
         };
+        let suites = self.edge.suites(test_format());
         let mut tests = Vec::new();
         for given in test.tests.iter().cloned() {
             let given = test_input(given)?;
             tests.push(
-                self.engine
-                    .resolve_test(&tenant, &given, test_format())
+                suites
+                    .resolve_test(&tenant, &given)
                     .await
                     .map_err(suite_error)?,
             );
@@ -934,22 +931,22 @@ impl Api for World {
         let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
         let tenant = TenantId::local();
         let stored = self
-            .engine
-            .journal()
+            .catalog()
             .get_script(&tenant, parsed)
             .await
-            .map_err(store_error)?
+            .map_err(catalog_error)?
             .ok_or_else(missing)?;
         // What the caller's runs of the script did.
-        let mut query = rewind_engine::ports::RunFilter::new(tenant.clone());
-        query.labels = self.labels.clone();
-        let records = self.engine.list_runs(&query).await.map_err(engine_error)?;
+        let summaries = self.summaries().await.map_err(edge_error)?;
         let mut runs = RunCounts::default();
         let mut tools = BTreeSet::new();
         let mut first = None;
         let mut last = None;
-        for record in records.iter().filter(|record| record.script == parsed) {
-            let count = match ApiRunStatus::from(record.status) {
+        for summary in summaries
+            .iter()
+            .filter(|summary| summary.script == parsed && self.sees(&summary.labels))
+        {
+            let count = match ApiRunStatus::from(summary.status) {
                 ApiRunStatus::Pending => &mut runs.pending,
                 ApiRunStatus::Active => &mut runs.active,
                 ApiRunStatus::Completed => &mut runs.completed,
@@ -958,16 +955,10 @@ impl Api for World {
                 ApiRunStatus::Aborted => &mut runs.aborted,
             };
             *count += 1;
-            first = first
-                .min(Some(record.created_at))
-                .or(Some(record.created_at));
-            last = last.max(Some(record.created_at));
-            for entry in self
-                .engine
-                .history(&record.run)
-                .await
-                .map_err(engine_error)?
-            {
+            let started_at = summary.started_at.unwrap_or(summary.last_activity_at);
+            first = first.min(Some(started_at)).or(Some(started_at));
+            last = last.max(Some(started_at));
+            for entry in self.history(&summary.run).await.map_err(edge_error)? {
                 if let Event::Command(Command::ScheduleToolCall { tool, .. }) = &entry.event {
                     tools.insert(tool.clone());
                 }
@@ -1008,11 +999,7 @@ impl Api for World {
             ));
         };
         let (run, _) = self.visible_run(id).await?;
-        let history = self
-            .engine
-            .export_history(&run)
-            .await
-            .map_err(engine_error)?;
+        let history = self.history(&run).await.map_err(edge_error)?;
         history
             .iter()
             .filter_map(|entry| view::payload_of(&entry.event))
@@ -1025,8 +1012,9 @@ impl Api for World {
         let missing = || not_found(format!("no test {digest} for this tenant"));
         let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
         let loaded = self
-            .engine
-            .load_test(&TenantId::local(), parsed, test_format())
+            .edge
+            .suites(test_format())
+            .load_test(&TenantId::local(), parsed)
             .await
             .map_err(suite_error)?
             .ok_or_else(missing)?;
@@ -1148,7 +1136,7 @@ impl Api for World {
         let generated = rewind_codegen::workflow_declarations(&workflow.name, &schemas);
         let loader = TsMockLoader::default();
         let saved = self
-            .engine
+            .edge
             .register_workflow(
                 RegisterWorkflow {
                     tenant: TenantId::local(),
@@ -1197,7 +1185,6 @@ impl Api for World {
         workflow: &str,
         record: &RecordTests,
     ) -> Result<RecordedTests, ApiError> {
-        let tenant = TenantId::local();
         if World::workflow_versions(self, workflow)
             .await
             .map_err(fault)?
@@ -1214,8 +1201,8 @@ impl Api for World {
             })
             .clamp(1, MAX_RECORDED);
         let candidates: Vec<RunRef> = if record.runs.is_empty() {
-            // The world projects no read model: the runs the caller sees, newest first, of the
-            // workflow, completed or failed, and those the query selects.
+            // The runs the caller sees, newest first, of the workflow, completed or failed,
+            // and those the query selects.
             let statuses = match record.query.as_deref().map(str::trim) {
                 None | Some("") => vec![
                     rewind_core::RunStatus::Completed,
@@ -1233,22 +1220,15 @@ impl Api for World {
                     ));
                 }
             };
-            let mut filter = rewind_engine::ports::RunFilter::new(tenant.clone());
-            filter.labels = self.labels.clone();
-            let mut records = self.engine.list_runs(&filter).await.map_err(engine_error)?;
-            records.reverse();
-            records
+            let mut summaries = self.summaries().await.map_err(edge_error)?;
+            summaries.reverse();
+            summaries
                 .into_iter()
-                .filter(|record| statuses.contains(&record.status))
-                .filter(|record| {
-                    record
-                        .metadata
-                        .workflow
-                        .as_ref()
-                        .is_some_and(|of| of.name == workflow)
-                })
+                .filter(|summary| self.sees(&summary.labels))
+                .filter(|summary| statuses.contains(&summary.status))
+                .filter(|summary| summary.workflow.as_deref() == Some(workflow))
                 .take(MAX_RECORDING_CANDIDATES)
-                .map(|record| record.run)
+                .map(|summary| summary.run)
                 .collect()
         } else {
             let mut candidates = Vec::with_capacity(record.runs.len());
@@ -1264,46 +1244,15 @@ impl Api for World {
             candidates
         };
 
-        let mut recorder = Recorder::new(limit, test_format());
-        for run in &candidates {
-            if recorder.is_full() {
-                break;
-            }
-            let Some(found) = self.engine.get_run(run).await.map_err(engine_error)? else {
-                continue;
-            };
-            let Some(of) = &found.metadata.workflow else {
-                continue;
-            };
-            let history = self
-                .engine
-                .export_history(run)
-                .await
-                .map_err(engine_error)?;
-            recorder.offer(
-                &history,
-                TestOrigin {
-                    run: run.id,
-                    version: of.version,
-                    namespace: found.namespace.to_string(),
-                },
-            );
-        }
-        let tests: Vec<Test> = recorder
-            .recorded
-            .iter()
-            .map(|recorded| recorded.test.clone())
-            .collect();
-        let digests = self
-            .engine
-            .store_tests(&tenant, &tests, test_format())
+        let recording = self
+            .record_runs(workflow, candidates, limit)
             .await
-            .map_err(suite_error)?;
+            .map_err(recording_error)?;
         Ok(RecordedTests {
-            tests: recorder
+            tests: recording
                 .recorded
                 .iter()
-                .zip(digests)
+                .zip(recording.digests)
                 .map(|(recorded, digest)| RecordedTest {
                     digest: digest.to_hex(),
                     name: recorded.test.name.clone(),
@@ -1312,7 +1261,7 @@ impl Api for World {
                     status: recorded.path.status.into(),
                 })
                 .collect(),
-            skipped: recorder
+            skipped: recording
                 .skipped
                 .iter()
                 .map(|skipped| SkippedRun {
@@ -1340,8 +1289,8 @@ impl Api for World {
 impl World {
     /// A run that has ended refuses a signal or a cancellation, as the server says it.
     async fn run_ended(&self, run: &RunRef, what: &str) -> ApiError {
-        let status = match self.engine.get_run(run).await {
-            Ok(Some(record)) => record.status.as_str(),
+        let status = match self.run_view(run).await {
+            Ok(Some(view)) => view.head.status.as_str(),
             _ => "ended",
         };
         problem(

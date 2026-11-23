@@ -8,7 +8,8 @@
 //! the first-try check pass rate, task success, iterations and tokens.
 //!
 //! - [`fake`]: the fake MCP servers and their fixtures.
-//! - [`world`]: the engine wired in process, and the outside world in virtual time.
+//! - [`world`]: the engine's run plane wired in process, one node stepped by its driver, and
+//!   the outside world in virtual time.
 //! - [`api`]: the world as the API `/v1` answers the agent tools of `rewind-agent-tools`, which
 //!   the model calls as a harness's model calls the SDK's.
 //! - [`model`]: Claude (Anthropic API), an OpenAI model (Responses API), a scripted model.

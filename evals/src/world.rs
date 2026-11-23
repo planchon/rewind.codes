@@ -1,38 +1,45 @@
-//! The world of an episode: the real engine with the V8 sandbox and the MCP dispatcher, the
-//! fake MCP servers it calls, and the outside world reacting in virtual time.
+//! The world of an episode: the engine's run plane with the V8 sandbox and the MCP dispatcher,
+//! the fake MCP servers it calls, and the outside world reacting in virtual time.
 //!
-//! The engine is wired in process, as `rewind-e2e` wires it (`archi/08-decisions.md`, "Taken
-//! while building the evals"): in-memory storage, `McpDispatcher` for MCP tools, the type
-//! checker `rewind-check`, codegen `rewind-codegen`, and one virtual clock shared with the fake
-//! servers. Time only moves when the world is driven: a run's `wait`, a server's webhook, a
-//! signal sent by the world after a delay, a timer.
+//! The run plane is wired in process (`archi/08-decisions.md`, "Taken while building the
+//! evals"): one node holding the one partition, over the engine's memory adapters, stepped by its
+//! driver; `McpDispatcher` for MCP tools, the type checker `rewind-check`, codegen
+//! `rewind-codegen`, and one virtual clock shared with the fake servers. Time only moves when the
+//! world is driven: a run's `wait`, a server's webhook, a signal sent by the world after a delay,
+//! a timer.
 //!
 //! The agent's toolset is registered as `POST /v1/toolsets` registers it, so that workflows are
-//! saved with it; workflows are saved and run as the server saves and runs them, with the
-//! agent's labels as the labels of the key that saves them.
+//! saved with it; workflows are saved and run as the server saves and runs them, at the node's
+//! edge, with the agent's labels as the labels of the key that saves them.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU16;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_check::TsgoChecker;
 use rewind_core::{
-    Builtin, Digest, HistoryEntry, McpServer, McpTransport, RetiredTest, RunId, RunOutcome,
-    RunState, RunStatus, Script, Timestamp, Tool, ToolRoute, Toolset, UpdatedTest,
+    Builtin, Command, Completion, Digest, Event, HistoryEntry, McpServer, McpTransport,
+    RetiredTest, RunId, RunOutcome, RunState, RunStatus, Script, Seq, Timestamp, Tool, ToolRoute,
+    Toolset, UpdatedTest,
 };
 use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, RoutingDispatcher, SeededEntropy,
-    Unrouted,
+    ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
+    MemoryPartitions, MemorySecrets, MemorySpanExporter, MemoryWebhooks, RoutingDispatcher,
+    SeededEntropy, Unrouted,
 };
+use rewind_engine::driver::{DriveError, Driver, PlaneClock};
+use rewind_engine::edge::{Edge, EdgeError, RecordFrom, Recording, RecordingError};
+use rewind_engine::plane::{NodeConfig, Wiring};
+use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{
-    Clock, JournalStore, NamespaceName, RunFilter, RunMetadata, RunRef, RunWorkflow,
-    StoredWorkflow, TenantId, ToolDeclarations, VirtualTime, WebhookToken, WorkflowFilter,
+    CatalogError, CatalogStore, Clock, Created, Enqueued, NamespaceName, NodeId, Page, RunMetadata,
+    RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, StoredWorkflow, TenantId,
+    ToolDeclarations, ToolTask, VirtualTime, WaitKind, WorkflowFilter,
 };
 use rewind_engine::suites::{LoadedTest, SuiteLoadError, TestFormat, TestKit};
 use rewind_engine::testing::TestOptions;
-use rewind_engine::{
-    Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartError, StartRun, StartWorkflow,
-};
+use rewind_engine::{ForkError, ForkRun, StartError, StartRun, StartWorkflow};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
 use rewind_outbound::ToolEgress;
 use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
@@ -41,17 +48,22 @@ use serde_json::Value;
 use crate::clock::{DAY, SharedClock, T0};
 use crate::fake::{self, Running, Service};
 
-/// The engine of an episode.
-pub type EvalEngine = Engine<
-    MemoryJournal,
+/// The run plane of an episode.
+pub type EvalPlane = Wiring<
+    MemoryCatalog,
+    MemoryPartitions,
+    MemoryArchive,
     MemoryBlobs,
     V8Executor,
     RoutingDispatcher<McpDispatcher, Unrouted, Unrouted, Unrouted>,
+    MemorySecrets,
+    MemorySpanExporter,
+    MemoryWebhooks,
     SharedClock,
     SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
 >;
+
+type EvalDriver = Driver<EvalPlane, MemoryCluster>;
 
 /// The base of the URLs `webhook(name)` returns.
 pub const PUBLIC_URL: &str = "https://rewind.example";
@@ -62,6 +74,13 @@ pub const SETTLE_HORIZON: u64 = 60 * DAY;
 
 /// Jumps of virtual time in one drive, at most: a guard against scripts that never stop.
 const MAX_STEPS: usize = 20_000;
+
+/// Steps of the driver in one pass at the current time, at most: a guard against scripts that
+/// never wait.
+const MAX_DRIVER_STEPS: usize = 200_000;
+
+/// Summaries a page of a search of the world holds.
+const SEARCH_PAGE: usize = 1_000;
 
 /// The world answers a signal wait: when a run waits for `signal`, the world sends `payload`
 /// `after` that much virtual time, once per run.
@@ -105,9 +124,17 @@ pub enum WorldError {
     #[error("the sandbox cannot start: {0}")]
     Sandbox(String),
     #[error(transparent)]
-    Engine(#[from] EngineError),
-    #[error("an activation of run {run} failed: {error}")]
-    Activation { run: RunId, error: EngineError },
+    Edge(#[from] EdgeError),
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// The driver stopped: a request got no answer, or the node is gone.
+    #[error("the run plane stopped: {0}")]
+    Drive(String),
+    /// What the engine answered the world cannot take as a refusal.
+    #[error("{0}")]
+    Engine(String),
+    #[error("the activations of run {run} failed {failures} times in a row")]
+    Activation { run: RunId, failures: u32 },
     #[error("the run of the workflow {workflow} cannot start: {message}")]
     Production { workflow: String, message: String },
     #[error("the stored tests cannot be read: {0}")]
@@ -154,7 +181,12 @@ struct Reactions {
 
 /// The world of an episode.
 pub struct World {
-    pub engine: EvalEngine,
+    /// The adapters of the node.
+    pub plane: Arc<EvalPlane>,
+    /// The node's edge: what `rewind-server`'s handlers call.
+    pub edge: Edge<EvalPlane>,
+    /// How the node runs: its limits, its public URL.
+    pub config: NodeConfig,
     pub clock: SharedClock,
     pub servers: Vec<Running>,
     /// The pinned toolset the agent's scripts import from `rewind:tools`.
@@ -164,7 +196,9 @@ pub struct World {
     pub checker: Arc<TsgoChecker>,
     /// Set on every run of the agent.
     pub labels: BTreeMap<String, String>,
-    pub options: DriveOptions,
+    /// Steps the node; each request at the edge goes through it.
+    driver: tokio::sync::Mutex<EvalDriver>,
+    at: NodeId,
     mcp: McpDispatcher,
     reactions_spec: Vec<Reaction>,
     reactions: Mutex<Reactions>,
@@ -189,9 +223,13 @@ impl Drop for World {
     }
 }
 
+fn drive_error(error: DriveError) -> WorldError {
+    WorldError::Drive(error.to_string())
+}
+
 impl World {
     /// Serves the fake servers, pins their tools as `POST /v1/toolsets` does (discovery through
-    /// `McpDispatcher`), generates the declarations, and wires the engine at [`T0`].
+    /// `McpDispatcher`), generates the declarations, and wires the run plane at [`T0`].
     pub async fn new(
         spec: &WorldSpec,
         checker: Arc<TsgoChecker>,
@@ -242,42 +280,58 @@ impl World {
 
         let executor = V8Executor::new(SandboxLimits::default())
             .map_err(|err| WorldError::Sandbox(err.to_string()))?;
-        let config = EngineConfig {
-            worker: "evals".into(),
-            public_url: Some(PUBLIC_URL.into()),
-            ..EngineConfig::default()
-        };
-        let engine: EvalEngine = Engine::new(
-            Adapters {
-                journal: MemoryJournal::new(),
-                blobs: MemoryBlobs::new(),
-                executor,
-                dispatcher: RoutingDispatcher::new(mcp.clone(), Unrouted, Unrouted, Unrouted),
-                clock: clock.clone(),
-                entropy: SeededEntropy::new(1),
-                secrets: MemorySecrets::new(),
-                webhooks: MemoryWebhooks::new(),
-            },
-            config,
-        );
-        let declarations = register_toolset(&engine, &toolset).await?;
+        let changes = ControlPlaneChanges::new();
+        let cluster = MemoryCluster::with_changes(1, changes.clone());
+        let blobs = MemoryBlobs::new();
+        let plane = Arc::new(Wiring {
+            catalog: MemoryCatalog::with_changes(changes.clone()),
+            partitions: MemoryPartitions::new(),
+            archive: MemoryArchive::with_blobs(blobs.clone()),
+            blobs,
+            executor,
+            dispatcher: RoutingDispatcher::new(mcp.clone(), Unrouted, Unrouted, Unrouted),
+            secrets: MemorySecrets::with_changes(changes),
+            spans: MemorySpanExporter::new(),
+            webhooks: MemoryWebhooks::new(),
+            clock: clock.clone(),
+            entropy: SeededEntropy::new(1),
+        });
+        let node = NodeId::new("evals").map_err(|err| WorldError::Engine(err.to_string()))?;
+        let mut config = NodeConfig::new(node, NonZeroU16::MIN);
+        config.public_url = Some(PUBLIC_URL.into());
+        // Every timer of an episode is held by the wheel: the world moves time itself.
+        config.horizon = Duration::from_secs(100 * 365 * 86_400);
+        let mut driver = Driver::new(cluster, Arc::new(PlaneClock(Arc::clone(&plane))));
+        driver.max_steps = MAX_DRIVER_STEPS;
+        let at = driver
+            .add_node(Arc::clone(&plane), config.clone())
+            .await
+            .map_err(drive_error)?;
+        driver.run_until_idle().await.map_err(drive_error)?;
+        let edge = Edge::new(Arc::clone(&plane), config.clone());
+        let declarations = register_toolset(&plane.catalog, &toolset).await?;
         Ok(Self {
-            engine,
+            plane,
+            edge,
+            config,
             clock,
             servers,
             toolset,
             declarations,
             checker,
             labels,
-            options: DriveOptions {
-                max_passes: 20_000,
-                ..DriveOptions::default()
-            },
+            driver: tokio::sync::Mutex::new(driver),
+            at,
             mcp,
             reactions_spec: spec.reactions.clone(),
             reactions: Mutex::new(Reactions::default()),
             production: spec.production.clone(),
         })
+    }
+
+    /// The catalog of the control plane.
+    pub fn catalog(&self) -> &MemoryCatalog {
+        &self.plane.catalog
     }
 
     /// Registers a toolset as `POST /v1/toolsets` does: its declarations generated, then stored
@@ -286,7 +340,7 @@ impl World {
         &self,
         toolset: &Toolset,
     ) -> Result<rewind_codegen::Declarations, WorldError> {
-        register_toolset(&self.engine, toolset).await
+        register_toolset(self.catalog(), toolset).await
     }
 
     /// The declarations stored with the toolset, as the engine and the checker take them.
@@ -337,14 +391,142 @@ impl World {
         }
     }
 
+    // ---------------------------------------------------------------------------------------
+    // The edge, each request stepped by the driver to its answer
+
+    /// Starts a run at the edge, type-checked first unless `unchecked`.
+    pub async fn start(&self, request: StartRun, unchecked: bool) -> Result<Created, StartError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        if unchecked {
+            self.edge.start_run(&mut gateway, request).await
+        } else {
+            self.edge
+                .start_run_checked(&mut gateway, request, &*self.checker)
+                .await
+        }
+    }
+
+    /// Forks a run at the edge, type-checked first unless `unchecked`.
+    pub async fn fork(&self, request: ForkRun, unchecked: bool) -> Result<Created, ForkError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        if unchecked {
+            self.edge.fork(&mut gateway, request).await
+        } else {
+            self.edge
+                .fork_checked(&mut gateway, request, &*self.checker)
+                .await
+        }
+    }
+
+    /// The run, live or sealed: its head and its summary.
+    pub async fn run_view(&self, run: &RunRef) -> Result<Option<RunView>, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge.get_run(&mut gateway, run).await
+    }
+
+    /// The run's history, every payload loaded.
+    pub async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        Ok(self.edge.export_journal(&mut gateway, run).await?.entries)
+    }
+
+    /// The run's tool tasks.
+    pub async fn tool_tasks(&self, run: &RunRef) -> Result<Vec<ToolTask>, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge.tool_tasks(&mut gateway, run).await
+    }
+
+    pub async fn signal(
+        &self,
+        run: &RunRef,
+        name: &str,
+        payload: Value,
+        key: Option<String>,
+    ) -> Result<Enqueued, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge
+            .signal(&mut gateway, run, name, payload, key)
+            .await
+    }
+
+    pub async fn cancel(
+        &self,
+        run: &RunRef,
+        message: Option<String>,
+    ) -> Result<Enqueued, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge.cancel(&mut gateway, run, message).await
+    }
+
+    /// The run's LLM trace.
+    pub async fn trace(&self, run: &RunRef) -> Result<String, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge.trace(&mut gateway, run).await
+    }
+
+    /// Records tests from these runs of `workflow`, in this order, and stores them.
+    pub async fn record_runs(
+        &self,
+        workflow: &str,
+        runs: Vec<RunRef>,
+        limit: usize,
+    ) -> Result<Recording, RecordingError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge
+            .record_tests(
+                &mut gateway,
+                workflow,
+                RecordFrom::Runs(runs),
+                limit,
+                test_format(),
+            )
+            .await
+    }
+
+    /// The summaries of every run of the tenant `local`, oldest first.
+    pub async fn summaries(&self) -> Result<Vec<RunSummary>, EdgeError> {
+        let tenant = TenantId::local();
+        let query = RunQuery {
+            tenant: tenant.clone(),
+            terms: Vec::new(),
+        };
+        let scope = Scope::Tenant(tenant);
+        let mut summaries = Vec::new();
+        let mut page = Page::first(SEARCH_PAGE);
+        loop {
+            let found = {
+                let mut driver = self.driver.lock().await;
+                let mut gateway = driver.gateway(&self.at);
+                self.edge
+                    .search(&mut gateway, &scope, &query, RunOrder::Oldest, &page)
+                    .await?
+            };
+            summaries.extend(found.summaries);
+            match found.cursor {
+                Some(cursor) => page = Page::after(cursor, SEARCH_PAGE),
+                None => return Ok(summaries),
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Workflows
+
     /// The versions of a workflow the agent sees, newest first.
     pub async fn workflow_versions(&self, name: &str) -> Result<Vec<StoredWorkflow>, WorldError> {
         Ok(self
-            .engine
-            .journal()
+            .catalog()
             .workflow_versions(&TenantId::local(), name, &self.labels)
-            .await
-            .map_err(EngineError::from)?)
+            .await?)
     }
 
     /// Starts a run of the latest version of a workflow the agent sees, with its labels, as
@@ -360,23 +542,28 @@ impl World {
             .into_iter()
             .next()
             .ok_or_else(|| refused("the agent sees no version of it".into()))?;
-        let created = self
-            .engine
-            .start_workflow(StartWorkflow {
-                tenant: TenantId::local(),
-                namespace: NamespaceName::new(NamespaceName::LOCAL)
-                    .unwrap_or_else(|_| NamespaceName::migrated()),
-                version: latest.workflow.version(),
-                input,
-                ttl: None,
-                metadata: RunMetadata {
-                    labels: self.labels.clone(),
-                    ..RunMetadata::default()
-                },
-                idempotency_key: None,
-            })
-            .await
-            .map_err(|error: StartError| refused(error.to_string()))?;
+        let namespace =
+            NamespaceName::new(NamespaceName::LOCAL).map_err(|error| refused(error.to_string()))?;
+        let request = StartWorkflow {
+            tenant: TenantId::local(),
+            namespace,
+            version: latest.workflow.version(),
+            input,
+            ttl: None,
+            metadata: RunMetadata {
+                labels: self.labels.clone(),
+                ..RunMetadata::default()
+            },
+            idempotency_key: None,
+        };
+        let created = {
+            let mut driver = self.driver.lock().await;
+            let mut gateway = driver.gateway(&self.at);
+            self.edge
+                .start_workflow(&mut gateway, request)
+                .await
+                .map_err(|error: StartError| refused(error.to_string()))?
+        };
         Ok(created.run)
     }
 
@@ -398,40 +585,33 @@ impl World {
     /// tests loaded: what a checker reads.
     pub async fn workflow_reports(&self) -> Result<Vec<WorkflowReport>, WorldError> {
         let tenant = TenantId::local();
-        let journal = self.engine.journal();
-        let latest = journal
+        let catalog = self.catalog();
+        let latest = catalog
             .latest_workflows(&WorkflowFilter {
                 tenant: tenant.clone(),
                 labels: BTreeMap::new(),
                 after: None,
                 limit: None,
             })
-            .await
-            .map_err(EngineError::from)?;
+            .await?;
+        let suites = self.edge.suites(test_format());
         let mut reports = Vec::new();
         for stored in latest {
-            let mut versions = journal
+            let mut versions = catalog
                 .workflow_versions(&tenant, stored.workflow.name(), &BTreeMap::new())
-                .await
-                .map_err(EngineError::from)?;
+                .await?;
             versions.reverse();
             for version in versions {
-                let tests = self
-                    .engine
-                    .load_suite(&tenant, &version.workflow, test_format())
-                    .await?;
+                let tests = suites.load_suite(&tenant, &version.workflow).await?;
                 let workflow = &version.workflow;
                 reports.push(WorkflowReport {
                     name: workflow.name().to_owned(),
                     version: workflow.version(),
                     parent: workflow.suite().parent,
                     toolset: workflow.toolset(),
-                    script: self
-                        .engine
-                        .journal()
+                    script: catalog
                         .get_script(&tenant, workflow.script())
-                        .await
-                        .map_err(EngineError::from)?
+                        .await?
                         .map(|stored| stored.script.source().to_owned())
                         .unwrap_or_default(),
                     tests,
@@ -445,11 +625,12 @@ impl World {
 
     /// Every run of the world, oldest first.
     pub async fn runs(&self) -> Result<Vec<RunRef>, WorldError> {
-        let records = self
-            .engine
-            .list_runs(&RunFilter::new(TenantId::local()))
-            .await?;
-        Ok(records.into_iter().map(|record| record.run).collect())
+        Ok(self
+            .summaries()
+            .await?
+            .into_iter()
+            .map(|summary| summary.run)
+            .collect())
     }
 
     /// The calls a fake server received.
@@ -466,7 +647,10 @@ impl World {
         fake::lock(&self.reactions).delivered.clone()
     }
 
-    /// Drives the world in virtual time: the engine runs whatever is ready, the world reacts
+    // ---------------------------------------------------------------------------------------
+    // Time
+
+    /// Drives the world in virtual time: the node runs whatever is ready, the world reacts
     /// (webhooks of the servers, signals answering waits), and time jumps to the next thing
     /// that happens, until `run` has ended, until `until`, or until nothing can happen without
     /// the agent.
@@ -479,20 +663,39 @@ impl World {
     }
 
     /// [`drive`](Self::drive); when nothing can happen any more before `until`, the clock
-    /// moves to `until` only if `elapse` (a wait elapses; a world left alone does not).
+    /// moves to `until` only if `elapse` (a wait elapses; a world left alone does not). An
+    /// activation that failed is the world's fault, not the agent's.
     async fn drive_until(
         &self,
         run: Option<&RunRef>,
         until: Option<Timestamp>,
         elapse: bool,
     ) -> Result<Drove, WorldError> {
-        for _ in 0..MAX_STEPS {
-            let report = self.engine.run_until_idle(&self.options).await?;
-            if let Some((run, error)) = report.failures.into_iter().next() {
-                return Err(WorldError::Activation { run: run.id, error });
+        let drove = self.drive_steps(run, until, elapse).await?;
+        for summary in self.summaries().await? {
+            if let Some(view) = self.run_view(&summary.run).await?
+                && view.head.failures > 0
+            {
+                return Err(WorldError::Activation {
+                    run: summary.run.id,
+                    failures: view.head.failures,
+                });
             }
-            if report.interrupted {
-                return Ok(Drove::Interrupted);
+        }
+        Ok(drove)
+    }
+
+    async fn drive_steps(
+        &self,
+        run: Option<&RunRef>,
+        until: Option<Timestamp>,
+        elapse: bool,
+    ) -> Result<Drove, WorldError> {
+        for _ in 0..MAX_STEPS {
+            match self.driver.lock().await.run_until_idle().await {
+                Ok(_) => {}
+                Err(DriveError::NeverIdle(_)) => return Ok(Drove::Interrupted),
+                Err(error) => return Err(drive_error(error)),
             }
             if let Some(run) = run
                 && self.is_terminal(run).await?
@@ -503,7 +706,7 @@ impl World {
                 continue;
             }
             let now = self.now();
-            match (self.next_event().await?, until) {
+            match (self.next_event().await, until) {
                 (Some(next), Some(until)) if next > until => {
                     self.clock.advance_to(until);
                     return Ok(Drove::TimeUp);
@@ -532,23 +735,15 @@ impl World {
 
     async fn is_terminal(&self, run: &RunRef) -> Result<bool, WorldError> {
         Ok(self
-            .engine
-            .get_run(run)
+            .run_view(run)
             .await?
-            .is_some_and(|record| record.status.is_terminal()))
+            .is_some_and(|view| view.head.status.is_terminal()))
     }
 
-    /// The next time something happens by itself: a timer, a retried tool call (or a run's
-    /// deadline before them), a webhook of a server, a signal the world will send.
-    async fn next_event(&self) -> Result<Option<Timestamp>, WorldError> {
-        let journal = self.engine.journal();
-        let timer = journal.next_timer().await.map_err(EngineError::from)?;
-        let retry = self.engine.next_tool_wake_up().await?;
-        let mut next = timer.into_iter().chain(retry).min();
-        if let Some(engine_next) = next {
-            let deadline = journal.next_deadline().await.map_err(EngineError::from)?;
-            next = Some(deadline.map_or(engine_next, |deadline| deadline.min(engine_next)));
-        }
+    /// The next time something happens by itself: a timer of the node that wakes a run (or a
+    /// run's deadline before it), a webhook of a server, a signal the world will send.
+    async fn next_event(&self) -> Option<Timestamp> {
+        let node = self.driver.lock().await.next_jump();
         let scheduled = fake::lock(&self.reactions)
             .scheduled
             .iter()
@@ -559,7 +754,7 @@ impl World {
             .iter()
             .filter_map(|server| server.service.outbox().and_then(|outbox| outbox.next()))
             .min();
-        Ok(next.into_iter().chain(scheduled).chain(webhooks).min())
+        node.into_iter().chain(scheduled).chain(webhooks).min()
     }
 
     /// Delivers what is due now: the servers' webhooks, and the signals answering waits.
@@ -581,47 +776,54 @@ impl World {
                 let Some(token) = token else {
                     continue;
                 };
-                let target = self
-                    .engine
-                    .journal()
-                    .resolve_webhook_token(&WebhookToken(token.to_owned()))
-                    .await
-                    .map_err(EngineError::from)?;
-                if let Some(target) = target {
-                    self.engine
-                        .signal(
-                            &target.run,
-                            target.name.clone(),
-                            outbound.payload,
-                            Some(outbound.id),
-                        )
-                        .await?;
-                    self.record(&target.run, &target.name, now, "webhook");
-                    delivered = true;
+                let Ok((run, _)) = self.edge.partition_of_token(token).await else {
+                    continue;
+                };
+                let run = self.run_ref(run);
+                let enqueued = {
+                    let mut driver = self.driver.lock().await;
+                    let mut gateway = driver.gateway(&self.at);
+                    self.edge
+                        .webhook(&mut gateway, token, outbound.payload, Some(outbound.id))
+                        .await
+                };
+                match enqueued {
+                    Ok(_) => {}
+                    // A token no longer bound to a run: its run ended.
+                    Err(EdgeError::Refused(_)) => continue,
+                    Err(error) => return Err(error.into()),
                 }
+                let name =
+                    webhook_name(&self.history(&run).await?, &outbound.url).unwrap_or_default();
+                self.record(&run, &name, now, "webhook");
+                delivered = true;
             }
         }
 
         if !self.reactions_spec.is_empty() {
-            for run in self.runs().await? {
-                let state = self.engine.run_state(&run).await?;
-                if state.status().is_terminal() {
+            for summary in self.summaries().await? {
+                if summary.status.is_terminal() {
                     continue;
                 }
-                for awaited in state.awaited_signals() {
+                let awaited = summary
+                    .waits
+                    .iter()
+                    .filter(|wait| wait.kind == WaitKind::Signal)
+                    .filter_map(|wait| wait.name.as_ref());
+                for name in awaited {
                     let Some(reaction) = self
                         .reactions_spec
                         .iter()
-                        .find(|reaction| reaction.signal == awaited.name)
+                        .find(|reaction| reaction.signal == name)
                     else {
                         continue;
                     };
                     let mut reactions = fake::lock(&self.reactions);
-                    if reactions.fired.insert((run.id, awaited.name.clone())) {
+                    if reactions.fired.insert((summary.run.id, name.clone())) {
                         let after = u64::try_from(reaction.after.as_millis()).unwrap_or(u64::MAX);
                         reactions.scheduled.push(Scheduled {
-                            run: run.clone(),
-                            signal: awaited.name.clone(),
+                            run: summary.run.clone(),
+                            signal: name.clone(),
                             payload: reaction.payload.clone(),
                             at: Timestamp(now.0.saturating_add(after)),
                         });
@@ -640,13 +842,7 @@ impl World {
             due
         };
         for scheduled in due {
-            self.engine
-                .signal(
-                    &scheduled.run,
-                    scheduled.signal.clone(),
-                    scheduled.payload,
-                    None,
-                )
+            self.signal(&scheduled.run, &scheduled.signal, scheduled.payload, None)
                 .await?;
             self.record(&scheduled.run, &scheduled.signal, now, "reaction");
             delivered = true;
@@ -667,8 +863,8 @@ impl World {
     pub async fn run_reports(&self) -> Result<Vec<RunReport>, WorldError> {
         let mut reports = Vec::new();
         for run in self.runs().await? {
-            let record = self.engine.get_run(&run).await?;
-            let history = self.engine.export_history(&run).await?;
+            let head = self.run_view(&run).await?.map(|view| view.head);
+            let history = self.history(&run).await?;
             let state = RunState::from_history(&history).ok();
             let (output, error) = match state.as_ref().and_then(RunState::outcome) {
                 Some(RunOutcome::Completed { output }) => (output.value().cloned(), None),
@@ -680,13 +876,15 @@ impl World {
             };
             reports.push(RunReport {
                 id: run.id,
-                status: record.as_ref().map_or(RunStatus::Pending, |r| r.status),
-                parent: record
+                status: head.as_ref().map_or(RunStatus::Pending, |head| head.status),
+                parent: head
                     .as_ref()
-                    .and_then(|r| r.metadata.parent.as_ref())
+                    .and_then(|head| head.metadata.parent.as_ref())
                     .map(|parent| parent.run),
-                workflow: record.as_ref().and_then(|r| r.metadata.workflow.clone()),
-                labels: record.map(|r| r.metadata.labels).unwrap_or_default(),
+                workflow: head
+                    .as_ref()
+                    .and_then(|head| head.metadata.workflow.clone()),
+                labels: head.map(|head| head.metadata.labels).unwrap_or_default(),
                 output,
                 error,
                 history,
@@ -694,6 +892,37 @@ impl World {
         }
         Ok(reports)
     }
+}
+
+/// The name a run gave the webhook whose URL is `url`: the argument of its call of `webhook`
+/// that answered it.
+fn webhook_name(history: &[HistoryEntry], url: &str) -> Option<String> {
+    let answered: Option<Seq> = history.iter().find_map(|entry| match &entry.event {
+        Event::Completion(Completion::ToolCallCompleted { seq, result, .. })
+            if result
+                .value()
+                .and_then(|result| result.get("url"))
+                .and_then(Value::as_str)
+                == Some(url) =>
+        {
+            Some(*seq)
+        }
+        _ => None,
+    });
+    let seq = answered?;
+    history.iter().find_map(|entry| match &entry.event {
+        Event::Command(Command::ScheduleToolCall {
+            seq: scheduled,
+            tool,
+            args,
+            ..
+        }) if *scheduled == seq && tool == "webhook" => args
+            .value()
+            .and_then(|args| args.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        _ => None,
+    })
 }
 
 /// A run at the end of an episode.
@@ -748,12 +977,11 @@ pub fn test_format() -> TestFormat {
 
 /// Stores a toolset with the declarations codegen generates for it.
 async fn register_toolset(
-    engine: &EvalEngine,
+    catalog: &MemoryCatalog,
     toolset: &Toolset,
 ) -> Result<rewind_codegen::Declarations, WorldError> {
     let declarations = rewind_codegen::generate(toolset, &BTreeMap::new());
-    engine
-        .journal()
+    catalog
         .put_toolset(
             &TenantId::local(),
             toolset,
@@ -762,7 +990,6 @@ async fn register_toolset(
                 prompt: declarations.prompt.clone(),
             },
         )
-        .await
-        .map_err(EngineError::from)?;
+        .await?;
     Ok(declarations)
 }

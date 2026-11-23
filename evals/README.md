@@ -13,7 +13,7 @@ model ──► system prompt (introduction, the rewind module, the toolset in o
   │          signal_run, cancel_run, retry_run, search_tools, save_workflow, get_workflow,
   │          record_tests
   ▼
-agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──► engine in process:
+agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──► run plane in process:
                                        │   tsgo check, V8 sandbox, journal, workflows and their
                                        │   suites (the gate), tests, McpDispatcher (the real MCP
                                        ▼   client)
@@ -22,7 +22,7 @@ agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──
 ```
 
 1. The task's world starts: its fake servers, the toolset pinned from them (discovery through
-   `McpDispatcher`), the declarations from `rewind-codegen`, and the engine at Monday
+   `McpDispatcher`), the declarations from `rewind-codegen`, and the run plane at Monday
    2026-03-02T09:00:00Z in virtual time. The task's setup, if it has one, is played first, with
    the agent's labels: runs of scripts, workflows saved through the gate with their suite (on
    the toolset as it was then, for a server that changed since), runs of those workflows.

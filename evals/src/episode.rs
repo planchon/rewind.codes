@@ -313,8 +313,7 @@ async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
             Setup::Run(script) => {
                 let request = world.start_request(Script::new(*script), json!({}));
                 world
-                    .engine
-                    .start_run(request)
+                    .start(request, true)
                     .await
                     .map_err(|err| format!("a setup run was refused: {err}"))?
                     .run
@@ -371,7 +370,7 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
     let generated = rewind_codegen::workflow_declarations(workflow.name, &schemas);
     let loader = TsMockLoader::default();
     world
-        .engine
+        .edge
         .register_workflow(
             RegisterWorkflow {
                 tenant: TenantId::local(),
