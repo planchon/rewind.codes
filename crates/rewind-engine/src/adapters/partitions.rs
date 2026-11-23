@@ -767,6 +767,25 @@ impl PartitionLog for MemoryPartitionLog {
         self.read(|state| state.records(run).map(|records| records.head.clone()))
     }
 
+    async fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: RunId,
+        high: RunId,
+    ) -> Result<Vec<RunHead>, PartitionError> {
+        if low > high {
+            return Ok(Vec::new());
+        }
+        self.read(|state| {
+            state
+                .runs
+                .range(low..=high)
+                .filter(|(_, records)| records.head.run.tenant == *tenant)
+                .map(|(_, records)| records.head.clone())
+                .collect()
+        })
+    }
+
     async fn summary(&self, run: &RunRef) -> Result<Option<IndexedSummary>, PartitionError> {
         self.read(|state| {
             state

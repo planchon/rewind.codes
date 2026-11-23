@@ -18,7 +18,7 @@
 //! - [`Test`]: the world a run meets and what the outside must see at the end; [`RunPath`],
 //!   the path a run took.
 //! - [`RunHandle`]: a run's readable name, `<namespace>/<origin>/<suffix>`, whose suffix is the
-//!   start of its UUIDv7; [`script_doc`], a script's title and description from its top comment.
+//!   start of its UUID; [`script_doc`], a script's title and description from its top comment.
 //!
 //! This crate is the domain and nothing else: no I/O, no async, no V8, no serde, no telemetry.
 //! It knows nothing about how events are stored or transported, nor where time, ids and seeds
@@ -58,7 +58,7 @@ pub use event::{
 };
 pub use handle::{
     InvalidRunHandle, MAX_ORIGIN_LEN, MAX_SUFFIX_LEN, RunHandle, SCRIPT_ORIGIN, SUFFIX_LEN,
-    is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours, suffix_range,
+    is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours, suffix_ranges,
 };
 pub use history::{HistoryError, validate_history};
 pub use ids::{Epoch, PartitionId, RunId, Seed, Seq};

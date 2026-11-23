@@ -128,7 +128,7 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_CLUSTER_DATABASE", default_value = "postgres")]
     pub cluster_database: String,
 
-    /// The partitions, the archive and the blobs: a directory, or `s3://<bucket>` (R2 or any
+    /// The partitions, the archive and the blobs: a directory, or `s3://<bucket>` (AWS S3 or any
     /// S3-compatible service, with `--s3-*`). Next to a Turso database by default.
     #[arg(long, env = "REWIND_BUCKET")]
     pub bucket: Option<String>,
@@ -137,7 +137,7 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_S3_ENDPOINT")]
     pub s3_endpoint: Option<String>,
 
-    /// `auto` for R2.
+    /// The bucket's region; `auto` for R2.
     #[arg(long, env = "REWIND_S3_REGION")]
     pub s3_region: Option<String>,
 
@@ -762,7 +762,7 @@ impl ServerArgs {
                 ),
                 StoreLocation::Postgres(_) => {
                     return Err(ConfigError::new(
-                        "--bucket is required with Postgres: s3://<bucket> (R2 or any \
+                        "--bucket is required with Postgres: s3://<bucket> (AWS S3 or any \
                          S3-compatible service), where every node reads the partitions",
                     ));
                 }

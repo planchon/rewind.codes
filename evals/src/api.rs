@@ -431,10 +431,15 @@ impl World {
     /// The run, if it exists and carries the caller's labels; otherwise 404, as the server
     /// answers a key limited to labels.
     async fn visible_run(&self, id: &str) -> Result<(RunRef, RunHead), ApiError> {
-        let run_id: RunId = id.parse().map_err(|_| run_not_found(id))?;
-        let run = self.run_ref(run_id);
-        match self.run_view(&run).await {
-            Ok(Some(view)) if self.sees(&view.head.metadata.labels) => Ok((run, view.head)),
+        let found = match (id.parse::<RunId>(), id.parse::<rewind_core::RunHandle>()) {
+            (Ok(run_id), _) => self.run_view(&self.run_ref(run_id)).await,
+            (_, Ok(handle)) => self.find_run(&handle).await,
+            _ => return Err(run_not_found(id)),
+        };
+        match found {
+            Ok(Some(view)) if self.sees(&view.head.metadata.labels) => {
+                Ok((view.head.run.clone(), view.head))
+            }
             Ok(_) | Err(EdgeError::Refused(Refusal::RunNotFound(_))) => Err(run_not_found(id)),
             Err(error) => Err(edge_error(error)),
         }
@@ -742,7 +747,12 @@ impl Api for World {
         let more = summaries.len() > offset + limit;
         let mut runs = Vec::new();
         for summary in summaries.iter().skip(offset).take(limit) {
-            runs.push(view::summary(summary).map_err(edge_error)?);
+            let mut shown = view::summary(summary).map_err(edge_error)?;
+            shown.script_title = view::script_title(self, &summary.run.tenant, summary.script)
+                .await
+                .map_err(edge_error)?
+                .map(|(title, _, _)| title);
+            runs.push(shown);
         }
         Ok(RunPage {
             runs,
@@ -967,7 +977,7 @@ impl Api for World {
         let source = stored.script.source().to_owned();
         let title = crate::view::script_title(self, &tenant, parsed)
             .await
-            .map_err(engine_error)?;
+            .map_err(edge_error)?;
         let (title, description, title_source) = match title {
             Some((title, description, source)) => (Some(title), description, Some(source)),
             None => (None, None, None),

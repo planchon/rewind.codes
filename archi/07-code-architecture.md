@@ -141,9 +141,11 @@ Methods (declared in `crates/rewind-engine/src/ports/catalog.rs`):
 
 ```
 put_script(tenant, script, compiled) / get_script(tenant, digest)
+set_script_title(tenant, digest, ScriptTitle?) -> bool / script_titles(tenant, [digest]) -> [(digest, ScriptTitle)]
 put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest) / list_toolsets(tenant)
 put_workflow(tenant, workflow, labels, now) -> StoredWorkflow / get_workflow(tenant, version)
 workflow_versions(tenant, name, labels) / workflows_with_script(tenant, script, labels)
+workflow_number(tenant, name, number) -> StoredWorkflow?
 latest_workflows(WorkflowFilter { tenant, labels, after, limit })
 reserve_tests(tenant, [TestRecord { digest, namespace?, size }], now) -> [digest being deleted]
 get_test(tenant, digest) -> TestRecord    namespace_tests(tenant, namespace, limit) -> [digest]
@@ -164,7 +166,12 @@ drop_namespace(tenant, name) -> Dropped
   the first. `workflow_versions` lists a name's versions carrying `labels`, newest first (created
   last first, then stored last first): the first is the latest; `workflows_with_script` lists the
   versions of any name whose script is `script`, in the same order; `latest_workflows` gives the
-  latest version of each name, by name.
+  latest version of each name, by name. A new version takes the next number of its name in its
+  tenant, from 1 in the order they were stored; `workflow_number` finds a version by its
+  number, whatever its labels.
+- `set_script_title` gives a stored script the title and description a person wrote, or removes
+  them, and answers `false` for a script the tenant does not have; `script_titles` reads them
+  ([titles](04-tools.md#script-titles)).
 - Tests ([suites](05-testing-and-observability.md#suites-and-the-gate)): the documents are
   blobs; the store indexes them. `reserve_tests` inserts a test's row, or makes an existing one
   new again, before its blob is written, and returns the digests whose deletion has started.
@@ -194,6 +201,7 @@ Methods (declared in `crates/rewind-engine/src/ports/partition/`):
 open(partition, node) -> PartitionLog            # the only writer from now on: fences the previous one
 recover(horizon) -> Recovery { runnable, quarantined, timers, tasks, unsealed, outbox, counters, organizations }
 run(run) -> RunHead?                  summary(run) -> RunSummary?
+runs_in_range(tenant, low, high) -> [RunHead]     # the runs a handle's suffix names, by id
 history(run, attempt, from) -> [HistoryEntry]    inbox(run) -> [InboxItem]
 tasks(run) -> [ToolTask]              payload(run, digest) -> PayloadRow?
 watchers(run) -> [Watcher]            timers(from, to) -> [DueTimer]
@@ -645,7 +653,7 @@ Conventions:
 |  | `GET /v1/runs/{id}/trace?format=llm` | `runs:read` | The LLM trace |
 |  | `GET /v1/runs/{id}/entries/{idx}` | `runs:read` | One journal entry in full |
 |  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
-| Changes | `GET /v1/changes` | `runs:read` | SSE of what changes in the organization, as the caller may see it (an end user's namespace, a grant's labels, the namespace `Rewind-Namespace` names): a `run` event holds the run's summary, the same object as an item of `GET /v1/runs`, pushed by the run's owner once its batch is durable; `script`, `workflow`, `secret`, `namespace` and `connection` events name what changed in the control plane; `resync` says more changed at once than one pass reads, and the client reads again what it shows. No resume cursor: after a drop, the client reads again what it shows. Closed as a run's event stream is: at a member's access token's expiry (one already expired is refused with 401), once an end user's token or a connection stops authenticating, once the caller's grant no longer gives `runs:read` with the same labels or its key is revoked |
+| Changes | `GET /v1/changes` | `runs:read` | SSE of what changes in the organization, as the caller may see it (an end user's namespace, a grant's labels, the namespace `Rewind-Namespace` names): a `run` event holds the run's summary, the same object as an item of `GET /v1/runs`, pushed by the run's owner once its batch is durable; `script` (a script run for the first time, or given a title or none), `workflow`, `secret`, `namespace` and `connection` events name what changed in the control plane; `resync` says more changed at once than one pass reads, and the client reads again what it shows. No resume cursor: after a drop, the client reads again what it shows. Closed as a run's event stream is: at a member's access token's expiry (one already expired is refused with 401), once an end user's token or a connection stops authenticating, once the caller's grant no longer gives `runs:read` with the same labels or its key is revoked |
 |  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
 |  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
 |  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at`, `input` and `secrets` ([forks](03-execution.md#forks)); for a run of a workflow, its version's suite runs against the script first (422 `tests-failed`) |
@@ -664,7 +672,8 @@ Conventions:
 |  | `GET /v1/subscriptions` | `subscriptions:read` | Lists the subscriptions, without their secrets |
 |  | `DELETE /v1/subscriptions/{id}` | `subscriptions:write` | Deletes a subscription |
 | Reading (dashboard) | `GET /v1/scripts` | `runs:read` | Every distinct script, its runs, its tools |
-|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
+|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source, its title and description and where they come from (`titleSource`: `person`, `comment`) |
+|  | `PATCH /v1/scripts/{digest}` | `scripts:write` | Gives the script a title (1 to 120 characters) and a description (at most 2,000) for the organization, or removes them (`title: null`); 422 `invalid-title` out of bounds; sends the script's `script` change; answers the script ([titles](04-tools.md#script-titles)) |
 |  | `GET /v1/tools/stats` | `runs:read` | Per tool, from the hourly counters of a namespace or the tenant over a window: calls, latency, errors, retries |
 |  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through the run that holds it (`run`, required: a payload belongs to its run) |
 | Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user; for a connection, its id, person and client, and the organizations it opens with their access |
@@ -1000,7 +1009,7 @@ Its build is what `rewind-server` serves:
 | Claude | Connect Claude (`/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
 | Layers | `views/`, `app/` and `components/` render state and call actions; they import only `state/`. `state/` holds the TanStack DB collections (`@tanstack/db`, pinned to an exact version), the hooks that read them and the actions, and decides what to load, when it is stale and what a change touches. `sources/` holds the HTTP client, the change stream and the run event streams: a new way for the server to push changes changes this folder only. Biome's `noRestrictedImports` (`biome.jsonc`) keeps `sources/` and `@tanstack/*` (but `@tanstack/react-virtual`, a component) out of the views. What the caller may do is `state/access.tsx`; browser storage, `model/storage.ts`; views may read the contexts `app/` provides (the server's answer, by the gate) |
-| Event streams | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header. A run's is resumed with `from` after a drop. The change stream (`GET /v1/changes`) is one per tab, reopened after a drop (1 s, doubling up to 30 s) with a read of what is on screen; while it is down, the views keep what they show, and the dot beside the organization picker says it is not live. No view reads on a timer, and the lint refuses `refetchInterval` |
+| Event streams | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header. A run's is resumed with `from` after a drop. The change stream (`GET /v1/changes`) is one per tab, reopened after a drop (1 s, doubling up to 30 s) with a read of what is on screen; while it is down, the views keep what they show. No view reads on a timer, and the lint refuses `refetchInterval` |
 | Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |
 
 `dashboard/README.md` has the development commands; `pnpm dev:mock` runs it against a mocked API.

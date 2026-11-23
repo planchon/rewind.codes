@@ -2,7 +2,6 @@
 //! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 //! Each goes through the edge to the owner of the run's partition.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -17,7 +16,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
     SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
 };
-use rewind_core::{Attachments, Matching, RunMode, Script, SecretRef, canonical_json};
+use rewind_core::{Attachments, Matching, RunHandle, RunMode, Script, SecretRef, canonical_json};
 use rewind_engine::attachments::AttachRights;
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{Enqueued, Page, RunMetadata, SCAN_BUDGET, TraceContext};
@@ -27,7 +26,6 @@ use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
 use crate::http::{search, toolsets, workflows};
-use crate::titles::Title;
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most.
 const PAGE: u32 = 50;
@@ -175,8 +173,42 @@ pub(super) async fn list(
         .cursor
         .as_ref()
         .map(|cursor| search::encode_cursor(order, cursor));
-    let runs = found.summaries.iter().map(search::summary).collect();
+    let titles = app
+        .titles(
+            &caller.tenant,
+            found.summaries.iter().map(|summary| summary.script),
+        )
+        .await?;
+    let runs = found
+        .summaries
+        .iter()
+        .map(|found| {
+            let mut summary = search::summary(found);
+            summary.script_title = titles.get(&found.script).map(|title| title.title.clone());
+            summary
+        })
+        .collect();
     Ok(Json(RunPage { runs, next_cursor }))
+}
+
+/// A filter's run (`parent`, `startedBy`) by its id, when the filter gives its handle: `false`
+/// when the handle names no run the caller sees, which no run of the list can then match. What
+/// is neither an id nor a handle is left for the filter to refuse.
+async fn by_id(app: &App, caller: &Caller, run: &mut Option<String>) -> Result<bool, ApiError> {
+    let Some(given) = run.as_deref() else {
+        return Ok(true);
+    };
+    if given.parse::<rewind_core::RunId>().is_ok() || given.parse::<RunHandle>().is_err() {
+        return Ok(true);
+    }
+    match app.run(caller, given).await {
+        Ok(view) => {
+            *run = Some(view.head.run.id.to_string());
+            Ok(true)
+        }
+        Err(error) if error.0.status == 404 => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// `GET /v1/runs/{id}`.

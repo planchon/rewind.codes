@@ -1,6 +1,6 @@
 [package]
 name = "rewind-store-slatedb"
-description = "PartitionStore of Rewind on SlateDB over object storage: R2 or any S3-compatible service, local files, memory."
+description = "PartitionStore of Rewind on SlateDB over object storage: AWS S3 or any S3-compatible service, local files, memory."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

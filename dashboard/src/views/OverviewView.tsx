@@ -282,6 +282,15 @@ export function OverviewView() {
     <div className="page">
       <PageHeader
         title="Overview"
+        info={
+          scope.narrowed &&
+          !fault && (
+            <p>
+              The figures count the runs of {scope.q ? <code>{scope.q}</code> : "the organization"}:
+              the other terms of the query narrow the runs each figure opens.
+            </p>
+          )
+        }
         actions={
           <Seg<RangeKey>
             label="Window"
@@ -298,15 +307,7 @@ export function OverviewView() {
         values={lookup.values}
         onTyping={lookup.onTyping}
         fault={fault}
-      >
-        <SaveSearch q={q} view="overview" />
-      </QueryBar>
-      {scope.narrowed && !fault && (
-        <p className="muted">
-          The figures count the runs of {scope.q ? <code>{scope.q}</code> : "the organization"}: the
-          other terms of the query narrow the runs each figure opens.
-        </p>
-      )}
+      />
       {body}
     </div>
   );

@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::num::NonZeroU32;
 use std::ops::Bound as StdBound;
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use rewind_core::{
     SecretRef, Seed, Seq, Shape, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy, ToolRoute,
     Toolset,
 };
+use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
     ActivationRequest, ActivationResult, Admit, Changed, Committed, CountsReport, Decision,
     EdgeNotice, HostFailure, HostTask, HostTaskOffer, NodeReply, NodeRequest, OrgReply, OrgRequest,
@@ -21,15 +23,15 @@ use rewind_engine::ports::link::{
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
     Attempt, AttributeValue, CompiledScript, CounterDelta, Counters, Created,
-    CredentialsExpiredReason, DueTimer, Ending, Enqueued, FailureCounts, ForkParent, Found, Gauges,
-    Hour, InboxItem, IndexedSummary, LatestRun, LogRecord, Month, NamespaceName, NodeId,
-    OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionEpoch, PayloadRecord, Predicate,
-    Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey,
+    CredentialsExpiredReason, Day, DayUsage, DueTimer, Ending, Enqueued, FailureCounts, ForkParent,
+    Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun, LogRecord, Month, NamespaceName,
+    NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionEpoch, PayloadRecord,
+    Predicate, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey,
     QuotaExceeded, QuotaKind, QuotaScope, Range, RunCounts, RunHead, RunMetadata, RunOrder,
     RunQuery, RunRef, RunSummary, RunWorkflow, Scope, ScriptCounts, SealedAttempt, SearchCursor,
     Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, StoredScript, StoredToolset, TaskPhase,
     TaskRecord, TaskRef, TaskState, TaskToken, TenantId, Term, TextMatch, Threshold, TimerChange,
-    TimerKind, ToolCounts, ToolDeclarations, ToolTask, TraceContext, TraceId, Trigger, Wait,
+    TimerKind, ToolCounts, ToolDeclarations, ToolTask, TraceContext, TraceId, Trigger, Usage, Wait,
     WaitKind, WaitingFor, WebhookEvent, WebhookEventKind, Window,
 };
 use serde::Serialize;
@@ -180,6 +182,8 @@ fn head(n: u128) -> RunHead {
     RunHead {
         run: run(n),
         namespace: user(),
+        origin: "triage-new-issues".into(),
+        suffix_len: 14,
         script: digest("script"),
         toolset: digest("toolset"),
         status: RunStatus::Active,
@@ -209,6 +213,8 @@ fn summary(n: u128) -> RunSummary {
     RunSummary {
         run: run(n),
         namespace: user(),
+        origin: "triage-new-issues".into(),
+        suffix_len: 14,
         script: digest("script"),
         headline: "import { signal } from \"rewind\";".into(),
         toolset: digest("toolset"),
@@ -720,6 +726,7 @@ fn every_partition_request() -> Vec<PartitionRequest> {
         PartitionRequest::Start(Box::new(StartAtOwner {
             run: run(1),
             namespace: user(),
+            origin: "triage-new-issues".into(),
             started: started(),
             metadata: metadata(),
             start_key: Some("start-1".into()),
@@ -778,6 +785,10 @@ fn every_partition_request() -> Vec<PartitionRequest> {
             key: Some("delivery-1".into()),
         },
         PartitionRequest::GetRun { run: run(1) },
+        PartitionRequest::Find {
+            tenant: acme(),
+            handle: "user-1/triage/06bqx3k9f2mt".parse().unwrap(),
+        },
         PartitionRequest::History {
             run: run(1),
             from: 3,
@@ -805,6 +816,27 @@ fn every_partition_request() -> Vec<PartitionRequest> {
         PartitionRequest::Counters {
             scope: namespace_scope(),
             window: Window::hours(Hour(10), Hour(12)),
+            bucket: None,
+        },
+        PartitionRequest::Counters {
+            scope: Scope::Tenant(acme()),
+            window: Window::hours(Hour(10), Hour(34)),
+            bucket: NonZeroU32::new(6),
+        },
+        PartitionRequest::Usage {
+            scope: namespace_scope(),
+            month: Month::new(2026, 11).unwrap(),
+            days: true,
+        },
+        PartitionRequest::QuotaAlerts {
+            tenant: acme(),
+            namespace: Some(user()),
+            month: Month::new(2026, 11).unwrap(),
+        },
+        PartitionRequest::QuotaAlerts {
+            tenant: acme(),
+            namespace: None,
+            month: Month::new(2026, 12).unwrap(),
         },
         PartitionRequest::Shapes {
             tenant: acme(),
@@ -847,6 +879,14 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
         PartitionReply::Run(Ok(Some(RunView {
             head: head(1),
             summary: Some(summary(1)),
+            parent: Some("user-1/triage/06bqx3k9f2mt".parse().unwrap()),
+            started_by: None,
+        }))),
+        PartitionReply::Run(Ok(Some(RunView {
+            head: head(2),
+            summary: None,
+            parent: None,
+            started_by: Some("user-1/digest/06bqx3k9f2mtq".parse().unwrap()),
         }))),
         PartitionReply::Run(Ok(None)),
         PartitionReply::History(Ok(Some(history()))),
@@ -859,7 +899,39 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
                 run: run_id(2),
             }),
         })),
-        PartitionReply::Counted(Ok((counters(), gauges()))),
+        PartitionReply::Counted(Ok((vec![counters(), Counters::default()], gauges()))),
+        PartitionReply::Used(Ok(BTreeMap::from([(
+            user(),
+            Usage {
+                cpu: Duration::new(7, 5),
+                runs_started: 4,
+                active_runs: 1,
+                scripts: 2,
+                days: vec![(
+                    Day::of(T),
+                    DayUsage {
+                        cpu: Duration::new(7, 5),
+                        runs_started: 4,
+                    },
+                )],
+            },
+        )]))),
+        PartitionReply::Alerts(Ok(vec![
+            alert(),
+            QuotaAlert {
+                key: QuotaAlertKey {
+                    tenant: acme(),
+                    namespace: None,
+                    quota: QuotaKind::Scripts,
+                    period: Month::new(2026, 11).unwrap(),
+                    threshold: Threshold::Reached,
+                },
+                used: 10,
+                limit: 10,
+                raised_at: at(22),
+                sent_at: None,
+            },
+        ])),
         PartitionReply::Shapes(Ok(BTreeMap::from([(
             "srv.a".to_owned(),
             Shape::Object(BTreeMap::from([(
@@ -944,6 +1016,11 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
         })),
         OrgRequest::HostTaskDone {
             task: task_ref(1, 2),
+            gone: false,
+        },
+        OrgRequest::HostTaskDone {
+            task: task_ref(1, 3),
+            gone: true,
         },
         OrgRequest::Attach(StreamAttach {
             stream: StreamId("stream-1".into()),
@@ -1078,6 +1155,24 @@ fn activations_round_trip() {
             copied: true,
             cpu: Duration::new(0, 1_234_567),
             mode: Some(RunMode::Mock),
+            measurements: vec![
+                RunMeasurement::Started,
+                RunMeasurement::Ended {
+                    outcome: "completed".into(),
+                },
+                RunMeasurement::ToolCall {
+                    tool: "srv.a".into(),
+                    outcome: "failed".into(),
+                    error_kind: Some("timeout".into()),
+                    seconds: 1.5,
+                },
+                RunMeasurement::ToolCall {
+                    tool: "ask".into(),
+                    outcome: "no_outcome".into(),
+                    error_kind: None,
+                    seconds: 0.0,
+                },
+            ],
         })),
         ActivationResult::Committed(Box::new(Committed {
             activation: activation(),
@@ -1087,6 +1182,7 @@ fn activations_round_trip() {
             copied: false,
             cpu: Duration::ZERO,
             mode: None,
+            measurements: Vec::new(),
         })),
         ActivationResult::Quarantined {
             kind: QuarantineKind::NonDeterminism,

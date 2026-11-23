@@ -144,6 +144,10 @@ pub(crate) trait Columns {
         unsigned(self.i64(index)?)
     }
 
+    fn u32(&self, index: usize) -> Result<u32, Error> {
+        narrow(self.u64(index)?)
+    }
+
     fn opt_u32(&self, index: usize) -> Result<Option<u32>, Error> {
         self.opt_u64(index)?.map(narrow).transpose()
     }

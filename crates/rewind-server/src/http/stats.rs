@@ -288,14 +288,15 @@ pub(super) async fn runs(
     }))
 }
 
-/// The labels of each failure group's latest runs, as `key:value`, most runs first: read from
-/// the runs' owners, as many at once as [`LABEL_READS`]. A run that cannot be read (erased since,
-/// its partition moving) adds none.
+/// The labels of each failure group's latest runs, as `key:value`, most runs first, and the
+/// handle of its latest run: read from the runs' owners, as many at once as [`LABEL_READS`]. A
+/// run that cannot be read (erased since, its partition moving) adds no label, and the latest
+/// is then named by its id.
 async fn latest_labels<'a>(
     app: &App,
     caller: &Caller,
     groups: impl Iterator<Item = &'a Vec<LatestRun>>,
-) -> Vec<Vec<FacetValue>> {
+) -> Vec<(Vec<FacetValue>, Option<String>)> {
     let runs: Vec<(usize, RunRef)> = groups
         .enumerate()
         .flat_map(|(group, latest)| {
@@ -306,6 +307,13 @@ async fn latest_labels<'a>(
         .collect();
     let groups = runs.last().map_or(0, |(group, _)| group + 1);
     let mut counts = vec![BTreeMap::<String, u64>::new(); groups];
+    let mut handles = vec![None; groups];
+    let mut firsts = vec![None; groups];
+    for (group, run) in &runs {
+        if firsts[*group].is_none() {
+            firsts[*group] = Some(run.id);
+        }
+    }
     let mut reads = futures_util::stream::iter(runs)
         .map(|(group, run)| async move { (group, app.read_run(&run).await) })
         .buffer_unordered(LABEL_READS);
@@ -313,13 +321,17 @@ async fn latest_labels<'a>(
         let Ok(Some(view)) = view else {
             continue;
         };
+        if firsts[group] == Some(view.head.run.id) {
+            handles[group] = Some(view.head.handle().to_string());
+        }
         for (key, value) in &view.head.metadata.labels {
             *counts[group].entry(format!("{key}:{value}")).or_insert(0) += 1;
         }
     }
     counts
         .into_iter()
-        .map(|counts| top(counts, TOP_LABELS))
+        .zip(handles)
+        .map(|(counts, handle)| (top(counts, TOP_LABELS), handle))
         .collect()
 }
 
@@ -356,7 +368,7 @@ pub(super) async fn failures(
     let groups = page
         .into_iter()
         .zip(labels)
-        .filter_map(|((fingerprint, group), labels)| {
+        .filter_map(|((fingerprint, group), (labels, handle))| {
             let latest = group.latest.first()?;
             let ends = group.latest.iter().map(|run| run.ended_at);
             Some(FailureGroup {
@@ -384,6 +396,7 @@ pub(super) async fn failures(
                 labels,
                 latest: FailureSample {
                     id: latest.run.to_string(),
+                    handle: handle.unwrap_or_else(|| latest.run.to_string()),
                     status: latest.status.into(),
                     message: latest.message.clone(),
                 },
@@ -552,10 +565,17 @@ pub(super) async fn scripts(
         )
     });
     scripts.truncate(limit);
+    let mut titles = app
+        .titles(&caller.tenant, scripts.iter().map(|(script, _)| **script))
+        .await?;
     let mut page = Vec::with_capacity(scripts.len());
     for (script, counts) in scripts {
+        let title = titles.remove(script);
         page.push(ScriptSummary {
             digest: script.to_hex(),
+            title_source: title.as_ref().map(|title| title.source),
+            description: title.as_ref().and_then(|title| title.description.clone()),
+            title: title.map(|title| title.title),
             headline: app.headline(&caller.tenant, *script).await,
             first_run_at: counts
                 .first_started_at

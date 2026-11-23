@@ -8,9 +8,9 @@ use crate::adapters::ControlPlaneChanges;
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, StoredScript,
-    StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant,
-    TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
+    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle,
+    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 
 /// `CatalogStore` in memory: engine tests and mock mode. Every write sends its change through
@@ -26,6 +26,8 @@ pub struct MemoryCatalog {
 #[derive(Debug, Default)]
 struct State {
     scripts: BTreeMap<(TenantId, Digest), StoredScript>,
+    /// The titles people gave scripts.
+    titles: BTreeMap<(TenantId, Digest), ScriptTitle>,
     toolsets: BTreeMap<(TenantId, Digest), StoredToolset>,
     /// Workflow versions, with the order they were stored in.
     workflows: BTreeMap<(TenantId, Digest), (u64, StoredWorkflow)>,
@@ -163,6 +165,47 @@ impl CatalogStore for MemoryCatalog {
         Ok(self.lock()?.scripts.get(&(tenant.clone(), digest)).cloned())
     }
 
+    async fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, CatalogError> {
+        let mut state = self.lock()?;
+        let key = (tenant.clone(), script);
+        if !state.scripts.contains_key(&key) {
+            return Ok(false);
+        }
+        match title {
+            Some(title) => state.titles.insert(key, title.clone()),
+            None => state.titles.remove(&key),
+        };
+        self.send(ControlPlaneChange::Script {
+            tenant: tenant.clone(),
+            digest: script,
+        });
+        Ok(true)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
+        let state = self.lock()?;
+        Ok(scripts
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|script| {
+                state
+                    .titles
+                    .get(&(tenant.clone(), *script))
+                    .map(|title| (*script, title.clone()))
+            })
+            .collect())
+    }
+
     async fn put_toolset(
         &self,
         tenant: &TenantId,
@@ -232,6 +275,16 @@ impl CatalogStore for MemoryCatalog {
         }
         let order = state.next_workflow;
         state.next_workflow += 1;
+        let number = state
+            .workflows
+            .iter()
+            .filter(|((owner, _), (_, stored))| {
+                owner == tenant && stored.workflow.name() == workflow.name()
+            })
+            .map(|(_, (_, stored))| stored.number)
+            .max()
+            .unwrap_or(0)
+            + 1;
         let (_, stored) = state.workflows.entry(key).or_insert_with(|| {
             (
                 order,
@@ -239,6 +292,7 @@ impl CatalogStore for MemoryCatalog {
                     workflow: workflow.clone(),
                     labels: workflow.labels().clone(),
                     created_at: now,
+                    number,
                 },
             )
         });
@@ -261,6 +315,22 @@ impl CatalogStore for MemoryCatalog {
             .workflows
             .get(&(tenant.clone(), version))
             .map(|(_, stored)| stored.clone()))
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, CatalogError> {
+        Ok(self
+            .lock()?
+            .workflows
+            .iter()
+            .find(|((owner, _), (_, stored))| {
+                owner == tenant && stored.workflow.name() == name && stored.number == number
+            })
+            .map(|(_, (_, stored))| stored.clone()))
     }
 
     async fn workflow_versions(

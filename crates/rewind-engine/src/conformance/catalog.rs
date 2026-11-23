@@ -20,9 +20,9 @@ use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::cluster::Membership;
 use crate::ports::{
     CatalogError, CatalogStore, Cluster, CompiledScript, ControlPlaneChange, DeleteNamespace,
-    DisplayName, DropNamespace, NamespaceName, NamespaceWrite, NodeId, NodeInfo, Quotas, Secret,
-    Subscription, TEST_GRACE, Tenant, TenantId, TestRecord, ToolDeclarations, WebhookEventType,
-    WorkflowFilter, namespace_partition,
+    DisplayName, DropNamespace, NamespaceName, NamespaceWrite, NodeId, NodeInfo, Quotas,
+    ScriptTitle, Secret, Subscription, TEST_GRACE, Tenant, TenantId, TestRecord, ToolDeclarations,
+    WebhookEventType, WorkflowFilter, namespace_partition,
 };
 
 /// Runs every check, each on a new catalog and its cluster.
@@ -36,6 +36,8 @@ pub async fn run_all<C: CatalogStore, K: Cluster>(new_store: impl Fn() -> (C, K)
     }
     catalog_check!(scripts_and_toolsets_are_stored_by_tenant_and_digest);
     catalog_check!(workflow_versions_are_stored_by_tenant_and_listed_newest_first);
+    catalog_check!(scripts_take_the_titles_people_give_them);
+    catalog_check!(workflow_versions_are_numbered_per_workflow);
     catalog_check!(tests_are_kept_while_a_version_references_them);
     catalog_check!(tests_of_an_erased_namespace_go_whatever_references_them);
     catalog_check!(subscriptions_are_stored_per_tenant);
@@ -393,6 +395,157 @@ pub async fn workflow_versions_are_stored_by_tenant_and_listed_newest_first<C: C
 
 // -------------------------------------------------------------------------------------------
 // Tests
+
+/// A stored script takes the title and description a person gives it, for its tenant; a new
+/// title replaces the last, `None` removes it, and a script the tenant does not have takes none.
+pub async fn scripts_take_the_titles_people_give_them<C: CatalogStore>(catalog: &C) {
+    let compiled = CompiledScript {
+        javascript: "export default () => 1".into(),
+        source_map: "{}".into(),
+    };
+    let titled = Script::new("// Triage\nexport default () => 1");
+    let plain = Script::new("export default () => 2");
+    for script in [&titled, &plain] {
+        catalog
+            .put_script(&acme(), script, &compiled)
+            .await
+            .expect("put_script");
+    }
+    let title = |text: &str, description: Option<&str>| ScriptTitle {
+        title: text.into(),
+        description: description.map(str::to_owned),
+        updated_by: "user:user_1".into(),
+        updated_at: T0,
+    };
+    let scripts = [titled.digest(), plain.digest()];
+    assert_eq!(
+        catalog
+            .script_titles(&acme(), &scripts)
+            .await
+            .expect("script_titles"),
+        []
+    );
+    let first = title("Triage new issues", Some("Labels each new issue."));
+    assert!(
+        catalog
+            .set_script_title(&acme(), titled.digest(), Some(&first))
+            .await
+            .expect("set_script_title")
+    );
+    let second = title("Morning digest", None);
+    assert!(
+        catalog
+            .set_script_title(&acme(), titled.digest(), Some(&second))
+            .await
+            .expect("set_script_title")
+    );
+    assert_eq!(
+        catalog
+            .script_titles(&acme(), &scripts)
+            .await
+            .expect("script_titles"),
+        [(titled.digest(), second.clone())],
+        "the last title given"
+    );
+    assert_eq!(
+        catalog
+            .script_titles(&tenant("other"), &scripts)
+            .await
+            .expect("script_titles"),
+        [],
+        "another tenant's scripts have none"
+    );
+    assert!(
+        !catalog
+            .set_script_title(&tenant("other"), titled.digest(), Some(&first))
+            .await
+            .expect("set_script_title"),
+        "a script the tenant does not have"
+    );
+    assert!(
+        !catalog
+            .set_script_title(&acme(), Digest::of(b"missing"), None)
+            .await
+            .expect("set_script_title")
+    );
+    assert!(
+        catalog
+            .set_script_title(&acme(), titled.digest(), None)
+            .await
+            .expect("set_script_title")
+    );
+    assert_eq!(
+        catalog
+            .script_titles(&acme(), &scripts)
+            .await
+            .expect("script_titles"),
+        [],
+        "removed"
+    );
+}
+
+/// A new version takes the next number of its workflow in its tenant; a version stored again
+/// keeps its number; `workflow_number` finds a version by its number, whatever its labels.
+pub async fn workflow_versions_are_numbered_per_workflow<C: CatalogStore>(catalog: &C) {
+    let first = workflow("triage", "t1").with_labels(labels(&[("team", "a")]));
+    let stored = catalog
+        .put_workflow(&acme(), &first, T0)
+        .await
+        .expect("put_workflow");
+    assert_eq!(stored.number, 1);
+    let second = catalog
+        .put_workflow(&acme(), &workflow("triage", "t2"), later(T0, 1))
+        .await
+        .expect("put_workflow");
+    assert_eq!(second.number, 2);
+    let digest = catalog
+        .put_workflow(&acme(), &workflow("digest", "d1"), later(T0, 2))
+        .await
+        .expect("put_workflow");
+    assert_eq!(digest.number, 1, "another workflow counts its own");
+    let theirs = catalog
+        .put_workflow(&tenant("other"), &workflow("triage", "x1"), T0)
+        .await
+        .expect("put_workflow");
+    assert_eq!(theirs.number, 1, "another tenant counts its own");
+    assert_eq!(
+        catalog
+            .put_workflow(&acme(), &first, later(T0, 3))
+            .await
+            .expect("put_workflow")
+            .number,
+        1,
+        "stored again, it keeps its number"
+    );
+    assert_eq!(
+        catalog
+            .get_workflow(&acme(), second.workflow.version())
+            .await
+            .expect("get_workflow")
+            .map(|stored| stored.number),
+        Some(2)
+    );
+    let found = catalog
+        .workflow_number(&acme(), "triage", 1)
+        .await
+        .expect("workflow_number")
+        .expect("version 1");
+    assert_eq!(found.workflow, first, "whatever its labels");
+    assert_eq!(
+        catalog
+            .workflow_number(&acme(), "triage", 3)
+            .await
+            .expect("workflow_number"),
+        None
+    );
+    assert_eq!(
+        catalog
+            .workflow_number(&acme(), "nope", 1)
+            .await
+            .expect("workflow_number"),
+        None
+    );
+}
 
 pub async fn tests_are_kept_while_a_version_references_them<C: CatalogStore>(catalog: &C) {
     let referenced = test_record("referenced", None);
@@ -1152,6 +1305,40 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
             tenant: acme(),
             digest: script.digest()
         }
+    );
+    let title = ScriptTitle {
+        title: "Triage".into(),
+        description: None,
+        updated_by: "user:user_1".into(),
+        updated_at: T0,
+    };
+    assert!(
+        catalog
+            .set_script_title(&acme(), script.digest(), Some(&title))
+            .await
+            .expect("set_script_title")
+    );
+    assert_eq!(
+        next_change(&mut changes).await,
+        ControlPlaneChange::Script {
+            tenant: acme(),
+            digest: script.digest()
+        },
+        "a title given"
+    );
+    assert!(
+        catalog
+            .set_script_title(&acme(), script.digest(), None)
+            .await
+            .expect("set_script_title")
+    );
+    assert_eq!(
+        next_change(&mut changes).await,
+        ControlPlaneChange::Script {
+            tenant: acme(),
+            digest: script.digest()
+        },
+        "a title removed"
     );
     let toolset = Toolset::from_host_tools(["a"]).expect("toolset");
     catalog

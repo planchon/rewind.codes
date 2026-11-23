@@ -264,6 +264,8 @@ impl Runs {
             .map(|run| RunHead {
                 run: run.clone(),
                 namespace: namespace.clone(),
+                origin: "script".into(),
+                suffix_len: 12,
                 script: Digest::of(b"script"),
                 toolset: Digest::of(b"toolset"),
                 status: RunStatus::Pending,
@@ -292,6 +294,8 @@ impl Runs {
                 IndexedSummary::new(RunSummary {
                     run: run.clone(),
                     namespace: namespace.clone(),
+                    origin: "script".into(),
+                    suffix_len: 12,
                     script: Digest::of(b"script"),
                     headline: "export default async ({ issue }) => {".into(),
                     toolset: Digest::of(b"toolset"),

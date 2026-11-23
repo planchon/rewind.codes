@@ -26,19 +26,21 @@ use crate::ports::link::{
 use crate::ports::partition::{Change, CreateRun};
 use crate::ports::{
     ArchiveError, Attempt, BlobStore, CatalogStore, Created, DueTimer, Enqueued, InboxItem,
-    LinkError, Namespace, NamespaceName, NodeId, PartitionLog, Projection, Quarantine,
-    QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, TenantId, TimerChange, TimerKind,
-    Trigger, Watcher, WebhookTarget,
+    LinkError, Namespace, NamespaceName, NodeId, PartitionError, PartitionLog, Projection,
+    Quarantine, QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, TenantId, TimerChange,
+    TimerKind, Trigger, Watcher, WebhookTarget,
 };
 use crate::text;
 
 /// What a job of a use case reports.
 pub(crate) enum Step {
-    /// The run a start key started, if any.
+    /// The run a start key started, if any; and the runs of the start's namespace whose handle
+    /// the new run's must tell apart from.
     StartKey {
         start: Box<StartAtOwner>,
         reply: ReplyTo,
         found: Result<Option<RunId>, String>,
+        neighbours: Result<Vec<RunId>, String>,
     },
     /// A signal checked against its run's workflow and its key.
     SignalChecked {
@@ -114,6 +116,26 @@ pub(crate) enum Step {
         name: NamespaceName,
         result: Result<(), String>,
     },
+}
+
+/// The ids of the runs of `namespace` whose suffix of 12 characters is `run`'s: those a new
+/// run's handle must tell it apart from (`archi/06-storage-and-scale.md`, "Run handles").
+pub(crate) async fn neighbours<L: PartitionLog>(
+    log: &L,
+    run: &RunRef,
+    namespace: &NamespaceName,
+) -> Result<Vec<RunId>, PartitionError> {
+    let mut found = Vec::new();
+    for (low, high) in rewind_core::suffix_neighbours(run.id) {
+        found.extend(
+            log.runs_in_range(&run.tenant, low, high)
+                .await?
+                .into_iter()
+                .filter(|head| head.namespace == *namespace && head.run.id != run.id)
+                .map(|head| head.run.id),
+        );
+    }
+    Ok(found)
 }
 
 impl fmt::Debug for Step {
@@ -244,12 +266,17 @@ impl<P: Plane> Owner<P> {
             Err(error) => Err(Refusal::Unavailable(error.to_string())),
         };
         match ask {
-            Ask::Start { start, reply } => self.admitted(start, reply, admission),
+            Ask::Start {
+                start,
+                reply,
+                neighbours,
+            } => self.admitted(start, reply, admission, &neighbours),
             Ask::Child {
                 task,
                 attempt,
                 start,
-            } => self.child_admitted(&task, attempt, start, admission),
+                neighbours,
+            } => self.child_admitted(&task, attempt, start, admission, &neighbours),
         }
     }
 
@@ -259,7 +286,8 @@ impl<P: Plane> Owner<P> {
                 start,
                 reply,
                 found,
-            } => self.start_key_read(start, reply, found),
+                neighbours,
+            } => self.start_key_read(start, reply, found, neighbours),
             Step::SignalChecked {
                 signal,
                 reply,
@@ -424,31 +452,40 @@ impl<P: Plane> Owner<P> {
             );
             return;
         }
-        let Some(key) = start.start_key.clone() else {
-            self.ask_admission(start, reply);
-            return;
-        };
-        let slot = (tenant.clone(), start.namespace.clone(), key.clone());
-        if let Some(waiting) = self.starting.get_mut(&slot) {
-            waiting.push(reply);
-            return;
+        let key = start.start_key.clone();
+        if let Some(key) = &key {
+            let slot = (tenant.clone(), start.namespace.clone(), key.clone());
+            if let Some(waiting) = self.starting.get_mut(&slot) {
+                waiting.push(reply);
+                return;
+            }
+            self.starting.insert(slot, Vec::new());
         }
-        self.starting.insert(slot, Vec::new());
         let Some(log) = self.log.clone() else {
             return;
         };
         let partition = self.partition;
         self.out.push(job(async move {
-            let found = log
-                .started(&tenant, &start.namespace, &key)
-                .await
-                .map_err(|error| error.to_string());
+            let found = match &key {
+                Some(key) => log
+                    .started(&tenant, &start.namespace, key)
+                    .await
+                    .map_err(|error| error.to_string()),
+                None => Ok(None),
+            };
+            let neighbours = match found {
+                Ok(None) => neighbours(&*log, &start.run, &start.namespace)
+                    .await
+                    .map_err(|error| error.to_string()),
+                _ => Ok(Vec::new()),
+            };
             step(
                 partition,
                 Step::StartKey {
                     start,
                     reply,
                     found,
+                    neighbours,
                 },
             )
         }));
@@ -459,9 +496,16 @@ impl<P: Plane> Owner<P> {
         start: Box<StartAtOwner>,
         reply: ReplyTo,
         found: Result<Option<RunId>, String>,
+        neighbours: Result<Vec<RunId>, String>,
     ) {
+        // A known key answers its run; otherwise the neighbours read go with the start.
+        let found = found.and_then(|found| match (found, neighbours) {
+            (Some(existing), _) => Ok(Ok(existing)),
+            (None, Ok(neighbours)) => Ok(Err(neighbours)),
+            (None, Err(error)) => Err(error),
+        });
         match found {
-            Ok(Some(existing)) => {
+            Ok(Ok(existing)) => {
                 let created = Created {
                     run: RunRef::new(start.run.tenant.clone(), existing),
                     created: false,
@@ -471,7 +515,7 @@ impl<P: Plane> Owner<P> {
                     self.reply(reply, PartitionReply::Started(Ok(created.clone())));
                 }
             }
-            Ok(None) => self.ask_admission(start, reply),
+            Ok(Err(neighbours)) => self.ask_admission(start, reply, neighbours),
             Err(error) => {
                 let waiting = self.starting_done(&start);
                 for reply in std::iter::once(reply).chain(waiting) {
@@ -517,9 +561,17 @@ impl<P: Plane> Owner<P> {
         )
     }
 
-    fn ask_admission(&mut self, start: Box<StartAtOwner>, reply: ReplyTo) {
+    fn ask_admission(&mut self, start: Box<StartAtOwner>, reply: ReplyTo, neighbours: Vec<RunId>) {
         let (to, request) = self.admit_request(&start);
-        self.ask(to, request, Ask::Start { start, reply });
+        self.ask(
+            to,
+            request,
+            Ask::Start {
+                start,
+                reply,
+                neighbours,
+            },
+        );
     }
 
     fn admitted(
@@ -527,6 +579,7 @@ impl<P: Plane> Owner<P> {
         start: Box<StartAtOwner>,
         reply: ReplyTo,
         admission: Result<(), Refusal>,
+        neighbours: &[RunId],
     ) {
         if let Err(refusal) = admission {
             let waiting = self.starting_done(&start);
@@ -543,7 +596,7 @@ impl<P: Plane> Owner<P> {
             .clone()
             .map(|key| (run.tenant.clone(), start.namespace.clone(), key));
         let mut unit = Unit::new();
-        self.create(&mut unit, *start);
+        self.create(&mut unit, *start, neighbours);
         let created = Created {
             run: run.clone(),
             created: true,
@@ -555,12 +608,34 @@ impl<P: Plane> Owner<P> {
         self.push(unit);
     }
 
-    /// Creates a run in `unit`: its head, its start key, its pending summary, its `run_started`
-    /// in its inbox, its count; the run is queued once durable.
-    pub(crate) fn create(&mut self, unit: &mut Unit<P>, start: StartAtOwner) {
+    /// The characters of a new run's suffix: the fewest, at least 12, that no other run of its
+    /// namespace has, among `neighbours` (read before the start was admitted) and the runs this
+    /// owner created since (`archi/06-storage-and-scale.md`, "Run handles").
+    fn suffix_len(&self, run: &RunRef, namespace: &NamespaceName, neighbours: &[RunId]) -> u8 {
+        let mut others = neighbours.to_vec();
+        for (low, high) in rewind_core::suffix_neighbours(run.id) {
+            others.extend(
+                self.runs
+                    .range(low..=high)
+                    .filter(|(_, entry)| {
+                        matches!(entry, Entry::Present(slot)
+                            if slot.head.run.tenant == run.tenant && slot.head.namespace == *namespace)
+                    })
+                    .map(|(id, _)| *id),
+            );
+        }
+        u8::try_from(rewind_core::suffix_len_apart(run.id, others)).unwrap_or(u8::MAX)
+    }
+
+    /// Creates a run in `unit`: its head, with the shortest suffix its namespace leaves it, its
+    /// start key, its pending summary, its `run_started` in its inbox, its count; the run is
+    /// queued once durable.
+    pub(crate) fn create(&mut self, unit: &mut Unit<P>, start: StartAtOwner, neighbours: &[RunId]) {
+        let suffix_len = self.suffix_len(&start.run, &start.namespace, neighbours);
         let StartAtOwner {
             run,
             namespace,
+            origin,
             started,
             metadata,
             start_key,
@@ -570,6 +645,8 @@ impl<P: Plane> Owner<P> {
         let head = RunHead {
             run: run.clone(),
             namespace: namespace.clone(),
+            origin,
+            suffix_len,
             script: started.script,
             toolset: started.toolset,
             status: RunStatus::Pending,

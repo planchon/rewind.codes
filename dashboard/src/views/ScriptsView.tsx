@@ -5,11 +5,12 @@
 // scripts of one end user, counted over their runs.
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
-import { Ago, Digest, Empty, Loading, ProblemView } from "../components/bits";
+import { Ago, Empty, Loading, ProblemView } from "../components/bits";
 import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
+import { TableScroll } from "../components/TableScroll";
 import {
   legacyScriptsQuery,
   RANGES,
@@ -24,7 +25,7 @@ import { useRunStats } from "../state/aggregates";
 import { type ScriptList, useScriptList } from "../state/scripts";
 import { Seg } from "./FilterBits";
 import { useListQuery, useRunQueryValues, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
-import { TableToolbar } from "./TableTop";
+import { TableTop } from "./TableTop";
 
 const LEGACY_NAMES = ["label", "tool"] as const;
 

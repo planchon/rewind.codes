@@ -1,4 +1,4 @@
-//! The runs of the tables `legacy_*` (schema version 12), which `rewind server migrate-runs`
+//! The runs of the tables `legacy_*` (schema version 13), which `rewind server migrate-runs`
 //! moves onto the run plane (`archi/08-decisions.md`, "Taken while writing the object-storage
 //! spec": the migration): [`TursoLegacy`], the `LegacyRuns` of the engine.
 //!
@@ -39,7 +39,7 @@ impl TursoStore {
     }
 }
 
-/// The tables version 12 set aside, in an order that drops nothing another still names.
+/// The tables version 13 set aside, in an order that drops nothing another still names.
 const TABLES: [&str; 20] = [
     "legacy_journal_runs",
     "legacy_history",
@@ -132,7 +132,7 @@ const RUN_COLUMNS: &str = "id, tenant, namespace, script, toolset, epoch, expire
     expiry_enqueued, quarantine_kind, quarantine_reason, quarantine_since, quarantine_retried_by, \
     failures, attempts, labels, traceparent, tracestate, parent, parent_at, idempotency_key, \
     created_at, updated_at, ended_at, archive_document, workflow, workflow_version, started_by, \
-    started_seq, detached, scope, secrets";
+    started_seq, detached, scope, secrets, origin, suffix_len";
 
 fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
     let id = sql::parse_run_id(&row.text(0)?)?;
@@ -179,6 +179,8 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
         run: RunRef::new(row.tenant(1)?, id),
         namespace: NamespaceName::new(namespace.clone())
             .map_err(|_| corrupt(format!("invalid namespace {namespace:?}")))?,
+        origin: row.text(31)?,
+        suffix_len: row.suffix_len(32)?,
         script: row.digest(3)?,
         toolset: row.digest(4)?,
         epoch: Epoch(u32_of(row.u64(5)?)?),

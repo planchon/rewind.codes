@@ -9,7 +9,7 @@
 //!  a subscription lost, changes lost ────────────────────────────► resync, then closed
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -21,6 +21,7 @@ use rewind_api::events::{
     ChangeEvent, ConnectionChanged, NamespaceChanged, Resync, ScriptChanged, SecretChanged,
     WorkflowChanged,
 };
+use rewind_core::Digest;
 use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::link::{Changed, SubscriptionKey};
 use rewind_engine::ports::{
@@ -75,6 +76,7 @@ pub(super) async fn stream(
         _busy: app.idle.busy(),
         app,
         pending: VecDeque::new(),
+        titles: HashMap::new(),
         closing: false,
     };
     let events = futures_util::stream::unfold(follow, |mut follow| async move {
@@ -90,6 +92,9 @@ struct Follow {
     runs: UnboundedReceiver<Changed>,
     control: broadcast::Receiver<Control>,
     pending: VecDeque<Event>,
+    /// The titles of the scripts the stream's runs ran, read once and forgotten when the
+    /// script's `script` change comes (a title given or removed).
+    titles: HashMap<Digest, Option<String>>,
     /// A subscription was lost: the stream ends once `pending` is sent.
     closing: bool,
     /// A stream keeps the embedded server from stopping on idle, as a followed run's does.
@@ -108,7 +113,7 @@ impl Follow {
             tokio::select! {
                 () = self.rights.lost() => return None,
                 changed = self.runs.recv() => match changed {
-                    Some(changed) => self.run(changed),
+                    Some(changed) => self.run(changed).await,
                     None => {
                         self.pending.push_back(resync());
                         self.closing = true;
@@ -123,8 +128,8 @@ impl Follow {
         }
     }
 
-    /// A run's summary, if the caller may see the run.
-    fn run(&mut self, changed: Changed) {
+    /// A run's summary, with its script's title, if the caller may see the run.
+    async fn run(&mut self, changed: Changed) {
         let caller = self.rights.caller();
         let Some(summary) = changed.summary else {
             return;
@@ -135,7 +140,24 @@ impl Follow {
         {
             return;
         }
-        let event = ChangeEvent::Run(Box::new(search::summary(&summary)));
+        let script = summary.script;
+        let title = match self.titles.get(&script) {
+            Some(title) => title.clone(),
+            None => {
+                // A title that cannot be read now is left out, and read again next time.
+                match self.app.titles(&caller.tenant, [script]).await {
+                    Ok(mut titles) => {
+                        let title = titles.remove(&script).map(|title| title.title);
+                        self.titles.insert(script, title.clone());
+                        title
+                    }
+                    Err(_) => None,
+                }
+            }
+        };
+        let mut shown = search::summary(&summary);
+        shown.script_title = title;
+        let event = ChangeEvent::Run(Box::new(shown));
         self.pending.push_back(sse(&event));
     }
 
@@ -144,6 +166,11 @@ impl Follow {
         let caller = self.rights.caller();
         let tenant = caller.tenant.clone();
         let unscoped = caller.namespace.is_none() && caller.labels.is_empty();
+        if let ControlPlaneChange::Script { tenant: of, digest } = &change
+            && *of == tenant
+        {
+            self.titles.remove(digest);
+        }
         let event = match change {
             ControlPlaneChange::Script { tenant: of, digest } if of == tenant && unscoped => {
                 Some(ChangeEvent::Script(ScriptChanged {

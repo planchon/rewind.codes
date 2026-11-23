@@ -15,7 +15,7 @@
 //! | [`Edge::signal`], [`Edge::cancel`], [`Edge::webhook`] | NUL characters | the run, its workflow's signals, the signal key |
 //! | [`Edge::release`], [`Edge::give_up`], [`Edge::erase`] | | the quarantine, the archive, the records |
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
-//! | [`Edge::get_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::tool_tasks`] | | the partition, or the archive |
+//! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::tool_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its organization actor |
 //! | [`Edge::trace`], [`Edge::trace_entry`] | | the run's head and history |
@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    HistoryEntry, JournalDocument, JsonValue, PartitionId, Payload, RunId, RunMode, RunStarted,
-    Script, Shape,
+    HistoryEntry, JournalDocument, JsonValue, PartitionId, Payload, RunHandle, RunId, RunMode,
+    RunStarted, SCRIPT_ORIGIN, Script, Shape, origin_slug, script_doc,
 };
 
 use crate::attachments::{self, AttachmentCheck};
@@ -246,12 +246,16 @@ impl<P: Plane> Edge<P> {
             self.plane.entropy().run_id_in(namespace),
         );
         let seed = self.plane.entropy().seed();
+        let origin = self
+            .origin_of(&request.tenant, &request.script, &request.metadata)
+            .await?;
         self.create(
             gateway,
             namespace,
             StartAtOwner {
                 run,
                 namespace: request.namespace,
+                origin,
                 started: started(seed),
                 metadata: request.metadata,
                 start_key: request.idempotency_key,
@@ -335,6 +339,8 @@ impl<P: Plane> Edge<P> {
             StartAtOwner {
                 run,
                 namespace: request.namespace,
+                // A workflow's run is the run of its workflow.
+                origin: workflow.name().to_owned(),
                 started: RunStarted {
                     script: workflow.script(),
                     toolset: workflow.toolset(),
@@ -500,6 +506,8 @@ impl<P: Plane> Edge<P> {
         let start = StartAtOwner {
             run,
             namespace: head.namespace.clone(),
+            // A fork is the run of what its parent ran.
+            origin: head.origin.clone(),
             started: RunStarted {
                 script: request.script.digest(),
                 toolset: head.toolset,
@@ -517,6 +525,34 @@ impl<P: Plane> Edge<P> {
         self.create(gateway, partition, start)
             .await
             .map_err(start_failed)
+    }
+
+    /// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
+    /// "Run handles"): its workflow's name; else its script's title as a slug, the title a
+    /// person gave the script or else the one of the comment at its top; else `script`.
+    async fn origin_of(
+        &self,
+        tenant: &TenantId,
+        script: &Script,
+        metadata: &crate::ports::RunMetadata,
+    ) -> Result<String, StartError> {
+        if let Some(workflow) = &metadata.workflow {
+            return Ok(workflow.name.clone());
+        }
+        let given = self
+            .plane
+            .catalog()
+            .script_titles(tenant, &[script.digest()])
+            .await
+            .map_err(start_unavailable)?
+            .into_iter()
+            .next()
+            .map(|(_, title)| title.title);
+        let title = given.or_else(|| script_doc(script.source()).map(|doc| doc.title));
+        Ok(title
+            .as_deref()
+            .and_then(origin_slug)
+            .unwrap_or_else(|| SCRIPT_ORIGIN.to_owned()))
     }
 
     async fn create<G: Gateway>(
@@ -866,6 +902,37 @@ impl<P: Plane> Edge<P> {
         )
         .await?
         {
+            PartitionReply::Run(view) => Ok(view?),
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    /// The run of the tenant a handle names (`archi/06-storage-and-scale.md`, "Run handles"):
+    /// asked to the owner of its namespace's partition. `None` when the namespace or the run
+    /// does not exist.
+    pub async fn find_run<G: Gateway>(
+        &self,
+        gateway: &mut G,
+        tenant: &TenantId,
+        handle: &RunHandle,
+    ) -> Result<Option<RunView>, EdgeError> {
+        let Ok(namespace) = NamespaceName::new(handle.namespace.clone()) else {
+            return Ok(None);
+        };
+        let Some(namespace) = self
+            .plane
+            .catalog()
+            .get_namespace(tenant, &namespace)
+            .await
+            .map_err(unavailable)?
+        else {
+            return Ok(None);
+        };
+        let request = PartitionRequest::Find {
+            tenant: tenant.clone(),
+            handle: handle.clone(),
+        };
+        match ask(gateway, namespace.partition, request).await? {
             PartitionReply::Run(view) => Ok(view?),
             other => Err(unexpected(&other)),
         }

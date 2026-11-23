@@ -184,6 +184,8 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
         let record = LegacyRun {
             run: RunRef::new(tenant.clone(), id),
             namespace: NamespaceName::new(namespace).unwrap(),
+            origin: "triage".into(),
+            suffix_len: 13,
             script: head.script,
             toolset: head.toolset,
             epoch: head.epoch,

@@ -1,14 +1,15 @@
 //! A run's handle: `<namespace>/<origin>/<suffix>`, what people read, copy and type to name a
-//! run (`archi/06-storage-and-scale.md`, "Run handles"). The run's id stays its UUIDv7; the
-//! handle says for whom it ran (its namespace), what ran (its origin: the workflow, or the
-//! script's title as a slug) and which run it is (its suffix).
+//! run (`archi/06-storage-and-scale.md`, "Run handles"). The run's id stays its UUID; the handle
+//! says for whom it ran (its namespace), what ran (its origin: the workflow, or the script's
+//! title as a slug) and which run it is (its suffix).
 //!
-//! The suffix is the start of the run's UUID in Crockford base32: its millisecond and the 12
-//! bits after it, which the engine fills with the number of the node that made the id and a
-//! counter of that node within the millisecond. Two runs can therefore not share a suffix, and
-//! the runs whose UUID starts with a suffix are one range of ids: a handle needs no index of its
-//! own. A run made before handles existed may share its first 60 bits with another; its suffix
-//! is then longer, as long as it takes to tell them apart.
+//! The suffix is the start of the run's UUID in Crockford base32, its version and variant left
+//! out: its millisecond and the 12 bits after it, which the engine fills with the number of the
+//! process that made the id and a counter of that process within the millisecond. The runs whose
+//! UUID starts with a suffix are one range of ids for each version of run ids (7 for a run moved
+//! from the previous design, 8 for a run of a partition): a handle needs no index of its own.
+//! Runs that share their first 60 bits get a longer suffix, as long as it takes to tell them
+//! apart.
 
 use std::fmt;
 use std::str::FromStr;
@@ -30,12 +31,16 @@ pub const MAX_ORIGIN_LEN: usize = 40;
 /// Crockford's base32, lower case: no `i`, `l`, `o` nor `u`.
 const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
-/// The bits of a UUIDv7 that vary: 48 of milliseconds, 12 after the version, 62 after the
+/// The bits of a run id that vary: 48 of milliseconds, 12 after the version, 62 after the
 /// variant. The handle encodes them in this order, padded by 3 zero bits to 125 (25 characters).
 const BITS: u32 = 122;
 const PADDED: u32 = 125;
 
-/// The 122 bits of a UUIDv7 that are not its version nor its variant, in order.
+/// The versions of run ids, both laid out as a version 7: 7 for the runs moved from the previous
+/// design, 8 for the runs of a partition ([`RunId::in_partition`]).
+const VERSIONS: [u128; 2] = [0x7, 0x8];
+
+/// The 122 bits of a run id that are not its version nor its variant, in order.
 fn meaningful(id: RunId) -> u128 {
     let uuid = id.as_uuid().as_u128();
     let ms = uuid >> 80;
@@ -44,12 +49,12 @@ fn meaningful(id: RunId) -> u128 {
     (ms << 74) | (rand_a << 62) | rand_b
 }
 
-/// The UUIDv7 whose varying bits are `bits`.
-fn from_meaningful(bits: u128) -> RunId {
+/// The run id of `version` whose varying bits are `bits`.
+fn from_meaningful(bits: u128, version: u128) -> RunId {
     let ms = bits >> 74;
     let rand_a = (bits >> 62) & 0xfff;
     let rand_b = bits & ((1 << 62) - 1);
-    RunId::from_u128((ms << 80) | (0x7 << 76) | (rand_a << 64) | (0b10 << 62) | rand_b)
+    RunId::from_u128((ms << 80) | (version << 76) | (rand_a << 64) | (0b10 << 62) | rand_b)
 }
 
 /// The run's suffix of `len` characters (clamped to 1..=25).
@@ -64,21 +69,16 @@ pub fn run_suffix(id: RunId, len: usize) -> String {
         .collect()
 }
 
-/// The ids that share their first 64 bits with `id` (its millisecond, version and the 12 bits
-/// after it): the runs whose suffix of [`SUFFIX_LEN`] characters may be `id`'s, among which a
-/// store looks for those a new run's handle must tell it apart from.
-pub fn suffix_neighbours(id: RunId) -> (RunId, RunId) {
-    let uuid = id.as_uuid().as_u128();
-    let low_bits = (1u128 << 64) - 1;
-    (
-        RunId::from_u128(uuid & !low_bits),
-        RunId::from_u128(uuid | low_bits),
-    )
+/// The ids whose suffix of [`SUFFIX_LEN`] characters is `id`'s (their millisecond and the 12
+/// bits after it), one range per version of run ids: among them, the owner of a partition looks
+/// for those a new run's handle must tell it apart from.
+pub fn suffix_neighbours(id: RunId) -> [(RunId, RunId); 2] {
+    suffix_ranges(&run_suffix(id, SUFFIX_LEN)).unwrap_or([(id, id); 2])
 }
 
 /// The shortest suffix, at least [`SUFFIX_LEN`] characters, that `id` shares with none of
-/// `others`: the length a store gives a new run's handle, among the runs of its tenant whose ids
-/// fall in the range of its [`SUFFIX_LEN`] characters.
+/// `others`: the length the owner of a partition gives a new run's handle, among the runs of its
+/// namespace whose ids fall in the ranges of its [`SUFFIX_LEN`] characters.
 pub fn suffix_len_apart(id: RunId, others: impl IntoIterator<Item = RunId>) -> usize {
     let mine = run_suffix(id, MAX_SUFFIX_LEN);
     others
@@ -108,9 +108,10 @@ fn digit(c: char) -> Option<u128> {
         .map(|v| v as u128)
 }
 
-/// The ids a suffix names: the first and the last UUIDv7 that start with it. `None` for a suffix
-/// shorter than [`SUFFIX_LEN`], longer than [`MAX_SUFFIX_LEN`], or not base32.
-pub fn suffix_range(suffix: &str) -> Option<(RunId, RunId)> {
+/// The ids a suffix names: for each version of run ids (7, then 8), the first and the last id
+/// that start with it. `None` for a suffix shorter than [`SUFFIX_LEN`], longer than
+/// [`MAX_SUFFIX_LEN`], or not base32.
+pub fn suffix_ranges(suffix: &str) -> Option<[(RunId, RunId); 2]> {
     let len = suffix.chars().count();
     if !(SUFFIX_LEN..=MAX_SUFFIX_LEN).contains(&len) {
         return None;
@@ -127,10 +128,12 @@ pub fn suffix_range(suffix: &str) -> Option<(RunId, RunId)> {
         return None;
     }
     let shift = PADDED - BITS;
-    Some((
-        from_meaningful(low >> shift),
-        from_meaningful(high >> shift),
-    ))
+    Some(VERSIONS.map(|version| {
+        (
+            from_meaningful(low >> shift, version),
+            from_meaningful(high >> shift, version),
+        )
+    }))
 }
 
 /// The origin a script's title gives a run: lower case ASCII letters and digits, every other run
@@ -187,18 +190,18 @@ impl RunHandle {
         }
     }
 
-    /// The ids its suffix names.
-    pub fn range(&self) -> Option<(RunId, RunId)> {
-        suffix_range(&self.suffix)
+    /// The ids its suffix names, one range per version of run ids.
+    pub fn ranges(&self) -> Option<[(RunId, RunId); 2]> {
+        suffix_ranges(&self.suffix)
     }
 
-    /// Whether this handle names the run `id` of `namespace` and `origin`.
-    pub fn names(&self, namespace: &str, origin: &str, id: RunId) -> bool {
+    /// Whether this handle names the run `id` of `namespace` and `origin`, whose suffix has
+    /// `suffix_len` characters.
+    pub fn names(&self, namespace: &str, origin: &str, id: RunId, suffix_len: usize) -> bool {
         self.namespace == namespace
             && self.origin == origin
-            && self
-                .range()
-                .is_some_and(|(low, high)| low <= id && id <= high)
+            && self.suffix.len() == suffix_len
+            && run_suffix(id, suffix_len) == self.suffix
     }
 }
 
@@ -227,7 +230,7 @@ impl FromStr for RunHandle {
             && namespace
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.:@".contains(&b));
-        if !namespace_ok || !is_origin(origin) || suffix_range(suffix).is_none() {
+        if !namespace_ok || !is_origin(origin) || suffix_ranges(suffix).is_none() {
             return Err(invalid());
         }
         Ok(Self {
@@ -241,6 +244,13 @@ impl FromStr for RunHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::PartitionId;
+    use crate::time::Timestamp;
+
+    /// The range of version 7 ids a suffix names.
+    fn suffix_range(suffix: &str) -> Option<(RunId, RunId)> {
+        suffix_ranges(suffix).map(|[v7, _]| v7)
+    }
 
     fn v7(ms: u64, rand_a: u16, rand_b: u64) -> RunId {
         RunId::from_v7_parts(ms, rand_a, rand_b)
@@ -308,9 +318,10 @@ mod tests {
         assert!(text.starts_with("dana/triage/"));
         let parsed: RunHandle = text.parse().expect("a handle");
         assert_eq!(parsed, handle);
-        assert!(parsed.names("dana", "triage", id));
-        assert!(!parsed.names("bob", "triage", id));
-        assert!(!parsed.names("dana", "digest", id));
+        assert!(parsed.names("dana", "triage", id, SUFFIX_LEN));
+        assert!(!parsed.names("dana", "triage", id, SUFFIX_LEN + 1));
+        assert!(!parsed.names("bob", "triage", id, SUFFIX_LEN));
+        assert!(!parsed.names("dana", "digest", id, SUFFIX_LEN));
         assert!("dana/triage".parse::<RunHandle>().is_err());
         assert!("da/na/triage/0123456789ab".parse::<RunHandle>().is_err());
         assert!(
@@ -346,5 +357,29 @@ mod tests {
         let long = origin_slug(&"word ".repeat(30)).expect("a slug");
         assert!(long.len() <= MAX_ORIGIN_LEN && !long.ends_with('-'));
         assert!(is_origin(&long));
+    }
+
+    #[test]
+    fn a_run_of_a_partition_is_named_as_a_run_moved_with_its_id() {
+        let at = Timestamp::from_millis(1_795_383_896_000);
+        let rand_a: u64 = 0b000011_000101;
+        let id = RunId::in_partition(PartitionId::new(41), at, (rand_a << 46) | 99);
+        let suffix = run_suffix(id, SUFFIX_LEN);
+        let moved = v7(1_795_383_896_000, 0b000011_000101, 7);
+        assert_eq!(
+            run_suffix(moved, SUFFIX_LEN),
+            suffix,
+            "the version is not in the suffix"
+        );
+        let [old, new] = suffix_ranges(&suffix).expect("ranges");
+        assert!(old.0 <= moved && moved <= old.1);
+        assert!(new.0 <= id && id <= new.1);
+        assert!(!(old.0 <= id && id <= old.1));
+        assert_eq!(suffix_neighbours(id), [old, new]);
+        let handle = RunHandle::new("dana", "triage", id, SUFFIX_LEN);
+        assert!(handle.names("dana", "triage", id, SUFFIX_LEN));
+        let full = run_suffix(id, MAX_SUFFIX_LEN);
+        assert_eq!(suffix_ranges(&full).map(|[_, new]| new), Some((id, id)));
+        assert!(suffix_len_apart(id, [moved]) > SUFFIX_LEN);
     }
 }

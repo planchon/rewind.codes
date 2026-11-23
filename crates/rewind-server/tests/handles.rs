@@ -1,5 +1,5 @@
 //! Runs named by their handles, scripts' titles and workflows' version numbers over HTTP, on
-//! Turso (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script
+//! the embedded server (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script
 //! titles"): a handle names a run wherever its id does, a run and its summary show their handle
 //! and their script's title, a person's title comes before the comment's, and `name@v<number>`
 //! names a workflow's version.

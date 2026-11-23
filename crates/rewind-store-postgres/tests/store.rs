@@ -1,7 +1,8 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
 //! migrations, the keys of version 1 becoming keys and grants, servers starting together, what a
 //! call dropped half-way leaves, secrets at rest, the master key replaced and the credentials of
-//! version 9 dropped, the byte order of tenants, and owners demoting each other at once.
+//! version 9 dropped, the handles and numbers given to what version 12 stored, the byte order of
+//! tenants, and owners demoting each other at once.
 //!
 //! The checks share one Postgres container, each on a new database.
 
@@ -14,6 +15,7 @@ use futures_util::future::join_all;
 use rewind_core::{
     Digest, RunId, SecretName, Suite, SuiteTest, Timestamp, Workflow, WorkflowSchemas,
 };
+use rewind_engine::ports::legacy::LegacyRuns;
 use rewind_engine::ports::{
     AccessStore, ApiKey, CatalogStore, Grant, GrantDeletion, GrantWrite, NamespaceName, NewSecret,
     Principal, Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
@@ -59,6 +61,7 @@ async fn the_database_behind_the_store() {
     check!(the_master_key_is_replaced_by_a_rewrap);
     check!(two_rewraps_at_once_change_each_data_key_once);
     check!(the_credentials_of_version_9_are_dropped);
+    check!(runs_and_workflows_of_version_12_get_handles_and_numbers);
 }
 
 async fn a_new_database_gets_the_current_schema(postgres: &Postgres) {
@@ -493,7 +496,7 @@ async fn two_rewraps_at_once_change_each_data_key_once(postgres: &Postgres) {
 }
 
 /// The migrations released before run handles, version 1 first.
-const RELEASED: [&str; 12] = [
+const RELEASED: [&str; 13] = [
     include_str!("../migrations/0001_schema.sql"),
     include_str!("../migrations/0002_access.sql"),
     include_str!("../migrations/0003_workflows.sql"),
@@ -506,6 +509,7 @@ const RELEASED: [&str; 12] = [
     include_str!("../migrations/0010_secrets.sql"),
     include_str!("../migrations/0011_run_orders.sql"),
     include_str!("../migrations/0012_run_changes.sql"),
+    include_str!("../migrations/0013_run_handles.sql"),
 ];
 
 /// Migrations 1 to `n`: a database as a build of schema version `n` left it.
@@ -603,20 +607,20 @@ fn workflow(name: &str, script: &str) -> Workflow {
         Digest::of(script.as_bytes()),
         Digest::of(b"toolset"),
         WorkflowSchemas {
-            input: json!({ "type": "object" }),
-            output: json!({}),
+            input: serde_json::json!({ "type": "object" }),
+            output: serde_json::json!({}),
             signals: BTreeMap::new(),
         },
     )
     .expect("a valid workflow")
 }
 
-/// The runs, summaries and workflow versions of a server of schema version 12 get handles and
-/// numbers once the store is upgraded. Runs of a tenant whose ids share their first 64 bits take
-/// the full suffix, and their handles differ; the others keep the short one, as do the runs of
-/// another tenant. A run's origin is its workflow, or `script`; a summary takes its run's, or,
-/// kept longer than its run, its own workflow's. Versions are numbered by workflow and tenant, by
-/// their creation, then in the order they were stored, and a new one takes the next number.
+/// The runs and workflow versions of a server of schema version 12 get handles and numbers once
+/// the store is upgraded (migration 13, as released), and the runs keep them set aside in
+/// `legacy` for `migrate-runs`. Runs of a tenant whose ids share their first 64 bits take the
+/// full suffix; the others keep the short one, as do the runs of another tenant. A run's origin
+/// is its workflow, or `script`. Versions are numbered by workflow and tenant, by their creation,
+/// then in the order they were stored, and a new one takes the next number.
 async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Postgres) {
     use rewind_core::{MAX_SUFFIX_LEN, SUFFIX_LEN, run_suffix};
 
@@ -666,33 +670,6 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
         .await
         .expect("a run of version 12");
     }
-    // The summaries of two of those runs, and of three runs no longer in the journal: two that
-    // share their first 64 bits, the first of a workflow, and one alone.
-    let gone_twin = RunId::from_v7_parts(ms + 1, 0x001, 1);
-    let other_gone_twin = RunId::from_v7_parts(ms + 1, 0x001, 2);
-    let gone = RunId::from_v7_parts(ms + 1, 0x002, 3);
-    let summaries = [
-        (twin, None),
-        (alone, Some("triage")),
-        (gone_twin, Some("digest")),
-        (other_gone_twin, None),
-        (gone, None),
-    ];
-    for (id, workflow) in summaries {
-        sqlx::query(
-            "INSERT INTO run_summaries (run_id, tenant, script, toolset, headline, labels, \
-             status, last_activity_at, tool_calls, errors, history_len, snapshot_len, namespace, \
-             workflow) \
-             VALUES ($1, 'acme', $2, $3, '', '{}', 'completed', 1, 0, 0, 1, 1, 'alice', $4)",
-        )
-        .bind(id.as_uuid())
-        .bind(Digest::of(b"script").as_bytes().to_vec())
-        .bind(Digest::of(b"toolset").as_bytes().to_vec())
-        .bind(workflow)
-        .execute(&pool)
-        .await
-        .expect("a summary of version 12");
-    }
     // Versions of `triage` in `acme`: two created at once, then one created before them but
     // stored last; one of another workflow, and one of `triage` in `beta`.
     let second = workflow("triage", "t2");
@@ -726,78 +703,42 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
     assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
     let acme = TenantId::new("acme").expect("tenant");
     let beta = TenantId::new("beta").expect("tenant");
-    let record = |tenant: &TenantId, id: RunId| {
-        let run = RunRef::new(tenant.clone(), id);
-        let store = &store;
-        async move {
-            store
-                .get_run(&run)
-                .await
-                .expect("get_run")
-                .expect("the run is kept")
-        }
-    };
-    let twin_record = record(&acme, twin).await;
-    let other_twin_record = record(&acme, other_twin).await;
-    for twin in [&twin_record, &other_twin_record] {
-        assert_eq!(twin.origin, "script");
-        assert_eq!(usize::from(twin.suffix_len), MAX_SUFFIX_LEN);
-    }
-    assert_ne!(twin_record.handle(), other_twin_record.handle());
-    let alone_record = record(&acme, alone).await;
-    assert_eq!(
-        alone_record.origin, "triage",
-        "a run of a workflow is its workflow's"
-    );
-    assert_eq!(usize::from(alone_record.suffix_len), SUFFIX_LEN);
-    assert_eq!(
-        usize::from(record(&beta, elsewhere).await.suffix_len),
-        SUFFIX_LEN,
-        "the runs of another tenant do not count"
-    );
-    // Each twin's handle names it alone.
-    for record in [&twin_record, &other_twin_record] {
-        let (low, high) = record.handle().range().expect("a range");
-        let named: Vec<RunId> = store
-            .runs_in_range(&acme, low, high, 10)
-            .await
-            .expect("runs_in_range")
-            .iter()
-            .map(|named| named.run.id)
-            .collect();
-        assert_eq!(named, [record.run.id]);
-    }
-
-    let summaries: BTreeMap<RunId, (String, usize)> = store
-        .changed_runs(std::slice::from_ref(&acme), 0, 10)
+    let set_aside: BTreeMap<RunId, (String, String, usize)> = store
+        .legacy()
+        .runs(None, 10)
         .await
-        .expect("changed_runs")
+        .expect("the runs set aside")
         .into_iter()
-        .map(|change| {
-            let summary = change.summary;
+        .map(|run| {
             (
-                summary.run.id,
-                (summary.origin, usize::from(summary.suffix_len)),
+                run.run.id,
+                (
+                    run.run.tenant.to_string(),
+                    run.origin,
+                    usize::from(run.suffix_len),
+                ),
             )
         })
         .collect();
-    let handle = |origin: &str, len: usize| (origin.to_owned(), len);
+    let handle =
+        |tenant: &str, origin: &str, len: usize| (tenant.to_owned(), origin.to_owned(), len);
     assert_eq!(
-        summaries,
+        set_aside,
         BTreeMap::from([
-            (twin, handle("script", MAX_SUFFIX_LEN)),
-            (alone, handle("triage", SUFFIX_LEN)),
-            (gone_twin, handle("digest", MAX_SUFFIX_LEN)),
-            (other_gone_twin, handle("script", MAX_SUFFIX_LEN)),
-            (gone, handle("script", SUFFIX_LEN)),
-        ])
+            (twin, handle("acme", "script", MAX_SUFFIX_LEN)),
+            (other_twin, handle("acme", "script", MAX_SUFFIX_LEN)),
+            (alone, handle("acme", "triage", SUFFIX_LEN)),
+            (elsewhere, handle("beta", "script", SUFFIX_LEN)),
+        ]),
+        "a run of a workflow is its workflow's; the runs of another tenant do not count"
     );
 
+    let catalog = store.catalog();
     let number = |tenant: &TenantId, workflow: &Workflow| {
         let (tenant, version) = (tenant.clone(), workflow.version());
-        let store = &store;
+        let catalog = &catalog;
         async move {
-            store
+            catalog
                 .get_workflow(&tenant, version)
                 .await
                 .expect("get_workflow")
@@ -810,19 +751,19 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
     assert_eq!(number(&acme, &second).await, 3);
     assert_eq!(number(&acme, &digest).await, 1);
     assert_eq!(number(&beta, &theirs).await, 1);
-    let numbered = store
+    let numbered = catalog
         .workflow_number(&acme, "triage", 1)
         .await
         .expect("workflow_number")
         .expect("version 1");
     assert_eq!(numbered.workflow, first);
-    let next = store
+    let next = catalog
         .put_workflow(&acme, &workflow("triage", "t4"), T0)
         .await
         .expect("put_workflow");
     assert_eq!(next.number, 4, "a new version takes the next number");
     assert_eq!(
-        store
+        catalog
             .put_workflow(&acme, &triage, T0)
             .await
             .expect("put_workflow")

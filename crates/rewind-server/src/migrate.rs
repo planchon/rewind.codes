@@ -9,7 +9,7 @@
 //! ```
 //!
 //! It takes the server's options. It opens the control plane (which sets the run tables aside,
-//! migration 14 on Postgres, version 12 on Turso), places the namespaces in their partitions,
+//! migration 15 on Postgres, version 13 on Turso), places the namespaces in their partitions,
 //! moves each run into its namespace's partition or into the archive ([`rewind_engine::migrate`]),
 //! with its payloads above 64 KiB read from `--blobs` (the bucket by default), prints what it
 //! moved and skipped, and drops the set-aside tables once every run moved. Run again, it skips

@@ -17,7 +17,7 @@ use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workfl
 use crate::ports::checker::ToolDeclarations;
 use crate::ports::executor::CompiledScript;
 use crate::ports::journal::{
-    StoredScript, StoredToolset, StoredWorkflow, TestRecord, WorkflowFilter,
+    ScriptTitle, StoredScript, StoredToolset, StoredWorkflow, TestRecord, WorkflowFilter,
 };
 use crate::ports::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
@@ -84,11 +84,16 @@ pub struct NamespacePage {
 ///   namespace or a subscription of one tenant is never visible to another.
 /// - **Content.** Scripts and toolsets are stored by digest, and a second put changes nothing.
 ///   Only scripts that compile are stored.
+/// - **Titles.** `set_script_title` gives a stored script the title and description a person
+///   wrote, or removes them, and answers `false` for a script the tenant does not have;
+///   `script_titles` reads them for the scripts that have one.
 /// - **Workflows.** A version is immutable: a second `put_workflow` of a version changes nothing
 ///   and returns the first. `workflow_versions` lists a name's versions carrying `labels`,
 ///   newest first (created last first, then stored last first): the first is the latest;
 ///   `workflows_with_script` lists the versions of any name whose script is `script`, in the
-///   same order; `latest_workflows` gives the latest version of each name, by name.
+///   same order; `latest_workflows` gives the latest version of each name, by name. A new
+///   version takes the next number of its name in its tenant, from 1 in the order they were
+///   stored; `workflow_number` finds a version by its number, whatever its labels.
 /// - **Tests.** `reserve_tests` inserts a test's row, or makes an existing one new again, before
 ///   its blob is written, and returns the digests whose deletion has started. `put_workflow`
 ///   writes the rows of `workflow_tests` from the version's suite, and refuses (`Conflict`) a
@@ -127,6 +132,23 @@ pub trait CatalogStore: Send + Sync {
         digest: Digest,
     ) -> impl Future<Output = Result<Option<StoredScript>, CatalogError>> + Send;
 
+    /// Sets the title a person gave a stored script, or removes it (`None`)
+    /// (`archi/04-tools.md`, "Script titles"). `false` when the tenant has no such script:
+    /// nothing is stored.
+    fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> impl Future<Output = Result<bool, CatalogError>> + Send;
+
+    /// The titles people gave these scripts, for those that have one.
+    fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> impl Future<Output = Result<Vec<(Digest, ScriptTitle)>, CatalogError>> + Send;
+
     /// Stores a pinned toolset and its declarations. Idempotent by digest: a second put changes
     /// nothing.
     fn put_toolset(
@@ -153,7 +175,8 @@ pub trait CatalogStore: Send + Sync {
 
     /// Stores a workflow version, visible to the principals that see its labels
     /// ([`Workflow::labels`]), and returns it as stored, with a row of `workflow_tests` for each
-    /// test of its suite, in one transaction. Idempotent by version.
+    /// test of its suite, in one transaction. Idempotent by version. A new version takes the
+    /// next number of its workflow in its tenant (1 for the first).
     fn put_workflow(
         &self,
         tenant: &TenantId,
@@ -165,6 +188,14 @@ pub trait CatalogStore: Send + Sync {
         &self,
         tenant: &TenantId,
         version: Digest,
+    ) -> impl Future<Output = Result<Option<StoredWorkflow>, CatalogError>> + Send;
+
+    /// The version `number` of the workflow `name`, whatever its labels.
+    fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
     ) -> impl Future<Output = Result<Option<StoredWorkflow>, CatalogError>> + Send;
 
     /// The versions of the workflow `name` that carry all of `labels`, newest first.

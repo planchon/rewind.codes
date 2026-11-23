@@ -630,7 +630,7 @@
           },
           {
             "$ref": "#/components/schemas/ScriptChanged",
-            "description": "`script`: the organization's runs ran a script for the first time."
+            "description": "`script`: the organization's runs ran a script for the first time, or a person gave it a\ntitle or removed it."
           },
           {
             "$ref": "#/components/schemas/WorkflowChanged",
@@ -5619,7 +5619,7 @@
         "type": "object"
       },
       "ScriptChanged": {
-        "description": "The data of a `script` event: a script the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists.",
+        "description": "The data of a `script` event: a script the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists, or whose title a person gave or removed.",
         "properties": {
           "digest": {
             "description": "SHA-256 of the TypeScript source, lowercase hex.",

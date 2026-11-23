@@ -264,10 +264,8 @@ where
             .await?
             .ok_or_else(|| Refused::Run(format!("its toolset {} is missing", legacy.toolset)))?
             .toolset;
-        if !history.is_empty() {
-            RunState::from_history(&history)
-                .map_err(|error| Refused::Run(format!("its history is corrupt: {error}")))?;
-        }
+        let state = RunState::from_history(&history)
+            .map_err(|error| Refused::Run(format!("its history is corrupt: {error}")))?;
 
         // Every payload belongs to the run: the values above 64 KiB become its blobs.
         let mut values: BTreeMap<Digest, JsonValue> = BTreeMap::new();
@@ -309,6 +307,8 @@ where
         let mut head = RunHead {
             run: run.clone(),
             namespace: legacy.namespace.clone(),
+            origin: legacy.origin.clone(),
+            suffix_len: legacy.suffix_len,
             script: legacy.script,
             toolset: legacy.toolset,
             status: rewind_core::RunStatus::Pending,
@@ -330,7 +330,8 @@ where
             ended_at: None,
         };
         let headline = crate::projector::headline(script.source());
-        let summary = derive::summary_of(&head, &headline, &history, &toolset, &by_seq);
+        let summary =
+            derive::summary_of(&head, &headline, &history, &state, &toolset, &by_seq, None);
         head.status = summary.summary.status;
         let ended = head.is_ended();
         if ended {
@@ -343,16 +344,20 @@ where
 
         let mut inlined = history.clone();
         inline(&mut inlined, &values);
+        // Every entry is new: the state before them is a run's that has none.
+        let none = RunState::new();
+        let openings = derive::Openings::new(&inlined, 0, &none);
         let mut counters = vec![derive::created_counters(&head)];
         counters.extend(derive::counters_of(
             &head,
             &history,
             0,
+            &openings,
             &summary,
             Duration::ZERO,
             self.now,
         ));
-        counters.extend(derive::shapes_of(&head, &inlined, 0));
+        counters.extend(derive::shapes_of(&head, &inlined, 0, &openings));
 
         let mut batch = Batch::new();
         batch.push(CreateRun {

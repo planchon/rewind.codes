@@ -18,9 +18,9 @@ use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workfl
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, Secret, StoredScript,
-    StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant,
-    TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
+    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle, Secret,
+    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 use turso::{Connection, Row, Value};
 
@@ -56,7 +56,7 @@ impl TursoStore {
 /// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
 macro_rules! workflow_columns {
     () => {
-        "version, document, labels, created_at"
+        "version, document, labels, created_at, number"
     };
 }
 
@@ -73,6 +73,7 @@ fn workflow_from_row(row: &Row) -> Result<StoredWorkflow, Error> {
         workflow,
         labels: decode_labels(&row.text(2)?)?,
         created_at: row.ts(3)?,
+        number: row.u32(4)?,
     })
 }
 
@@ -368,6 +369,92 @@ impl CatalogStore for TursoCatalog {
         }))
     }
 
+    async fn set_script_title(
+        &self,
+        tenant_id: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, CatalogError> {
+        let connection = self.store.connection().await?;
+        let connection = &*connection;
+        let stored = transaction(connection, async {
+            let stored = sql::query_row(
+                connection,
+                "SELECT 1 FROM scripts WHERE tenant = ? AND digest = ?",
+                vec![tenant(tenant_id), digest(script)],
+            )
+            .await?;
+            if stored.is_none() {
+                return Ok::<_, CatalogError>(false);
+            }
+            match title {
+                Some(title) => {
+                    sql::execute(
+                        connection,
+                        "INSERT OR REPLACE INTO script_titles (tenant, digest, title, \
+                         description, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        vec![
+                            tenant(tenant_id),
+                            digest(script),
+                            text(title.title.as_str()),
+                            opt_text(title.description.as_deref()),
+                            text(title.updated_by.as_str()),
+                            ts(title.updated_at),
+                        ],
+                    )
+                    .await?
+                }
+                None => {
+                    sql::execute(
+                        connection,
+                        "DELETE FROM script_titles WHERE tenant = ? AND digest = ?",
+                        vec![tenant(tenant_id), digest(script)],
+                    )
+                    .await?
+                }
+            };
+            Ok(true)
+        })
+        .await?;
+        if stored {
+            self.send([ControlPlaneChange::Script {
+                tenant: tenant_id.clone(),
+                digest: script,
+            }]);
+        }
+        Ok(stored)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant_id: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let mut titles = BTreeMap::new();
+        for script in scripts.iter().collect::<BTreeSet<_>>() {
+            let row = sql::query_row(
+                &connection,
+                "SELECT title, description, updated_by, updated_at FROM script_titles \
+                 WHERE tenant = ? AND digest = ?",
+                vec![tenant(tenant_id), digest(*script)],
+            )
+            .await?;
+            if let Some(row) = row {
+                titles.insert(
+                    *script,
+                    ScriptTitle {
+                        title: row.text(0)?,
+                        description: row.opt_text(1)?,
+                        updated_by: row.text(2)?,
+                        updated_at: row.ts(3)?,
+                    },
+                );
+            }
+        }
+        Ok(titles.into_iter().collect())
+    }
+
     async fn put_toolset(
         &self,
         tenant_id: &TenantId,
@@ -480,19 +567,23 @@ impl CatalogStore for TursoCatalog {
                 )
                 .await?;
             }
-            // Only the versions of one workflow are compared by the order they were stored in.
-            let order = sql::query_row(
+            // Only the versions of one workflow are compared by the order they were stored in,
+            // and numbered: a new version takes the next number of its workflow.
+            let (order, number) = match sql::query_row(
                 connection,
-                "SELECT COALESCE(MAX(stored_order), 0) + 1 FROM workflows \
-                 WHERE tenant = ? AND name = ?",
+                "SELECT COALESCE(MAX(stored_order), 0) + 1, COALESCE(MAX(number), 0) + 1 \
+                 FROM workflows WHERE tenant = ? AND name = ?",
                 vec![tenant(tenant_id), text(workflow.name())],
             )
             .await?
-            .map_or(Ok(1), |row| row.u64(0))?;
+            {
+                Some(row) => (row.u64(0)?, row.u32(1)?),
+                None => (1, 1),
+            };
             sql::execute(
                 connection,
                 "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
-                 stored_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 stored_order, number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 vec![
                     tenant(tenant_id),
                     digest(version),
@@ -501,6 +592,7 @@ impl CatalogStore for TursoCatalog {
                     text(encode_labels(labels)),
                     ts(now),
                     int(order),
+                    int(u64::from(number)),
                 ],
             )
             .await?;
@@ -508,6 +600,7 @@ impl CatalogStore for TursoCatalog {
                 workflow: workflow.clone(),
                 labels: labels.clone(),
                 created_at: now,
+                number,
             };
             Ok::<_, CatalogError>((stored, true))
         })
@@ -536,6 +629,26 @@ impl CatalogStore for TursoCatalog {
                 " FROM workflows WHERE tenant = ? AND version = ?"
             ),
             vec![tenant(tenant_id), digest(version)],
+        )
+        .await?;
+        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant_id: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let row = sql::query_row(
+            &connection,
+            concat!(
+                "SELECT ",
+                workflow_columns!(),
+                " FROM workflows WHERE tenant = ? AND name = ? AND number = ?"
+            ),
+            vec![tenant(tenant_id), text(name), int(u64::from(number))],
         )
         .await?;
         Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
@@ -625,7 +738,7 @@ impl CatalogStore for TursoCatalog {
             if filter.limit.is_some_and(|max| latest.len() >= max) {
                 break;
             }
-            let name = row.text(4)?;
+            let name = row.text(5)?;
             if seen.as_deref() == Some(name.as_str()) {
                 continue;
             }

@@ -6,6 +6,7 @@
 //! (`{"not_owner":{"partition":3}}`). A refusal is `{"Err":{…}}` beside `{"Ok":…}`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use rewind_core::{Event, JsonValue, Lifecycle, PartitionId, Timestamp};
@@ -17,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use super::values::{
-    Counters, Found, Page, QuotaExceeded, RunOrder, RunQuery, RunRef, RunView, Scope, TaskRef,
-    Window, summary_of, summary_record,
+    Counters, Found, Month, Page, QuotaExceeded, RunOrder, RunQuery, RunRef, RunView, Scope,
+    TaskRef, Usage, Window, summary_of, summary_record,
 };
 use super::{Hex, Id, Invalid, namespace, node, present, tenant};
 
@@ -265,6 +266,11 @@ pub enum PartitionRequest {
     GetRun {
         run: RunRef,
     },
+    /// The run a handle names, written as the handle's text.
+    Find {
+        tenant: String,
+        handle: String,
+    },
     History {
         run: RunRef,
         from: u64,
@@ -282,6 +288,19 @@ pub enum PartitionRequest {
     Counters {
         scope: Scope,
         window: Window,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bucket: Option<NonZeroU32>,
+    },
+    Usage {
+        scope: Scope,
+        month: Month,
+        days: bool,
+    },
+    QuotaAlerts {
+        tenant: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        month: Month,
     },
     Shapes {
         tenant: String,
@@ -298,6 +317,7 @@ pub enum PartitionRequest {
 pub struct StartAtOwner {
     pub run: RunRef,
     pub namespace: String,
+    pub origin: String,
     pub started: Box<RawValue>,
     #[serde(default, skip_serializing_if = "record::Metadata::is_empty")]
     pub metadata: record::Metadata,
@@ -372,6 +392,7 @@ impl From<&link::PartitionRequest> for PartitionRequest {
             R::Start(start) => PartitionRequest::Start(Box::new(StartAtOwner {
                 run: (&start.run).into(),
                 namespace: start.namespace.to_string(),
+                origin: start.origin.clone(),
                 started: started_event(&start.started),
                 metadata: codec::metadata_record(&start.metadata),
                 start_key: start.start_key.clone(),
@@ -425,6 +446,10 @@ impl From<&link::PartitionRequest> for PartitionRequest {
                 key: key.clone(),
             },
             R::GetRun { run } => PartitionRequest::GetRun { run: run.into() },
+            R::Find { tenant, handle } => PartitionRequest::Find {
+                tenant: tenant.to_string(),
+                handle: handle.to_string(),
+            },
             R::History { run, from, values } => PartitionRequest::History {
                 run: run.into(),
                 from: *from,
@@ -442,9 +467,28 @@ impl From<&link::PartitionRequest> for PartitionRequest {
                 order: (*order).into(),
                 page: page.into(),
             },
-            R::Counters { scope, window } => PartitionRequest::Counters {
+            R::Counters {
+                scope,
+                window,
+                bucket,
+            } => PartitionRequest::Counters {
                 scope: scope.into(),
                 window: (*window).into(),
+                bucket: *bucket,
+            },
+            R::Usage { scope, month, days } => PartitionRequest::Usage {
+                scope: scope.into(),
+                month: (*month).into(),
+                days: *days,
+            },
+            R::QuotaAlerts {
+                tenant,
+                namespace,
+                month,
+            } => PartitionRequest::QuotaAlerts {
+                tenant: tenant.to_string(),
+                namespace: namespace.as_ref().map(ToString::to_string),
+                month: (*month).into(),
             },
             R::Shapes {
                 tenant,
@@ -468,6 +512,7 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
             PartitionRequest::Start(start) => R::Start(Box::new(link::StartAtOwner {
                 run: start.run.try_into()?,
                 namespace: namespace(start.namespace)?,
+                origin: start.origin,
                 started: started_of(&start.started)?,
                 metadata: codec::metadata_of(start.metadata),
                 start_key: start.start_key,
@@ -529,6 +574,10 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
             PartitionRequest::GetRun { run } => R::GetRun {
                 run: run.try_into()?,
             },
+            PartitionRequest::Find { tenant: id, handle } => R::Find {
+                tenant: tenant(id)?,
+                handle: handle.parse().map_err(Invalid::new)?,
+            },
             PartitionRequest::History { run, from, values } => R::History {
                 run: run.try_into()?,
                 from,
@@ -548,9 +597,28 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
                 order: order.into(),
                 page: page.try_into()?,
             },
-            PartitionRequest::Counters { scope, window } => R::Counters {
+            PartitionRequest::Counters {
+                scope,
+                window,
+                bucket,
+            } => R::Counters {
                 scope: scope.try_into()?,
                 window: window.into(),
+                bucket,
+            },
+            PartitionRequest::Usage { scope, month, days } => R::Usage {
+                scope: scope.try_into()?,
+                month: month.try_into()?,
+                days,
+            },
+            PartitionRequest::QuotaAlerts {
+                tenant: id,
+                namespace: name,
+                month,
+            } => R::QuotaAlerts {
+                tenant: tenant(id)?,
+                namespace: name.map(namespace).transpose()?,
+                month: month.try_into()?,
             },
             PartitionRequest::Shapes {
                 tenant: id,
@@ -579,6 +647,8 @@ pub enum PartitionReply {
     Found(Result<Found, Refusal>),
     Counted(Result<Box<Counted>, Refusal>),
     Shapes(Result<BTreeMap<String, record::Shape>, Refusal>),
+    Used(Result<BTreeMap<String, Usage>, Refusal>),
+    Alerts(Result<Vec<record::QuotaAlert>, Refusal>),
 }
 
 /// `{"run":{…},"created":true}`.
@@ -598,12 +668,12 @@ pub enum Enqueued {
     RunEnded,
 }
 
-/// A partition's counters over a window and its gauges: `{"counters":{…},"gauges":<gauges
-/// record>}`.
+/// A partition's counters over a window, one per bucket, and its gauges:
+/// `{"counters":[{…},…],"gauges":<gauges record>}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Counted {
-    pub counters: Counters,
+    pub counters: Vec<Counters>,
     pub gauges: record::Gauges,
 }
 
@@ -640,9 +710,17 @@ impl From<&link::PartitionReply> for PartitionReply {
             R::Found(result) => PartitionReply::Found(refused(result, |found| found.into())),
             R::Counted(result) => PartitionReply::Counted(refused(result, |(counters, gauges)| {
                 Box::new(Counted {
-                    counters: counters.into(),
+                    counters: counters.iter().map(Into::into).collect(),
                     gauges: codec::gauges_record(gauges),
                 })
+            })),
+            R::Used(result) => PartitionReply::Used(refused(result, |used| {
+                used.iter()
+                    .map(|(name, usage)| (name.to_string(), usage.into()))
+                    .collect()
+            })),
+            R::Alerts(result) => PartitionReply::Alerts(refused(result, |alerts| {
+                alerts.iter().map(codec::alert_record).collect()
             })),
             R::Shapes(result) => PartitionReply::Shapes(refused(result, |shapes| {
                 shapes
@@ -701,9 +779,24 @@ impl TryFrom<PartitionReply> for link::PartitionReply {
             PartitionReply::Found(result) => R::Found(refused_of(result, TryInto::try_into)?),
             PartitionReply::Counted(result) => R::Counted(refused_of(result, |counted| {
                 Ok((
-                    counted.counters.try_into()?,
+                    counted
+                        .counters
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, Invalid>>()?,
                     codec::gauges_of(counted.gauges),
                 ))
+            })?),
+            PartitionReply::Used(result) => R::Used(refused_of(result, |used| {
+                used.into_iter()
+                    .map(|(name, usage)| Ok((namespace(name)?, usage.into())))
+                    .collect()
+            })?),
+            PartitionReply::Alerts(result) => R::Alerts(refused_of(result, |alerts| {
+                alerts
+                    .into_iter()
+                    .map(|alert| codec::alert_of(alert).map_err(Invalid::from))
+                    .collect()
             })?),
             PartitionReply::Shapes(result) => R::Shapes(refused_of(result, |shapes| {
                 Ok(shapes
@@ -728,7 +821,7 @@ pub enum OrgRequest {
     Slot(SlotRequest),
     SlotFreed { task: TaskRef, server: String },
     HostTask(Box<HostTaskOffer>),
-    HostTaskDone { task: TaskRef },
+    HostTaskDone { task: TaskRef, gone: bool },
     Attach(StreamAttach),
     Detach { stream: String },
 }
@@ -969,7 +1062,10 @@ impl From<&link::OrgRequest> for OrgRequest {
                 toolset: Hex(offer.toolset),
                 grace: offer.grace,
             })),
-            R::HostTaskDone { task } => OrgRequest::HostTaskDone { task: task.into() },
+            R::HostTaskDone { task, gone } => OrgRequest::HostTaskDone {
+                task: task.into(),
+                gone: *gone,
+            },
             R::Attach(attach) => OrgRequest::Attach(attach.into()),
             R::Detach { stream } => OrgRequest::Detach {
                 stream: stream.0.clone(),
@@ -1021,8 +1117,9 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
                 toolset: offer.toolset.0,
                 grace: offer.grace,
             })),
-            OrgRequest::HostTaskDone { task } => R::HostTaskDone {
+            OrgRequest::HostTaskDone { task, gone } => R::HostTaskDone {
                 task: task.try_into()?,
+                gone,
             },
             OrgRequest::Attach(attach) => R::Attach(attach.try_into()?),
             OrgRequest::Detach { stream } => R::Detach {
@@ -1098,7 +1195,7 @@ impl TryFrom<OwnerNotice> for link::OwnerNotice {
 }
 
 /// What an organization actor tells the edge holding an SDK stream:
-/// `{"hand_out":{"stream":"…","task":{…}}}`.
+/// `{"hand_out":{"stream":"…","task":{…}}}` or `{"gone":{"stream":"…","token":"…"}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum EdgeNotice {
@@ -1112,7 +1209,11 @@ impl From<&link::EdgeNotice> for EdgeNotice {
         match notice {
             link::EdgeNotice::HandOut { stream, task } => EdgeNotice::HandOut {
                 stream: stream.0.clone(),
-                task: task.into(),
+                task: Box::new(task.into()),
+            },
+            link::EdgeNotice::Gone { stream, token } => EdgeNotice::Gone {
+                stream: stream.0.clone(),
+                token: token.0.clone(),
             },
             link::EdgeNotice::Reopened { partition } => EdgeNotice::Reopened {
                 partition: partition.get(),
@@ -1128,7 +1229,11 @@ impl TryFrom<EdgeNotice> for link::EdgeNotice {
         Ok(match notice {
             EdgeNotice::HandOut { stream, task } => link::EdgeNotice::HandOut {
                 stream: link::StreamId(stream),
-                task: task.try_into()?,
+                task: (*task).try_into()?,
+            },
+            EdgeNotice::Gone { stream, token } => link::EdgeNotice::Gone {
+                stream: link::StreamId(stream),
+                token: engine::TaskToken(token),
             },
             EdgeNotice::Reopened { partition } => link::EdgeNotice::Reopened {
                 partition: PartitionId::new(partition),

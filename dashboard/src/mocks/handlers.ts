@@ -11,6 +11,7 @@ import type {
 } from "../model/types";
 import { type Caller, principalOf } from "./access";
 import { accessHandlers, authenticate, guard, runsWorld } from "./access-handlers";
+import { told } from "./changes";
 import { connectionHandlers } from "./connection-handlers";
 import type { World } from "./fixtures";
 import { findRun, scriptTitleOf } from "./handles";
@@ -370,7 +371,11 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       const body = (await request.json()) as { title: string | null; description?: string | null };
       if (body.title === null) {
         world.scriptTitles.delete(script.digest);
-        return HttpResponse.json(scriptOf(world, script));
+        return told(
+          world,
+          { kind: "script", digest: script.digest },
+          HttpResponse.json(scriptOf(world, script)),
+        );
       }
       const title = body.title.trim();
       const description = body.description?.trim() || null;
@@ -384,7 +389,11 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
         updatedBy: principalOf(caller) ?? "operator",
         updatedAt: now(),
       });
-      return HttpResponse.json(scriptOf(world, script));
+      return told(
+        world,
+        { kind: "script", digest: script.digest },
+        HttpResponse.json(scriptOf(world, script)),
+      );
     }),
 
     http.get("*/v1/tools/stats", ({ request }) =>

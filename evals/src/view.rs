@@ -47,11 +47,28 @@ fn unavailable(message: String) -> EdgeError {
 
 /// `GET /v1/runs/{id}`.
 pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
-    let record = world
+    let view = world
         .run_view(run)
         .await?
-        .ok_or(Refusal::RunNotFound(run.id))?
-        .head;
+        .ok_or(Refusal::RunNotFound(run.id))?;
+    let record = view.head.clone();
+    // A run named by a handle, or by its id once it is erased.
+    let named = |handle: Option<&rewind_core::RunHandle>, run: rewind_core::RunId| {
+        handle.map_or_else(|| run.to_string(), ToString::to_string)
+    };
+    let workflow = match &record.metadata.workflow {
+        Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
+            name: workflow.name.clone(),
+            version: workflow.version.to_hex(),
+            number: world
+                .catalog()
+                .get_workflow(&run.tenant, workflow.version)
+                .await
+                .map_err(|error| unavailable(error.to_string()))?
+                .map_or(0, |stored| stored.number),
+        }),
+        None => None,
+    };
     // Every payload loaded, as the server loads those it shows.
     let history = world.history(run).await?;
     let state = RunState::from_history(&history).map_err(|error| {
@@ -89,8 +106,12 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     } else {
         waiting(world, run, &history, &state).await?
     };
+    let script_title = script_title(world, &run.tenant, record.script)
+        .await?
+        .map(|(title, _, _)| title);
     Ok(Run {
         id: run.id.to_string(),
+        handle: record.handle().to_string(),
         namespace: namespace_of(run, &record.namespace)?,
         status,
         quarantine: record.quarantine.as_ref().map(|quarantine| Quarantine {
@@ -119,19 +140,16 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
             .to_string(),
         parent: record.metadata.parent.map(|parent| ForkParent {
             run: parent.run.to_string(),
+            handle: named(view.parent.as_ref(), parent.run),
             at: parent.at,
         }),
-        workflow: record.metadata.workflow.as_ref().map(|workflow| {
-            rewind_api::workflows::RunWorkflow {
-                name: workflow.name.clone(),
-                version: workflow.version.to_hex(),
-            }
-        }),
+        workflow,
         started_by: record
             .metadata
             .started_by
             .map(|by| rewind_api::workflows::StartedBy {
                 run: by.run.to_string(),
+                handle: named(view.started_by.as_ref(), by.run),
                 seq: by.seq.0,
                 detached: by.detached,
             }),
@@ -150,38 +168,28 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     })
 }
 
-/// The handle of another run of the tenant, which a run names; its id once it is erased.
-async fn handle_of(
-    world: &World,
-    tenant: &rewind_engine::ports::TenantId,
-    run: rewind_core::RunId,
-) -> Result<String, EngineError> {
-    Ok(world
-        .engine
-        .get_run(&RunRef::new(tenant.clone(), run))
-        .await?
-        .map_or_else(|| run.to_string(), |record| record.handle().to_string()))
-}
-
 /// A script's title, its description and where they come from, as the server shows them: the
 /// title a person gave the script, else the comment at the top of its source.
 pub async fn script_title(
     world: &World,
     tenant: &rewind_engine::ports::TenantId,
     script: rewind_core::Digest,
-) -> Result<Option<(String, Option<String>, TitleSource)>, EngineError> {
-    let journal = world.engine.journal();
-    if let Some((_, given)) = journal
+) -> Result<Option<(String, Option<String>, TitleSource)>, EdgeError> {
+    let catalog = world.catalog();
+    let failed = |error: rewind_engine::ports::CatalogError| unavailable(error.to_string());
+    if let Some((_, given)) = catalog
         .script_titles(tenant, &[script])
-        .await?
+        .await
+        .map_err(failed)?
         .into_iter()
         .next()
     {
         return Ok(Some((given.title, given.description, TitleSource::Person)));
     }
-    Ok(journal
+    Ok(catalog
         .get_script(tenant, script)
-        .await?
+        .await
+        .map_err(failed)?
         .and_then(|stored| rewind_core::script_doc(stored.script.source()))
         .map(|doc| (doc.title, doc.description, TitleSource::Comment)))
 }
@@ -313,10 +321,13 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
     let ending = run.ending.as_ref();
     Ok(RunSummary {
         id: run.run.id.to_string(),
+        handle: run.handle().to_string(),
         namespace: namespace_of(&run.run, &run.namespace)?,
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
         script: run.script.to_hex(),
+        // The script's title is not the index's: the caller gives it.
+        script_title: None,
         headline: run.headline.clone(),
         toolset: run.toolset.to_hex(),
         labels: Labels::from(run.labels.clone()),

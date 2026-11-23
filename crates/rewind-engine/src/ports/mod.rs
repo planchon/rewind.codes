@@ -9,7 +9,7 @@
 //! | Port | Adapters |
 //! | --- | --- |
 //! | [`CatalogStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
-//! | [`PartitionStore`] / [`PartitionLog`] | memory, `rewind-store-slatedb` (R2 or S3, local files, memory) |
+//! | [`PartitionStore`] / [`PartitionLog`] | memory, `rewind-store-slatedb` (S3 or any S3-compatible service, local files, memory) |
 //! | [`RunArchive`] | memory, `rewind-blob` (files, S3, and a cache in front of either) |
 //! | [`Cluster`] / [`cluster::Membership`] | memory, `rewind-store-turso` (one node), `rewind-store-postgres` |
 //! | [`NodeLink`] | in process ([`LocalLink`](crate::adapters::LocalLink)), HTTP/2 (`rewind-server`) |
@@ -102,9 +102,9 @@ pub use identity::{
 };
 pub use journal::{
     Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
-    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, StartedBy,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, TEST_GRACE, TaskRef, TaskState,
-    TaskToken, TestRecord, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
+    StartedBy, StoreError, StoredScript, StoredToolset, StoredWorkflow, TEST_GRACE, TaskRef,
+    TaskState, TaskToken, TestRecord, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
     WorkflowFilter, deferred_timeout_failure,
 };
 pub use link::{LinkError, NodeLink};

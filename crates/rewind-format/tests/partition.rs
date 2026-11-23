@@ -84,6 +84,8 @@ fn run_head() -> RunHead {
         run: run(1),
         tenant: "acme".into(),
         namespace: "alice".into(),
+        origin: "script".into(),
+        suffix_len: 12,
         script: digest("script"),
         toolset: digest("toolset"),
         status: Status::Active,
@@ -212,6 +214,8 @@ fn summary() -> Summary {
         tenant: "acme".into(),
         run: run(1),
         namespace: "alice".into(),
+        origin: "script".into(),
+        suffix_len: 12,
         script: digest("script"),
         headline: "export default async () => {".into(),
         toolset: digest("toolset"),
@@ -623,6 +627,25 @@ fn every_variant_round_trips() {
         decode::<RunHead>(&encode(&quarantined)).unwrap(),
         quarantined
     );
+    // A head and a summary keep an origin and a suffix that differ from the defaults; with the
+    // defaults they write neither.
+    let named = RunHead {
+        origin: "triage-new-issues".into(),
+        suffix_len: 17,
+        ..run_head()
+    };
+    let bytes = encode(&named);
+    assert!(
+        String::from_utf8_lossy(&bytes).contains(r#""origin":"triage-new-issues","suffix_len":17"#)
+    );
+    assert_eq!(decode::<RunHead>(&bytes).unwrap(), named);
+    assert!(!String::from_utf8_lossy(&encode(&run_head())).contains("origin"));
+    let summarized = Summary {
+        origin: "triage".into(),
+        suffix_len: 13,
+        ..summary()
+    };
+    assert_eq!(decode::<Summary>(&encode(&summarized)).unwrap(), summarized);
     for status in [
         Status::Pending,
         Status::Completed,

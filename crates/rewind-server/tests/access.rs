@@ -14,7 +14,7 @@ use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
-use rewind_api::scripts::{CheckRequest, ScriptFilter};
+use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::workflows::WorkflowQuery;

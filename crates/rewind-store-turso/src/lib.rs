@@ -17,7 +17,7 @@
 //!   key per tenant, itself encrypted by one of the deployment's [`MasterKeys`], whose id it
 //!   records.
 //!
-//! [`TursoLegacy`] ([`TursoStore::legacy`]) reads the runs version 12 set aside in the tables
+//! [`TursoLegacy`] ([`TursoStore::legacy`]) reads the runs version 13 set aside in the tables
 //! `legacy_*`, for `rewind server migrate-runs`, and drops them once they moved.
 //!
 //! The `meta` table holds the schema version and the server's settings, such as virtual time.

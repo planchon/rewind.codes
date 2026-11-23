@@ -622,6 +622,49 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
         }
     }
 
+    /// Sends requests to node `at` together, as several edges at once would, and steps until
+    /// each is answered: their replies, in the order of the requests.
+    pub async fn requests(
+        &mut self,
+        at: &NodeId,
+        requests: Vec<NodeRequest>,
+    ) -> Result<Vec<NodeReply>, DriveError> {
+        if !self.nodes.contains_key(at) {
+            return Err(DriveError::NoNode(at.clone()));
+        }
+        let mut ids = Vec::with_capacity(requests.len());
+        for request in requests {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.waiters.insert(id, None);
+            self.queue
+                .push_back((at.clone(), Message::Inbound(request, ReplyTo::Waiter(id))));
+            ids.push(id);
+        }
+        let mut taken = 0;
+        loop {
+            if ids
+                .iter()
+                .all(|id| matches!(self.waiters.get(id), Some(Some(_))))
+            {
+                return Ok(ids
+                    .iter()
+                    .filter_map(|id| self.waiters.remove(id).flatten())
+                    .collect());
+            }
+            if !self.step().await {
+                for id in &ids {
+                    self.waiters.remove(id);
+                }
+                return Err(DriveError::NoReply);
+            }
+            taken += 1;
+            if taken > self.max_steps {
+                return Err(DriveError::NeverIdle(self.max_steps));
+            }
+        }
+    }
+
     /// The partition map node `at` knows.
     pub fn map(&self, at: &NodeId) -> Option<PartitionMap> {
         self.nodes.get(at).map(|node| node.node.map().clone())

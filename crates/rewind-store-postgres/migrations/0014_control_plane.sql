@@ -1,4 +1,4 @@
--- Version 13: what the control plane keeps of the run plane (`archi/06-storage-and-scale.md`,
+-- Version 14: what the control plane keeps of the run plane (`archi/06-storage-and-scale.md`,
 -- "The control plane", "Partitions, owners and nodes").
 
 -- The partition a namespace's runs live in, chosen when the catalog creates it and never

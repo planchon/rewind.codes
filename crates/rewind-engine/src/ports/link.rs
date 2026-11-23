@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use futures_util::Stream;
 use rewind_core::{
-    Digest, HistoryEntry, JsonValue, PartitionId, RunId, RunStarted, Seq, Shape, Timestamp,
+    Digest, HistoryEntry, JsonValue, PartitionId, RunHandle, RunId, RunStarted, Seq, Shape,
+    Timestamp,
 };
 
 use crate::ports::archive::SealedAttempt;
@@ -201,6 +202,9 @@ pub enum PartitionRequest {
     },
     /// The run, live or sealed: answered `Run`.
     GetRun { run: RunRef },
+    /// The run of the tenant a handle names, live or sealed: answered `Run`
+    /// (`archi/06-storage-and-scale.md`, "Run handles").
+    Find { tenant: TenantId, handle: RunHandle },
     /// The entries of the run's attempt from `from`, from its partition or its sealed journal:
     /// answered `History`. With `values`, every payload up to 64 KiB is inlined as a value, as
     /// the sealed journal holds it; larger ones stay digests, their values in the run's blobs.
@@ -272,11 +276,14 @@ pub enum PartitionReply {
     Alerts(Result<Vec<QuotaAlert>, Refusal>),
 }
 
-/// A run as its owner knows it: its head and its summary.
+/// A run as its owner knows it: its head and its summary, and the handles of the runs its
+/// metadata names (its parent, the run that started it) while they are kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunView {
     pub head: RunHead,
     pub summary: Option<RunSummary>,
+    pub parent: Option<RunHandle>,
+    pub started_by: Option<RunHandle>,
 }
 
 /// A start the edge checked (script, TTL, input, attachments, namespace): the owner answers a
@@ -286,6 +293,9 @@ pub struct StartAtOwner {
     /// The new run, its id drawn for the namespace's partition.
     pub run: RunRef,
     pub namespace: NamespaceName,
+    /// What ran, the middle of the run's handle ([`RunHead::origin`]). The owner gives the run
+    /// its suffix.
+    pub origin: String,
     pub started: RunStarted,
     pub metadata: RunMetadata,
     /// Unique in the namespace for as long as the run is kept.

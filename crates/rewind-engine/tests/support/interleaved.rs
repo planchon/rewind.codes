@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use rewind_core::{Digest, HistoryEntry, PartitionId, Shape, Timestamp};
+use rewind_core::{Digest, HistoryEntry, PartitionId, RunId, Shape, Timestamp};
 use rewind_engine::adapters::{MemoryPartitionLog, MemoryPartitions};
 use rewind_engine::ports::partition::Change;
 use rewind_engine::ports::{
@@ -114,6 +114,15 @@ impl PartitionLog for InterleavedLog {
             });
         }
         self.inner.run(run).await
+    }
+
+    async fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: RunId,
+        high: RunId,
+    ) -> Result<Vec<RunHead>, PartitionError> {
+        self.inner.runs_in_range(tenant, low, high).await
     }
 
     async fn summary(&self, run: &RunRef) -> Result<Option<IndexedSummary>, PartitionError> {

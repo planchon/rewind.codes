@@ -129,8 +129,9 @@ export const routes: RouteObject[] = [
           { path: "runs", element: <Moved to="/observability" /> },
           { path: "waiting", element: <Moved to="/observability/waiting" /> },
           { path: "failures", element: <Moved to="/observability/failures" /> },
-          // One route for every section: the page stays mounted, and its event stream open.
-          { path: "runs/:id/:section?", lazy: runView },
+          // One route for every section: the page stays mounted, and its event stream open. A run
+          // is named by its UUID or by its handle, `namespace/origin/suffix` (`runPath`).
+          { path: "runs/*", lazy: runView },
           {
             path: "scripts",
             element: (

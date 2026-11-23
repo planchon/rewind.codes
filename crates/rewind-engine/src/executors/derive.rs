@@ -104,6 +104,8 @@ pub(crate) fn summary_of(
         summary: RunSummary {
             run: head.run.clone(),
             namespace: head.namespace.clone(),
+            origin: head.origin.clone(),
+            suffix_len: head.suffix_len,
             script: head.script,
             headline: headline.to_owned(),
             toolset: head.toolset,
@@ -641,6 +643,8 @@ mod tests {
         RunHead {
             run: RunRef::new(TenantId::local(), RunId::from_u128(7)),
             namespace: NamespaceName::new("alice").unwrap(),
+            origin: "script".into(),
+            suffix_len: 12,
             script: Digest::of(b"script"),
             toolset: Digest::of(b"toolset"),
             status: RunStatus::Active,

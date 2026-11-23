@@ -610,7 +610,7 @@ export function listScripts(world: World, query: ListScriptsQuery, now: number):
   const until = Math.ceil((query.until ? Date.parse(query.until) : now) / hour) * hour;
   const byDigest = new Map<string, ScriptSummary>();
   for (const fixture of started(world, now)) {
-    const s = summarize(fixture, now);
+    const s = summarize(world, fixture, now);
     const at = Date.parse(s.startedAt);
     if ((since !== null && at < since) || at >= until) continue;
     let summary = byDigest.get(s.script);

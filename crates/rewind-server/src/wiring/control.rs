@@ -37,9 +37,9 @@ use rewind_engine::ports::{
     GrantWrite, MasterKeyId, Moves, Namespace, NamespaceName, NamespaceWrite, NewConnection,
     NewSecret, NewToken, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization,
     PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef,
-    Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader, SecretStore,
-    SigningKey, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, Tenant,
-    TenantId, TestRecord, Token, TokenKey, ToolDeclarations, UserId, WorkflowFilter,
+    ScriptTitle, Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader,
+    SecretStore, SigningKey, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription,
+    Tenant, TenantId, TestRecord, Token, TokenKey, ToolDeclarations, UserId, WorkflowFilter,
 };
 use rewind_store_postgres::{PostgresCatalog, PostgresCluster, PostgresMembership, PostgresStore};
 use rewind_store_turso::{TursoCatalog, TursoCluster, TursoMembership, TursoStore};
@@ -630,6 +630,23 @@ impl CatalogStore for Catalog {
         catalog!(self, catalog => catalog.get_script(tenant, digest).await)
     }
 
+    async fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, CatalogError> {
+        catalog!(self, catalog => catalog.set_script_title(tenant, script, title).await)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
+        catalog!(self, catalog => catalog.script_titles(tenant, scripts).await)
+    }
+
     async fn put_toolset(
         &self,
         tenant: &TenantId,
@@ -666,6 +683,15 @@ impl CatalogStore for Catalog {
         version: Digest,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
         catalog!(self, catalog => catalog.get_workflow(tenant, version).await)
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, CatalogError> {
+        catalog!(self, catalog => catalog.workflow_number(tenant, name, number).await)
     }
 
     async fn workflow_versions(
@@ -877,6 +903,23 @@ impl CatalogStore for ControlPlane {
         self.catalog().get_script(tenant, digest).await
     }
 
+    async fn set_script_title(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, CatalogError> {
+        self.catalog().set_script_title(tenant, script, title).await
+    }
+
+    async fn script_titles(
+        &self,
+        tenant: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
+        self.catalog().script_titles(tenant, scripts).await
+    }
+
     async fn put_toolset(
         &self,
         tenant: &TenantId,
@@ -915,6 +958,15 @@ impl CatalogStore for ControlPlane {
         version: Digest,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
         self.catalog().get_workflow(tenant, version).await
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, CatalogError> {
+        self.catalog().workflow_number(tenant, name, number).await
     }
 
     async fn workflow_versions(

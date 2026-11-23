@@ -135,14 +135,12 @@ pub struct HttpLink<M> {
     http: reqwest::Client,
     /// The addresses of the members, as last read.
     addresses: Mutex<BTreeMap<NodeId, String>>,
-    version: u32,
 }
 
 impl<M> fmt::Debug for HttpLink<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpLink")
             .field("addresses", &*self.book())
-            .field("version", &self.version)
             .finish_non_exhaustive()
     }
 }
@@ -173,15 +171,7 @@ impl<M: Members> HttpLink<M> {
             secret,
             http,
             addresses: Mutex::new(BTreeMap::new()),
-            version: LINK_VERSION,
         })
-    }
-
-    /// The same link, speaking another version: what a node of another build sends.
-    #[cfg(test)]
-    pub(crate) fn speaking(mut self, version: u32) -> Self {
-        self.version = version;
-        self
     }
 
     /// The node's address: as last read, or read from the members.
@@ -220,7 +210,7 @@ impl<M: Members> HttpLink<M> {
             .http
             .post(format!("http://{address}{route}"))
             .bearer_auth(self.secret.expose())
-            .header(VERSION_HEADER, self.version)
+            .header(VERSION_HEADER, LINK_VERSION)
             .json(body)
             .send()
             .await

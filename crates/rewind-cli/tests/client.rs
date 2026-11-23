@@ -203,6 +203,10 @@ async fn get_run(
         query.clone(),
         Value::Null,
     );
+    // A run's handle names it as its id does.
+    let id = id
+        .strip_prefix("local/script/")
+        .map_or_else(|| id.clone(), str::to_owned);
     let wait = query
         .get("wait")
         .map(|wait| wait.parse::<rewind_api::common::Duration>().unwrap());

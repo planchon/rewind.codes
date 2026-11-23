@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use rewind_core::{JsonValue, PartitionId, Script, Seq};
+use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports as engine;
 use rewind_engine::ports::link;
 use rewind_engine::ports::partition as store;
@@ -121,7 +122,7 @@ pub enum ActivationResult {
 
 /// An activation to commit: `{"activation":{…},"projections":[<projection record>,…],
 /// "end":…,"children":[{"seq":1,"run":"0196…","attached":true},…],"copied":false,
-/// "cpu":{"secs":…,"nanos":…},"mode":"live"}`.
+/// "cpu":{"secs":…,"nanos":…},"mode":"live","measurements":["started",…]}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Committed {
@@ -140,6 +141,68 @@ pub struct Committed {
     pub cpu: Duration,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<record::Mode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measurements: Vec<Measurement>,
+}
+
+/// A run metric of the new entries: `"started"`, `{"ended":{"outcome":"completed"}}` or
+/// `{"tool_call":{"tool":"…","outcome":"failed","error_kind":"timeout","seconds":1.5}}`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Measurement {
+    Started,
+    Ended {
+        outcome: String,
+    },
+    ToolCall {
+        tool: String,
+        outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_kind: Option<String>,
+        seconds: f64,
+    },
+}
+
+impl From<&RunMeasurement> for Measurement {
+    fn from(measurement: &RunMeasurement) -> Self {
+        match measurement {
+            RunMeasurement::Started => Measurement::Started,
+            RunMeasurement::Ended { outcome } => Measurement::Ended {
+                outcome: outcome.clone(),
+            },
+            RunMeasurement::ToolCall {
+                tool,
+                outcome,
+                error_kind,
+                seconds,
+            } => Measurement::ToolCall {
+                tool: tool.clone(),
+                outcome: outcome.clone(),
+                error_kind: error_kind.clone(),
+                seconds: *seconds,
+            },
+        }
+    }
+}
+
+impl From<Measurement> for RunMeasurement {
+    fn from(measurement: Measurement) -> Self {
+        match measurement {
+            Measurement::Started => RunMeasurement::Started,
+            Measurement::Ended { outcome } => RunMeasurement::Ended { outcome },
+            Measurement::ToolCall {
+                tool,
+                outcome,
+                error_kind,
+                seconds,
+            } => RunMeasurement::ToolCall {
+                tool,
+                outcome,
+                error_kind,
+                seconds,
+            },
+        }
+    }
 }
 
 /// A run the attempt started and whose end its history does not hold.
@@ -396,6 +459,7 @@ impl From<&link::Committed> for Committed {
             copied: committed.copied,
             cpu: committed.cpu,
             mode: committed.mode.map(Into::into),
+            measurements: committed.measurements.iter().map(Into::into).collect(),
         }
     }
 }
@@ -416,6 +480,7 @@ impl TryFrom<Committed> for link::Committed {
             copied: committed.copied,
             cpu: committed.cpu,
             mode: committed.mode.map(Into::into),
+            measurements: committed.measurements.into_iter().map(Into::into).collect(),
         })
     }
 }

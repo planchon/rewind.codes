@@ -525,16 +525,16 @@ async fn seen_by(app: &App, caller: &Caller, meta: &SecretMeta) -> Result<Secret
         .as_ref()
         .and_then(|last| last.by.run())
         .map(|(run, _)| run);
-    if restricted && let Some(last) = last_run {
+    if let Some(last) = last_run {
         let run = RunRef::new(caller.tenant.clone(), last);
-        let sees = match app.read_run(&run).await? {
-            Some(view) => caller.sees_run(&view.head),
-            None => false,
-        };
-        if !sees {
+        let found = app.read_run(&run).await?;
+        let sees = found
+            .as_ref()
+            .is_some_and(|found| caller.sees_run(&found.head));
+        if restricted && !sees {
             view.last_read = None;
-        } else if let (Some(read), Some(record)) = (view.last_read.as_mut(), record) {
-            read.run_handle = Some(record.handle().to_string());
+        } else if let (Some(read), Some(found)) = (view.last_read.as_mut(), found) {
+            read.run_handle = Some(found.head.handle().to_string());
         }
     }
     Ok(view)

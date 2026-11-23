@@ -41,8 +41,8 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 pub use activations::{
-    Activation, ActivationRequest, ActivationResult, Child, Committed, CounterDelta, ParentHistory,
-    Purpose, SealedAttempt, StoredScript, StoredToolset, TimerChange,
+    Activation, ActivationRequest, ActivationResult, Child, Committed, CounterDelta, Measurement,
+    ParentHistory, Purpose, SealedAttempt, StoredScript, StoredToolset, TimerChange,
 };
 pub use requests::{
     Admit, Changed, Counted, CountsReport, Created, Decision, EdgeNotice, Enqueued, HostFailure,
@@ -51,8 +51,9 @@ pub use requests::{
     StreamAttach, Subscribe, SubscriptionKey, TaskAnswer,
 };
 pub use values::{
-    Bound, Counters, Found, Page, Predicate, QuotaExceeded, QuotaKind, QuotaScope, Range, RunOrder,
-    RunQuery, RunRef, RunView, Scope, SearchCursor, TaskRef, Term, TextMatch, Window,
+    Bound, Counters, DayUsage, Found, Month, Page, Predicate, QuotaExceeded, QuotaKind, QuotaScope,
+    Range, RunOrder, RunQuery, RunRef, RunView, Scope, SearchCursor, TaskRef, Term, TextMatch,
+    Usage, Window,
 };
 
 /// The version of the node link this build speaks: every request carries it, and a node refuses

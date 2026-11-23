@@ -25,7 +25,7 @@ mod commit;
 mod outbox;
 mod reads;
 mod recovery;
-mod runs;
+pub(crate) mod runs;
 mod tasks;
 pub(crate) mod tokens;
 pub(crate) mod wheel;
@@ -292,16 +292,19 @@ pub(crate) enum Flight {
 
 /// A request the owner asked and waits for the answer of.
 pub(crate) enum Ask {
-    /// A start waits for its admission.
+    /// A start waits for its admission, with the runs of its namespace its handle must tell
+    /// apart from.
     Start {
         start: Box<StartAtOwner>,
         reply: ReplyTo,
+        neighbours: Vec<RunId>,
     },
     /// A workflow run a call starts waits for its admission.
     Child {
         task: TaskRef,
         attempt: u32,
         start: Box<StartAtOwner>,
+        neighbours: Vec<RunId>,
     },
 }
 

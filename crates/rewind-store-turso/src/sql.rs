@@ -197,6 +197,11 @@ pub(crate) trait Columns {
         self.opt_u64(index)?.ok_or_else(|| null(index))
     }
 
+    fn u32(&self, index: usize) -> Result<u32, Error> {
+        let value = self.u64(index)?;
+        u32::try_from(value).map_err(|_| Error::Corrupt(format!("{value} is out of range")))
+    }
+
     fn opt_u32(&self, index: usize) -> Result<Option<u32>, Error> {
         self.opt_u64(index)?
             .map(|value| {

@@ -57,6 +57,7 @@ pub async fn run_all<S: PartitionStore>(new_store: impl Fn() -> S) {
     partition_check!(webhook_tokens_resolve_to_their_run);
     partition_check!(recover_returns_what_an_owner_needs);
     partition_check!(seal_keeps_the_head_and_the_summary);
+    partition_check!(runs_in_range_read_the_heads_a_suffix_names);
     partition_check!(erase_deletes_everything_of_the_run);
     partition_check!(search_reads_the_scope_in_order_by_pages);
     partition_check!(search_stops_at_its_budget_with_a_cursor);
@@ -126,6 +127,8 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
     RunHead {
         run: run.clone(),
         namespace: namespace.clone(),
+        origin: "triage".into(),
+        suffix_len: 12,
         script: script("script"),
         toolset: toolset_digest(),
         status: RunStatus::Pending,
@@ -245,6 +248,8 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
     IndexedSummary::new(RunSummary {
         run: run.clone(),
         namespace: namespace.clone(),
+        origin: "triage".into(),
+        suffix_len: 12,
         script: script("script"),
         headline: "export default async () => {".into(),
         toolset: toolset_digest(),
@@ -1649,6 +1654,103 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
             history_len: 1,
             ..active_head
         })
+    );
+}
+
+/// `runs_in_range` reads the heads of the tenant's runs in a range of ids, by id, of either
+/// version, sealed ones included; the head and the summary keep the origin and the suffix's
+/// length they were created with.
+pub async fn runs_in_range_read_the_heads_a_suffix_names<S: PartitionStore>(store: &S) {
+    let log = open(store, "n1").await;
+    // Two runs of the same millisecond and 12 bits, a third of another; one of version 7.
+    let at = Timestamp(T0.0 + 10);
+    let a = RunRef::new(acme(), RunId::in_partition(PARTITION, at, (5 << 46) | 1));
+    let b = RunRef::new(acme(), RunId::in_partition(PARTITION, at, (5 << 46) | 2));
+    let c = RunRef::new(acme(), RunId::in_partition(PARTITION, at, (6 << 46) | 1));
+    let moved = RunRef::new(acme(), RunId::from_v7_parts(at.0, 5, 3));
+    let foreign = RunRef::new(
+        tenant("other"),
+        RunId::in_partition(PARTITION, at, (5 << 46) | 4),
+    );
+    let mut longer = head(&b, &bob());
+    longer.origin = "digest".into();
+    longer.suffix_len = 14;
+    let mut changes = vec![
+        create(&a),
+        create_with(longer.clone(), None),
+        create(&c),
+        create(&moved),
+        create_with(head(&foreign, &alice()), None),
+    ];
+    if let Change::CreateRun(create) = &mut changes[1] {
+        create.summary.summary.origin = "digest".into();
+        create.summary.summary.suffix_len = 14;
+    }
+    commit(&log, changes).await;
+    let ids = |heads: Vec<RunHead>| heads.into_iter().map(|head| head.run).collect::<Vec<_>>();
+    let [old, new] = rewind_core::suffix_neighbours(a.id);
+    assert_eq!(
+        ids(log
+            .runs_in_range(&acme(), new.0, new.1)
+            .await
+            .expect("range")),
+        vec![a.clone(), b.clone()],
+        "the tenant's runs of the range, by id"
+    );
+    assert_eq!(
+        ids(log
+            .runs_in_range(&acme(), old.0, old.1)
+            .await
+            .expect("range")),
+        vec![moved.clone()],
+        "a run of version 7 in the range of its version"
+    );
+    assert_eq!(
+        log.runs_in_range(&acme(), b.id, b.id).await.expect("range"),
+        vec![longer.clone()],
+        "the head as it was created"
+    );
+    let summary = log.summary(&b).await.expect("summary").expect("summary");
+    assert_eq!(
+        (summary.summary.origin.as_str(), summary.summary.suffix_len),
+        ("digest", 14)
+    );
+    assert_eq!(
+        ids(log
+            .runs_in_range(&tenant("other"), new.0, new.1)
+            .await
+            .expect("range")),
+        vec![foreign.clone()]
+    );
+    assert_eq!(
+        log.runs_in_range(&acme(), new.1, new.0)
+            .await
+            .expect("range"),
+        [],
+        "an empty range"
+    );
+    commit(&log, vec![enqueue(&a, started_item(1), None)]).await;
+    activate(
+        &log,
+        &a,
+        vec![run_started_entry()],
+        vec![1],
+        RunStatus::Active,
+    )
+    .await;
+    end(&log, &a).await;
+    commit(
+        &log,
+        vec![Change::Seal {
+            run: a.clone(),
+            attempt: Attempt::FIRST,
+        }],
+    )
+    .await;
+    assert_eq!(
+        ids(log.runs_in_range(&acme(), a.id, a.id).await.expect("range")),
+        vec![a.clone()],
+        "a sealed run stays in its range"
     );
 }
 

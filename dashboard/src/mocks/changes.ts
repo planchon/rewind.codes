@@ -1,6 +1,7 @@
 // What changes in the mocked control plane, told to the open change streams of its world
 // (`GET /v1/changes`): the write handlers say what they changed (a secret, a namespace, a
-// workflow, a connection, a script run for the first time), as the server's NOTIFY does.
+// workflow, a connection, a script run for the first time or given a title), as the server's
+// NOTIFY does.
 import type { ControlChange } from "../model/types";
 import type { World } from "./fixtures";
 

@@ -22,9 +22,9 @@ use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workfl
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, Secret, StoredScript,
-    StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant,
-    TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
+    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle, Secret,
+    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool};
@@ -92,7 +92,7 @@ impl PostgresStore {
 /// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
 macro_rules! workflow_columns {
     () => {
-        "version, document, labels::text, created_at"
+        "version, document, labels::text, created_at, number"
     };
 }
 
@@ -120,7 +120,13 @@ fn workflow_from_row(row: &PgRow) -> Result<StoredWorkflow, Error> {
         workflow,
         labels: decode_labels(&row.text(2)?)?,
         created_at: row.ts(3)?,
+        number: row.u32(4)?,
     })
+}
+
+/// The advisory lock of a tenant's workflow, under which its new versions take their numbers.
+fn workflow_key(tenant_id: &TenantId, name: &str) -> String {
+    format!("rewind workflow\u{1f}{tenant_id}\u{1f}{name}")
 }
 
 fn toolset_from_row(row: &PgRow, digest: Digest, first: usize) -> Result<StoredToolset, Error> {
@@ -312,9 +318,17 @@ impl PostgresCatalog {
     ) -> Result<Option<StoredWorkflow>, Fail> {
         let version = workflow.version();
         let mut tx = self.pool.begin().await?;
+        // The workflow's lock orders its new versions: each takes the number after the highest
+        // stored, which no concurrent put takes too.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(workflow_key(tenant_id, workflow.name()))
+            .execute(&mut *tx)
+            .await?;
         let inserted = sqlx::query(concat!(
-            "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
-             VALUES ($1, $2, $3, $4, $5::jsonb, $6) ON CONFLICT DO NOTHING RETURNING ",
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at, number) \
+             SELECT $1, $2, $3, $4, $5::jsonb, $6, COALESCE(max(number), 0) + 1 \
+             FROM workflows WHERE tenant = $1 AND name = $3 \
+             ON CONFLICT (tenant, version) DO NOTHING RETURNING ",
             workflow_columns!()
         ))
         .bind(tenant(tenant_id))
@@ -753,6 +767,96 @@ impl CatalogStore for PostgresCatalog {
         }))
     }
 
+    async fn set_script_title(
+        &self,
+        tenant_id: &TenantId,
+        script: Digest,
+        title: Option<&ScriptTitle>,
+    ) -> Result<bool, CatalogError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
+        // A tenant's scripts are never deleted: whether it has the script needs no lock.
+        let stored = match title {
+            None => sqlx::query_scalar(
+                "WITH removed AS (DELETE FROM script_titles WHERE tenant = $1 AND digest = $2) \
+                 SELECT EXISTS (SELECT 1 FROM scripts WHERE tenant = $1 AND digest = $2)",
+            )
+            .bind(tenant(tenant_id))
+            .bind(bytes(script))
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(Error::from)?,
+            Some(title) => {
+                sqlx::query(
+                    "INSERT INTO script_titles (tenant, digest, title, description, \
+                         updated_by, updated_at) \
+                     SELECT tenant, digest, $3, $4, $5, $6 FROM scripts \
+                     WHERE tenant = $1 AND digest = $2 \
+                     ON CONFLICT (tenant, digest) DO UPDATE SET title = EXCLUDED.title, \
+                         description = EXCLUDED.description, \
+                         updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at",
+                )
+                .bind(tenant(tenant_id))
+                .bind(bytes(script))
+                .bind(title.title.as_str())
+                .bind(title.description.as_deref())
+                .bind(title.updated_by.as_str())
+                .bind(ts(title.updated_at))
+                .execute(&mut *tx)
+                .await
+                .map_err(Error::from)?
+                .rows_affected()
+                    > 0
+            }
+        };
+        if stored {
+            let change = ControlPlaneChange::Script {
+                tenant: tenant_id.clone(),
+                digest: script,
+            };
+            notify(&mut tx, &[change]).await?;
+        }
+        tx.commit().await.map_err(Error::from)?;
+        Ok(stored)
+    }
+
+    async fn script_titles(
+        &self,
+        tenant_id: &TenantId,
+        scripts: &[Digest],
+    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
+        if scripts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let digests: Vec<Vec<u8>> = scripts
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|digest| bytes(*digest))
+            .collect();
+        let rows = sqlx::query(
+            "SELECT digest, title, description, updated_by, updated_at FROM script_titles \
+             WHERE tenant = $1 AND digest = ANY($2) ORDER BY digest",
+        )
+        .bind(tenant(tenant_id))
+        .bind(digests)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        let mut titles = Vec::with_capacity(rows.len());
+        for row in &rows {
+            titles.push((
+                row.digest(0)?,
+                ScriptTitle {
+                    title: row.text(1)?,
+                    description: row.opt_text(2)?,
+                    updated_by: row.text(3)?,
+                    updated_at: row.ts(4)?,
+                },
+            ));
+        }
+        Ok(titles)
+    }
+
     async fn put_toolset(
         &self,
         tenant_id: &TenantId,
@@ -851,6 +955,26 @@ impl CatalogStore for PostgresCatalog {
         ))
         .bind(tenant(tenant_id))
         .bind(bytes(version))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+    }
+
+    async fn workflow_number(
+        &self,
+        tenant_id: &TenantId,
+        name: &str,
+        number: u32,
+    ) -> Result<Option<StoredWorkflow>, CatalogError> {
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows WHERE tenant = $1 AND name = $2 AND number = $3"
+        ))
+        .bind(tenant(tenant_id))
+        .bind(name)
+        .bind(i64::from(number))
         .fetch_optional(&self.pool)
         .await
         .map_err(Error::from)?;

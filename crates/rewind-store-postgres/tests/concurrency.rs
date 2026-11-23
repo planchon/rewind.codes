@@ -1,7 +1,7 @@
 //! A new workflow version and the cleanup of tests race for the version's test, from two
 //! servers sharing one database: either the version is stored and its test kept, or the test is
 //! marked for deletion and the version refused. A version never references a test whose blob may
-//! be deleted.
+//! be deleted. Versions of one workflow saved at once take distinct numbers.
 
 mod support;
 
@@ -109,4 +109,53 @@ async fn a_version_and_the_cleanup_of_its_test_never_both_win() {
         }
     }
     eprintln!("{stored} versions stored, {refused} refused");
+}
+
+/// Versions of one workflow saved at once, from two servers, take the numbers 1 to n, each
+/// once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn versions_saved_at_once_take_distinct_numbers() {
+    const VERSIONS: usize = 20;
+    let Some(postgres) = Postgres::start("numbers") else {
+        return;
+    };
+    let database = postgres.create_database();
+    let first = postgres.connect(&database).await.catalog();
+    let second = postgres.connect(&database).await.catalog();
+    let tenant = TenantId::new("acme").expect("tenant");
+    let puts = futures_util::future::join_all((0..VERSIONS).map(|n| {
+        let catalog = if n % 2 == 0 {
+            first.clone()
+        } else {
+            second.clone()
+        };
+        let tenant = tenant.clone();
+        async move {
+            let version = Workflow::new(
+                "triage",
+                None,
+                Digest::of(format!("script {n}").as_bytes()),
+                Digest::of(b"toolset"),
+                WorkflowSchemas {
+                    input: json!({ "type": "object" }),
+                    output: json!({}),
+                    signals: BTreeMap::new(),
+                },
+            )
+            .expect("a valid workflow");
+            catalog
+                .put_workflow(&tenant, &version, now())
+                .await
+                .expect("put_workflow")
+                .number
+        }
+    }))
+    .await;
+    let mut numbers = puts.clone();
+    numbers.sort_unstable();
+    assert_eq!(
+        numbers,
+        (1..=u32::try_from(VERSIONS).expect("in range")).collect::<Vec<u32>>(),
+        "{puts:?}"
+    );
 }

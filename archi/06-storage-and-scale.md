@@ -42,6 +42,8 @@ data_keys  (tenant PK, wrapped_key, master_key)      -- wrapped_key: the tenant'
                                                      -- by the master key whose id is master_key
 namespaces (tenant, name, partition, display_name, quotas, tokens_revoked_before, created_at,
             last_active_at, deleting_since)                PK (tenant, name)
+script_titles (tenant, digest, title, description, updated_by, updated_at)
+                                                           PK (tenant, digest)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
 tokens     (hash PK, tenant, namespace, permissions, labels, expires_at, created_by, created_at,
             revoked_at)                                    index (tenant, namespace)
@@ -61,7 +63,8 @@ connection_tokens (hash PK, connection_id, kind, expires_at, created_at, used_at
 access_settings (tenant PK, default_role)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
-workflows  (tenant, version, name, document, labels, created_at)   PK (tenant, version)
+workflows  (tenant, version, name, document, labels, created_at, number)   PK (tenant, version)
+                                                           unique (tenant, name, number)
                                                            index on (tenant, name, created_at)
 tests      (tenant, digest, namespace, size, reserved_at, deletion_started_at)
                                                            PK (tenant, digest), index (tenant, namespace)
@@ -81,7 +84,10 @@ legacy_runs (id PK, tenant, partition)                     -- runs moved by migr
 meta       (key PK, value)                                 -- schema version; virtual time (embedded)
 ```
 
-A `workflows` row holds a [workflow version](02-journal.md#stored-format-v1) document. A `tests`
+A `workflows` row holds a [workflow version](02-journal.md#stored-format-v1) document and its
+`number` among the versions of its name, which a new version takes under a lock of its workflow
+(`triage v12`). A `script_titles` row holds the title a person gave a script
+([titles](04-tools.md#script-titles)). A `tests`
 row indexes a [test](05-testing-and-observability.md#testing-and-mocks) whose document is a blob of
 the `BlobStore`; `namespace` is the one a recorded test came from, none for a test written by hand.
 `workflow_tests` lists the tests of each version's suite, written with the version. `secrets`,
@@ -105,7 +111,7 @@ under keys that belong to `rewind-store-slatedb`; the engine never sees a key.
 
 | Records | One per | Holds |
 | --- | --- | --- |
-| Run head | Run | Status, epoch, its script and pinned toolset, the attempt it is at and the last one sealed, the counts of failed and started activations, quarantine, waits, deadline, the attempt's history length, dates, and the run metadata: namespace, labels, trace context, idempotency key, parent, workflow and version, the run that started it and its `seq`, `detached`, scope, the secrets it attached ([05](05-testing-and-observability.md#run-metadata)) |
+| Run head | Run | Its origin and the length of its handle's suffix ([handles](#run-handles)), status, epoch, its script and pinned toolset, the attempt it is at and the last one sealed, the counts of failed and started activations, quarantine, waits, deadline, the attempt's history length, dates, and the run metadata: namespace, labels, trace context, idempotency key, parent, workflow and version, the run that started it and its `seq`, `detached`, scope, the secrets it attached ([05](05-testing-and-observability.md#run-metadata)) |
 | History | Entry of an attempt | The event, its index, `recorded_at` |
 | Inbox | Completion not yet delivered | The event, when it was received |
 | Signal key | Signal key used | Kept for the life of the run ([idempotency](#idempotency-of-the-api)) |
@@ -222,6 +228,46 @@ lifecycle webhooks, and `quota.alert`. An outbox entry is written in the batch o
 causes it. Once the batch is durable, the projection consumes it, and the entry is deleted, in a
 later batch, once exported or delivered. Recovery hands the projections what is left. A failed
 delivery's next try is a timer.
+
+## Run handles
+
+A run's id is a UUID, and stays its identity everywhere: the journal, the partitions, the archive
+and their keys, the signals runs send each other (`rewind:ended:<id>`), the trace. People read,
+copy and type its **handle**, `<namespace>/<origin>/<suffix>`
+([decisions](08-decisions.md#taken-for-script-titles-and-run-handles-november-2026)):
+
+- **namespace**: the run's namespace, by its id (a display name changes; an id never does).
+- **origin**: what ran, frozen when the run is created: its workflow's name; else its script's
+  title as a slug (lower-case ASCII letters and digits, every other run of characters a `-`, at
+  most 40 characters), the title a person gave the script or else its comment's
+  ([titles](04-tools.md#script-titles)); else `script`. A fork's is its parent's.
+- **suffix**: the start of the id in Crockford's base32 (lower case), its version and variant
+  left out: the 48 bits of its millisecond and the 12 bits after them, 12 characters. The process
+  that draws the id writes in those 12 bits its number (6 bits, drawn at random when it draws
+  its first) and a counter of its ids within the millisecond (6 bits; a 65th id moves to the
+  next millisecond): one process never repeats a suffix. `/` occurs in no part, so a handle
+  splits without doubt.
+
+A handle never names two runs of a tenant. It carries its namespace, and every run of a
+namespace is created by the owner of the namespace's partition, which serializes its creations
+([decisions](08-decisions.md#taken-while-bringing-script-titles-and-run-handles-to-the-run-plane-november-2026)).
+With the start's other reads, the owner reads the heads of the namespace's runs whose ids share
+the new one's 12 characters, one range of ids for each version (7 for a run moved from the
+previous design, 8 for a run of a partition), adds the runs it created that are not durable yet,
+and gives the run the shortest suffix, of at least 12 characters, that none of them has. The run
+keeps it in its head and its summary, with its origin. Ids of different processes rarely share
+those bits; a run of a partition that does gets at least 16 characters, the three after the 12
+being its partition's. A run moved from the previous design keeps the origin and the suffix its
+tables gave it: `script` or its workflow, and 25 characters (the whole id) when it shared its
+first 64 bits with another run of its tenant.
+
+The runs a suffix names are a range of ids for each version: a handle needs no index of its own.
+The API takes a handle wherever it takes a run (`GET /v1/runs/{handle}`, percent-encoded in a
+path): the edge finds the namespace's partition in the catalog and asks its owner, which reads
+the heads of the namespace's runs in those ranges and keeps the one whose suffix has the
+handle's length, of the handle's origin. A run's view names its parent and the run that started
+it, both of its namespace, by their handles, which its owner reads; by their ids once they are
+erased.
 
 ## Idempotency of the API
 

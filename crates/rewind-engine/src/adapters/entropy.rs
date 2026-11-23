@@ -1,19 +1,19 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rewind_core::{PartitionId, RunId, Seed, Timestamp};
-use uuid::Uuid;
 
 use crate::ports::Entropy;
 
-/// UUIDv7 run ids (sortable by creation time) and seeds from the operating system's CSPRNG.
+/// Run ids sortable by creation time, and seeds from the operating system's CSPRNG.
 ///
 /// The 12 bits after an id's millisecond are this process's node number (6 bits, drawn at random
 /// when it makes its first id) and a counter of its ids within that millisecond (6 bits; a 65th
 /// id moves to the next millisecond, as does a clock that steps back). Two ids of one process
 /// therefore never share their first 60 bits, which a run's handle encodes
-/// (`archi/06-storage-and-scale.md`, "Run handles"); the store lengthens the handle of the rare
-/// run that shares them with another process's.
+/// (`archi/06-storage-and-scale.md`, "Run handles"); the owner of a partition lengthens the
+/// handle of the rare run that shares them with another run of its namespace.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemEntropy;
 
@@ -25,6 +25,9 @@ struct Sequence {
 
 const NODE_BITS: u16 = 6;
 const COUNTER_MAX: u16 = (1 << 6) - 1;
+/// The random bits of a run id of a partition after its partition: what [`RunId::in_partition`]
+/// takes below the 12 bits of the node and its counter.
+const RAND_B_BITS: u32 = 46;
 
 fn random_u64() -> u64 {
     let mut bytes = [0u8; 8];
@@ -67,19 +70,15 @@ impl Entropy for SystemEntropy {
         RunId::from_v7_parts(ms, (Self::node() << NODE_BITS) | count, random_u64())
     }
 
-    /// The system clock's millisecond, and random bits from the operating system's CSPRNG.
+    /// The millisecond and the counter of [`SystemEntropy::run_id`], the node number, the
+    /// partition, and random bits from the operating system's CSPRNG.
     fn run_id_in(&self, partition: PartitionId) -> RunId {
-        let millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| {
-                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-            });
-        let mut random = [0u8; 8];
-        getrandom::fill(&mut random).expect("the operating system's random generator is available");
+        let (ms, count) = Self::next_slot();
+        let rand_a = u64::from((Self::node() << NODE_BITS) | count);
         RunId::in_partition(
             partition,
-            Timestamp::from_millis(millis),
-            u64::from_le_bytes(random),
+            Timestamp::from_millis(ms),
+            (rand_a << RAND_B_BITS) | (random_u64() & ((1 << RAND_B_BITS) - 1)),
         )
     }
 
@@ -97,6 +96,10 @@ impl Entropy for SystemEntropy {
 pub struct SeededEntropy {
     base: u64,
     counter: AtomicU64,
+    /// The millisecond and the random bits every run id of a partition shares, but the last 8.
+    shared: Option<(Timestamp, u64)>,
+    /// The run ids of partitions drawn so far.
+    drawn: AtomicU64,
 }
 
 impl SeededEntropy {
@@ -104,7 +107,21 @@ impl SeededEntropy {
         Self {
             base,
             counter: AtomicU64::new(0),
+            shared: None,
+            drawn: AtomicU64::new(0),
         }
+    }
+
+    /// Run ids of partitions that share all their bits but the last 8: their millisecond and
+    /// the 12 bits after it, and so the 12 characters of their handle's suffix, and 23 in all
+    /// (`archi/06-storage-and-scale.md`, "Run handles"). The first id's last 8 bits are 0, the
+    /// next ones' `0x40`, `0x41`, …: the second and the third share 24 characters, which the
+    /// first does not. What two processes rarely draw, made certain for a test.
+    pub fn sharing_suffixes(base: u64) -> Self {
+        let mut entropy = Self::new(base);
+        let at = Timestamp::from_millis(entropy.next() >> 16);
+        entropy.shared = Some((at, entropy.next()));
+        entropy
     }
 
     fn next(&self) -> u64 {
@@ -123,13 +140,25 @@ impl Entropy for SeededEntropy {
         RunId::from_uuid(uuid)
     }
 
-    /// A run id of the partition whose time and random bits come from the counter.
+    /// A run id of the partition whose time and random bits come from the counter, but those
+    /// the ids share when they share their suffixes.
     fn run_id_in(&self, partition: PartitionId) -> RunId {
-        RunId::in_partition(
-            partition,
-            Timestamp::from_millis(self.next() >> 16),
-            self.next(),
-        )
+        match self.shared {
+            Some((at, random)) => {
+                let drawn = self.drawn.fetch_add(1, Ordering::SeqCst);
+                let last = if drawn == 0 {
+                    0
+                } else {
+                    0x40 | ((drawn - 1) & 0x3f)
+                };
+                RunId::in_partition(partition, at, (random & !0xff) | last)
+            }
+            None => RunId::in_partition(
+                partition,
+                Timestamp::from_millis(self.next() >> 16),
+                self.next(),
+            ),
+        }
     }
 
     fn seed(&self) -> Seed {
@@ -193,14 +222,36 @@ mod tests {
 
     #[test]
     fn a_process_never_makes_two_ids_of_the_same_suffix() {
-        let ids: Vec<RunId> = (0..2_000).map(|_| SystemEntropy.run_id()).collect();
+        let partition = PartitionId::new(9);
+        let ids: Vec<RunId> = (0..2_000)
+            .map(|n| {
+                if n % 2 == 0 {
+                    SystemEntropy.run_id()
+                } else {
+                    SystemEntropy.run_id_in(partition)
+                }
+            })
+            .collect();
         let suffixes: std::collections::HashSet<String> = ids
             .iter()
             .map(|id| rewind_core::run_suffix(*id, rewind_core::SUFFIX_LEN))
             .collect();
         assert_eq!(suffixes.len(), ids.len());
-        // Ordered as they were made, and version 7.
-        assert!(ids.windows(2).all(|w| w[0] < w[1]));
-        assert!(ids.iter().all(|id| id.as_uuid().get_version_num() == 7));
+        // Ordered as they were made, whatever their version.
+        assert!(ids.windows(2).all(|w| {
+            rewind_core::run_suffix(w[0], rewind_core::SUFFIX_LEN)
+                < rewind_core::run_suffix(w[1], rewind_core::SUFFIX_LEN)
+        }));
+        assert!(
+            ids.iter()
+                .step_by(2)
+                .all(|id| id.as_uuid().get_version_num() == 7)
+        );
+        assert!(
+            ids.iter()
+                .skip(1)
+                .step_by(2)
+                .all(|id| id.partition() == Some(partition))
+        );
     }
 }

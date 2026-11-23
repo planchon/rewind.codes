@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use rewind_core::{Digest, Epoch, RunId, RunStatus, Seq, Timestamp};
+use rewind_core::{Digest, Epoch, RunHandle, RunId, RunStatus, Seq, Timestamp};
 
 use crate::ports::journal::{Quarantine, RunMetadata, TaskState, ToolTask};
 use crate::ports::namespaces::NamespaceName;
@@ -44,6 +44,13 @@ pub struct RunHead {
     pub run: RunRef,
     /// The end user the run belongs to.
     pub namespace: NamespaceName,
+    /// What ran, the middle of the run's handle: its workflow's name, or its script's title as
+    /// a slug, or `script`; a fork's is its parent's (`archi/06-storage-and-scale.md`, "Run
+    /// handles"). Frozen when the run is created.
+    pub origin: String,
+    /// The characters of the suffix of the run's handle: [`SUFFIX_LEN`](rewind_core::SUFFIX_LEN),
+    /// more when another run of its namespace shares them. Frozen when the run is created.
+    pub suffix_len: u8,
     pub script: Digest,
     pub toolset: Digest,
     pub status: RunStatus,
@@ -79,6 +86,16 @@ pub struct RunHead {
 }
 
 impl RunHead {
+    /// The run's handle, `<namespace>/<origin>/<suffix>`.
+    pub fn handle(&self) -> RunHandle {
+        RunHandle::new(
+            self.namespace.as_str(),
+            &self.origin,
+            self.run.id,
+            usize::from(self.suffix_len),
+        )
+    }
+
     /// The attempt has ended.
     pub fn is_ended(&self) -> bool {
         self.status.is_terminal()

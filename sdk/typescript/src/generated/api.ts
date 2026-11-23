@@ -4477,7 +4477,7 @@ export interface components {
         };
         /**
          * @description The data of a `script` event: a script the organization's runs ran for the first time, which
-         *     `GET /v1/scripts` now lists.
+         *     `GET /v1/scripts` now lists, or whose title a person gave or removed.
          */
         ScriptChanged: {
             /** @description SHA-256 of the TypeScript source, lowercase hex. */

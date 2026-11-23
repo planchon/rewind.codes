@@ -1,6 +1,7 @@
-//! Reading for the dashboard: a script's source and what the runs did with it, a payload on
-//! demand (`archi/05-testing-and-observability.md`, "Read model" and "Dashboard"). The lists and
-//! statistics drawn from the counters are in [`super::stats`].
+//! Reading for the dashboard: a script's source, its title and what the runs did with it, the
+//! title a person gives it, a payload on demand (`archi/05-testing-and-observability.md`, "Read
+//! model" and "Dashboard"; `archi/04-tools.md`, "Script titles"). The lists and statistics drawn
+//! from the counters are in [`super::stats`].
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -13,21 +14,22 @@ use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::common::timestamp;
 use rewind_api::reading::PayloadQuery;
-use rewind_api::scripts::{RunCounts, Script};
-use rewind_core::{Digest, canonical_json};
+use rewind_api::scripts::{RunCounts, Script, SetScriptTitle};
+use rewind_core::{Digest, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, canonical_json};
 use rewind_engine::ports::{
-    CatalogStore, Page, Predicate, RunOrder, Scope, SearchCursor, Term, Window,
+    CatalogStore, Page, Predicate, RunOrder, Scope, ScriptTitle, SearchCursor, Term, Window,
 };
 
 use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
-use crate::extract::Query;
+use crate::extract::{Body, Query};
 use crate::http::search;
 use crate::http::stats::run_counts;
 
-/// `GET /v1/scripts/{digest}`: the source, and what the runs the caller sees did with it. A
-/// caller limited to a namespace or to labels reads only the scripts of the runs it sees.
+/// `GET /v1/scripts/{digest}`: the source, its title, and what the runs the caller sees did
+/// with it. A caller limited to a namespace or to labels reads only the scripts of the runs it
+/// sees.
 pub(super) async fn script(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -38,7 +40,8 @@ pub(super) async fn script(
 }
 
 /// `PATCH /v1/scripts/{digest}`: the title and description a person gives the script, for the
-/// organization, or their removal.
+/// organization, or their removal. The catalog sends the `script` change: every process, and
+/// every dashboard following the organization, reads the title again.
 pub(super) async fn set_title(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -59,7 +62,7 @@ pub(super) async fn set_title(
     let seen = seen_script(&app, &caller, &digest).await?;
     let script = Digest::from_hex(&seen.digest).map_err(ApiError::internal)?;
     if !app
-        .store
+        .catalog()
         .set_script_title(&caller.tenant, script, title.as_ref())
         .await?
     {
@@ -126,7 +129,7 @@ async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script,
         .ok_or_else(missing)?;
     if caller.scoped() || caller.namespace.is_some() {
         // A run the caller sees ran it: one summary of the index, within the caller's scope.
-        let mut query = search::run_query(&caller, None, None, app.now())?;
+        let mut query = search::run_query(caller, None, None, app.now())?;
         query.terms.push(Term {
             negated: false,
             predicate: Predicate::Script(vec![parsed.to_hex()]),

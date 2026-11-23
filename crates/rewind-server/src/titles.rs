@@ -2,16 +2,14 @@
 //! gave a script, for the organization, else those of the comment at the top of its source.
 //!
 //! A source never changes, so what its comment says is read once per tenant and digest and kept;
-//! the titles people give are read from the store, once per page for the scripts it shows.
+//! the titles people give are read from the catalog, once per page for the scripts it shows.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use rewind_api::scripts::TitleSource;
 use rewind_core::{Digest, ScriptDoc, script_doc};
-use rewind_engine::ports::{JournalStore, ScriptTitle, StoreError, TenantId};
-
-use crate::wiring::store::Store;
+use rewind_engine::ports::{CatalogError, CatalogStore, ScriptTitle, TenantId};
 
 /// The scripts whose text a server keeps before it forgets them all.
 const KEPT: usize = 10_000;
@@ -67,9 +65,9 @@ pub(crate) struct ScriptTexts {
 impl ScriptTexts {
     /// What the script's source says of it; `None` when the tenant has no such script, or the
     /// store cannot be read (nothing is kept then).
-    pub(crate) async fn text(
+    pub(crate) async fn text<C: CatalogStore>(
         &self,
-        store: &Store,
+        catalog: &C,
         tenant: &TenantId,
         digest: Digest,
     ) -> Option<Arc<ScriptText>> {
@@ -82,7 +80,7 @@ impl ScriptTexts {
         {
             return Some(text);
         }
-        let text = match store.get_script(tenant, digest).await {
+        let text = match catalog.get_script(tenant, digest).await {
             Ok(Some(stored)) => Arc::new(ScriptText::of(stored.script.source())),
             Ok(None) => return None,
             Err(error) => {
@@ -101,12 +99,12 @@ impl ScriptTexts {
 
     /// The titles of these scripts of the tenant, for those that have one: one read of the
     /// titles people gave, the comments of the sources kept.
-    pub(crate) async fn titles(
+    pub(crate) async fn titles<C: CatalogStore>(
         &self,
-        store: &Store,
+        catalog: &C,
         tenant: &TenantId,
         scripts: impl IntoIterator<Item = Digest>,
-    ) -> Result<BTreeMap<Digest, Title>, StoreError> {
+    ) -> Result<BTreeMap<Digest, Title>, CatalogError> {
         let scripts: Vec<Digest> = scripts
             .into_iter()
             .collect::<BTreeSet<_>>()
@@ -115,7 +113,7 @@ impl ScriptTexts {
         if scripts.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let given: BTreeMap<Digest, ScriptTitle> = store
+        let given: BTreeMap<Digest, ScriptTitle> = catalog
             .script_titles(tenant, &scripts)
             .await?
             .into_iter()
@@ -125,7 +123,7 @@ impl ScriptTexts {
             let title = match given.get(&script) {
                 Some(given) => shown(Some(given), None),
                 None => self
-                    .text(store, tenant, script)
+                    .text(catalog, tenant, script)
                     .await
                     .and_then(|text| shown(None, text.doc.as_ref())),
             };

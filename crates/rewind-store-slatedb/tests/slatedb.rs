@@ -39,6 +39,8 @@ fn create(run: &RunRef) -> Change {
     let head = RunHead {
         run: run.clone(),
         namespace: namespace.clone(),
+        origin: "script".into(),
+        suffix_len: 12,
         script: Digest::of(b"script"),
         toolset: Digest::of(b"toolset"),
         status: RunStatus::Pending,
@@ -60,6 +62,8 @@ fn create(run: &RunRef) -> Change {
     let summary = IndexedSummary::new(RunSummary {
         run: run.clone(),
         namespace,
+        origin: "script".into(),
+        suffix_len: 12,
         script: head.script,
         headline: "export default async () => {".into(),
         toolset: head.toolset,

@@ -343,13 +343,19 @@ pub(crate) fn summary_of(record: record::Summary) -> Result<engine::RunSummary, 
     Ok(codec::summary_of(record)?.summary)
 }
 
-/// A run as its owner knows it: `{"head":<run head record>,"summary":<summary record>}`.
+/// A run as its owner knows it: `{"head":<run head record>,"summary":<summary record>,
+/// "parent":"dana/triage/06bqx3k9f2mt","started_by":…}`, the handles of the runs it names as
+/// their text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunView {
     pub head: record::RunHead,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<record::Summary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<String>,
 }
 
 impl From<&engine::link::RunView> for RunView {
@@ -357,6 +363,8 @@ impl From<&engine::link::RunView> for RunView {
         Self {
             head: codec::head_record(&view.head),
             summary: view.summary.as_ref().map(summary_record),
+            parent: view.parent.as_ref().map(ToString::to_string),
+            started_by: view.started_by.as_ref().map(ToString::to_string),
         }
     }
 }
@@ -368,6 +376,14 @@ impl TryFrom<RunView> for engine::link::RunView {
         Ok(engine::link::RunView {
             head: codec::head_of(view.head)?,
             summary: view.summary.map(summary_of).transpose()?,
+            parent: view
+                .parent
+                .map(|handle| handle.parse().map_err(Invalid::new))
+                .transpose()?,
+            started_by: view
+                .started_by
+                .map(|handle| handle.parse().map_err(Invalid::new))
+                .transpose()?,
         })
     }
 }
@@ -411,6 +427,98 @@ impl TryFrom<Counters> for engine::Counters {
             .map(|(name, runs)| Ok((namespace(name)?, codec::runs_of(runs))))
             .collect::<Result<_, Invalid>>()?;
         Ok(decoded)
+    }
+}
+
+/// A calendar month, in UTC: `{"year":2026,"month":11}`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Month {
+    pub year: i16,
+    pub month: i8,
+}
+
+impl From<engine::Month> for Month {
+    fn from(month: engine::Month) -> Self {
+        Self {
+            year: month.year(),
+            month: month.month(),
+        }
+    }
+}
+
+impl TryFrom<Month> for engine::Month {
+    type Error = Invalid;
+
+    fn try_from(month: Month) -> Result<Self, Invalid> {
+        engine::Month::new(month.year, month.month)
+            .ok_or_else(|| Invalid(format!("no month {}-{}", month.year, month.month)))
+    }
+}
+
+/// What a namespace used in a month: `{"cpu":{"secs":…,"nanos":…},"runs_started":4,
+/// "active_runs":1,"scripts":2,"days":[{"day":20412,"cpu":{…},"runs_started":3},…]}`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Usage {
+    pub cpu: Duration,
+    pub runs_started: u64,
+    pub active_runs: u64,
+    pub scripts: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub days: Vec<DayUsage>,
+}
+
+/// What a namespace used in a day, counted in days since the Unix epoch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DayUsage {
+    pub day: u32,
+    pub cpu: Duration,
+    pub runs_started: u64,
+}
+
+impl From<&engine::Usage> for Usage {
+    fn from(usage: &engine::Usage) -> Self {
+        Self {
+            cpu: usage.cpu,
+            runs_started: usage.runs_started,
+            active_runs: usage.active_runs,
+            scripts: usage.scripts,
+            days: usage
+                .days
+                .iter()
+                .map(|(day, used)| DayUsage {
+                    day: day.0,
+                    cpu: used.cpu,
+                    runs_started: used.runs_started,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<Usage> for engine::Usage {
+    fn from(usage: Usage) -> Self {
+        Self {
+            cpu: usage.cpu,
+            runs_started: usage.runs_started,
+            active_runs: usage.active_runs,
+            scripts: usage.scripts,
+            days: usage
+                .days
+                .into_iter()
+                .map(|used| {
+                    (
+                        engine::Day(used.day),
+                        engine::DayUsage {
+                            cpu: used.cpu,
+                            runs_started: used.runs_started,
+                        },
+                    )
+                })
+                .collect(),
+        }
     }
 }
 

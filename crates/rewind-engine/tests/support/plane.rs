@@ -121,6 +121,26 @@ impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
         partitions: u16,
         nodes: &[NodeConfig],
     ) -> Self {
+        Self::drawing(
+            store,
+            programs,
+            dispatcher,
+            partitions,
+            nodes,
+            SeededEntropy::new(42),
+        )
+        .await
+    }
+
+    /// [`World::over`], its run ids drawn by `entropy`.
+    pub async fn drawing(
+        store: S,
+        programs: FakeExecutor,
+        dispatcher: RecordingDispatcher,
+        partitions: u16,
+        nodes: &[NodeConfig],
+        entropy: SeededEntropy,
+    ) -> Self {
         let changes = ControlPlaneChanges::new();
         let cluster = MemoryCluster::with_changes(partitions, changes.clone());
         let blobs = MemoryBlobs::new();
@@ -135,7 +155,7 @@ impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
             spans: MemorySpanExporter::new(),
             webhooks: MemoryWebhooks::new(),
             clock: VirtualClock::new(T0),
-            entropy: SeededEntropy::new(42),
+            entropy,
         });
         let mut driver = Driver::new(cluster.clone(), Arc::new(PlaneClock(Arc::clone(&plane))));
         for config in nodes {

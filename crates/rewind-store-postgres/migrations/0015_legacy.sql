@@ -1,4 +1,4 @@
--- Version 14: the tables of runs set aside (`archi/08-decisions.md`, "Taken while writing the
+-- Version 15: the tables of runs set aside (`archi/08-decisions.md`, "Taken while writing the
 -- object-storage spec": the migration). Runs live in the partitions of the run plane and in the
 -- archive; the database holds the control plane only (`archi/06-storage-and-scale.md`, "Where
 -- data lives").

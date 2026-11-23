@@ -111,7 +111,11 @@ pub(crate) enum CallOutcome {
 /// A workflow run a call starts.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildStart {
-    New(Box<StartAtOwner>),
+    /// A new run, with the runs of its namespace its handle must tell apart from.
+    New {
+        start: Box<StartAtOwner>,
+        neighbours: Vec<RunId>,
+    },
     /// The call's key already started this run: a fork's call its parent left without an
     /// outcome. The caller watches it.
     Found(RunId),
@@ -699,9 +703,19 @@ async fn start_child<P: Plane>(
         Ok(None) => {}
         Err(error) => return not_sent(format!("the start key could not be read: {error}")),
     }
-    CallOutcome::Child(Box::new(ChildStart::New(Box::new(StartAtOwner {
+    let neighbours = match crate::partition::runs::neighbours(log, &child, &head.namespace).await {
+        Ok(neighbours) => neighbours,
+        Err(error) => {
+            return not_sent(format!(
+                "the runs of the namespace could not be read: {error}"
+            ));
+        }
+    };
+    let start = Box::new(StartAtOwner {
         run: child,
         namespace: head.namespace.clone(),
+        // A workflow's run is the run of its workflow.
+        origin: workflow.name().to_owned(),
         started: RunStarted {
             script: workflow.script(),
             toolset: workflow.toolset(),
@@ -715,7 +729,8 @@ async fn start_child<P: Plane>(
         start_key: Some(key),
         headline: crate::projector::headline(script.source()),
         created_at: now,
-    }))))
+    });
+    CallOutcome::Child(Box::new(ChildStart::New { start, neighbours }))
 }
 
 /// `workflows.<name>.signal` of a live run: the target, checked against the caller's scope and

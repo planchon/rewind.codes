@@ -258,8 +258,34 @@ impl Views<'_> {
                 attempts: record.task.attempt,
             })
             .collect();
+        let tenant = &head.run.tenant;
+        let script_title = self
+            .app
+            .titles(tenant, [head.script])
+            .await?
+            .remove(&head.script)
+            .map(|title| title.title);
+        // A run named by a handle, or by its id once it is erased.
+        let named = |handle: Option<&rewind_core::RunHandle>, run: rewind_core::RunId| {
+            handle.map_or_else(|| run.to_string(), ToString::to_string)
+        };
+        let workflow = match &head.metadata.workflow {
+            Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
+                name: workflow.name.clone(),
+                version: workflow.version.to_hex(),
+                // A version is never erased: 0 would say its row is gone.
+                number: self
+                    .app
+                    .catalog()
+                    .get_workflow(tenant, workflow.version)
+                    .await?
+                    .map_or(0, |stored| stored.number),
+            }),
+            None => None,
+        };
         Ok(Run {
             id: head.run.id.to_string(),
+            handle: head.handle().to_string(),
             namespace: namespace(&head.namespace),
             status: head.status.into(),
             quarantine: head.quarantine.as_ref().map(|quarantine| Quarantine {
@@ -270,6 +296,7 @@ impl Views<'_> {
                 reason: quarantine.reason.clone(),
             }),
             script: head.script.to_hex(),
+            script_title,
             toolset: head.toolset.to_hex(),
             epoch: head.epoch.0,
             // Only live runs are stored: mock runs live in memory (`POST /v1/test`).
@@ -284,19 +311,16 @@ impl Views<'_> {
             trace_id: trace_id(head),
             parent: head.metadata.parent.map(|parent| ForkParent {
                 run: parent.run.to_string(),
+                handle: named(view.parent.as_ref(), parent.run),
                 at: parent.at,
             }),
-            workflow: head.metadata.workflow.as_ref().map(|workflow| {
-                rewind_api::workflows::RunWorkflow {
-                    name: workflow.name.clone(),
-                    version: workflow.version.to_hex(),
-                }
-            }),
+            workflow,
             started_by: head
                 .metadata
                 .started_by
                 .map(|by| rewind_api::workflows::StartedBy {
                     run: by.run.to_string(),
+                    handle: named(view.started_by.as_ref(), by.run),
                     seq: by.seq.0,
                     detached: by.detached,
                 }),
@@ -313,20 +337,6 @@ impl Views<'_> {
             ended_at: head.ended_at.map(timestamp),
             expires_at: timestamp(head.expires_at),
         })
-    }
-
-    /// The handle of another run of the tenant, which a run names (its parent, the run that
-    /// started it); its id once it is erased.
-    async fn handle_of(
-        &self,
-        tenant: &TenantId,
-        run: rewind_core::RunId,
-    ) -> Result<String, ApiError> {
-        Ok(self
-            .store
-            .get_run(&RunRef::new(tenant.clone(), run))
-            .await?
-            .map_or_else(|| run.to_string(), |record| record.handle().to_string()))
     }
 
     async fn run_error(

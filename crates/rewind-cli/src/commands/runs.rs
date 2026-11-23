@@ -371,7 +371,8 @@ mod tests {
 
     use super::*;
 
-    const RUN: &str = r#"{"id":"r1","namespace":"local","status":"completed","script":"aa",
+    const RUN: &str = r#"{"id":"r1","handle":"local/script/06bqx3k9f2mt","namespace":"local",
+        "status":"completed","script":"aa",
         "toolset":"bb","epoch":1,"mode":"live","labels":{},"traceId":"00","historyLen":3,
         "createdAt":"2026-11-09T10:00:00Z","updatedAt":"2026-11-09T10:00:01Z",
         "expiresAt":"2026-12-09T10:00:00Z"}"#;

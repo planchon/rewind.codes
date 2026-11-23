@@ -353,8 +353,8 @@ fn read_options() -> ReadOptions {
 }
 
 /// Scans see only what is durable, keep the blocks they read in the cache (a partition's scans
-/// read runs, read again soon), and read ahead [`READ_AHEAD`] at a time: R2 charges by request,
-/// and a run's history in a cold table is a few requests rather than one per block.
+/// read runs, read again soon), and read ahead [`READ_AHEAD`] at a time: object storage charges
+/// by request, and a run's history in a cold table is a few requests rather than one per block.
 pub(crate) fn scan_options() -> ScanOptions {
     ScanOptions {
         durability_filter: DurabilityLevel::Remote,
@@ -468,6 +468,35 @@ impl PartitionLog for SlateLog {
 
     async fn run(&self, run: &RunRef) -> Result<Option<RunHead>, PartitionError> {
         self.head(run).await
+    }
+
+    async fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: RunId,
+        high: RunId,
+    ) -> Result<Vec<RunHead>, PartitionError> {
+        if high < low {
+            return Ok(Vec::new());
+        }
+        let range = (
+            Bound::Included(keys::head(low).into_bytes()),
+            Bound::Included(keys::head(high).into_bytes()),
+        );
+        let mut iterator = self
+            .inner
+            .db
+            .scan_with_options(range, &scan_options())
+            .await
+            .map_err(|err| self.error(err))?;
+        let mut heads = Vec::new();
+        while let Some(entry) = iterator.next().await.map_err(|err| self.error(err))? {
+            let head: record::RunHead = decode(&entry.value)?;
+            if head.tenant == tenant.as_str() {
+                heads.push(codec::head_of(head)?);
+            }
+        }
+        Ok(heads)
     }
 
     async fn summary(&self, run: &RunRef) -> Result<Option<IndexedSummary>, PartitionError> {

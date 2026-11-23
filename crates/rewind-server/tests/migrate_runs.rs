@@ -2,8 +2,10 @@
 //! "Taken while writing the object-storage spec": the migration): a Postgres database and an
 //! embedded `.rewind/`, kept as fixtures (`tests/fixtures/`). The command runs twice, the second
 //! time moving nothing; then a server on the result reads every run back as the tables held it,
-//! and lets the live ones go on: a timer fires, signals and a webhook end them, a workflow run's
-//! end reaches its starter, host tasks in flight are handed again.
+//! named by the handle they gave it, and lets the live ones go on: a timer fires, signals and a
+//! webhook end them, a workflow run's end reaches its starter, host tasks in flight are handed
+//! again. The fixtures are as a build of schema version 12 (Postgres) and 10 (Turso) left them:
+//! the server runs the migrations that give runs their handles, then those of the run plane.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -56,12 +58,19 @@ fn master_key() -> String {
     base64::engine::general_purpose::STANDARD.encode([9u8; 32])
 }
 
-/// The event names of each run's history, as the set-aside tables hold them.
-type Histories = BTreeMap<String, Vec<&'static str>>;
+/// The event names of each run's history, and its handle, as the set-aside tables hold them.
+type Histories = BTreeMap<String, (Vec<&'static str>, String)>;
 
 async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Histories {
     let mut histories = BTreeMap::new();
     for run in legacy.runs(None, 100).await.unwrap() {
+        let handle = rewind_core::RunHandle::new(
+            run.namespace.as_str(),
+            &run.origin,
+            run.run.id,
+            usize::from(run.suffix_len),
+        )
+        .to_string();
         let entries = match run.history {
             LegacyHistory::Entries(entries) => entries,
             LegacyHistory::Archived(document) => blobs
@@ -72,7 +81,10 @@ async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Hist
         };
         histories.insert(
             run.run.id.to_string(),
-            entries.iter().map(|entry| entry.event.name()).collect(),
+            (
+                entries.iter().map(|entry| entry.event.name()).collect(),
+                handle,
+            ),
         );
     }
     histories
@@ -101,7 +113,10 @@ async fn ended(client: &Client, run: &str) -> rewind_api::runs::Run {
 /// Every run reads back as the tables held it, and the live ones go on.
 async fn check(url: &str, client: &Client, histories: &Histories) {
     assert_eq!(histories.len(), 15, "{histories:?}");
-    for (run, events) in histories {
+    for (run, (events, handle)) in histories {
+        // The run keeps the handle the tables gave it, and is found by it.
+        let found = client.get_run(handle, None).await.unwrap();
+        assert_eq!((&found.id, &found.handle), (run, handle));
         let journal = client
             .export_journal(run, JournalExport::Journal)
             .await
@@ -133,7 +148,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
     );
     for holder in [ARCHIVED, COMPLETED, BIG_LIVE] {
         assert_eq!(
-            client.get_payload(BIG, Some(holder)).await.unwrap(),
+            client.get_payload(BIG, holder).await.unwrap(),
             json!({ "text": "b".repeat(100_000) }),
             "{holder} holds its payload above 64 KiB"
         );

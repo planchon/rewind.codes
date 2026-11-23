@@ -40,6 +40,10 @@ pub struct LegacyRun {
     /// Its version 7 id, which it keeps.
     pub run: RunRef,
     pub namespace: NamespaceName,
+    /// What ran and the characters of its handle's suffix, as the tables have them: its handle
+    /// stays the same (`archi/06-storage-and-scale.md`, "Run handles").
+    pub origin: String,
+    pub suffix_len: u8,
     pub script: Digest,
     pub toolset: Digest,
     /// The determinism epoch of its `run_started`.

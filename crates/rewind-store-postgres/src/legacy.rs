@@ -1,4 +1,4 @@
-//! The runs of the schema `legacy` (migration 14), which `rewind server migrate-runs` moves onto
+//! The runs of the schema `legacy` (migration 15), which `rewind server migrate-runs` moves onto
 //! the run plane (`archi/08-decisions.md`, "Taken while writing the object-storage spec": the
 //! migration): [`PostgresLegacy`], the `LegacyRuns` of the engine.
 //!
@@ -119,7 +119,8 @@ const RUN_COLUMNS: &str = "id, tenant, namespace, script, toolset, epoch, expire
     expiry_enqueued, quarantine_kind, quarantine_reason, quarantine_since, quarantine_retried_by, \
     failures, attempts, labels::text, traceparent, tracestate, parent, parent_at, \
     idempotency_key, created_at, updated_at, ended_at, archive_document, workflow, \
-    workflow_version, started_by, started_seq, detached, scope::text, secrets::text";
+    workflow_version, started_by, started_seq, detached, scope::text, secrets::text, origin, \
+    suffix_len::bigint";
 
 fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
     let id = run_id(row, 0)?;
@@ -154,6 +155,7 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
             version: row.digest(25)?,
         }),
     };
+    let suffix_len = row.u64(32)?;
     let started_by = match row.opt_run_id(26)? {
         None => None,
         Some(run) => Some(StartedBy {
@@ -166,6 +168,9 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
         run: RunRef::new(row.tenant(1)?, id),
         namespace: NamespaceName::new(namespace.clone())
             .map_err(|_| corrupt(format!("invalid namespace {namespace:?}")))?,
+        origin: row.text(31)?,
+        suffix_len: u8::try_from(suffix_len)
+            .map_err(|_| corrupt(format!("a suffix of {suffix_len} characters")))?,
         script: row.digest(3)?,
         toolset: row.digest(4)?,
         epoch: Epoch(u32_of(row.u64(5)?)?),

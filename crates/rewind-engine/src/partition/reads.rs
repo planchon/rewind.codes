@@ -12,15 +12,15 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rewind_core::{Seq, Timestamp};
+use rewind_core::{RunHandle, RunId, Seq, Timestamp};
 
 use crate::node::message::{Message, ReplyTo, job};
 use crate::partition::{Flight, Owner, OwnerMsg};
 use crate::plane::Plane;
 use crate::ports::link::{NodeReply, PartitionReply, PartitionRequest, Refusal, RunView};
 use crate::ports::{
-    Day, DayUsage, Hour, Month, NamespaceName, PartitionError, PartitionLog, QuotaAlert, Scope,
-    TaskState, TenantId, Usage, Window,
+    Day, DayUsage, Hour, Month, NamespaceName, PartitionError, PartitionLog, QuotaAlert, RunHead,
+    RunRef, Scope, TaskState, TenantId, Usage, Window,
 };
 
 /// A refusal in the shape of the request's reply.
@@ -36,7 +36,9 @@ pub(crate) fn refused(request: &PartitionRequest, refusal: Refusal) -> Partition
         PartitionRequest::Answer { .. } | PartitionRequest::Decide { .. } => {
             PartitionReply::Answered(Err(refusal))
         }
-        PartitionRequest::GetRun { .. } => PartitionReply::Run(Err(refusal)),
+        PartitionRequest::GetRun { .. } | PartitionRequest::Find { .. } => {
+            PartitionReply::Run(Err(refusal))
+        }
         PartitionRequest::History { .. } => PartitionReply::History(Err(refusal)),
         PartitionRequest::Tasks { .. } => PartitionReply::Tasks(Err(refusal)),
         PartitionRequest::Search { .. } => PartitionReply::Found(Err(refusal)),
@@ -45,6 +47,73 @@ pub(crate) fn refused(request: &PartitionRequest, refusal: Refusal) -> Partition
         PartitionRequest::Usage { .. } => PartitionReply::Used(Err(refusal)),
         PartitionRequest::QuotaAlerts { .. } => PartitionReply::Alerts(Err(refusal)),
     }
+}
+
+/// The run of the tenant `handle` names, among the runs of the partition its suffix names
+/// (`archi/06-storage-and-scale.md`, "Run handles"): of the handle's namespace and origin, and
+/// whose suffix has the handle's length.
+pub(crate) async fn find<L: PartitionLog>(
+    log: &L,
+    tenant: &TenantId,
+    handle: &RunHandle,
+) -> Result<Option<RunHead>, PartitionError> {
+    let Some(ranges) = handle.ranges() else {
+        return Ok(None);
+    };
+    for (low, high) in ranges {
+        let found = log
+            .runs_in_range(tenant, low, high)
+            .await?
+            .into_iter()
+            .find(|head| {
+                handle.names(
+                    head.namespace.as_str(),
+                    &head.origin,
+                    head.run.id,
+                    usize::from(head.suffix_len),
+                )
+            });
+        if found.is_some() {
+            return Ok(found);
+        }
+    }
+    Ok(None)
+}
+
+/// A run as an edge reads it: its head, its summary, and the handles of the runs its metadata
+/// names while the partition keeps them (a fork's parent, the run that started it: both of its
+/// namespace).
+async fn view_of<L: PartitionLog>(log: &L, head: RunHead) -> Result<RunView, PartitionError> {
+    let summary = log.summary(&head.run).await?;
+    let tenant = &head.run.tenant;
+    let parent = handle_of(log, tenant, head.metadata.parent.map(|parent| parent.run)).await?;
+    let started_by = handle_of(
+        log,
+        tenant,
+        head.metadata.started_by.as_ref().map(|by| by.run),
+    )
+    .await?;
+    Ok(RunView {
+        head,
+        summary: summary.map(|indexed| indexed.summary),
+        parent,
+        started_by,
+    })
+}
+
+/// The handle of a run of the tenant, while the partition keeps it.
+async fn handle_of<L: PartitionLog>(
+    log: &L,
+    tenant: &TenantId,
+    run: Option<RunId>,
+) -> Result<Option<RunHandle>, PartitionError> {
+    let Some(run) = run else {
+        return Ok(None);
+    };
+    Ok(log
+        .run(&RunRef::new(tenant.clone(), run))
+        .await?
+        .map(|named| named.handle()))
 }
 
 impl<P: Plane> Owner<P> {
@@ -100,16 +169,23 @@ impl<P: Plane> Owner<P> {
             let answer = match request {
                 PartitionRequest::GetRun { run } => PartitionReply::Run(
                     async {
-                        let Some(head) = log.run(&run).await.map_err(unavailable)? else {
+                        let Some(head) = log.run(&run).await? else {
                             return Ok(None);
                         };
-                        let summary = log.summary(&run).await.map_err(unavailable)?;
-                        Ok(Some(RunView {
-                            head,
-                            summary: summary.map(|indexed| indexed.summary),
-                        }))
+                        view_of(&*log, head).await.map(Some)
                     }
-                    .await,
+                    .await
+                    .map_err(unavailable),
+                ),
+                PartitionRequest::Find { tenant, handle } => PartitionReply::Run(
+                    async {
+                        let Some(head) = find(&*log, &tenant, &handle).await? else {
+                            return Ok(None);
+                        };
+                        view_of(&*log, head).await.map(Some)
+                    }
+                    .await
+                    .map_err(unavailable),
                 ),
                 PartitionRequest::History { run, from, values } => PartitionReply::History(
                     super::attempt::read_attempt(&*plane, &*log, &run, from, values)

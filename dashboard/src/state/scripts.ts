@@ -1,10 +1,14 @@
-// Scripts: named by their digest, a script's source never changes. The list of the scripts the runs
-// ran, each with its runs by outcome, from the hourly counters, is read again within 10 s of a run's
-// change, and at once when the change stream announces a script run for the first time.
+// Scripts: named by their digest; a script's source never changes, its title and description do.
+// The list of the scripts the runs ran, each with its runs by outcome, from the hourly counters, is
+// read again within 10 s of a run's change; a `script` event (a script run for the first time, or
+// given a title) reads again the lists, the script and the titles.
 import { useQuery } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { RANGES, type RangeKey } from "../model/filters";
-import type { ListScriptsQuery, Script, ScriptSummary } from "../model/types";
+import type { ListScriptsQuery, Script, ScriptSummary, SetScriptTitle } from "../model/types";
+import { type Action, useAction } from "./actions";
 import { type PagedRead, usePaged } from "./paged";
+import { SCRIPT_TITLES } from "./queries";
 import { type Read, useQueryRead } from "./read";
 import { useStore } from "./store";
 
@@ -63,8 +67,6 @@ export function useScriptList({
   }));
 }
 
-const TITLES = ["script-titles"] as const;
-
 /**
  * The title of each script the runs ran, by digest, for the menus that list scripts by their
  * digest (a facet's values): a script without a title has none here.
@@ -72,12 +74,13 @@ const TITLES = ["script-titles"] as const;
 export function useScriptTitles(): (digest: string) => string | undefined {
   const { api } = useStore();
   const titles = useQuery({
-    queryKey: TITLES,
+    queryKey: SCRIPT_TITLES,
     queryFn: async ({ signal }) => {
       const page = await api.scripts({ limit: 500 }, signal);
       return new Map(page.scripts.flatMap((s) => (s.title ? [[s.digest, s.title] as const] : [])));
     },
-    staleTime: 60_000,
+    // Read again on a `script` change only (`queries.ts`).
+    staleTime: Number.POSITIVE_INFINITY,
   });
   const data = titles.data;
   return useCallback((digest: string) => data?.get(digest), [data]);
@@ -93,7 +96,7 @@ export function useSetScriptTitle(digest: string): Action<SetScriptTitle, Script
     const script = await store.api.setScriptTitle(digest, body);
     store.queryClient.setQueryData(["script", digest], script);
     await Promise.all([
-      store.queryClient.invalidateQueries({ queryKey: TITLES }),
+      store.queryClient.invalidateQueries({ queryKey: SCRIPT_TITLES }),
       ...store
         .resourcesUnder("scripts|")
         .filter((r) => r.held)

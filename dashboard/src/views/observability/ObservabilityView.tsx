@@ -3,16 +3,7 @@
 // the failures (grouped by fingerprint). Its sidebar holds the views and the filters; the query
 // lives in the URL, and a filter is a term of it.
 import { Menu } from "@base-ui/react/menu";
-import {
-  Activity,
-  Bookmark,
-  ChevronDown,
-  CircleAlert,
-  Hourglass,
-  List,
-  RefreshCw,
-  X,
-} from "lucide-react";
+import { Activity, ChevronDown, CircleAlert, Hourglass, List, RefreshCw } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router";
 import { RunsFrom } from "../../app/runLinks";
@@ -312,22 +303,19 @@ export function ObservabilityView() {
           crumbs="Observability"
           title={view.label}
           actions={
-            <>
-              <SaveSearch q={q} view={view.saved} />
-              <button
-                type="button"
-                className="btn icon-only"
-                aria-label="Refresh"
-                title="Refresh"
-                disabled={refreshing}
-                onClick={() => {
-                  setRefreshing(true);
-                  void stats.refresh().finally(() => setRefreshing(false));
-                }}
-              >
-                <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn icon-only"
+              aria-label="Refresh"
+              title="Refresh"
+              disabled={refreshing}
+              onClick={() => {
+                setRefreshing(true);
+                void stats.refresh().finally(() => setRefreshing(false));
+              }}
+            >
+              <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
+            </button>
           }
         />
         <div className="page-body">

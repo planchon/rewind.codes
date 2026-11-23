@@ -427,6 +427,23 @@ impl World {
         self.edge.get_run(&mut gateway, run).await
     }
 
+    /// The run of the world's tenant a handle names (`archi/06-storage-and-scale.md`, "Run
+    /// handles").
+    pub async fn find_run(
+        &self,
+        handle: &rewind_core::RunHandle,
+    ) -> Result<Option<RunView>, EdgeError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge
+            .find_run(
+                &mut gateway,
+                &rewind_engine::ports::TenantId::local(),
+                handle,
+            )
+            .await
+    }
+
     /// The run's history, every payload loaded.
     pub async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EdgeError> {
         let mut driver = self.driver.lock().await;

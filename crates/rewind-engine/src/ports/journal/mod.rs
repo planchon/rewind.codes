@@ -10,7 +10,7 @@ mod runs;
 mod tasks;
 mod workflows;
 
-use rewind_core::{RunId, Script, Toolset};
+use rewind_core::{RunId, Script, Timestamp, Toolset};
 
 pub use activation::{InboxItem, PayloadRecord, Trigger};
 pub use runs::{

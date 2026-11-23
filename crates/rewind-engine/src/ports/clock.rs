@@ -16,8 +16,9 @@ pub trait VirtualTime: Clock {
 pub trait Entropy: Send + Sync {
     fn run_id(&self) -> RunId;
 
-    /// A run id of `partition`: a UUID v7 whose 16 bits after the variant hold the partition
-    /// ([`RunId::in_partition`]).
+    /// A run id of `partition`, whose 16 bits after the variant hold the partition
+    /// ([`RunId::in_partition`]). The 12 bits after its millisecond are the process's number and
+    /// its counter within the millisecond, so that its handle's suffix is rarely another run's.
     fn run_id_in(&self, partition: PartitionId) -> RunId;
 
     fn seed(&self) -> Seed;

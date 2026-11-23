@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rewind_core::{Digest, RunId, Timestamp, Toolset};
+use rewind_core::{Digest, RunHandle, RunId, Timestamp, Toolset};
 use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::node::runtime::NodeHandle;
@@ -177,7 +177,7 @@ impl App {
             stop: watch::Sender::new(false),
             sign_in: parts.sign_in,
             oauth: parts.oauth,
-            headlines: Mutex::new(HashMap::new()),
+            texts: Arc::new(ScriptTexts::default()),
             tenants: Mutex::new(HashSet::new()),
         }
     }
@@ -279,12 +279,31 @@ impl App {
         }
     }
 
-    /// A run the caller sees: of its tenant, with its allowed labels, in the namespace its
-    /// request is bound to, if any. Any other is answered as missing.
+    /// A run of the tenant, named by its id or its handle (`archi/06-storage-and-scale.md`,
+    /// "Run handles"), as its owner knows it; `None` when it does not exist, or when `id` is
+    /// neither.
+    pub(crate) async fn find_run(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+    ) -> Result<Option<RunView>, ApiError> {
+        if let Ok(run) = id.parse::<RunId>() {
+            return self.read_run(&RunRef::new(tenant.clone(), run)).await;
+        }
+        let Ok(handle) = id.parse::<RunHandle>() else {
+            return Ok(None);
+        };
+        Ok(self
+            .edge
+            .find_run(&mut self.gateway(), tenant, &handle)
+            .await?)
+    }
+
+    /// A run the caller sees, named by its id or its handle: of its tenant, with its allowed
+    /// labels, in the namespace its request is bound to, if any. Any other is answered as
+    /// missing, by what the caller asked for.
     pub(crate) async fn run(&self, caller: &Caller, id: &str) -> Result<RunView, ApiError> {
-        let run_id: RunId = id.parse().map_err(|_| ApiError::run_not_found(id))?;
-        let run = RunRef::new(caller.tenant.clone(), run_id);
-        match self.read_run(&run).await? {
+        match self.find_run(&caller.tenant, id).await? {
             Some(view) if caller.sees_run(&view.head) => Ok(view),
             _ => Err(ApiError::run_not_found(id)),
         }
@@ -349,25 +368,19 @@ impl App {
 
     /// The first non-blank line of a script.
     pub(crate) async fn headline(&self, tenant: &TenantId, digest: Digest) -> String {
-        let key = (tenant.clone(), digest);
-        if let Some(headline) = self
-            .headlines
-            .lock()
-            .ok()
-            .and_then(|headlines| headlines.get(&key).cloned())
-        {
-            return headline;
-        }
-        let headline = match self.catalog().get_script(tenant, digest).await {
-            Ok(Some(stored)) => rewind_api::scripts::headline(stored.script.source()),
-            _ => return String::new(),
-        };
-        if let Ok(mut headlines) = self.headlines.lock() {
-            if headlines.len() > 10_000 {
-                headlines.clear();
-            }
-            headlines.insert(key, headline.clone());
-        }
-        headline
+        self.texts
+            .text(self.catalog(), tenant, digest)
+            .await
+            .map(|text| text.headline.clone())
+            .unwrap_or_default()
+    }
+
+    /// The titles of these scripts of the tenant, for those that have one.
+    pub(crate) async fn titles(
+        &self,
+        tenant: &TenantId,
+        scripts: impl IntoIterator<Item = Digest>,
+    ) -> Result<BTreeMap<Digest, Title>, ApiError> {
+        Ok(self.texts.titles(self.catalog(), tenant, scripts).await?)
     }
 }

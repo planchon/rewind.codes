@@ -10,7 +10,7 @@
 //!
 //! | Key | Value | Read by |
 //! | --- | --- | --- |
-//! | `h r` | run head | `run`; run ids are unique across tenants, so a creation checks it |
+//! | `h r` | run head | `run`, `runs_in_range` (a range of ids); run ids are unique across tenants, so a creation checks it |
 //! | `m t r` | run summary | `summary` |
 //! | `e t r attempt:u32 index:u64` | history entry | `history` (a range from `index`) |
 //! | `i t r id:u64` | inbox item | `inbox` (a range); the recovery's runnable runs (the family) |

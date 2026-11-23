@@ -1,5 +1,5 @@
 //! `PartitionStore` on SlateDB over object storage (`archi/07-code-architecture.md`,
-//! "`PartitionStore`"; `archi/06-storage-and-scale.md`, "A partition"): R2 or any S3-compatible
+//! "`PartitionStore`"; `archi/06-storage-and-scale.md`, "A partition"): AWS S3 or any S3-compatible
 //! service in production, local files embedded, memory in tests.
 //!
 //! - [`SlatePartitions`] opens a partition as its only writer: one SlateDB database at

@@ -20,7 +20,7 @@ use crate::Error;
 /// Where the partitions live: `partitions/{id}/` under the bucket's root.
 #[derive(Clone)]
 pub enum Bucket {
-    /// R2 or any S3-compatible service.
+    /// AWS S3 or any S3-compatible service (R2, MinIO…).
     S3(S3Bucket),
     /// Local files under a directory: the embedded server's `.rewind/`.
     Local(PathBuf),

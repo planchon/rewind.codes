@@ -6,7 +6,8 @@
 //! watch, the partition map, the changes of the control plane through `LISTEN`), with access and
 //! secrets below. Every write of the catalog, of access and of secrets sends what it changed with
 //! `NOTIFY` in its transaction; the payloads name what changed, never a value
-//! (`crate::changes`).
+//! (`crate::changes`). A new version of a workflow takes a transaction-scoped advisory lock on
+//! the workflow: two versions never take the same number.
 //!
 //! [`PostgresStore`] implements, on the same database:
 //!
@@ -24,7 +25,7 @@
 //! transaction at `READ COMMITTED`, and the rows it competes for are locked in a fixed order; a
 //! deadlock or a serialization failure, should one happen anyway, is retried.
 //!
-//! [`PostgresLegacy`] ([`PostgresStore::legacy`]) reads the runs migration 14 set aside in the
+//! [`PostgresLegacy`] ([`PostgresStore::legacy`]) reads the runs migration 15 set aside in the
 //! schema `legacy`, for `rewind server migrate-runs`, and drops them once they moved.
 //!
 //! The schema is versioned: its migrations are embedded in the binary and applied when the store

@@ -4,7 +4,7 @@
 //! | `--bucket` | Partitions | Archive and blobs |
 //! | --- | --- | --- |
 //! | a directory | SlateDB on local files under `partitions/` (`rewind-store-slatedb`) | files under `runs/`, `blobs/`, `tests/` (`rewind-blob`) |
-//! | `s3://<bucket>` | SlateDB on R2 or any S3-compatible service | the same bucket (`rewind-blob`'s S3), behind this process's cache |
+//! | `s3://<bucket>` | SlateDB on AWS S3 or any S3-compatible service | the same bucket (`rewind-blob`'s S3), behind this process's cache |
 //!
 //! Every object of the archive and the blobs is immutable: each process caches what it reads
 //! without asking again.

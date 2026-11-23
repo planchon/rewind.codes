@@ -308,7 +308,7 @@ impl<P: Plane> Owner<P> {
             }
             CallOutcome::Webhook { name } => self.webhook_created(&task, record, &name),
             CallOutcome::Child(child) => match *child {
-                ChildStart::New(start) => {
+                ChildStart::New { start, neighbours } => {
                     let tenant = task.run.tenant.clone();
                     let request = NodeRequest::Organization {
                         tenant: tenant.clone(),
@@ -328,6 +328,7 @@ impl<P: Plane> Owner<P> {
                             task,
                             attempt,
                             start,
+                            neighbours,
                         },
                     );
                 }
@@ -724,6 +725,7 @@ impl<P: Plane> Owner<P> {
         attempt: u32,
         start: Box<crate::ports::link::StartAtOwner>,
         admission: Result<(), Refusal>,
+        neighbours: &[rewind_core::RunId],
     ) {
         let record = self
             .slot(task.run.id)
@@ -754,7 +756,7 @@ impl<P: Plane> Owner<P> {
                     .started_by
                     .as_ref()
                     .is_some_and(|by| by.detached);
-                self.create(&mut unit, *start);
+                self.create(&mut unit, *start, neighbours);
                 unit.change(Change::Watch {
                     run: child.clone(),
                     watcher: Watcher {

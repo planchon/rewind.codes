@@ -248,7 +248,7 @@ pub(crate) async fn resolve(
             ))
         })?;
         return app
-            .store
+            .catalog()
             .workflow_number(tenant, name, number)
             .await?
             .filter(|stored| stored.carries(labels))

@@ -4,8 +4,8 @@
 // second after the last change of a run (at most 5 s after the first of a burst), their counts and
 // charts at most every 10 s, a run's details when that run changes. A script, a workflow, a secret,
 // a namespace or a connection that changes reads again the views that show it. While the stream is
-// down, the views keep what they show and the connection's dot says it is not live; a reopened
-// stream, and a `resync`, read once everything on screen.
+// down, the views keep what they show; a reopened stream, and a `resync`, read once everything on
+// screen.
 import type { ControlChange, RunSummary } from "../model/types";
 import { type ChangeStream, type ChangeStreamOptions, followChanges } from "../sources/changes";
 import type { Api } from "../sources/client";

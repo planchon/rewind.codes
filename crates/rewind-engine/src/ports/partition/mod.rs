@@ -120,6 +120,9 @@ pub trait PartitionStore: Send + Sync {
 ///   hours); `gauges` reads the exact gauges.
 /// - **Timers** are ordered by due time, then by run and kind; `timers(from, to)` includes
 ///   `from` and excludes `to`.
+/// - **Ranges of runs.** `runs_in_range(tenant, low, high)` reads the heads of the tenant's runs
+///   whose id is between `low` and `high`, both included, by id, sealed runs included: the
+///   runs a handle's suffix names ([`rewind_core::suffix_ranges`]).
 /// - **Recovery.** `recover(horizon)` returns what [`Recovery`] lists.
 pub trait PartitionLog: Send + Sync {
     /// The partition this log writes.
@@ -135,6 +138,15 @@ pub trait PartitionLog: Send + Sync {
         &self,
         run: &RunRef,
     ) -> impl Future<Output = Result<Option<RunHead>, PartitionError>> + Send;
+
+    /// The heads of the tenant's runs whose id is between `low` and `high`, both included, by
+    /// id.
+    fn runs_in_range(
+        &self,
+        tenant: &TenantId,
+        low: RunId,
+        high: RunId,
+    ) -> impl Future<Output = Result<Vec<RunHead>, PartitionError>> + Send;
 
     /// The run's summary in the index, once an activation wrote one.
     fn summary(

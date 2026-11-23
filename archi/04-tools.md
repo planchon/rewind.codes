@@ -479,7 +479,9 @@ title is, in order:
 The comment is part of the source, so the same source has the same title everywhere; a title a
 person gives renames the script for every run of it, past and future. `run_script` and
 `check_script` ask the model for the comment, and `check_script` says when a script has none.
-A run's handle takes the title when the run is created ([handles](06-storage-and-scale.md#run-handles)).
+A title given or removed sends the script's change: every client that shows it reads it again
+(the change stream's `script` event). A run's handle takes the title when the run is created
+([handles](06-storage-and-scale.md#run-handles)).
 
 ## Type-checking
 

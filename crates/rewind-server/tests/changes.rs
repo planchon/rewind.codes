@@ -16,7 +16,7 @@ use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::ChangeEvent;
 use rewind_api::namespaces::{CreateToken, NamespaceName};
 use rewind_api::organization::CreateOrganization;
-use rewind_api::runs::{CancelRun, RunSummary, StartRun};
+use rewind_api::runs::{RunSummary, StartRun};
 use rewind_api::{ChangeStream, Client};
 use serde_json::json;
 use support::{Browser, TestServer, identity, token};

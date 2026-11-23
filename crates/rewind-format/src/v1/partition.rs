@@ -28,6 +28,12 @@ pub struct RunHead {
     pub run: RunId,
     pub tenant: String,
     pub namespace: String,
+    /// What ran, the middle of the run's handle; `script` when left out.
+    #[serde(default = "script_origin", skip_serializing_if = "is_script_origin")]
+    pub origin: String,
+    /// The characters of its handle's suffix; 12 when left out.
+    #[serde(default = "suffix_len", skip_serializing_if = "is_suffix_len")]
+    pub suffix_len: u8,
     #[serde(with = "with::digest")]
     pub script: Digest,
     #[serde(with = "with::digest")]
@@ -237,6 +243,25 @@ pub struct Task {
     pub token_hash: Option<Digest>,
 }
 
+/// The origin of a run without a workflow and whose script has no title
+/// ([`rewind_core::SCRIPT_ORIGIN`]).
+fn script_origin() -> String {
+    rewind_core::SCRIPT_ORIGIN.to_owned()
+}
+
+fn is_script_origin(origin: &str) -> bool {
+    origin == rewind_core::SCRIPT_ORIGIN
+}
+
+/// The characters of a handle's suffix that tells its run apart ([`rewind_core::SUFFIX_LEN`]).
+fn suffix_len() -> u8 {
+    rewind_core::SUFFIX_LEN as u8
+}
+
+fn is_suffix_len(len: &u8) -> bool {
+    usize::from(*len) == rewind_core::SUFFIX_LEN
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -356,6 +381,11 @@ pub struct Summary {
     #[serde(with = "with::run_id")]
     pub run: RunId,
     pub namespace: String,
+    /// As the run's head has them.
+    #[serde(default = "script_origin", skip_serializing_if = "is_script_origin")]
+    pub origin: String,
+    #[serde(default = "suffix_len", skip_serializing_if = "is_suffix_len")]
+    pub suffix_len: u8,
     #[serde(with = "with::digest")]
     pub script: Digest,
     pub headline: String,

@@ -56,6 +56,8 @@ pub fn head_record(head: &RunHead) -> record::RunHead {
         run: head.run.id,
         tenant: head.run.tenant.to_string(),
         namespace: head.namespace.to_string(),
+        origin: head.origin.clone(),
+        suffix_len: head.suffix_len,
         script: head.script,
         toolset: head.toolset,
         status: head.status.into(),
@@ -80,6 +82,8 @@ pub fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError> {
     Ok(RunHead {
         run: RunRef::new(tenant(record.tenant)?, record.run),
         namespace: namespace(record.namespace)?,
+        origin: record.origin,
+        suffix_len: record.suffix_len,
         script: record.script,
         toolset: record.toolset,
         status: record.status.into(),
@@ -499,6 +503,8 @@ pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
         tenant: summary.run.tenant.to_string(),
         run: summary.run.id,
         namespace: summary.namespace.to_string(),
+        origin: summary.origin.clone(),
+        suffix_len: summary.suffix_len,
         script: summary.script,
         headline: summary.headline.clone(),
         toolset: summary.toolset,
@@ -545,6 +551,8 @@ pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionEr
         summary: RunSummary {
             run: RunRef::new(tenant(record.tenant)?, record.run),
             namespace: namespace(record.namespace)?,
+            origin: record.origin,
+            suffix_len: record.suffix_len,
             script: record.script,
             headline: record.headline,
             toolset: record.toolset,
@@ -921,7 +929,7 @@ fn log_of(record: record::Log) -> LogRecord {
     }
 }
 
-fn alert_record(alert: &QuotaAlert) -> record::QuotaAlert {
+pub fn alert_record(alert: &QuotaAlert) -> record::QuotaAlert {
     let key = &alert.key;
     record::QuotaAlert {
         tenant: key.tenant.to_string(),
@@ -947,7 +955,7 @@ fn alert_record(alert: &QuotaAlert) -> record::QuotaAlert {
     }
 }
 
-fn alert_of(record: record::QuotaAlert) -> Result<QuotaAlert, PartitionError> {
+pub fn alert_of(record: record::QuotaAlert) -> Result<QuotaAlert, PartitionError> {
     Ok(QuotaAlert {
         key: QuotaAlertKey {
             tenant: tenant(record.tenant)?,

@@ -326,7 +326,8 @@ impl StreamEvent {
 pub enum ChangeEvent {
     /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
     Run(Box<RunSummary>),
-    /// `script`: the organization's runs ran a script for the first time.
+    /// `script`: the organization's runs ran a script for the first time, or a person gave it a
+    /// title or removed it.
     Script(ScriptChanged),
     /// `workflow`: a workflow has a new version.
     Workflow(WorkflowChanged),
@@ -343,7 +344,7 @@ pub enum ChangeEvent {
 }
 
 /// The data of a `script` event: a script the organization's runs ran for the first time, which
-/// `GET /v1/scripts` now lists.
+/// `GET /v1/scripts` now lists, or whose title a person gave or removed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptChanged {

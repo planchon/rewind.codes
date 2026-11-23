@@ -13,7 +13,7 @@
 //! - [`router`]: where a run's partition and its owner are.
 //! - [`plane`]: the adapters a node is wired with, and its configuration.
 //! - [`ports`]: what the engine needs from the outside world, as traits. Adapters implement
-//!   them; the engine never names Postgres, SlateDB, R2, V8, MCP or OpenTelemetry.
+//!   them; the engine never names Postgres, SlateDB, S3, V8, MCP or OpenTelemetry.
 //!
 //! What the actors share:
 //!

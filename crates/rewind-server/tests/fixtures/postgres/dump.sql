@@ -206,18 +206,6 @@ ALTER SEQUENCE public.inbox_ids OWNED BY public.inbox.id;
 
 
 --
--- Name: legacy_runs; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.legacy_runs (
-    id uuid NOT NULL,
-    tenant text NOT NULL COLLATE pg_catalog."C",
-    partition integer NOT NULL,
-    CONSTRAINT legacy_runs_partition_check CHECK (((partition >= 0) AND (partition < 65536)))
-);
-
-
---
 -- Name: namespace_scripts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -248,24 +236,7 @@ CREATE TABLE public.namespaces (
     last_active_at bigint NOT NULL,
     deleting_since bigint,
     display_name text,
-    display_key text,
-    partition integer,
-    CONSTRAINT namespaces_partition_check CHECK (((partition >= 0) AND (partition < 65536)))
-);
-
-
---
--- Name: nodes; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.nodes (
-    id text NOT NULL COLLATE pg_catalog."C",
-    address text NOT NULL,
-    build text NOT NULL,
-    epochs bigint[] NOT NULL,
-    pool text COLLATE pg_catalog."C",
-    executors_only boolean NOT NULL,
-    joined_at bigint NOT NULL
+    display_key text
 );
 
 
@@ -305,20 +276,6 @@ CREATE TABLE public.oauth_codes (
     expires_at bigint NOT NULL,
     used_at bigint,
     connection_id text COLLATE pg_catalog."C"
-);
-
-
---
--- Name: partitions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.partitions (
-    id integer NOT NULL,
-    pool text COLLATE pg_catalog."C",
-    node text COLLATE pg_catalog."C",
-    epoch bigint DEFAULT 0 NOT NULL,
-    CONSTRAINT partitions_epoch_check CHECK ((epoch >= 0)),
-    CONSTRAINT partitions_id_check CHECK (((id >= 0) AND (id < 65536)))
 );
 
 
@@ -872,7 +829,6 @@ COPY public._sqlx_migrations (version, description, installed_on, success, check
 10	secrets	2026-11-23 03:10:30.931416+00	t	\\x71a0c5689c79455dcdfe19b1fb5c48cad2397ad161e4fdea0198aca31d8fa9ccee1bc283bd54899e90fed13bcbd503e4	2813250
 11	run orders	2026-11-23 03:10:30.934605+00	t	\\x933b28f04cedd164ed42e4b84d031d48ab212f33a9b16d3cc67a353857d2c6ad9aae5fcc38a9434ff338c8f2d6002ee9	1308791
 12	run changes	2026-11-23 03:10:30.936076+00	t	\\xebe9c745ffc813429700e4118f928e21b506cc7640ca9fe9e939821d17913383bcf56c39e602be40c7c6c18be7438022	1234958
-13	control plane	2026-11-23 03:10:30.937506+00	t	\\xa710ea845f5ee744613a1efdbc8e69ef9e087e29a0886d41e7bd1218cefc04df4dda92cba251154e30c233d3e5836488	2362458
 \.
 
 
@@ -1006,14 +962,6 @@ COPY public.inbox (run_id, id, event, received_at) FROM stdin;
 
 
 --
--- Data for Name: legacy_runs; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.legacy_runs (id, tenant, partition) FROM stdin;
-\.
-
-
---
 -- Data for Name: namespace_scripts; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -1040,17 +988,9 @@ acme	bob	\\x22bff039f17f95307821bf817968bf896c40c9658b6a60a4ecaad28a92d01670	1	1
 -- Data for Name: namespaces; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.namespaces (tenant, name, cpu_per_month_ms, active_runs, runs_per_month, scripts, max_ttl_ms, max_script_lines, tokens_revoked_before, created_at, last_active_at, deleting_since, display_name, display_key, partition) FROM stdin;
-acme	alice	\N	\N	\N	\N	\N	\N	\N	1767225600000	1769904000000	\N	\N	\N	\N
-acme	bob	\N	\N	\N	\N	\N	\N	\N	1769904000000	1769904000000	\N	\N	\N	\N
-\.
-
-
---
--- Data for Name: nodes; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.nodes (id, address, build, epochs, pool, executors_only, joined_at) FROM stdin;
+COPY public.namespaces (tenant, name, cpu_per_month_ms, active_runs, runs_per_month, scripts, max_ttl_ms, max_script_lines, tokens_revoked_before, created_at, last_active_at, deleting_since, display_name, display_key) FROM stdin;
+acme	alice	\N	\N	\N	\N	\N	\N	\N	1767225600000	1769904000000	\N	\N	\N
+acme	bob	\N	\N	\N	\N	\N	\N	\N	1769904000000	1769904000000	\N	\N	\N
 \.
 
 
@@ -1067,14 +1007,6 @@ COPY public.oauth_clients (id, kind, name, uri, logo_uri, redirect_uris, auth_me
 --
 
 COPY public.oauth_codes (hash, client_id, user_id, redirect_uri, code_challenge, resource, organizations, labels, expires_at, used_at, connection_id) FROM stdin;
-\.
-
-
---
--- Data for Name: partitions; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY public.partitions (id, pool, node, epoch) FROM stdin;
 \.
 
 
@@ -1561,14 +1493,6 @@ ALTER TABLE ONLY public.inbox
 
 
 --
--- Name: legacy_runs legacy_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.legacy_runs
-    ADD CONSTRAINT legacy_runs_pkey PRIMARY KEY (id);
-
-
---
 -- Name: namespace_scripts namespace_scripts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1585,14 +1509,6 @@ ALTER TABLE ONLY public.namespaces
 
 
 --
--- Name: nodes nodes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.nodes
-    ADD CONSTRAINT nodes_pkey PRIMARY KEY (id);
-
-
---
 -- Name: oauth_clients oauth_clients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1606,14 +1522,6 @@ ALTER TABLE ONLY public.oauth_clients
 
 ALTER TABLE ONLY public.oauth_codes
     ADD CONSTRAINT oauth_codes_pkey PRIMARY KEY (hash);
-
-
---
--- Name: partitions partitions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.partitions
-    ADD CONSTRAINT partitions_pkey PRIMARY KEY (id);
 
 
 --
