@@ -61,7 +61,7 @@ edge, which serves the API, the dashboard and `/mcp`, and a **node**, which runs
 | Piece | Holds |
 | --- | --- |
 | Postgres (`--store postgres://…`) | The control plane only: organizations, keys, roles, end users, toolsets, workflows, secrets, subscriptions, and which node owns which partition. It never holds a run |
-| A bucket on R2 or any S3-compatible service (`--bucket s3://…`) | The runs: the partitions, the archive of the journals of ended runs, and the payloads above 64 KiB |
+| A bucket on AWS S3 or any S3-compatible service (`--bucket s3://…`) | The runs: the partitions, the archive of the journals of ended runs, and the payloads above 64 KiB |
 | The nodes | Nothing of their own: each holds some partitions while it lives, runs their scripts, sends their tool calls and fires their timers |
 
 - **Partitions.** The runs of a deployment are spread over 64 partitions (`--partitions`). Every run of an end user
@@ -81,8 +81,8 @@ Every node of a deployment takes the same options, but its id and link address:
 ```bash
 export REWIND_STORE="postgres://rewind:…@postgres.internal:5432/rewind"
 export REWIND_BUCKET="s3://rewind"
-export REWIND_S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com"
-export REWIND_S3_REGION=auto
+export REWIND_S3_REGION=eu-west-3     # the bucket's region; another S3-compatible service also
+                                      # takes REWIND_S3_ENDPOINT (R2: its endpoint, region auto)
 export REWIND_S3_ACCESS_KEY_ID=… REWIND_S3_SECRET_ACCESS_KEY=…
 export REWIND_CLUSTER_SECRET=…        # openssl rand -hex 32, once: the same on every node
 export REWIND_MASTER_KEY=…            # the same on every node
@@ -117,7 +117,7 @@ Every option of `rewind server` also reads an environment variable. `rewind serv
 | `--listen` | `REWIND_LISTEN` | Where the HTTP API listens. `127.0.0.1:8080` by default |
 | `--store` | `REWIND_STORE` | The control plane: `turso:<path>` for a single node, or `postgres://…` for a deployment |
 | `--bucket` | `REWIND_BUCKET` | The partitions, the archive and the blobs: a directory, or `s3://<bucket>`. With Turso, the database's directory by default; required with Postgres |
-| `--s3-endpoint`, `--s3-region` | `REWIND_S3_ENDPOINT`, `REWIND_S3_REGION` | The S3-compatible service: R2's endpoint with the region `auto`, MinIO's… |
+| `--s3-endpoint`, `--s3-region` | `REWIND_S3_ENDPOINT`, `REWIND_S3_REGION` | The bucket's region on AWS S3; for another S3-compatible service, its endpoint too: R2's with the region `auto`, MinIO's… |
 | `--s3-access-key-id`, `--s3-secret-access-key` | `REWIND_S3_ACCESS_KEY_ID`, `REWIND_S3_SECRET_ACCESS_KEY` | Its keys; the standard AWS variables otherwise |
 | `--s3-allow-http` | `REWIND_S3_ALLOW_HTTP` | Allows an `http://` endpoint, on a trusted network only |
 | `--partitions` | `REWIND_PARTITIONS` | The partitions of the deployment: 64 by default, 1 on Turso. Fixed once the deployment holds runs: more only serve the end users created after them |
@@ -216,7 +216,7 @@ docker compose up -d --build    # builds the image from the repository
 | The nodes | `rewind server`, each the HTTP API, the dashboard and each organization's public keys (`/organizations/{tenant}/jwks.json`, without authentication), and a node: the owners of its partitions, script execution, tool calls (with the secrets the runs attach, and the signature of signed calls), timers, webhooks. Their only way out is the egress proxy |
 | The egress proxy | Forwards the nodes' traffic to the addresses of allowed names only |
 | Postgres | The control plane: organizations, keys, toolsets, workflows, the encrypted secrets, the partitions' owners |
-| MinIO | The bucket: the partitions, the archive and the large payloads (R2 or S3 in your platform) |
+| MinIO | The bucket: the partitions, the archive and the large payloads (S3 or any S3-compatible service in your platform) |
 | An OpenTelemetry Collector | Traces, metrics and logs of the nodes |
 
 The nodes can run under gVisor. The

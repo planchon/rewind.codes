@@ -33,7 +33,7 @@ Dependencies only point down. Adapters never depend on each other.
 2. **Ports live in `rewind-engine`, and adapters implement them.** The engine holds the use
    cases (start, activate, signal, cancel, replay, project, fork, seal, erase) and the actors
    that run them ([inside a node](#inside-a-node)), and declares what it needs from the outside
-   world as traits. It never names Postgres, SlateDB, R2, V8, MCP or OpenTelemetry.
+   world as traits. It never names Postgres, SlateDB, S3, V8, MCP or OpenTelemetry.
 
 3. **Ports follow the domain's invariants, not the keys.** "A trigger is committed atomically
    with everything it caused" is one port method, `PartitionLog::commit`, taking what changed;
@@ -406,11 +406,11 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, partition records, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
 | `rewind-api` | adapter support | the HTTP DTOs (serde, utoipa) of `/v1` and `/auth`, the catalog of permissions and the built-in roles, the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `rewind-server` and `rewind-cli` |
 | `rewind-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog (which also reports each call's CPU time), heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
-| `rewind-store-slatedb` | adapter | `PartitionStore` on SlateDB over `object_store`: R2 or any S3-compatible service, local files, memory; the key layout of a partition |
+| `rewind-store-slatedb` | adapter | `PartitionStore` on SlateDB over `object_store`: S3 or any S3-compatible service (R2, MinIO…), local files, memory; the key layout of a partition |
 | `rewind-store-turso` | adapter | the embedded control plane: `CatalogStore`, `AccessStore`, `SecretStore`, and a `Cluster` of one node (Turso Database, the `turso` crate) |
 | `rewind-store-postgres` | adapter | the production control plane: `CatalogStore`, `AccessStore`, `SecretStore`, and `Cluster` (session advisory locks, `LISTEN` and `NOTIFY`) |
 | `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
-| `rewind-blob` | adapter | `BlobStore` and `RunArchive` on local files and S3 (R2) |
+| `rewind-blob` | adapter | `BlobStore` and `RunArchive` on local files and S3 or any S3-compatible service |
 | `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, the attached secret or the signature in the transport) and the built-ins `http` and `webhook` |
 | `rewind-openapi` | adapter | API tools ([04](04-tools.md#api-tools)): an OpenAPI 3.0 or 3.1 document read into pinned tools at registration, and `ApiDispatcher`, the `ToolDispatcher` of the `api` route: the request built from the args, its authentication, the answer mapped to an outcome |
 | `rewind-outbound` | adapter support | what leaves Rewind for a tenant's servers: the egress checks (a name resolved once, private addresses refused, the connection to the checked address, redirects within the origin) and the HTTP client built on them, the JWT signing of [signed calls](04-tools.md#signed-calls); used by `rewind-mcp`, `rewind-openapi` and the server's webhooks |
@@ -438,7 +438,7 @@ separate process.
 `rewind-server` wires each adapter in its own module of `src/wiring/` (control plane,
 partitions, archive and blobs, cluster, tools, checker, telemetry, webhooks, clock, identity),
 picked by configuration: `--store turso:<path>` or `postgres://…` for the control plane,
-`--bucket <directory>` or `s3://<bucket>` (with its endpoint, for R2) for the partitions, the
+`--bucket <directory>` or `s3://<bucket>` (with its region, and its endpoint for a service other than AWS S3) for the partitions, the
 archive and the blobs, `--partitions` (64 by default, 1 embedded), `--cluster-database` (where the
 nodes take their liveness locks, `postgres` by default), `--cluster-secret`, `--link-listen` and
 `--link-address` (the node link's port and the address the other nodes dial), `--node-id`,

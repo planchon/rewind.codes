@@ -14,7 +14,7 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | **The license is FSL-1.1-ALv2** (the owner, 14 November 2026) | The Functional Source License, the one Sentry uses: any purpose but a competing use, and each version becomes Apache 2.0 two years after its release. `LICENSE.md` at the root covers the repository; every crate and the SDK say `FSL-1.1-ALv2`, and the SDK carries a copy of the license for its npm package. |
 | Rewind is a tool for **agent harness developers** | Server + TypeScript SDK + ready-made agent tools; the CLI is for local development. |
 | **Durable workflows are the priority** | A short run is the same mechanism started with `wait`. |
-| **Built to scale** | Compute apart from storage: runs in partitions on R2, Postgres for the control plane only, Turso for the embedded control plane (the owner, 22 November 2026; [rewrite](#taken-for-the-object-storage-rewrite-november-2026)). It was Postgres for everything. |
+| **Built to scale** | Compute apart from storage: runs in partitions on object storage (AWS S3), Postgres for the control plane only, Turso for the embedded control plane (the owner, 22 November 2026; [rewrite](#taken-for-the-object-storage-rewrite-november-2026)). It was Postgres for everything. |
 | **Payloads live on object storage**, except small ones | Three tiers by size: in the event, in the run's records in its partition, in a blob under the run ([storage](06-storage-and-scale.md#payloads)). |
 | **Mocks are recorded from real runs** | Cassettes from journals; TypeScript mock handlers as a complement. |
 | **Events can come from any source** | Harness, humans, other agents, other runs, external systems through webhooks. |
@@ -379,8 +379,8 @@ Postgres, and that nothing polls but the scheduler.
 | --- | --- | --- |
 | **A store is written only when a state changes**: a fact, an owner that moves, a setting someone changes; never a lease renewal, a heartbeat, a queue position or a poll (W1) | Leases, claims and a feed in Postgres | The owner's rule. An idle worker sent about 112 queries a second; one tool call wrote 25 rows, of which 8 were facts. |
 | **A tool call costs its run two appends**: the call before it is sent, its outcome before the script sees it (W2) | Writing the claim, its renewals and its release | The rest is the owner's memory, rebuilt from the facts after a takeover. |
-| **Runs live in partitions on object storage**: one SlateDB database per partition on R2, one writer per partition, batches shared by every run of the partition. Postgres holds the control plane only, Turso when embedded | Postgres for runs; Postgres sharded | Compute scales apart from storage; a batch costs one write to R2 whatever the number of runs in it; Postgres stays at the pace of people. |
-| **R2** for the bucket | Tigris on Railway | The owner's choice. |
+| **Runs live in partitions on object storage**: one SlateDB database per partition on S3, one writer per partition, batches shared by every run of the partition. Postgres holds the control plane only, Turso when embedded | Postgres for runs; Postgres sharded | Compute scales apart from storage; a batch costs one write to the bucket whatever the number of runs in it; Postgres stays at the pace of people. |
+| **AWS S3** for the bucket, in eu-west-3 (Paris), the closest S3 region to Railway's europe-west4 | R2; Tigris on Railway | The owner's choice (23 November 2026). Railway is outside AWS, so what a node reads from the bucket (cold histories, sealed journals and blobs outside its cache, the compactor's reads) is billed by AWS as egress, about $0.09/GB. |
 | **No broker** (E1). Facts are the partition's records; messages go between nodes over the node link; a lost message is rebuilt from the facts at takeover, never caught by asking again | NATS JetStream or Redpanda between every actor | One system less to run, and the records are already the source of truth. |
 | **The SDK gets a task stream** (E2); the open stream is the liveness of the tasks handed on it; per-task heartbeats are gone. SDK 0.5.0 drops the long-poll (C8) | The long-poll and heartbeats | Nothing is written or asked while a task is in flight. Dax, the one harness running, moves in the same release. |
 | **A start above an organization's ceiling is refused with 429** (E3) | Holding the start in the organization's queue | Holding it would add a queued state to runs. The organization actor admits starts in order, so a few milliseconds of latency are accepted. |
@@ -396,7 +396,7 @@ Postgres, and that nothing polls but the scheduler.
 | **One kind of process** (C6): every process is the HTTP edge and a node; Railway scales it by replicas; the node link is HTTP/2 with JSON on the private network | An api role and a worker role | One thing to deploy. |
 | **The embedded server is one node** (C7): one partition, SlateDB on local files, Turso for the control plane, the node link in process | A separate embedded store | The CLI runs the code production runs. |
 | **The control plane notifies its changes** (C9): every write sends its change in the same transaction (`NOTIFY`), and every process listens | Reading the control plane on every request | Caches stay right without a timer; the dashboard's stream carries scripts, workflows, secrets, namespaces and connections. |
-| **SlateDB 0.18** (C10), its compactor in the writer's process, the WAL flushed by the committer after each batch | Another embedded store on object storage | Writer fencing, atomic write batches and conditional puts on R2. Its manifest reads on a timer are measured in the R2 benchmark (W4). |
+| **SlateDB 0.18** (C10), its compactor in the writer's process, the WAL flushed by the committer after each batch | Another embedded store on object storage | Writer fencing, atomic write batches and conditional puts on S3. Its manifest reads on a timer are measured in the benchmark from Railway (W4). |
 
 ## Architecture (approved for 0.1)
 
@@ -1548,7 +1548,7 @@ The stream's contract and the dashboard's layers stay.
 | The grace after an SDK stream closes is the policy's heartbeat timeout, 60 s by default; the pinned toolset's field keeps its name, `heartbeat_timeout_ms` | A new field; a fixed 30 s | The stored format needs no migration, and each tool keeps its own value. |
 | The concurrency of an MCP server or an API is counted across the organization | Per worker | There are no workers; a limit per organization protects the customer's server. |
 | A task's token and a webhook token name their run | Looking tokens up in a global table | Any process routes them to the run's owner. |
-| One retention for an ended run, 1 year by default, as a timer written at seal; it erases the run's objects and records | 30 days in the database then 1 year archived; lifecycle rules on R2 | One place erases a run, whatever the tenant's retention. |
+| One retention for an ended run, 1 year by default, as a timer written at seal; it erases the run's objects and records | 30 days in the database then 1 year archived; lifecycle rules on the bucket | One place erases a run, whatever the tenant's retention. |
 | A run's summary stays in its partition's index until the run is erased | A TTL on the index | Erasure removes it, with the rest. |
 | The activation's span id is `H(run, "activation", index of its first entry)`, from leaving the ready queue to its batch being durable | `H(run, fence)` | There is no fence; the first entry's index is unique per committed activation. |
 | A search reads at most 10,000 summaries per partition per page, and answers a short page with a cursor when it stops | No budget | A query whose terms match few runs must not scan a partition whole. |
@@ -1592,7 +1592,7 @@ The stream's contract and the dashboard's layers stay.
 | SlateDB's timers: no WAL flush timer (the committer flushes), the writer's manifest poll 5 min (under the compactor's 15 min checkpoint), the compactor's poll 1 min, its commit of finished compactions 5 s, the worker's poll 1 min, the collector every 10 min; fence objects never collected, no detach task | SlateDB's defaults (1 s, 5 s, 1 s, 5 s, 10 min) | As long as SlateDB stays correct (principle 11); measured by `examples/bench.rs` |
 | A level-0 table every 4096 batches or 64 MiB: a takeover replays at most 4096 WAL objects | Fewer | SlateDB refuses less than 4096 |
 | One block cache per process, on moka, 256 MiB of blocks and 64 MiB of indexes and filters, shared by the partitions it opens | SlateDB's default of 512 MiB and 128 MiB per database | 64 partitions per node |
-| Scans keep their blocks in the cache and read ahead 256 KiB with two fetches; tables and WAL objects are compressed with lz4 | One block per request, uncompressed | R2 charges by request: a cold history is one or two requests |
+| Scans keep their blocks in the cache and read ahead 256 KiB with two fetches; tables and WAL objects are compressed with lz4 | One block per request, uncompressed | S3 charges by request: a cold history is one or two requests |
 
 ### Taken while building the control plane of the run plane (November 2026)
 

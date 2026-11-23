@@ -46,7 +46,7 @@ Rewind runs as a set of identical **nodes**: each serves the API and executes ru
 | Executors | Execute scripts in V8 isolates, one activation at a time; the owner commits what the activation recorded. |
 | Tool dispatcher | Sends the calls Rewind makes itself: MCP tools, API tools and the built-in `http` tool. The secrets a run attached, or the signature of your organization's key, are added here, never in the sandbox. Calls to host tools are handed to your worker's task stream. |
 | Timers | Durable: `sleep`, `setTimeout`, signal timeouts, call timeouts, run deadlines, each kept with its run and fired by its owner. |
-| Runs and journals | Object storage (S3, R2) holds every run: its history in its partition while it lives, its journal in the archive once it ended, and its large payloads. It is the only source of truth. Postgres holds what you configure: organizations, keys, toolsets, workflows, secrets. |
+| Runs and journals | Object storage (S3 or any S3-compatible service) holds every run: its history in its partition while it lives, its journal in the archive once it ended, and its large payloads. It is the only source of truth. Postgres holds what you configure: organizations, keys, toolsets, workflows, secrets. |
 | Host-tool worker | Part of your harness, from the SDK. Holds a stream open, and executes the tools that live in your code. |
 
 ## The life of a run

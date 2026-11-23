@@ -21,7 +21,7 @@ Priorities:
 1. **Durable workflows first.** Short "run this and give me the result" scripts are the
    same thing, started with a `wait` timeout.
 2. **Horizontal scale from day one.** Compute and storage are separate. Runs live in
-   partitions on object storage (R2), each written by one node, and adding nodes adds compute.
+   partitions on object storage (AWS S3 in production), each written by one node, and adding nodes adds compute.
    Postgres holds only the control plane: organizations, keys, toolsets, workflows, secrets.
    Turso, an embedded SQLite-compatible database, holds it for the embedded engine (CLI, local
    dev, tests), whose partition lives in local files
@@ -39,7 +39,7 @@ directory (Turso, local files), or of a remote one
 ```
 ┌──────────── agent harness ─────────────┐       ┌────────────────── Rewind ──────────────────┐
 │                                        │       │  Postgres (control plane)                  │
-│  model ── run_script(code) ──► SDK ────┼─HTTP─►│  edge ──► partition owners ──► R2: runs,   │
+│  model ── run_script(code) ──► SDK ────┼─HTTP─►│  edge ──► partition owners ──► S3: runs,   │
 │    ▲                            │      │       │             │    timer wheel     archive,  │
 │    └── result | "suspended" ◄───┘      │       │             ▼                    blobs     │
 │                                        │       │  executors (V8) ──► MCP servers, APIs      │

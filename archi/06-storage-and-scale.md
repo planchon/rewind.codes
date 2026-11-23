@@ -16,7 +16,7 @@ planes.
 
 | Use | Control plane | Partitions | Archive and blobs |
 | --- | --- | --- | --- |
-| Production (`rewind-server`) | Postgres (`rewind-store-postgres`) | SlateDB on R2 or any S3-compatible service (`rewind-store-slatedb`) | R2 or any S3-compatible service (`rewind-blob`) |
+| Production (`rewind-server`) | Postgres (`rewind-store-postgres`) | SlateDB on S3 or any S3-compatible service (R2, MinIO…) (`rewind-store-slatedb`) | S3 or any S3-compatible service (`rewind-blob`) |
 | Embedded (`rewind server --embedded`, local dev, tests) | Turso Database (`rewind-store-turso`, the `turso` crate) | SlateDB on local files under `.rewind/partitions/` | Local files under `.rewind/` (`rewind-blob`) |
 | Engine unit tests, mock mode | In memory | In memory | In memory |
 
@@ -143,7 +143,7 @@ read forever after, so every process caches it without asking again.
 ## Partitions, owners and nodes
 
 ```
- edge (every process) ──router──► owner of the partition ──batch──► SlateDB on R2
+ edge (every process) ──router──► owner of the partition ──batch──► SlateDB on S3
                                    │  one writer, fenced by epoch
                                    ├─ ready queue ──► executors (V8) of its node, or of a node of the run's epoch
                                    ├─ timer wheel, registry, outbox, sealer
@@ -164,7 +164,7 @@ read forever after, so every process caches it without asking again.
   on noticing that a node died; only the time it takes another to take over does.
 - **Batches.** Everything an owner writes goes through its committer, which writes as one batch
   everything that reached it while the previous batch was being written: atomic, and durable when
-  the commit returns. A batch holds the changes of many runs, and costs one write to R2. The
+  the commit returns. A batch holds the changes of many runs, and costs one write to the bucket. The
   [commit invariant](02-journal.md#the-commit-invariant) holds per batch.
 - **Messages after facts.** Once a batch is durable, its fan-out sends what follows from it: a run
   made runnable goes to the ready queue, a timer to the wheel, a call to be sent, a change to the
@@ -207,8 +207,8 @@ read forever after, so every process caches it without asking again.
   and hands its host tasks to SDK streams ([quotas](#quotas), [04](04-tools.md#tool-task-lifecycle)).
 
 Scaling: more nodes take more partitions, and more executors run more activations. A partition's
-writes are bounded by what one batch per R2 write carries, and its reads are served by SlateDB's
-cache in front of R2. More partitions only serve the namespaces created after them.
+writes are bounded by what one batch per write to the bucket carries, and its reads are served by SlateDB's
+cache in front of the bucket. More partitions only serve the namespaces created after them.
 
 ### The outbox
 
@@ -274,7 +274,7 @@ The responsibilities are split by layer:
 | `rewind-core` | A payload's **identity**: the SHA-256 of its canonical JSON, as defined by RFC 8785 (JCS). An event holds either the value (`Payload::Value`) or only the digest (`Payload::Digest`). The determinism check compares digests. |
 | `rewind-engine` | **When** to move values: at commit, a payload above the inline threshold leaves the event, which keeps only the digest. Its value goes into the run's payload records with the batch, or to the `BlobStore` before it when it is above the second threshold. On delivery to the script, the value is loaded from where it lives. |
 | `rewind-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. A value is written in its canonical form, so its stored bytes are exactly the bytes its digest is computed on, whatever the JSON library's settings. |
-| `rewind-blob` | **Where** large values live: under their run on R2 or S3, `.rewind/blobs/{tenant}/{run}/sha256/ab/<digest>` on disk (atomic writes); every node keeps a local cache in front of R2. |
+| `rewind-blob` | **Where** large values live: under their run on S3 or any S3-compatible service, `.rewind/blobs/{tenant}/{run}/sha256/ab/<digest>` on disk (atomic writes); every node keeps a local cache in front of the bucket. |
 
 Consequences:
 

@@ -214,7 +214,7 @@ read the runs of its namespace reads it. The gate runs it whoever saves.
 ### Where tests are stored
 
 A test is a document of the [stored format v1](02-journal.md#stored-format-v1), stored as a blob
-in the `BlobStore` (R2 in production) under its tenant and the digest of its canonical JSON
+in the `BlobStore` (AWS S3 in production) under its tenant and the digest of its canonical JSON
 (`tests/{tenant}/sha256/{digest}`). A workflow version holds digests only. The `tests` table of
 the control plane indexes the blobs, with the namespace a recorded test came from, and
 `workflow_tests` the tests each version references
