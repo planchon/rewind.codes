@@ -1,6 +1,6 @@
 /**
  * Helpers of the sandbox, CLI and lifecycle specs of the release gate: start a run and wait for
- * its end through the recorded `Api`, read its journal, replay a journal with the CLI, and read
+ * its end through the recorded `Api`, read its export, replay an export with the CLI, and read
  * the Collector's spans.
  */
 import { spawnSync } from "node:child_process";
@@ -26,7 +26,7 @@ export async function runScript(
   options: { namespace?: string; input?: unknown; actionSet?: string; check?: boolean; timeoutMs?: number; extra?: Record<string, unknown> } = {},
 ): Promise<RunJson> {
   const started = await api.ns(options.namespace ?? "sandbox").post("/v1/runs", {
-    script,
+    code: script,
     input: options.input,
     actionSet: options.actionSet,
     check: options.check ?? false,
@@ -75,19 +75,19 @@ export function expectLimit(run: RunJson, message: string): void {
   expect(String(run.abort?.message), context).toContain(message);
 }
 
-/** The run's journal document (`GET /v1/runs/{id}/journal`). */
+/** The run's export (`GET /v1/runs/{id}/export`). */
 export async function journal(api: Api, id: string): Promise<{ text: string; doc: any }> {
-  const reply = await api.get(`/v1/runs/${id}/journal`);
+  const reply = await api.get(`/v1/runs/${id}/export`);
   expectOk(reply);
   return { text: reply.text, doc: reply.json };
 }
 
-/** The `type` of each entry of a journal document. */
+/** The `type` of each event of a run export. */
 export function eventTypes(doc: any): string[] {
-  return (doc.entries as { event: { type: string } }[]).map((entry) => entry.event.type);
+  return (doc.events as { event: { type: string } }[]).map((event) => event.event.type);
 }
 
-/** `rewind [--json] replay <file>` of a journal document, in a directory without a server. */
+/** `rewind [--json] replay <file>` of a run export, in a directory without a server. */
 export function replayDocument(document: string, args: string[] = []): { code: number; stdout: string; stderr: string } {
   const dir = shortTempDir("rewind-gate-replay");
   const file = join(dir, "journal.json");

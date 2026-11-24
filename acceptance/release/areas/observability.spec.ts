@@ -74,7 +74,7 @@ async function query(q: string, extra: Record<string, string | string[]> = {}): 
  * waits until their summaries have them settled.
  */
 async function corpus(c: string, namespace = "alice") {
-  const start = (script: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { actionSet, script, labels: { case: c, ...labels } });
+  const start = (script: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { actionSet, code: script, labels: { case: c, ...labels } });
   const [completed, rateLimited, waiting, toolFails] = await Promise.all([
     start(SCRIPTS.lookup, { agent: "triage" }),
     start(SCRIPTS.rateLimited, { agent: "billing" }),
@@ -169,8 +169,8 @@ test("failures are grouped by fingerprint, numbers and quoted strings set aside"
   const namespace = `failures-${c}`;
   const own = t.api.ns(namespace);
   const fail = (order: number, quoted: string) =>
-    startRun(own, { script: `export default async function main() {\n  throw new Error('order ${order} of "${quoted}" not found');\n}\n`, labels: { case: c } });
-  const runs = await Promise.all([fail(1234, "ada"), fail(99, "grace"), startRun(own, { script: SCRIPTS.rateLimited, labels: { case: c } })]);
+    startRun(own, { code: `export default async function main() {\n  throw new Error('order ${order} of "${quoted}" not found');\n}\n`, labels: { case: c } });
+  const runs = await Promise.all([fail(1234, "ada"), fail(99, "grace"), startRun(own, { code: SCRIPTS.rateLimited, labels: { case: c } })]);
   for (const run of runs) await ended(own, run.id);
   const groups = await eventually(
     "the failures are grouped",
@@ -181,8 +181,8 @@ test("failures are grouped by fingerprint, numbers and quoted strings set aside"
     },
     60_000,
   );
-  expect(groups.totalGroups).toBe(2);
-  const orders = groups.groups.find((g: any) => g.runs === 2);
+  expect(groups.totalFingerprints).toBe(2);
+  const orders = groups.fingerprints.find((g: any) => g.runs === 2);
   expect(orders.error).toBe("Error");
   expect(orders.signature).toContain("<n>");
   expect(orders.signature).not.toContain("1234");
@@ -196,10 +196,10 @@ test("scripts are listed once per source, with their runs and tools, and read wh
   const namespace = `scripts-${c}`;
   const own = t.api.ns(namespace);
   const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const runs = await Promise.all([1, 2].map(() => startRun(own, { actionSet, script: source, labels: { case: c } })));
+  const runs = await Promise.all([1, 2].map(() => startRun(own, { actionSet, code: source, labels: { case: c } })));
   for (const run of runs) expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
-  expect(runs[0]!.script).toBe(digest);
+  expect(runs[0]!.codeDigest).toBe(digest);
   // The scripts of one namespace, from its counters.
   const listed = await eventually(
     "the script is listed with both runs",
@@ -230,7 +230,7 @@ test("a script is titled by its top comment, then by a person's title and descri
   const c = unique("ti");
   const own = t.api.ns(`titles-${c}`);
   const source = `// Look up ${c}\nimport { fx } from "rewind:actions";\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const run = await startRun(own, { actionSet, script: source, labels: { case: c } });
+  const run = await startRun(own, { actionSet, code: source, labels: { case: c } });
   expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
   // The comment at the top of the source titles it.
@@ -257,7 +257,7 @@ test("a title or a description out of bounds is refused as invalid-title", { tag
   const c = unique("tb");
   const own = t.api.ns(`titles-${c}`);
   const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const run = await startRun(own, { actionSet, script: source });
+  const run = await startRun(own, { actionSet, code: source });
   expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
   for (const body of [{ title: "" }, { title: "t".repeat(121) }, { title: "Fine", description: "d".repeat(2001) }]) {
@@ -283,7 +283,7 @@ export default async function main() {
   return "done";
 }
 `;
-    const run = await startRun(alice(), { actionSet: own.json.id, script });
+    const run = await startRun(alice(), { actionSet: own.json.id, code: script });
     expect((await ended(alice(), run.id)).status).toBe("completed");
     const stats = await eventually(
       "the tool statistics count the calls",
@@ -304,7 +304,7 @@ export default async function main() {
 });
 
 test("a payload above 256 KiB is left out of the answer and read on demand through its run", { tag: "@success" }, async () => {
-  const run = await startRun(alice(), { script: `export default async function main() {\n  return "x".repeat(300 * 1024);\n}\n` });
+  const run = await startRun(alice(), { code: `export default async function main() {\n  return "x".repeat(300 * 1024);\n}\n` });
   const done = await ended(alice(), run.id);
   expect(done.status).toBe("completed");
   expect(done.output.bytes).toBe(300 * 1024 + 2);
@@ -329,7 +329,7 @@ export default async function main() {
   return customer.tier;
 }
 `;
-  const run = await startRun(alice(), { actionSet, script, traceparent: harness.traceparent });
+  const run = await startRun(alice(), { actionSet, code: script, traceparent: harness.traceparent });
   expect(run.traceId).toBe(harness.traceId);
   expect((await ended(alice(), run.id)).status).toBe("completed");
   const mine = await eventually(
@@ -358,20 +358,20 @@ export default async function main() {
   evidence(`${mine.length} spans in trace ${harness.traceId}: ${[...new Set(mine.map((s) => s.name))].join(", ")}`);
 });
 
-test("lifecycle webhooks arrive signed: completed, failed, suspended and cancelled", { tag: "@success" }, async () => {
+test("lifecycle webhooks arrive signed: completed, failed, waiting and cancelled", { tag: "@success" }, async () => {
   const c = unique("w");
-  const completed = await startRun(alice(), { script: `export default async function main() { return 1; }\n`, labels: { case: c } });
-  const failed = await startRun(alice(), { script: SCRIPTS.rateLimited, labels: { case: c } });
-  const waiting = await startRun(alice(), { script: SCRIPTS.waiting, labels: { case: c } });
+  const completed = await startRun(alice(), { code: `export default async function main() { return 1; }\n`, labels: { case: c } });
+  const failed = await startRun(alice(), { code: SCRIPTS.rateLimited, labels: { case: c } });
+  const waiting = await startRun(alice(), { code: SCRIPTS.waiting, labels: { case: c } });
   await ended(alice(), completed.id);
   await ended(alice(), failed.id);
-  await eventually("the waiting run is suspended", async () => ((await alice().get(`/v1/runs/${waiting.id}`)).json.waitingFor?.length ? true : undefined));
+  await eventually("the run waits", async () => ((await alice().get(`/v1/runs/${waiting.id}`)).json.waitingFor?.length ? true : undefined));
   expectOk(await alice().post(`/v1/runs/${waiting.id}/cancel`, {}));
   await ended(alice(), waiting.id);
   const expected: [string, string][] = [
     ["run.completed", completed.id],
     ["run.failed", failed.id],
-    ["run.suspended", waiting.id],
+    ["run.waiting", waiting.id],
     ["run.cancelled", waiting.id],
   ];
   const got = await eventually(
@@ -401,7 +401,7 @@ test("quota.alert is sent when a namespace crosses 80 % and 100 % of its runs pe
   const namespace = `quota-${unique()}`;
   expectOk(await t.api.put(`/v1/namespaces/${namespace}`, { exceptions: { runsPerMonth: 4 } }));
   const one = async (n: number) => {
-    const run = await startRun(t.api.ns(namespace), { script: `export default async function main() { return ${n}; }\n` });
+    const run = await startRun(t.api.ns(namespace), { code: `export default async function main() { return ${n}; }\n` });
     await ended(t.api.ns(namespace), run.id);
   };
   const alerts = async () => {
@@ -516,7 +516,7 @@ test("the query language is no injection vector: SQL and wildcards are text", { 
 test("logs and payloads are never searched", { tag: "@attack" }, async () => {
   const needle = `needle${unique()}`;
   const run = await startRun(alice(), {
-    script: `export default async function main(input: { secret: string }) {\n  console.log("the secret is", input.secret);\n  return { echoed: input.secret };\n}\n`,
+    code: `export default async function main(input: { secret: string }) {\n  console.log("the secret is", input.secret);\n  return { echoed: input.secret };\n}\n`,
     input: { secret: needle },
     labels: { case: needle.slice(0, 10) },
   });
@@ -530,7 +530,7 @@ test("logs and payloads are never searched", { tag: "@attack" }, async () => {
 });
 
 test("a forged or replayed delivery fails verification", { tag: "@attack" }, async () => {
-  const run = await startRun(alice(), { script: `export default async function main() { return "signed"; }\n` });
+  const run = await startRun(alice(), { code: `export default async function main() { return "signed"; }\n` });
   await ended(alice(), run.id);
   const delivery = await eventually("run.completed is delivered", () =>
     receiver.deliveries.find((d) => {
@@ -554,9 +554,9 @@ test("a forged or replayed delivery fails verification", { tag: "@attack" }, asy
 });
 
 test("a payload is read only through a run that holds it", { tag: "@attack" }, async () => {
-  const big = await startRun(alice(), { script: `export default async function main() {\n  return "y".repeat(300 * 1024);\n}\n` });
+  const big = await startRun(alice(), { code: `export default async function main() {\n  return "y".repeat(300 * 1024);\n}\n` });
   const holder = await ended(alice(), big.id);
-  const other = await ended(alice(), (await startRun(alice(), { script: `export default async function main() { return 0; }\n` })).id);
+  const other = await ended(alice(), (await startRun(alice(), { code: `export default async function main() { return 0; }\n` })).id);
   const digest = holder.output.digest;
   await expectRefused({
     attempt: () => alice().get(`/v1/payloads/${digest}`, { query: { run: other.id } }),

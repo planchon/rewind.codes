@@ -32,7 +32,7 @@ const UNKNOWN_INVITATION = "invitation_01JZZZZZZZZZZZZZZZZZZZZZZZ";
  */
 const PROBES: { permission: string; method: string; path: string; body?: unknown }[] = [
   { permission: "runs:read", method: "GET", path: "/v1/runs" },
-  { permission: "runs:start", method: "POST", path: "/v1/check", body: { script: "export default async function main() { return 1; }" } },
+  { permission: "runs:start", method: "POST", path: "/v1/check", body: { code: "export default async function main() { return 1; }" } },
   { permission: "runs:control", method: "POST", path: `/v1/runs/${UNKNOWN_RUN}/cancel`, body: {} },
   { permission: "runs:quarantine", method: "POST", path: `/v1/runs/${UNKNOWN_RUN}/release` },
   { permission: "runs:delete", method: "DELETE", path: `/v1/runs/${UNKNOWN_RUN}` },
@@ -79,7 +79,7 @@ async function call(server: Server, token: string, method: string, path: string,
 }
 
 interface Whoami {
-  tenant?: string;
+  organizationId?: string;
   principal?: { type?: string; id?: string } | string;
   grant?: { role: string; allowedLabels?: Record<string, string> };
   permissions: string[];
@@ -217,7 +217,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
 
     await test.step("the key works within its role, and is refused, naming the permission, outside it", async () => {
       const whoami = (await call(server, key, "GET", "/v1/whoami")).body as unknown as Whoami;
-      expect(whoami.tenant).toBe(organization);
+      expect(whoami.organizationId).toBe(organization);
       expect(whoami.grant?.role).toBe("harness");
       // Every permission of the catalog is probed.
       const catalog = (await call(server, key, "GET", "/v1/permissions")).body as unknown as {
@@ -306,7 +306,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       }
 
       const whoami = (await call(server, inviteeToken, "GET", "/v1/whoami")).body as unknown as Whoami;
-      expect(whoami.tenant).toBe(organization);
+      expect(whoami.organizationId).toBe(organization);
       expect(whoami.grant?.role).toBe("reader");
       expect(whoami.permissions.sort()).toEqual(
         ["runs:read", "actions:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"].sort(),

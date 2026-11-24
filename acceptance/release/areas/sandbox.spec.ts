@@ -1,8 +1,8 @@
 /**
  * Area "Sandbox" of the release gate, on setup A: what a script written by a model can reach.
  *
- * - Determinism: logical time, the seeded `Math.random` and `crypto`; a replay of the exported
- *   journal recomputes every value; two runs differ (`archi/01-product.md`, "What exists in the
+ * - Determinism: logical time, the seeded `Math.random` and `crypto`; a replay of the run
+ *   export recomputes every value; two runs differ (`archi/01-product.md`, "What exists in the
  *   sandbox"; `archi/03-execution.md`, "Logical time", "Replay").
  * - Escape: the globals are exactly the sandbox lib's; no module but `rewind`, `rewind:actions` and
  *   `rewind:workflows`, statically, dynamically or through `eval`; no tool outside the action set;
@@ -48,7 +48,7 @@ let hostActionSet: string;
 test.beforeAll(async () => {
   tenant = await newTenant("sandbox");
   const created = await tenant.api.post("/v1/action-sets", {
-    host: [{ name: "t.noop", description: "Does nothing.", inputSchema: { type: "object" } }],
+    harness: [{ name: "t.noop", description: "Does nothing.", inputSchema: { type: "object" } }],
   });
   expectOk(created);
   hostActionSet = created.json.id;
@@ -91,25 +91,25 @@ test("time is logical and randomness is seeded: a replay recomputes every value,
   // Logical time: the time of the trigger the script reacts to, in UTC and en-US.
   const { doc, text } = await journal(tenant.api, first.id);
   expect(eventTypes(doc)).toEqual(["run_started", "start_timer", "timer_fired", "complete_run"]);
-  expect(one.a.now).toBe(doc.entries[0].recorded_at);
+  expect(one.a.now).toBe(doc.events[0].recorded_at);
   expect(one.a.iso).toBe(new Date(one.a.now).toISOString());
-  expect(one.b.now).toBe(doc.entries[2].recorded_at);
+  expect(one.b.now).toBe(doc.events[2].recorded_at);
   expect(one.a.perf).toBe(0);
   expect(one.timeZone).toBe("UTC");
   expect(one.locale).toBe("en-US");
 
   // Each run has its own seed: its generators, crypto included, differ from another run's.
-  expect(doc.entries[0].event.seed).toMatch(/^[0-9a-f]{64}$/);
+  expect(doc.events[0].event.seed).toMatch(/^[0-9a-f]{64}$/);
   expect(two.a.uuid).not.toBe(one.a.uuid);
   expect(two.a.bytes).not.toEqual(one.a.bytes);
   expect(two.a.random).not.toBe(one.a.random);
   expect(one.b.uuid).not.toBe(one.a.uuid);
 
-  // The journal replays in another process, without the server, to the same output.
+  // The history replays in another process, without the server, to the same output.
   const replayed = replayDocument(text);
   expect(replayed.code, replayed.stdout + replayed.stderr).toBe(0);
-  expect(replayed.stdout).toContain("the script replays the 4 entries");
-  evidence("a CLI replay of the exported journal recomputed the same time, random values and UUIDs");
+  expect(replayed.stdout).toContain("the code replays the 4 events");
+  evidence("a CLI replay of the run export recomputed the same time, random values and UUIDs");
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -162,17 +162,17 @@ test("a module outside rewind, rewind:actions and rewind:workflows is refused be
     const reply = await expectRefused({
       attempt: () =>
         tenant.api.ns(namespace).post("/v1/runs", {
-          script: `import x from ${JSON.stringify(specifier)};\nexport default async function main() { return String(x); }\n`,
+          code: `import x from ${JSON.stringify(specifier)};\nexport default async function main() { return String(x); }\n`,
           check: false,
         }),
       status: 422,
-      slug: "invalid-script",
+      slug: "invalid-code",
       probe: () => runsIn(namespace),
     });
-    expect(reply.json.diagnostics?.[0]?.code).toBe("rewind/invalid-script");
+    expect(reply.json.diagnostics?.[0]?.code).toBe("rewind/invalid-code");
     expect(reply.json.detail).toContain(`cannot import ${JSON.stringify(specifier)}`);
   }
-  evidence(`${SPECIFIERS.length} imports refused with 422 invalid-script; no run was created`);
+  evidence(`${SPECIFIERS.length} imports refused with 422 invalid-code; no run was created`);
 });
 
 test("a dynamic import() is refused before any run exists", { tag: "@attack" }, async () => {
@@ -181,16 +181,16 @@ test("a dynamic import() is refused before any run exists", { tag: "@attack" }, 
     const reply = await expectRefused({
       attempt: () =>
         tenant.api.ns(namespace).post("/v1/runs", {
-          script: `export default async function main() { const m = await import(${JSON.stringify(specifier)}); return Object.keys(m); }\n`,
+          code: `export default async function main() { const m = await import(${JSON.stringify(specifier)}); return Object.keys(m); }\n`,
           check: false,
         }),
       status: 422,
-      slug: "invalid-script",
+      slug: "invalid-code",
       probe: () => runsIn(namespace),
     });
     expect(reply.json.detail).toContain("dynamic import() is not available");
   }
-  evidence("import() refused at start with 422 invalid-script");
+  evidence("import() refused at start with 422 invalid-code");
 });
 
 test("an import() hidden in eval or new Function loads nothing", { tag: "@attack" }, async () => {
@@ -223,11 +223,11 @@ test("a tool outside the action set: an absent group is refused at start, an abs
     attempt: () =>
       tenant.api.ns(namespace).post("/v1/runs", {
         actionSet: hostActionSet,
-        script: `import { payments } from "rewind:actions";\nexport default async function main() { return await payments.refund({ amount: 100 }); }\n`,
+        code: `import { payments } from "rewind:actions";\nexport default async function main() { return await payments.refund({ amount: 100 }); }\n`,
         check: false,
       }),
     status: 422,
-    slug: "invalid-script",
+    slug: "invalid-code",
     probe: () => runsIn(namespace),
   });
   expect(refused.json.detail).toContain('has no export named "payments"');
@@ -239,9 +239,9 @@ test("a tool outside the action set: an absent group is refused at start, an abs
   );
   expect(run.status).toBe("failed");
   expect(run.error).toMatchObject({ name: "TypeError" });
-  // No call was scheduled: the journal holds the start and the failure only.
+  // No call was scheduled: the history holds the start and the failure only.
   expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "fail_run"]);
-  evidence("absent group: 422 invalid-script; absent tool: TypeError, no schedule_call");
+  evidence("absent group: 422 invalid-code; absent tool: TypeError, no schedule_call");
 });
 
 test("fetch does not exist without the http action, and nothing reaches the network", { tag: "@attack" }, async () => {
@@ -329,15 +329,15 @@ export default async function main() {
   for (const host of ["/Users/", "/home/", "/root/", "/private/", "/var/", "target/", ".rs:", "cargo", "deno_core", "node_modules"]) {
     expect(text, `the run names ${host}`).not.toContain(host);
   }
-  expect(run.error.stack).toContain("script.ts");
+  expect(run.error.stack).toContain("workflow.ts");
   // Glue frames reach the script as text only: no CallSite object to reach the runtime through.
   const { doc } = await journal(tenant.api, run.id);
-  const failed = doc.entries.at(-1).event;
+  const failed = doc.events.at(-1).event;
   expect(JSON.stringify(failed)).not.toContain("/Users/");
-  evidence("stacks name script.ts and rewind:bootstrap frames; prepareStackTrace never hands the script a CallSite");
+  evidence("stacks name workflow.ts and rewind:bootstrap frames; prepareStackTrace never hands the script a CallSite");
 });
 
-test("a secret the run attaches never enters the isolate, a journal, a trace or an answer", { tag: "@attack" }, async () => {
+test("a secret the run attaches never enters the isolate, a run export, a transcript or an answer", { tag: "@attack" }, async () => {
   const mcp: McpFixture = await startMcpFixture();
   const secret = canary();
   try {
@@ -383,14 +383,14 @@ export default async function main() {
     // The call carried the attached secret to the MCP server, in its transport.
     expect(mcp.calls.length).toBeGreaterThan(0);
     expect(mcp.calls[0]!.headers.authorization).toBe(`Bearer ${secret}`);
-    // Nothing the script reached, logged or returned holds it; nor its journal or trace.
+    // Nothing the script reached, logged or returned holds it; nor its history or transcript.
     expect(JSON.stringify(run)).not.toContain(secret);
     const exported = await journal(tenant.api, run.id);
     expect(exported.text).not.toContain(secret);
-    const trace = await tenant.api.get(`/v1/runs/${run.id}/trace`);
-    expectOk(trace);
-    expect(trace.text).not.toContain(secret);
-    const cassette = await tenant.api.get(`/v1/runs/${run.id}/journal`, { query: { as: "cassette" } });
+    const transcript = await tenant.api.get(`/v1/runs/${run.id}/transcript`);
+    expectOk(transcript);
+    expect(transcript.text).not.toContain(secret);
+    const cassette = await tenant.api.get(`/v1/runs/${run.id}/export`, { query: { as: "cassette" } });
     expectOk(cassette);
     expect(cassette.text).not.toContain(secret);
     const actionSets = await tenant.api.get("/v1/action-sets");
@@ -585,7 +585,7 @@ export default async function main() { spin(20_000_000); await sleep(1); spin(20
   for (let batch = 0; batch < 6 && seen().size < a.nodes.length; batch++) {
     const runs = await Promise.all(
       Array.from({ length: 8 }, async () => {
-        const started = await tenant.api.ns(unique("nodes-")).post("/v1/runs", { script: SCRIPT, check: false });
+        const started = await tenant.api.ns(unique("nodes-")).post("/v1/runs", { code: SCRIPT, check: false });
         expectOk(started);
         ids.add(started.json.id);
         return started.json.id as string;

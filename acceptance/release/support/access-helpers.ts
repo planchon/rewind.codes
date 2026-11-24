@@ -117,7 +117,7 @@ export async function startRun(
 ): Promise<Reply> {
   return api.ns(namespace).post(
     "/v1/runs",
-    { script: body.script ?? QUICK_SCRIPT, input: body.input ?? { n: 1 }, labels: body.labels, wait: body.wait, actionSet: body.actionSet },
+    { code: body.script ?? QUICK_SCRIPT, input: body.input ?? { n: 1 }, labels: body.labels, wait: body.wait, actionSet: body.actionSet },
     { headers },
   );
 }
@@ -143,16 +143,16 @@ export async function waitingRun(tenant: Tenant, namespace: string, note = "wait
   throw new Error(`run ${id} never waited for its signal`);
 }
 
-/** What a victim's run looks like, for probes: its status and the length of its journal. */
-export async function runProbe(api: Api, id: string): Promise<{ status: string; entries: number; signals: number }> {
+/** What a victim's run looks like, for probes: its status and the length of its history. */
+export async function runProbe(api: Api, id: string): Promise<{ status: string; events: number; signals: number }> {
   const state = await api.get(`/v1/runs/${id}`);
   expectOk(state, 200);
-  const journal = await api.get(`/v1/runs/${id}/journal`);
-  expectOk(journal, 200);
-  const entries = (journal.json.entries ?? []) as { event: { type: string } }[];
+  const exported = await api.get(`/v1/runs/${id}/export`);
+  expectOk(exported, 200);
+  const events = (exported.json.events ?? []) as { event: { type: string } }[];
   return {
     status: state.json.status as string,
-    entries: entries.length,
-    signals: entries.filter((e) => e.event.type.includes("signal")).length,
+    events: events.length,
+    signals: events.filter((e) => e.event.type.includes("signal")).length,
   };
 }

@@ -68,7 +68,7 @@ test.describe("the Rewind-Namespace header", () => {
       [tenant.api, "/v1/check"],
       [strict.api, "/v1/test"],
     ] as const) {
-      const reply = await api.post(path, { script });
+      const reply = await api.post(path, { code: script });
       expectProblem(reply, 400, "invalid-request");
       expect(reply.json.detail).toContain("Rewind-Namespace");
     }
@@ -77,11 +77,11 @@ test.describe("the Rewind-Namespace header", () => {
     evidence("POST /v1/runs, /v1/check and /v1/test without Rewind-Namespace → 400 invalid-request naming the header; no namespace created");
   });
 
-  test("a key's header narrows its reads, and a fork stays in its parent's namespace", { tag: "@success" }, async () => {
+  test("a key's header narrows its reads, and a fork stays in its source's namespace", { tag: "@success" }, async () => {
     const alice = tenant.api.ns("alice");
     const bob = tenant.api.ns("bob");
-    const hers = await start(alice, { script: waiting(unique("hers")) });
-    const his = await start(bob, { script: waiting(unique("his")) });
+    const hers = await start(alice, { code: waiting(unique("hers")) });
+    const his = await start(bob, { code: waiting(unique("his")) });
     expect(hers.namespace).toBe("alice");
     expect(his.namespace).toBe("bob");
     await untilWaiting(tenant.api, hers.id);
@@ -90,12 +90,12 @@ test.describe("the Rewind-Namespace header", () => {
       await bob.get(`/v1/runs/${hers.id}`),
       await bob.post(`/v1/runs/${hers.id}/signals/approval`, { ok: true }),
       await bob.post(`/v1/runs/${hers.id}/cancel`, {}),
-      await bob.post(`/v1/runs/${hers.id}/fork`, { script: waiting(unique("fork")) }),
+      await bob.post(`/v1/runs/${hers.id}/fork`, { code: waiting(unique("fork")) }),
     ]) {
       expectProblem(reply, 404, "not-found");
     }
-    // A fork takes its parent's namespace, with the header or without it.
-    const fork = await tenant.api.post(`/v1/runs/${hers.id}/fork`, { script: waiting(unique("fork")) });
+    // A fork takes its source's namespace, with the header or without it.
+    const fork = await tenant.api.post(`/v1/runs/${hers.id}/fork`, { code: waiting(unique("fork")) });
     expectOk(fork);
     expect(fork.json.namespace).toBe("alice");
     // Reads: that namespace with the header, every namespace without it.
@@ -134,12 +134,12 @@ test.describe("opaque tokens", () => {
     const carol = tenant.api.as(minted.token);
     const who = await carol.get("/v1/whoami");
     expectOk(who, 200);
-    expect(who.json.tenant).toBe(tenant.id);
+    expect(who.json.organizationId).toBe(tenant.id);
     expect(who.json.operator).toBe(false);
     expect(who.json.permissions).toEqual(TOKEN_DEFAULT);
     expect(who.json.principal).toMatchObject({ kind: "token", token: "opaque", namespace, id: minted.id });
 
-    const run = await start(carol, { script: short(unique("carol")), wait: "20s" });
+    const run = await start(carol, { code: short(unique("carol")), wait: "20s" });
     expect(run.namespace).toBe(namespace);
     expect(run.status).toBe("completed");
     const erase = await carol.delete(`/v1/runs/${run.id}`);
@@ -154,13 +154,13 @@ test.describe("opaque tokens", () => {
     const minted = await mint(tenant.api, namespace, { permissions: ["runs:read", "runs:start"], labels: { agent: "triage" } });
     expect(minted.json.permissions).toEqual(["runs:read", "runs:start"]);
     const dave = tenant.api.as(minted.token);
-    const run = await start(dave, { script: waiting(unique("dave")) });
+    const run = await start(dave, { code: waiting(unique("dave")) });
     expect(run.labels).toEqual({ agent: "triage" });
     await untilWaiting(tenant.api, run.id);
     const signal = await dave.post(`/v1/runs/${run.id}/signals/approval`, { ok: true });
     expectProblem(signal, 403, "forbidden");
     expect(signal.json.detail).toContain("runs:control");
-    const contradicting = await dave.post("/v1/runs", { script: short(unique("dave")), labels: { agent: "other" } });
+    const contradicting = await dave.post("/v1/runs", { code: short(unique("dave")), labels: { agent: "other" } });
     expectProblem(contradicting, 403, "forbidden");
   });
 
@@ -214,7 +214,7 @@ test.describe("opaque tokens", () => {
     expectOk(await fay.get("/v1/whoami"), 200);
     await new Promise((resolve) => setTimeout(resolve, 1500));
     await expectRefused({
-      attempt: () => fay.post("/v1/runs", { script: short(unique("fay")) }),
+      attempt: () => fay.post("/v1/runs", { code: short(unique("fay")) }),
       status: 401,
       slug: "unauthorized",
       probe: () => namespaceState(tenant.api, namespace),
@@ -230,7 +230,7 @@ test.describe("opaque tokens", () => {
     expectOk(await tenant.api.as(first.token).get("/v1/whoami"), 200);
     expectOk(await tenant.api.delete(`/v1/tokens/${first.id}`), 204);
     await expectRefused({
-      attempt: () => tenant.api.as(first.token).post("/v1/runs", { script: short(unique("gus")) }),
+      attempt: () => tenant.api.as(first.token).post("/v1/runs", { code: short(unique("gus")) }),
       status: 401,
       slug: "unauthorized",
       probe: () => namespaceState(tenant.api, namespace),
@@ -289,7 +289,7 @@ test.describe("signed tokens", () => {
       expectOk(who, 200);
       expect(who.json.principal).toMatchObject({ kind: "token", token: "signed", namespace, kid: key.kid, jti: "j-1", labels: { agent: "triage" } });
       expect(who.json.permissions).toEqual(["runs:read", "runs:start"]);
-      const run = await start(client, { script: short(unique(alg)), wait: "20s" });
+      const run = await start(client, { code: short(unique(alg)), wait: "20s" });
       expect(run.namespace).toBe(namespace);
       expect(run.labels).toEqual({ agent: "triage" });
       expect(run.status).toBe("completed");
@@ -358,7 +358,7 @@ test.describe("signed tokens", () => {
     test(`refused: ${forgery.name}`, { tag: "@attack" }, async () => {
       const { token, sub } = await forgery.token();
       await expectRefused({
-        attempt: () => tenant.api.as(token).post("/v1/runs", { script: short(unique("forged")) }),
+        attempt: () => tenant.api.as(token).post("/v1/runs", { code: short(unique("forged")) }),
         status: 401,
         slug: "unauthorized",
         probe: () => namespaceState(tenant.api, sub),
@@ -375,7 +375,7 @@ test.describe("signed tokens", () => {
     expectOk(await tenant.api.as(token).get("/v1/whoami"), 200);
     expectOk(await tenant.api.delete(`/v1/organization/token-keys/${key.kid}`), 204);
     await expectRefused({
-      attempt: () => tenant.api.as(token).post("/v1/runs", { script: short(unique("judy")) }),
+      attempt: () => tenant.api.as(token).post("/v1/runs", { code: short(unique("judy")) }),
       status: 401,
       slug: "unauthorized",
       probe: () => namespaceState(tenant.api, namespace),
@@ -391,7 +391,7 @@ test.describe("signed tokens", () => {
     const revoked = await tenant.api.delete(`/v1/namespaces/${namespace}/tokens`);
     expectOk(revoked, 200);
     await expectRefused({
-      attempt: () => tenant.api.as(early).post("/v1/runs", { script: short(unique("kim")) }),
+      attempt: () => tenant.api.as(early).post("/v1/runs", { code: short(unique("kim")) }),
       status: 401,
       slug: "unauthorized",
       probe: () => namespaceState(tenant.api, namespace),
@@ -403,14 +403,14 @@ test.describe("signed tokens", () => {
 
   test("a token signed with another tenant's key reaches that tenant only", { tag: "@attack" }, async () => {
     // A run of this tenant's Alice.
-    const hers = await start(tenant.api.ns("alice"), { script: waiting(unique("alice")) });
+    const hers = await start(tenant.api.ns("alice"), { code: waiting(unique("alice")) });
     await untilWaiting(tenant.api, hers.id);
     // The other customer signs a token for its own "alice".
     const token = await foreign.sign({ sub: "alice", permissions: ["runs:read", "runs:start", "runs:control"] });
     const intruder = tenant.api.as(token);
     const who = await intruder.get("/v1/whoami");
     expectOk(who, 200);
-    expect(who.json.tenant).toBe(other.id);
+    expect(who.json.organizationId).toBe(other.id);
     await expectRefused({
       attempt: () => intruder.get(`/v1/runs/${hers.id}`),
       status: 404,
@@ -471,7 +471,7 @@ export default async function main(input: { id: string }) {
     tenant = await newTenant("ns-alice-bob");
     const owner = tenant.api;
     const actionSet = await owner.post("/v1/action-sets", {
-      host: [
+      harness: [
         {
           name: "support.ask",
           description: "Asks the end user a question.",
@@ -486,7 +486,7 @@ export default async function main(input: { id: string }) {
       name: "ticket",
       description: "A ticket waiting for approval.",
       actionSet: asking,
-      script: TICKET,
+      code: TICKET,
       input: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       output: { type: "object", properties: { approved: { type: "boolean" }, id: { type: "string" } }, required: ["approved", "id"] },
       signals: { approve: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] } },
@@ -499,13 +499,13 @@ export default async function main(input: { id: string }) {
     // Bob's runs, started by the customer: one waits for a signal, one for a harness action, one is
     // a run of the workflow `ticket`.
     const asBob = owner.ns("bob");
-    bob.waiting = await start(asBob, { script: waiting(unique("bob")), input: { secret: unique("bob-input-"), padding: "b".repeat(300 * 1024) } });
-    bob.asking = await start(asBob, { script: ASK(unique("bob-asks")), actionSet: asking });
+    bob.waiting = await start(asBob, { code: waiting(unique("bob")), input: { secret: unique("bob-input-"), padding: "b".repeat(300 * 1024) } });
+    bob.asking = await start(asBob, { code: ASK(unique("bob-asks")), actionSet: asking });
     bob.ticket = await start(asBob, { workflow: "ticket", input: { id: unique("bob-ticket-") } });
     // Alice's.
     const asAlice = owner.ns("alice");
-    hers.waiting = await start(asAlice, { script: waiting(unique("alice")), input: { secret: unique("alice-input-"), padding: "a".repeat(300 * 1024) } });
-    hers.asking = await start(asAlice, { script: ASK(unique("alice-asks")), actionSet: asking });
+    hers.waiting = await start(asAlice, { code: waiting(unique("alice")), input: { secret: unique("alice-input-"), padding: "a".repeat(300 * 1024) } });
+    hers.asking = await start(asAlice, { code: ASK(unique("alice-asks")), actionSet: asking });
     for (const run of [bob.waiting, bob.asking, bob.ticket, hers.waiting, hers.asking]) {
       Object.assign(run, await untilWaiting(owner, run.id));
     }
@@ -516,16 +516,16 @@ export default async function main(input: { id: string }) {
   /** Every request of Alice's token on Bob's waiting run: each must be 404, and leave it unchanged. */
   const onBobsRun: { what: string; send: () => Promise<import("../support/gate.js").Reply> }[] = [
     { what: "GET /v1/runs/{bob}", send: () => alice.get(`/v1/runs/${bob.waiting.id}`) },
-    { what: "GET /v1/runs/{bob}/trace", send: () => alice.get(`/v1/runs/${bob.waiting.id}/trace`, { query: { format: "llm" } }) },
-    { what: "GET /v1/runs/{bob}/entries/0", send: () => alice.get(`/v1/runs/${bob.waiting.id}/entries/0`) },
-    { what: "GET /v1/runs/{bob}/journal", send: () => alice.get(`/v1/runs/${bob.waiting.id}/journal`) },
-    { what: "GET /v1/runs/{bob}/journal?as=cassette", send: () => alice.get(`/v1/runs/${bob.waiting.id}/journal`, { query: { as: "cassette" } }) },
+    { what: "GET /v1/runs/{bob}/transcript", send: () => alice.get(`/v1/runs/${bob.waiting.id}/transcript`) },
+    { what: "GET /v1/runs/{bob}/events/0", send: () => alice.get(`/v1/runs/${bob.waiting.id}/events/0`) },
+    { what: "GET /v1/runs/{bob}/export", send: () => alice.get(`/v1/runs/${bob.waiting.id}/export`) },
+    { what: "GET /v1/runs/{bob}/export?as=cassette", send: () => alice.get(`/v1/runs/${bob.waiting.id}/export`, { query: { as: "cassette" } }) },
     { what: "GET /v1/runs/{bob}/events", send: () => alice.get(`/v1/runs/${bob.waiting.id}/events`) },
-    { what: "GET /v1/scripts/{bob's script}", send: () => alice.get(`/v1/scripts/${bob.waiting.script}`) },
+    { what: "GET /v1/scripts/{bob's script}", send: () => alice.get(`/v1/scripts/${bob.waiting.codeDigest}`) },
     { what: "GET /v1/payloads/{bob's input}?run={bob}", send: () => alice.get(`/v1/payloads/${bob.waiting.input.digest}`, { query: { run: bob.waiting.id } }) },
     { what: "POST /v1/runs/{bob}/signals/approval", send: () => alice.post(`/v1/runs/${bob.waiting.id}/signals/approval`, { ok: true }) },
     { what: "POST /v1/runs/{bob}/cancel", send: () => alice.post(`/v1/runs/${bob.waiting.id}/cancel`, { reason: "mallory" }) },
-    { what: "POST /v1/runs/{bob}/fork", send: () => alice.post(`/v1/runs/${bob.waiting.id}/fork`, { script: waiting(unique("fork")) }) },
+    { what: "POST /v1/runs/{bob}/fork", send: () => alice.post(`/v1/runs/${bob.waiting.id}/fork`, { code: waiting(unique("fork")) }) },
     { what: "POST /v1/runs/{bob}/release", send: () => alice.post(`/v1/runs/${bob.waiting.id}/release`) },
     { what: "POST /v1/runs/{bob}/give-up", send: () => alice.post(`/v1/runs/${bob.waiting.id}/give-up`) },
     { what: "GET /v1/namespaces/bob/secrets", send: () => alice.get("/v1/namespaces/bob/secrets") },
@@ -558,7 +558,7 @@ export default async function main(input: { id: string }) {
     const astray = alice.ns("bob");
     await expectRefused({ attempt: () => astray.get("/v1/runs"), status: 403, slug: "forbidden" });
     await expectRefused({
-      attempt: () => astray.post("/v1/runs", { script: short(unique("astray")) }),
+      attempt: () => astray.post("/v1/runs", { code: short(unique("astray")) }),
       status: 403,
       slug: "forbidden",
       probe: () => namespaceState(tenant.api, "bob"),
@@ -589,8 +589,8 @@ export default async function main(input: { id: string }) {
     const scripts = await alice.get("/v1/scripts");
     expectOk(scripts, 200);
     const digests = scripts.json.scripts.map((s: any) => s.digest);
-    expect(digests).not.toContain(bob.waiting.script);
-    expect(digests).not.toContain(bob.asking.script);
+    expect(digests).not.toContain(bob.waiting.codeDigest);
+    expect(digests).not.toContain(bob.asking.codeDigest);
     const failures = await alice.get("/v1/runs/failures");
     expectOk(failures, 200);
     expect(JSON.stringify(failures.json)).not.toContain(bob.waiting.id);
@@ -664,7 +664,7 @@ export default async function main(input: { target: string }) {
 }
 `;
     const before = await runState(tenant.api, bob.ticket.id);
-    const run = await start(alice, { script, actionSet: tickets, input: { target: bob.ticket.id }, wait: "30s" });
+    const run = await start(alice, { code: script, actionSet: tickets, input: { target: bob.ticket.id }, wait: "30s" });
     expect(run.status, JSON.stringify(run)).toBe("completed");
     expect(String(run.output.value.signalled)).toMatch(/^refused:/);
     expect(await runState(tenant.api, bob.ticket.id)).toEqual(before);
@@ -679,25 +679,25 @@ export default async function main(input: { target: string }) {
 // Quotas: a tenant per check, so that limits never leak into another
 
 test.describe("quotas", () => {
-  test("maxScriptLines refuses a longer script at start, fork, check and test; an exception lifts it", { tag: "@failure" }, async () => {
+  test("maxCodeLines refuses longer code at start, fork, check and test; an exception lifts it", { tag: "@failure" }, async () => {
     const tenant = await newTenant("ns-lines");
-    expectOk(await tenant.api.put("/v1/organization/namespace-defaults", { defaults: { maxScriptLines: 3 } }));
+    expectOk(await tenant.api.put("/v1/organization/namespace-defaults", { defaults: { maxCodeLines: 3 } }));
     const alice = tenant.api.ns("alice");
     const long = waiting(unique("long"));
     const tooLong = (reply: import("../support/gate.js").Reply) => {
-      expectProblem(reply, 422, "invalid-script");
-      expect(reply.json.diagnostics?.[0]?.code).toBe("rewind/max-script-lines");
+      expectProblem(reply, 422, "invalid-code");
+      expect(reply.json.diagnostics?.[0]?.code).toBe("rewind/max-code-lines");
     };
-    tooLong(await alice.post("/v1/runs", { script: long }));
-    tooLong(await alice.post("/v1/check", { script: long }));
+    tooLong(await alice.post("/v1/runs", { code: long }));
+    tooLong(await alice.post("/v1/check", { code: long }));
     const strict = await newTenant("ns-lines", stacks().b);
-    expectOk(await strict.api.put("/v1/organization/namespace-defaults", { defaults: { maxScriptLines: 3 } }));
-    tooLong(await strict.api.ns("alice").post("/v1/test", { script: long }));
-    const ok = await start(alice, { script: short(unique("ok")), wait: "20s" });
-    tooLong(await alice.post(`/v1/runs/${ok.id}/fork`, { script: long }));
+    expectOk(await strict.api.put("/v1/organization/namespace-defaults", { defaults: { maxCodeLines: 3 } }));
+    tooLong(await strict.api.ns("alice").post("/v1/test", { code: long }));
+    const ok = await start(alice, { code: short(unique("ok")), wait: "20s" });
+    tooLong(await alice.post(`/v1/runs/${ok.id}/fork`, { code: long }));
     expect(await namespaceState(tenant.api, "alice")).toMatchObject({ runsStarted: 1 });
-    expectOk(await tenant.api.put("/v1/namespaces/vip", { exceptions: { maxScriptLines: 100 } }), 200);
-    await start(tenant.api.ns("vip"), { script: long });
+    expectOk(await tenant.api.put("/v1/namespaces/vip", { exceptions: { maxCodeLines: 100 } }), 200);
+    await start(tenant.api.ns("vip"), { code: long });
   });
 
   test("maxTtl refuses a longer TTL with 400, and lowers the default TTL", { tag: "@failure" }, async () => {
@@ -705,14 +705,14 @@ test.describe("quotas", () => {
     expectOk(await tenant.api.put("/v1/namespaces/alice", { exceptions: { maxTtl: "1h" } }), 200);
     const alice = tenant.api.ns("alice");
     await expectRefused({
-      attempt: () => alice.post("/v1/runs", { script: short(unique("ttl")), ttl: "2h" }),
+      attempt: () => alice.post("/v1/runs", { code: short(unique("ttl")), ttl: "2h" }),
       status: 400,
       slug: "invalid-request",
       probe: () => namespaceState(tenant.api, "alice"),
     });
-    const run = await start(alice, { script: short(unique("ttl")), wait: "20s" });
+    const run = await start(alice, { code: short(unique("ttl")), wait: "20s" });
     expect(Date.parse(run.expiresAt) - Date.parse(run.createdAt)).toBeLessThanOrEqual(3_600_000 + 1000);
-    expectProblem(await alice.post(`/v1/runs/${run.id}/fork`, { script: short(unique("fork")), ttl: "2h" }), 400, "invalid-request");
+    expectProblem(await alice.post(`/v1/runs/${run.id}/fork`, { code: short(unique("fork")), ttl: "2h" }), 400, "invalid-request");
   });
 
   test("runsPerMonth refuses with 429, the quota's fields and Retry-After, never naming the namespace", { tag: "@failure" }, async () => {
@@ -720,10 +720,10 @@ test.describe("quotas", () => {
     const namespace = unique("monthly-");
     expectOk(await tenant.api.put(`/v1/namespaces/${namespace}`, { exceptions: { runsPerMonth: 1 } }), 200);
     const api = tenant.api.ns(namespace);
-    const first = await api.post("/v1/runs", { script: short(unique("m")), wait: "20s" }, { headers: { "idempotency-key": "first" } });
+    const first = await api.post("/v1/runs", { code: short(unique("m")), wait: "20s" }, { headers: { "idempotency-key": "first" } });
     expectOk(first, 201);
     const refused = await expectRefused({
-      attempt: () => api.post("/v1/runs", { script: short(unique("m")) }),
+      attempt: () => api.post("/v1/runs", { code: short(unique("m")) }),
       status: 429,
       slug: "quota-exceeded",
       probe: () => namespaceState(tenant.api, namespace),
@@ -735,7 +735,7 @@ test.describe("quotas", () => {
     expect(retryAfter).toBeLessThanOrEqual(31 * 86_400);
     expect(refused.json.detail).not.toContain(namespace);
     // The first request, retried with its key, still returns its run.
-    const retried = await api.post("/v1/runs", { script: short(unique("m")) }, { headers: { "idempotency-key": "first" } });
+    const retried = await api.post("/v1/runs", { code: short(unique("m")) }, { headers: { "idempotency-key": "first" } });
     expectOk(retried);
     expect(retried.json.id).toBe(first.json.id);
     evidence(`429 quota-exceeded runs_per_month, Retry-After ${retryAfter}s; the retry with its key returns ${first.json.id}`);
@@ -746,22 +746,22 @@ test.describe("quotas", () => {
     const namespace = unique("busy-");
     expectOk(await tenant.api.put(`/v1/namespaces/${namespace}`, { exceptions: { activeRuns: 1 } }), 200);
     const api = tenant.api.ns(namespace);
-    const first = await api.post("/v1/runs", { script: waiting(unique("a")) }, { headers: { "idempotency-key": "k1" } });
+    const first = await api.post("/v1/runs", { code: waiting(unique("a")) }, { headers: { "idempotency-key": "k1" } });
     expectOk(first, 201);
     await untilWaiting(tenant.api, first.json.id);
     const refused = await expectRefused({
-      attempt: () => api.post("/v1/runs", { script: waiting(unique("a")) }, { headers: { "idempotency-key": "k2" } }),
+      attempt: () => api.post("/v1/runs", { code: waiting(unique("a")) }, { headers: { "idempotency-key": "k2" } }),
       status: 429,
       slug: "quota-exceeded",
       probe: () => namespaceState(tenant.api, namespace),
     });
     expect(refused.json).toMatchObject({ quota: "active_runs", scope: "namespace", limit: 1, used: 1 });
     expect(refused.json.resetsAt ?? null).toBeNull();
-    const retried = await api.post("/v1/runs", { script: waiting(unique("a")) }, { headers: { "idempotency-key": "k1" } });
+    const retried = await api.post("/v1/runs", { code: waiting(unique("a")) }, { headers: { "idempotency-key": "k1" } });
     expectOk(retried);
     expect(retried.json.id).toBe(first.json.id);
     // A fork is a start too.
-    expectProblem(await tenant.api.post(`/v1/runs/${first.json.id}/fork`, { script: waiting(unique("f")) }), 429, "quota-exceeded");
+    expectProblem(await tenant.api.post(`/v1/runs/${first.json.id}/fork`, { code: waiting(unique("f")) }), 429, "quota-exceeded");
     const alerts = await eventually("the refusal raised an alert", async () => {
       const reply = await tenant.api.get("/v1/organization/quota-alerts", { query: { namespace } });
       return reply.json?.alerts?.length > 0 ? reply.json.alerts : undefined;
@@ -769,30 +769,30 @@ test.describe("quotas", () => {
     expect(alerts[0]).toMatchObject({ quota: "active_runs", threshold: 100, namespace });
   });
 
-  test("scripts refuses a script new to the namespace", { tag: "@failure" }, async () => {
+  test("workflows refuses code new to the namespace", { tag: "@failure" }, async () => {
     const tenant = await newTenant("ns-scripts");
     const namespace = unique("one-script-");
-    expectOk(await tenant.api.put(`/v1/namespaces/${namespace}`, { exceptions: { scripts: 1 } }), 200);
+    expectOk(await tenant.api.put(`/v1/namespaces/${namespace}`, { exceptions: { workflows: 1 } }), 200);
     const api = tenant.api.ns(namespace);
     const script = short(unique("only"));
-    await start(api, { script, wait: "20s" });
-    await start(api, { script, wait: "20s" });
+    await start(api, { code: script, wait: "20s" });
+    await start(api, { code: script, wait: "20s" });
     const refused = await expectRefused({
-      attempt: () => api.post("/v1/runs", { script: short(unique("another")) }),
+      attempt: () => api.post("/v1/runs", { code: short(unique("another")) }),
       status: 429,
       slug: "quota-exceeded",
       probe: () => namespaceState(tenant.api, namespace),
     });
-    expect(refused.json).toMatchObject({ quota: "scripts", scope: "namespace", limit: 1 });
+    expect(refused.json).toMatchObject({ quota: "workflows", scope: "namespace", limit: 1 });
   });
 
   test("the operator's ceiling bounds the tenant's totals across its namespaces", { tag: "@failure" }, async () => {
     const tenant = await newTenant("ns-ceiling");
     expectOk(await operator().put(`/v1/organizations/${tenant.id}/quotas`, { ceiling: { activeRuns: 1 } }), 204);
-    await start(tenant.api.ns("first"), { script: waiting(unique("c")) });
+    await start(tenant.api.ns("first"), { code: waiting(unique("c")) });
     const runs = async () => (await namespaceState(tenant.api, "second")) as { runsStarted?: number; activeRuns?: number };
     const refused = await expectRefused({
-      attempt: () => tenant.api.ns("second").post("/v1/runs", { script: waiting(unique("c")) }),
+      attempt: () => tenant.api.ns("second").post("/v1/runs", { code: waiting(unique("c")) }),
       status: 429,
       slug: "quota-exceeded",
       probe: async () => {
@@ -814,7 +814,7 @@ test.describe("quotas", () => {
     const tenant = await newTenant("ns-refused");
     expectOk(await operator().put(`/v1/organizations/${tenant.id}/quotas`, { ceiling: { activeRuns: 0 } }), 204);
     const namespace = unique("refused-");
-    const refused = await tenant.api.ns(namespace).post("/v1/runs", { script: short(unique("never")) });
+    const refused = await tenant.api.ns(namespace).post("/v1/runs", { code: short(unique("never")) });
     expectProblem(refused, 429, "quota-exceeded");
     expect(refused.json.scope).toBe("organization");
     expectOk(await tenant.api.get(`/v1/namespaces/${namespace}`), 200);
@@ -828,8 +828,8 @@ test.describe("quotas", () => {
     const tenant = await newTenant("ns-alerts");
     const namespace = unique("team:busy-");
     expectOk(await tenant.api.put(`/v1/namespaces/${namespace}`, { exceptions: { runsPerMonth: 2 } }), 200);
-    for (const marker of ["one", "two"]) await start(tenant.api.ns(namespace), { script: short(unique(marker)) });
-    await start(tenant.api.ns("idle"), { script: short(unique("idle")) });
+    for (const marker of ["one", "two"]) await start(tenant.api.ns(namespace), { code: short(unique(marker)) });
+    await start(tenant.api.ns("idle"), { code: short(unique("idle")) });
     const detail = await eventually("the namespace has its alerts", async () => {
       const reply = await tenant.api.get(`/v1/namespaces/${encodeURIComponent(namespace)}`);
       return reply.json?.alerts?.length >= 2 ? reply.json : undefined;
@@ -885,7 +885,7 @@ test.describe("secrets per namespace", () => {
       const put = await aliceToken.put("/v1/namespaces/alice/secrets/fx", { value: hers });
       expectOk(put, 201);
       expect(put.json).toMatchObject({ reference: "ns/fx", namespace: "alice", createdBy: "token:alice" });
-      const run = await start(aliceToken, { script: ECHO, actionSet: id, secrets: { fx: "ns/fx" }, wait: "30s" });
+      const run = await start(aliceToken, { code: ECHO, actionSet: id, secrets: { fx: "ns/fx" }, wait: "30s" });
       expect(run.status, JSON.stringify(run)).toBe("completed");
       expect(run.secrets).toEqual({ fx: "ns/fx" });
       const calls = mcp.calls.filter((c) => c.tool === "echo");
@@ -896,21 +896,21 @@ test.describe("secrets per namespace", () => {
       // on the organization's fx nor on Alice's.
       const started = (namespace: string) => async () => ((await namespaceState(tenant.api, namespace)) as { runsStarted?: number }).runsStarted ?? 0;
       const refused = await expectRefused({
-        attempt: () => tenant.api.ns("bob").post("/v1/runs", { script: ECHO, actionSet: id, secrets: { fx: "ns/fx" } }),
+        attempt: () => tenant.api.ns("bob").post("/v1/runs", { code: ECHO, actionSet: id, secrets: { fx: "ns/fx" } }),
         status: 422,
         slug: "secret-required",
         probe: started("bob"),
       });
-      expect(refused.json.attachments[0]).toMatchObject({ server: "fx", problem: "unknown", secret: "ns/fx" });
-      expect(refused.json.attachments[0].attachable).toEqual(["org/fx"]);
-      // Nothing attached at all: refused too.
+      expect(refused.json.secrets[0]).toMatchObject({ server: "fx", problem: "unknown", secret: "ns/fx" });
+      expect(refused.json.secrets[0].usable).toEqual(["org/fx"]);
+      // No secret named at all: refused too.
       const missing = await expectRefused({
-        attempt: () => tenant.api.ns("alice").post("/v1/runs", { script: ECHO, actionSet: id }),
+        attempt: () => tenant.api.ns("alice").post("/v1/runs", { code: ECHO, actionSet: id }),
         status: 422,
         slug: "secret-required",
         probe: started("alice"),
       });
-      expect(missing.json.attachments[0]).toMatchObject({ server: "fx", problem: "missing" });
+      expect(missing.json.secrets[0]).toMatchObject({ server: "fx", problem: "missing" });
       expect(mcp.calls.filter((c) => c.tool === "echo")).toHaveLength(1);
 
       // Alice's token reaches her namespace's secrets only.
@@ -922,10 +922,10 @@ test.describe("secrets per namespace", () => {
       // Nothing Rewind answers holds a value: the recorder flags any answer with the canary.
       for (const path of [
         `/v1/runs/${run.id}`,
-        `/v1/runs/${run.id}/journal`,
-        `/v1/runs/${run.id}/journal?as=cassette`,
-        `/v1/runs/${run.id}/trace?format=llm`,
-        `/v1/runs/${run.id}/entries/1`,
+        `/v1/runs/${run.id}/export`,
+        `/v1/runs/${run.id}/export?as=cassette`,
+        `/v1/runs/${run.id}/transcript`,
+        `/v1/runs/${run.id}/events/1`,
         `/v1/runs/${run.id}/events`,
         "/v1/namespaces/alice",
         "/v1/namespaces/alice/secrets",
@@ -940,7 +940,7 @@ test.describe("secrets per namespace", () => {
       }
       const usage = await tenant.api.get("/v1/namespaces/alice/secrets/fx/usage");
       expect(usage.json.secret.lastRead).toMatchObject({ run: run.id, namespace: "alice" });
-      evidence(`Alice's secret reached her MCP call only (Bearer <canary>-alice, key ${run.id}/1); Bob's run attaching ns/fx → 422 secret-required (unknown, attachable org/fx), no fallback; Alice's token on Bob's secrets → 404, on the organization's → 403; no answer holds a value`);
+      evidence(`Alice's secret reached her MCP call only (Bearer <canary>-alice, key ${run.id}/1); Bob's run naming ns/fx → 422 secret-required (unknown, usable org/fx), no fallback; Alice's token on Bob's secrets → 404, on the organization's → 403; no answer holds a value`);
     } finally {
       await mcp.close();
     }
@@ -958,23 +958,23 @@ test.describe("secrets per namespace", () => {
       const plain = tenant.api.as((await mint(tenant.api, "carol")).token);
       const runs = async () => ((await namespaceState(tenant.api, "carol")) as { runsStarted?: number }).runsStarted ?? 0;
       const refused = await expectRefused({
-        attempt: () => plain.post("/v1/runs", { script: ECHO, actionSet: id, secrets: { fx: "org/fx" } }),
+        attempt: () => plain.post("/v1/runs", { code: ECHO, actionSet: id, secrets: { fx: "org/fx" } }),
         status: 422,
         slug: "secret-required",
         probe: runs,
       });
-      expect(refused.json.attachments[0]).toMatchObject({ server: "fx", problem: "forbidden", secret: "org/fx" });
-      expect(refused.json.attachments[0].attachable).toEqual(["ns/fx"]);
-      const own = await start(plain, { script: ECHO, actionSet: id, secrets: { fx: "ns/fx" }, wait: "30s" });
+      expect(refused.json.secrets[0]).toMatchObject({ server: "fx", problem: "forbidden", secret: "org/fx" });
+      expect(refused.json.secrets[0].usable).toEqual(["ns/fx"]);
+      const own = await start(plain, { code: ECHO, actionSet: id, secrets: { fx: "ns/fx" }, wait: "30s" });
       expect(own.status, JSON.stringify(own)).toBe("completed");
       const using = tenant.api.as((await mint(tenant.api, "carol", { permissions: ["runs:start", "runs:read", "secrets:use"] })).token);
-      const shared = await start(using, { script: ECHO, actionSet: id, secrets: { fx: "org/fx" }, wait: "30s" });
+      const shared = await start(using, { code: ECHO, actionSet: id, secrets: { fx: "org/fx" }, wait: "30s" });
       expect(shared.status, JSON.stringify(shared)).toBe("completed");
       expect(mcp.calls.filter((c) => c.tool === "echo").map((c) => c.headers.authorization)).toEqual([
         `Bearer ${canary()}-carol`,
         `Bearer ${canary()}-org`,
       ]);
-      evidence("a token without secrets:use: org/fx → 422 secret-required (forbidden, attachable ns/fx), ns/fx → completed; with secrets:use, org/fx → completed");
+      evidence("a token without secrets:use: org/fx → 422 secret-required (forbidden, usable ns/fx), ns/fx → completed; with secrets:use, org/fx → completed");
     } finally {
       await mcp.close();
     }
@@ -988,7 +988,7 @@ test.describe("secrets per namespace", () => {
       expectOk(actionSet);
       expectOk(await tenant.api.put("/v1/secrets/shared-fx", { value: `${canary()}-dashboard-org`, labels: { env: "prod" } }), 201);
       expectOk(await tenant.api.put("/v1/namespaces/alice/secrets/fx", { value: `${canary()}-dashboard-alice` }), 201);
-      const run = await start(tenant.api.ns("alice"), { script: ECHO, actionSet: actionSet.json.id, secrets: { fx: "ns/fx" }, wait: "30s" });
+      const run = await start(tenant.api.ns("alice"), { code: ECHO, actionSet: actionSet.json.id, secrets: { fx: "ns/fx" }, wait: "30s" });
       expect(run.status, JSON.stringify(run)).toBe("completed");
 
       await page.goto(`${stacks().a.url}/`);
@@ -1030,7 +1030,7 @@ test.describe("erasure", () => {
     const tenant = await newTenant("ns-erase");
     const namespace = unique("leaving-");
     const api = tenant.api.ns(namespace);
-    const run = await start(api, { script: waiting(unique("leaving")) });
+    const run = await start(api, { code: waiting(unique("leaving")) });
     await untilWaiting(tenant.api, run.id);
     const token = await mint(tenant.api, namespace);
     expectOk(await tenant.api.as(token.token).get("/v1/whoami"), 200);
@@ -1038,7 +1038,7 @@ test.describe("erasure", () => {
     // A run whose activation spins until its CPU limit (5 s) is cancelled only once that
     // activation ends: the erasure, which waits for the partition to hold nothing of the
     // namespace, stays under way while the checks below run.
-    await start(api, { script: `// ${unique("spinning")}\nexport default async function main() { for (;;) {} }\n`, check: false });
+    await start(api, { code: `// ${unique("spinning")}\nexport default async function main() { for (;;) {} }\n`, check: false });
     await delay(500);
 
     expectOk(await tenant.api.delete(`/v1/namespaces/${namespace}`), 202);
@@ -1046,7 +1046,7 @@ test.describe("erasure", () => {
     // Cancelled, then erased as soon as it ended: a 404.
     expect(cancelled.status === 404 ? "erased" : cancelled.json?.status, cancelled.text).toMatch(/^(cancelled|erased)$/);
     expectProblem(await tenant.api.as(token.token).get("/v1/whoami"), 401, "unauthorized");
-    expectProblem(await api.post("/v1/runs", { script: short(unique("again")) }), 409, "namespace-deleting");
+    expectProblem(await api.post("/v1/runs", { code: short(unique("again")) }), 409, "namespace-deleting");
     expectProblem(await tenant.api.post(`/v1/namespaces/${namespace}/tokens`, {}), 409, "namespace-deleting");
     expectProblem(await tenant.api.put(`/v1/namespaces/${namespace}`, {}), 409, "namespace-deleting");
     // Its runs and secrets go with it, in the background: the lifecycle stage

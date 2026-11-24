@@ -91,7 +91,7 @@ test("a harness action served by the SDK's worker is called once, with its run's
   const { actionSet, group, tool } = await lookupActionSet();
   const { worker, seen } = serve(actionSet, tool, ({ id }) => ({ id, name: "Ada Lovelace" }));
   try {
-    const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-1" }, labels: { suite: "harness-actions" }, wait: "30s" });
+    const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-1" }, labels: { suite: "harness-actions" }, wait: "30s" });
     const done = run.status === "completed" ? run : await ended(alice(), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     expect(done.output.value).toEqual({ id: "c-1", name: "Ada Lovelace" });
@@ -108,7 +108,7 @@ test("a harness action served by the SDK's worker is called once, with its run's
 
 test("an open stream keeps its task while the handler works, past the grace, with nothing sent meanwhile", { tag: "@success" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "1s" });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-2" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-2" } });
   const { task, stream } = await handOne(tenant.api, actionSet, tool, run.id);
   expect(task).toMatchObject({ runId: run.id, namespace: "alice", seq: 1, delivery: 1, idempotencyKey: `${run.id}/1` });
   expect(task.token).toEqual(expect.any(String));
@@ -126,8 +126,8 @@ test("an open stream keeps its task while the handler works, past the grace, wit
 test("a stream holds at most its slots: the next task is handed once a slot is free", { tag: "@success" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
   const stream = await TaskStream.open(tenant.api, { actionSet, actions: [tool], slots: 1 });
-  const first = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-2a" } });
-  const second = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-2b" } });
+  const first = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-2a" } });
+  const second = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-2b" } });
   const handed = await stream.taskOf(tool);
   await delay(1500);
   expect(stream.handed, "one slot, one task in flight").toHaveLength(1);
@@ -141,7 +141,7 @@ test("a stream holds at most its slots: the next task is handed once a slot is f
 
 test("a deferred task is answered later, by its token, from another key, after its stream closed", { tag: "@success" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "1s" });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-3" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-3" } });
   const { task, stream } = await handOne(tenant.api, actionSet, tool, run.id);
   expectOk(await tenant.api.post(`/v1/calls/${task.token}/defer`, { timeout: "5m" }));
   // Deferred, the task does not need its stream: it waits past the grace for its answer.
@@ -160,7 +160,7 @@ test("a deferred task is answered later, by its token, from another key, after i
 
 test("a worker that opens its stream again within the grace keeps its task: it is not handed again", { tag: "@success" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "10s" });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-3b" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-3b" } });
   const { task, stream } = await handOne(tenant.api, actionSet, tool, run.id);
   // The connection drops; the worker comes back with its id within the grace.
   await stream.close();
@@ -180,7 +180,7 @@ test("a handler's failure reaches the script as a ActionError with its message a
     throw new HostToolError("card declined", { data: { code: 51 } });
   });
   try {
-    const run = await startRun(alice(), { actionSet, script: script(group, CATCHING), input: { id: "c-4" }, wait: "30s" });
+    const run = await startRun(alice(), { actionSet, code: script(group, CATCHING), input: { id: "c-4" }, wait: "30s" });
     const done = await ended(alice(), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     expect(done.output.value).toMatchObject({ name: "ActionError", tool, data: { code: 51 }, outcomeUnknown: false });
@@ -201,7 +201,7 @@ test("a retryable failure is retried with the same idempotency key, and the atte
     return { id, name: "second try" };
   });
   try {
-    const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-5" } });
+    const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-5" } });
     // The attempts live in the run's call tasks: shown while the second attempt is in flight.
     await expect.poll(async () => (await alice().get(`/v1/runs/${run.id}`)).json.attempts, { timeout: 30_000 }).toEqual([{ seq: 1, attempts: 2 }]);
     release();
@@ -222,7 +222,7 @@ test("a call under the approval policy waits for the harness, then runs once app
   const { actionSet, group, tool } = await lookupActionSet({ approval: true });
   const { worker, seen } = serve(actionSet, tool, ({ id }) => ({ id, name: "approved" }));
   try {
-    const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-6" } });
+    const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-6" } });
     const wait = await waitingCall(alice(), run.id, "approval");
     expect(wait.args.value).toEqual({ id: "c-6" });
     await delay(1000);
@@ -241,7 +241,7 @@ test("a rejected call fails with a ActionError carrying the harness's message, a
   const { actionSet, group, tool } = await lookupActionSet({ approval: true });
   const { worker, seen } = serve(actionSet, tool, () => ({ never: true }));
   try {
-    const run = await startRun(alice(), { actionSet, script: script(group, CATCHING), input: { id: "c-7" } });
+    const run = await startRun(alice(), { actionSet, code: script(group, CATCHING), input: { id: "c-7" } });
     const wait = await waitingCall(alice(), run.id, "approval");
     expectOk(await tenant.api.post(`/v1/calls/${wait.callId}/reject`, { message: "the customer said no" }));
     const done = await ended(alice(), run.id);
@@ -256,7 +256,7 @@ test("a rejected call fails with a ActionError carrying the harness's message, a
 
 test("a task whose stream closed and did not come back within its grace is handed again, as attempt 2, with the same idempotency key", { tag: "@success" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "1s" });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-8" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-8" } });
   const { task: first, stream: lost } = await handOne(tenant.api, actionSet, tool, run.id);
   // Another worker holds a stream; the first one dies and never comes back.
   const other = await TaskStream.open(tenant.api, { actionSet, actions: [tool] });
@@ -273,7 +273,7 @@ test("a task whose stream closed and did not come back within its grace is hande
 
 test("a task of an at_most_once tool whose stream did not come back fails with outcomeUnknown, never handed again", { tag: "@success" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "1s", idempotent: false });
-  const run = await startRun(alice(), { actionSet, script: script(group, CATCHING), input: { id: "c-9" } });
+  const run = await startRun(alice(), { actionSet, code: script(group, CATCHING), input: { id: "c-9" } });
   const { stream: lost } = await handOne(tenant.api, actionSet, tool, run.id);
   // Another worker holds a stream: the task is not handed to it.
   const other = await TaskStream.open(tenant.api, { actionSet, actions: [tool] });
@@ -288,7 +288,7 @@ test("a task of an at_most_once tool whose stream did not come back fails, even 
   // archi/04-tools.md, "Call lifecycle": the stream closed and did not come back within its
   // grace → `done` with `outcomeUnknown` at once (`at_most_once`). The harness's worker died.
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "1s", idempotent: false });
-  const run = await startRun(alice(), { actionSet, script: script(group, CATCHING), input: { id: "c-9b" } });
+  const run = await startRun(alice(), { actionSet, code: script(group, CATCHING), input: { id: "c-9b" } });
   const { stream } = await handOne(tenant.api, actionSet, tool, run.id);
   await stream.close();
   const done = await ended(alice(), run.id, 30_000);
@@ -307,7 +307,7 @@ export default async function main() {
   return await ${group}.lookup({ id: 42 } as any);
 }
 `;
-  const run = await startRun(alice(), { actionSet, script: bad, wait: "30s" });
+  const run = await startRun(alice(), { actionSet, code: bad, wait: "30s" });
   const done = run.status === "failed" ? run : await ended(alice(), run.id);
   expect(done.status, JSON.stringify(done)).toBe("failed");
   expect(done.error.name).toBe("TypeError");
@@ -322,7 +322,7 @@ test("a failure the script does not catch fails the run, naming the call and its
     throw new HostToolError("no such customer");
   });
   try {
-    const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-10" }, wait: "30s" });
+    const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-10" }, wait: "30s" });
     const done = await ended(alice(), run.id);
     expect(done.status).toBe("failed");
     expect(done.error.name).toBe("ActionError");
@@ -335,7 +335,7 @@ test("a failure the script does not catch fails the run, naming the call and its
 
 test("approving a task that does not wait for an approval is refused with call-not-waiting", { tag: "@failure" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-11" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-11" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   const reply = await tenant.api.post(`/v1/calls/${task.id}/approve`);
   expectProblem(reply, 409, "call-not-waiting");
@@ -353,7 +353,7 @@ test("approving or rejecting a task that does not exist is not-found", { tag: "@
 
 test("an answer without its result is an invalid request, and the task stays handed", { tag: "@failure" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-12" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-12" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   expectProblem(await tenant.api.post(`/v1/calls/${task.token}/complete`, { value: 1 }), 400, "invalid-request");
   expectProblem(await tenant.api.post(`/v1/calls/${task.token}/fail`, { retryable: true }), 400, "invalid-request");
@@ -363,7 +363,7 @@ test("an answer without its result is an invalid request, and the task stays han
 
 test("a deferred task nobody answers fails at its timeout", { tag: "@failure" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-13" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-13" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   expectOk(await tenant.api.post(`/v1/calls/${task.token}/defer`, { timeout: "1s" }));
   const done = await ended(alice(), run.id);
@@ -375,7 +375,7 @@ test("a deferral is bounded by the tool's execution timeout", { tag: "@failure" 
   // archi/08-decisions.md: a deferral ends at the requested timeout or the tool's execution
   // timeout from now, whichever comes first; the worker is told the timeout (`timeoutMs`).
   const { actionSet, group, tool } = await lookupActionSet({ timeout: "1s" });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-14" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-14" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   expect(task.timeoutMs).toBe(1000);
   expectOk(await tenant.api.post(`/v1/calls/${task.token}/defer`, { timeout: "10m" }));
@@ -386,7 +386,7 @@ test("a deferral is bounded by the tool's execution timeout", { tag: "@failure" 
 
 test("a harness action's failure above 64 KiB is refused as payload-too-large", { tag: "@failure" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-15" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-15" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   const reply = await tenant.api.post(`/v1/calls/${task.token}/fail`, { message: "x".repeat(70 * 1024) });
   expectProblem(reply, 413, "payload-too-large");
@@ -400,7 +400,7 @@ test("a harness action's failure above 64 KiB is refused as payload-too-large", 
 
 test("a task token used again after its answer is gone", { tag: "@attack" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-16" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-16" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   expectOk(await tenant.api.post(`/v1/calls/${task.token}/complete`, { result: { id: "c-16", name: "first answer" } }));
   const first = await ended(alice(), run.id);
@@ -422,7 +422,7 @@ test("a task token used again after its answer is gone", { tag: "@attack" }, asy
 
 test("an approval cannot be used twice: the tool runs once", { tag: "@attack" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ approval: true });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-17" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-17" } });
   const wait = await waitingCall(alice(), run.id, "approval");
   expectOk(await tenant.api.post(`/v1/calls/${wait.callId}/approve`));
   // Approved, the task is ready: approving or rejecting it again changes nothing.
@@ -443,7 +443,7 @@ test("an approval cannot be used twice: the tool runs once", { tag: "@attack" },
 
 test("the answer of a task handed on a stream gone past its grace is refused; the next hand-out's answer stands", { tag: "@attack" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet({ reconnectTimeout: "1s" });
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-18" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-18" } });
   const { task: lost, stream } = await handOne(tenant.api, actionSet, tool, run.id);
   const other = await TaskStream.open(tenant.api, { actionSet, actions: [tool] });
   await stream.close();
@@ -461,7 +461,7 @@ test("the answer of a task handed on a stream gone past its grace is refused; th
 
 test("an answer for a run that was cancelled is gone, and the run stays cancelled", { tag: "@attack" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-19" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-19" } });
   const { task, stream } = await handOne(tenant.api, actionSet, tool, run.id);
   expectOk(await alice().post(`/v1/runs/${run.id}/cancel`, {}));
   const cancelled = await ended(alice(), run.id);
@@ -481,7 +481,7 @@ test("an answer for a run that was cancelled is gone, and the run stays cancelle
 
 test("a forged task token reaches no task", { tag: "@attack" }, async () => {
   const { actionSet, group, tool } = await lookupActionSet();
-  const run = await startRun(alice(), { actionSet, script: script(group), input: { id: "c-20" } });
+  const run = await startRun(alice(), { actionSet, code: script(group), input: { id: "c-20" } });
   const { task } = await handOne(tenant.api, actionSet, tool, run.id);
   // The real token with its last character changed, and a token of the right shape made up.
   const last = task.token.at(-1) === "A" ? "B" : "A";

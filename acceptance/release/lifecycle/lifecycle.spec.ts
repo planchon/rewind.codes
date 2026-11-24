@@ -71,7 +71,7 @@ test.beforeAll(async () => {
   });
   tenant = await newTenant("lifecycle", stack.info);
   const created = await tenant.api.post("/v1/action-sets", {
-    host: [{ name: "t.record", description: "Records a call.", inputSchema: { type: "object" } }],
+    harness: [{ name: "t.record", description: "Records a call.", inputSchema: { type: "object" } }],
   });
   expectOk(created);
   actionSet = created.json.id;
@@ -180,7 +180,7 @@ async function whileMoving(attempt: () => Promise<Reply>, timeoutMs = 60_000): P
   }
 }
 
-/** The calls the run scheduled, from its journal. */
+/** The calls the run scheduled, from its history. */
 async function scheduled(run: string): Promise<number> {
   return eventTypes((await journal(tenant.api, run)).doc).filter((type) => type === "schedule_call").length;
 }
@@ -205,7 +205,7 @@ test("the owner killed during an activation: the other node takes the partition 
   const namespace = unique("owners-");
   const api = tenant.api.ns(namespace);
   // A loop of about 1.5 s of CPU on this machine, well under the 5 s limit on a slower node. The
-  // journal's times are logical: the wall time of a start that waits for the end measures it.
+  // history's times are logical: the wall time of a start that waits for the end measures it.
   const turns = 200_000_000;
   const before = Date.now();
   const calibration = await runScript(tenant.api, CPU_THEN_CALL, { namespace, input: { n: turns, call: false }, actionSet });
@@ -216,7 +216,7 @@ test("the owner killed during an activation: the other node takes the partition 
 
   const server = new TaskServer(tenant.api.as(workerKey));
   try {
-    const started = await api.post("/v1/runs", { script: CPU_THEN_CALL, input: { n, call: true }, actionSet, check: false });
+    const started = await api.post("/v1/runs", { code: CPU_THEN_CALL, input: { n, call: true }, actionSet, check: false });
     expectOk(started);
     const id: string = started.json.id;
     // The activation is under way on the owner's executors.
@@ -252,7 +252,7 @@ test("the owner killed while a harness action holds the run's call: the run comp
   });
   try {
     const started = await api.post("/v1/runs", {
-      script: 'import { t } from "rewind:actions";\nexport default async function main() { return await t.record({ step: 1 }); }\n',
+      code: 'import { t } from "rewind:actions";\nexport default async function main() { return await t.record({ step: 1 }); }\n',
       actionSet,
       check: false,
     });
@@ -374,7 +374,7 @@ test("Postgres paused: requests wait or answer 503, and nothing is lost", { tag:
   });
   const key = unique("outage-start-");
   const start = () =>
-    api.post("/v1/runs", { script: "export default async function main() { return 7; }\n", check: false }, { headers: { "idempotency-key": key } });
+    api.post("/v1/runs", { code: "export default async function main() { return 7; }\n", check: false }, { headers: { "idempotency-key": key } });
 
   // The control plane and the nodes' liveness locks are both on this Postgres.
   stack.pausePostgres();
@@ -408,7 +408,7 @@ test("Postgres paused: requests wait or answer 503, and nothing is lost", { tag:
   await expectHealthy(tenant);
 });
 
-test("an ended attempt is sealed into the bucket, and its journal is read from there", { tag: "@success" }, async () => {
+test("an ended attempt is sealed into the bucket, and its history is read from there", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
   const namespace = unique("archive-");
   const run = await runScript(tenant.api, 'import { sleep } from "rewind";\nexport default async function main() { await sleep(1); return { archived: "sealed" }; }\n', {
@@ -417,22 +417,22 @@ test("an ended attempt is sealed into the bucket, and its journal is read from t
   const done = run.status === "completed" ? run : await ended(tenant.api, run.id);
   expect(done.status).toBe("completed");
   const before = await journal(tenant.api, run.id);
-  // The sealer writes the attempt's journal document to the archive once the run ended.
+  // The sealer writes the attempt's run export to the archive once the run ended.
   const sealed = `runs/${tenant.id}/${run.id}/1.json`;
   await eventually("the attempt is sealed", () => (objects(sealed).length === 1 ? true : undefined), 60_000, 500);
 
-  // Read from the archive: the same journal, which replays.
+  // Read from the archive: the same history, which replays.
   const after = await journal(tenant.api, run.id);
-  expect(after.doc.entries).toEqual(before.doc.entries);
+  expect(after.doc.events).toEqual(before.doc.events);
   const replayed = replayDocument(after.text);
   expect(replayed.code, replayed.stdout + replayed.stderr).toBe(0);
   const state = await tenant.api.get(`/v1/runs/${run.id}`);
   expectOk(state);
   expect(state.json.output.value).toEqual({ archived: "sealed" });
-  evidence(`sealed as ${sealed}; the journal still read and replayed`);
+  evidence(`sealed as ${sealed}; the history still read and replayed`);
 });
 
-test("an erased run leaves nothing: its summary, its sealed journal and its blobs", { tag: "@success" }, async () => {
+test("an erased run leaves nothing: its summary, its sealed history and its blobs", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
   const namespace = unique("erasure-");
   const api = tenant.api.ns(namespace);
@@ -454,7 +454,7 @@ test("an erased run leaves nothing: its summary, its sealed journal and its blob
   const erased = await api.delete(`/v1/runs/${run.id}`);
   expectOk(erased);
   expectProblem(await api.get(`/v1/runs/${run.id}`), 404, "not-found");
-  expectProblem(await api.get(`/v1/runs/${run.id}/journal`), 404, "not-found");
+  expectProblem(await api.get(`/v1/runs/${run.id}/export`), 404, "not-found");
   const listed = await api.get("/v1/runs", { query: { label: `case:${label}` } });
   expectOk(listed);
   expect(listed.json.runs).toEqual([]);
@@ -506,7 +506,7 @@ test("an erased namespace leaves nothing: its runs, secrets, their reads and blo
   const blobs = `blobs/${tenant.id}/${done.id}/`;
   expect(objects(blobs).length).toBeGreaterThan(0);
   const waiting = await api.post("/v1/runs", {
-    script: 'import { signal } from "rewind";\nexport default async function main() { return await signal<number>("never"); }\n',
+    code: 'import { signal } from "rewind";\nexport default async function main() { return await signal<number>("never"); }\n',
   });
   expectOk(waiting, 201);
   const usage = async () => Number((await tenant.api.get("/v1/organization/namespace-defaults")).json?.usage?.runsStarted ?? 0);
@@ -515,7 +515,7 @@ test("an erased namespace leaves nothing: its runs, secrets, their reads and blo
   const erased = await tenant.api.delete(`/v1/namespaces/${name}`);
   expectOk(erased, 202);
   // At once: no new run, no new token, the old token refused, the waiting run cancelled.
-  expectProblem(await api.post("/v1/runs", { script: "export default async function main() { return 1; }\n" }), 409, "namespace-deleting");
+  expectProblem(await api.post("/v1/runs", { code: "export default async function main() { return 1; }\n" }), 409, "namespace-deleting");
   expectProblem(await tenant.api.post(`/v1/namespaces/${name}/tokens`, {}), 409, "namespace-deleting");
   expectProblem(await tenant.api.as(token).get("/v1/runs"), 401, "unauthorized");
   await eventually("the waiting run is cancelled", async () => {

@@ -26,7 +26,7 @@ export default async function main() {
 /** A text where the tool takes a string: refused by the check. */
 const WRONG = SOLUTION.replace('text: "Deploy freeze starts Friday 18:00 UTC"', "text: 18");
 
-const runScript = (code: string) => ({ calls: [{ name: "run_script", input: { code } }] });
+const runScript = (code: string) => ({ calls: [{ name: "run_workflow", input: { code } }] });
 
 interface Summary {
   model: string;

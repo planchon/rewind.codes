@@ -40,7 +40,7 @@ function triage(name: string, script = TRIAGE) {
     name,
     description: "Triage the stale issues of a repository, after approval.",
     actionSet: emptyActionSet,
-    script,
+    code: script,
     input: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] },
     output: { type: "object", properties: { closed: { type: "integer" } }, required: ["closed"] },
     signals: {
@@ -82,30 +82,30 @@ test("saving a workflow checks it and gives its declarations; saving it again is
   const created = await tenant.api.post("/v1/workflows", triage(name));
   expectOk(created, 201);
   expect(created.json).toMatchObject({ name, actionSet: emptyActionSet });
-  expect(created.json.version).toMatch(/^[0-9a-f]{64}$/);
+  expect(created.json.digest).toMatch(/^[0-9a-f]{64}$/);
   expect(created.json.declarations.dts).toContain(`export const ${name}: Workflow<`);
   expect(created.json.declarations.prompt.startsWith(`${name}.start({ repo: string }) → run`), created.json.declarations.prompt).toBe(true);
   const again = await tenant.api.post("/v1/workflows", triage(name));
   expectOk(again, 200);
-  expect(again.json.version).toBe(created.json.version);
+  expect(again.json.digest).toBe(created.json.digest);
 });
 
 test("each change is a new version: versions are listed newest first, the list shows the latest", { tag: "@success" }, async () => {
   const name = fresh();
   const first = await save(tenant.api, triage(name));
   const second = await save(tenant.api, triage(name, TRIAGE.replace("? 3 : 0", "? 5 : 0")));
-  expect(second.version).not.toBe(first.version);
+  expect(second.digest).not.toBe(first.digest);
   const versions = await tenant.api.get(`/v1/workflows/${name}`);
   expectOk(versions, 200);
-  expect(versions.json.versions.map((v: any) => v.version)).toEqual([second.version, first.version]);
+  expect(versions.json.versions.map((v: any) => v.digest)).toEqual([second.digest, first.digest]);
   // Numbered from 1 in the order they were saved.
-  expect(versions.json.versions.map((v: any) => v.number)).toEqual([2, 1]);
-  expect([first.number, second.number]).toEqual([1, 2]);
+  expect(versions.json.versions.map((v: any) => v.version)).toEqual([2, 1]);
+  expect([first.version, second.version]).toEqual([1, 2]);
   const listed = await tenant.api.get("/v1/workflows", { query: { limit: 200 } });
   expectOk(listed, 200);
   const mine = listed.json.workflows.filter((w: any) => w.name === name);
   expect(mine).toHaveLength(1);
-  expect(mine[0].version).toBe(second.version);
+  expect(mine[0].digest).toBe(second.digest);
 });
 
 test("the harness starts a run of a workflow by name, or by name@version, and signals it", { tag: "@success" }, async () => {
@@ -114,12 +114,12 @@ test("the harness starts a run of a workflow by name, or by name@version, and si
   const second = await save(tenant.api, triage(name, TRIAGE.replace("? 3 : 0", "? 5 : 0")));
 
   const latest = await started(api, { workflow: name, input: { repo: "acme/api" } });
-  expect(latest.workflow).toEqual({ name, version: second.version, number: 2 });
-  const pinned = await started(api, { workflow: `${name}@${first.version.slice(0, 12)}`, input: { repo: "acme/web" } });
-  expect(pinned.workflow).toEqual({ name, version: first.version, number: 1 });
+  expect(latest.workflow).toEqual({ name, digest: second.digest, version: 2 });
+  const pinned = await started(api, { workflow: `${name}@${first.digest.slice(0, 12)}`, input: { repo: "acme/web" } });
+  expect(pinned.workflow).toEqual({ name, digest: first.digest, version: 1 });
   // A version by its number pins it too.
   const numbered = await started(api, { workflow: `${name}@v1`, input: { repo: "acme/app" } });
-  expect(numbered.workflow).toEqual({ name, version: first.version, number: 1 });
+  expect(numbered.workflow).toEqual({ name, digest: first.digest, version: 1 });
 
   for (const run of [latest, pinned, numbered]) {
     await waitingFor(api, run.id, "signal", "approval");
@@ -138,7 +138,7 @@ test("a script starts a run of a workflow, signals it and receives its result", 
     actionSet,
     input: { repo: "acme/api" },
     wait: "30s",
-    script: `import { ${name} } from "rewind:workflows";
+    code: `import { ${name} } from "rewind:workflows";
 
 export default async function main(input: { repo: string }) {
   const run = await ${name}.start({ repo: input.repo });
@@ -153,7 +153,7 @@ export default async function main(input: { repo: string }) {
   const child = await getRun(api, done.output.value.id);
   expect(child.status).toBe("completed");
   expect(child.namespace).toBe("wf");
-  expect(child.workflow).toEqual({ name, version: saved.version, number: 1 });
+  expect(child.workflow).toEqual({ name, digest: saved.digest, version: 1 });
   expect(child.startedBy).toMatchObject({ run: parent.id, detached: false });
 });
 
@@ -165,7 +165,7 @@ test("a detached child lives on after its parent; a failing parent cancels its a
   const detachedParent = await started(api, {
     actionSet,
     wait: "30s",
-    script: `import { ${name} } from "rewind:workflows";
+    code: `import { ${name} } from "rewind:workflows";
 export default async function main() {
   const run = await ${name}.start({ repo: "acme/long" }, { detached: true });
   return run.id;
@@ -180,7 +180,7 @@ export default async function main() {
 
   const failing = await started(api, {
     actionSet,
-    script: `import { ${name} } from "rewind:workflows";
+    code: `import { ${name} } from "rewind:workflows";
 export default async function main() {
   await ${name}.start({ repo: "acme/api" });
   throw new Error("the parent gave up");
@@ -214,9 +214,9 @@ test("a workflow whose name or signals cannot be used is 422 invalid-workflow", 
   expectProblem(await tenant.api.post("/v1/workflows", reserved), 422, "invalid-workflow");
 });
 
-test("a script that does not match its workflow's schemas is 422 invalid-script, with the diagnostic", { tag: "@failure" }, async () => {
+test("code that does not match its workflow's schemas is 422 invalid-code, with the diagnostic", { tag: "@failure" }, async () => {
   const reply = await tenant.api.post("/v1/workflows", triage(fresh(), TRIAGE.replace("input: { repo: string }", "input: { repo: number }")));
-  expectProblem(reply, 422, "invalid-script");
+  expectProblem(reply, 422, "invalid-code");
   const messages = (reply.json.diagnostics ?? []).map((d: any) => d.message);
   expect(messages.some((m: string) => m.startsWith("the default export does not match the workflow's schemas")), messages.join("\n")).toBe(true);
 });
@@ -279,13 +279,13 @@ test("a run of a workflow refuses a signal it does not declare, or a payload tha
   await api.post(`/v1/runs/${run.id}/cancel`, {});
 });
 
-test("an unknown workflow is 404; a malformed version or a workflow with a script is 400", { tag: "@failure" }, async () => {
+test("an unknown workflow is 404; a malformed version or a workflow with code is 400", { tag: "@failure" }, async () => {
   const name = fresh();
   await save(tenant.api, triage(name));
   expectProblem(await startRun(api, { workflow: fresh("nothing"), input: {} }), 404, "not-found");
   expectProblem(await startRun(api, { workflow: `${name}@${"0".repeat(12)}`, input: { repo: "x" } }), 404, "not-found");
   expectProblem(await startRun(api, { workflow: `${name}@xyz`, input: { repo: "x" } }), 400, "invalid-request");
-  expectProblem(await startRun(api, { workflow: name, script: TRIAGE, input: { repo: "x" } }), 400, "invalid-request");
+  expectProblem(await startRun(api, { workflow: name, code: TRIAGE, input: { repo: "x" } }), 400, "invalid-request");
   expectProblem(await tenant.api.get(`/v1/workflows/${fresh("nothing")}`), 404, "not-found");
 });
 
@@ -296,7 +296,7 @@ test("a script that starts a workflow with a wrong input gets a TypeError at the
   const run = await started(api, {
     actionSet,
     check: false,
-    script: `import { ${name} } from "rewind:workflows";
+    code: `import { ${name} } from "rewind:workflows";
 export default async function main() {
   await ${name}.start({ repo: 42 } as any);
   return "started";
@@ -317,7 +317,7 @@ test("a forged end signal cannot answer a parent's result()", { tag: "@attack" }
   const actionSet = await pinning(tenant.api, name);
   const parent = await started(api, {
     actionSet,
-    script: `import { ${name} } from "rewind:workflows";
+    code: `import { ${name} } from "rewind:workflows";
 export default async function main() {
   const run = await ${name}.start({ repo: "acme/api" });
   return await run.result();
@@ -358,22 +358,22 @@ test("a key limited to labels saves its own version of a workflow saved first ou
   const dev = new Api(stacks().a.url, created.json.key as string).ns("wf");
 
   const ours = await save(dev, triage(name));
-  expect(ours.version).not.toBe(first.version);
+  expect(ours.digest).not.toBe(first.digest);
   expect(ours.labels).toEqual({ env: "dev" });
   const again = await dev.post("/v1/workflows", triage(name));
   expectOk(again, 200);
-  expect(again.json.version).toBe(ours.version);
+  expect(again.json.digest).toBe(ours.digest);
   const tenantWide = await api.post("/v1/workflows", triage(name));
   expectOk(tenantWide, 200);
-  expect(tenantWide.json.version, "a tenant-wide save keeps its version").toBe(first.version);
+  expect(tenantWide.json.digest, "a tenant-wide save keeps its version").toBe(first.digest);
 
   const listed = await dev.get("/v1/workflows");
   expectOk(listed, 200);
-  expect(listed.json.workflows.filter((w: any) => w.name === name).map((w: any) => w.version)).toEqual([ours.version]);
+  expect(listed.json.workflows.filter((w: any) => w.name === name).map((w: any) => w.digest)).toEqual([ours.digest]);
   const run = await started(dev, { workflow: name, input: { repo: "acme/dev" } });
-  expect(run.workflow.version).toBe(ours.version);
+  expect(run.workflow.digest).toBe(ours.digest);
   expect(run.labels).toMatchObject({ env: "dev" });
-  evidence(`${name}: tenant-wide ${first.version.slice(0, 12)}, env=dev ${ours.version.slice(0, 12)}; the dev key lists and starts its own`);
+  evidence(`${name}: tenant-wide ${first.digest.slice(0, 12)}, env=dev ${ours.digest.slice(0, 12)}; the dev key lists and starts its own`);
   await dev.post(`/v1/runs/${run.id}/cancel`, {});
 });
 
@@ -396,7 +396,7 @@ test("a script started by a key limited to labels cannot signal a run outside it
 
   const attacker = await started(redApi, {
     actionSet,
-    script: `import { ${name} } from "rewind:workflows";
+    code: `import { ${name} } from "rewind:workflows";
 import { ActionError } from "rewind";
 export default async function main(input: { target: string }) {
   try {

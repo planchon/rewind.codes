@@ -1,6 +1,6 @@
 /**
  * Area "Endings and limits" of the release gate, on setup A (deployed): how a script ends
- * (`archi/03-execution.md`, "How a script ends", "Cancellation") and the resource limits that
+ * (`archi/03-execution.md`, "How a run ends", "Cancellation") and the resource limits that
  * bound a hostile or careless script ("Resource limits"): CPU per call into the script, heap,
  * array buffers, commands and bytes per activation, payload sizes. Every limit attack ends with a
  * canary run, so a script that ends a worker shows here.
@@ -29,7 +29,7 @@ test.afterAll(async () => {
 
 /** Starts a script (type-checked unless `check: false`) and waits for its end. */
 async function runToEnd(script: string, options: { check?: boolean; input?: unknown; timeoutMs?: number } = {}) {
-  const run = await started(api, { actionSet, script, input: options.input ?? {}, check: options.check });
+  const run = await started(api, { actionSet, code: script, input: options.input ?? {}, check: options.check });
   return ended(api, run.id, options.timeoutMs ?? 90_000);
 }
 
@@ -79,7 +79,7 @@ export default async function main() {
 
 test("a script that catches its CancelledError cleans up within its grace and completes", { tag: "@success" }, async () => {
   const run = await started(api, {
-    script: `import { sleep, CancelledError } from "rewind";
+    code: `import { sleep, CancelledError } from "rewind";
 export default async function main() {
   try {
     await sleep("30d");
@@ -117,7 +117,7 @@ test("an output above 256 KiB is kept whole and read on demand through its run",
 // ---------------------------------------------------------------------------------------------
 // Failures
 
-test("main throwing fails the run with its error, its location and stack in script.ts", { tag: "@failure" }, async () => {
+test("main throwing fails the run with its error, its location and stack in workflow.ts", { tag: "@failure" }, async () => {
   const run = await runToEnd(`export default async function main() {
   const order: { id?: string } = {};
   if (!order.id) throw new Error("the order has no id");
@@ -126,7 +126,7 @@ test("main throwing fails the run with its error, its location and stack in scri
 `);
   expectFailed(run, "Error", "the order has no id");
   expect(run.error.location).toMatchObject({ line: 3 });
-  expect(run.error.stack ?? "").toContain("script.ts");
+  expect(run.error.stack ?? "").toContain("workflow.ts");
   expect(await events(api, run.id)).toEqual(["run_started", "fail_run"]);
 
   const typeError = await runToEnd(
@@ -178,7 +178,7 @@ test("a script nothing can wake fails with DeadlockError", { tag: "@failure" }, 
   await new Promise(() => {}); // nothing can ever resolve it
 }
 `);
-  expectFailed(run, "DeadlockError", "nothing can wake the script");
+  expectFailed(run, "DeadlockError", "nothing can wake the code");
   expect(await events(api, run.id)).toEqual(["run_started", "fail_run"]);
 });
 
@@ -196,14 +196,14 @@ export default async function main() {
   expect(await events(api, run.id)).toEqual(["run_started", "schedule_call", "call_completed", "fail_run"]);
 });
 
-test("top-level code that throws aborts the run with invalid_script at its first activation", { tag: "@failure" }, async () => {
+test("top-level code that throws aborts the run with invalid_code at its first activation", { tag: "@failure" }, async () => {
   const run = await runToEnd(`const limit = JSON.parse("{not json");
 export default async function main() {
   return limit;
 }
 `);
   expect(run.status, JSON.stringify(run)).toBe("aborted");
-  expect(run.abort).toMatchObject({ kind: "invalid_script" });
+  expect(run.abort).toMatchObject({ kind: "invalid_code" });
   expect(run.abort.message).toContain("SyntaxError");
 });
 
@@ -211,7 +211,7 @@ test("a cleanup that needs another activation exceeds the cancellation grace: ab
   const text = unique("cleanup-");
   const run = await started(api, {
     actionSet,
-    script: `import { sleep } from "rewind";
+    code: `import { sleep } from "rewind";
 import { fx } from "rewind:actions";
 export default async function main() {
   try {

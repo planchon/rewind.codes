@@ -31,7 +31,7 @@ export interface GateStacks {
   /**
    * A value only this run of the gate knows. Specs put it as secrets (`PUT /v1/secrets/{name}`,
    * `PUT /v1/namespaces/{name}/secrets/{secret}`) that their runs attach, and an MCP server or an
-   * API receives it; it must never come back in an answer of Rewind (a run, a journal, a problem),
+   * API receives it; it must never come back in an answer of Rewind (a run, a run export, a problem),
    * a trace, a log, the database in clear, or the dashboard.
    */
   canary: string;
@@ -333,7 +333,7 @@ export function expectOk(reply: Reply, status?: number): void {
 
 /**
  * The attack pattern: probe the state, attempt, assert the exact refusal, probe again and assert
- * nothing moved. `probe` reads whatever the attempt would have changed (a run's journal, a
+ * nothing moved. `probe` reads whatever the attempt would have changed (a run's history, a
  * fixture's call log, a list of keys).
  */
 export async function expectRefused<T>(options: {
@@ -381,7 +381,7 @@ export function operator(stack: StackInfo = stacks().a): Api {
  */
 export async function newTenant(prefix: string, stack: StackInfo = stacks().a): Promise<Tenant> {
   const id = `${prefix.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40)}-${randomBytes(4).toString("hex")}`;
-  const created = await operator(stack).post("/v1/api-keys", { tenant: id, role: "owner", name: `${prefix} owner` });
+  const created = await operator(stack).post("/v1/api-keys", { organizationId: id, role: "owner", name: `${prefix} owner` });
   expectOk(created, 201);
   const ownerKey: string = created.json.key;
   const client = (bearer: { apiKey?: string; token?: string }) =>
@@ -407,7 +407,7 @@ export async function newTenant(prefix: string, stack: StackInfo = stacks().a): 
  */
 export async function expectHealthy(tenant: Tenant, namespace = "canary"): Promise<void> {
   const started = await tenant.api.ns(namespace).post("/v1/runs", {
-    script: `export default async function main(input: { n: number }) { return input.n * 2; }\n`,
+    code: `export default async function main(input: { n: number }) { return input.n * 2; }\n`,
     input: { n: 21 },
     wait: "30s",
   });

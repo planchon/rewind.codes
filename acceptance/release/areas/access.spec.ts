@@ -119,8 +119,8 @@ const PROBES: Probe[] = [
   { op: "POST /v1/api-keys", need: p("api_keys:write"), path: "/v1/api-keys", body: { name: "matrix", role: "no-such-role" } },
   { op: "DELETE /v1/api-keys/{id}", need: p("api_keys:write"), path: `/v1/api-keys/${NO_DIGEST}` },
   // Scripts.
-  { op: "POST /v1/check", need: p("runs:start"), path: "/v1/check", body: { script: "export default async function main( {" }, namespaced: true },
-  { op: "POST /v1/test", need: p("runs:start"), path: "/v1/test", body: { script: "export default async function main( {" }, namespaced: true },
+  { op: "POST /v1/check", need: p("runs:start"), path: "/v1/check", body: { code: "export default async function main( {" }, namespaced: true },
+  { op: "POST /v1/test", need: p("runs:start"), path: "/v1/test", body: { code: "export default async function main( {" }, namespaced: true },
   // Scripts and statistics come from counters, which carry no labels: not for a grant limited to them.
   { op: "GET /v1/scripts", need: p("runs:read"), path: "/v1/scripts", refusedTo: ["labels"] },
   { op: "GET /v1/scripts/{digest}", need: p("runs:read"), path: `/v1/scripts/${NO_DIGEST}` },
@@ -167,8 +167,8 @@ const PROBES: Probe[] = [
   { op: "GET /v1/organization/members", need: p("members:read"), path: "/v1/organization/members" },
   { op: "GET /v1/organization/connections", need: p("members:read"), path: "/v1/organization/connections" },
   { op: "DELETE /v1/organization/connections/{id}", need: p("members:manage"), path: "/v1/organization/connections/cn_unknown" },
-  { op: "DELETE /v1/organization/members/{user}", need: p("members:manage"), path: "/v1/organization/members/user_unknown" },
-  { op: "PUT /v1/organization/members/{user}/grant", need: p("members:manage"), path: "/v1/organization/members/user_unknown/grant", body: { role: "reader" } },
+  { op: "DELETE /v1/organization/members/{member}", need: p("members:manage"), path: "/v1/organization/members/user_unknown" },
+  { op: "PUT /v1/organization/members/{member}/grant", need: p("members:manage"), path: "/v1/organization/members/user_unknown/grant", body: { role: "reader" } },
   { op: "GET /v1/organization/namespace-defaults", need: p("namespaces:read"), path: "/v1/organization/namespace-defaults" },
   { op: "GET /v1/organization/namespace-names", need: p("namespaces:read"), path: "/v1/organization/namespace-names" },
   { op: "PUT /v1/organization/namespace-defaults", need: p("namespaces:write"), path: "/v1/organization/namespace-defaults", body: { defaults: {} } },
@@ -180,7 +180,7 @@ const PROBES: Probe[] = [
   { op: "POST /v1/organization/token-keys", need: p("tokens:write"), path: "/v1/organization/token-keys", body: { name: "matrix", jwk: {} } },
   { op: "DELETE /v1/organization/token-keys/{kid}", need: p("tokens:write"), path: "/v1/organization/token-keys/rk_unknown" },
   // The operator's.
-  { op: "PUT /v1/organizations/{tenant}/quotas", need: "operator", path: "/v1/organizations/{tenant}/quotas", body: { ceiling: {} } },
+  { op: "PUT /v1/organizations/{organization}/quotas", need: "operator", path: "/v1/organizations/{organization}/quotas", body: { ceiling: {} } },
   { op: "POST /v1/server/stop", need: "operator", path: "/v1/server/stop" },
   // Payloads: through a run (`run` is required with a token or a grant limited to labels).
   { op: "GET /v1/payloads/{digest}", need: p("runs:read"), path: `/v1/payloads/${NO_DIGEST}`, query: { run: NO_RUN } },
@@ -196,7 +196,7 @@ const PROBES: Probe[] = [
     op: "POST /v1/runs",
     need: p("runs:start"),
     path: "/v1/runs",
-    body: { script: "export default async function main( {" },
+    body: { code: "export default async function main( {" },
     namespaced: true,
   },
   { op: "GET /v1/runs/failures", need: p("runs:read"), path: "/v1/runs/failures", refusedTo: ["labels"] },
@@ -204,14 +204,14 @@ const PROBES: Probe[] = [
   { op: "DELETE /v1/runs/{id}", need: p("runs:delete"), path: `/v1/runs/${NO_RUN}` },
   { op: "GET /v1/runs/{id}", need: p("runs:read"), path: `/v1/runs/${NO_RUN}` },
   { op: "POST /v1/runs/{id}/cancel", need: p("runs:control"), path: `/v1/runs/${NO_RUN}/cancel`, body: {} },
-  { op: "GET /v1/runs/{id}/entries/{idx}", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/entries/0` },
+  { op: "GET /v1/runs/{id}/events/{idx}", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/events/0` },
   { op: "GET /v1/runs/{id}/events", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/events` },
-  { op: "POST /v1/runs/{id}/fork", need: p("runs:start"), path: `/v1/runs/${NO_RUN}/fork`, body: { script: "export default async function main() { return 1; }" } },
+  { op: "GET /v1/runs/{id}/export", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/export` },
+  { op: "POST /v1/runs/{id}/fork", need: p("runs:start"), path: `/v1/runs/${NO_RUN}/fork`, body: { code: "export default async function main() { return 1; }" } },
   { op: "POST /v1/runs/{id}/give-up", need: p("runs:quarantine"), path: `/v1/runs/${NO_RUN}/give-up` },
-  { op: "GET /v1/runs/{id}/journal", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/journal` },
   { op: "POST /v1/runs/{id}/release", need: p("runs:quarantine"), path: `/v1/runs/${NO_RUN}/release` },
   { op: "POST /v1/runs/{id}/signals/{name}", need: p("runs:control"), path: `/v1/runs/${NO_RUN}/signals/go`, body: { n: 1 } },
-  { op: "GET /v1/runs/{id}/trace", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/trace` },
+  { op: "GET /v1/runs/{id}/transcript", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/transcript` },
   // The server.
   { op: "GET /v1/server", need: "any", path: "/v1/server" },
   // The organization's secrets: never an end user's token's (06: "Tokens"). A name that is no
@@ -221,7 +221,7 @@ const PROBES: Probe[] = [
   { op: "DELETE /v1/secrets/{name}", need: p("secrets:write"), path: "/v1/secrets/matrix-never-put", refusedTo: ["token"] },
   { op: "GET /v1/secrets/{name}/usage", need: p("secrets:read"), path: "/v1/secrets/matrix-never-put/usage", refusedTo: ["token"] },
   // The public keys of signed calls: no credentials, whoever asks.
-  { op: "GET /organizations/{tenant}/jwks.json", need: "open", path: "/organizations/{tenant}/jwks.json" },
+  { op: "GET /organizations/{organization}/jwks.json", need: "open", path: "/organizations/{organization}/jwks.json" },
   // Lifecycle webhooks.
   { op: "GET /v1/subscriptions", need: p("subscriptions:read"), path: "/v1/subscriptions" },
   { op: "POST /v1/subscriptions", need: p("subscriptions:write"), path: "/v1/subscriptions", body: { url: "not a url" } },
@@ -258,7 +258,7 @@ const PROBES: Probe[] = [
     op: "POST /v1/workflows",
     need: p("actions:write"),
     path: "/v1/workflows",
-    body: { name: "matrix", actionSet: NO_DIGEST, script: "export default async function main() {}", input: {}, output: {} },
+    body: { name: "matrix", actionSet: NO_DIGEST, code: "export default async function main() {}", input: {}, output: {} },
   },
   { op: "GET /v1/workflows/{name}", need: p("actions:read"), path: "/v1/workflows/matrix-never-saved" },
   { op: "POST /v1/workflows/{name}/record", need: p("runs:read"), path: "/v1/workflows/matrix-never-saved/record", body: {} },
@@ -299,7 +299,7 @@ async function send(api: Api, probe: Probe, principal: Principal, tenant: string
   const method = probe.op.split(" ")[0]!;
   let target = api;
   if (probe.namespaced && principal.scope !== "token") target = target.ns("matrix-ns");
-  return target.request(method, probe.path.replace("{tenant}", tenant), {
+  return target.request(method, probe.path.replace("{organization}", tenant), {
     json: probe.body,
     query: probe.query,
     stream: probe.stream,
@@ -588,7 +588,7 @@ test.describe("roles and grants", () => {
 
   test("keys never count as the organization's owner: its only owner key can be revoked", { tag: "@failure" }, async () => {
     // archi/08 (accounts): `keep` refuses only a write that takes `owner` from the last member
-    // (`user:`) holding it; keys and pending invitations never count as holders. A tenant the
+    // (`member:`) holding it; keys and pending invitations never count as holders. A tenant the
     // operator made has no owner member, so its owner keys can all go; `last-owner` protects
     // members, which only WorkOS brings (criterion 8).
     const lone = await newTenant("access-last-owner");
@@ -600,7 +600,7 @@ test.describe("roles and grants", () => {
     expectOk(last, 204);
     expectProblem(await lone.api.as(second.key).get("/v1/whoami"), 401, "unauthorized");
     // The operator still reaches the tenant: it makes a new owner key.
-    const again = await operator().post("/v1/api-keys", { tenant: lone.id, role: "owner", name: "new owner" });
+    const again = await operator().post("/v1/api-keys", { organizationId: lone.id, role: "owner", name: "new owner" });
     expectOk(again, 201);
     expectOk(await lone.api.as(again.json.key).get("/v1/whoami"), 200);
     evidence("an owner key revokes another, then itself: 204 both times; keys never stand for the organization's owner (08), and the operator makes a new one");
@@ -639,7 +639,7 @@ test.describe("roles and grants", () => {
 
 /**
  * An API whose key is a secret the run attaches: its document inline, its base URL public and
- * never called (a start refused for its attachments sends nothing).
+ * never called (a start refused for its secrets sends nothing).
  */
 const CRM_API = {
   apis: [
@@ -683,7 +683,7 @@ test.describe("keys limited to labels", () => {
 
   test("a key limited to labels reads only the runs carrying them", { tag: "@attack" }, async () => {
     expectOk(await red.get(`/v1/runs/${redRun}`), 200);
-    for (const path of [`/v1/runs/${blueRun}`, `/v1/runs/${blueRun}/journal`, `/v1/runs/${blueRun}/trace`, `/v1/runs/${blueRun}/entries/0`, `/v1/runs/${blueRun}/events`]) {
+    for (const path of [`/v1/runs/${blueRun}`, `/v1/runs/${blueRun}/export`, `/v1/runs/${blueRun}/transcript`, `/v1/runs/${blueRun}/events/0`, `/v1/runs/${blueRun}/events`]) {
       expectProblem(await red.get(path), 404, "not-found");
     }
     const listed = await red.get("/v1/runs");
@@ -692,20 +692,20 @@ test.describe("keys limited to labels", () => {
     expect(ids).toContain(redRun);
     expect(ids).not.toContain(blueRun);
     expect(ids).not.toContain(blueWaiting);
-    evidence("the red key: the blue run, its journal, trace, entries and events → 404; lists hold red runs only");
+    evidence("the red key: the blue run, its export, transcript, one event and its events → 404; lists hold red runs only");
   });
 
   test("a key limited to labels cannot signal, cancel, fork or erase a run it does not see", { tag: "@attack" }, async () => {
     const probe = async () => {
       const state = await tenant.api.get(`/v1/runs/${blueWaiting}`);
-      const journal = await tenant.api.get(`/v1/runs/${blueWaiting}/journal`);
-      return { status: state.json.status, entries: journal.json.entries.length };
+      const exported = await tenant.api.get(`/v1/runs/${blueWaiting}/export`);
+      return { status: state.json.status, events: exported.json.events.length };
     };
     await expectRefused({ attempt: () => red.post(`/v1/runs/${blueWaiting}/signals/go`, { n: 1 }), status: 404, slug: "not-found", probe });
     await expectRefused({ attempt: () => red.post(`/v1/runs/${blueWaiting}/cancel`, {}), status: 404, slug: "not-found", probe });
-    await expectRefused({ attempt: () => red.post(`/v1/runs/${blueWaiting}/fork`, { script: "export default async function main() { return 0; }" }), status: 404, slug: "not-found", probe });
+    await expectRefused({ attempt: () => red.post(`/v1/runs/${blueWaiting}/fork`, { code: "export default async function main() { return 0; }" }), status: 404, slug: "not-found", probe });
     await expectRefused({ attempt: () => red.delete(`/v1/runs/${blueWaiting}`), status: 404, slug: "not-found", probe });
-    evidence("signal, cancel, fork and erase of a run without the key's labels → 404; the run still waits, its journal unchanged");
+    evidence("signal, cancel, fork and erase of a run without the key's labels → 404; the run still waits, its history unchanged");
   });
 
   test("what a key limited to labels starts carries them, and a contradicting label is refused", { tag: "@attack" }, async () => {
@@ -716,7 +716,7 @@ test.describe("keys limited to labels", () => {
     const refused = await expectRefused({ attempt: () => startRun(red, "labels", { labels: { team: "blue" }, wait: "30s" }), status: 403, slug: "forbidden", probe: count });
     expect(refused.json.detail).toContain("team:red");
     // Its forks too: a fork of its run cannot be relabelled away.
-    const fork = await red.post(`/v1/runs/${started.json.id}/fork`, { script: "export default async function main() { return 0; }", labels: { team: "blue" } });
+    const fork = await red.post(`/v1/runs/${started.json.id}/fork`, { code: "export default async function main() { return 0; }", labels: { team: "blue" } });
     expectProblem(fork, 403, "forbidden");
     evidence("a run started by the red key gets team:red; asking team:blue for a run or a fork → 403 forbidden, no blue run created");
   });
@@ -742,14 +742,14 @@ test.describe("keys limited to labels", () => {
     const actionSet = { mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }] };
     const listing = await red.post("/v1/action-sets", { ...actionSet, secrets: { crm: "org/blue-crm" } });
     expectProblem(listing, 422, "secret-required");
-    expect(listing.json.attachments[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
-    expect(listing.json.attachments[0].attachable).toEqual(["org/red-crm"]);
+    expect(listing.json.secrets[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
+    expect(listing.json.secrets[0].usable).toEqual(["org/red-crm"]);
     const api = await tenant.api.post("/v1/action-sets", CRM_API);
     expectOk(api);
-    const run = await red.ns("labels").post("/v1/runs", { script: CRM_SCRIPT, actionSet: api.json.id, secrets: { crm: "org/blue-crm" } });
+    const run = await red.ns("labels").post("/v1/runs", { code: CRM_SCRIPT, actionSet: api.json.id, secrets: { crm: "org/blue-crm" } });
     expectProblem(run, 422, "secret-required");
-    expect(run.json.attachments[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
-    evidence("the red key lists org/red-crm only (written with team:red); blue's usage and deletion → 404, replacing it or labelling one blue → 403; a namespace's secret read, never written (403); org/blue-crm attached for a listing or a run → 422 secret-required (unknown), attachable org/red-crm");
+    expect(run.json.secrets[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
+    evidence("the red key lists org/red-crm only (written with team:red); blue's usage and deletion → 404, replacing it or labelling one blue → 403; a namespace's secret read, never written (403); org/blue-crm named for a listing or a run → 422 secret-required (unknown), usable org/red-crm");
   });
 
   test("attaching an organization's secret takes secrets:use", { tag: "@attack" }, async () => {
@@ -768,12 +768,12 @@ test.describe("keys limited to labels", () => {
     const started = async () => (await tenant.api.get("/v1/namespaces/use")).json?.namespace?.usage?.runsStarted ?? 0;
     const run = await expectRefused({
       attempt: () =>
-        starter.ns("use").post("/v1/runs", { script: CRM_SCRIPT, actionSet: actionSet.json.id, secrets: { crm: "org/shared-crm" } }),
+        starter.ns("use").post("/v1/runs", { code: CRM_SCRIPT, actionSet: actionSet.json.id, secrets: { crm: "org/shared-crm" } }),
       status: 422,
       slug: "secret-required",
       probe: started,
     });
-    expect(run.json.attachments[0]).toMatchObject({ server: "crm", problem: "forbidden", secret: "org/shared-crm" });
+    expect(run.json.secrets[0]).toMatchObject({ server: "crm", problem: "forbidden", secret: "org/shared-crm" });
     evidence("a role without secrets:use: org/shared-crm for a listing → 403 naming secrets:use; for a run → 422 secret-required (forbidden), no run");
   });
 
@@ -792,7 +792,7 @@ test.describe("keys limited to labels", () => {
   test("a worker key limited to labels is handed and answers the harness calls of its runs only", { tag: "@attack" }, async () => {
     // One action set for both teams, as two environments of a tenant register the same harness actions.
     const actionSet = await tenant.api.post("/v1/action-sets", {
-      host: [{ name: "team.lookup", description: "Looks something up.", inputSchema: { type: "object" } }],
+      harness: [{ name: "team.lookup", description: "Looks something up.", inputSchema: { type: "object" } }],
     });
     expectOk(actionSet);
     const script = `import { team } from "rewind:actions";
@@ -872,7 +872,7 @@ test.describe("the operator's endpoints", () => {
     });
     expectProblem(await tenant.api.post("/v1/server/stop"), 403, "forbidden");
     const other = `access-elsewhere-${unique()}`;
-    const reply = await tenant.api.post("/v1/api-keys", { name: "elsewhere", role: "owner", tenant: other });
+    const reply = await tenant.api.post("/v1/api-keys", { name: "elsewhere", role: "owner", organizationId: other });
     expectProblem(reply, 403, "forbidden");
     expect(reply.json.detail).toContain("operator");
     // The server still answers: it was not stopped.
@@ -886,12 +886,12 @@ test.describe("the operator's endpoints", () => {
     const seen = await tenant.api.get("/v1/organization/namespace-defaults");
     expectOk(seen, 200);
     expect(JSON.stringify(seen.json)).toContain('"activeRuns":7');
-    const made = await operator().post("/v1/api-keys", { name: "reader by operator", role: "reader", tenant: tenant.id });
+    const made = await operator().post("/v1/api-keys", { name: "reader by operator", role: "reader", organizationId: tenant.id });
     expectOk(made, 201);
     const whoami = await tenant.api.as(made.json.key).get("/v1/whoami");
-    expect(whoami.json.tenant).toBe(tenant.id);
+    expect(whoami.json.organizationId).toBe(tenant.id);
     expect(whoami.json.operator).toBe(false);
-    evidence("the operator's PUT /v1/organizations/{tenant}/quotas shows in the tenant's namespace defaults; its key of another tenant is that tenant's reader");
+    evidence("the operator's PUT /v1/organizations/{organization}/quotas shows in the tenant's namespace defaults; its key of another tenant is that tenant's reader");
   });
 });
 

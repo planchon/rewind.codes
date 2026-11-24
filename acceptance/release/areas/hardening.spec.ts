@@ -23,21 +23,21 @@ const SETUPS: { name: string; stack: () => StackInfo }[] = [
   { name: "B, strict", stack: () => stacks().b },
 ];
 
-/** A script that hands out a webhook URL in its logs, then waits for one signal through it. */
+/** A script that hands out a signal URL in its logs, then waits for one signal through it. */
 const HOOKED = (marker: string) => `// ${marker}
-import { signal, webhook } from "rewind";
+import { signal, signalUrl } from "rewind";
 
 export default async function main() {
-  const hook = await webhook("ping");
+  const hook = await signalUrl("ping");
   console.log(\`hook: \${hook.url}\`);
   const event = await signal<{ n: number }>("ping");
   return { got: event };
 }
 `;
 
-/** The webhook URL a run of `HOOKED` logged. */
+/** The signal URL a run of `HOOKED` logged. */
 async function hookOf(tenant: Tenant, id: string): Promise<string> {
-  return eventually(`run ${id} logs its webhook`, async () => {
+  return eventually(`run ${id} logs its signal URL`, async () => {
     const reply = await tenant.api.get(`/v1/runs/${id}`);
     const line = (reply.json?.logs ?? []).map((l: any) => String(l.message)).find((m: string) => m.startsWith("hook: "));
     return line ? line.slice("hook: ".length).trim() : undefined;
@@ -58,7 +58,7 @@ for (const setup of SETUPS) {
     // Bodies
 
     test("a body above the server's limit is refused with 413", { tag: "@attack" }, async () => {
-      const body = JSON.stringify({ script: short("big"), input: "a".repeat(17 * 1024 * 1024) });
+      const body = JSON.stringify({ code: short("big"), input: "a".repeat(17 * 1024 * 1024) });
       const namespace = unique("big-");
       const before = await namespaceState(tenant.api, namespace);
       // Sent with Expect: 100-continue: the server refuses from Content-Length, without reading
@@ -85,12 +85,12 @@ for (const setup of SETUPS) {
     test("an input above the payload limit is refused with 413, and so is a signal's payload", { tag: "@attack" }, async () => {
       const namespace = unique("input-");
       await expectRefused({
-        attempt: () => tenant.api.ns(namespace).post("/v1/runs", { script: short("input"), input: "a".repeat(9 * 1024 * 1024) }),
+        attempt: () => tenant.api.ns(namespace).post("/v1/runs", { code: short("input"), input: "a".repeat(9 * 1024 * 1024) }),
         status: 413,
         slug: "payload-too-large",
         probe: () => namespaceState(tenant.api, namespace),
       });
-      const run = await start(tenant.api.ns("alice"), { script: waiting(unique("payload")) });
+      const run = await start(tenant.api.ns("alice"), { code: waiting(unique("payload")) });
       await untilWaiting(tenant.api, run.id);
       await expectRefused({
         attempt: () => tenant.api.post(`/v1/runs/${run.id}/signals/approval`, { ok: true, blob: "a".repeat(9 * 1024 * 1024) }),
@@ -102,7 +102,7 @@ for (const setup of SETUPS) {
     });
 
     test("a body that is not JSON is refused with 415", { tag: "@failure" }, async () => {
-      const json = JSON.stringify({ script: short("media") });
+      const json = JSON.stringify({ code: short("media") });
       for (const contentType of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "application/xml"]) {
         for (const [method, path] of [
           ["POST", "/v1/runs"],
@@ -117,33 +117,33 @@ for (const setup of SETUPS) {
 
     test("invalid JSON and wrong shapes are refused with 400, never a 5xx", { tag: "@failure" }, async () => {
       const bodies = [
-        '{"script":',
-        '{"script": "x",}',
-        '{"script": NaN}',
+        '{"code":',
+        '{"code": "x",}',
+        '{"code": NaN}',
         "[1, 2, 3]",
         '"just a string"',
         "null",
-        '{"script": 42}',
-        '{"script": "export default async () => 1;", "unknown": true}',
-        '{"script": "export default async () => 1;", "ttl": "forever"}',
-        '{"script": "export default async () => 1;", "labels": {"a": 1}}',
+        '{"code": 42}',
+        '{"code": "export default async () => 1;", "unknown": true}',
+        '{"code": "export default async () => 1;", "ttl": "forever"}',
+        '{"code": "export default async () => 1;", "labels": {"a": 1}}',
         '\u0000\u0001\u0002',
       ];
       for (const body of bodies) {
         const reply = await tenant.api.ns("alice").request("POST", "/v1/runs", { body, contentType: "application/json" });
         expectNo5xx(reply, body);
         expect([400, 422], `${body} → ${reply.status} ${reply.text.slice(0, 200)}`).toContain(reply.status);
-        expect(reply.slug, body).toMatch(/^(invalid-request|invalid-script)$/);
+        expect(reply.slug, body).toMatch(/^(invalid-request|invalid-code)$/);
       }
     });
 
     test("deeply nested JSON is refused, and the server keeps serving", { tag: "@attack" }, async () => {
       const depth = 200_000;
       const nested = `${"[".repeat(depth)}${"]".repeat(depth)}`;
-      const run = await start(tenant.api.ns("alice"), { script: waiting(unique("nested")) });
+      const run = await start(tenant.api.ns("alice"), { code: waiting(unique("nested")) });
       await untilWaiting(tenant.api, run.id);
       for (const [path, body] of [
-        ["/v1/runs", `{"script": "export default async () => 1;", "input": ${nested}}`],
+        ["/v1/runs", `{"code": "export default async () => 1;", "input": ${nested}}`],
         [`/v1/runs/${run.id}/signals/approval`, nested],
         ["/v1/action-sets", `{"harness": [{"name": "deep", "description": "d", "inputSchema": ${nested}}]}`],
       ] as const) {
@@ -174,7 +174,7 @@ for (const setup of SETUPS) {
       ];
       const templates = [
         (id: string) => ["GET", `/v1/runs/${id}`],
-        (id: string) => ["GET", `/v1/runs/${id}/journal`],
+        (id: string) => ["GET", `/v1/runs/${id}/export`],
         (id: string) => ["POST", `/v1/runs/${id}/signals/approval`],
         (id: string) => ["GET", `/v1/scripts/${id}`],
         (id: string) => ["GET", `/v1/payloads/${id}`],
@@ -205,7 +205,7 @@ for (const setup of SETUPS) {
     test("namespace names outside their alphabet are refused with 400", { tag: "@failure" }, async () => {
       const before = (await tenant.api.get("/v1/namespaces")).json.total;
       for (const name of ["a b", "*", "n".repeat(129), "../etc", "a/b", "al,ice", "", "tab\tname", "a;b"]) {
-        const reply = await tenant.api.request("POST", "/v1/runs", { json: { script: short("ns") }, headers: { "rewind-namespace": name } });
+        const reply = await tenant.api.request("POST", "/v1/runs", { json: { code: short("ns") }, headers: { "rewind-namespace": name } });
         expectProblem(reply, 400, "invalid-request");
       }
       for (const name of ["%00", "a%00b", "%E5%90%8D%E5%89%8D", "*", "n".repeat(129), "..%2Fetc", "a%20b", "%2A"]) {
@@ -216,7 +216,7 @@ for (const setup of SETUPS) {
       // The longest name and every character of the alphabet are accepted.
       const longest = "n".repeat(128);
       for (const name of [longest, "user@example.net", "team:a.b_c-D9"]) {
-        const run = await start(tenant.api.ns(name), { script: short(unique("ok")), wait: "20s" });
+        const run = await start(tenant.api.ns(name), { code: short(unique("ok")), wait: "20s" });
         expect(run.namespace).toBe(name);
       }
     });
@@ -230,7 +230,7 @@ for (const setup of SETUPS) {
       const values = ["a_c", "abc", "a%c", "a'c", "a\\c"];
       const ids: Record<string, string> = {};
       for (const value of values) {
-        const run = await start(own.api.ns("alice"), { script: short(unique("label")), labels: { suite, team: value }, wait: "20s" });
+        const run = await start(own.api.ns("alice"), { code: short(unique("label")), labels: { suite, team: value }, wait: "20s" });
         ids[value] = run.id;
       }
       await eventually("the read model has the runs", async () => {
@@ -279,25 +279,25 @@ for (const setup of SETUPS) {
 
     test("an idempotency key reused with another body returns the first run and starts nothing", { tag: "@attack" }, async () => {
       // The spec says a second request with the key returns the existing run; it is silent on a
-      // different body. Checked: no second run, and the first run's script and input stand.
+      // different body. Checked: no second run, and the first run's code and input stand.
       const namespace = unique("idem-");
       const key = unique("key-");
-      const first = await tenant.api.ns(namespace).post("/v1/runs", { script: short("first"), input: { n: 1 }, wait: "20s" }, { headers: { "idempotency-key": key } });
+      const first = await tenant.api.ns(namespace).post("/v1/runs", { code: short("first"), input: { n: 1 }, wait: "20s" }, { headers: { "idempotency-key": key } });
       expectOk(first, 201);
       const second = await tenant.api
         .ns(namespace)
-        .post("/v1/runs", { script: `export default async function main() { return "other"; }\n`, input: { n: 2 }, wait: "20s" }, { headers: { "idempotency-key": key } });
+        .post("/v1/runs", { code: `export default async function main() { return "other"; }\n`, input: { n: 2 }, wait: "20s" }, { headers: { "idempotency-key": key } });
       expectOk(second);
       expect(second.json.id).toBe(first.json.id);
-      expect(second.json.script).toBe(first.json.script);
+      expect(second.json.codeDigest).toBe(first.json.codeDigest);
       expect(await namespaceState(tenant.api, namespace)).toMatchObject({ runsStarted: 1 });
       const run = await tenant.api.get(`/v1/runs/${first.json.id}`);
       expect(run.json.input.value).toEqual({ n: 1 });
       // The key is per namespace: another namespace starts its own run.
-      const elsewhere = await tenant.api.ns(`${namespace}-b`).post("/v1/runs", { script: short("first") }, { headers: { "idempotency-key": key } });
+      const elsewhere = await tenant.api.ns(`${namespace}-b`).post("/v1/runs", { code: short("first") }, { headers: { "idempotency-key": key } });
       expectOk(elsewhere, 201);
       expect(elsewhere.json.id).not.toBe(first.json.id);
-      evidence(`the key reused with another script and input → ${second.status} with the first run; one run started (spec silent on a different body)`);
+      evidence(`the key reused with another code and input → ${second.status} with the first run; one run started (spec silent on a different body)`);
     });
 
     test("repeated singleton headers never act across namespaces or principals", { tag: "@attack" }, async () => {
@@ -306,7 +306,7 @@ for (const setup of SETUPS) {
       const minted = await tenant.api.post("/v1/namespaces/alice/tokens", {});
       expectOk(minted, 201);
       const aliceToken = minted.json.token as string;
-      const body = JSON.stringify({ script: short(unique("dup")) });
+      const body = JSON.stringify({ code: short(unique("dup")) });
       const bobBefore = await namespaceState(tenant.api, "bob");
       const ownFirst = await rawRequest(stack.url, "POST", "/v1/runs", [
         ["authorization", `Bearer ${aliceToken}`],
@@ -331,9 +331,9 @@ for (const setup of SETUPS) {
         ["authorization", `Bearer ${other.ownerKey}`],
       ]);
       expect(who.status, who.text).toBeLessThan(500);
-      if (who.status === 200) expect([tenant.id, other.id]).toContain(who.json.tenant);
+      if (who.status === 200) expect([tenant.id, other.id]).toContain(who.json.organizationId);
       evidence(
-        `Rewind-Namespace twice with Alice's token: alice first → ${ownFirst.status}, bob first → ${otherFirst.status}; Authorization twice → ${who.status}${who.json?.tenant ? ` as ${who.json.tenant === tenant.id ? "the first" : "the second"}` : ""} (spec silent)`,
+        `Rewind-Namespace twice with Alice's token: alice first → ${ownFirst.status}, bob first → ${otherFirst.status}; Authorization twice → ${who.status}${who.json?.organizationId ? ` as ${who.json.organizationId === tenant.id ? "the first" : "the second"}` : ""} (spec silent)`,
       );
     });
 
@@ -344,7 +344,7 @@ for (const setup of SETUPS) {
       await expectRefused({ attempt: () => bare.get("/v1/whoami"), status: 401, slug: "unauthorized" });
       const namespace = unique("cookie-");
       await expectRefused({
-        attempt: () => bare.ns(namespace).post("/v1/runs", { script: short(unique("cookie")) }),
+        attempt: () => bare.ns(namespace).post("/v1/runs", { code: short(unique("cookie")) }),
         status: 401,
         slug: "unauthorized",
         probe: () => namespaceState(tenant.api, namespace),
@@ -388,8 +388,8 @@ for (const setup of SETUPS) {
         ["a value that is not a string", () => tenant.api.put("/v1/secrets/typed", { value: 42 }), 400, "invalid-request"],
         ["an unknown field", () => tenant.api.put("/v1/secrets/extra", { value: "x", plaintext: true }), 400, "invalid-request"],
         ["a label on a namespace's secret", () => tenant.api.put("/v1/namespaces/alice/secrets/github", { value: "x", labels: { env: "prod" } }), 400, "invalid-request"],
-        ["an attachment that names no scope", () => tenant.api.ns("alice").post("/v1/runs", { script: short(unique("attach")), secrets: { github: "github" } }), 400, "invalid-request"],
-        ["an attachment of another scope", () => tenant.api.ns("alice").post("/v1/runs", { script: short(unique("attach")), secrets: { github: "tenant/github" } }), 400, "invalid-request"],
+        ["an attachment that names no scope", () => tenant.api.ns("alice").post("/v1/runs", { code: short(unique("attach")), secrets: { github: "github" } }), 400, "invalid-request"],
+        ["an attachment of another scope", () => tenant.api.ns("alice").post("/v1/runs", { code: short(unique("attach")), secrets: { github: "tenant/github" } }), 400, "invalid-request"],
       ];
       const seen: string[] = [];
       for (const [what, attempt, status, slug] of cases) {
@@ -404,7 +404,7 @@ for (const setup of SETUPS) {
     // Routes
 
     test("a guessed /hooks token is 404 and signals nothing", { tag: "@attack" }, async () => {
-      const run = await start(tenant.api.ns("alice"), { script: HOOKED(unique("guess")) });
+      const run = await start(tenant.api.ns("alice"), { code: HOOKED(unique("guess")) });
       await untilWaiting(tenant.api, run.id);
       const real = await hookOf(tenant, run.id);
       const token = real.split("/hooks/")[1]!;
@@ -416,11 +416,11 @@ for (const setup of SETUPS) {
           probe: () => runState(tenant.api, run.id),
         });
       }
-      evidence("random, off-by-one, NUL, 4 kB and dot-segment /hooks tokens → 404; the run's journal unchanged");
+      evidence("random, off-by-one, NUL, 4 kB and dot-segment /hooks tokens → 404; the run's history unchanged");
     });
 
     test("a /hooks URL delivers one signal per delivery id", { tag: "@success" }, async () => {
-      const run = await start(tenant.api.ns("alice"), { script: HOOKED(unique("hook")) });
+      const run = await start(tenant.api.ns("alice"), { code: HOOKED(unique("hook")) });
       await untilWaiting(tenant.api, run.id);
       const url = await hookOf(tenant, run.id);
       expect(url.startsWith(`${stack.url}/hooks/`), url).toBe(true);
@@ -442,7 +442,7 @@ for (const setup of SETUPS) {
     });
 
     test("an old /hooks token signals nothing once its run has ended", { tag: "@attack" }, async () => {
-      const run = await start(tenant.api.ns("alice"), { script: HOOKED(unique("old")) });
+      const run = await start(tenant.api.ns("alice"), { code: HOOKED(unique("old")) });
       await untilWaiting(tenant.api, run.id);
       const path = (await hookOf(tenant, run.id)).slice(stack.url.length);
       expectOk(await tenant.api.as(undefined).post(path, { n: 1 }), 202);
@@ -460,7 +460,7 @@ for (const setup of SETUPS) {
       expect([404, 409], replay.text).toContain(replay.status);
       expect(replay.slug).toMatch(/^(not-found|run-ended)$/);
       expect(await runState(tenant.api, run.id)).toEqual(before);
-      evidence(`POST to the webhook of an ended run → ${replay.status} ${replay.slug}; nothing recorded`);
+      evidence(`POST to the signal URL of an ended run → ${replay.status} ${replay.slug}; nothing recorded`);
     });
 
     /** Each route of `/auth`, with a body it takes. */
@@ -515,7 +515,7 @@ for (const setup of SETUPS) {
       await expectRefused({ attempt: () => tenant.api.post("/v1/server/stop"), status: 403, slug: "forbidden" });
       expectOk(await tenant.api.get("/v1/server"), 200);
       await expectRefused({
-        attempt: () => tenant.api.post("/v1/api-keys", { tenant: unique("victim-"), role: "owner", name: "foothold" }),
+        attempt: () => tenant.api.post("/v1/api-keys", { organizationId: unique("victim-"), role: "owner", name: "foothold" }),
         status: 403,
         slug: "forbidden",
         probe: keys,

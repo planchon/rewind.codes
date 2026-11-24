@@ -148,9 +148,9 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
             status: "completed",
             output: { echoed: "Echo: hello", sum: "The sum of 2 and 40 is 42.", celsius },
             calls: [
-              { tool: "everything.echo", times: 1 },
-              { tool: "everything.get-sum", times: 1 },
-              { tool: "everything.get-structured-content", times: 1 },
+              { action: "everything.echo", times: 1 },
+              { action: "everything.get-sum", times: 1 },
+              { action: "everything.get-structured-content", times: 1 },
             ],
           },
         },
@@ -179,19 +179,19 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
     expect(toolCalls().slice(before).map((call) => call.name)).toEqual(["echo", "get-sum"]);
 
     // What a fork reuses.
-    const replay = await project.rewind(["replay", parent, "--script", "fixed.ts"]);
+    const replay = await project.rewind(["replay", parent, "--code", "fixed.ts"]);
     expect(replay.stdout).toContain("a fork reuses: #1 everything.echo");
 
     const afterFailure = toolCalls().length;
-    const fork = await project.json(["fork", parent, "--script", "fixed.ts", "--wait", "120s"]);
+    const fork = await project.json(["fork", parent, "--code", "fixed.ts", "--wait", "120s"]);
     expect(fork.code, JSON.stringify(fork.value)).toBe(0);
     expect(fork.value.status).toBe("completed");
     expect(fork.value.output.value).toEqual({ echoed: "Echo: step 1", total: 42 });
-    expect(fork.value.parent.run).toBe(parent);
-    // The MCP server received no call: both outcomes came from the parent's journal.
+    expect(fork.value.source.run).toBe(parent);
+    // The MCP server received no call: both outcomes came from the source's history.
     expect(toolCalls()).toHaveLength(afterFailure);
 
-    const forks = await project.json(["runs", "--parent", parent]);
+    const forks = await project.json(["runs", "--source", parent]);
     expect(forks.value.runs.map((run: { id: string }) => run.id)).toEqual([fork.value.id]);
   });
 });

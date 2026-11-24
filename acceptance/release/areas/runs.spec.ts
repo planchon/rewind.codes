@@ -1,8 +1,8 @@
 /**
  * Area "Runs" of the release gate: a run's life through the HTTP API on setup A (deployed).
  * Starts with `wait`, labels, TTL and trace context; idempotent starts and signals; mailboxes,
- * timeouts and sleeps; cancellation; the TTL's deadline; forks; erasure; the journal, the cassette,
- * the event stream, the trace and single entries (`archi/03-execution.md`, `archi/07`'s table,
+ * timeouts and sleeps; cancellation; the TTL's deadline; forks; erasure; the run export, the cassette,
+ * the event stream, the transcript and single events (`archi/03-execution.md`, `archi/07`'s table,
  * `api/README.md`).
  */
 import { type McpFixture, startMcpFixture } from "../support/fixtures.js";
@@ -51,7 +51,7 @@ const callsOf = (tool: string) => mcp.calls.filter((c) => c.tool === tool);
 
 test("a run started with wait completes and answers its output, input, labels and namespace", { tag: "@success" }, async () => {
   const run = await started(alice, {
-    script: `export default async function main(input: { a: number; b: number }) {\n  return { sum: input.a + input.b };\n}\n`,
+    code: `export default async function main(input: { a: number; b: number }) {\n  return { sum: input.a + input.b };\n}\n`,
     input: { a: 2, b: 40 },
     labels: { suite: "runs", conversation: "c-1" },
     wait: "30s",
@@ -69,7 +69,7 @@ test("a run started with wait completes and answers its output, input, labels an
 });
 
 test("wait answers once it elapses, with the run still active and what it waits for", { tag: "@success" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO, wait: "1s" });
+  const run = await started(alice, { code: WAITS_FOR_GO, wait: "1s" });
   expect(run.status).toBe("active");
   expect(run.waitingFor.map((w: any) => [w.kind, w.name])).toContainEqual(["signal", "go"]);
   await alice.post(`/v1/runs/${run.id}/cancel`, {});
@@ -78,7 +78,7 @@ test("wait answers once it elapses, with the run still active and what it waits 
 test("a TTL given at start sets the deadline, and the trace context makes the run's trace the caller's", { tag: "@success" }, async () => {
   const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
   const run = await started(alice, {
-    script: WAITS_FOR_GO,
+    code: WAITS_FOR_GO,
     ttl: "2h",
     traceparent: `00-${traceId}-00f067aa0ba902b7-01`,
   });
@@ -91,7 +91,7 @@ test("the same Idempotency-Key starts one run per namespace, and a retry runs no
   const key = unique("start-");
   const body = {
     actionSet,
-    script: `import { fx } from "rewind:actions";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
+    code: `import { fx } from "rewind:actions";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
     wait: "30s",
   };
   const first = await startRun(alice, body, { key });
@@ -111,7 +111,7 @@ test("the same Idempotency-Key starts one run per namespace, and a retry runs no
 
 test("signals wait in their mailbox, come out first in first out, and a timeout gives undefined", { tag: "@success" }, async () => {
   const run = await started(alice, {
-    script: `import { signal, sleep } from "rewind";
+    code: `import { signal, sleep } from "rewind";
 export default async function main() {
   await sleep("1s");
   const first = await signal("note");
@@ -134,7 +134,7 @@ export default async function main() {
 
 test("a signal sent twice with one Idempotency-Key is delivered once", { tag: "@success" }, async () => {
   const run = await started(alice, {
-    script: `import { signal } from "rewind";
+    code: `import { signal } from "rewind";
 export default async function main() {
   const first = await signal("go");
   const second = await signal("go", { timeout: "2s" });
@@ -155,7 +155,7 @@ export default async function main() {
 
 test("a sleeping run waits for its timer, then resumes on its own", { tag: "@success" }, async () => {
   const run = await started(alice, {
-    script: `import { sleep } from "rewind";
+    code: `import { sleep } from "rewind";
 export default async function main() {
   const before = Date.now();
   await sleep("1500ms");
@@ -174,7 +174,7 @@ export default async function main() {
 });
 
 test("a cancelled run ends cancelled with a CancelledError carrying the reason", { tag: "@success" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO });
+  const run = await started(alice, { code: WAITS_FOR_GO });
   await waitingFor(alice, run.id, "signal", "go");
   const cancelled = await alice.post(`/v1/runs/${run.id}/cancel`, { reason: "user asked", wait: "20s" });
   expectOk(cancelled, 202);
@@ -185,7 +185,7 @@ test("a cancelled run ends cancelled with a CancelledError carrying the reason",
 });
 
 test("a run past its TTL is cancelled through the normal path, reason ttl", { tag: "@success" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO, ttl: "2s" });
+  const run = await started(alice, { code: WAITS_FOR_GO, ttl: "2s" });
   const done = await ended(alice, run.id, 60_000);
   expect(done.status, JSON.stringify(done)).toBe("cancelled");
   expect(done.error).toMatchObject({ name: "CancelledError" });
@@ -194,13 +194,13 @@ test("a run past its TTL is cancelled through the normal path, reason ttl", { ta
   evidence(`ended ${between(run.expiresAt, done.endedAt)} ms after its deadline`);
 });
 
-test("a fork reuses its parent's recorded calls and seed, and stays in its namespace", { tag: "@success" }, async () => {
+test("a fork reuses its source's recorded calls and seed, and stays in its namespace", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const parent = await started(alice, {
     actionSet,
     input: { id },
     wait: "30s",
-    script: `import { fx } from "rewind:actions";
+    code: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
   const draw = Math.random();
@@ -215,7 +215,7 @@ export default async function main(input: { id: string }) {
 
   const forked = await alice.post(`/v1/runs/${parent.id}/fork`, {
     wait: "30s",
-    script: `import { fx } from "rewind:actions";
+    code: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
   const draw = Math.random();
@@ -227,36 +227,36 @@ export default async function main(input: { id: string }) {
   const fork = forked.json.status === "completed" ? forked.json : await ended(alice, forked.json.id);
   expect(fork.status, JSON.stringify(fork)).toBe("completed");
   expect(fork.id).not.toBe(parent.id);
-  expect(fork.parent).toMatchObject({ run: parent.id });
+  expect(fork.source).toMatchObject({ run: parent.id });
   expect(fork.namespace).toBe("alice");
-  // The recorded call was copied, not made again; the seed is the parent's.
+  // The recorded call was copied, not made again; the seed is the source's.
   expect(fork.output.value).toEqual({ name: `Customer ${id}`, tier: "gold", draw });
   expect(callsOf("lookup").filter((c) => c.args.id === id)).toHaveLength(1);
 });
 
-test("a fork forced live at an entry, or given another input, calls again under its own key", { tag: "@success" }, async () => {
+test("a fork forced live at an event, or given another input, calls again under its own key", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const script = `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   return await fx.lookup({ id: input.id });
 }
 `;
-  const parent = await started(alice, { actionSet, input: { id }, wait: "30s", script });
+  const parent = await started(alice, { actionSet, input: { id }, wait: "30s", code: script });
   expect(parent.status).toBe("completed");
-  const entries = (await journal(alice, parent.id)).entries as { index: number; event: { type: string } }[];
-  const scheduled = entries.find((e) => e.event.type === "schedule_call")!;
+  const history = (await journal(alice, parent.id)).events as { index: number; event: { type: string } }[];
+  const scheduled = history.find((e) => e.event.type === "schedule_call")!;
 
-  const atEntry = await alice.post(`/v1/runs/${parent.id}/fork`, { script, at: scheduled.index, wait: "30s" });
+  const atEntry = await alice.post(`/v1/runs/${parent.id}/fork`, { code: script, at: scheduled.index, wait: "30s" });
   expectOk(atEntry, 201);
   const live = atEntry.json.status === "completed" ? atEntry.json : await ended(alice, atEntry.json.id);
   expect(live.status, JSON.stringify(live)).toBe("completed");
-  expect(live.parent).toMatchObject({ run: parent.id, at: scheduled.index });
+  expect(live.source).toMatchObject({ run: parent.id, at: scheduled.index });
   const again = callsOf("lookup").filter((c) => c.args.id === id);
   expect(again).toHaveLength(2);
   expect(String(again[1]!.meta?.["codes.rewind/idempotency-key"])).toMatch(new RegExp(`^${live.id}/`));
 
   const other = unique("cus-");
-  const withInput = await alice.post(`/v1/runs/${parent.id}/fork`, { script, input: { id: other }, wait: "30s" });
+  const withInput = await alice.post(`/v1/runs/${parent.id}/fork`, { code: script, input: { id: other }, wait: "30s" });
   expectOk(withInput, 201);
   const forkedInput = withInput.json.status === "completed" ? withInput.json : await ended(alice, withInput.json.id);
   expect(forkedInput.output.value).toMatchObject({ id: other });
@@ -264,27 +264,27 @@ export default async function main(input: { id: string }) {
   expect(callsOf("lookup").filter((c) => c.args.id === other)).toHaveLength(1);
 });
 
-test("an erased run is gone: its state, journal and events answer 404", { tag: "@success" }, async () => {
+test("an erased run is gone: its state, export and events answer 404", { tag: "@success" }, async () => {
   const run = await started(alice, {
-    script: `export default async function main(input: { secret: string }) { return input.secret.length; }\n`,
+    code: `export default async function main(input: { secret: string }) { return input.secret.length; }\n`,
     input: { secret: "personal data" },
     wait: "30s",
   });
   expect(run.status).toBe("completed");
   const erased = await alice.delete(`/v1/runs/${run.id}`);
   expect(erased.status, erased.text).toBe(204);
-  for (const path of [`/v1/runs/${run.id}`, `/v1/runs/${run.id}/journal`, `/v1/runs/${run.id}/trace`, `/v1/runs/${run.id}/entries/0`]) {
+  for (const path of [`/v1/runs/${run.id}`, `/v1/runs/${run.id}/export`, `/v1/runs/${run.id}/transcript`, `/v1/runs/${run.id}/events/0`]) {
     expectProblem(await alice.get(path), 404, "not-found");
   }
   expect(await runIds(alice)).not.toContain(run.id);
 });
 
-test("the journal and the cassette export what the run did", { tag: "@success" }, async () => {
+test("the run export and the cassette export what the run did", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const run = await started(alice, {
     actionSet,
     input: { id },
-    script: `import { fx } from "rewind:actions";
+    code: `import { fx } from "rewind:actions";
 import { signal } from "rewind";
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
@@ -300,9 +300,9 @@ export default async function main(input: { id: string }) {
 
   const document = await journal(alice, run.id);
   expect(document.run).toBe(run.id);
-  expect(typeof document.script === "string" || typeof document.script === "object").toBe(true);
-  expect(document.entries.map((e: any) => e.index)).toEqual(document.entries.map((_: unknown, n: number) => n));
-  expect(document.entries.map((e: any) => e.event.type)).toEqual([
+  expect(typeof document.code === "string" || typeof document.code === "object").toBe(true);
+  expect(document.events.map((e: any) => e.index)).toEqual(document.events.map((_: unknown, n: number) => n));
+  expect(document.events.map((e: any) => e.event.type)).toEqual([
     "run_started",
     "schedule_call",
     "call_completed",
@@ -310,9 +310,9 @@ export default async function main(input: { id: string }) {
     "signal_received",
     "complete_run",
   ]);
-  expect(document.entries.length).toBe(done.historyLen);
+  expect(document.events.length).toBe(done.historyLen);
 
-  const cassette = await alice.get(`/v1/runs/${run.id}/journal`, { query: { as: "cassette" } });
+  const cassette = await alice.get(`/v1/runs/${run.id}/export`, { query: { as: "cassette" } });
   expectOk(cassette, 200);
   expect(cassette.text).toContain("fx.lookup");
   expect(cassette.text).toContain(id);
@@ -324,7 +324,7 @@ test("the change stream announces each change of a run, as GET /v1/runs lists it
   try {
     expect(changes.status).toBe(200);
     expect(changes.contentType).toContain("text/event-stream");
-    const run = await started(alice, { script: WAITS_FOR_GO });
+    const run = await started(alice, { code: WAITS_FOR_GO });
     const of = (status: string) => (e: { event: string; data: any }) =>
       e.event === "run" && e.data?.id === run.id && e.data?.status === status;
     expect(await changes.until(of("active"), 15_000), "the stream announces the run active").toBeDefined();
@@ -342,8 +342,8 @@ test("the change stream announces each change of a run, as GET /v1/runs lists it
   }
 });
 
-test("the event stream sends every entry then the end, from any entry, and follows a live run", { tag: "@success" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO });
+test("the event stream sends every event then the end, from any event, and follows a live run", { tag: "@success" }, async () => {
+  const run = await started(alice, { code: WAITS_FOR_GO });
   await waitingFor(alice, run.id, "signal", "go");
 
   // Follow: the stream stays open until the run ends.
@@ -354,29 +354,29 @@ test("the event stream sends every entry then the end, from any entry, and follo
   expectOk(stream, 200);
   expect(stream.headers.get("content-type") ?? "").toContain("text/event-stream");
   const live = parseSse(stream.text);
-  expect(live.filter((e) => e.event === "entry").map((e) => e.data.event.type)).toEqual([
+  expect(live.filter((e) => e.event === "event").map((e) => e.data.event.type)).toEqual([
     "run_started",
     "signal_awaited",
     "signal_received",
     "complete_run",
   ]);
   expect(live.at(-1)).toMatchObject({ event: "end", data: { status: "completed" } });
-  expect(live.filter((e) => e.event === "entry").map((e) => Number(e.id))).toEqual([0, 1, 2, 3]);
+  expect(live.filter((e) => e.event === "event").map((e) => Number(e.id))).toEqual([0, 1, 2, 3]);
 
-  // Without follow, from entry 2.
+  // Without follow, from event 2.
   const resumed = await alice.get(`/v1/runs/${run.id}/events`, { query: { from: 2 } });
   const tail = parseSse(resumed.text);
-  expect(tail.filter((e) => e.event === "entry").map((e) => e.data.idx)).toEqual([2, 3]);
+  expect(tail.filter((e) => e.event === "event").map((e) => e.data.idx)).toEqual([2, 3]);
   expect(tail.at(-1)?.event).toBe("end");
 });
 
-test("the LLM trace and one entry in full describe the run", { tag: "@success" }, async () => {
+test("the transcript and one event in full describe the run", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const run = await started(alice, {
     actionSet,
     input: { id },
     wait: "30s",
-    script: `import { fx } from "rewind:actions";
+    code: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   console.log("looking up", input.id);
   return await fx.lookup({ id: input.id });
@@ -386,31 +386,31 @@ export default async function main(input: { id: string }) {
   expect(run.status).toBe("completed");
   expect(run.logs.map((line: any) => line.message)).toEqual([`looking up ${id}`]);
   expect(run.logs[0]).toMatchObject({ level: "info", callsite: { line: 3 } });
-  const trace = await alice.get(`/v1/runs/${run.id}/trace`);
-  expectOk(trace, 200);
-  expect(trace.json).toMatchObject({ runId: run.id, format: "llm" });
-  expect(trace.json.text).toContain("fx.lookup");
-  expect(trace.json.text).toContain(id);
-  // Entry 1 is the log line; entry 2 the call.
-  const entry = await alice.get(`/v1/runs/${run.id}/entries/2`);
-  expectOk(entry, 200);
-  expect(entry.json.idx).toBe(2);
-  expect(entry.json.event.type).toBe("schedule_call");
-  expect(JSON.stringify(entry.json)).toContain(id);
+  const transcript = await alice.get(`/v1/runs/${run.id}/transcript`);
+  expectOk(transcript, 200);
+  expect(transcript.json).toMatchObject({ runId: run.id });
+  expect(transcript.json.text).toContain("fx.lookup");
+  expect(transcript.json.text).toContain(id);
+  // Event 1 is the log line; event 2 the call.
+  const event = await alice.get(`/v1/runs/${run.id}/events/2`);
+  expectOk(event, 200);
+  expect(event.json.idx).toBe(2);
+  expect(event.json.event.type).toBe("schedule_call");
+  expect(JSON.stringify(event.json)).toContain(id);
 });
 
 // ---------------------------------------------------------------------------------------------
 // Failures
 
 test("a signal or a cancellation to a run that has ended is 409 run-ended", { tag: "@failure" }, async () => {
-  const run = await started(alice, { script: `export default async function main() { return 1; }\n`, wait: "30s" });
+  const run = await started(alice, { code: `export default async function main() { return 1; }\n`, wait: "30s" });
   expect(run.status).toBe("completed");
   expectProblem(await alice.post(`/v1/runs/${run.id}/signals/go`, true), 409, "run-ended");
   expectProblem(await alice.post(`/v1/runs/${run.id}/cancel`, {}), 409, "run-ended");
 });
 
 test("releasing or giving up a run that is not quarantined is 409 not-quarantined", { tag: "@failure" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO });
+  const run = await started(alice, { code: WAITS_FOR_GO });
   await waitingFor(alice, run.id, "signal", "go");
   expectProblem(await alice.post(`/v1/runs/${run.id}/release`), 409, "not-quarantined");
   expectProblem(await alice.post(`/v1/runs/${run.id}/give-up`), 409, "not-quarantined");
@@ -420,14 +420,14 @@ test("releasing or giving up a run that is not quarantined is 409 not-quarantine
 
 test("a TTL above the deployment's maximum is 400 invalid-request naming the TTL, and no run starts", { tag: "@failure" }, async () => {
   const before = await runIds(alice);
-  const reply = await startRun(alice, { script: WAITS_FOR_GO, ttl: "400d" });
+  const reply = await startRun(alice, { code: WAITS_FOR_GO, ttl: "400d" });
   expectProblem(reply, 400, "invalid-request");
   expect(reply.json.detail).toMatch(/TTL/i);
   expect(await runIds(alice)).toEqual(before);
 });
 
 test("starting a run without Rewind-Namespace is 400 invalid-request: there is no default namespace", { tag: "@failure" }, async () => {
-  const reply = await startRun(tenant.api, { script: WAITS_FOR_GO });
+  const reply = await startRun(tenant.api, { code: WAITS_FOR_GO });
   expectProblem(reply, 400, "invalid-request");
   expect(reply.json.detail).toMatch(/namespace/i);
 });
@@ -438,34 +438,34 @@ test("an unknown run is 404 on every endpoint of a run", { tag: "@failure" }, as
     alice.get(`/v1/runs/${id}`),
     alice.post(`/v1/runs/${id}/signals/go`, 1),
     alice.post(`/v1/runs/${id}/cancel`, {}),
-    alice.post(`/v1/runs/${id}/fork`, { script: "export default async function main() {}\n" }),
-    alice.get(`/v1/runs/${id}/journal`),
+    alice.post(`/v1/runs/${id}/fork`, { code: "export default async function main() {}\n" }),
+    alice.get(`/v1/runs/${id}/export`),
     alice.get(`/v1/runs/${id}/events`),
-    alice.get(`/v1/runs/${id}/trace`),
-    alice.get(`/v1/runs/${id}/entries/0`),
+    alice.get(`/v1/runs/${id}/transcript`),
+    alice.get(`/v1/runs/${id}/events/0`),
     alice.post(`/v1/runs/${id}/release`),
     alice.delete(`/v1/runs/${id}`),
   ]);
   for (const reply of replies) expectProblem(reply, 404, "not-found");
 });
 
-test("an entry past the end of the journal is 404, and an unknown action set refuses the start", { tag: "@failure" }, async () => {
-  const run = await started(alice, { script: `export default async function main() { return 1; }\n`, wait: "30s" });
-  expectProblem(await alice.get(`/v1/runs/${run.id}/entries/${run.historyLen + 5}`), 404, "not-found");
-  const unknown = await startRun(alice, { script: WAITS_FOR_GO, actionSet: "0".repeat(64) });
+test("an event past the end of the history is 404, and an unknown action set refuses the start", { tag: "@failure" }, async () => {
+  const run = await started(alice, { code: `export default async function main() { return 1; }\n`, wait: "30s" });
+  expectProblem(await alice.get(`/v1/runs/${run.id}/events/${run.historyLen + 5}`), 404, "not-found");
+  const unknown = await startRun(alice, { code: WAITS_FOR_GO, actionSet: "0".repeat(64) });
   expectProblem(unknown, 404, "not-found");
 });
 
 test("an unreadable wait or TTL is 400 invalid-request", { tag: "@failure" }, async () => {
-  expectProblem(await startRun(alice, { script: WAITS_FOR_GO, wait: "forever" }), 400, "invalid-request");
-  expectProblem(await startRun(alice, { script: WAITS_FOR_GO, ttl: "-1h" }), 400, "invalid-request");
+  expectProblem(await startRun(alice, { code: WAITS_FOR_GO, wait: "forever" }), 400, "invalid-request");
+  expectProblem(await startRun(alice, { code: WAITS_FOR_GO, ttl: "-1h" }), 400, "invalid-request");
   expectProblem(await alice.get("/v1/runs/whatever", { query: { wait: "soon" } }), 400, "invalid-request");
 });
 
 test("an input or a signal payload above 8 MiB is 413 payload-too-large, before anything is stored", { tag: "@failure" }, async () => {
   const before = await runIds(alice);
   const big = "x".repeat(8 * 1024 * 1024 + 16);
-  const reply = await startRun(alice, { script: WAITS_FOR_GO, input: { big } });
+  const reply = await startRun(alice, { code: WAITS_FOR_GO, input: { big } });
   expectProblem(reply, 413, "payload-too-large");
   expect(await runIds(alice)).toEqual(before);
 });
@@ -478,7 +478,7 @@ test("a start replayed with its Idempotency-Key never runs the script's effects 
   const body = {
     actionSet,
     wait: "30s",
-    script: `import { fx } from "rewind:actions";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
+    code: `import { fx } from "rewind:actions";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
   };
   const replies = await Promise.all(Array.from({ length: 5 }, () => startRun(alice, body, { key })));
   const ids = new Set(replies.map((r) => r.json?.id));
@@ -490,7 +490,7 @@ test("a start replayed with its Idempotency-Key never runs the script's effects 
 });
 
 test("a forged rewind:ended signal cannot fake the end of a run", { tag: "@attack" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO });
+  const run = await started(alice, { code: WAITS_FOR_GO });
   await waitingFor(alice, run.id, "signal", "go");
   for (const name of [`rewind:ended:${run.id}`, "rewind:go", "rewind:"]) {
     await expectRefused({
@@ -503,12 +503,12 @@ test("a forged rewind:ended signal cannot fake the end of a run", { tag: "@attac
       },
     });
   }
-  evidence("422 invalid-signal for every name starting with rewind:; the run's journal unchanged");
+  evidence("422 invalid-signal for every name starting with rewind:; the run's history unchanged");
   await alice.post(`/v1/runs/${run.id}/cancel`, {});
 });
 
-test("a signal payload above 8 MiB is refused and the run's journal does not grow", { tag: "@attack" }, async () => {
-  const run = await started(alice, { script: WAITS_FOR_GO });
+test("a signal payload above 8 MiB is refused and the run's history does not grow", { tag: "@attack" }, async () => {
+  const run = await started(alice, { code: WAITS_FOR_GO });
   await waitingFor(alice, run.id, "signal", "go");
   await expectRefused({
     attempt: () => alice.post(`/v1/runs/${run.id}/signals/go`, "y".repeat(8 * 1024 * 1024 + 16)),

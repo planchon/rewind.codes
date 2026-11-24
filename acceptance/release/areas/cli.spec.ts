@@ -4,14 +4,14 @@
  * and CLI").
  *
  * - Exit codes of 07's table: 0 completed, 1 failed, 2 cancelled, 3 aborted, 4 still waiting,
- *   6 refused (unknown run, a signal to a run that ended), 64 usage, 65 script refused at start.
+ *   6 refused (unknown run, a signal to a run that ended), 64 usage, 65 code refused at start.
  *   Not provoked here: 5 (quarantine needs five failed activations of one run), 70 (an internal
  *   fault), and 130 (a second Ctrl-C only exits at once while a call is still in flight, and the
  *   first one finishes the CLI's call within milliseconds: the race cannot be won reliably).
  * - `--json`: results on stdout, errors as problem+json on stderr.
  * - The embedded server: its lock (a second server exits 75), its files' modes, virtual time,
  *   the idle stop, `kill -9` and a resume in the next process.
- * - `rewind replay` of an exported journal, and of tampered ones.
+ * - `rewind replay` of a run export, and of tampered ones.
  * - An API read from its OpenAPI document and called over http, as only the embedded server does
  *   (`archi/04-tools.md`, "API tools"), with the secret `rewind secrets put` wrote and
  *   `--secret` attaches; a signed call where no public URL publishes the keys is not sent.
@@ -60,7 +60,7 @@ test.afterAll(async () => {
 /** A command's output, for a failed expectation's message. */
 const said = (ran: { code: number; stdout: string; stderr: string }) => `exit ${ran.code}\nstdout: ${ran.stdout}\nstderr: ${ran.stderr}`;
 
-test("rewind run, status, trace and export work through the embedded server the CLI starts", { tag: "@success" }, async () => {
+test("rewind run, status, transcript and export work through the embedded server the CLI starts", { tag: "@success" }, async () => {
   const ran = await project.json(["run", "ok.ts", "--input", '{"n": 41}', "--wait", "30s"]);
   expect(ran.code, said(ran.ran)).toBe(0);
   expect(ran.value).toMatchObject({ status: "completed", namespace: "local", output: { value: 42 } });
@@ -70,21 +70,21 @@ test("rewind run, status, trace and export work through the embedded server the 
   expect(status.code).toBe(0);
   expect(status.value.output.value).toBe(42);
 
-  const trace = await project.rewind(["trace", ran.value.id]);
-  expect(trace.code, said(trace)).toBe(0);
-  expect(trace.stdout).toContain("42");
+  const transcript = await project.rewind(["transcript", ran.value.id]);
+  expect(transcript.code, said(transcript)).toBe(0);
+  expect(transcript.stdout).toContain("42");
 
   const exported = await project.rewind(["export", ran.value.id, "-o", "exported.json"]);
   expect(exported.code, said(exported)).toBe(0);
   const doc = JSON.parse(readFileSync(project.path("exported.json"), "utf8"));
-  expect(doc.entries.map((entry: { event: { type: string } }) => entry.event.type)).toEqual(["run_started", "complete_run"]);
+  expect(doc.events.map((event: { event: { type: string } }) => event.event.type)).toEqual(["run_started", "complete_run"]);
 
   const replayed = await project.rewind(["replay", "exported.json"]);
   expect(replayed.code, said(replayed)).toBe(0);
   const listed = await project.json(["runs", "--status", "completed"]);
   expect(listed.code).toBe(0);
   expect((listed.value.runs as { id: string }[]).map((run) => run.id)).toContain(ran.value.id);
-  evidence("run → 0 with --json; status, trace, export, replay of the export and runs answer");
+  evidence("run → 0 with --json; status, transcript, export, replay of the export and runs answer");
 });
 
 test("a failed run exits 1 and an aborted one 3", { tag: "@failure" }, async () => {
@@ -138,11 +138,11 @@ test("unknown runs, usage errors and refused scripts have their exit codes; --js
   const refused = await project.rewind(["run", "imports_fs.ts", "--wait", "5s"]);
   expect(refused.code, said(refused)).toBe(65);
   expect(refused.stderr).toContain('cannot import "node:fs"');
-  expect(refused.stderr).toContain("rewind/invalid-script");
+  expect(refused.stderr).toContain("rewind/invalid-code");
 
   const checked = await project.rewind(["check", "imports_fs.ts"]);
   expect(checked.code, said(checked)).toBe(65);
-  expect(checked.stdout + checked.stderr).toContain("rewind/invalid-script");
+  expect(checked.stdout + checked.stderr).toContain("rewind/invalid-code");
   evidence("unknown run → 6 with problem+json on stderr; usage → 64; refused script → 65 (run and check)");
 });
 
@@ -205,7 +205,7 @@ test("the embedded server's directory, socket, lock and master key are its owner
   evidence(".rewind 0700, server.sock 0600 (the socket takes no token), master.key 0600");
 });
 
-test("a tampered journal is refused by replay", { tag: "@attack" }, async () => {
+test("a tampered run export is refused by replay", { tag: "@attack" }, async () => {
   const ran = await project.json(["run", "random_sleeps.ts", "--wait", "30s"]);
   expect(ran.code, said(ran.ran)).toBe(0);
   const exported = await project.rewind(["export", ran.value.id, "-o", "genuine.json"]);
@@ -222,24 +222,24 @@ test("a tampered journal is refused by replay", { tag: "@attack" }, async () => 
   };
   const cases: { file: string; code: number; says: string }[] = [
     {
-      file: tamper("output.json", (doc) => (doc.entries.at(-1).event.output.value = "forged")),
+      file: tamper("output.json", (doc) => (doc.events.at(-1).event.output.value = "forged")),
       code: 1,
-      says: "the replay diverges from the journal",
+      says: "the replay diverges from the history",
     },
     {
-      file: tamper("seed.json", (doc) => (doc.entries[0].event.seed = "00".repeat(32))),
+      file: tamper("seed.json", (doc) => (doc.events[0].event.seed = "00".repeat(32))),
       code: 1,
-      says: "the replay diverges from the journal",
+      says: "the replay diverges from the history",
     },
     {
-      file: tamper("timer.json", (doc) => (doc.entries[1].event.duration_ms = 5)),
+      file: tamper("timer.json", (doc) => (doc.events[1].event.duration_ms = 5)),
       code: 1,
-      says: "the replay diverges from the journal",
+      says: "the replay diverges from the history",
     },
     {
-      file: tamper("script.json", (doc) => (doc.script = String(doc.script).replace('"1s"', '"3s"'))),
+      file: tamper("code.json", (doc) => (doc.code = String(doc.code).replace('"1s"', '"3s"'))),
       code: 1,
-      says: "the journal is inconsistent",
+      says: "the history is inconsistent",
     },
     { file: tamper("version.json", (doc) => (doc.v = 99)), code: 64, says: "unsupported format version 99" },
   ];
@@ -326,11 +326,11 @@ test("an API is read from its OpenAPI document and called with the secret the ru
     expect(put.code, said(put)).toBe(0);
     expect(put.stdout + put.stderr).not.toContain(value);
 
-    // Nothing attached for dax, whose document requires a key: refused before any run exists,
-    // naming what may be attached (a usage error of the command line: 64).
+    // Nothing named for dax, whose document requires a key: refused before any run exists,
+    // naming what may be used (a usage error of the command line: 64).
     const refused = await project.rewind(["run", "measures.ts", "--action-set", "measures.actionSet.json"]);
     expect(refused.code, said(refused)).toBe(64);
-    expect(refused.stderr).toContain("the script imports dax, which needs a secret");
+    expect(refused.stderr).toContain("the code imports dax, which needs a secret");
     expect(refused.stderr).toContain("org/dax-key");
     expect(api.requests).toEqual([]);
 

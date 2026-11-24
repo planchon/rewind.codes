@@ -1,6 +1,6 @@
 /**
  * Helpers of the run-centred areas of the release gate (runs, endings, workflows, check and
- * test): start a run as raw HTTP, wait for its end, read its journal's events.
+ * test): start a run as raw HTTP, wait for its end, read its history's events.
  */
 import { eventually } from "../../support/processes.js";
 import { type Api, expect, expectOk, type Reply, recordingFetch } from "./gate.js";
@@ -55,16 +55,16 @@ export async function waitingFor(api: Api, id: string, kind: string, name?: stri
   );
 }
 
-/** The run's journal document. */
+/** The run's export (`GET /v1/runs/{id}/export`). */
 export async function journal(api: Api, id: string): Promise<any> {
-  const reply = await api.get(`/v1/runs/${id}/journal`);
+  const reply = await api.get(`/v1/runs/${id}/export`);
   expectOk(reply, 200);
   return reply.json;
 }
 
-/** The `type` of each entry of the run's journal. */
+/** The `type` of each event of the run's history. */
 export async function events(api: Api, id: string): Promise<string[]> {
-  return (await journal(api, id)).entries.map((entry: any) => entry.event.type);
+  return (await journal(api, id)).events.map((event: any) => event.event.type);
 }
 
 /** Asserts a run was aborted for a limit, with `message` in its reason. */

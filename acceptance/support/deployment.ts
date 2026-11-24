@@ -69,7 +69,7 @@ export async function startServer(dir: string, options: { workos?: StagingCreden
     randomBytes(32).toString("base64"),
     "--admin-key",
     adminKey,
-    "--admin-tenant",
+    "--admin-organization",
     "acme",
     "--listen",
     `127.0.0.1:${port}`,
@@ -125,7 +125,7 @@ export async function startDeployment(dir: string, options: { nodes?: number } =
       "http",
       "--admin-key",
       adminKey,
-      "--admin-tenant",
+      "--admin-organization",
       "acme",
     ];
     const binary = rewindBinary();

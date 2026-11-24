@@ -1,8 +1,8 @@
 /**
  * Area "Check and test" of the release gate: `POST /v1/check` and the checks at start on setup A
- * (deployed), and `POST /v1/test` (tests in mock mode, in virtual time) on setup B, one node, and
+ * (deployed), and `POST /v1/test` (test runs, in virtual time) on setup B, one node, and
  * on each node of setup A: every node runs tests (`archi/03-execution.md`, "Starting a run";
- * `archi/04-tools.md`, "Type-checking"; `archi/05`, "Testing and mocks").
+ * `archi/04-tools.md`, "Type-checking"; `archi/05`, "Test runs").
  */
 import {
   Api,
@@ -26,7 +26,7 @@ let tested: Api;
 let testedActionSet: string;
 
 const ACTION_SET = {
-  host: [
+  harness: [
     {
       name: "crm.lookup",
       description: "Find a customer by email.",
@@ -67,7 +67,7 @@ test.beforeAll(async () => {
 });
 
 /** `POST /v1/check`. */
-const check = (as: Api, script: string, withActionSet = actionSet) => as.post("/v1/check", { script, actionSet: withActionSet });
+const check = (as: Api, script: string, withActionSet = actionSet) => as.post("/v1/check", { code: script, actionSet: withActionSet });
 
 // ---------------------------------------------------------------------------------------------
 // Success
@@ -87,16 +87,16 @@ export default async function main(input: { email: string }) {
   expect(reply.json.diagnostics.filter((d: any) => d.severity === "error")).toEqual([]);
 });
 
-test("a test runs in mock mode and virtual time: a 10-day sleep, a signal, a tool's answer", { tag: "@success" }, async () => {
+test("a test runs as a test run in virtual time: a 10-day sleep, a signal, a tool's answer", { tag: "@success" }, async () => {
   const started = Date.now();
   const reply = await tested.post("/v1/test", {
-    script: SCENARIO_SCRIPT,
+    code: SCENARIO_SCRIPT,
     actionSet: testedActionSet,
     tests: [
       {
         name: "refunds ada",
         input: { email: "ada@example.com" },
-        world: { tools: { "crm.lookup": { returns: { id: "cus_ada", notes: "" } } } },
+        world: { actions: { "crm.lookup": { returns: { id: "cus_ada", notes: "" } } } },
         signals: [{ name: "decision", payload: { refund: 10 } }],
         expect: {
           status: "completed",
@@ -113,20 +113,20 @@ test("a test runs in mock mode and virtual time: a 10-day sleep, a signal, a too
   expect(result.status).toBe("completed");
   expect(result.output.slept).toBe(10 * 24 * 3_600_000);
   expect(result.calls).toEqual({ "crm.lookup": 1 });
-  expect(result.trace).toContain("crm.lookup");
+  expect(result.transcript).toContain("crm.lookup");
   expect(Date.now() - started, "ten days pass in virtual time").toBeLessThan(20_000);
 });
 
-test("a test's TypeScript mock handlers answer the calls", { tag: "@success" }, async () => {
+test("a test's TypeScript handlers answer the calls", { tag: "@success" }, async () => {
   const reply = await tested.post("/v1/test", {
-    script: SCENARIO_SCRIPT,
+    code: SCENARIO_SCRIPT,
     actionSet: testedActionSet,
     tests: [
       {
         name: "refunds grace nothing",
         input: { email: "grace@example.com" },
         world: {
-          mocks: `export default {
+          handlers: `export default {
   crm: { lookup: ({ email }, call) => ({ id: "cus_" + email.split("@")[0], notes: call.action }) },
 };
 `,
@@ -184,17 +184,17 @@ export default async function main() {
   expect(`${hinted.message} ${hinted.hint}`).toContain("process");
 });
 
-test("a start whose script does not type-check is 422 invalid-script with its diagnostics, and no run exists", { tag: "@failure" }, async () => {
+test("a start whose code does not type-check is 422 invalid-code with its diagnostics, and no run exists", { tag: "@failure" }, async () => {
   const before = await runIds(api);
   const reply = await startRun(api, {
     actionSet,
-    script: `import { crm } from "rewind:actions";
+    code: `import { crm } from "rewind:actions";
 export default async function main() {
   return await crm.lookup({ email: 42 });
 }
 `,
   });
-  expectProblem(reply, 422, "invalid-script");
+  expectProblem(reply, 422, "invalid-code");
   expect((reply.json.diagnostics ?? []).some((d: any) => /^TS\d+$/.test(d.code)), reply.text).toBe(true);
   expect(await runIds(api)).toEqual(before);
 });
@@ -208,8 +208,8 @@ test("the checks at start refuse what cannot run even unchecked: a syntax error,
     [`export default 42;\n`, "export default` its main function"],
   ];
   for (const [script, words] of cases) {
-    const reply = await startRun(api, { actionSet, script, check: false });
-    expectProblem(reply, 422, "invalid-script");
+    const reply = await startRun(api, { actionSet, code: script, check: false });
+    expectProblem(reply, 422, "invalid-code");
     expect(reply.json.detail, reply.text).toContain(words);
   }
   expect(await runIds(api)).toEqual(before);
@@ -217,13 +217,13 @@ test("the checks at start refuse what cannot run even unchecked: a syntax error,
 
 test("a test whose expectations do not hold says which, in sentences", { tag: "@failure" }, async () => {
   const reply = await tested.post("/v1/test", {
-    script: SCENARIO_SCRIPT,
+    code: SCENARIO_SCRIPT,
     actionSet: testedActionSet,
     tests: [
       {
         name: "the CRM is down",
         input: { email: "ada@example.com" },
-        world: { tools: { "crm.lookup": { error: { message: "the CRM is down" } } } },
+        world: { actions: { "crm.lookup": { error: { message: "the CRM is down" } } } },
         signals: [{ name: "decision", payload: { refund: 10 } }],
         expect: { status: "completed", calls: [{ action: "crm.lookup", times: 2 }] },
       },
@@ -245,7 +245,7 @@ test("on setup A, every node runs the tests itself", { tag: "@success" }, async 
   for (const url of nodeUrls) {
     // Each node directly, not through the edge.
     const reply = await new Api(url, tenant.ownerKey).ns("checks").post("/v1/test", {
-      script: "export default async function main(input: { n: number }) { return input.n + 1; }\n",
+      code: "export default async function main(input: { n: number }) { return input.n + 1; }\n",
       tests: [{ name: "adds one", input: { n: 41 }, expect: { status: "completed", output: 42 } }],
     });
     expectOk(reply, 200);
@@ -255,27 +255,27 @@ test("on setup A, every node runs the tests itself", { tag: "@success" }, async 
 });
 
 test("checking or testing without Rewind-Namespace is 400", { tag: "@failure" }, async () => {
-  expectProblem(await tenant.api.post("/v1/check", { script: "export default async function main() {}\n" }), 400, "invalid-request");
-  expectProblem(await tenant.api.post("/v1/test", { script: "export default async function main() {}\n" }), 400, "invalid-request");
+  expectProblem(await tenant.api.post("/v1/check", { code: "export default async function main() {}\n" }), 400, "invalid-request");
+  expectProblem(await tenant.api.post("/v1/test", { code: "export default async function main() {}\n" }), 400, "invalid-request");
 });
 
-test("a namespace's maxScriptLines refuses a longer script in check, test and start alike", { tag: "@failure" }, async () => {
+test("a namespace's maxCodeLines refuses longer code in check, test and start alike", { tag: "@failure" }, async () => {
   const long = `export default async function main() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n`;
   for (const [as, owner] of [
     [api, tenant.api],
     [tested, undefined],
   ] as const) {
     const ownerApi = owner ?? new (await import("../support/gate.js")).Api(stacks().b.url, (as as Api).bearer);
-    expectOk(await ownerApi.put("/v1/namespaces/short", { exceptions: { maxScriptLines: 3 } }));
+    expectOk(await ownerApi.put("/v1/namespaces/short", { exceptions: { maxCodeLines: 3 } }));
   }
   const short = api.ns("short");
-  const checked = await short.post("/v1/check", { script: long });
-  expectProblem(checked, 422, "invalid-script");
+  const checked = await short.post("/v1/check", { code: long });
+  expectProblem(checked, 422, "invalid-code");
   expect(checked.json.detail).toMatch(/lines/);
-  expectProblem(await startRun(short, { script: long }), 422, "invalid-script");
-  expectProblem(await tested.ns("short").post("/v1/test", { script: long }), 422, "invalid-script");
+  expectProblem(await startRun(short, { code: long }), 422, "invalid-code");
+  expectProblem(await tested.ns("short").post("/v1/test", { code: long }), 422, "invalid-code");
   // The same script in a namespace without the exception is fine.
-  expect((await api.post("/v1/check", { script: long })).json.ok).toBe(true);
+  expect((await api.post("/v1/check", { code: long })).json.ok).toBe(true);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -296,39 +296,39 @@ test("every way to load code from outside is refused before any run exists", { t
   ];
   for (const script of sources) {
     const reply = await expectRefused({
-      attempt: () => startRun(api, { script, check: false }),
+      attempt: () => startRun(api, { code: script, check: false }),
       status: 422,
-      slug: "invalid-script",
+      slug: "invalid-code",
       probe: () => runIds(api),
     });
     evidence(`${script.split("\n")[0]!.slice(0, 70)} → 422: ${String(reply.json.detail).slice(0, 120)}`);
   }
 });
 
-test("mock handlers run in a sandbox of their own: no imports, no process, no network", { tag: "@attack" }, async () => {
+test("handlers run in a sandbox of their own: no imports, no process, no network", { tag: "@attack" }, async () => {
   const imported = await tested.post("/v1/test", {
-    script: SCENARIO_SCRIPT,
+    code: SCENARIO_SCRIPT,
     actionSet: testedActionSet,
     tests: [
       {
         name: "imports node:fs",
-        world: { mocks: `import fs from "node:fs";\nexport default { crm: { lookup: () => ({ id: typeof fs, notes: "" }) } };\n` },
+        world: { handlers: `import fs from "node:fs";\nexport default { crm: { lookup: () => ({ id: typeof fs, notes: "" }) } };\n` },
       },
     ],
   });
   expectOk(imported, 200);
   expect(imported.json.passed).toBe(false);
-  expect(imported.json.tests[0].failures.join("\n")).toContain("the mock handlers cannot load");
+  expect(imported.json.tests[0].failures.join("\n")).toContain("the handlers cannot load");
 
   const probing = await tested.post("/v1/test", {
-    script: SCENARIO_SCRIPT,
+    code: SCENARIO_SCRIPT,
     actionSet: testedActionSet,
     tests: [
       {
         name: "probes its sandbox",
         input: { email: "eve@example.com" },
         world: {
-          mocks: `export default {
+          handlers: `export default {
   crm: {
     lookup: () => ({
       id: [typeof process, typeof Deno, typeof require, typeof fetch, typeof WebAssembly].join("/"),
@@ -347,5 +347,5 @@ test("mock handlers run in a sandbox of their own: no imports, no process, no ne
   const [probed] = probing.json.tests;
   expect(probed.status, JSON.stringify(probing.json)).toBe("completed");
   expect(probed.output.customer).toBe("undefined/undefined/undefined/undefined/undefined");
-  evidence("mocks importing node:fs: the test fails, the mocks cannot load; process, Deno, require, fetch, WebAssembly are undefined in their isolate");
+  evidence("handlers importing node:fs: the test fails, the handlers cannot load; process, Deno, require, fetch, WebAssembly are undefined in their isolate");
 });

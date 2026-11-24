@@ -67,7 +67,7 @@ Specs import `test`, `expect` and the helpers from `support/gate.ts`.
   expects is declared first with `allow5xx(slug)`; any other fails the gate.
 - **The canary.** `canary()` is a value only this run knows. Put it as a secret, of the
   organization or of a namespace, that runs attach (`secrets: { fx: "ns/fx" }`): the MCP server or
-  the API receives it, and it must never come back in an answer (a run, a journal, a cassette, an
+  the API receives it, and it must never come back in an answer (a run, a run export, a cassette, an
   event, a problem), a trace, a log, the database in clear, or the dashboard.
 - **A tenant per file**, made by the operator with `newTenant(prefix, stack)`; tests are
   independent given their file's `beforeAll`.

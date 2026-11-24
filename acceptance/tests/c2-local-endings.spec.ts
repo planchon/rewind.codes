@@ -5,7 +5,7 @@
  * server it starts. The harness actions are served by the SDK's worker over the server's socket.
  *
  * `cli.rs` proves the rest, through the same binary: a run that sleeps, whose server is killed,
- * resumes in another process (`rewind run`, `rewind signal`, `rewind status`, `rewind trace`, `rewind replay`);
+ * resumes in another process (`rewind run`, `rewind signal`, `rewind status`, `rewind transcript`, `rewind replay`);
  * `run.sh` runs it as part of this criterion.
  */
 import { HostToolError, type HostToolWorker } from "@rewind.codes/sdk";
@@ -13,7 +13,7 @@ import { expect, test } from "@playwright/test";
 import { Project } from "../support/project.js";
 
 const ACTION_SET = {
-  host: [
+  harness: [
     {
       name: "payments.charge",
       description: "Charge a card.",
@@ -68,7 +68,7 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
     await project?.dispose();
   });
 
-  /** `rewind run` with the action set, to its end; the run and the events of its journal. */
+  /** `rewind run` with the action set, to its end; the run and the events of its history. */
   async function run(name: string, script: string) {
     project.write(name, script);
     // `rewind check` would refuse a forgotten await: these scripts run anyway.
@@ -76,7 +76,7 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
     const id: string = started.value.id;
     runs.set(name, id);
     const exported = await project.json(["export", id]);
-    const events: string[] = exported.value.entries.map((entry: { event: { type: string } }) => entry.event.type);
+    const events: string[] = exported.value.events.map((event: { event: { type: string } }) => event.event.type);
     return { code: started.code, run: started.value, events };
   }
 
@@ -121,17 +121,17 @@ export default async function main() {
     expect(ended.run.error.message).toBe("payments.charge failed: card declined");
     expect(ended.run.error.failedCall).toMatchObject({
       seq: 1,
-      tool: "payments.charge",
+      action: "payments.charge",
       args: { value: { amount: 100 } },
       error: { message: "card declined" },
       callsite: { line: 4 },
     });
     expect(ended.events).toEqual(["run_started", "schedule_call", "call_failed", "fail_run"]);
 
-    const trace = await project.rewind(["trace", ended.run.id]);
-    expect(trace.code).toBe(0);
-    expect(trace.stdout).toContain("payments.charge");
-    expect(trace.stdout).toContain("card declined");
+    const transcript = await project.rewind(["transcript", ended.run.id]);
+    expect(transcript.code).toBe(0);
+    expect(transcript.stdout).toContain("payments.charge");
+    expect(transcript.stdout).toContain("card declined");
   });
 
   test("a rejection left unhandled fails the run, even if a handler comes later", async () => {
@@ -154,7 +154,7 @@ export default async function main() {
     expect(ended.run.status).toBe("failed");
     expect(ended.run.output).toBeUndefined();
     expect(ended.run.error).toMatchObject({ name: "ActionError", message: "payments.charge failed: card declined" });
-    expect(ended.run.error.failedCall).toMatchObject({ seq: 1, tool: "payments.charge" });
+    expect(ended.run.error.failedCall).toMatchObject({ seq: 1, action: "payments.charge" });
     // The run does not end while a call is in flight: the audit record has its outcome.
     expect(ended.events.indexOf("call_completed")).toBeGreaterThan(-1);
     expect(ended.events.at(-1)).toBe("fail_run");
@@ -171,10 +171,10 @@ export default async function main() {
     expect(ended.code, JSON.stringify(ended.run)).toBe(1);
     expect(ended.run.status).toBe("failed");
     expect(ended.run.error.name).toBe("DeadlockError");
-    expect(ended.run.error.message).toContain("nothing can wake the script");
+    expect(ended.run.error.message).toContain("nothing can wake the code");
     expect(ended.events).toEqual(["run_started", "fail_run"]);
 
-    // Each failed run replays identically from its journal.
+    // Each failed run replays identically from its history.
     const replayed = await project.rewind(["replay", ended.run.id]);
     expect(replayed.code, replayed.stdout + replayed.stderr).toBe(0);
   });

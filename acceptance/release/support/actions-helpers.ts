@@ -233,11 +233,11 @@ export async function handedWithin(api: Api, query: TaskStreamQuery, ms = 1_000)
   return stream.handed;
 }
 
-/** The journal's event types of a run, in order. */
+/** The history's event types of a run, in order. */
 export async function events(api: Api, id: string): Promise<string[]> {
-  const reply = await api.get(`/v1/runs/${id}/journal`);
+  const reply = await api.get(`/v1/runs/${id}/export`);
   expectOk(reply);
-  return (reply.json.entries as { event: { type: string } }[]).map((e) => e.event.type);
+  return (reply.json.events as { event: { type: string } }[]).map((e) => e.event.type);
 }
 
 /** The problem's detail, or the whole body. */
@@ -280,7 +280,7 @@ export async function startBroken(status: number, body: string): Promise<{ url: 
   };
 }
 
-/** Asserts the run's journal holds `type` (one of the four event families' entries). */
+/** Asserts the run's history holds `type` (one of the four event families' events). */
 export async function expectEvent(api: Api, id: string, type: string): Promise<void> {
   expect(await events(api, id)).toContain(type);
 }
