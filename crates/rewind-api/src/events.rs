@@ -509,7 +509,7 @@ mod tests {
             "id": "0193a5c4-0000-7000-8000-000000000001",
             "handle": "alice/script/06bqx3k9f2mt",
             "namespace": "alice",
-            "status": "active",
+            "status": "waiting",
             "quarantined": false,
             "codeDigest": "ab",
             "actionSet": "cd",

@@ -98,7 +98,7 @@ impl RunHead {
 
     /// The attempt has ended.
     pub fn is_ended(&self) -> bool {
-        self.status.is_terminal()
+        self.status.is_ended()
     }
 
     /// The attempt has ended and is not sealed yet.

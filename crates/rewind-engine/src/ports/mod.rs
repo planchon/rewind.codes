@@ -115,7 +115,7 @@ pub use partition::{
 };
 pub use read_model::{
     Ending, Latency, Predicate, QuarantineNote, Range, RunOrder, RunQuery, RunSnapshot, RunSummary,
-    SearchCursor, TaskPhase, Term, TextMatch, Wait, WaitKind, WaitingFor,
+    SearchCursor, TaskPhase, Term, TextMatch, Wait, WaitKind, WaitingFor, status_of,
 };
 pub use records::{
     CallTask, Created, Enqueued, ForkSource, InboxItem, Labels, NewVersion, NewWorkflow, ParkKind,

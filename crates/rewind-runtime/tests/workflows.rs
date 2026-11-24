@@ -277,7 +277,10 @@ export default async function main(input: { repos: string[] }) {
     );
     harness.assert_replays(&run).await;
     let child = harness.get(&harness.child(&run)).await;
-    assert_eq!(child.state.status(), RunStatus::Completed);
+    assert_eq!(
+        RunStatus::at_rest(child.state.phase()),
+        RunStatus::Completed
+    );
 }
 
 #[tokio::test]
@@ -364,8 +367,8 @@ export default async function main() {
     harness.drive().await;
     let waiting = harness.get(&id).await;
     assert_eq!(
-        waiting.state.status(),
-        RunStatus::Active,
+        RunStatus::at_rest(waiting.state.phase()),
+        RunStatus::Waiting,
         "{:?}",
         waiting.events()
     );

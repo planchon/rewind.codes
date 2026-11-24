@@ -601,7 +601,7 @@ async fn a_secret_deleted_mid_run_parks_the_call_until_it_is_put_again() {
     };
     assert_eq!(**reason, SecretExpiredReason::Missing);
     assert_eq!(secret.as_ref(), Some(&secret_ref("ns/github")));
-    assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Waiting);
 
     // Bob's github put is not alice's: the call keeps waiting.
     put(&world, of(&bob(), "github"), "ghp_bob", &[]).await;

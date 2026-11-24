@@ -453,7 +453,7 @@ async fn a_tenant_with_a_pool_runs_on_the_nodes_of_its_pool_only() {
         .unwrap();
     assert_eq!(
         at_a.status,
-        RunStatus::Pending,
+        RunStatus::Queued,
         "no node of acme-pool activated it"
     );
     a.stop().await;

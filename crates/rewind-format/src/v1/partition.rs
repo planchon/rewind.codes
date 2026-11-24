@@ -593,6 +593,10 @@ pub struct Shape {
 #[serde(deny_unknown_fields)]
 pub struct Gauges {
     pub active_runs: u64,
+    /// The active runs by status: `queued`, `running`, `waiting`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub statuses: BTreeMap<Status, u64>,
+    /// The waiting runs by what they wait for, their quarantine included.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub waiting: BTreeMap<WaitingFor, u64>,
     pub quarantined: u64,
@@ -606,11 +610,11 @@ pub struct Gauges {
 pub enum WaitingFor {
     Signal,
     Timer,
-    Call,
     Harness,
     Approval,
     Parked,
     Deferred,
+    Quarantined,
 }
 
 // -------------------------------------------------------------------------------------------
@@ -849,8 +853,9 @@ pub struct Admission {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
-    Pending,
-    Active,
+    Queued,
+    Running,
+    Waiting,
     Completed,
     Failed,
     Cancelled,
@@ -860,8 +865,9 @@ pub enum Status {
 impl From<RunStatus> for Status {
     fn from(status: RunStatus) -> Self {
         match status {
-            RunStatus::Pending => Status::Pending,
-            RunStatus::Active => Status::Active,
+            RunStatus::Queued => Status::Queued,
+            RunStatus::Running => Status::Running,
+            RunStatus::Waiting => Status::Waiting,
             RunStatus::Completed => Status::Completed,
             RunStatus::Failed => Status::Failed,
             RunStatus::Cancelled => Status::Cancelled,
@@ -873,8 +879,9 @@ impl From<RunStatus> for Status {
 impl From<Status> for RunStatus {
     fn from(status: Status) -> Self {
         match status {
-            Status::Pending => RunStatus::Pending,
-            Status::Active => RunStatus::Active,
+            Status::Queued => RunStatus::Queued,
+            Status::Running => RunStatus::Running,
+            Status::Waiting => RunStatus::Waiting,
             Status::Completed => RunStatus::Completed,
             Status::Failed => RunStatus::Failed,
             Status::Cancelled => RunStatus::Cancelled,

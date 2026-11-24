@@ -317,7 +317,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
         mismatch.to_string(),
         "event 3 is call #2 b(\"bad\"), but the code emitted call #2 b(\"good\")"
     );
-    assert_eq!(fixed.status, RunStatus::Active);
+    assert_eq!(fixed.status, RunStatus::Running, "the fork goes live");
 
     let forced = check("buggy", Some(2)).await.unwrap();
     assert_eq!(forced.point, ForkPoint::At(2));

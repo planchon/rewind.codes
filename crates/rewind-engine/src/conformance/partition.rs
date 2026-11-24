@@ -157,7 +157,7 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
         suffix_len: 12,
         code: code("script"),
         action_set: action_set_digest(),
-        status: RunStatus::Pending,
+        status: RunStatus::Queued,
         epoch: Epoch(1),
         attempt: Attempt::FIRST,
         sealed: None,
@@ -177,7 +177,7 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
 
 fn create_with(head: RunHead, start_key: Option<&str>) -> Change {
     let mut summary = summary_of(&head.run, &head.namespace, RunStatus::Completed);
-    summary.summary.status = RunStatus::Pending;
+    summary.summary.status = RunStatus::Queued;
     CreateRun {
         run: head.run.clone(),
         head,
@@ -279,8 +279,8 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         code: code("script"),
         headline: "export default async () => {".into(),
         action_set: action_set_digest(),
-        status: if status == RunStatus::Pending {
-            RunStatus::Active
+        status: if status == RunStatus::Queued {
+            RunStatus::Waiting
         } else {
             status
         },
@@ -290,7 +290,7 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         workflow: None,
         started_by: None,
         started_at: Some(T0),
-        ended_at: status.is_terminal().then_some(later(T0, 100)),
+        ended_at: status.is_ended().then_some(later(T0, 100)),
         last_activity_at: T0,
         calls: 0,
         errors: 0,
@@ -315,7 +315,7 @@ async fn activation<L: PartitionLog>(
     head.status = status;
     head.failures = 0;
     head.unfinished = 0;
-    head.ended_at = status.is_terminal().then_some(later(T0, 100));
+    head.ended_at = status.is_ended().then_some(later(T0, 100));
     let mut summary = summary_of(run, &head.namespace, status);
     summary.summary.history_len = head.history_len + events.len() as u64;
     Activation {
@@ -697,7 +697,7 @@ pub async fn a_batch_is_applied_whole_or_not_at_all<S: PartitionStore>(store: &S
         [started_item(1), signal(2, "go")],
         "the changes of a batch apply in order"
     );
-    let wrong = activation(&log, &r1, vec![log_event(3)], vec![1], RunStatus::Active).await;
+    let wrong = activation(&log, &r1, vec![log_event(3)], vec![1], RunStatus::Waiting).await;
     let error = refused(
         &log,
         vec![enqueue(&r1, signal(3, "later"), None), wrong.into()],
@@ -784,7 +784,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
         ),
         ("events that do not start at the length", vec![log_event(1)]),
     ] {
-        let wrong = activation(&log, &r1, events, vec![1], RunStatus::Active).await;
+        let wrong = activation(&log, &r1, events, vec![1], RunStatus::Waiting).await;
         let error = refused(&log, vec![wrong.into()]).await;
         assert!(is_conflict(&error), "{mistake}: {error:?}");
     }
@@ -793,7 +793,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
         &r1,
         vec![run_started_event()],
         vec![1, 99],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     let error = refused(&log, vec![missing.into()]).await;
@@ -806,7 +806,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
         &r1,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     another_attempt.attempt = Attempt::FIRST.next();
@@ -821,7 +821,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
         &r1,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     twice.tasks = vec![task(&r1, 1, ready(T0)), task(&r1, 1, ready(T0))];
@@ -833,7 +833,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
         &r1,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     let overlap = activation(
@@ -841,13 +841,20 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
         &r1,
         vec![run_started_event()],
         Vec::new(),
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     let error = refused(&log, vec![overlap.into()]).await;
     assert!(is_conflict(&error), "events over the history: {error:?}");
     end(&log, &r1).await;
-    let after_end = activation(&log, &r1, vec![log_event(2)], Vec::new(), RunStatus::Active).await;
+    let after_end = activation(
+        &log,
+        &r1,
+        vec![log_event(2)],
+        Vec::new(),
+        RunStatus::Waiting,
+    )
+    .await;
     let error = refused(&log, vec![after_end.into()]).await;
     assert!(
         is_conflict(&error),
@@ -872,7 +879,7 @@ pub async fn changes_to_a_missing_or_erased_run_are_refused<S: PartitionStore>(s
         &run(1),
         vec![run_started_event()],
         Vec::new(),
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     commit(
@@ -1015,7 +1022,7 @@ pub async fn a_signal_key_is_taken_once_per_run<S: PartitionStore>(store: &S) {
         &r1,
         vec![run_started_event()],
         vec![1, 4],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     commit(
@@ -1065,7 +1072,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
         &r1,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     first.tasks = vec![task(&r1, 1, ready(T0)), task(&r1, 2, TaskState::Approval)];
@@ -1179,7 +1186,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
         &r1,
         vec![run_started_event(), log_event(1)],
         vec![1, 2],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     first.head.history_len = 99;
@@ -1241,7 +1248,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
     let head = log.run(&r1).await.expect("run").expect("run");
     assert_eq!(
         (head.status, head.history_len, head.updated_at),
-        (RunStatus::Active, 2, later(T0, 1)),
+        (RunStatus::Waiting, 2, later(T0, 1)),
         "the head as written, its history length the store's"
     );
     assert_eq!(log.summary(&r1).await.expect("summary"), Some(summary));
@@ -1260,7 +1267,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
         [outbox_entry(1, Some(&r1))]
     );
 
-    let mut second = activation(&log, &r1, vec![log_event(2)], vec![3], RunStatus::Active).await;
+    let mut second = activation(&log, &r1, vec![log_event(2)], vec![3], RunStatus::Waiting).await;
     second.timers = vec![TimerChange::Cancel(code_timer(&r1, 2))];
     commit(&log, vec![second.into()]).await;
     assert_eq!(
@@ -1286,7 +1293,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
 pub async fn a_summary_is_written_alone<S: PartitionStore>(store: &S) {
     let log = open(store, "a").await;
     let run = run(1);
-    let mut summary = summary_of(&run, &alice(), RunStatus::Active);
+    let mut summary = summary_of(&run, &alice(), RunStatus::Waiting);
     index(&log, &run, &alice(), summary.summary.clone()).await;
     summary.summary.waits = vec![Wait {
         kind: WaitKind::Call,
@@ -1336,7 +1343,7 @@ pub async fn a_summary_is_written_alone<S: PartitionStore>(store: &S) {
         &log,
         vec![Change::Summary {
             run: missing.clone(),
-            summary: Box::new(summary_of(&missing, &alice(), RunStatus::Active)),
+            summary: Box::new(summary_of(&missing, &alice(), RunStatus::Waiting)),
         }],
     )
     .await;
@@ -1352,7 +1359,7 @@ pub async fn failures_and_interruptions_are_counted<S: PartitionStore>(store: &S
         &r1,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     commit(
@@ -1556,7 +1563,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
         &active,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     activation.tasks = vec![
@@ -1628,7 +1635,12 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
     assert_eq!(recovery.runnable[0], head(&runnable, &alice()));
     let mut quarantined_head = head(&quarantined, &alice());
     quarantined_head.quarantine = Some(quarantine);
-    assert_eq!(recovery.quarantined, [quarantined_head]);
+    quarantined_head.status = RunStatus::Waiting;
+    assert_eq!(
+        recovery.quarantined,
+        [quarantined_head],
+        "a quarantined run is waiting"
+    );
     assert_eq!(
         recovery.timers,
         [DueTimer {
@@ -1757,7 +1769,7 @@ pub async fn runs_in_range_read_the_heads_a_suffix_names<S: PartitionStore>(stor
         &a,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     end(&log, &a).await;
@@ -1792,7 +1804,7 @@ pub async fn seal_keeps_the_head_and_the_summary<S: PartitionStore>(store: &S) {
         &r1,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     first.payloads = vec![payload("large")];
@@ -1884,7 +1896,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
         &erased,
         vec![run_started_event()],
         vec![1],
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     first.payloads = vec![payload("large")];
@@ -2050,10 +2062,10 @@ pub async fn search_reads_the_scope_in_order_by_pages<S: PartitionStore>(store: 
     let runs: Vec<RunRef> = (1..=6).map(run).collect();
     let statuses = [
         RunStatus::Completed,
-        RunStatus::Active,
+        RunStatus::Waiting,
         RunStatus::Failed,
         RunStatus::Completed,
-        RunStatus::Active,
+        RunStatus::Waiting,
         RunStatus::Completed,
     ];
     let calls = [3, 9, 1, 9, 0, 5];
@@ -2228,7 +2240,7 @@ pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
     let found = log
         .search(
             &Scope::Tenant(acme()),
-            &RunQuery::new(acme()).with(Predicate::Status([RunStatus::Pending].into())),
+            &RunQuery::new(acme()).with(Predicate::Status([RunStatus::Queued].into())),
             RunOrder::Started,
             &Page::first(10),
         )
@@ -2240,7 +2252,7 @@ pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
         .await
         .expect("summary")
         .expect("summary");
-    assert_eq!(summary.summary.status, RunStatus::Pending);
+    assert_eq!(summary.summary.status, RunStatus::Queued);
 }
 
 /// A namespace's counters, shapes and start keys go once the partition holds none of its runs;
@@ -2548,10 +2560,10 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
     let (pending, signal_wait, approval, quarantined, ended, elsewhere) =
         (run(1), run(2), run(3), run(4), run(5), run(6));
     commit(&log, vec![create_with(head(&pending, &alice()), None)]).await;
-    let mut waiting = summary(&signal_wait, &alice(), RunStatus::Active, 0);
+    let mut waiting = summary(&signal_wait, &alice(), RunStatus::Waiting, 0);
     waiting.waits = vec![wait(WaitKind::Signal, "approval", None)];
     index(&log, &signal_wait, &alice(), waiting).await;
-    let mut two_waits = summary(&approval, &alice(), RunStatus::Active, 1);
+    let mut two_waits = summary(&approval, &alice(), RunStatus::Waiting, 1);
     two_waits.waits = vec![
         wait(WaitKind::Call, "github.merge", Some(TaskPhase::Approval)),
         wait(WaitKind::Signal, "approval", None),
@@ -2607,7 +2619,12 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
         gauges,
         Gauges {
             active_runs: 4,
-            waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Approval, 1)]),
+            statuses: BTreeMap::from([(RunStatus::Queued, 1), (RunStatus::Waiting, 3)]),
+            waiting: BTreeMap::from([
+                (WaitingFor::Signal, 2),
+                (WaitingFor::Approval, 1),
+                (WaitingFor::Quarantined, 1)
+            ]),
             quarantined: 1,
             workflows: BTreeMap::from([
                 (flow_id("script"), 3),
@@ -2881,7 +2898,7 @@ pub async fn runs_of_another_tenant_are_invisible<S: PartitionStore>(store: &S) 
         &r1,
         vec![run_started_event()],
         Vec::new(),
-        RunStatus::Active,
+        RunStatus::Waiting,
     )
     .await;
     assert_eq!(log.run(&foreign).await.expect("run"), None);

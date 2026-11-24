@@ -12,6 +12,6 @@
   "expect": {
     "status": "completed",
     "output": { "started": 36 },
-    "children": ["active"]
+    "children": ["waiting"]
   }
 }

@@ -1,1 +1,1 @@
-{"v":1,"active_runs":4,"waiting":{"signal":2,"approval":1},"quarantined":1,"workflows":{"wf_0d1g35t0000a":1,"wf_7k2m9q4x8d1c":3}}
+{"v":1,"active_runs":4,"statuses":{"running":1,"waiting":3},"waiting":{"signal":2,"approval":1,"quarantined":1},"quarantined":1,"workflows":{"wf_0d1g35t0000a":1,"wf_7k2m9q4x8d1c":3}}

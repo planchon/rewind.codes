@@ -5,7 +5,7 @@
 //! payloads are truncated, and any event can be shown in full.
 //!
 //! ```text
-//! run 0198…0001  suspended · waiting for signal "approval" (timeout in 2d 23h)
+//! run 0198…0001  waiting · for signal "approval" (timeout in 2d 23h)
 //! code 21a0270b7f66 · action set 5598149567a4 · started 2026-01-01T00:00:00Z
 //!
 //!   idx  at       event                                                    line  outcome
@@ -191,7 +191,7 @@ fn headline(
     now: Timestamp,
 ) -> String {
     let mut headline = match state.map(RunState::outcome) {
-        _ if history.is_empty() => "pending · not activated yet".to_owned(),
+        _ if history.is_empty() => "queued · not activated yet".to_owned(),
         Some(Some(rewind_core::RunOutcome::Completed { .. })) => "completed".to_owned(),
         Some(Some(rewind_core::RunOutcome::Failed { error }))
             if record.status == RunStatus::Cancelled
@@ -207,7 +207,7 @@ fn headline(
         Some(Some(rewind_core::RunOutcome::Aborted { reason })) => {
             format!("aborted · {}", truncate(&reason.to_string(), MESSAGE_CHARS))
         }
-        Some(None) => waiting(state, now),
+        Some(None) => active(record.status, state, now),
         None => "invalid history".to_owned(),
     };
     if let Some(quarantine) = record.quarantine {
@@ -224,10 +224,15 @@ fn headline(
     headline
 }
 
-/// What an active run waits for.
-fn waiting(state: Option<&RunState>, now: Timestamp) -> String {
+/// An active run's status, running or waiting as its owner computed it, and what it waits for.
+fn active(status: RunStatus, state: Option<&RunState>, now: Timestamp) -> String {
+    let status = if status.is_active() {
+        status.as_str()
+    } else {
+        "running"
+    };
     let Some(state) = state else {
-        return "active".to_owned();
+        return status.to_owned();
     };
     let calls = state.pending_calls();
     if !calls.is_empty() {
@@ -235,10 +240,10 @@ fn waiting(state: Option<&RunState>, now: Timestamp) -> String {
             .iter()
             .map(|(seq, action)| format!("{action} {seq}"))
             .collect();
-        return format!("running · waiting for {}", names.join(", "));
+        return format!("{status} · for {}", names.join(", "));
     }
     if let Some(wait) = state.awaited_signals().first() {
-        let mut text = format!("suspended · waiting for signal {:?}", wait.name);
+        let mut text = format!("{status} · for signal {:?}", wait.name);
         if let Some(fire_at) = wait
             .timeout
             .and_then(|seq| state.pending_timers().get(&seq).copied())
@@ -249,12 +254,12 @@ fn waiting(state: Option<&RunState>, now: Timestamp) -> String {
     }
     if let Some(fire_at) = state.pending_timers().values().min() {
         return format!(
-            "sleeping · until {} (in {})",
+            "{status} · until {} (in {})",
             rfc3339(*fire_at),
             left(*fire_at, now)
         );
     }
-    "active".to_owned()
+    status.to_owned()
 }
 
 fn left(at: Timestamp, now: Timestamp) -> String {

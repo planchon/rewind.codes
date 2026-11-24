@@ -42,7 +42,7 @@ async fn ended(client: &Client, run: &str, limit: Duration) -> Run {
     let deadline = tokio::time::Instant::now() + limit;
     loop {
         let state = client.get_run(run, wait("30s")).await.unwrap();
-        if !matches!(state.status, RunStatus::Pending | RunStatus::Active) {
+        if state.status.is_ended() {
             return state;
         }
         assert!(

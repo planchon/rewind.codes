@@ -12,33 +12,124 @@ use crate::ids::{Epoch, Seq};
 use crate::payload::Payload;
 use crate::time::Timestamp;
 
+/// Where a run's history says it is (`archi/02-history.md`, "Run state"): `queued` until a step
+/// is committed, active until it ends, then how it ended. Active is not a status: the partition
+/// owner tells `running` from `waiting` with what it holds of the run ([`RunStatus`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum RunStatus {
-    /// Only `run_started` is enqueued: the run has not been activated yet.
-    Pending,
+pub enum RunPhase {
+    /// Only `run_started` is enqueued: no step is committed yet.
+    Queued,
+    /// A step is committed and the run has not ended.
     Active,
     Completed,
     Failed,
     /// A `fail_run` whose error is `CancelledError`.
     Cancelled,
-    /// The host ended the run (`run_aborted`).
+    /// The engine ended the run (`run_aborted`).
+    Aborted,
+}
+
+impl RunPhase {
+    /// Completed, failed, cancelled or aborted.
+    pub fn is_ended(self) -> bool {
+        !matches!(self, RunPhase::Queued | RunPhase::Active)
+    }
+
+    /// The status of an ended run, or of a queued one; `None` while it is active, which only
+    /// what the owner holds splits into running and waiting.
+    pub fn status(self) -> Option<RunStatus> {
+        match self {
+            RunPhase::Queued => Some(RunStatus::Queued),
+            RunPhase::Active => None,
+            RunPhase::Completed => Some(RunStatus::Completed),
+            RunPhase::Failed => Some(RunStatus::Failed),
+            RunPhase::Cancelled => Some(RunStatus::Cancelled),
+            RunPhase::Aborted => Some(RunStatus::Aborted),
+        }
+    }
+}
+
+/// The status a run shows (`archi/02-history.md`, "Run state"): `queued`, `running` or
+/// `waiting` while it is active, then how it ended. The partition owner computes it at each
+/// batch from the run's phase and the waits it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RunStatus {
+    /// No step committed yet: only `run_started` is enqueued.
+    Queued,
+    /// A step is in progress, or a call Rewind makes itself (to an MCP server, an API or
+    /// `http`) is in flight or backing off.
+    Running,
+    /// Nothing Rewind does can move the run until something arrives: a signal, a timer, a
+    /// harness action, an approval, a deferred answer, a parked call, a release from quarantine.
+    Waiting,
+    Completed,
+    Failed,
+    /// A `fail_run` whose error is `CancelledError`.
+    Cancelled,
+    /// The engine ended the run (`run_aborted`).
     Aborted,
 }
 
 impl RunStatus {
-    pub fn is_terminal(self) -> bool {
-        !matches!(self, RunStatus::Pending | RunStatus::Active)
+    pub const ALL: [RunStatus; 7] = [
+        RunStatus::Queued,
+        RunStatus::Running,
+        RunStatus::Waiting,
+        RunStatus::Completed,
+        RunStatus::Failed,
+        RunStatus::Cancelled,
+        RunStatus::Aborted,
+    ];
+
+    /// The statuses of a run that has not ended: queued, running, waiting.
+    pub const ACTIVE: [RunStatus; 3] = [RunStatus::Queued, RunStatus::Running, RunStatus::Waiting];
+
+    /// Completed, failed, cancelled or aborted.
+    pub fn is_ended(self) -> bool {
+        !self.is_active()
+    }
+
+    /// Queued, running or waiting: the run has not ended.
+    pub fn is_active(self) -> bool {
+        matches!(
+            self,
+            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting
+        )
+    }
+
+    /// The phase of a run with this status: running and waiting are both active.
+    pub fn phase(self) -> RunPhase {
+        match self {
+            RunStatus::Queued => RunPhase::Queued,
+            RunStatus::Running | RunStatus::Waiting => RunPhase::Active,
+            RunStatus::Completed => RunPhase::Completed,
+            RunStatus::Failed => RunPhase::Failed,
+            RunStatus::Cancelled => RunPhase::Cancelled,
+            RunStatus::Aborted => RunPhase::Aborted,
+        }
+    }
+
+    /// The status of a run in `phase` that nothing moves any more but the outside world: an
+    /// active run is waiting. What a test run shows once virtual time takes it no further.
+    pub fn at_rest(phase: RunPhase) -> Self {
+        phase.status().unwrap_or(RunStatus::Waiting)
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            RunStatus::Pending => "pending",
-            RunStatus::Active => "active",
+            RunStatus::Queued => "queued",
+            RunStatus::Running => "running",
+            RunStatus::Waiting => "waiting",
             RunStatus::Completed => "completed",
             RunStatus::Failed => "failed",
             RunStatus::Cancelled => "cancelled",
             RunStatus::Aborted => "aborted",
         }
+    }
+
+    /// The status named `name`, as [`as_str`](Self::as_str) writes it.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|status| status.as_str() == name)
     }
 }
 
@@ -48,7 +139,20 @@ impl fmt::Display for RunStatus {
     }
 }
 
-/// How a terminal run ended.
+impl fmt::Display for RunPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RunPhase::Queued => "queued",
+            RunPhase::Active => "active",
+            RunPhase::Completed => "completed",
+            RunPhase::Failed => "failed",
+            RunPhase::Cancelled => "cancelled",
+            RunPhase::Aborted => "aborted",
+        })
+    }
+}
+
+/// How an ended run ended.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunOutcome {
     Completed {
@@ -75,11 +179,11 @@ pub struct AwaitedSignal {
 
 /// The state of a run, folded from its history.
 ///
-/// A terminal status clears everything pending. The store keeps a copy of the status for
-/// queries, but the history is authoritative.
+/// An ending clears everything pending. The partition keeps the status the owner derives from
+/// it, but the history is authoritative for whether and how the run ended.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunState {
-    status: RunStatus,
+    phase: RunPhase,
     epoch: Option<Epoch>,
     expires_at: Option<Timestamp>,
     mode: Option<RunMode>,
@@ -102,10 +206,10 @@ impl Default for RunState {
 }
 
 impl RunState {
-    /// The state of a run whose history is empty: `pending`.
+    /// The state of a run whose history is empty: `queued`.
     pub fn new() -> Self {
         Self {
-            status: RunStatus::Pending,
+            phase: RunPhase::Queued,
             epoch: None,
             expires_at: None,
             mode: None,
@@ -139,13 +243,13 @@ impl RunState {
 
         match &entry.event {
             Event::Lifecycle(Lifecycle::RunStarted(started)) => {
-                self.status = RunStatus::Active;
+                self.phase = RunPhase::Active;
                 self.epoch = Some(started.epoch);
                 self.expires_at = Some(started.expires_at);
                 self.mode = Some(started.mode);
             }
             Event::Lifecycle(Lifecycle::RunAborted(reason)) => self.end(
-                RunStatus::Aborted,
+                RunPhase::Aborted,
                 RunOutcome::Aborted {
                     reason: reason.clone(),
                 },
@@ -180,19 +284,19 @@ impl RunState {
                 }
             }
             Command::CompleteRun { output } => self.end(
-                RunStatus::Completed,
+                RunPhase::Completed,
                 RunOutcome::Completed {
                     output: output.clone(),
                 },
             ),
             Command::FailRun { error } => {
-                let status = if error.name == ErrorInfo::CANCELLED {
-                    RunStatus::Cancelled
+                let phase = if error.name == ErrorInfo::CANCELLED {
+                    RunPhase::Cancelled
                 } else {
-                    RunStatus::Failed
+                    RunPhase::Failed
                 };
                 self.end(
-                    status,
+                    phase,
                     RunOutcome::Failed {
                         error: error.clone(),
                     },
@@ -229,8 +333,8 @@ impl RunState {
         }
     }
 
-    fn end(&mut self, status: RunStatus, outcome: RunOutcome) {
-        self.status = status;
+    fn end(&mut self, phase: RunPhase, outcome: RunOutcome) {
+        self.phase = phase;
         self.outcome = Some(outcome);
         self.pending_calls.clear();
         self.pending_timers.clear();
@@ -238,12 +342,13 @@ impl RunState {
         self.awaited_signals.clear();
     }
 
-    pub fn status(&self) -> RunStatus {
-        self.status
+    pub fn phase(&self) -> RunPhase {
+        self.phase
     }
 
-    pub fn is_terminal(&self) -> bool {
-        self.status.is_terminal()
+    /// The run has ended: completed, failed, cancelled or aborted.
+    pub fn is_ended(&self) -> bool {
+        self.phase.is_ended()
     }
 
     /// The epoch recorded in `run_started`.
@@ -371,9 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_history_is_pending() {
+    fn an_empty_history_is_queued() {
         let state = RunState::from_history(&[]).unwrap();
-        assert_eq!(state.status(), RunStatus::Pending);
+        assert_eq!(state.phase(), RunPhase::Queued);
         assert_eq!(state.history_len(), 0);
         assert_eq!(state.started_at(), None);
     }
@@ -394,7 +499,7 @@ mod tests {
             awaited("comment", None),
         ]);
         let state = RunState::from_history(&history).unwrap();
-        assert_eq!(state.status(), RunStatus::Active);
+        assert_eq!(state.phase(), RunPhase::Active);
         assert_eq!(state.epoch(), Some(Epoch(1)));
         assert_eq!(state.expires_at(), Some(Timestamp(9_999)));
         assert_eq!(
@@ -436,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_status_clears_everything_pending() {
+    fn an_ending_clears_everything_pending() {
         let history = history_of(vec![
             started(),
             call(1),
@@ -448,8 +553,8 @@ mod tests {
             })),
         ]);
         let state = RunState::from_history(&history).unwrap();
-        assert_eq!(state.status(), RunStatus::Aborted);
-        assert!(state.is_terminal());
+        assert_eq!(state.phase(), RunPhase::Aborted);
+        assert!(state.is_ended());
         assert!(state.pending_calls().is_empty());
         assert!(state.pending_timers().is_empty());
         assert!(state.awaited_signals().is_empty());
@@ -466,13 +571,13 @@ mod tests {
             fail(ErrorInfo::CANCELLED),
         ]);
         assert_eq!(
-            RunState::from_history(&cancelled).unwrap().status(),
-            RunStatus::Cancelled
+            RunState::from_history(&cancelled).unwrap().phase(),
+            RunPhase::Cancelled
         );
         let failed = history_of(vec![started(), fail("TypeError")]);
         assert_eq!(
-            RunState::from_history(&failed).unwrap().status(),
-            RunStatus::Failed
+            RunState::from_history(&failed).unwrap().phase(),
+            RunPhase::Failed
         );
     }
 

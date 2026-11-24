@@ -569,7 +569,7 @@ async fn wait_for_end(shared: &Shared, run: &str, outcome: &mut Outcome) -> Opti
             answer = shared.harness.get_run(run, Some(wait.into())) => answer,
         };
         match answer {
-            Ok(state) if is_terminal(state.status) => return Some(state),
+            Ok(state) if state.status.is_ended() => return Some(state),
             Ok(_) => {}
             Err(error) => {
                 outcome.errors.push(format!("get run: {}", kind(&error)));
@@ -579,19 +579,8 @@ async fn wait_for_end(shared: &Shared, run: &str, outcome: &mut Outcome) -> Opti
     }
 }
 
-fn is_terminal(status: RunStatus) -> bool {
-    !matches!(status, RunStatus::Pending | RunStatus::Active)
-}
-
 fn status_name(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Pending => "pending",
-        RunStatus::Active => "active",
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::Cancelled => "cancelled",
-        RunStatus::Aborted => "aborted",
-    }
+    status.as_str()
 }
 
 /// Fills the report from the outcomes, and checks the invariants:

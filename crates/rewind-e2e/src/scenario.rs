@@ -210,7 +210,8 @@ pub enum Step {
 pub struct Expect {
     /// The start is refused, with a message containing this text: no run exists.
     pub start_error: Option<String>,
-    /// `pending`, `active`, `completed`, `failed`, `cancelled` or `aborted`.
+    /// `completed`, `failed`, `cancelled`, `aborted`, or `waiting` for a run that waits for the
+    /// outside world once virtual time takes it no further.
     pub status: Option<String>,
     /// The output contains these values (objects are compared key by key, recursively).
     pub output: Option<Value>,

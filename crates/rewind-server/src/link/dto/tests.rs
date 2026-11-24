@@ -198,7 +198,7 @@ fn head(n: u128) -> RunHead {
         suffix_len: 14,
         code: digest("script"),
         action_set: digest("action_set"),
-        status: RunStatus::Active,
+        status: RunStatus::Waiting,
         epoch: Epoch(1),
         attempt: Attempt(2),
         sealed: Some(Attempt(1)),
@@ -512,7 +512,12 @@ fn counters() -> Counters {
 fn gauges() -> Gauges {
     Gauges {
         active_runs: 3,
-        waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Parked, 1)]),
+        statuses: BTreeMap::from([(RunStatus::Running, 1), (RunStatus::Waiting, 2)]),
+        waiting: BTreeMap::from([
+            (WaitingFor::Signal, 2),
+            (WaitingFor::Parked, 1),
+            (WaitingFor::Quarantined, 1),
+        ]),
         quarantined: 1,
         workflows: BTreeMap::from([(workflow_id(), 3)]),
     }
@@ -680,7 +685,7 @@ fn every_predicate() -> Vec<Predicate> {
     vec![
         Predicate::Namespace(BTreeSet::from([user()])),
         Predicate::Id(vec!["019b".into()]),
-        Predicate::Status(BTreeSet::from([RunStatus::Pending, RunStatus::Aborted])),
+        Predicate::Status(BTreeSet::from([RunStatus::Queued, RunStatus::Aborted])),
         Predicate::Label {
             key: "agent".into(),
             values: vec![
@@ -707,7 +712,6 @@ fn every_predicate() -> Vec<Predicate> {
         Predicate::Workflow(vec![TextMatch::Any]),
         Predicate::StartedBy(run_id(8)),
         Predicate::Fingerprint(vec!["0123456789abcdef".into()]),
-        Predicate::Quarantined,
         Predicate::Mode(vec![RunMode::Live, RunMode::Test]),
         Predicate::Text("undefined".into()),
     ]

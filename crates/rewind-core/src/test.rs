@@ -30,7 +30,7 @@ use crate::event::{
 use crate::history::{HistoryError, validate_history};
 use crate::ids::{RunId, Seed};
 use crate::payload::Payload;
-use crate::state::{RunOutcome, RunState, RunStatus};
+use crate::state::{RunOutcome, RunPhase, RunState, RunStatus};
 use crate::time::Timestamp;
 use crate::workflow::is_reserved_signal;
 
@@ -110,9 +110,10 @@ pub struct TestSignal {
 /// When a test sends a signal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SignalWhen {
-    /// Once the run can advance no further without the outside world.
+    /// Once the run waits for something other than a timer, which virtual time moves by
+    /// itself: it can advance no further without the outside world.
     #[default]
-    Blocked,
+    Waiting,
     /// This much virtual time after the start.
     After(Duration),
 }
@@ -314,21 +315,21 @@ impl Test {
         let input = loaded(0, &started.input)?;
         let state = RunState::from_history(history)?;
         let mut expect = Expectations {
-            status: Some(state.status()),
+            status: Some(RunStatus::at_rest(state.phase())),
             ..Expectations::default()
         };
         match state.outcome() {
-            Some(RunOutcome::Completed { output }) if state.status() == RunStatus::Completed => {
+            Some(RunOutcome::Completed { output }) if state.phase() == RunPhase::Completed => {
                 let index = history.last().map_or(0, |entry| entry.index);
                 expect.output = Some(loaded(index, output)?);
             }
-            Some(RunOutcome::Failed { error }) if state.status() == RunStatus::Failed => {
+            Some(RunOutcome::Failed { error }) if state.phase() == RunPhase::Failed => {
                 expect.error = Some(ExpectedError {
                     name: error.name.clone(),
                     message: Some(error.message.clone()),
                 });
             }
-            _ => return Err(RecordError::Status(state.status())),
+            _ => return Err(RecordError::Status(state.phase())),
         }
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
         for entry in history {
@@ -384,7 +385,7 @@ pub enum RecordError {
         "the run is {0}: only a run that completed or failed is recorded, since a cancellation, \
          an abort or a wait does not come from the code"
     )]
-    Status(RunStatus),
+    Status(RunPhase),
 }
 
 // -------------------------------------------------------------------------------------------
@@ -592,7 +593,7 @@ impl RunPath {
         }
         Ok(Self {
             steps,
-            status: state.status(),
+            status: RunStatus::at_rest(state.phase()),
         })
     }
 
@@ -838,7 +839,7 @@ mod tests {
         waiting.truncate(4);
         assert_eq!(
             Test::record(&waiting, origin()),
-            Err(RecordError::Status(RunStatus::Active))
+            Err(RecordError::Status(RunPhase::Active))
         );
     }
 
@@ -1052,7 +1053,7 @@ mod tests {
         test.signals.push(TestSignal {
             name: "rewind:ended:x".into(),
             payload: Value::Null,
-            when: SignalWhen::Blocked,
+            when: SignalWhen::Waiting,
         });
         assert!(matches!(
             test.check(),

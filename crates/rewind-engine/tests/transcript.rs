@@ -48,10 +48,7 @@ async fn the_transcript_folds_each_call_with_its_outcome_and_truncates_payloads(
     let lines: Vec<&str> = transcript.lines().collect();
     assert_eq!(
         lines[0],
-        format!(
-            "run {}  suspended · waiting for signal \"approval\"",
-            run.id
-        )
+        format!("run {}  waiting · for signal \"approval\"", run.id)
     );
     assert!(
         lines[1].ends_with("· started 2026-01-01T00:00:00Z"),

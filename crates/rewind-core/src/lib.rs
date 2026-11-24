@@ -80,7 +80,7 @@ pub use secret::{
     ServerSecrets,
 };
 pub use shape::{Field, Shape};
-pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};
+pub use state::{AwaitedSignal, RunOutcome, RunPhase, RunState, RunStatus};
 pub use test::{
     ActionRule, CallOrder, Expectations, ExpectedCall, ExpectedError, InvalidTest, Observed,
     ObservedCall, PathStep, RecordError, RunPath, SignalWhen, StepKind, Test, TestFromRun,

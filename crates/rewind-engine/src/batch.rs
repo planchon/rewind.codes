@@ -200,7 +200,7 @@ impl<'l> Batch<'l> {
             }
             self.events.push(entry);
         }
-        if refused.is_none() && grace == Grace::Ends && !self.state.is_terminal() {
+        if refused.is_none() && grace == Grace::Ends && !self.state.is_ended() {
             refused = Some(AbortReason {
                 kind: AbortKind::Cancelled,
                 message: "the code did not end within its cancellation grace".into(),

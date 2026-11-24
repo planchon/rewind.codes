@@ -161,7 +161,7 @@ async fn start(
     }
     let mut stub = stub.lock().unwrap();
     let id = format!("run-{}", stub.runs.len() + 1);
-    let mut run = base_run(&id, RunStatus::Active);
+    let mut run = base_run(&id, RunStatus::Waiting);
     run.labels = start.labels.clone();
     run.input = Some(Payload::of(start.input.clone(), 262_144));
     if start.code.contains("fails") {
@@ -236,7 +236,7 @@ async fn get_run(
     if wait.is_some() && *left != u32::MAX {
         *left = 0;
     }
-    let run = if *left == 0 && run.status == RunStatus::Active {
+    let run = if *left == 0 && run.status == RunStatus::Waiting {
         let input = run
             .input
             .as_ref()
@@ -267,7 +267,7 @@ async fn signal(
     let stub = stub.lock().unwrap();
     match stub.runs.get(&id) {
         None => problem(ProblemType::NotFound, &format!("no run {id}")),
-        Some(run) if run.status.is_terminal() => problem(
+        Some(run) if run.status.is_ended() => problem(
             ProblemType::RunEnded,
             &format!("run {id} has ended ({})", run.status),
         ),
@@ -338,7 +338,7 @@ async fn fork(
     }
     let fork_id = format!("run-{}", stub.runs.len() + 1);
     let mut run = completed(
-        base_run(&fork_id, RunStatus::Active),
+        base_run(&fork_id, RunStatus::Waiting),
         json!({"fixed": true}),
     );
     run.source = Some(ForkSource {
@@ -632,7 +632,7 @@ async fn run_exits_with_the_runs_outcome() {
         .await;
     assert_eq!(exit, Exit::Waiting);
     let run: Run = serde_json::from_str(&out).unwrap();
-    assert_eq!(run.status, RunStatus::Active);
+    assert_eq!(run.status, RunStatus::Waiting);
     let reads = server
         .requests()
         .into_iter()

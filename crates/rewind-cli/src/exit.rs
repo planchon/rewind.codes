@@ -53,7 +53,7 @@ impl Exit {
 
     /// What became of a run: its status, or its quarantine, which is not a status.
     pub fn of_run(run: &Run) -> Exit {
-        if run.quarantine.is_some() && !run.status.is_terminal() {
+        if run.quarantine.is_some() && !run.status.is_ended() {
             return Exit::Quarantined;
         }
         Exit::of_status(run.status)
@@ -65,7 +65,7 @@ impl Exit {
             RunStatus::Failed => Exit::Failed,
             RunStatus::Cancelled => Exit::Cancelled,
             RunStatus::Aborted => Exit::Aborted,
-            RunStatus::Pending | RunStatus::Active => Exit::Waiting,
+            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting => Exit::Waiting,
         }
     }
 }
@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(Exit::of_status(RunStatus::Failed), Exit::Failed);
         assert_eq!(Exit::of_status(RunStatus::Cancelled), Exit::Cancelled);
         assert_eq!(Exit::of_status(RunStatus::Aborted), Exit::Aborted);
-        assert_eq!(Exit::of_status(RunStatus::Active), Exit::Waiting);
-        assert_eq!(Exit::of_status(RunStatus::Pending), Exit::Waiting);
+        assert_eq!(Exit::of_status(RunStatus::Waiting), Exit::Waiting);
+        assert_eq!(Exit::of_status(RunStatus::Queued), Exit::Waiting);
     }
 }

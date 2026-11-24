@@ -163,7 +163,7 @@ pub struct Run {
     /// With `aborted`: why the host ended the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort: Option<AbortReason>,
-    /// With `active`: what the run waits for.
+    /// With `waiting`: what the run waits for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting_for: Vec<Waiting>,
     /// The last log lines of the code (`console.*`), oldest first, at most 20.
@@ -224,11 +224,12 @@ pub struct Deliveries {
     pub deliveries: u32,
 }
 
-/// Something an active run waits for.
+/// Something a waiting run waits for.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
-    /// A call in flight, and its state.
+    /// A call, and its state: `ready` or `claimed` for a harness action, `approval`, `deferred`
+    /// or `parked`.
     #[serde(rename_all = "camelCase")]
     Call {
         seq: u32,
@@ -263,6 +264,14 @@ pub enum Waiting {
         timeout_at: Option<Timestamp>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         callsite: Option<Callsite>,
+    },
+    /// The run is quarantined: it waits to be released, retried by a new build or given up
+    /// (`Run.quarantine` says why).
+    #[serde(rename_all = "camelCase")]
+    Quarantined {
+        cause: QuarantineCause,
+        /// When it was quarantined.
+        since: Timestamp,
     },
 }
 
@@ -328,7 +337,7 @@ pub struct RunFilter {
     /// with this error name (`TypeError`, `DeadlockError`…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Only quarantined runs, or only runs that are not.
+    /// Only quarantined runs (`waiting:quarantined`), or only runs that are not.
     #[serde(
         default,
         deserialize_with = "flag",
@@ -442,10 +451,11 @@ pub struct RunSummary {
     /// With `error`: the fingerprint (`GET /v1/runs/failures`, `fingerprint:` in a query).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
-    /// With `active`: what the run waits for.
+    /// With `waiting`: what the run waits for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting_for: Vec<RunWait>,
-    /// With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.
+    /// While it is active: when the run wakes by itself, if a timer or a signal's timeout wakes
+    /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wakes_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -542,11 +552,14 @@ pub struct RunStats {
     pub facets: Facets,
 }
 
+/// The runs by status: the active ones now (queued, running, waiting), from the gauges, and the
+/// ended ones of the window, from the counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusCounts {
-    pub pending: u64,
-    pub active: u64,
+    pub queued: u64,
+    pub running: u64,
+    pub waiting: u64,
     pub completed: u64,
     pub failed: u64,
     pub cancelled: u64,
@@ -558,11 +571,11 @@ pub struct StatusCounts {
 pub struct WaitCounts {
     pub signal: u64,
     pub timer: u64,
-    pub call: u64,
     pub harness: u64,
     pub approval: u64,
-    pub parked: u64,
     pub deferred: u64,
+    pub parked: u64,
+    pub quarantined: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

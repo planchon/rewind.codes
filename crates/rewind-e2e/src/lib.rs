@@ -42,7 +42,7 @@ use std::time::Duration;
 use rewind_core::{
     Action, ActionAuth, ActionRoute, ActionSet, Builtin, Code, Command, Event, HistoryEvent,
     Lifecycle, McpServer, McpTransport, PinnedWorkflow, RunExport, RunId, RunOutcome, RunState,
-    SecretPlacement, SecretRef, ServerSecrets, Timestamp, WorkflowId, WorkflowSchemas,
+    RunStatus, SecretPlacement, SecretRef, ServerSecrets, Timestamp, WorkflowId, WorkflowSchemas,
     WorkflowVersion,
 };
 use rewind_engine::adapters::SeededEntropy;
@@ -288,9 +288,9 @@ impl Case {
                 "{}: a blue case cannot expect a failure; move it to red/",
                 self.name
             )),
-            Color::Blue if !matches!(expect.status.as_deref(), Some("completed" | "active")) => {
+            Color::Blue if !matches!(expect.status.as_deref(), Some("completed" | "waiting")) => {
                 Err(format!(
-                    "{}: a blue case must expect the status \"completed\" or \"active\"",
+                    "{}: a blue case must expect the status \"completed\" or \"waiting\"",
                     self.name
                 ))
             }
@@ -607,8 +607,11 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
 
     if let Some(status) = &expect.status {
         check(
-            state.status().as_str() == status,
-            format!("status is {}, expected {status}", state.status()),
+            RunStatus::at_rest(state.phase()).as_str() == status,
+            format!(
+                "status is {}, expected {status}",
+                RunStatus::at_rest(state.phase())
+            ),
         );
     }
     if let Some(expected) = &expect.output {

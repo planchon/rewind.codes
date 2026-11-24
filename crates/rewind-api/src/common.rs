@@ -308,34 +308,49 @@ pub(crate) fn present<'de, D: Deserializer<'de>>(
 // -------------------------------------------------------------------------------------------
 // Runs
 
-/// The status of a run, a function of its history (`archi/02-history.md`, "Run state").
-/// Quarantine is not a status: see `Run.quarantine`.
+/// The status of a run (`archi/02-history.md`, "Run state"): queued, running or waiting while
+/// it is active, then how it ended. A quarantined run is `waiting`, for its quarantine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
-    /// Started, not activated yet.
-    Pending,
-    /// Running, or waiting for calls, timers or signals.
-    Active,
+    /// No step committed yet.
+    Queued,
+    /// A step is in progress, or a call Rewind makes itself (to an MCP server, an API or `http`)
+    /// is in flight or backing off.
+    Running,
+    /// Nothing Rewind does can move the run until something arrives: a signal, a timer, a
+    /// harness action, an approval, a deferred answer, a parked call, a release from quarantine
+    /// (`waitingFor`).
+    Waiting,
     /// `main` returned and every call settled.
     Completed,
     /// The code failed.
     Failed,
     /// The code ended with `CancelledError`.
     Cancelled,
-    /// The host ended the run (a limit, a code that cannot load, a given-up quarantine…).
+    /// The engine ended the run (a limit, a code that cannot load, a given-up quarantine…).
     Aborted,
 }
 
 impl RunStatus {
-    pub fn is_terminal(self) -> bool {
-        !matches!(self, RunStatus::Pending | RunStatus::Active)
+    /// Completed, failed, cancelled or aborted.
+    pub fn is_ended(self) -> bool {
+        !self.is_active()
+    }
+
+    /// Queued, running or waiting: the run has not ended.
+    pub fn is_active(self) -> bool {
+        matches!(
+            self,
+            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting
+        )
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            RunStatus::Pending => "pending",
-            RunStatus::Active => "active",
+            RunStatus::Queued => "queued",
+            RunStatus::Running => "running",
+            RunStatus::Waiting => "waiting",
             RunStatus::Completed => "completed",
             RunStatus::Failed => "failed",
             RunStatus::Cancelled => "cancelled",
@@ -353,8 +368,9 @@ impl fmt::Display for RunStatus {
 impl From<RunStatus> for rewind_core::RunStatus {
     fn from(status: RunStatus) -> Self {
         match status {
-            RunStatus::Pending => rewind_core::RunStatus::Pending,
-            RunStatus::Active => rewind_core::RunStatus::Active,
+            RunStatus::Queued => rewind_core::RunStatus::Queued,
+            RunStatus::Running => rewind_core::RunStatus::Running,
+            RunStatus::Waiting => rewind_core::RunStatus::Waiting,
             RunStatus::Completed => rewind_core::RunStatus::Completed,
             RunStatus::Failed => rewind_core::RunStatus::Failed,
             RunStatus::Cancelled => rewind_core::RunStatus::Cancelled,
@@ -366,8 +382,9 @@ impl From<RunStatus> for rewind_core::RunStatus {
 impl From<rewind_core::RunStatus> for RunStatus {
     fn from(status: rewind_core::RunStatus) -> Self {
         match status {
-            rewind_core::RunStatus::Pending => RunStatus::Pending,
-            rewind_core::RunStatus::Active => RunStatus::Active,
+            rewind_core::RunStatus::Queued => RunStatus::Queued,
+            rewind_core::RunStatus::Running => RunStatus::Running,
+            rewind_core::RunStatus::Waiting => RunStatus::Waiting,
             rewind_core::RunStatus::Completed => RunStatus::Completed,
             rewind_core::RunStatus::Failed => RunStatus::Failed,
             rewind_core::RunStatus::Cancelled => RunStatus::Cancelled,

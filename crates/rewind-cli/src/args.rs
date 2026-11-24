@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rewind_api::common::{Duration, RunStatus};
+use rewind_api::query::WaitKind;
 
 /// The `rewind` command line, but `rewind server`, which the binary hands to `rewind-server`.
 #[derive(Debug, Parser)]
@@ -426,6 +427,7 @@ pub(crate) struct RunsArgs {
     /// runs that have not ended last), or the most calls first.
     #[arg(long, value_enum)]
     pub(crate) sort: Option<SortArg>,
+    /// Only runs with this status; `active`: queued, running or waiting.
     #[arg(long, value_enum)]
     pub(crate) status: Option<StatusFilter>,
     /// Only runs carrying this label, key:value or key=value. Repeat to require several.
@@ -440,9 +442,10 @@ pub(crate) struct RunsArgs {
     /// Only runs whose calls failed with this kind, or that failed with this error name.
     #[arg(long)]
     pub(crate) error: Option<String>,
-    /// Only quarantined runs.
-    #[arg(long)]
-    pub(crate) quarantined: bool,
+    /// Only runs waiting for this: a signal, a timer, a harness action, an approval, a deferred
+    /// answer, a parked call, or a release from quarantine.
+    #[arg(long, value_enum, value_name = "KIND")]
+    pub(crate) waiting: Option<WaitingFilter>,
     /// Only forks of this run: its handle or its id.
     #[arg(long)]
     pub(crate) source: Option<String>,
@@ -479,24 +482,59 @@ impl From<SortArg> for rewind_api::runs::RunSort {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum StatusFilter {
-    Pending,
-    Active,
+    Queued,
+    Running,
+    Waiting,
     Completed,
     Failed,
     Cancelled,
     Aborted,
+    /// Queued, running or waiting: not ended.
+    Active,
 }
 
-impl From<StatusFilter> for RunStatus {
-    fn from(status: StatusFilter) -> Self {
-        match status {
-            StatusFilter::Pending => RunStatus::Pending,
-            StatusFilter::Active => RunStatus::Active,
+impl StatusFilter {
+    /// The one status it names; `None` for `active`, three statuses, which only the query
+    /// language names (`status:active`).
+    pub(crate) fn status(self) -> Option<RunStatus> {
+        Some(match self {
+            StatusFilter::Active => return None,
+            StatusFilter::Queued => RunStatus::Queued,
+            StatusFilter::Running => RunStatus::Running,
+            StatusFilter::Waiting => RunStatus::Waiting,
             StatusFilter::Completed => RunStatus::Completed,
             StatusFilter::Failed => RunStatus::Failed,
             StatusFilter::Cancelled => RunStatus::Cancelled,
             StatusFilter::Aborted => RunStatus::Aborted,
-        }
+        })
+    }
+}
+
+/// What a waiting run waits for, as `rewind runs --waiting` takes it.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum WaitingFilter {
+    Signal,
+    Timer,
+    Harness,
+    Approval,
+    Deferred,
+    Parked,
+    Quarantined,
+}
+
+impl WaitingFilter {
+    /// The term of the query language that asks for it.
+    pub(crate) fn term(self) -> String {
+        let kind = match self {
+            WaitingFilter::Signal => WaitKind::Signal,
+            WaitingFilter::Timer => WaitKind::Timer,
+            WaitingFilter::Harness => WaitKind::Harness,
+            WaitingFilter::Approval => WaitKind::Approval,
+            WaitingFilter::Deferred => WaitKind::Deferred,
+            WaitingFilter::Parked => WaitKind::Parked,
+            WaitingFilter::Quarantined => WaitKind::Quarantined,
+        };
+        format!("waiting:{}", kind.as_str())
     }
 }
 

@@ -88,7 +88,7 @@ fn run_head() -> RunHead {
         suffix_len: 12,
         code: digest("script"),
         action_set: digest("action_set"),
-        status: Status::Active,
+        status: Status::Waiting,
         epoch: 1,
         attempt: 1,
         sealed: None,
@@ -315,7 +315,12 @@ fn shape() -> Shape {
 fn gauges() -> Gauges {
     Gauges {
         active_runs: 4,
-        waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Approval, 1)]),
+        statuses: BTreeMap::from([(Status::Running, 1), (Status::Waiting, 3)]),
+        waiting: BTreeMap::from([
+            (WaitingFor::Signal, 2),
+            (WaitingFor::Approval, 1),
+            (WaitingFor::Quarantined, 1),
+        ]),
         quarantined: 1,
         workflows: BTreeMap::from([("wf_7k2m9q4x8d1c".into(), 3), ("wf_0d1g35t0000a".into(), 1)]),
     }
@@ -653,10 +658,11 @@ fn every_variant_round_trips() {
     };
     assert_eq!(decode::<Summary>(&encode(&summarized)).unwrap(), summarized);
     for status in [
-        Status::Pending,
+        Status::Queued,
+        Status::Running,
+        Status::Waiting,
         Status::Completed,
         Status::Aborted,
-        Status::Active,
     ] {
         let record = Summary {
             status,
@@ -745,11 +751,11 @@ fn every_variant_round_trips() {
         waiting: [
             WaitingFor::Signal,
             WaitingFor::Timer,
-            WaitingFor::Call,
             WaitingFor::Harness,
             WaitingFor::Approval,
             WaitingFor::Parked,
             WaitingFor::Deferred,
+            WaitingFor::Quarantined,
         ]
         .into_iter()
         .map(|kind| (kind, 1))
@@ -833,7 +839,7 @@ fn rejects_what_v1_does_not_define() {
     let head = String::from_utf8(encode(&run_head())).unwrap();
     for (bytes, what) in [
         (
-            head.replace(r#""status":"active""#, r#""status":"sleeping""#),
+            head.replace(r#""status":"waiting""#, r#""status":"active""#),
             "a status",
         ),
         (

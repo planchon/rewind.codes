@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Written in its canonical form: its bytes hash to the test's digest, the key of its blob. A
-//! field that holds its default is left out (`input` `{}`, a signal sent `"blocked"`, the order
+//! field that holds its default is left out (`input` `{}`, a signal sent `"waiting"`, the order
 //! `"any"`), so one test has one document. An action's single rule may be written without its
 //! array, and is written back in one. Times are milliseconds, the seed lowercase hex. The
 //! world's cassette is a cassette document without its version.
@@ -109,12 +109,12 @@ struct SignalV1 {
     when: Option<WhenV1>,
 }
 
-/// `"blocked"`, or milliseconds of virtual time after the start.
+/// `"waiting"`, or milliseconds of virtual time after the start.
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum WhenV1 {
     After(u64),
-    Blocked(String),
+    Waiting(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -139,8 +139,9 @@ struct ExpectV1 {
 #[derive(Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 enum StatusV1 {
-    Pending,
-    Active,
+    Queued,
+    Running,
+    Waiting,
     Completed,
     Failed,
     Cancelled,
@@ -339,7 +340,7 @@ fn signal_dto(signal: &TestSignal) -> SignalV1 {
         name: signal.name.clone(),
         payload: (!signal.payload.is_null()).then(|| CanonicalJson(signal.payload.clone())),
         when: match signal.when {
-            SignalWhen::Blocked => None,
+            SignalWhen::Waiting => None,
             SignalWhen::After(after) => Some(WhenV1::After(
                 u64::try_from(after.as_millis()).unwrap_or(u64::MAX),
             )),
@@ -349,11 +350,11 @@ fn signal_dto(signal: &TestSignal) -> SignalV1 {
 
 fn signal_from_dto(signal: SignalV1) -> Result<TestSignal, String> {
     let when = match signal.when {
-        None => SignalWhen::Blocked,
-        Some(WhenV1::Blocked(when)) if when == "blocked" => SignalWhen::Blocked,
-        Some(WhenV1::Blocked(when)) => {
+        None => SignalWhen::Waiting,
+        Some(WhenV1::Waiting(when)) if when == "waiting" => SignalWhen::Waiting,
+        Some(WhenV1::Waiting(when)) => {
             return Err(format!(
-                "signal {}: \"when\" is \"blocked\" or a number of milliseconds, not {when:?}",
+                "signal {}: \"when\" is \"waiting\" or a number of milliseconds, not {when:?}",
                 signal.name
             ));
         }
@@ -418,8 +419,9 @@ fn expect_from_dto(expect: ExpectV1) -> Expectations {
 
 fn status_dto(status: RunStatus) -> StatusV1 {
     match status {
-        RunStatus::Pending => StatusV1::Pending,
-        RunStatus::Active => StatusV1::Active,
+        RunStatus::Queued => StatusV1::Queued,
+        RunStatus::Running => StatusV1::Running,
+        RunStatus::Waiting => StatusV1::Waiting,
         RunStatus::Completed => StatusV1::Completed,
         RunStatus::Failed => StatusV1::Failed,
         RunStatus::Cancelled => StatusV1::Cancelled,
@@ -429,8 +431,9 @@ fn status_dto(status: RunStatus) -> StatusV1 {
 
 fn status_from_dto(status: StatusV1) -> RunStatus {
     match status {
-        StatusV1::Pending => RunStatus::Pending,
-        StatusV1::Active => RunStatus::Active,
+        StatusV1::Queued => RunStatus::Queued,
+        StatusV1::Running => RunStatus::Running,
+        StatusV1::Waiting => RunStatus::Waiting,
         StatusV1::Completed => RunStatus::Completed,
         StatusV1::Failed => RunStatus::Failed,
         StatusV1::Cancelled => RunStatus::Cancelled,

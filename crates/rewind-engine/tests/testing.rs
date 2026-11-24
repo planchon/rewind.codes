@@ -61,7 +61,7 @@ fn test() -> Test {
     test.signals.push(TestSignal {
         name: "approval".into(),
         payload: json!(true),
-        when: SignalWhen::Blocked,
+        when: SignalWhen::Waiting,
     });
     test
 }
@@ -197,7 +197,7 @@ async fn a_signal_can_be_sent_at_a_time_of_the_run() {
 async fn a_run_waiting_for_the_outside_world_ends_its_test_active() {
     let mut test = test();
     test.signals.clear();
-    test.expect.status = Some(RunStatus::Active);
+    test.expect.status = Some(RunStatus::Waiting);
     let report = run(&test).await;
     assert!(report.passed, "{report:#?}");
 }

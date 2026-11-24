@@ -261,7 +261,7 @@ async fn a_start_key_starts_one_run_and_a_signal_key_is_taken_once() {
     world.idle().await;
     let run = created.run;
     // Virtual time does not jump to the deadline: only the outside world wakes the run.
-    assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Waiting);
     assert_eq!(world.now(), support::T0);
 
     let accepted = world
@@ -308,6 +308,71 @@ async fn a_start_key_starts_one_run_and_a_signal_key_is_taken_once() {
         matches!(reserved, Err(EdgeError::Refused(Refusal::Signal(_)))),
         "{reserved:?}"
     );
+}
+
+/// The status a run shows (`archi/02-history.md`, "Run state"): `queued` until a step is
+/// committed, `waiting` while only the outside world can move it, `running` once a trigger
+/// reaches its inbox, until its activation commits; the gauges count the active runs by status.
+#[tokio::test]
+async fn a_run_is_queued_then_waits_and_runs_once_a_signal_reaches_it() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let run = world
+        .start(request("approval", json!({})))
+        .await
+        .unwrap()
+        .run;
+    let queued = world.view(&run).await;
+    assert_eq!(
+        queued.head.status,
+        RunStatus::Queued,
+        "no step committed yet"
+    );
+    world.idle().await;
+    let waiting = world.view(&run).await;
+    assert_eq!(waiting.head.status, RunStatus::Waiting);
+    let summary = waiting.summary.unwrap();
+    assert_eq!(
+        summary.status,
+        RunStatus::Waiting,
+        "the summary says the same"
+    );
+    assert_eq!(
+        summary.waiting_for(),
+        [rewind_engine::ports::WaitingFor::Signal].into()
+    );
+    let gauges = {
+        let mut gateway = world.driver.gateway(&world.at);
+        world
+            .edge
+            .statistics(
+                &mut gateway,
+                &Scope::Tenant(run.tenant.clone()),
+                Window::covering(support::T0, Timestamp(support::T0.0 + DAY)),
+            )
+            .await
+            .unwrap()
+            .1
+    };
+    assert_eq!(gauges.active_runs, 1);
+    assert_eq!(gauges.with_status(RunStatus::Waiting), 1);
+    assert_eq!(
+        gauges.waiting_for(rewind_engine::ports::WaitingFor::Signal),
+        1
+    );
+
+    // The signal is committed to the inbox: a step of the run is in progress.
+    world
+        .signal(&run, "approval", json!({ "ok": true }), None)
+        .await
+        .unwrap();
+    let running = world.view(&run).await;
+    assert_eq!(running.head.status, RunStatus::Running);
+    assert!(
+        running.summary.unwrap().waiting_for().is_empty(),
+        "a running run waits for nothing"
+    );
+    world.idle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
 }
 
 #[tokio::test]
@@ -376,7 +441,7 @@ async fn the_deadline_cancels_a_run_through_the_normal_path() {
     let mut request = request("approval", json!({}));
     request.ttl = Some(Duration::from_millis(HOUR));
     let run = world.run(request).await;
-    assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Waiting);
     world.advance(2 * HOUR);
     world.settle().await;
     let history = world.history(&run).await;
@@ -471,7 +536,7 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     let view = world.view(&run).await;
     assert_eq!(
         view.head.status,
-        RunStatus::Active,
+        RunStatus::Waiting,
         "quarantine is not a status"
     );
     let quarantine = view.head.quarantine.clone().unwrap();
@@ -690,7 +755,7 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
     let late = world
         .run(with_policy(request("one_call", json!({})), policy))
         .await;
-    assert_eq!(world.view(&late).await.head.status, RunStatus::Active);
+    assert_eq!(world.view(&late).await.head.status, RunStatus::Waiting);
     world.advance(61_000);
     world.settle().await;
     let history = world.history(&late).await;

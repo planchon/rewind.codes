@@ -215,7 +215,7 @@ fn reference(id: &'static str) -> Model {
                 ("cancel_stuck_run", 0) => Some(call("list_runs", json!({}))),
                 ("cancel_stuck_run", 1) => {
                     let listing = last.unwrap_or_default();
-                    let line = listing.lines().find(|line| line.contains(": active"))?;
+                    let line = listing.lines().find(|line| line.contains(": waiting"))?;
                     Some(call("get_run", json!({ "run_id": first_run(line)? })))
                 }
                 ("cancel_stuck_run", 2) => {
@@ -460,7 +460,7 @@ async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_waiting_run_is_reported_as_suspended_and_goes_on_after_the_conversation() {
+async fn a_waiting_run_is_reported_as_waiting_and_goes_on_after_the_conversation() {
     let model = Model::Scripted(Scripted::turns(
         "scripted",
         vec![call(
@@ -473,7 +473,7 @@ async fn a_waiting_run_is_reported_as_suspended_and_goes_on_after_the_conversati
         panic!("tool results");
     };
     let text = &results[0].content;
-    assert!(text.contains("is suspended, waiting for:"), "{text}");
+    assert!(text.contains("is waiting for:"), "{text}");
     assert!(
         text.contains("- the signal \"refund_approval\" at workflow.ts:5:"),
         "{text}"

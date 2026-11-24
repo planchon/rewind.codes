@@ -257,10 +257,22 @@ impl Views<'_> {
             Some(RunOutcome::Aborted { reason }) => abort = Some(AbortReason::from(reason)),
             None => {}
         }
-        let waiting_for = if state.is_terminal() || history.is_empty() {
-            Vec::new()
+        // What a waiting run waits for: its waits from the outside world, then its quarantine.
+        let waiting_for = if head.status == rewind_core::RunStatus::Waiting {
+            let mut waiting = if state.is_ended() || history.is_empty() {
+                Vec::new()
+            } else {
+                waiting(&head.run, history, &state, tasks, &payload)
+            };
+            if let Some(quarantine) = &head.quarantine {
+                waiting.push(Waiting::Quarantined {
+                    cause: quarantine_cause(quarantine.kind),
+                    since: timestamp(quarantine.since),
+                });
+            }
+            waiting
         } else {
-            waiting(&head.run, history, &state, tasks, &payload)
+            Vec::new()
         };
         let deliveries = tasks
             .iter()
@@ -281,10 +293,7 @@ impl Views<'_> {
             namespace: namespace(&head.namespace),
             status: head.status.into(),
             quarantine: head.quarantine.as_ref().map(|quarantine| Quarantine {
-                cause: match quarantine.kind {
-                    QuarantineKind::NonDeterminism => QuarantineCause::NonDeterminism,
-                    QuarantineKind::Failures => QuarantineCause::RepeatedFailures,
-                },
+                cause: quarantine_cause(quarantine.kind),
                 reason: quarantine.reason.clone(),
             }),
             code_digest: head.code.to_hex(),
@@ -635,6 +644,14 @@ pub(crate) fn quota_alert(
         period: alert.key.period.to_string(),
         raised_at: rewind_api::common::timestamp(alert.raised_at),
         sent_at: alert.sent_at.map(rewind_api::common::timestamp),
+    }
+}
+
+/// Why a run is quarantined, as the API names it.
+fn quarantine_cause(kind: QuarantineKind) -> QuarantineCause {
+    match kind {
+        QuarantineKind::NonDeterminism => QuarantineCause::NonDeterminism,
+        QuarantineKind::Failures => QuarantineCause::RepeatedFailures,
     }
 }
 

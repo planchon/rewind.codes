@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rewind_core::{Event, Lifecycle, Seq, Timestamp, WorkflowId};
+use rewind_core::{Event, Lifecycle, RunStatus, Seq, Timestamp, WorkflowId};
 use rewind_engine::ports::{
     ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, DueTimer, Ending,
     FailureCounts, ForkSource, Gauges, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
@@ -791,11 +791,11 @@ pub fn waiting_record(kind: WaitingFor) -> record::WaitingFor {
     match kind {
         WaitingFor::Signal => record::WaitingFor::Signal,
         WaitingFor::Timer => record::WaitingFor::Timer,
-        WaitingFor::Call => record::WaitingFor::Call,
         WaitingFor::Harness => record::WaitingFor::Harness,
         WaitingFor::Approval => record::WaitingFor::Approval,
         WaitingFor::Parked => record::WaitingFor::Parked,
         WaitingFor::Deferred => record::WaitingFor::Deferred,
+        WaitingFor::Quarantined => record::WaitingFor::Quarantined,
     }
 }
 
@@ -803,17 +803,22 @@ pub fn waiting_of(kind: record::WaitingFor) -> WaitingFor {
     match kind {
         record::WaitingFor::Signal => WaitingFor::Signal,
         record::WaitingFor::Timer => WaitingFor::Timer,
-        record::WaitingFor::Call => WaitingFor::Call,
         record::WaitingFor::Harness => WaitingFor::Harness,
         record::WaitingFor::Approval => WaitingFor::Approval,
         record::WaitingFor::Parked => WaitingFor::Parked,
         record::WaitingFor::Deferred => WaitingFor::Deferred,
+        record::WaitingFor::Quarantined => WaitingFor::Quarantined,
     }
 }
 
 pub fn gauges_record(gauges: &Gauges) -> record::Gauges {
     record::Gauges {
         active_runs: gauges.active_runs,
+        statuses: gauges
+            .statuses
+            .iter()
+            .map(|(&status, &count)| (record::Status::from(status), count))
+            .collect(),
         waiting: gauges
             .waiting
             .iter()
@@ -831,6 +836,11 @@ pub fn gauges_record(gauges: &Gauges) -> record::Gauges {
 pub fn gauges_of(record: record::Gauges) -> Result<Gauges, PartitionError> {
     Ok(Gauges {
         active_runs: record.active_runs,
+        statuses: record
+            .statuses
+            .into_iter()
+            .map(|(status, count)| (RunStatus::from(status), count))
+            .collect(),
         waiting: record
             .waiting
             .into_iter()

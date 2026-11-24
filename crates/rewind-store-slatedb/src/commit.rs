@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, PoisonError};
 
-use rewind_core::HistoryEvent;
+use rewind_core::{HistoryEvent, RunStatus};
 use rewind_engine::ports::partition::{Activation, CreateRun};
 use rewind_engine::ports::{
     Attempt, Batch, Change, CounterDelta, DueTimer, Gauges, IndexedSummary, OutboxChange,
@@ -91,10 +91,19 @@ impl RunState {
         gauges
     }
 
-    /// Sets or lifts the quarantine, in the head and in the summary.
+    /// Sets or lifts the quarantine, in the head and in the summary; a run quarantined is
+    /// `waiting`.
     fn quarantine(&mut self, quarantine: Option<Quarantine>) {
         if let Some(summary) = &mut self.summary {
             summary.summary.quarantine = quarantine.as_ref().map(QuarantineNote::from);
+        }
+        // A quarantined run that has not ended waits for its release: its status is `waiting`.
+        // Released, its owner computes it again.
+        if quarantine.is_some() && !self.head.is_ended() {
+            self.head.status = RunStatus::Waiting;
+            if let Some(summary) = &mut self.summary {
+                summary.summary.status = RunStatus::Waiting;
+            }
         }
         self.head.quarantine = quarantine;
     }
@@ -414,6 +423,10 @@ impl Apply<'_> {
                 }
                 let before = self.existing(&run).await?;
                 let mut after = before.clone();
+                if !after.head.is_ended() {
+                    after.head.status = summary.summary.status;
+                    after.head.waits = summary.summary.waits.clone();
+                }
                 after.summary = Some(*summary);
                 self.write_run(Some(&before), Some(&after)).await
             }
@@ -873,6 +886,14 @@ fn hash_after(key: &[u8], prefix: &Key) -> Result<rewind_core::Digest, Partition
 fn subtract(gauges: &mut Gauges, held: &Gauges) {
     gauges.active_runs = gauges.active_runs.saturating_sub(held.active_runs);
     gauges.quarantined = gauges.quarantined.saturating_sub(held.quarantined);
+    for (status, count) in &held.statuses {
+        if let Some(left) = gauges.statuses.get_mut(status) {
+            *left = left.saturating_sub(*count);
+            if *left == 0 {
+                gauges.statuses.remove(status);
+            }
+        }
+    }
     for (kind, count) in &held.waiting {
         if let Some(left) = gauges.waiting.get_mut(kind) {
             *left = left.saturating_sub(*count);

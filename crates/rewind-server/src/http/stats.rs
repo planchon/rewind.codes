@@ -162,10 +162,13 @@ async fn series(
         .await?)
 }
 
-/// The runs of the window by status: those that ended, by their end; the active ones now.
+/// The runs of the window by status: those that ended, by their end; the active ones now, by
+/// status.
 fn statuses(runs: &Counted, gauges: &Gauges) -> StatusCounts {
     let mut counts = StatusCounts {
-        active: gauges.active_runs,
+        queued: gauges.with_status(RunStatus::Queued),
+        running: gauges.with_status(RunStatus::Running),
+        waiting: gauges.with_status(RunStatus::Waiting),
         ..StatusCounts::default()
     };
     for (status, count) in &runs.ended {
@@ -174,7 +177,7 @@ fn statuses(runs: &Counted, gauges: &Gauges) -> StatusCounts {
             RunStatus::Failed => counts.failed += count,
             RunStatus::Cancelled => counts.cancelled += count,
             RunStatus::Aborted => counts.aborted += count,
-            RunStatus::Pending | RunStatus::Active => {}
+            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting => {}
         }
     }
     counts
@@ -215,7 +218,9 @@ pub(super) async fn runs(
     let facets = Facets {
         statuses: top(
             [
-                ("active", counts.active),
+                ("queued", counts.queued),
+                ("running", counts.running),
+                ("waiting", counts.waiting),
                 ("completed", counts.completed),
                 ("failed", counts.failed),
                 ("cancelled", counts.cancelled),
@@ -484,12 +489,11 @@ pub(super) async fn actions(
     }))
 }
 
-/// A code's runs by status, as the API counts them: those started and not ended are active.
+/// A workflow's runs by status, as the API counts them: those started and not ended are active.
 pub(crate) fn run_counts(runs: &Counted) -> RunCounts {
     let ended = ended(runs);
     let finished = ended.completed + ended.failed + ended.cancelled + ended.aborted;
     RunCounts {
-        pending: 0,
         active: runs.started.saturating_sub(finished),
         completed: ended.completed,
         failed: ended.failed,

@@ -96,7 +96,7 @@ async fn a_member_follows_a_run_from_its_start_to_its_end() {
         .start_run(&waiting("member", &[]), None)
         .await
         .unwrap();
-    let started = until(&mut stream, &run.id, |run| run.status == RunStatus::Active)
+    let started = until(&mut stream, &run.id, |run| run.status == RunStatus::Waiting)
         .await
         .pop()
         .unwrap();

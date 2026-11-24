@@ -9,7 +9,7 @@
     }
   },
   "expect": {
-    "status": "active",
+    "status": "waiting",
     "awaiting": [
       "approval"
     ],

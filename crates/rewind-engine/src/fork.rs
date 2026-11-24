@@ -156,7 +156,7 @@ pub struct Compatibility {
     /// fork with `outcome_unknown`.
     pub unknown: Vec<Seq>,
     /// The fork's status once it has followed the run: `completed` or `failed` when it ended as
-    /// the run did, `active` when it goes live.
+    /// the run did, `running` when it goes live.
     pub status: RunStatus,
 }
 
@@ -254,7 +254,7 @@ pub async fn compatibility<X: CodeExecutor>(
         reused,
         redispatched: followed.redispatched,
         unknown: followed.unknown,
-        status: batch.state.status(),
+        status: batch.state.phase().status().unwrap_or(RunStatus::Running),
     })
 }
 
@@ -354,7 +354,7 @@ where
         while point.is_none() {
             // The code ended as the followed did, its last command matching the source's; or
             // the host aborted it.
-            if batch.state.is_terminal() {
+            if batch.state.is_ended() {
                 let aborted = batch.events().last().is_some_and(|entry| {
                     matches!(entry.event, Event::Lifecycle(Lifecycle::RunAborted(_)))
                 });
@@ -422,7 +422,7 @@ where
         let mut reused = Vec::new();
         let mut redispatched = Vec::new();
         let mut unknown = Vec::new();
-        if !batch.state.is_terminal() {
+        if !batch.state.is_ended() {
             let pending = batch.state.pending_calls().clone();
             let mut outcomes: BTreeMap<Seq, Completion> = BTreeMap::new();
             let mut order = Vec::new();

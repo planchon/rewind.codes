@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Command, Completion, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunState,
-    RunStatus, Seq, Shape, Timestamp,
+    ActionSet, Command, Completion, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunPhase,
+    RunState, RunStatus, Seq, Shape, Timestamp,
 };
 
 use crate::failures;
@@ -19,7 +19,7 @@ use crate::metrics::RunMeasurement;
 use crate::ports::{
     ActionCounts, CallTask, CounterDelta, Counters, DueTimer, FailureCounts, Hour, IndexedSummary,
     LatestRun, PayloadRecord, Projection, QuarantineNote, RunHead, RunSummary, TaskPhase,
-    TaskRecord, TaskRef, TaskState, TimerChange, TimerKind, WaitKind,
+    TaskRecord, TaskRef, TaskState, TimerChange, TimerKind, WaitKind, status_of,
 };
 use crate::projector;
 use crate::telemetry::{RunTelemetry, SpanKey, TelemetryConfig};
@@ -38,6 +38,10 @@ pub(crate) fn phase_of(task: &TaskRecord) -> TaskPhase {
 /// The run's summary after `history`, which leaves the run in `state`: its status, its waits
 /// (each call's with its task's phase), its ending, its counts, the actions it called.
 ///
+/// The status is the one the run has once the activation is committed with nothing left in its
+/// inbox ([`status_of`]); the owner computes it again when it commits, with what reached the
+/// run's inbox meanwhile and its tasks as they are then.
+///
 /// The counts are those of `previous`, the summary of the history up to its `history_len`,
 /// with the events after it: an activation counts its new events only, and its derivation
 /// costs what it appends and what the run holds pending, never the length of the history.
@@ -52,7 +56,12 @@ pub(crate) fn summary_of(
     tasks: &BTreeMap<Seq, TaskRecord>,
     previous: Option<&IndexedSummary>,
 ) -> IndexedSummary {
-    let mut waits = if state.status() == RunStatus::Active {
+    let phase = if history.is_empty() {
+        RunPhase::Queued
+    } else {
+        state.phase()
+    };
+    let mut waits = if phase == RunPhase::Active {
         projector::waits(history, state, Some(action_set))
     } else {
         Vec::new()
@@ -109,11 +118,7 @@ pub(crate) fn summary_of(
             code: head.code,
             headline: headline.to_owned(),
             action_set: head.action_set,
-            status: if history.is_empty() {
-                RunStatus::Pending
-            } else {
-                state.status()
-            },
+            status: status_of(phase, &waits, head.quarantine.is_some(), false),
             mode: state.mode(),
             labels: metadata.labels.clone(),
             source: metadata.source.map(|parent| parent.run),
@@ -137,8 +142,8 @@ pub(crate) fn summary_of(
     }
 }
 
-/// The summary of a run created and not activated yet: `pending`.
-pub(crate) fn pending_summary(head: &RunHead, headline: &str) -> IndexedSummary {
+/// The summary of a run created and not activated yet: `queued`.
+pub(crate) fn queued_summary(head: &RunHead, headline: &str) -> IndexedSummary {
     let mut summary = summary_of(
         head,
         headline,
@@ -148,7 +153,7 @@ pub(crate) fn pending_summary(head: &RunHead, headline: &str) -> IndexedSummary 
         &BTreeMap::new(),
         None,
     );
-    summary.summary.status = RunStatus::Pending;
+    summary.summary.status = RunStatus::Queued;
     summary
 }
 
@@ -215,7 +220,7 @@ pub(crate) fn head_after(
     if let Some(last) = history.last() {
         next.updated_at = last.recorded_at;
     }
-    if next.status.is_terminal() {
+    if next.status.is_ended() {
         next.ended_at = summary.summary.ended_at;
         next.quarantine = None;
         next.waits.clear();
@@ -240,7 +245,7 @@ pub(crate) fn effects_of(
 ) -> Result<(Vec<TaskRecord>, Vec<TimerChange>), String> {
     let mut tasks = Vec::new();
     let mut timers = Vec::new();
-    if state.is_terminal() {
+    if state.is_ended() {
         return Ok((tasks, timers));
     }
     let run = &head.run;
@@ -617,6 +622,19 @@ pub(crate) fn with_phases(
     summary
 }
 
+/// The status of the run `summary` describes, as its owner computes it now: from the summary's
+/// phase and waits, whether it is quarantined, and whether a step of it is in progress
+/// ([`status_of`]).
+pub(crate) fn status_now(summary: &IndexedSummary, quarantined: bool, stepping: bool) -> RunStatus {
+    let summary = &summary.summary;
+    status_of(
+        summary.status.phase(),
+        &summary.waits,
+        quarantined,
+        stepping,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use rewind_core::{
@@ -637,7 +655,7 @@ mod tests {
             suffix_len: 12,
             code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
-            status: RunStatus::Active,
+            status: RunStatus::Running,
             epoch: Epoch(1),
             attempt: Attempt::FIRST,
             sealed: None,
@@ -870,7 +888,7 @@ mod tests {
         hours(whole.counters, &mut whole_hours);
         let mut sizes = 0x2545_f491_u64;
         for chunking in ["one event", "three events", "varied"] {
-            let mut previous = Some(pending_summary(&head(), "headline"));
+            let mut previous = Some(queued_summary(&head(), "headline"));
             let (mut spans, mut measurements, mut shapes) = (Vec::new(), Vec::new(), Vec::new());
             let mut chunked_hours = BTreeMap::new();
             let mut from = 0;

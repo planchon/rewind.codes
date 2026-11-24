@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Seq, Shape, Timestamp};
+use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, RunStatus, Seq, Shape, Timestamp};
 
 use crate::ports::partition::{Activation, CreateRun};
 use crate::ports::{
@@ -286,7 +286,12 @@ impl PartitionState {
                         "the summary of run {run} names another run"
                     )));
                 }
-                self.records_mut(&run)?.summary = Some(*summary);
+                let records = self.records_mut(&run)?;
+                if !records.head.is_ended() {
+                    records.head.status = summary.summary.status;
+                    records.head.waits = summary.summary.waits.clone();
+                }
+                records.summary = Some(*summary);
                 Ok(())
             }
             Change::Outbox(OutboxChange::Add(entry)) => self.add_outbox(*entry),
@@ -729,6 +734,14 @@ impl RunRecords {
     fn quarantine(&mut self, quarantine: Option<Quarantine>) {
         if let Some(summary) = &mut self.summary {
             summary.summary.quarantine = quarantine.as_ref().map(QuarantineNote::from);
+        }
+        // A quarantined run that has not ended waits for its release: its status is `waiting`.
+        // Released, its owner computes it again.
+        if quarantine.is_some() && !self.head.is_ended() {
+            self.head.status = RunStatus::Waiting;
+            if let Some(summary) = &mut self.summary {
+                summary.summary.status = RunStatus::Waiting;
+            }
         }
         self.head.quarantine = quarantine;
     }

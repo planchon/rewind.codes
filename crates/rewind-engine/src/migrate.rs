@@ -313,7 +313,7 @@ where
             suffix_len: legacy.suffix_len,
             code: legacy.code,
             action_set: legacy.action_set,
-            status: rewind_core::RunStatus::Pending,
+            status: rewind_core::RunStatus::Queued,
             epoch: legacy.epoch,
             attempt: Attempt::FIRST,
             sealed: None,

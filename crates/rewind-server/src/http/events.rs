@@ -154,7 +154,7 @@ impl Tail {
             .filter(|entry| entry.index >= self.next)
             .collect();
         self.push(&events).await?;
-        if summary.status.is_terminal() && self.next >= summary.history_len {
+        if summary.status.is_ended() && self.next >= summary.history_len {
             self.end(summary.status);
         }
         Ok(())

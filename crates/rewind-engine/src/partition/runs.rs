@@ -649,7 +649,7 @@ impl<P: Plane> Owner<P> {
             suffix_len,
             code: started.code,
             action_set: started.action_set,
-            status: RunStatus::Pending,
+            status: RunStatus::Queued,
             epoch: started.epoch,
             attempt: Attempt::FIRST,
             sealed: None,
@@ -665,7 +665,7 @@ impl<P: Plane> Owner<P> {
             updated_at: created_at,
             ended_at: None,
         };
-        let summary = derive::pending_summary(&head, &headline);
+        let summary = derive::queued_summary(&head, &headline);
         unit.change(CreateRun {
             run: run.clone(),
             head: head.clone(),
@@ -713,7 +713,47 @@ impl<P: Plane> Owner<P> {
             slot.inbox.insert(id, now);
             slot.keys.extend(key);
         }
+        // A trigger in its inbox: a step of the run is in progress.
+        self.restatus(unit, run.id);
         unit.then(After::Queue(run.clone()));
+    }
+
+    /// Writes in `unit` the run's status as its owner computes it now, in its head and its
+    /// summary, when it changed (`archi/03-execution.md`, "Activations"): from its phase, the
+    /// waits its summary holds with their tasks' phases, its quarantine, and whether a step of it
+    /// is in progress (a trigger in its inbox, or its activation running). Called after every
+    /// change of what it depends on.
+    pub(crate) fn restatus(&mut self, unit: &mut Unit<P>, run: RunId) {
+        let Some(slot) = self.slot_mut(run) else {
+            return;
+        };
+        if slot.head.is_ended() {
+            return;
+        }
+        let stepping = !slot.inbox.is_empty() || slot.busy.is_some();
+        let Some(summary) = &mut slot.summary else {
+            return;
+        };
+        let status = crate::ports::status_of(
+            slot.head.status.phase(),
+            &summary.summary.waits,
+            slot.head.quarantine.is_some(),
+            stepping,
+        );
+        if status == slot.head.status && status == summary.summary.status {
+            return;
+        }
+        slot.head.status = status;
+        summary.summary.status = status;
+        summary.summary.quarantine = slot
+            .head
+            .quarantine
+            .as_ref()
+            .map(crate::ports::QuarantineNote::from);
+        unit.change(Change::Summary {
+            run: slot.head.run.clone(),
+            summary: Box::new(summary.clone()),
+        });
     }
 
     // ---------------------------------------------------------------------------------------
@@ -934,6 +974,7 @@ impl<P: Plane> Owner<P> {
         }
         let mut unit = Unit::new();
         self.release_in(&mut unit, run);
+        self.restatus(&mut unit, run.id);
         unit.then(After::Reply(reply, PartitionReply::Done(Ok(true))));
         unit.then(After::Queue(run.clone()));
         self.push(unit);
@@ -1003,6 +1044,13 @@ impl<P: Plane> Owner<P> {
             return;
         };
         slot.busy = Some(purpose);
+        // Its activation runs: a step of it is in progress.
+        let mut unit = Unit::new();
+        self.restatus(&mut unit, run.id);
+        self.push(unit);
+        let Some(slot) = self.slot_mut(run.id) else {
+            return;
+        };
         let oldest = slot
             .inbox
             .values()
@@ -1129,6 +1177,8 @@ impl<P: Plane> Owner<P> {
                             Some(crate::ports::QuarantineNote::from(&quarantine));
                     }
                 }
+                // A quarantined run waits for its release.
+                self.restatus(&mut unit, run);
                 unit.then(After::Forget(run_ref.clone()));
                 unit.then(After::Idle(run_ref));
                 self.push(unit);
@@ -1140,6 +1190,7 @@ impl<P: Plane> Owner<P> {
                     .is_some_and(|slot| slot.head.quarantine.is_some())
                 {
                     self.release_in(&mut unit, &run_ref);
+                    self.restatus(&mut unit, run);
                 }
                 for reply in self
                     .slot_mut(run)
@@ -1232,6 +1283,7 @@ impl<P: Plane> Owner<P> {
                 slot.head.failures = failures;
                 slot.head.quarantine = Some(quarantine);
             }
+            self.restatus(&mut unit, run);
         } else {
             unit.change(Change::Timer(TimerChange::Set(DueTimer {
                 at: now.saturating_add(self.config.activation_retry),
@@ -1340,6 +1392,19 @@ impl<P: Plane> Owner<P> {
             .collect();
         activation.summary = derive::with_phases(activation.summary, &phases);
         activation.head.waits = activation.summary.summary.waits.clone();
+        // Triggers that reached its inbox meanwhile are a step in progress: the run is queued
+        // again once the batch is durable.
+        let stepping = slot
+            .inbox
+            .keys()
+            .any(|id| !activation.consumed.contains(id));
+        let status = derive::status_now(
+            &activation.summary,
+            activation.head.quarantine.is_some(),
+            stepping,
+        );
+        activation.summary.summary.status = status;
+        activation.head.status = status;
         let mut unit = Unit::new();
         unit.then(After::Measure(measurements));
         for projection in projections {
@@ -1866,7 +1931,7 @@ impl<P: Plane> Owner<P> {
         }
         for summary in runs {
             let run = summary.run.clone();
-            if summary.status.is_terminal() {
+            if summary.status.is_ended() {
                 self.dispatch(OwnerMsg::Internal(Internal::Erase(run)));
             } else if self.cancelling.insert(run.id) {
                 // Cancelled once, through the normal path: its end erases it.

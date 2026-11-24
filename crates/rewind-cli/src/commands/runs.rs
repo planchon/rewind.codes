@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::Server;
 use crate::args::{
     CancelArgs, ExportArgs, ExportFormat, ForkArgs, ReleaseArgs, RunArgs, RunsArgs, SignalArgs,
-    StatusArgs, TranscriptArgs,
+    StatusArgs, StatusFilter, TranscriptArgs,
 };
 use crate::error::CliError;
 use crate::exit::Exit;
@@ -230,10 +230,18 @@ pub(super) async fn list(
     args: RunsArgs,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
+    // `--status active` and `--waiting` are terms of the query: `active` is three statuses.
+    let active = matches!(args.status, Some(StatusFilter::Active));
+    let terms: Vec<String> = args
+        .query
+        .into_iter()
+        .chain(active.then(|| "status:active".to_owned()))
+        .chain(args.waiting.map(|kind| kind.term()))
+        .collect();
     let filter = RunFilter {
-        q: args.query,
+        q: (!terms.is_empty()).then(|| terms.join(" ")),
         sort: args.sort.map(Into::into),
-        status: args.status.map(Into::into),
+        status: args.status.and_then(StatusFilter::status),
         labels: args
             .labels
             .iter()
@@ -241,7 +249,7 @@ pub(super) async fn list(
             .collect::<Result<_, _>>()?,
         action: args.action,
         error: args.error,
-        quarantined: args.quarantined.then_some(true),
+        quarantined: None,
         source: args.source,
         workflow: args.workflow,
         started_by: None,
@@ -322,7 +330,7 @@ pub(super) async fn wait_for_end(
     run: Run,
     deadline: Instant,
 ) -> Result<Run, CliError> {
-    if run.status.is_terminal() || run.quarantine.is_some() || Instant::now() >= deadline {
+    if run.status.is_ended() || run.quarantine.is_some() || Instant::now() >= deadline {
         return Ok(run);
     }
     Ok(held(client, &run.id, deadline).await?.unwrap_or(run))
@@ -351,7 +359,7 @@ async fn held(client: &Client, run: &str, deadline: Instant) -> Result<Option<Ru
 }
 
 fn started(console: &mut Console, run: &Run) {
-    if !console.json() && !run.status.is_terminal() {
+    if !console.json() && !run.status.is_ended() {
         console.note(format!("started run {}", run.handle));
     }
 }

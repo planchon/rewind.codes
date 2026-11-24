@@ -192,7 +192,7 @@ fn a_run_sleeps_is_interrupted_and_resumes_in_another_process() {
     let mut run = run;
     wait_until("the run sleeps", Duration::from_secs(30), || {
         run = project.json(&["status", &id]).1;
-        run["status"] == "active"
+        run["status"] == "waiting"
     });
     assert_eq!(run["waitingFor"][0]["kind"], "timer", "{run}");
 
@@ -613,7 +613,7 @@ fn the_corpus_runs_live_on_the_embedded_server() {
         let code = case.join("workflow.ts");
         let status = expect["status"].as_str().unwrap_or("completed");
         // A run that waits for the outside world is seen waiting.
-        let wait = if status == "active" { "3s" } else { "60s" };
+        let wait = if status == "waiting" { "3s" } else { "60s" };
         // The corpus checks workflows at start, not their types.
         let mut args = vec![
             "--json".to_owned(),

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use rewind_core::{ActionFailureKind, Digest, RunId, RunStatus};
 
 use crate::ports::read_model::{
-    Predicate, RunOrder, RunQuery, RunSummary, SearchCursor, Wait, WaitKind, WaitingFor,
+    Predicate, RunOrder, RunQuery, RunSummary, SearchCursor, WaitKind, WaitingFor,
 };
 
 /// The summaries a partition reads at most for one page of a search.
@@ -84,9 +84,12 @@ impl IndexedSummary {
                     || self.call_errors.iter().any(|kind| kinds.contains(kind))
             }
             Predicate::Waiting(kinds) => {
-                let waiting = self.waiting();
-                !waiting.is_empty()
-                    && (kinds.is_empty() || waiting.iter().any(|kind| kinds.contains(kind)))
+                summary.status == RunStatus::Waiting
+                    && (kinds.is_empty()
+                        || summary
+                            .waiting_for()
+                            .iter()
+                            .any(|kind| kinds.contains(kind)))
             }
             Predicate::Signal(matchers) => self
                 .signals()
@@ -115,7 +118,6 @@ impl IndexedSummary {
                 .ending
                 .as_ref()
                 .is_some_and(|ending| fingerprints.contains(&ending.fingerprint)),
-            Predicate::Quarantined => summary.quarantine.is_some(),
             Predicate::Mode(modes) => summary.mode.is_some_and(|mode| modes.contains(&mode)),
             Predicate::Text(text) => self
                 .text()
@@ -124,12 +126,9 @@ impl IndexedSummary {
         }
     }
 
-    /// What the run waits for: its waits' kinds, while it is active.
+    /// What the run waits for while it is `waiting` ([`RunSummary::waiting_for`]).
     pub fn waiting(&self) -> BTreeSet<WaitingFor> {
-        if self.summary.status != RunStatus::Active {
-            return BTreeSet::new();
-        }
-        self.summary.waits.iter().map(Wait::waiting_for).collect()
+        self.summary.waiting_for()
     }
 
     /// The signals the run waits for.

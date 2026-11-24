@@ -7,7 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
-use rewind_core::{ActionFailureKind, Callsite, Digest, RunId, RunMode, RunStatus, Seq, Timestamp};
+use rewind_core::{
+    ActionFailureKind, Callsite, Digest, RunId, RunMode, RunPhase, RunStatus, Seq, Timestamp,
+};
 
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::records::{Quarantine, QuarantineKind};
@@ -19,17 +21,18 @@ use crate::ports::tenancy::{RunRef, TenantId};
 pub struct RunSnapshot {
     /// The events folded.
     pub history_len: u64,
-    pub status: RunStatus,
+    /// Where the history says the run is: the owner tells running from waiting.
+    pub phase: RunPhase,
     /// From `run_started`; `None` before it.
     pub mode: Option<RunMode>,
-    /// With `active`: what the run waits for, by `since`, then kind, then seq and name; empty
-    /// otherwise. A signal's timeout timer is part of the signal's wait, not a wait of its own.
+    /// While it is active: what the run waits for, by `since`, then kind, then seq and name;
+    /// empty otherwise. A signal's timeout timer is part of the signal's wait, not a wait of its own.
     pub waits: Vec<Wait>,
     /// With `failed`, `cancelled` or `aborted`: how the run ended.
     pub ending: Option<Ending>,
 }
 
-/// Something an active run waits for from the outside world.
+/// Something an active run waits for: from the outside world, or a call Rewind makes itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wait {
     pub kind: WaitKind,
@@ -50,17 +53,49 @@ pub struct Wait {
 
 impl Wait {
     /// What the run waits for, as queries name it: a call's task waiting for the harness
-    /// (approval, parked, deferred) names the wait; otherwise its kind does.
-    pub fn waiting_for(&self) -> WaitingFor {
+    /// (approval, parked, deferred) names the wait; otherwise its kind does. `None` for a call
+    /// Rewind makes itself, in flight or backing off: the run is running, not waiting for it.
+    pub fn waiting_for(&self) -> Option<WaitingFor> {
         match (self.kind, self.task) {
-            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Approval)) => WaitingFor::Approval,
-            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Parked)) => WaitingFor::Parked,
-            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Deferred)) => WaitingFor::Deferred,
-            (WaitKind::Signal, _) => WaitingFor::Signal,
-            (WaitKind::Timer, _) => WaitingFor::Timer,
-            (WaitKind::Call, _) => WaitingFor::Call,
-            (WaitKind::Harness, _) => WaitingFor::Harness,
+            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Approval)) => {
+                Some(WaitingFor::Approval)
+            }
+            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Parked)) => {
+                Some(WaitingFor::Parked)
+            }
+            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Deferred)) => {
+                Some(WaitingFor::Deferred)
+            }
+            (WaitKind::Signal, _) => Some(WaitingFor::Signal),
+            (WaitKind::Timer, _) => Some(WaitingFor::Timer),
+            (WaitKind::Harness, _) => Some(WaitingFor::Harness),
+            (WaitKind::Call, _) => None,
         }
+    }
+}
+
+/// The status of a run, as its partition owner computes it at each batch (`archi/02-history.md`,
+/// "Run state"; `archi/03-execution.md`, "Activations"), from its phase and what its head holds:
+///
+/// - queued until a step is committed, and once it ended, how it ended;
+/// - `waiting` while it is quarantined, for its release;
+/// - `running` while a step is in progress (`stepping`: a trigger in its inbox, or its
+///   activation running), or while a call Rewind makes itself (to an MCP server, an API or
+///   `http`) is in flight or backing off;
+/// - `waiting` otherwise: on a signal, a timer, a harness action, an approval, a deferred answer
+///   or a parked call. An active run with nothing to wait for is still Rewind's: `running`.
+pub fn status_of(phase: RunPhase, waits: &[Wait], quarantined: bool, stepping: bool) -> RunStatus {
+    if let Some(status) = phase.status() {
+        return status;
+    }
+    if quarantined {
+        return RunStatus::Waiting;
+    }
+    let ours = waits.iter().any(|wait| wait.waiting_for().is_none());
+    if stepping || ours || waits.is_empty() {
+        RunStatus::Running
+    } else {
+        RunStatus::Waiting
     }
 }
 
@@ -81,7 +116,7 @@ pub enum WaitKind {
 pub enum WaitingFor {
     Signal,
     Timer,
-    Call,
+    /// A harness action's call, ready or claimed.
     Harness,
     /// A call under the `approval` policy, not approved yet.
     Approval,
@@ -89,29 +124,36 @@ pub enum WaitingFor {
     Parked,
     /// A harness action's call whose handler answers later.
     Deferred,
+    /// The run is quarantined, until it is released, retried by a new build or given up.
+    Quarantined,
 }
 
 impl WaitingFor {
     pub const ALL: [WaitingFor; 7] = [
         WaitingFor::Signal,
         WaitingFor::Timer,
-        WaitingFor::Call,
         WaitingFor::Harness,
         WaitingFor::Approval,
-        WaitingFor::Parked,
         WaitingFor::Deferred,
+        WaitingFor::Parked,
+        WaitingFor::Quarantined,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             WaitingFor::Signal => "signal",
             WaitingFor::Timer => "timer",
-            WaitingFor::Call => "call",
             WaitingFor::Harness => "harness",
             WaitingFor::Approval => "approval",
             WaitingFor::Parked => "parked",
             WaitingFor::Deferred => "deferred",
+            WaitingFor::Quarantined => "quarantined",
         }
+    }
+
+    /// The kind named `name`, as [`as_str`](Self::as_str) writes it.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }
 }
 
@@ -176,7 +218,8 @@ pub struct RunSummary {
     pub code: Digest,
     pub headline: String,
     pub action_set: Digest,
-    /// `pending` until its first activation commits, then `active` until a terminal event.
+    /// `queued` until its first activation commits, then `running` or `waiting` as its owner
+    /// computes it, until it ends.
     pub status: RunStatus,
     pub mode: Option<RunMode>,
     pub labels: BTreeMap<String, String>,
@@ -206,6 +249,20 @@ pub struct RunSummary {
 }
 
 impl RunSummary {
+    /// What the run waits for while it is `waiting`: its waits' kinds, and its quarantine. Empty
+    /// otherwise.
+    pub fn waiting_for(&self) -> BTreeSet<WaitingFor> {
+        if self.status != RunStatus::Waiting {
+            return BTreeSet::new();
+        }
+        let mut kinds: BTreeSet<WaitingFor> =
+            self.waits.iter().filter_map(Wait::waiting_for).collect();
+        if self.quarantine.is_some() {
+            kinds.insert(WaitingFor::Quarantined);
+        }
+        kinds
+    }
+
     /// The run's handle, `<namespace>/<origin>/<suffix>`.
     pub fn handle(&self) -> rewind_core::RunHandle {
         rewind_core::RunHandle::new(
@@ -308,8 +365,7 @@ pub enum Predicate {
         names: BTreeSet<String>,
         kinds: BTreeSet<ActionFailureKind>,
     },
-    /// The run waits (status `active`, at least one wait) for one of these; empty: for
-    /// anything.
+    /// The run is `waiting`, for one of these; empty: for anything.
     Waiting(BTreeSet<WaitingFor>),
     /// The run waits for a signal whose name one of these matches.
     Signal(Vec<TextMatch>),
@@ -331,8 +387,6 @@ pub enum Predicate {
     StartedBy(RunId),
     /// The run's ending has one of these fingerprints.
     Fingerprint(Vec<String>),
-    /// The run is quarantined.
-    Quarantined,
     Mode(Vec<RunMode>),
     /// Lowercase; found, case-insensitively, in the ending's message or error, the headline, a
     /// label's value or the run's id.
@@ -433,4 +487,88 @@ pub struct Latency {
     pub p95_ms: u64,
     pub p99_ms: u64,
     pub max_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wait(kind: WaitKind, task: Option<TaskPhase>) -> Wait {
+        Wait {
+            kind,
+            seq: Some(Seq(1)),
+            name: Some("x".into()),
+            since: Timestamp(0),
+            until: None,
+            callsite: None,
+            task,
+        }
+    }
+
+    #[test]
+    fn the_status_tells_what_rewind_does_from_what_the_outside_world_must_do() {
+        let active = RunPhase::Active;
+        let signal = wait(WaitKind::Signal, None);
+        let timer = wait(WaitKind::Timer, None);
+        let mcp = |task| wait(WaitKind::Call, task);
+        let harness = |task| wait(WaitKind::Harness, task);
+        assert_eq!(
+            status_of(RunPhase::Queued, &[], false, true),
+            RunStatus::Queued
+        );
+        assert_eq!(
+            status_of(RunPhase::Failed, &[], true, true),
+            RunStatus::Failed,
+            "an ended run's phase is its status"
+        );
+        // Waiting on the outside world, a timer included.
+        for waits in [
+            vec![signal.clone()],
+            vec![timer.clone()],
+            vec![harness(Some(TaskPhase::Ready))],
+            vec![harness(Some(TaskPhase::Claimed))],
+            vec![harness(Some(TaskPhase::Deferred))],
+            vec![mcp(Some(TaskPhase::Approval))],
+            vec![mcp(Some(TaskPhase::Parked)), signal.clone()],
+        ] {
+            assert_eq!(
+                status_of(active, &waits, false, false),
+                RunStatus::Waiting,
+                "{waits:?}"
+            );
+        }
+        // A call Rewind makes itself, in flight or backing off, or a step in progress.
+        for (waits, stepping) in [
+            (vec![mcp(Some(TaskPhase::Ready))], false),
+            (vec![mcp(Some(TaskPhase::Claimed)), signal.clone()], false),
+            (vec![mcp(None)], false),
+            (vec![signal.clone()], true),
+            (vec![], false),
+        ] {
+            assert_eq!(
+                status_of(active, &waits, false, stepping),
+                RunStatus::Running,
+                "{waits:?} {stepping}"
+            );
+        }
+        assert_eq!(
+            status_of(active, &[mcp(Some(TaskPhase::Ready))], true, true),
+            RunStatus::Waiting,
+            "a quarantined run waits for its release"
+        );
+    }
+
+    #[test]
+    fn a_waiting_run_waits_for_its_kinds_and_its_quarantine() {
+        let mcp = wait(WaitKind::Call, Some(TaskPhase::Ready));
+        assert_eq!(mcp.waiting_for(), None, "Rewind's own call is not a wait");
+        assert_eq!(
+            wait(WaitKind::Harness, Some(TaskPhase::Claimed)).waiting_for(),
+            Some(WaitingFor::Harness)
+        );
+        for kind in WaitingFor::ALL {
+            assert_eq!(WaitingFor::parse(kind.as_str()), Some(kind));
+        }
+        assert_eq!(WaitingFor::parse("call"), None);
+    }
 }

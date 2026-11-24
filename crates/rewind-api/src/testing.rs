@@ -149,8 +149,9 @@ pub struct TestSignal {
     pub name: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub payload: Value,
-    /// When it is sent: `"blocked"` (the default) once the run can go no further without the
-    /// outside world; or a duration of virtual time after the start, such as `"2h"`.
+    /// When it is sent: `"waiting"` (the default) once the run waits for something other than a
+    /// timer, which virtual time moves by itself; or a duration of virtual time after the start,
+    /// such as `"2h"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
 }
@@ -159,7 +160,8 @@ pub struct TestSignal {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Expectations {
-    /// `active` for a run that can go no further in virtual time without the outside world.
+    /// `completed`, `failed`, `cancelled`, `aborted`, or `waiting` for a run that can go no
+    /// further in virtual time without the outside world.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<RunStatus>,
     /// The output contains these values (objects are compared key by key, recursively).
@@ -343,14 +345,14 @@ impl Test {
             .into_iter()
             .map(|signal| {
                 let when = match signal.when.as_deref() {
-                    None | Some("blocked") => rewind_core::SignalWhen::Blocked,
+                    None | Some("waiting") => rewind_core::SignalWhen::Waiting,
                     Some(after) => rewind_core::SignalWhen::After(
                         after
                             .parse::<crate::common::Duration>()
                             .map(Duration::from)
                             .map_err(|_| {
                                 format!(
-                                    "test {name:?}: signal {}: `when` is \"blocked\" or a \
+                                    "test {name:?}: signal {}: `when` is \"waiting\" or a \
                                      duration such as \"2h\", not {after:?}",
                                     signal.name
                                 )
@@ -428,7 +430,7 @@ impl Test {
                     name: signal.name.clone(),
                     payload: signal.payload.clone(),
                     when: match signal.when {
-                        rewind_core::SignalWhen::Blocked => None,
+                        rewind_core::SignalWhen::Waiting => None,
                         rewind_core::SignalWhen::After(after) => {
                             Some(crate::common::Duration::from(after).to_string())
                         }

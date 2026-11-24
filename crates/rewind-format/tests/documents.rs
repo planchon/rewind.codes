@@ -760,7 +760,7 @@ fn test_document() -> Test {
             TestSignal {
                 name: "approval".into(),
                 payload: json!({ "close": true }),
-                when: SignalWhen::Blocked,
+                when: SignalWhen::Waiting,
             },
             TestSignal {
                 name: "pr merged".into(),
@@ -835,7 +835,7 @@ fn a_test_is_written_one_way() {
     // A single rule without its array, the default `when`, `order` and input: the same test,
     // written back in one way.
     let given = r#"{"v":1,"name":"t","input":{},"world":{"actions":{"a.b":{"returns":1}}},
-        "signals":[{"name":"go","when":"blocked"}],"expect":{"order":"any"}}"#;
+        "signals":[{"name":"go","when":"waiting"}],"expect":{"order":"any"}}"#;
     let decoded = decode_test(given).unwrap();
     assert_eq!(
         encode_test(&decoded),
@@ -864,7 +864,8 @@ fn rejects_tests_v1_does_not_define() {
         r#"{"v":1,"name":"t","signals":[{"name":"rewind:ended:x"}]}"#,
         r#"{"v":1,"name":"t","signals":[{"name":"go","when":"soon"}]}"#,
         r#"{"v":1,"name":"t","seed":"ABC"}"#,
-        r#"{"v":1,"name":"t","expect":{"status":"waiting"}}"#,
+        r#"{"v":1,"name":"t","expect":{"status":"active"}}"#,
+        r#"{"v":1,"name":"t","signals":[{"name":"go","when":"blocked"}]}"#,
         r#"{"v":1,"name":"t","expect":{"order":"sorted"}}"#,
     ];
     for document in invalid {

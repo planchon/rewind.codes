@@ -464,7 +464,7 @@ async fn users(app: &App, caller: &Caller, id: &SecretId) -> Result<SecretUsers,
     let mut query = crate::http::search::run_query(caller, None, None, app.now())?;
     query.terms.push(Term {
         negated: false,
-        predicate: Predicate::Status([RunStatus::Active].into()),
+        predicate: Predicate::Status(RunStatus::ACTIVE.into()),
     });
     let scope = match &id.namespace {
         SecretNamespace::Namespace(namespace) => Scope::Namespace {
@@ -507,7 +507,7 @@ async fn users(app: &App, caller: &Caller, id: &SecretId) -> Result<SecretUsers,
         let parked = summary
             .waits
             .iter()
-            .any(|wait| wait.waiting_for() == WaitingFor::Parked);
+            .any(|wait| wait.waiting_for() == Some(WaitingFor::Parked));
         if parked {
             users.waiting.push(summary.run.clone());
         }

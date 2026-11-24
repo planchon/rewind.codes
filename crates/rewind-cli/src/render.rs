@@ -71,7 +71,7 @@ pub(crate) fn run(run: &Run) -> String {
                 let _ = writeln!(text, "aborted ({}): {}", snake_case(&kind), abort.message);
             }
         }
-        RunStatus::Pending | RunStatus::Active => {
+        RunStatus::Queued | RunStatus::Running | RunStatus::Waiting => {
             if !run.waiting_for.is_empty() {
                 text.push_str("waiting for:\n");
                 for waiting in &run.waiting_for {
@@ -133,6 +133,12 @@ fn waiting(waiting: &Waiting) -> String {
                 let _ = write!(text, " ({callsite})");
             }
             text
+        }
+        Waiting::Quarantined { cause, since } => {
+            format!(
+                "its release from quarantine ({}), since {since}",
+                snake_case(&format!("{cause:?}"))
+            )
         }
     }
 }
@@ -328,7 +334,7 @@ mod tests {
             id: "r1".into(),
             handle: "local/script/06bqx3k9f2mt".into(),
             namespace: "local".parse().unwrap(),
-            status: RunStatus::Active,
+            status: RunStatus::Waiting,
             quarantine: None,
             code_digest: "s".into(),
             action_set: "t".into(),
@@ -364,7 +370,7 @@ mod tests {
         let text = run(&active_run());
         assert_eq!(
             text,
-            "run local/script/06bqx3k9f2mt active\nwaiting for:\n  - signal \"approval\" (workflow.ts:4:9)\n"
+            "run local/script/06bqx3k9f2mt waiting\nwaiting for:\n  - signal \"approval\" (workflow.ts:4:9)\n"
         );
     }
 

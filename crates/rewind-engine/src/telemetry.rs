@@ -823,7 +823,7 @@ mod tests {
             suffix_len: 12,
             code: Digest::of(b"s"),
             action_set: Digest::of(b"t"),
-            status: rewind_core::RunStatus::Active,
+            status: rewind_core::RunStatus::Waiting,
             epoch: rewind_core::Epoch(1),
             attempt: crate::ports::Attempt::FIRST,
             sealed: None,

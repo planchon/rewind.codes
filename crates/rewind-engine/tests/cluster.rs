@@ -249,7 +249,11 @@ async fn a_lost_message_is_rebuilt_from_the_records_when_the_partition_moves() {
         world.plane.dispatcher.calls().is_empty(),
         "the call waits for a grant it lost"
     );
-    assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
+    assert_eq!(
+        world.view(&run).await.head.status,
+        RunStatus::Running,
+        "a call Rewind makes itself, waiting for its slot, keeps the run running"
+    );
 
     // Nothing asks again: the call goes once the partition's next owner rebuilds it from the
     // records, as an interrupted call, delivery + 1.
@@ -366,7 +370,7 @@ async fn an_owner_cut_off_is_fenced_at_its_next_commit() {
     );
     assert_eq!(
         world.view(&run).await.head.status,
-        RunStatus::Active,
+        RunStatus::Waiting,
         "nothing of it is visible"
     );
 

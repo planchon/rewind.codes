@@ -17,7 +17,7 @@ use rewind_core::{ActionFailureKind, RunId, RunStatus, Shape, Timestamp, Workflo
 use super::run::RunHead;
 use super::search::IndexedSummary;
 use crate::ports::namespaces::{Day, Month, NamespaceName};
-use crate::ports::read_model::{Latency, Wait, WaitingFor};
+use crate::ports::read_model::{Latency, WaitingFor};
 use crate::ports::tenancy::TenantId;
 
 const HOUR_MS: u64 = 3_600_000;
@@ -460,9 +460,12 @@ pub enum CounterDelta {
 /// What holds now among the runs of a scope. Kinds and workflows with nothing are left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Gauges {
-    /// Runs that have not ended (pending or active): what `activeRuns` counts.
+    /// Runs that have not ended (queued, running or waiting): what `activeRuns` counts.
     pub active_runs: u64,
-    /// Active runs by what they wait for; a run waiting for several kinds counts once in each.
+    /// Active runs by status: queued, running, waiting.
+    pub statuses: BTreeMap<RunStatus, u64>,
+    /// Waiting runs by what they wait for, their quarantine included; a run waiting for several
+    /// kinds counts once in each.
     pub waiting: BTreeMap<WaitingFor, u64>,
     /// Runs quarantined that have not ended.
     pub quarantined: u64,
@@ -481,19 +484,12 @@ impl Gauges {
             return;
         }
         self.active_runs += 1;
+        *self.statuses.entry(head.status).or_default() += 1;
         if head.quarantine.is_some() {
             self.quarantined += 1;
         }
         let waiting: BTreeSet<WaitingFor> = summary
-            .filter(|indexed| indexed.summary.status == RunStatus::Active)
-            .map(|indexed| {
-                indexed
-                    .summary
-                    .waits
-                    .iter()
-                    .map(Wait::waiting_for)
-                    .collect()
-            })
+            .map(|indexed| indexed.summary.waiting_for())
             .unwrap_or_default();
         for kind in waiting {
             *self.waiting.entry(kind).or_default() += 1;
@@ -502,9 +498,15 @@ impl Gauges {
 
     pub fn add(&mut self, other: &Gauges) {
         self.active_runs += other.active_runs;
+        add_counts(&mut self.statuses, &other.statuses);
         add_counts(&mut self.waiting, &other.waiting);
         self.quarantined += other.quarantined;
         add_counts(&mut self.workflows, &other.workflows);
+    }
+
+    /// The active runs with `status`.
+    pub fn with_status(&self, status: RunStatus) -> u64 {
+        self.statuses.get(&status).copied().unwrap_or(0)
     }
 
     /// The runs waiting for `kind`.

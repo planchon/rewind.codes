@@ -396,7 +396,7 @@ async fn a_parent_that_ends_cancels_its_attached_children_not_its_detached_ones(
 
     assert_eq!(status(&mut world, &detached).await, RunStatus::Failed);
     let independent = child_of(&mut world, &detached).await;
-    assert_eq!(status(&mut world, &independent).await, RunStatus::Active);
+    assert_eq!(status(&mut world, &independent).await, RunStatus::Waiting);
     // Its end goes nowhere: its parent has ended.
     world
         .signal(&independent, "approval", json!({ "close": false }), None)
@@ -694,7 +694,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_allowed_labels()
         "{outcomes:?}"
     );
     assert_eq!(status(&mut world, &visible).await, RunStatus::Completed);
-    assert_eq!(status(&mut world, &hidden).await, RunStatus::Active);
+    assert_eq!(status(&mut world, &hidden).await, RunStatus::Waiting);
 
     // A start may add labels, never contradict the scope.
     let mut conflicting = StartRun::new(
@@ -770,7 +770,7 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
             .is_some_and(|message| message.contains("is visible to this run")),
         "{failed:?}"
     );
-    assert_eq!(status(&mut world, &bobs).await, RunStatus::Active);
+    assert_eq!(status(&mut world, &bobs).await, RunStatus::Waiting);
 
     // Bob's own code reaches it.
     let own = world.run(signal(&bob)).await;
@@ -829,7 +829,7 @@ async fn a_fork_receives_the_end_of_the_runs_its_copied_history_started() {
         .await;
     assert_eq!(status(&mut world, &parent).await, RunStatus::Failed);
     let child = child_of(&mut world, &parent).await;
-    assert_eq!(status(&mut world, &child).await, RunStatus::Active);
+    assert_eq!(status(&mut world, &child).await, RunStatus::Waiting);
 
     // The fork follows the start, then signals the child and waits for its end, as `parent`
     // does when it does not give up.

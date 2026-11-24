@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 
 use rewind_core::{
     ActionRoute, ActionSet, Annotation, Callsite, Command, ErrorInfo, Event, HistoryEvent,
-    Lifecycle, RunState, RunStatus, Seq, Timestamp,
+    Lifecycle, RunPhase, RunState, RunStatus, Seq, Timestamp,
 };
 
 use crate::failures;
@@ -123,7 +123,7 @@ pub fn headline(source: &str) -> String {
         .to_owned()
 }
 
-/// The snapshot of a run, folded from its history (see the [module](self)): its status and
+/// The snapshot of a run, folded from its history (see the [module](self)): its phase and
 /// mode, what it waits for while active, and how it ended. The pinned action set tells the calls
 /// of harness actions from the calls Rewind sends; without it, every call is a `call`. A history
 /// that cannot be folded past an event gives the snapshot of the events before it.
@@ -138,14 +138,14 @@ pub fn run_snapshot(history: &[HistoryEvent], action_set: Option<&ActionSet>) ->
     let folded = &history[..usize::try_from(state.history_len())
         .unwrap_or(usize::MAX)
         .min(history.len())];
-    let waits = if state.status() == RunStatus::Active {
+    let waits = if state.phase() == RunPhase::Active {
         waits(folded, &state, action_set)
     } else {
         Vec::new()
     };
     RunSnapshot {
         history_len: state.history_len(),
-        status: state.status(),
+        phase: state.phase(),
         mode: state.mode(),
         waits,
         ending: state.outcome().and_then(failures::ending),

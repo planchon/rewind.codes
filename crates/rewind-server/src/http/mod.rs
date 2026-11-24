@@ -307,8 +307,9 @@ pub(crate) fn refuse_nul_in_filter(what: &str, text: &str) -> Result<(), ApiErro
 pub(crate) fn runs_status(status: rewind_api::common::RunStatus) -> rewind_core::RunStatus {
     use rewind_api::common::RunStatus as Api;
     match status {
-        Api::Pending => rewind_core::RunStatus::Pending,
-        Api::Active => rewind_core::RunStatus::Active,
+        Api::Queued => rewind_core::RunStatus::Queued,
+        Api::Running => rewind_core::RunStatus::Running,
+        Api::Waiting => rewind_core::RunStatus::Waiting,
         Api::Completed => rewind_core::RunStatus::Completed,
         Api::Failed => rewind_core::RunStatus::Failed,
         Api::Cancelled => rewind_core::RunStatus::Cancelled,

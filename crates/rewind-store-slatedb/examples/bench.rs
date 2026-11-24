@@ -268,7 +268,7 @@ impl Runs {
                 suffix_len: 12,
                 code: Digest::of(b"script"),
                 action_set: Digest::of(b"action_set"),
-                status: RunStatus::Pending,
+                status: RunStatus::Queued,
                 epoch: Epoch(1),
                 attempt: Attempt::FIRST,
                 sealed: None,
@@ -299,7 +299,7 @@ impl Runs {
                     code: Digest::of(b"script"),
                     headline: "export default async ({ issue }) => {".into(),
                     action_set: Digest::of(b"action_set"),
-                    status: RunStatus::Pending,
+                    status: RunStatus::Queued,
                     mode: Some(RunMode::Live),
                     labels: BTreeMap::from([("agent".into(), "triage".into())]),
                     source: None,
@@ -465,7 +465,7 @@ impl Runs {
             token_hash: None,
         };
         let mut head = self.heads[n].clone();
-        head.status = RunStatus::Active;
+        head.status = RunStatus::Waiting;
         head.updated_at = at;
         head.history_len = len + events.len() as u64;
         head.waits = vec![Wait {
@@ -478,7 +478,7 @@ impl Runs {
             task: None,
         }];
         let mut summary = self.summaries[n].clone();
-        summary.summary.status = RunStatus::Active;
+        summary.summary.status = RunStatus::Waiting;
         summary.summary.started_at.get_or_insert(at);
         summary.summary.last_activity_at = at;
         summary.summary.calls += 1;

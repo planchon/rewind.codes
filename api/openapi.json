@@ -2759,7 +2759,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/RunStatus",
-                "description": "`active` for a run that can go no further in virtual time without the outside world."
+                "description": "`completed`, `failed`, `cancelled`, `aborted`, or `waiting` for a run that can go no\nfurther in virtual time without the outside world."
               },
               {
                 "type": "null"
@@ -5678,7 +5678,7 @@
             "type": "string"
           },
           "waitingFor": {
-            "description": "With `active`: what the run waits for.",
+            "description": "With `waiting`: what the run waits for.",
             "items": {
               "$ref": "#/components/schemas/Waiting"
             },
@@ -5715,7 +5715,7 @@
         "type": "object"
       },
       "RunCounts": {
-        "description": "A number of runs per status.",
+        "description": "A number of runs per status, from the hourly counters: those started and not ended are\nactive (queued, running or waiting), the others by how they ended.",
         "properties": {
           "aborted": {
             "format": "int64",
@@ -5741,15 +5741,9 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
-          },
-          "pending": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
-          "pending",
           "active",
           "completed",
           "failed",
@@ -5859,10 +5853,11 @@
         "type": "object"
       },
       "RunStatus": {
-        "description": "The status of a run, a function of its history (`archi/02-history.md`, \"Run state\").\nQuarantine is not a status: see `Run.quarantine`.",
+        "description": "The status of a run (`archi/02-history.md`, \"Run state\"): queued, running or waiting while\nit is active, then how it ended. A quarantined run is `waiting`, for its quarantine.",
         "enum": [
-          "pending",
-          "active",
+          "queued",
+          "running",
+          "waiting",
           "completed",
           "failed",
           "cancelled",
@@ -5975,14 +5970,14 @@
             "$ref": "#/components/schemas/RunStatus"
           },
           "waitingFor": {
-            "description": "With `active`: what the run waits for.",
+            "description": "With `waiting`: what the run waits for.",
             "items": {
               "$ref": "#/components/schemas/RunWait"
             },
             "type": "array"
           },
           "wakesAt": {
-            "description": "With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.",
+            "description": "While it is active: when the run wakes by itself, if a timer or a signal's timeout wakes\nit.",
             "format": "date-time",
             "type": [
               "string",
@@ -6853,13 +6848,9 @@
         "type": "object"
       },
       "StatusCounts": {
+        "description": "The runs by status: the active ones now (queued, running, waiting), from the gauges, and the\nended ones of the window, from the counters.",
         "properties": {
           "aborted": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "active": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -6879,15 +6870,26 @@
             "minimum": 0,
             "type": "integer"
           },
-          "pending": {
+          "queued": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "waiting": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "pending",
-          "active",
+          "queued",
+          "running",
+          "waiting",
           "completed",
           "failed",
           "cancelled",
@@ -7450,7 +7452,7 @@
           },
           "payload": {},
           "when": {
-            "description": "When it is sent: `\"blocked\"` (the default) once the run can go no further without the\noutside world; or a duration of virtual time after the start, such as `\"2h\"`.",
+            "description": "When it is sent: `\"waiting\"` (the default) once the run waits for something other than a\ntimer, which virtual time moves by itself; or a duration of virtual time after the start,\nsuch as `\"2h\"`.",
             "type": [
               "string",
               "null"
@@ -7736,11 +7738,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "call": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "deferred": {
             "format": "int64",
             "minimum": 0,
@@ -7752,6 +7749,11 @@
             "type": "integer"
           },
           "parked": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quarantined": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -7770,11 +7772,11 @@
         "required": [
           "signal",
           "timer",
-          "call",
           "harness",
           "approval",
+          "deferred",
           "parked",
-          "deferred"
+          "quarantined"
         ],
         "type": "object"
       },
@@ -7783,19 +7785,19 @@
         "enum": [
           "signal",
           "timer",
-          "call",
           "harness",
           "approval",
           "parked",
-          "deferred"
+          "deferred",
+          "quarantined"
         ],
         "type": "string"
       },
       "Waiting": {
-        "description": "Something an active run waits for.",
+        "description": "Something a waiting run waits for.",
         "oneOf": [
           {
-            "description": "A call in flight, and its state.",
+            "description": "A call, and its state: `ready` or `claimed` for a harness action, `approval`, `deferred`\nor `parked`.",
             "properties": {
               "action": {
                 "type": "string"
@@ -7930,6 +7932,31 @@
             },
             "required": [
               "name",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The run is quarantined: it waits to be released, retried by a new build or given up\n(`Run.quarantine` says why).",
+            "properties": {
+              "cause": {
+                "$ref": "#/components/schemas/QuarantineCause"
+              },
+              "kind": {
+                "enum": [
+                  "quarantined"
+                ],
+                "type": "string"
+              },
+              "since": {
+                "description": "When it was quarantined.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "cause",
+              "since",
               "kind"
             ],
             "type": "object"
@@ -16348,10 +16375,11 @@
             "name": "status",
             "required": false,
             "schema": {
-              "description": "The status of a run, a function of its history (`archi/02-history.md`, \"Run state\").\nQuarantine is not a status: see `Run.quarantine`.",
+              "description": "The status of a run (`archi/02-history.md`, \"Run state\"): queued, running or waiting while\nit is active, then how it ended. A quarantined run is `waiting`, for its quarantine.",
               "enum": [
-                "pending",
-                "active",
+                "queued",
+                "running",
+                "waiting",
                 "completed",
                 "failed",
                 "cancelled",
@@ -16391,7 +16419,7 @@
             }
           },
           {
-            "description": "Only quarantined runs, or only runs that are not.",
+            "description": "Only quarantined runs (`waiting:quarantined`), or only runs that are not.",
             "in": "query",
             "name": "quarantined",
             "required": false,

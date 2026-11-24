@@ -512,7 +512,10 @@ export default async function main() {
     harness.world.advance_to(Timestamp(T0.0 + HOUR));
     harness.world.settle().await;
     let waiting = harness.get(&id).await;
-    assert_eq!(waiting.state.status(), RunStatus::Active);
+    assert_eq!(
+        RunStatus::at_rest(waiting.state.phase()),
+        RunStatus::Waiting
+    );
     assert_eq!(waiting.state.awaited_signals()[0].name, "comment");
 
     harness.world.advance_to(Timestamp(T0.0 + 2 * HOUR));
@@ -736,7 +739,7 @@ export default async function main() {
         error.stack.as_deref().unwrap().contains("workflow.ts:10"),
         "{error:?}"
     );
-    assert_eq!(run.state.status(), RunStatus::Failed);
+    assert_eq!(RunStatus::at_rest(run.state.phase()), RunStatus::Failed);
     harness.assert_replays(&run).await;
 }
 
@@ -834,7 +837,10 @@ export default async function main() { await slow({}); }
         &json!("cleaned up after: run cancelled: user asked")
     );
     let blunt = harness.get(&blunt).await;
-    assert_eq!(blunt.state.status(), RunStatus::Cancelled);
+    assert_eq!(
+        RunStatus::at_rest(blunt.state.phase()),
+        RunStatus::Cancelled
+    );
     assert_eq!(blunt.error().name, "CancelledError");
     assert_eq!(
         blunt.events(),
@@ -946,7 +952,10 @@ async fn nothing_left_to_wake_the_script_is_a_deadlock() {
             json!({}),
         )
         .await;
-    assert_eq!(waiting.state.status(), RunStatus::Active);
+    assert_eq!(
+        RunStatus::at_rest(waiting.state.phase()),
+        RunStatus::Waiting
+    );
 }
 
 #[tokio::test]
@@ -1008,7 +1017,7 @@ export default async function main() {
         .await;
     // The action answers first in virtual time here; either way the call has an outcome.
     let state = &run.state;
-    assert_eq!(state.status(), RunStatus::Completed);
+    assert_eq!(RunStatus::at_rest(state.phase()), RunStatus::Completed);
     assert!(run.events().contains(&"call_completed"));
 }
 
@@ -1672,7 +1681,7 @@ async fn cancelling_a_wait_built_on_set_timeout_ends_the_run_cancelled() {
     harness.world.cancel(&id, Some("user asked")).await.unwrap();
     harness.drive().await;
     let run = harness.get(&id).await;
-    assert_eq!(run.state.status(), RunStatus::Cancelled);
+    assert_eq!(RunStatus::at_rest(run.state.phase()), RunStatus::Cancelled);
     let error = run.error();
     assert_eq!(
         (error.name.as_str(), error.message.as_str()),

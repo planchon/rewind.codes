@@ -429,7 +429,7 @@ where
     let mut idle = true;
     for (name, payload, when) in signals {
         let driven = match when {
-            SignalWhen::Blocked => world.driver.run_until_idle_virtual().await,
+            SignalWhen::Waiting => world.driver.run_until_idle_virtual().await,
             SignalWhen::After(after) => world.driver.run_until(start.saturating_add(after)).await,
         };
         idle = drove(driven, &mut failures)?;
@@ -521,7 +521,7 @@ where
         ));
     }
     failures.extend(test.expect.check(&Observed {
-        status: state.status(),
+        status: RunStatus::at_rest(state.phase()),
         output: output.as_ref(),
         error: error.as_ref(),
         abort: abort.as_ref(),
@@ -532,7 +532,7 @@ where
         passed: failures.is_empty(),
         problem: (!failures.is_empty()).then_some(TestProblem::Failed),
         failures,
-        status: Some(state.status()),
+        status: Some(RunStatus::at_rest(state.phase())),
         output,
         error,
         abort,
@@ -743,12 +743,12 @@ mod tests {
         test.signals.push(rewind_core::TestSignal {
             name: "approval".into(),
             payload: json!({}),
-            when: SignalWhen::Blocked,
+            when: SignalWhen::Waiting,
         });
         test.signals.push(rewind_core::TestSignal {
             name: "merged".into(),
             payload: JsonValue::Null,
-            when: SignalWhen::Blocked,
+            when: SignalWhen::Waiting,
         });
         let (problem, reasons) = check_test(&test, &subject).unwrap();
         assert_eq!(problem, TestProblem::Incompatible);

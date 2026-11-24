@@ -439,11 +439,11 @@ pub struct WorkflowSummary {
     pub last_run_at: Option<Timestamp>,
 }
 
-/// A number of runs per status.
+/// A number of runs per status, from the hourly counters: those started and not ended are
+/// active (queued, running or waiting), the others by how they ended.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunCounts {
-    pub pending: u64,
     pub active: u64,
     pub completed: u64,
     pub failed: u64,

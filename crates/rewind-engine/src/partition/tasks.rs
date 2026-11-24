@@ -565,7 +565,9 @@ impl<P: Plane> Owner<P> {
         self.push(unit);
     }
 
-    /// Writes the task as it is now, and the run's summary with its phase.
+    /// Writes the task as it is now, and the run's summary with its phase and the status it
+    /// gives the run: a call Rewind makes that is parked or waits for an approval leaves the run
+    /// waiting, one sent again makes it running.
     fn put_task(&mut self, unit: &mut Unit<P>, record: TaskRecord) {
         let task = record.task.task.clone();
         unit.change(Change::Task {
@@ -583,7 +585,13 @@ impl<P: Plane> Owner<P> {
                 .iter()
                 .map(|(seq, task)| (*seq, derive::phase_of(task)))
                 .collect();
-            let summary = derive::with_phases(summary, &phases);
+            let mut summary = derive::with_phases(summary, &phases);
+            if !slot.head.is_ended() {
+                let stepping = !slot.inbox.is_empty() || slot.busy.is_some();
+                let status = derive::status_now(&summary, slot.head.quarantine.is_some(), stepping);
+                summary.summary.status = status;
+                slot.head.status = status;
+            }
             if Some(&summary) != slot.summary.as_ref() {
                 slot.head.waits = summary.summary.waits.clone();
                 slot.summary = Some(summary.clone());

@@ -117,7 +117,7 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
     if let Some(quarantined) = filter.quarantined {
         terms.push(Term {
             negated: !quarantined,
-            predicate: Predicate::Quarantined,
+            predicate: Predicate::Waiting([WaitingFor::Quarantined].into()),
         });
     }
     Ok(terms)
@@ -125,7 +125,7 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
 
 /// One term of a query, with `now` resolved.
 fn term(term: query::Term, now: jiff::Timestamp) -> Term {
-    let mut negated = term.negated;
+    let negated = term.negated;
     let predicate = match term.filter {
         Filter::Namespace(names) => Predicate::Namespace(
             names
@@ -163,10 +163,6 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
             Err(_) => Predicate::Id(vec![run]),
         },
         Filter::Fingerprint(fingerprints) => Predicate::Fingerprint(fingerprints),
-        Filter::Quarantined(quarantined) => {
-            negated ^= !quarantined;
-            Predicate::Quarantined
-        }
         Filter::Mode(modes) => Predicate::Mode(
             modes
                 .into_iter()
@@ -233,36 +229,28 @@ pub(crate) fn waiting_for(kind: WaitKind) -> WaitingFor {
     match kind {
         WaitKind::Signal => WaitingFor::Signal,
         WaitKind::Timer => WaitingFor::Timer,
-        WaitKind::Call => WaitingFor::Call,
         WaitKind::Harness => WaitingFor::Harness,
         WaitKind::Approval => WaitingFor::Approval,
         WaitKind::Parked => WaitingFor::Parked,
         WaitKind::Deferred => WaitingFor::Deferred,
+        WaitKind::Quarantined => WaitingFor::Quarantined,
     }
 }
 
 /// What a run waits for, as the query language names it.
 pub(crate) fn wait_name(waiting: WaitingFor) -> &'static str {
-    match waiting {
-        WaitingFor::Signal => "signal",
-        WaitingFor::Timer => "timer",
-        WaitingFor::Call => "call",
-        WaitingFor::Harness => "harness",
-        WaitingFor::Approval => "approval",
-        WaitingFor::Parked => "parked",
-        WaitingFor::Deferred => "deferred",
-    }
+    waiting.as_str()
 }
 
 fn wait_kind(waiting: WaitingFor) -> WaitKind {
     match waiting {
         WaitingFor::Signal => WaitKind::Signal,
         WaitingFor::Timer => WaitKind::Timer,
-        WaitingFor::Call => WaitKind::Call,
         WaitingFor::Harness => WaitKind::Harness,
         WaitingFor::Approval => WaitKind::Approval,
         WaitingFor::Parked => WaitKind::Parked,
         WaitingFor::Deferred => WaitKind::Deferred,
+        WaitingFor::Quarantined => WaitKind::Quarantined,
     }
 }
 
@@ -357,23 +345,45 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
         error_message: ending.map(|ending| ending.message.clone()),
         error_line: ending.and_then(|ending| ending.line),
         fingerprint: ending.map(|ending| ending.fingerprint.clone()),
-        waiting_for: run
-            .waits
-            .iter()
-            .map(|wait| RunWait {
-                kind: wait_kind(wait.waiting_for()),
+        waiting_for: run_waits(run),
+        wakes_at: run.wakes_at.map(timestamp),
+        source: run.source.map(|parent| parent.to_string()),
+        workflow: run.workflow.as_ref().map(crate::views::run_workflow),
+        started_by: run.started_by.map(|run| run.to_string()),
+    }
+}
+
+/// What a waiting run waits for, as a list shows it: its waits from the outside world, then its
+/// quarantine. Empty unless the run is `waiting`.
+fn run_waits(run: &ports::RunSummary) -> Vec<RunWait> {
+    if run.status != rewind_core::RunStatus::Waiting {
+        return Vec::new();
+    }
+    let mut waits: Vec<RunWait> = run
+        .waits
+        .iter()
+        .filter_map(|wait| {
+            Some(RunWait {
+                kind: wait_kind(wait.waiting_for()?),
                 seq: wait.seq.map(|seq| seq.0),
                 name: wait.name.clone(),
                 since: timestamp(wait.since),
                 until: wait.until.map(timestamp),
                 callsite: wait.callsite.map(Callsite::from),
             })
-            .collect(),
-        wakes_at: run.wakes_at.map(timestamp),
-        source: run.source.map(|parent| parent.to_string()),
-        workflow: run.workflow.as_ref().map(crate::views::run_workflow),
-        started_by: run.started_by.map(|run| run.to_string()),
+        })
+        .collect();
+    if let Some(quarantine) = &run.quarantine {
+        waits.push(RunWait {
+            kind: WaitKind::Quarantined,
+            seq: None,
+            name: None,
+            since: timestamp(quarantine.since),
+            until: None,
+            callsite: None,
+        });
     }
+    waits
 }
 
 pub(crate) fn wait_counts<'a>(
@@ -384,11 +394,11 @@ pub(crate) fn wait_counts<'a>(
         let slot = match kind {
             WaitingFor::Signal => &mut counts.signal,
             WaitingFor::Timer => &mut counts.timer,
-            WaitingFor::Call => &mut counts.call,
             WaitingFor::Harness => &mut counts.harness,
             WaitingFor::Approval => &mut counts.approval,
             WaitingFor::Parked => &mut counts.parked,
             WaitingFor::Deferred => &mut counts.deferred,
+            WaitingFor::Quarantined => &mut counts.quarantined,
         };
         *slot += count;
     }
@@ -437,15 +447,30 @@ mod tests {
     }
 
     #[test]
-    fn quarantined_no_is_the_negation_of_quarantined() {
+    fn a_quarantined_run_is_found_waiting_for_its_quarantine() {
         let now = jiff::Timestamp::UNIX_EPOCH;
-        let parsed = query::parse("quarantined:no -quarantined:no quarantined:yes").unwrap();
-        let negations: Vec<bool> = parsed
+        let parsed =
+            query::parse("waiting:quarantined -waiting:quarantined status:active").unwrap();
+        let terms: Vec<Term> = parsed
             .terms
             .into_iter()
-            .map(|parsed| term(parsed, now).negated)
+            .map(|parsed| term(parsed, now))
             .collect();
-        assert_eq!(negations, vec![true, false, false]);
+        let quarantined = Predicate::Waiting([WaitingFor::Quarantined].into());
+        assert_eq!(
+            terms
+                .iter()
+                .map(|term| (term.negated, term.predicate.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (false, quarantined.clone()),
+                (true, quarantined),
+                (
+                    false,
+                    Predicate::Status(rewind_core::RunStatus::ACTIVE.into())
+                ),
+            ]
+        );
     }
 
     #[test]

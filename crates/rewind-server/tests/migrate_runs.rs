@@ -189,7 +189,7 @@ fn output(run: &rewind_api::runs::Run) -> Value {
 async fn ended(client: &Client, run: &str) -> rewind_api::runs::Run {
     eventually(|| async {
         let found = client.get_run(run, None).await.unwrap();
-        (!matches!(found.status, RunStatus::Pending | RunStatus::Active)).then_some(found)
+        found.status.is_ended().then_some(found)
     })
     .await
 }
@@ -358,12 +358,10 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
         json!({ "url": hook, "merged": true })
     );
 
-    // The quarantined run is not lost: it waits, quarantined or tried again by this build.
+    // The quarantined run is not lost: it waits, quarantined, or runs, tried again by this
+    // build.
     let quarantined = client.get_run(QUARANTINED, None).await.unwrap();
-    assert!(
-        matches!(quarantined.status, RunStatus::Active),
-        "{quarantined:?}"
-    );
+    assert!(quarantined.status.is_active(), "{quarantined:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

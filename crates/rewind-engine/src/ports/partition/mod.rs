@@ -399,9 +399,11 @@ pub enum Change {
         namespace: NamespaceName,
         erased: NamespaceName,
     },
-    /// Writes the run's summary in the index as it is now, outside an activation: what its
-    /// waits' call tasks became (approved, parked, deferred, in flight again). A change to a run
-    /// that does not exist or has been erased is refused, as any other.
+    /// Writes the run's summary in the index as it is now, outside an activation, and the
+    /// status and waits it holds in the run's head unless the run has ended: what its waits'
+    /// call tasks became (approved, parked, deferred, in flight again), the status its owner
+    /// computes (running once a trigger reaches its inbox, waiting once quarantined). A change to
+    /// a run that does not exist or has been erased is refused, as any other.
     Summary {
         run: RunRef,
         summary: Box<IndexedSummary>,

@@ -1600,7 +1600,7 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
         .await;
         assert_eq!(stats.runs, 5);
         assert_eq!(stats.statuses.completed, 1);
-        assert_eq!(stats.statuses.active, 2);
+        assert_eq!(stats.statuses.waiting, 2, "both active runs wait");
         assert_eq!(stats.waiting.signal, 1);
         assert_eq!(stats.waiting.approval, 1);
         assert_eq!(stats.facets.namespaces[0].value, "tests");

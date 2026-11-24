@@ -21,7 +21,7 @@ use crate::common::{Duration, RunMode, RunStatus, Timestamp};
 use crate::namespaces::NamespaceName;
 
 /// The fields of the language, in the order error messages list them.
-pub const FIELDS: [&str; 20] = [
+pub const FIELDS: [&str; 19] = [
     "status",
     "action",
     "error",
@@ -39,7 +39,6 @@ pub const FIELDS: [&str; 20] = [
     "workflow",
     "started_by",
     "fingerprint",
-    "quarantined",
     "mode",
     "namespace",
 ];
@@ -77,12 +76,13 @@ pub enum Filter {
         key: String,
         values: Vec<Pattern>,
     },
+    /// With one of these statuses; `status:active` is the three of a run that has not ended.
     Status(Vec<RunStatus>),
     /// Scheduled a call to an action one of these matches.
     Action(Vec<Pattern>),
     /// A call failed with this kind, or the run ended with this error name or abort kind.
     Error(Vec<String>),
-    /// Waits for one of these; empty (`waiting:*`): for anything.
+    /// `waiting`, for one of these; empty (`waiting:*`): for anything.
     Waiting(Vec<WaitKind>),
     /// Waits for a signal one of these matches.
     Signal(Vec<Pattern>),
@@ -105,7 +105,6 @@ pub enum Filter {
     StartedBy(String),
     /// Lowercase fingerprints of 16 hexadecimal digits.
     Fingerprint(Vec<String>),
-    Quarantined(bool),
     Mode(Vec<RunMode>),
     /// Text, as written: matched case-insensitively.
     Text(String),
@@ -131,9 +130,7 @@ pub enum WaitKind {
     Signal,
     /// A durable timer.
     Timer,
-    /// A call Rewind sends itself.
-    Call,
-    /// A harness action's call, answered by the harness's worker.
+    /// A harness action's call, ready or claimed, answered by the harness's worker.
     Harness,
     /// A call under the `approval` policy, not approved yet.
     Approval,
@@ -141,28 +138,30 @@ pub enum WaitKind {
     Parked,
     /// A harness action's call whose handler answers later.
     Deferred,
+    /// The run is quarantined: it waits to be released, retried by a new build or given up.
+    Quarantined,
 }
 
 impl WaitKind {
     pub const ALL: [WaitKind; 7] = [
         WaitKind::Signal,
         WaitKind::Timer,
-        WaitKind::Call,
         WaitKind::Harness,
         WaitKind::Approval,
-        WaitKind::Parked,
         WaitKind::Deferred,
+        WaitKind::Parked,
+        WaitKind::Quarantined,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             WaitKind::Signal => "signal",
             WaitKind::Timer => "timer",
-            WaitKind::Call => "call",
             WaitKind::Harness => "harness",
             WaitKind::Approval => "approval",
             WaitKind::Parked => "parked",
             WaitKind::Deferred => "deferred",
+            WaitKind::Quarantined => "quarantined",
         }
     }
 }
@@ -369,7 +368,17 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
                 })
                 .collect::<Result<_, _>>()?,
         ),
-        "status" => Filter::Status(enumerated(name, operand, &STATUSES)?),
+        "status" => {
+            let mut statuses: Vec<RunStatus> = Vec::new();
+            for listed in enumerated(name, operand, &STATUSES)? {
+                for status in listed {
+                    if !statuses.contains(status) {
+                        statuses.push(*status);
+                    }
+                }
+            }
+            Filter::Status(statuses)
+        }
         "action" => Filter::Action(patterns(operand)?),
         "signal" => Filter::Signal(patterns(operand)?),
         "error" => Filter::Error(exact(name, operand)?),
@@ -399,33 +408,34 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
             }
             Filter::Fingerprint(values.iter().map(|v| v.to_ascii_lowercase()).collect())
         }
-        "quarantined" => Filter::Quarantined(match operand {
-            "yes" | "true" => true,
-            "no" | "false" => false,
-            other => return Err(format!("quarantined: expected yes or no, not {other:?}")),
-        }),
         "mode" => Filter::Mode(enumerated(name, operand, &MODES)?),
         _ => unreachable!("a field of FIELDS"),
     })
 }
 
-const STATUSES: [(&str, RunStatus); 6] = [
-    ("pending", RunStatus::Pending),
-    ("active", RunStatus::Active),
-    ("completed", RunStatus::Completed),
-    ("failed", RunStatus::Failed),
-    ("cancelled", RunStatus::Cancelled),
-    ("aborted", RunStatus::Aborted),
+/// The statuses, and `active`: the three of a run that has not ended.
+const STATUSES: [(&str, &[RunStatus]); 8] = [
+    ("queued", &[RunStatus::Queued]),
+    ("running", &[RunStatus::Running]),
+    ("waiting", &[RunStatus::Waiting]),
+    ("completed", &[RunStatus::Completed]),
+    ("failed", &[RunStatus::Failed]),
+    ("cancelled", &[RunStatus::Cancelled]),
+    ("aborted", &[RunStatus::Aborted]),
+    (
+        "active",
+        &[RunStatus::Queued, RunStatus::Running, RunStatus::Waiting],
+    ),
 ];
 
 const WAITS: [(&str, WaitKind); 7] = [
     ("signal", WaitKind::Signal),
     ("timer", WaitKind::Timer),
-    ("call", WaitKind::Call),
     ("harness", WaitKind::Harness),
     ("approval", WaitKind::Approval),
-    ("parked", WaitKind::Parked),
     ("deferred", WaitKind::Deferred),
+    ("parked", WaitKind::Parked),
+    ("quarantined", WaitKind::Quarantined),
 ];
 
 const MODES: [(&str, RunMode); 2] = [("live", RunMode::Live), ("test", RunMode::Test)];
@@ -844,13 +854,35 @@ mod tests {
             ]
         );
         assert_eq!(
-            filters("quarantined:yes -quarantined:no mode:test"),
+            filters("waiting:quarantined -status:active mode:test"),
             vec![
-                (false, Filter::Quarantined(true)),
-                (true, Filter::Quarantined(false)),
+                (false, Filter::Waiting(vec![WaitKind::Quarantined])),
+                (
+                    true,
+                    Filter::Status(vec![
+                        RunStatus::Queued,
+                        RunStatus::Running,
+                        RunStatus::Waiting
+                    ])
+                ),
                 (false, Filter::Mode(vec![RunMode::Test])),
             ]
         );
+        assert_eq!(
+            filters("status:waiting,active"),
+            vec![(
+                false,
+                Filter::Status(vec![
+                    RunStatus::Waiting,
+                    RunStatus::Queued,
+                    RunStatus::Running
+                ])
+            )],
+            "a status listed twice counts once"
+        );
+        assert!(parse("quarantined:yes").is_err());
+        assert!(parse("status:pending").is_err());
+        assert!(parse("waiting:call").is_err());
     }
 
     #[test]
@@ -1005,7 +1037,7 @@ mod tests {
         let e = error("status:faild");
         assert!(
             e.message
-                .contains("\"faild\" is not one of pending, active")
+                .contains("\"faild\" is not one of queued, running, waiting, completed")
         );
         let e = error("started:2026-13-45");
         assert!(
@@ -1026,7 +1058,7 @@ mod tests {
         assert!(
             error("waiting:soon")
                 .message
-                .contains("signal, timer, call, harness, approval, parked, deferred")
+                .contains("signal, timer, harness, approval, deferred, parked, quarantined")
         );
         assert!(error("ab\"c\"").message.contains("quote inside a word"));
         assert!(error("ab\"c").message.contains("not closed"));

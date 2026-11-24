@@ -131,7 +131,7 @@ fn decodes_to_the_expected_domain_values() {
         })
     );
     assert_eq!(
-        RunState::from_history(&history).unwrap().status(),
+        RunStatus::at_rest(RunState::from_history(&history).unwrap().phase()),
         RunStatus::Cancelled
     );
 
@@ -143,7 +143,7 @@ fn decodes_to_the_expected_domain_values() {
         })
     );
     assert_eq!(
-        RunState::from_history(&ttl).unwrap().status(),
+        RunStatus::at_rest(RunState::from_history(&ttl).unwrap().phase()),
         RunStatus::Completed
     );
 

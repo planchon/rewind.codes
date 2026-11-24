@@ -282,7 +282,7 @@ async fn work<P: Plane>(
             }
             let state = RunState::from_history(&history).map_err(corrupt)?;
             let mut instance = None;
-            if !history.is_empty() && !state.is_terminal() {
+            if !history.is_empty() && !state.is_ended() {
                 let input = ReplayInput {
                     run: &run,
                     compiled: Ok(&code.compiled),
@@ -360,7 +360,7 @@ async fn work<P: Plane>(
     let mut first_of_fork = false;
     for item in inbox {
         batch.consumed.push(item.id);
-        if batch.state.is_terminal() {
+        if batch.state.is_ended() {
             // A completion for a run that has ended: dropped.
             continue;
         }
@@ -488,7 +488,7 @@ async fn work<P: Plane>(
     )
     .await?;
     let warm = match instance {
-        Some(instance) if !state.is_terminal() => Some(Cached {
+        Some(instance) if !state.is_ended() => Some(Cached {
             instance,
             state,
             history,
@@ -607,7 +607,7 @@ async fn commit<P: Plane, B: BlobStore>(
     let projections =
         derive::projections_of(&next, new, action_set, &all_records, &config.telemetry);
     let measurements = derive::measurements_of(&next, new, &all_records, &config.telemetry);
-    let children = if state.is_terminal() || first_of_fork {
+    let children = if state.is_ended() || first_of_fork {
         derive::children_of(history)
     } else {
         Vec::new()
@@ -696,7 +696,7 @@ where
         Completion::CallFailed { seq, error }
     });
     for completion in followed.reused.into_iter().chain(unknown) {
-        if batch.state.is_terminal() {
+        if batch.state.is_ended() {
             break;
         }
         let recorded_at = batch.recorded_at(clock.now());
@@ -754,7 +754,7 @@ async fn give_up<P: Plane, B: BlobStore>(
     };
     let mut state = RunState::from_history(&history)
         .map_err(|error| EngineError::CorruptHistory { run_id, error })?;
-    if state.is_terminal() {
+    if state.is_ended() {
         return Ok(ActivationResult::Released);
     }
     let now = plane.clock().now();

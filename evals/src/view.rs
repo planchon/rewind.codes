@@ -63,11 +63,8 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     let state = RunState::from_history(&history).map_err(|error| {
         unavailable(format!("the history of run {} is corrupt: {error}", run.id))
     })?;
-    let status = if history.is_empty() {
-        RunStatus::Pending
-    } else {
-        state.status().into()
-    };
+    // The status its owner computed.
+    let status: RunStatus = record.status.into();
     let started = history.first().and_then(|entry| match &entry.event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started),
         _ => None,
@@ -90,7 +87,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
         Some(RunOutcome::Aborted { reason }) => abort = Some(AbortReason::from(reason)),
         None => {}
     }
-    let waiting_for = if state.is_terminal() || history.is_empty() {
+    let waiting_for = if status != RunStatus::Waiting || state.is_ended() || history.is_empty() {
         Vec::new()
     } else {
         waiting(world, run, &history, &state).await?
@@ -313,8 +310,10 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
         waiting_for: run
             .waits
             .iter()
-            .map(|wait| RunWait {
-                kind: wait_kind(wait.waiting_for()),
+            .filter(|_| run.status == rewind_core::RunStatus::Waiting)
+            .filter_map(|wait| Some((wait, wait.waiting_for()?)))
+            .map(|(wait, kind)| RunWait {
+                kind: wait_kind(kind),
                 seq: wait.seq.map(|seq| seq.0),
                 name: wait.name.clone(),
                 since: timestamp(wait.since),
@@ -335,11 +334,11 @@ fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
     match waiting {
         WaitingFor::Signal => WaitKind::Signal,
         WaitingFor::Timer => WaitKind::Timer,
-        WaitingFor::Call => WaitKind::Call,
         WaitingFor::Harness => WaitKind::Harness,
         WaitingFor::Approval => WaitKind::Approval,
         WaitingFor::Parked => WaitKind::Parked,
         WaitingFor::Deferred => WaitKind::Deferred,
+        WaitingFor::Quarantined => WaitKind::Quarantined,
     }
 }
 

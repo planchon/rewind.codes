@@ -218,7 +218,7 @@ mod tests {
         conversation.turns.push(Turn::ToolResults {
             results: vec![ToolResult {
                 call_id: "1".into(),
-                content: "Run 019a7b3c-0000-7000-8000-00000000abcd is suspended".into(),
+                content: "Run 019a7b3c-0000-7000-8000-00000000abcd is waiting".into(),
                 is_error: false,
             }],
         });

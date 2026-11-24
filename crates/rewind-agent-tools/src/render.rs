@@ -165,8 +165,8 @@ pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
                 lines.extend(error_section(error, limits));
             }
         }
-        RunStatus::Active => lines.extend(waiting_section(run)),
-        RunStatus::Aborted | RunStatus::Pending => {}
+        RunStatus::Waiting => lines.extend(waiting_section(run)),
+        RunStatus::Aborted | RunStatus::Queued | RunStatus::Running => {}
     }
     if let Some(transcript) = &extras.transcript {
         lines.push(
@@ -189,7 +189,7 @@ pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
             ));
         }
     }
-    if matches!(run.status, RunStatus::Active | RunStatus::Pending) {
+    if !run.status.is_ended() {
         lines.push(format!(
             "Follow it with get_run({}), send it a signal with signal_run, or cancel it with cancel_run.",
             args(&[("run_id", Value::from(run.handle.clone()))])
@@ -243,8 +243,9 @@ fn headline(run: &Run, limits: &Limits) -> String {
             ),
             None => format!("{name} was aborted by the host."),
         },
-        RunStatus::Pending => format!("{name} is pending: it has not started executing yet."),
-        RunStatus::Active => {
+        RunStatus::Queued => format!("{name} is queued: it has not started executing yet."),
+        RunStatus::Running => format!("{name} is still running."),
+        RunStatus::Waiting => {
             if let Some(quarantine) = &run.quarantine {
                 let cause = match quarantine.cause {
                     rewind_api::runs::QuarantineCause::NonDeterminism => "non_determinism",
@@ -255,11 +256,7 @@ fn headline(run: &Run, limits: &Limits) -> String {
                     truncate_end(&quarantine.reason, limits.value)
                 );
             }
-            if is_suspended(run) {
-                format!("{name} is suspended, waiting for:")
-            } else {
-                format!("{name} is still running.")
-            }
+            format!("{name} is waiting for:")
         }
     }
 }
@@ -274,30 +271,15 @@ fn abort_kind(kind: rewind_api::common::AbortKind) -> &'static str {
     }
 }
 
-/// Waiting for something other than calls in flight: a signal, a timer, the harness.
-pub fn is_suspended(run: &Run) -> bool {
-    run.waiting_for.iter().any(|waiting| match waiting {
-        Waiting::Call { state, .. } => !matches!(
-            state,
-            CallState::Ready | CallState::Claimed | CallState::Done
-        ),
-        Waiting::Timer { .. } | Waiting::Signal { .. } => true,
-    })
-}
-
 fn waiting_section(run: &Run) -> Vec<String> {
     if run.waiting_for.is_empty() || run.quarantine.is_some() {
         return Vec::new();
     }
-    let mut lines = if is_suspended(run) {
-        Vec::new()
-    } else {
-        vec!["Waiting for:".to_owned()]
-    };
-    for item in &run.waiting_for {
-        lines.push(format!("- {}", describe_waiting(item)));
-    }
-    lines
+    run.waiting_for
+        .iter()
+        .filter(|item| !matches!(item, Waiting::Quarantined { .. }))
+        .map(|item| format!("- {}", describe_waiting(item)))
+        .collect()
 }
 
 fn describe_waiting(waiting: &Waiting) -> String {
@@ -357,6 +339,7 @@ fn describe_waiting(waiting: &Waiting) -> String {
                 CallState::Done => format!("{call}: answered, about to be delivered"),
             }
         }
+        Waiting::Quarantined { .. } => "its release from quarantine".to_owned(),
     }
 }
 
@@ -1330,8 +1313,8 @@ fn status_phrase(status: RunStatus) -> &'static str {
         RunStatus::Failed => "failed",
         RunStatus::Cancelled => "was cancelled",
         RunStatus::Aborted => "was aborted",
-        RunStatus::Pending => "never started",
-        RunStatus::Active => "was still waiting at the end of the test",
+        RunStatus::Queued => "never started",
+        RunStatus::Running | RunStatus::Waiting => "was still waiting at the end of the test",
     }
 }
 
@@ -1877,7 +1860,7 @@ mod tests {
         );
         let passed = results(json!([
             { "name": "a", "passed": true, "status": "completed", "calls": {}, "failures": [], "transcript": "#0" },
-            { "name": "b", "passed": true, "status": "active", "calls": {}, "failures": [], "transcript": "#0" }
+            { "name": "b", "passed": true, "status": "waiting", "calls": {}, "failures": [], "transcript": "#0" }
         ]));
         assert_eq!(
             describe_test_results(&passed, &limits),
@@ -2330,7 +2313,7 @@ mod tests {
         );
         let summary: RunSummary = serde_json::from_value(json!({
             "id": "r2", "handle": "user_2fQ81/wf-7k2m9q/06bqx3k9f2mv", "namespace": "user_2fQ81",
-            "status": "active", "quarantined": false, "codeDigest": "s",
+            "status": "waiting", "quarantined": false, "codeDigest": "s",
             "actionSet": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
             "lastActivityAt": "2026-11-12T10:00:00Z", "calls": 1, "errors": 0, "historyLen": 3,
             "waitingFor": [], "workflow": { "id": ID, "digest": VERSION, "version": 1 },
@@ -2341,7 +2324,7 @@ mod tests {
             describe_runs(&[summary], false, None),
             [
                 "1 run, most recent first:",
-                &format!("- user_2fQ81/wf-7k2m9q/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow {ID}@v1, started by r1"),
+                &format!("- user_2fQ81/wf-7k2m9q/06bqx3k9f2mv: waiting, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow {ID}@v1, started by r1"),
             ]
             .join("\n")
         );

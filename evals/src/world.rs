@@ -795,7 +795,7 @@ impl World {
         Ok(self
             .run_view(run)
             .await?
-            .is_some_and(|view| view.head.status.is_terminal()))
+            .is_some_and(|view| view.head.status.is_ended()))
     }
 
     /// The next time something happens by itself: a timer of the node that wakes a run (or a
@@ -860,7 +860,7 @@ impl World {
 
         if !self.reactions_spec.is_empty() {
             for summary in self.summaries().await? {
-                if summary.status.is_terminal() {
+                if summary.status.is_ended() {
                     continue;
                 }
                 let awaited = summary
@@ -934,7 +934,7 @@ impl World {
             };
             reports.push(RunReport {
                 id: run.id,
-                status: head.as_ref().map_or(RunStatus::Pending, |head| head.status),
+                status: head.as_ref().map_or(RunStatus::Queued, |head| head.status),
                 source: head
                     .as_ref()
                     .and_then(|head| head.metadata.source.as_ref())

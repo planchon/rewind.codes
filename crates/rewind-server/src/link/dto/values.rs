@@ -570,7 +570,6 @@ pub enum Predicate {
     Workflow(Vec<TextMatch>),
     StartedBy(Id),
     Fingerprint(Vec<String>),
-    Quarantined,
     Mode(Vec<record::Mode>),
     Text(String),
 }
@@ -712,7 +711,6 @@ impl From<&engine::Predicate> for Predicate {
             P::Workflow(names) => Predicate::Workflow(matchers(names)),
             P::StartedBy(run) => Predicate::StartedBy(Id(*run)),
             P::Fingerprint(fingerprints) => Predicate::Fingerprint(fingerprints.clone()),
-            P::Quarantined => Predicate::Quarantined,
             P::Mode(modes) => Predicate::Mode(modes.iter().map(|&mode| mode.into()).collect()),
             P::Text(text) => Predicate::Text(text.clone()),
         }
@@ -756,7 +754,6 @@ impl TryFrom<Predicate> for engine::Predicate {
             Predicate::Workflow(names) => P::Workflow(matchers_of(names)),
             Predicate::StartedBy(run) => P::StartedBy(run.0),
             Predicate::Fingerprint(fingerprints) => P::Fingerprint(fingerprints),
-            Predicate::Quarantined => P::Quarantined,
             Predicate::Mode(modes) => P::Mode(modes.into_iter().map(Into::into).collect()),
             Predicate::Text(text) => P::Text(text),
         })

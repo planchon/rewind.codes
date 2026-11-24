@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rewind_core::{
     AbortKind, AbortReason, Action, ActionRoute, ActionSet, Annotation, Callsite, CancelReason,
     Command, Completion, Digest, Epoch, ErrorInfo, Event, HistoryEvent, Lifecycle, McpServer,
-    McpTransport, RunMode, RunStarted, RunStatus, Seed, Seq, Timestamp,
+    McpTransport, RunMode, RunPhase, RunStarted, Seed, Seq, Timestamp,
 };
 use rewind_engine::failures;
 use rewind_engine::plane::NodeConfig;
@@ -277,7 +277,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
         run_snapshot(&events[..9], Some(&action_set)),
         RunSnapshot {
             history_len: 9,
-            status: RunStatus::Active,
+            phase: RunPhase::Active,
             mode: Some(RunMode::Live),
             waits: vec![
                 calls[0].clone(),
@@ -315,8 +315,8 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
     // A history that cannot be folded stops before the event that breaks it.
     let broken = run_snapshot(&events[1..], Some(&action_set));
     assert_eq!(
-        (broken.history_len, broken.status, broken.waits.len()),
-        (0, RunStatus::Pending, 0)
+        (broken.history_len, broken.phase, broken.waits.len()),
+        (0, RunPhase::Queued, 0)
     );
 }
 
@@ -342,7 +342,7 @@ fn a_snapshot_tells_how_the_run_ended() {
         run_snapshot(&failed, None),
         RunSnapshot {
             history_len: 2,
-            status: RunStatus::Failed,
+            phase: RunPhase::Failed,
             mode: Some(RunMode::Live),
             waits: Vec::new(),
             ending: Some(Ending {
@@ -367,7 +367,7 @@ fn a_snapshot_tells_how_the_run_ended() {
         ),
     ]);
     let snapshot = run_snapshot(&aborted, Some(&gated_action_set(false)));
-    assert_eq!(snapshot.status, RunStatus::Aborted);
+    assert_eq!(snapshot.phase, RunPhase::Aborted);
     assert!(snapshot.waits.is_empty(), "an ended run waits for nothing");
     let signature = "limit_exceeded: the code used <n> ms of CPU time";
     assert_eq!(
@@ -402,7 +402,7 @@ fn a_snapshot_tells_how_the_run_ended() {
         ),
     ]);
     let snapshot = run_snapshot(&cancelled, None);
-    assert_eq!(snapshot.status, RunStatus::Cancelled);
+    assert_eq!(snapshot.phase, RunPhase::Cancelled);
     assert_eq!(
         snapshot.ending.map(|ending| ending.error),
         Some(ErrorInfo::CANCELLED.to_owned())
