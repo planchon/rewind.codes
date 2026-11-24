@@ -197,8 +197,8 @@ pub(crate) struct RunArgs {
 pub(crate) struct CheckArgs {
     /// The TypeScript script.
     pub(crate) script: PathBuf,
-    /// The action set: an action set file, pinned in this process, or the id of an action set registered
-    /// on the server, which then checks the script.
+    /// The action set: an action set file, pinned in this process, or the id of an action set
+    /// registered on the server, which then checks the script.
     #[arg(long, value_name = "ID|FILE")]
     pub(crate) action_set: Option<String>,
 }
@@ -215,8 +215,8 @@ pub(crate) struct TestArgs {
     /// checks every test against its interface.
     #[arg(long, value_name = "NAME")]
     pub(crate) workflow: Option<String>,
-    /// The action set: an action set file, or the id of an action set registered on the server, where the
-    /// tests then run. Default: the workflow's, or else the actions the tests answer.
+    /// The action set: an action set file, or the id of an action set registered on the server,
+    /// where the tests then run. Default: the workflow's, or else the actions the tests answer.
     #[arg(long, value_name = "ID|FILE")]
     pub(crate) action_set: Option<String>,
     /// Static responses per action, tried last, in this process. Default: rewind.actions.json next

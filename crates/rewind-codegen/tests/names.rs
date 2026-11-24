@@ -1,7 +1,8 @@
-//! Names that become identifiers of `rewind:actions`: a server, a group of harness actions and a harness action
-//! without a group are declared as `export const`, `export namespace` and `export function`.
-//! Every such name an action set accepts must give declarations that parse; the reserved words of
-//! JavaScript, which would not, are refused by the action set itself (`rewind_core::RESERVED_WORDS`).
+//! Names that become identifiers of `rewind:actions`: a server, a group of harness actions and a
+//! harness action without a group are declared as `export const`, `export namespace` and `export
+//! function`. Every such name an action set accepts must give declarations that parse; the reserved
+//! words of JavaScript, which would not, are refused by the action set itself
+//! (`rewind_core::RESERVED_WORDS`).
 
 #![allow(clippy::unwrap_used)]
 
@@ -65,8 +66,8 @@ const OTHER_NAMES: &[&str] = &[
     "github",
 ];
 
-/// An action set in which `name` is declared as a server, as a group of harness actions, or as a harness action
-/// without a group; each action takes a string and returns an object.
+/// An action set in which `name` is declared as a server, as a group of harness actions, or as a
+/// harness action without a group; each action takes a string and returns an object.
 fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3] {
     let input = json!({
         "type": "object",

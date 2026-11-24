@@ -10,10 +10,10 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Duration;
 
-/// `POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy per
-/// action. Registering connects to the MCP servers and lists their actions, reads the APIs' OpenAPI
-/// documents, and pins their schemas. The action set is content-addressed: registering the same
-/// action set twice gives the same id. It holds no secret: a run attaches its secrets when it
+/// `POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy
+/// per action. Registering connects to the MCP servers and lists their actions, reads the APIs'
+/// OpenAPI documents, and pins their schemas. The action set is content-addressed: registering the
+/// same action set twice gives the same id. It holds no secret: a run attaches its secrets when it
 /// starts.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -74,8 +74,8 @@ pub struct CreateActionSet {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServer {
-    /// The namespace of its actions in `rewind:actions`: an identifier that is not a reserved word of
-    /// JavaScript (`default`, `delete`, `let`…).
+    /// The namespace of its actions in `rewind:actions`: an identifier that is not a reserved word
+    /// of JavaScript (`default`, `delete`, `let`…).
     pub name: String,
     /// The URL of a streamable HTTP server. A server of a deployment reaches it only at a public
     /// address, unless its configuration allows the internal host.
@@ -253,8 +253,8 @@ pub enum SecretEncoding {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HarnessAction {
-    /// `group.action` puts the action in a group, the namespace `rewind:actions` exports it under. The
-    /// group, and a name without a dot, may not be a reserved word of JavaScript.
+    /// `group.action` puts the action in a group, the namespace `rewind:actions` exports it under.
+    /// The group, and a name without a dot, may not be a reserved word of JavaScript.
     pub name: String,
     /// Shown to the model in the declarations.
     pub description: String,
@@ -442,8 +442,8 @@ pub enum Route {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Declarations {
-    /// `rewind-actions.d.ts`: the `rewind:actions` module, with action descriptions as JSDoc, and the
-    /// `rewind:workflows` module when the action set pins workflows.
+    /// `rewind-actions.d.ts`: the `rewind:actions` module, with action descriptions as JSDoc, and
+    /// the `rewind:workflows` module when the action set pins workflows.
     pub dts: String,
     /// The compact rendering for the model's prompt, one line per action.
     pub prompt: String,

@@ -228,8 +228,8 @@ pub(crate) fn head_after(
 /// The call tasks and timers of the new entries (`from` on): a call still pending at the end of
 /// the activation, a timer still pending, the cancellation of a timer of an earlier activation,
 /// and the run's deadline once `run_started` is committed. A terminal run has none: its commit
-/// clears them. A task takes its route and policy from the pinned action set; an action the action set
-/// does not have is returned as the error.
+/// clears them. A task takes its route and policy from the pinned action set; an action the action
+/// set does not have is returned as the error.
 pub(crate) fn effects_of(
     head: &RunHead,
     history: &[HistoryEntry],

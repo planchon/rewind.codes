@@ -49,7 +49,8 @@ pub(crate) struct ReplayReport {
 pub(crate) struct ForkReport {
     /// The calls whose recorded outcome the fork reuses: they are not called again.
     pub(crate) reused: Vec<CallRef>,
-    /// Calls the run left without an outcome, of idempotent actions: called again with the run's key.
+    /// Calls the run left without an outcome, of idempotent actions: called again with the run's
+    /// key.
     pub(crate) called_again: Vec<CallRef>,
     /// Calls the run left without an outcome, of actions that are not idempotent: they fail with
     /// `outcome_unknown`.

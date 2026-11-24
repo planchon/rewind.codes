@@ -40,7 +40,8 @@ pub struct StartRun {
     /// Without it, `workflow` names what the run executes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub script: String,
-    /// The action set the script imports from `rewind:actions`. Without one, `rewind:actions` is empty.
+    /// The action set the script imports from `rewind:actions`. Without one, `rewind:actions` is
+    /// empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
     /// Instead of `script` and `actionSet`: a run of this workflow, `triage` for its latest version
@@ -522,8 +523,8 @@ pub struct RunWait {
 /// (`archi/05-testing-and-observability.md`, "Statistics").
 ///
 /// The statistics routes (`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/scripts`,
-/// `GET /v1/actions/stats`) take a scope and a window only. The scope is the caller's tenant, or one
-/// namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
+/// `GET /v1/actions/stats`) take a scope and a window only. The scope is the caller's tenant, or
+/// one namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
 /// `namespace:` term. The window is made of whole hours in UTC: its bounds are rounded out to the
 /// hour. A grant or a token limited to labels reads none of them (`forbidden`): counters do not
 /// know labels.

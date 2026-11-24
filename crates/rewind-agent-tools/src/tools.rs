@@ -929,8 +929,8 @@ impl<A: Api> AgentTools<A> {
         finish(name, handled, &self.limits)
     }
 
-    /// Saves a workflow with the agent's action set, then derives from that action set one that pins
-    /// this version of it: the later scripts of the model import it from `rewind:workflows`.
+    /// Saves a workflow with the agent's action set, then derives from that action set one that
+    /// pins this version of it: the later scripts of the model import it from `rewind:workflows`.
     async fn save_workflow(&self, session: &Session<'_, A>, input: &Values) -> Handled {
         let workflow = match session.create_workflow(input).await? {
             Ok(workflow) => workflow,

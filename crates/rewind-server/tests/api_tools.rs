@@ -1,7 +1,7 @@
-//! Action sets with APIs read from OpenAPI documents, and MCP servers listed with Rewind's signature
-//! (`archi/04-tools.md`, "API actions" and "Signed calls"). The servers of these tests listen on
-//! 127.0.0.1: the embedded server reaches them, calls included; a deployed server reaches them
-//! only through `--allow-internal-addresses`, and calls APIs over https only.
+//! Action sets with APIs read from OpenAPI documents, and MCP servers listed with Rewind's
+//! signature (`archi/04-tools.md`, "API actions" and "Signed calls"). The servers of these tests
+//! listen on 127.0.0.1: the embedded server reaches them, calls included; a deployed server reaches
+//! them only through `--allow-internal-addresses`, and calls APIs over https only.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

@@ -11,8 +11,8 @@
 //!
 //! A test runs on a run plane of its own, stepped by the [`Driver`]: one node holding one
 //! partition, wired with in-memory adapters, a virtual clock started at the test's start and an
-//! entropy giving the test's seed; harness actions are dispatched to the test's world as every other
-//! call. Its result is a function of the script, the action set, the test and the epoch. The
+//! entropy giving the test's seed; harness actions are dispatched to the test's world as every
+//! other call. Its result is a function of the script, the action set, the test and the epoch. The
 //! script under test is a parameter ([`Subject`]).
 //! TypeScript mock handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
 //! isolate of their own.

@@ -179,11 +179,11 @@ impl McpDispatcher {
         }
     }
 
-    /// Discovery: the actions of a server, as an action set pins them (`archi/04-tools.md`, "Action sets
-    /// and code generation"), sorted by name. Each is named `{server}.{action}`, with its
+    /// Discovery: the actions of a server, as an action set pins them (`archi/04-tools.md`, "Action
+    /// sets and code generation"), sorted by name. Each is named `{server}.{action}`, with its
     /// description (or its title), its input and output schemas, and the default policy of an
-    /// MCP action; the harness's policies are applied by whoever builds the action set. `auth` is how
-    /// the listing proves who calls: the organization's secret the registration attaches, or a
+    /// MCP action; the harness's policies are applied by whoever builds the action set. `auth` is
+    /// how the listing proves who calls: the organization's secret the registration attaches, or a
     /// listing signed with the reduced set of claims.
     pub async fn list_tools(
         &self,

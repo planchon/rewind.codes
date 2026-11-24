@@ -1059,17 +1059,18 @@ mod operations {
 
     /// Follow the harness calls handed to this worker (server-sent events)
     ///
-    /// The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among
-    /// the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
-    /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
-    /// `event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with
-    /// its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this
-    /// stream that no longer waits for its answer. The open stream is the liveness of every call
-    /// handed on it: no heartbeat. When it closes, its calls wait for the grace of their action
-    /// (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
-    /// each is handed to another worker with its delivery + 1, or fails with `outcomeUnknown`
-    /// when its action is not idempotent. A worker opens the stream again after it drops, with a backoff. The
-    /// server writes a comment line at least every 15 seconds while it sends nothing else.
+    /// The calls of the harness actions it names (`actionSet`, `actions`), as they become ready,
+    /// among the runs the caller sees: an end user's token those of its namespace, a key limited to
+    /// labels those of the runs carrying them. At most `slots` are in flight on the stream at once.
+    /// Each event's `event` field names it and its `data` is a `CallStreamMessage`: `call`, a call
+    /// handed with its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call
+    /// handed on this stream that no longer waits for its answer. The open stream is the liveness
+    /// of every call handed on it: no heartbeat. When it closes, its calls wait for the grace of
+    /// their action (60 s by default) for a stream opened again with the same `worker`, which keeps
+    /// them; then each is handed to another worker with its delivery + 1, or fails with
+    /// `outcomeUnknown` when its action is not idempotent. A worker opens the stream again after it
+    /// drops, with a backoff. The server writes a comment line at least every 15 seconds while it
+    /// sends nothing else.
     #[utoipa::path(
         get, path = "/v1/calls/stream", tag = "calls", operation_id = "streamCalls",
         params(CallStreamQuery),

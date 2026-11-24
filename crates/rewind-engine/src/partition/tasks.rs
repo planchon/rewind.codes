@@ -1007,8 +1007,8 @@ impl<P: Plane> Owner<P> {
     }
 
     /// A harness task handed on a stream that closed and did not come back within its grace: sent
-    /// again with delivery + 1 when its action is idempotent, failed `outcome_unknown` when it is not or
-    /// past the maximum of deliveries.
+    /// again with delivery + 1 when its action is idempotent, failed `outcome_unknown` when it is
+    /// not or past the maximum of deliveries.
     pub(crate) fn lost(&mut self, task: &TaskRef, token: &TaskToken) {
         let hash = tokens::hash(&token.0);
         if self.flights.get(task) != Some(&Flight::Handed { token: hash }) {

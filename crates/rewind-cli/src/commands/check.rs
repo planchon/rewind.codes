@@ -3,8 +3,8 @@
 //!
 //! In this process, without a server: the checks at start of the runtime (syntax, imports,
 //! default export), then tsgo and the checker's own rules against the sandbox lib and the
-//! declarations of the action set file, pinned here. An action set registered on a server lives there,
-//! with the result types observed in its runs: the server checks the script against it
+//! declarations of the action set file, pinned here. An action set registered on a server lives
+//! there, with the result types observed in its runs: the server checks the script against it
 //! (`POST /v1/check`).
 
 use std::collections::BTreeMap;

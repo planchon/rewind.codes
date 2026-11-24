@@ -200,10 +200,10 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's actions: harness actions, MCP actions, and the built-ins `http` and `webhook`, with
-    /// the pinned schemas of `schemas` and `output_schemas` and the policies of `policies` (the
-    /// default otherwise). In mock mode every call goes to the scenario's responses, whatever
-    /// its route.
+    /// The scenario's actions: harness actions, MCP actions, and the built-ins `http` and
+    /// `webhook`, with the pinned schemas of `schemas` and `output_schemas` and the policies of
+    /// `policies` (the default otherwise). In mock mode every call goes to the scenario's
+    /// responses, whatever its route.
     pub fn action_set(&self) -> ActionSet {
         let workflows = self
             .workflows()
@@ -272,11 +272,11 @@ impl Case {
     }
 }
 
-/// The scenario's actions: harness actions, the actions of its MCP servers, and the built-ins: `http`
-/// as `rewind_mcp::http_action` pins it, `webhook` with the schema of `rewind_runtime::builtins`.
-/// `schemas` pins the input schema of some actions, `output_schemas` the output schema of some
-/// MCP actions, and `policies` changes the default policy of some. The responses of `http` and of
-/// the MCP actions must be in the format their dispatcher returns.
+/// The scenario's actions: harness actions, the actions of its MCP servers, and the built-ins:
+/// `http` as `rewind_mcp::http_action` pins it, `webhook` with the schema of
+/// `rewind_runtime::builtins`. `schemas` pins the input schema of some actions, `output_schemas`
+/// the output schema of some MCP actions, and `policies` changes the default policy of some. The
+/// responses of `http` and of the MCP actions must be in the format their dispatcher returns.
 fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
     if let Some(unknown) = scenario
         .schemas

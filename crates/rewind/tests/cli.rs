@@ -383,8 +383,8 @@ fn slow_registration_server() -> (
     (url, requests, release)
 }
 
-/// A first Ctrl-C while `rewind run` registers its action set: the registration finishes, and no run
-/// is started.
+/// A first Ctrl-C while `rewind run` registers its action set: the registration finishes, and no
+/// run is started.
 #[test]
 fn a_first_ctrl_c_before_the_start_starts_no_run() {
     let project = Project::new();

@@ -47,9 +47,9 @@ struct Workflow<'a> {
 /// "Type-checking").
 ///
 /// A check writes the script as `script.ts` in a directory of its own, next to the sandbox lib
-/// and the action set's `rewind-actions.d.ts`, and runs tsgo there in strict mode. tsgo is extracted to
-/// the cache directory at first use. Diagnostics are written for a model: a location in
-/// `script.ts` (columns count characters), the message, a hint for the checker's own rules,
+/// and the action set's `rewind-actions.d.ts`, and runs tsgo there in strict mode. tsgo is
+/// extracted to the cache directory at first use. Diagnostics are written for a model: a location
+/// in `script.ts` (columns count characters), the message, a hint for the checker's own rules,
 /// and a short code frame. They come sorted by position, and the same script and declarations
 /// always give the same diagnostics.
 ///
@@ -124,8 +124,8 @@ impl TsgoChecker {
     /// Type-checks a script against the sandbox lib and `declarations`, the action set's
     /// `rewind-actions.d.ts`, and runs the checker's own rules.
     ///
-    /// `declarations` declare the module `rewind:actions` (`declare module "rewind:actions" { … }`);
-    /// empty, the module exports nothing. When they start with [`HTTP_ACTION_REFERENCE`], the
+    /// `declarations` declare the module `rewind:actions` (`declare module "rewind:actions" { …
+    /// }`); empty, the module exports nothing. When they start with [`HTTP_ACTION_REFERENCE`], the
     /// action set enables the `http` action, and the script has `fetch`.
     pub async fn check_source(
         &self,

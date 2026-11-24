@@ -1,6 +1,6 @@
 //! Harness calls: the harness's SDK worker holds a call stream open and is handed the calls, the
-//! tasks that carry them, as they become ready, and answers each through its token; the harness approves or rejects the
-//! calls that wait for it (`archi/04-tools.md`, "Call lifecycle").
+//! tasks that carry them, as they become ready, and answers each through its token; the harness
+//! approves or rejects the calls that wait for it (`archi/04-tools.md`, "Call lifecycle").
 //!
 //! ```text
 //!  GET /v1/calls/stream ── attach_stream ──► organization actor of the tenant (its home owner)

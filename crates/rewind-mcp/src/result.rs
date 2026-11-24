@@ -4,10 +4,10 @@
 //! - An action pinned with an output schema returns its `structuredContent`: the value its types
 //!   describe. A server that sent none, but put the JSON in a text block as the specification
 //!   asks for compatibility, gets that JSON parsed.
-//! - An action pinned without one returns its content: `{ "content": [blocks], "structuredContent"?:
-//!   value }`. Blocks keep the fields `rewind-actions.d.ts` declares (`type`, `text`, `data`,
-//!   `mimeType`, `uri`, `name`, `title`, `description`, `size`, `resource`); annotations and
-//!   `_meta` are dropped. The runtime adds the `text()` and `json()` helpers.
+//! - An action pinned without one returns its content: `{ "content": [blocks],
+//!   "structuredContent"?: value }`. Blocks keep the fields `rewind-actions.d.ts` declares (`type`,
+//!   `text`, `data`, `mimeType`, `uri`, `name`, `title`, `description`, `size`, `resource`);
+//!   annotations and `_meta` are dropped. The runtime adds the `text()` and `json()` helpers.
 //! - `isError: true` is a failure of kind `error`: its message is the text of the content, its
 //!   data the `structuredContent`, if any.
 

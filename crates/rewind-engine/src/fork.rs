@@ -145,11 +145,11 @@ pub struct Compatibility {
     pub point: ForkPoint,
     /// The calls whose recorded outcome a fork reuses: they are not called again.
     pub reused: Vec<Seq>,
-    /// Calls the run left without an outcome, of idempotent actions: a fork calls them again with the
-    /// run's idempotency key.
+    /// Calls the run left without an outcome, of idempotent actions: a fork calls them again with
+    /// the run's idempotency key.
     pub redispatched: Vec<Seq>,
-    /// Calls the run left without an outcome, of actions that are not idempotent: they fail in the fork with
-    /// `outcome_unknown`.
+    /// Calls the run left without an outcome, of actions that are not idempotent: they fail in the
+    /// fork with `outcome_unknown`.
     pub unknown: Vec<Seq>,
     /// The fork's status once it has followed the run: `completed` or `failed` when it ended as
     /// the run did, `active` when it goes live.

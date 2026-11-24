@@ -1,25 +1,25 @@
 //! The pinned action set (`archi/04-tools.md`, "Action sets and code generation").
 //!
-//! Registering an action set connects to its MCP servers, lists their actions, reads its APIs' OpenAPI
-//! documents and **pins** them: the servers and APIs, with how each one authenticates its calls,
-//! and for each action its name, route, description, schemas and policy. The pinned action set is
-//! immutable and content-addressed: its digest is the SHA-256 of its canonical JSON, the pinned
-//! action set document of the stored format v1 (`archi/02-journal.md`), and every run records the
-//! digest it was started with.
+//! Registering an action set connects to its MCP servers, lists their actions, reads its APIs'
+//! OpenAPI documents and **pins** them: the servers and APIs, with how each one authenticates its
+//! calls, and for each action its name, route, description, schemas and policy. The pinned action
+//! set is immutable and content-addressed: its digest is the SHA-256 of its canonical JSON, the
+//! pinned action set document of the stored format v1 (`archi/02-journal.md`), and every run
+//! records the digest it was started with.
 //!
 //! ```text
-//! Action set
+//! ActionSet
 //! ├── servers:   McpServer { name, transport: http(url) | stdio(command, args, env), concurrency,
 //! │                          auth }
 //! ├── apis:      Api { name, base_url, auth, concurrency }
-//! ├── actions:     Action { name, route, operation?, description?, input_schema, output_schema?,
-//! │                     policy }
-//! │                     route  = mcp(server) | api(api) | harness(group?)
-//! │                              | builtin(http(allowed_hosts) | webhook)
-//! │                     operation (API actions only) = { method, path, parameters, body,
-//! │                                                    idempotency_key }
-//! │                     policy = { idempotent, approval, execution_timeout?,
-//! │                                reconnect_timeout, concurrency }
+//! ├── actions:   Action { name, route, operation?, description?, input_schema, output_schema?,
+//! │                       policy }
+//! │                       route  = mcp(server) | api(api) | harness(group?)
+//! │                                | builtin(http(allowed_hosts) | webhook)
+//! │                       operation (API actions only) = { method, path, parameters, body,
+//! │                                                      idempotency_key }
+//! │                       policy = { idempotent, approval, execution_timeout?,
+//! │                                  reconnect_timeout, concurrency }
 //! └── workflows: PinnedWorkflow { name, version, description?, schemas }
 //!                  each gives two built-ins, not in the document:
 //!                  workflows.<name>.start and workflows.<name>.signal (builtin(workflow))
@@ -28,10 +28,10 @@
 //!
 //! An action is named as its server defines it, behind its group: `github.list_issues` for the
 //! action `list_issues` of the MCP server `github`, `dax.createMeasure` for the operation
-//! `createMeasure` of the API `dax`, `harness.ask_user` or `ask_user` for a harness action, `http` and
-//! `webhook` for the built-ins. The group is what `rewind:actions` exports. The group `workflows`
-//! is reserved for the workflows' built-ins; `rewind:workflows` exports one name per pinned
-//! workflow.
+//! `createMeasure` of the API `dax`, `harness.ask_user` or `ask_user` for a harness action, `http`
+//! and `webhook` for the built-ins. The group is what `rewind:actions` exports. The group
+//! `workflows` is reserved for the workflows' built-ins; `rewind:workflows` exports one name per
+//! pinned workflow.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -51,8 +51,8 @@ use crate::workflow::{InvalidWorkflow, PinnedWorkflow, WORKFLOWS_GROUP, Workflow
 ///
 /// Built with [`ActionSet::new`] or [`ActionSet::from_parts`], which check every invariant: unique
 /// names, MCP and API actions of known servers and APIs and inside their group, an operation
-/// for each API action, valid policies and `auth`. Servers, APIs and actions are kept sorted by name,
-/// so the digest does not depend on the order they were given in.
+/// for each API action, valid policies and `auth`. Servers, APIs and actions are kept sorted by
+/// name, so the digest does not depend on the order they were given in.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ActionSet {
     servers: Vec<McpServer>,
@@ -321,8 +321,8 @@ pub enum ActionRoute {
 }
 
 impl ActionRoute {
-    /// Whether Rewind calls the action itself: MCP actions, API actions and built-ins. Harness actions are
-    /// claimed by the harness's worker instead.
+    /// Whether Rewind calls the action itself: MCP actions, API actions and built-ins. Harness
+    /// actions are claimed by the harness's worker instead.
     pub fn is_dispatched(&self) -> bool {
         !matches!(self, ActionRoute::Harness { .. })
     }
@@ -467,7 +467,8 @@ pub enum ActionSetError {
 }
 
 impl ActionSet {
-    /// An action set of these MCP servers and actions, without APIs: [`from_parts`](Self::from_parts).
+    /// An action set of these MCP servers and actions, without APIs:
+    /// [`from_parts`](Self::from_parts).
     pub fn new(
         servers: impl IntoIterator<Item = McpServer>,
         actions: impl IntoIterator<Item = Action>,
@@ -580,7 +581,8 @@ impl ActionSet {
 
     /// Harness actions with these names, the default policy, and an input schema that accepts any
     /// value: what mock mode and tests use when the action set does not matter. A name
-    /// `group.action` puts the action in the group of harness actions `group`. Duplicates are ignored.
+    /// `group.action` puts the action in the group of harness actions `group`. Duplicates are
+    /// ignored.
     pub fn from_harness_actions<S: Into<String>>(
         names: impl IntoIterator<Item = S>,
     ) -> Result<Self, ActionSetError> {
@@ -677,9 +679,9 @@ impl ActionSet {
         self.action(name).is_some()
     }
 
-    /// SHA-256 of the action set's canonical JSON (RFC 8785), which is the pinned action set document
-    /// of the stored format v1, `"v": 1` included. The document `rewind-format` writes for an
-    /// action set hashes to this digest.
+    /// SHA-256 of the action set's canonical JSON (RFC 8785), which is the pinned action set
+    /// document of the stored format v1, `"v": 1` included. The document `rewind-format` writes for
+    /// an action set hashes to this digest.
     pub fn digest(&self) -> Digest {
         Digest::of(canonical_json(&self.document()).as_bytes())
     }
@@ -1025,8 +1027,8 @@ fn in_group<'a>(name: &'a str, group: &str) -> Option<&'a str> {
         .filter(|local| !local.is_empty())
 }
 
-/// An ECMAScript identifier name in ASCII. What `rewind:actions` exports a group or a harness action
-/// as must also not be a [reserved word](RESERVED_WORDS).
+/// An ECMAScript identifier name in ASCII. What `rewind:actions` exports a group or a harness
+/// action as must also not be a [reserved word](RESERVED_WORDS).
 pub(crate) fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
@@ -1470,8 +1472,8 @@ mod tests {
         )
     }
 
-    /// An action set where `name` becomes an identifier of `rewind:actions`: as a server, as a harness
-    /// group, and as a harness action without a group.
+    /// An action set where `name` becomes an identifier of `rewind:actions`: as a server, as a
+    /// harness group, and as a harness action without a group.
     fn as_identifier(name: &str) -> [Result<ActionSet, ActionSetError>; 3] {
         let action = Action::new(
             format!("{name}.find"),
@@ -1587,7 +1589,8 @@ mod tests {
                 assert!(action_set.is_ok(), "{name}: {action_set:?}");
             }
         }
-        // A harness action whose name is no identifier at all stays out of `rewind:actions`, as before.
+        // A harness action whose name is no identifier at all stays out of `rewind:actions`, as
+        // before.
         let dashed = Action::new("ask-user", ActionRoute::Harness { group: None }, json!({}));
         assert!(ActionSet::new([], [dashed]).is_ok());
     }

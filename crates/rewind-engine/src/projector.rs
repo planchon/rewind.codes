@@ -11,8 +11,8 @@
 //! - a signal awaited with an empty mailbox is a `signal` wait since its `signal_awaited`, until
 //!   its timeout timer's due time; that timer is not a wait of its own;
 //! - a pending timer is a `timer` wait since its `start_timer`, until its due time;
-//! - a pending call is a `harness` wait when the pinned action set routes its action to the harness, a
-//!   `call` wait otherwise, since its `schedule_call`;
+//! - a pending call is a `harness` wait when the pinned action set routes its action to the
+//!   harness, a `call` wait otherwise, since its `schedule_call`;
 //! - waits are ordered by `since`, then kind, then seq and name;
 //! - a failure or an abort gives the run's [`Ending`](crate::ports::Ending), its signature and
 //!   fingerprint ([`failures`]).
@@ -32,8 +32,8 @@ use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, WebhookEvent, WebhookEv
 
 /// The lifecycle events of the entries from `from` to the end of `history`, which leave the
 /// run in `state`: the run's end (`run.completed`, `run.failed`), or, when the range leaves the
-/// run waiting for the outside world only (signals, harness actions), `run.suspended`. Each is named
-/// by the index of the entry it is projected from.
+/// run waiting for the outside world only (signals, harness actions), `run.suspended`. Each is
+/// named by the index of the entry it is projected from.
 pub(crate) fn lifecycle_events(
     head: &RunHead,
     action_set: Option<&ActionSet>,
@@ -125,8 +125,8 @@ pub fn headline(source: &str) -> String {
 
 /// The snapshot of a run, folded from its history (see the [module](self)): its status and
 /// mode, what it waits for while active, and how it ended. The pinned action set tells the calls
-/// of harness actions from the calls Rewind sends; without it, every call is a `call`. A history that
-/// cannot be folded past an entry gives the snapshot of the entries before it.
+/// of harness actions from the calls Rewind sends; without it, every call is a `call`. A history
+/// that cannot be folded past an entry gives the snapshot of the entries before it.
 pub fn run_snapshot(history: &[HistoryEntry], action_set: Option<&ActionSet>) -> RunSnapshot {
     let mut state = RunState::new();
     for entry in history {

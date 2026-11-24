@@ -11,8 +11,8 @@
 //!
 //! A refused request fails with an `error`, for good. What `fetch` sees as a network error is
 //! a failure too: before anything was sent (no connection), it is transient, and delivered again
-//! when the action is idempotent; once the request may have reached the server (a timeout, a connection
-//! cut while reading), it is transient only for an idempotent method (`GET`, `HEAD`,
+//! when the action is idempotent; once the request may have reached the server (a timeout, a
+//! connection cut while reading), it is transient only for an idempotent method (`GET`, `HEAD`,
 //! `OPTIONS`, `PUT`, `DELETE`), and fails otherwise, as the request may have taken effect. A
 //! response with any status, 404 and 500 included, is a result, as `fetch` resolves with it.
 //!

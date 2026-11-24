@@ -1,5 +1,5 @@
-//! Workflows over HTTP, on Turso: saving versions, pinning them in action sets, a script that starts
-//! and signals runs of a workflow and receives their end, runs of a workflow started by the
+//! Workflows over HTTP, on Turso: saving versions, pinning them in action sets, a script that
+//! starts and signals runs of a workflow and receives their end, runs of a workflow started by the
 //! harness, and the signals a run of a workflow refuses (`archi/01-product.md`, "Workflows").
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -16,7 +16,8 @@ use crate::testing::TestInput;
 pub struct CheckRequest {
     /// The TypeScript source: a single ES module whose default export is the entry point.
     pub script: String,
-    /// The action set whose `rewind:actions` the script imports. Without one, `rewind:actions` is empty.
+    /// The action set whose `rewind:actions` the script imports. Without one, `rewind:actions` is
+    /// empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
 }

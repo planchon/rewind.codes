@@ -1,7 +1,7 @@
 //! The contract between codegen, the checker and the runtime (`archi/04-tools.md`, "Action sets
-//! and code generation" and "Type-checking"): the `rewind-actions.d.ts` that `rewind-codegen` writes
-//! for a pinned action set makes `rewind-check` accept what the runtime runs and refuse what it
-//! refuses.
+//! and code generation" and "Type-checking"): the `rewind-actions.d.ts` that `rewind-codegen`
+//! writes for a pinned action set makes `rewind-check` accept what the runtime runs and refuse what
+//! it refuses.
 
 #![allow(clippy::unwrap_used)]
 
@@ -288,8 +288,9 @@ async fn the_golden_declarations_of_codegen_check() {
     );
 }
 
-/// An action set in which `name` is a server, a group of harness actions or a harness action without a group,
-/// each action taking `{ q: string }` and returning `{ id: string }`; and a script that calls it.
+/// An action set in which `name` is a server, a group of harness actions or a harness action
+/// without a group, each action taking `{ q: string }` and returning `{ id: string }`; and a script
+/// that calls it.
 fn named(name: &str) -> Vec<(ActionSet, String)> {
     let input = json!({
         "type": "object",

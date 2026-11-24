@@ -8,8 +8,8 @@
 //! world is driven: a run's `wait`, a server's webhook, a signal sent by the world after a delay,
 //! a timer.
 //!
-//! The agent's action set is registered as `POST /v1/action-sets` registers it, so that workflows are
-//! saved with it; workflows are saved and run as the server saves and runs them, at the node's
+//! The agent's action set is registered as `POST /v1/action-sets` registers it, so that workflows
+//! are saved with it; workflows are saved and run as the server saves and runs them, at the node's
 //! edge, with the agent's labels as the labels of the key that saves them.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -228,8 +228,8 @@ fn drive_error(error: DriveError) -> WorldError {
 }
 
 impl World {
-    /// Serves the fake servers, pins their actions as `POST /v1/action-sets` does (discovery through
-    /// `McpDispatcher`), generates the declarations, and wires the run plane at [`T0`].
+    /// Serves the fake servers, pins their actions as `POST /v1/action-sets` does (discovery
+    /// through `McpDispatcher`), generates the declarations, and wires the run plane at [`T0`].
     pub async fn new(
         spec: &WorldSpec,
         checker: Arc<TsgoChecker>,
@@ -334,8 +334,8 @@ impl World {
         &self.plane.catalog
     }
 
-    /// Registers an action set as `POST /v1/action-sets` does: its declarations generated, then stored
-    /// with it. An action set registered again changes nothing.
+    /// Registers an action set as `POST /v1/action-sets` does: its declarations generated, then
+    /// stored with it. An action set registered again changes nothing.
     pub async fn register_action_set(
         &self,
         action_set: &ActionSet,

@@ -600,9 +600,9 @@ export default async function main() {
     }
 }
 
-/// An action set with the built-ins `http` and `webhook`, and one harness action. `webhook` is pinned
-/// with the schema of `rewind_runtime::builtins`; `http` with a schema that accepts anything, as
-/// its schema lives in `rewind-mcp` (the corpus of `rewind-e2e` pins that one).
+/// An action set with the built-ins `http` and `webhook`, and one harness action. `webhook` is
+/// pinned with the schema of `rewind_runtime::builtins`; `http` with a schema that accepts
+/// anything, as its schema lives in `rewind-mcp` (the corpus of `rewind-e2e` pins that one).
 fn builtins_action_set() -> ActionSet {
     ActionSet::new(
         [],

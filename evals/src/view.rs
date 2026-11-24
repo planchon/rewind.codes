@@ -602,7 +602,8 @@ pub fn payload_of(event: &Event) -> Option<&rewind_core::Payload> {
     }
 }
 
-/// The servers of an action set, with their actions counted (`rewind-server`'s `action_sets::servers`).
+/// The servers of an action set, with their actions counted (`rewind-server`'s
+/// `action_sets::servers`).
 fn servers(action_set: &rewind_core::ActionSet) -> Vec<rewind_api::action_sets::ServerSummary> {
     use rewind_core::{ActionRoute, McpTransport};
     action_set

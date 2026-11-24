@@ -1,6 +1,6 @@
-//! The cassette, pinned action set, workflow version and test documents v1 are frozen like events: these
-//! fixtures were written once and must decode forever, to the same domain values, and re-encode
-//! to the same bytes.
+//! The cassette, pinned action set, workflow version and test documents v1 are frozen like events:
+//! these fixtures were written once and must decode forever, to the same domain values, and
+//! re-encode to the same bytes.
 
 #![allow(clippy::unwrap_used)]
 

@@ -106,9 +106,9 @@ pub trait ScriptExecutor: Send + Sync {
         action_set: &ActionSet,
     ) -> Result<CompiledScript, InvalidScript>;
 
-    /// The names a script imports from `rewind:actions`: its MCP servers, APIs and groups of harness actions
-    /// by their namespace, and its harness actions without a group by name. A start checks that each
-    /// server or API it imports whose `auth` takes a secret has one attached
+    /// The names a script imports from `rewind:actions`: its MCP servers, APIs and groups of
+    /// harness actions by their namespace, and its harness actions without a group by name. A start
+    /// checks that each server or API it imports whose `auth` takes a secret has one attached
     /// (`archi/04-tools.md`, "Secrets"). `None` when the script may reach every one: it imports
     /// the whole module (`import * as actions`), or the executor cannot tell, which is the
     /// default. Called on a script [`compile`](Self::compile) accepted.

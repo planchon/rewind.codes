@@ -1,5 +1,5 @@
-//! The egress checks (`archi/04-tools.md`, "The `http` action and egress" and "Where MCP servers and
-//! APIs may be"; `archi/06-storage-and-scale.md`, "Security"):
+//! The egress checks (`archi/04-tools.md`, "The `http` action and egress" and "Where MCP servers
+//! and APIs may be"; `archi/06-storage-and-scale.md`, "Security"):
 //!
 //! 1. The name is resolved once ([`CheckedResolver`], the only resolver of the client).
 //! 2. Private, loopback, link-local and cloud-metadata addresses are refused ([`forbidden`]); a

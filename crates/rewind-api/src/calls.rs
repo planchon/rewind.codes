@@ -29,9 +29,10 @@ use crate::namespaces::NamespaceName;
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct CallStreamQuery {
-    /// The action set whose harness actions this worker executes: only the calls of runs of this action set.
-    /// Without it, the calls of the actions named in `actions`, whatever the action set of their run (an
-    /// action set derived from another, as saving a workflow does, keeps its harness actions' names).
+    /// The action set whose harness actions this worker executes: only the calls of runs of this
+    /// action set. Without it, the calls of the actions named in `actions`, whatever the action set
+    /// of their run (an action set derived from another, as saving a workflow does, keeps its
+    /// harness actions' names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
     /// Only the calls of runs of this namespace. An end user's token is limited to its own: it
@@ -40,8 +41,8 @@ pub struct CallStreamQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub namespace: Option<NamespaceName>,
-    /// Only these actions. Repeat for several. All the harness actions of `actionSet` when absent, every
-    /// harness action without `actionSet` either.
+    /// Only these actions. Repeat for several. All the harness actions of `actionSet` when absent,
+    /// every harness action without `actionSet` either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
     /// At most this many calls in flight on this stream: handed, and neither completed, failed,
@@ -83,7 +84,8 @@ pub struct HandedCall {
     /// and did not come back within its grace.
     pub delivery: u32,
     /// The action's execution timeout, in milliseconds: past it, the call is not waited for any
-    /// more. Absent when the action has none, the default of harness actions: the run's TTL bounds it.
+    /// more. Absent when the action has none, the default of harness actions: the run's TTL bounds
+    /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     /// The run's labels.

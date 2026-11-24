@@ -1,12 +1,13 @@
-//! Action sets pinned in the CLI process, for the local commands (`rewind check`, `rewind test`): from an
-//! action set file, or from the actions a scenario's mocks answer.
+//! Action sets pinned in the CLI process, for the local commands (`rewind check`, `rewind test`):
+//! from an action set file, or from the actions a scenario's mocks answer.
 //!
-//! An action set file is the body of `POST /v1/action-sets` (`CreateActionSet`), pinned as a server pins
-//! it: the actions of each MCP server are discovered by connecting to it (`rewind-mcp`), each with
-//! its `auth`; the operations of each API are read from its OpenAPI document (`rewind-openapi`);
-//! harness actions and the `http` action are taken as written, the `webhook` built-in is always there.
-//! As the embedded server, the CLI reaches any address, and APIs over `http` too. It holds no
-//! signing key: a server whose `auth` is `rewind` is listed without a signature.
+//! An action set file is the body of `POST /v1/action-sets` (`CreateActionSet`), pinned as a server
+//! pins it: the actions of each MCP server are discovered by connecting to it (`rewind-mcp`), each
+//! with its `auth`; the operations of each API are read from its OpenAPI document
+//! (`rewind-openapi`); harness actions and the `http` action are taken as written, the `webhook`
+//! built-in is always there. As the embedded server, the CLI reaches any address, and APIs over
+//! `http` too. It holds no signing key: a server whose `auth` is `rewind` is listed without a
+//! signature.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -75,8 +76,8 @@ pub(crate) async fn pin(create: &CreateActionSet) -> Result<ActionSet, String> {
     ActionSet::from_parts(servers, apis, actions).map_err(|error| error.to_string())
 }
 
-/// The APIs of an action set file, read from their OpenAPI documents as `POST /v1/action-sets` reads
-/// them: given in the file, or read once from their URL, at any address.
+/// The APIs of an action set file, read from their OpenAPI documents as `POST /v1/action-sets`
+/// reads them: given in the file, or read once from their URL, at any address.
 async fn read_apis(create: &CreateActionSet) -> Result<(Vec<Api>, Vec<Action>), String> {
     let mut apis = Vec::new();
     let mut actions = Vec::new();
@@ -239,8 +240,8 @@ fn webhook() -> Action {
     )
 }
 
-/// The action set of a scenario that names none: a harness action for each action its mocks answer (a
-/// name `group.action` puts it in a group), and `webhook`. In mock mode every call goes to the
+/// The action set of a scenario that names none: a harness action for each action its mocks answer
+/// (a name `group.action` puts it in a group), and `webhook`. In mock mode every call goes to the
 /// mocks, whatever its route. The `http` action needs its allow-list: a scenario whose mocks
 /// answer it names an action set file.
 pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<ActionSet, CliError> {

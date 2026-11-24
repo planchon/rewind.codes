@@ -14,14 +14,14 @@ pub struct Scenario {
     /// The run's input.
     #[serde(default = "empty_object")]
     pub input: Value,
-    /// The action set, and how each action answers (see [`crate::actions::ScenarioActions`]). An action is a
-    /// harness action (`group.action` puts it in a group), except `http` and `webhook`, the built-ins,
-    /// and the actions of `mcp_servers`.
+    /// The action set, and how each action answers (see [`crate::actions::ScenarioActions`]). An
+    /// action is a harness action (`group.action` puts it in a group), except `http` and `webhook`,
+    /// the built-ins, and the actions of `mcp_servers`.
     #[serde(default)]
     pub actions: BTreeMap<String, Value>,
-    /// MCP servers: an action `server.action` of one of them is an MCP action. Pinned without an output
-    /// schema (unless `output_schemas` gives one), it answers with MCP content, as `rewind-mcp`
-    /// returns it: `{"content": [blocks], "structuredContent"?: value}`.
+    /// MCP servers: an action `server.action` of one of them is an MCP action. Pinned without an
+    /// output schema (unless `output_schemas` gives one), it answers with MCP content, as
+    /// `rewind-mcp` returns it: `{"content": [blocks], "structuredContent"?: value}`.
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     /// The pinned output schema of some MCP actions, by name.

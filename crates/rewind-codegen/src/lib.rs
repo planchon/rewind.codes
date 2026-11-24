@@ -15,14 +15,14 @@
 //! recorded results, when there are some, marked `@observed`: for a harness action, the result's
 //! shape; for an MCP action, which returns its content, the shape of its `structuredContent`.
 //!
-//! `rewind-actions.d.ts` always declares the module `rewind:actions` (`declare module "rewind:actions" { … }`),
-//! empty for an action set without actions. An action set that pins workflows also gets the module
-//! `rewind:workflows`, one typed export per workflow, and a prompt line per workflow; the
-//! declarations a workflow's own script is checked against come from
+//! `rewind-actions.d.ts` always declares the module `rewind:actions` (`declare module
+//! "rewind:actions" { … }`), empty for an action set without actions. An action set that pins
+//! workflows also gets the module `rewind:workflows`, one typed export per workflow, and a prompt
+//! line per workflow; the declarations a workflow's own script is checked against come from
 //! [`workflow_declarations`]. Built-ins are not part of it: scripts reach `http` through
-//! `fetch` and `webhook` through the `rewind` module. For an action set that enables `http`, the file
-//! starts with [`HTTP_ACTION_REFERENCE`], from which the type-checker knows to declare `fetch`.
-//! The prompt lists the built-ins too, with the hosts `fetch` may reach.
+//! `fetch` and `webhook` through the `rewind` module. For an action set that enables `http`, the
+//! file starts with [`HTTP_ACTION_REFERENCE`], from which the type-checker knows to declare
+//! `fetch`. The prompt lists the built-ins too, with the hosts `fetch` may reach.
 
 #![forbid(unsafe_code)]
 
@@ -40,9 +40,10 @@ mod workflows;
 
 pub use workflows::{WorkflowDeclarations, workflow_declarations};
 
-/// The first line of the `rewind-actions.d.ts` of an action set that enables the `http` action. It is how
-/// the type-checker learns that the script has `fetch`: it then adds `fetch.d.ts` to the check.
-/// `rewind-check` exports the same line (`HTTP_ACTION_REFERENCE`); `archi/04-tools.md` records it.
+/// The first line of the `rewind-actions.d.ts` of an action set that enables the `http` action. It
+/// is how the type-checker learns that the script has `fetch`: it then adds `fetch.d.ts` to the
+/// check. `rewind-check` exports the same line (`HTTP_ACTION_REFERENCE`); `archi/04-tools.md`
+/// records it.
 pub const HTTP_ACTION_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
 
 /// What codegen generated for an action set.
@@ -65,8 +66,8 @@ pub struct ActionDeclaration {
     pub name: String,
     /// The action's line of the prompt rendering.
     pub prompt: String,
-    /// The action's declaration in `rewind-actions.d.ts`, with the types it uses, as a module of its
-    /// own. For a built-in, its declaration in the sandbox lib.
+    /// The action's declaration in `rewind-actions.d.ts`, with the types it uses, as a module of
+    /// its own. For a built-in, its declaration in the sandbox lib.
     pub typescript: String,
 }
 
@@ -74,8 +75,8 @@ pub struct ActionDeclaration {
 /// recorded results of its actions, by action name (`ReadModel::observed_shapes`); they type the
 /// results of the actions that declare no output schema.
 ///
-/// A bare harness action whose name is not an identifier cannot be imported from `rewind:actions`: it is
-/// left out, as the runtime leaves it out of the module.
+/// A bare harness action whose name is not an identifier cannot be imported from `rewind:actions`:
+/// it is left out, as the runtime leaves it out of the module.
 pub fn generate(action_set: &ActionSet, observed: &BTreeMap<String, Shape>) -> Declarations {
     let exports = model::exports(action_set, observed);
     let http_action = action_set

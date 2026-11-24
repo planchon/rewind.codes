@@ -104,7 +104,8 @@ impl Actions {
         action
     }
 
-    /// The declarations of an action set: `rewind-actions.d.ts`, the prompt rendering, each action's.
+    /// The declarations of an action set: `rewind-actions.d.ts`, the prompt rendering, each
+    /// action's.
     pub(crate) fn declarations(
         &self,
         action_set: &ActionSet,

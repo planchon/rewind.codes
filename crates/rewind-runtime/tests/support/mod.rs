@@ -2,7 +2,8 @@
 //! holding the one partition, over the engine's memory adapters, with the V8 executor and a
 //! test's dispatcher, stepped by the engine's driver in virtual time from [`T0`].
 //!
-//! Harness actions go to the dispatcher, as in mock mode: the tests' dispatchers answer every action.
+//! Harness actions go to the dispatcher, as in mock mode: the tests' dispatchers answer every
+//! action.
 
 #![allow(dead_code, unreachable_pub, clippy::unwrap_used)]
 

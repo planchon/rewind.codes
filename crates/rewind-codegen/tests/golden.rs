@@ -2,8 +2,8 @@
 //! codegen must generate from it, byte for byte: `rewind-actions.d.ts`, `prompt.txt`, and
 //! `actions.txt` (each action on its own). `REWIND_CODEGEN_BLESS=1` writes the outputs again.
 //!
-//! `action_set.json` describes the action set in a form of this test's own (codegen does not read the
-//! stored format):
+//! `action_set.json` describes the action set in a form of this test's own (codegen does not read
+//! the stored format):
 //!
 //! ```json
 //! {

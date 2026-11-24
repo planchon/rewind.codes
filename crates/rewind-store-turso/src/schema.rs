@@ -715,10 +715,10 @@ ALTER TABLE namespaces ADD COLUMN display_name TEXT;
 "#;
 
 /// Named secrets attached to runs, and each tenant's signing keys (`archi/04-tools.md`, "Secrets"
-/// and "Signed calls"). The credentials per action set, per namespace and action set, and per run are
-/// dropped, with the data keys that encrypted them: nothing is encrypted under those any more, and
-/// a tenant's next secret or signing key makes a data key under the current master key, whose id
-/// `data_keys.master_key` records. An organization's secrets are kept under the namespace `*`.
+/// and "Signed calls"). The credentials per action set, per namespace and action set, and per run
+/// are dropped, with the data keys that encrypted them: nothing is encrypted under those any more,
+/// and a tenant's next secret or signing key makes a data key under the current master key, whose
+/// id `data_keys.master_key` records. An organization's secrets are kept under the namespace `*`.
 const V9: &str = r#"
 DROP TABLE secrets;
 DROP TABLE data_keys;
