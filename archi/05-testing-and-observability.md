@@ -178,7 +178,9 @@ run](#tests-recorded-from-runs)), or as `{ "test": "<digest>", "expect": { … }
 with a new expectation, so a model corrects a recorded test without reading its cassette.
 
 A workflow forked from an organization's ([workflows](01-product.md#workflows)) starts with a
-copy of its source's suite, which then evolves on its own. Pulling its source's latest version
+copy of its source's suite, which then evolves on its own. The copy leaves out the tests
+recorded from another namespace's runs: they hold that end user's data, which never reaches
+another end user's namespace. Pulling its source's latest version
 (`POST /v1/workflows/{id}/pull`) makes it the fork's next version only once the fork's own suite
 passes against it, else 422 `tests-failed`: a fork's tests say what its end user relies on.
 

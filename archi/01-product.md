@@ -354,7 +354,8 @@ Every run is a run of a workflow, and the runs it starts are its child runs.
 - **Its forks.** A namespace changes an organization workflow by forking it. A fork is a
   namespace workflow whose `source` is the organization's workflow and one of its versions. It
   keeps its source's name, so the namespace's runs that name the workflow get the fork from then
-  on; it starts with a copy of its source's suite, which then evolves on its own; and it pulls
+  on; it starts with a copy of its source's suite, without the tests recorded from another
+  namespace's runs, which then evolves on its own; and it pulls
   its source's latest version (its code, interface and action set), which becomes its next
   version once the fork's own suite passes, else nothing changes (422 `tests-failed`). Members and
   API keys with `workflows:write` fork and pull, so a harness forks for its end users; an end
