@@ -103,7 +103,7 @@ async fn named(sign_in: &SignIn, organization: &OrganizationId) -> Result<Organi
 }
 
 /// The caller's tenant, as an organization of the identity provider.
-fn organization_of(caller: &Caller) -> OrganizationId {
+fn tenant_state_of(caller: &Caller) -> OrganizationId {
     OrganizationId::new(caller.tenant.as_str())
 }
 
@@ -158,7 +158,7 @@ pub(super) async fn whoami(
     who: Who,
 ) -> Result<Json<Identity>, ApiError> {
     let mut identity = Identity {
-        tenant: None,
+        organization_id: None,
         principal: None,
         grant: None,
         permissions: Vec::new(),
@@ -170,7 +170,7 @@ pub(super) async fn whoami(
         identity.principal = Some(super::connections::principal(&app, connection).await?);
     }
     if let Some(caller) = &who.caller {
-        identity.tenant = Some(caller.tenant.as_str().to_owned());
+        identity.organization_id = Some(caller.tenant.as_str().to_owned());
         identity.permissions = caller.effective_permissions();
         identity.operator = caller.operator();
         identity.grant = caller.role.clone().map(|role| rewind_api::access::Grant {
@@ -293,7 +293,7 @@ pub(super) async fn update_organization(
 ) -> Result<Json<OrganizationSettings>, ApiError> {
     caller.require(Permission::OrganizationWrite)?;
     let sign_in = app.sign_in()?;
-    let organization = organization_of(&caller);
+    let organization = tenant_state_of(&caller);
     let name = match request.name.as_deref().map(str::trim) {
         Some("") => return Err(ApiError::invalid("name: an organization needs a name")),
         Some(name) => {
@@ -434,7 +434,7 @@ async fn membership(
 ) -> Result<ports::Membership, ApiError> {
     sign_in
         .identity
-        .members(&organization_of(caller))
+        .members(&tenant_state_of(caller))
         .await?
         .into_iter()
         .find(|membership| membership.user.id.as_str() == user)
@@ -452,7 +452,7 @@ pub(super) async fn members(
 ) -> Result<Json<MemberList>, ApiError> {
     caller.require(Permission::MembersRead)?;
     let sign_in = app.sign_in()?;
-    let memberships = sign_in.identity.members(&organization_of(&caller)).await?;
+    let memberships = sign_in.identity.members(&tenant_state_of(&caller)).await?;
     let grants: HashMap<Principal, ports::Grant> = app
         .store
         .list_grants(&caller.tenant)
@@ -546,7 +546,7 @@ async fn invitation_of(
     caller: &Caller,
     id: &str,
 ) -> Result<ports::Invitation, ApiError> {
-    let organization = organization_of(caller);
+    let organization = tenant_state_of(caller);
     sign_in
         .identity
         .invitation(&InvitationId::new(id.trim()))
@@ -568,7 +568,7 @@ pub(super) async fn invitations(
 ) -> Result<Json<InvitationList>, ApiError> {
     caller.require(Permission::MembersRead)?;
     let sign_in = app.sign_in()?;
-    let organization = organization_of(&caller);
+    let organization = tenant_state_of(&caller);
     let found = sign_in.identity.invitations_of(&organization).await?;
     let grants: HashMap<Principal, ports::Grant> = app
         .store
@@ -610,7 +610,7 @@ pub(super) async fn invite(
     let permissions = givable_role(&app, &caller, &request.role).await?;
     holds(&caller, &request.role, &permissions, "giving")?;
     refuse_nul_in_labels(&request.allowed_labels.0)?;
-    let organization = organization_of(&caller);
+    let organization = tenant_state_of(&caller);
     let inviter = match &caller.principal {
         Some(Principal::User(user)) => Some(UserId::new(user.clone())),
         _ => None,
@@ -653,7 +653,7 @@ pub(super) async fn resend_invitation(
         .store
         .grant(&caller.tenant, &Principal::from(&invitation.id))
         .await?;
-    let named = named(sign_in, &organization_of(&caller)).await?;
+    let named = named(sign_in, &tenant_state_of(&caller)).await?;
     Ok(Json(invitation_view(&resent, Some(named), grant.as_ref())))
 }
 

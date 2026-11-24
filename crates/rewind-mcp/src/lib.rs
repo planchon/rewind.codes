@@ -349,7 +349,7 @@ pub enum ListingAuth {
     /// where the server's `auth` says.
     Secret(Secret),
     /// Each request signed with the tenant's key, issued by `issuer`
-    /// (`{public-url}/organizations/{tenant}`), with only `iss`, `aud`, `jti`, `htm`, `htu`,
+    /// (`{public-url}/organizations/{organization}`), with only `iss`, `aud`, `jti`, `htm`, `htu`,
     /// `body`, `iat` and `exp`.
     Signed { key: SigningKey, issuer: String },
 }

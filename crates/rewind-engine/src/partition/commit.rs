@@ -20,15 +20,15 @@ use rewind_core::RunId;
 use crate::executors::ExecMsg;
 use crate::node::NodeMsg;
 use crate::node::message::{Effect, Message, ReplyTo, job};
-use crate::org::OrgMsg;
 use crate::partition::{Entry, Internal, Owner, OwnerMsg, Phase};
 use crate::plane::Plane;
-use crate::ports::link::{Changed, NodeReply, OrgReply, PartitionReply, Refusal};
+use crate::ports::link::{Changed, NodeReply, PartitionReply, Refusal, TenantReply};
 use crate::ports::partition::{Batch, Change};
 use crate::ports::{
     NamespaceName, OutboxChange, OutboxEntry, PartitionError, PartitionLog, RunRef, TaskRef,
     TenantId,
 };
+use crate::tenant::TenantMsg;
 
 /// The changes of one message, and what follows once they are durable.
 pub(crate) struct Unit<P: Plane> {
@@ -57,7 +57,7 @@ pub(crate) enum After<P: Plane> {
     Seal(RunRef),
     /// An outbox entry for its projection.
     Project(OutboxEntry),
-    /// The counts of a namespace go to its organization actor; these admitted runs are
+    /// The counts of a namespace go to its tenant actor; these admitted runs are
     /// included, these were abandoned.
     Report {
         tenant: TenantId,
@@ -318,10 +318,10 @@ impl<P: Plane> Owner<P> {
                     let reply = refused(&reply, refusal.clone());
                     self.reply(to, reply);
                 }
-                After::Effect(Effect::Reply(to, NodeReply::Organization(_))) => {
+                After::Effect(Effect::Reply(to, NodeReply::Tenant(_))) => {
                     self.out.push(Effect::Reply(
                         to,
-                        NodeReply::Organization(OrgReply::Admission(Err(refusal.clone()))),
+                        NodeReply::Tenant(TenantReply::Admission(Err(refusal.clone()))),
                     ));
                 }
                 After::Effect(Effect::Reply(to, NodeReply::Partition(reply))) => {
@@ -453,7 +453,7 @@ impl<P: Plane> Owner<P> {
         }
     }
 
-    /// Sends the counts of a namespace to its organization actor, as absolute values.
+    /// Sends the counts of a namespace to its tenant actor, as absolute values.
     pub(crate) fn report(
         &mut self,
         tenant: TenantId,
@@ -493,7 +493,7 @@ impl<P: Plane> Owner<P> {
         }));
     }
 
-    /// The counts a report read, sent to the organization actor.
+    /// The counts a report read, sent to the tenant actor.
     pub(crate) fn counted(
         &mut self,
         tenant: TenantId,
@@ -520,15 +520,15 @@ impl<P: Plane> Owner<P> {
             abandoned,
             at: self.now(),
         };
-        let request = crate::ports::link::NodeRequest::Organization {
+        let request = crate::ports::link::NodeRequest::Tenant {
             tenant: tenant.clone(),
-            request: Box::new(crate::ports::link::OrgRequest::Counts(report)),
+            request: Box::new(crate::ports::link::TenantRequest::Counts(report)),
         };
         if crate::ports::home_partition(&tenant, self.config.partitions) == self.partition {
-            if let crate::ports::link::NodeRequest::Organization { request, .. } = request {
-                self.dispatch(OwnerMsg::Org {
+            if let crate::ports::link::NodeRequest::Tenant { request, .. } = request {
+                self.dispatch(OwnerMsg::Tenant {
                     tenant,
-                    message: OrgMsg::Request(request, ReplyTo::Nobody),
+                    message: TenantMsg::Request(request, ReplyTo::Nobody),
                 });
             }
         } else {

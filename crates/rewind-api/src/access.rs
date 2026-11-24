@@ -510,10 +510,10 @@ pub struct SetGrant {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateApiKey {
-    /// Another tenant than the caller's: only the operator names one, and the tenant is
-    /// created with its first key.
+    /// Another organization than the caller's, by its id: only the operator names one, and the
+    /// organization is created with its first key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
+    pub organization_id: Option<String>,
     /// What the key is for.
     pub name: String,
     /// A built-in role, a role of the tenant, or `operator` (only from the operator).
@@ -530,7 +530,8 @@ pub struct CreateApiKey {
 pub struct ApiKey {
     /// For `DELETE /v1/api-keys/{id}`: the hex of the key's SHA-256. Not a secret.
     pub id: String,
-    pub tenant: String,
+    /// The organization the key acts in, by its id.
+    pub organization_id: String,
     pub name: String,
     /// The role of the key's grant.
     pub role: String,
@@ -765,7 +766,7 @@ mod tests {
             "allowedLabels": { "conversation": "c-1" }
         }))
         .unwrap();
-        assert_eq!(created.tenant, None);
+        assert_eq!(created.organization_id, None);
         assert_eq!(created.allowed_labels.len(), 1);
         assert!(
             serde_json::from_value::<CreateApiKey>(json!({ "role": "harness" })).is_err(),

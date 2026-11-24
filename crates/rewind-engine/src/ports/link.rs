@@ -4,8 +4,8 @@
 //!
 //! ```text
 //!  edge ── Partition(PartitionRequest) ──────────► owner of the partition    (start, signal, …, reads)
-//!  owner ─ Organization(OrgRequest) ─────────────► organization actor        (admission, counts, slots, harness tasks)
-//!  edge ── Organization(Attach / Detach) ────────► organization actor        (an SDK stream opened or closed)
+//!  owner ─ Organization(TenantRequest) ─────────────► tenant actor        (admission, counts, slots, harness tasks)
+//!  edge ── Organization(Attach / Detach) ────────► tenant actor        (an SDK stream opened or closed)
 //!  org ─── Owner(OwnerNotice) ───────────────────► owner of a run            (slot granted, stream lost, counts wanted)
 //!  org ─── Edge(EdgeNotice::HandOut) ────────────► edge holding the stream   (a harness task, with its token)
 //!  edge ── subscribe(SubscriptionKey, from) ─────► owner                     (a stream of Changed)
@@ -96,12 +96,12 @@ pub enum NodeRequest {
         partition: PartitionId,
         request: Box<PartitionRequest>,
     },
-    /// To the organization actor of `tenant`, on the owner of its home partition.
-    Organization {
+    /// To the tenant actor of `tenant`, on the owner of its home partition.
+    Tenant {
         tenant: TenantId,
-        request: Box<OrgRequest>,
+        request: Box<TenantRequest>,
     },
-    /// To the owner of `partition`, from an organization actor.
+    /// To the owner of `partition`, from an tenant actor.
     Owner {
         partition: PartitionId,
         notice: Box<OwnerNotice>,
@@ -114,7 +114,7 @@ pub enum NodeRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeReply {
     Partition(Box<PartitionReply>),
-    Organization(OrgReply),
+    Tenant(TenantReply),
     /// The request was taken: a notice, or a request answered later by a notice.
     Done,
     /// This node does not hold the partition (or the home partition of the tenant) any more:
@@ -239,7 +239,7 @@ pub enum PartitionRequest {
         month: Month,
         days: bool,
     },
-    /// The quota alerts of a month the tenant's organization actor recorded: of one namespace,
+    /// The quota alerts of a month the tenant's tenant actor recorded: of one namespace,
     /// or every alert of the tenant (its own included), the newest first. To the owner of the
     /// tenant's home partition: answered `Alerts`.
     QuotaAlerts {
@@ -287,7 +287,7 @@ pub struct RunView {
 }
 
 /// A start the edge checked (code, TTL, input, attachments, namespace): the owner answers a
-/// known start key with its run, asks the organization actor to admit it, then creates it.
+/// known start key with its run, asks the tenant actor to admit it, then creates it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartAtOwner {
     /// The new run, its id drawn for the namespace's partition.
@@ -350,11 +350,11 @@ pub enum Decision {
 }
 
 // -------------------------------------------------------------------------------------------
-// The organization actor
+// The tenant actor
 
-/// What an owner, or an edge, asks the organization actor of a tenant.
+/// What an owner, or an edge, asks the tenant actor of a tenant.
 #[derive(Clone, Debug, PartialEq)]
-pub enum OrgRequest {
+pub enum TenantRequest {
     /// Admits a start: answered `Admission`.
     Admit(Admit),
     /// The absolute counts of one namespace in a partition, after a batch that moved them:
@@ -377,9 +377,9 @@ pub enum OrgRequest {
     Detach { stream: StreamId },
 }
 
-/// What the organization actor answers.
+/// What the tenant actor answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OrgReply {
+pub enum TenantReply {
     /// The start is admitted, or refused for a quota.
     Admission(Result<(), Refusal>),
 }
@@ -486,7 +486,7 @@ pub struct StreamAttach {
     pub slots: u32,
 }
 
-/// What an organization actor tells an owner.
+/// What an tenant actor tells an owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerNotice {
     /// The call may be sent.
@@ -495,11 +495,11 @@ pub enum OwnerNotice {
     /// grace: each is interrupted (delivery + 1, or `outcome_unknown` when its action is not
     /// idempotent).
     StreamLost { tasks: Vec<(TaskRef, TaskToken)> },
-    /// A new organization actor asks for the counts of the tenant's namespaces.
+    /// A new tenant actor asks for the counts of the tenant's namespaces.
     CountsWanted { tenant: TenantId },
 }
 
-/// What an organization actor tells the edge that holds an SDK stream, or the owner of a
+/// What an tenant actor tells the edge that holds an SDK stream, or the owner of a
 /// partition every edge.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(

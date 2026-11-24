@@ -381,7 +381,7 @@ pub struct PutNamespaceDefaults {
     pub defaults: Quotas,
 }
 
-/// `PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling.
+/// `PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PutCeiling {

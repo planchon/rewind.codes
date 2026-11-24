@@ -27,8 +27,8 @@ use crate::partition::{Ask, Flight, Owner, OwnerMsg, tokens};
 use crate::plane::{HarnessActions, Plane};
 use crate::ports::PartitionLog as _;
 use crate::ports::link::{
-    Decision, HarnessFailure, HarnessTaskOffer, NodeRequest, OrgRequest, PartitionReply, Refusal,
-    SlotRequest, TaskAnswer,
+    Decision, HarnessFailure, HarnessTaskOffer, NodeRequest, PartitionReply, Refusal, SlotRequest,
+    TaskAnswer, TenantRequest,
 };
 use crate::ports::partition::{Change, home_partition};
 use crate::ports::{
@@ -108,7 +108,7 @@ impl<P: Plane> Owner<P> {
         }
     }
 
-    /// Asks the organization actor for a slot of `server` for the task: its concurrency, from
+    /// Asks the tenant actor for a slot of `server` for the task: its concurrency, from
     /// the run's action set.
     fn ask_slot(&mut self, task: &TaskRef, server: String) {
         let limit = self
@@ -126,9 +126,9 @@ impl<P: Plane> Owner<P> {
         let tenant = task.run.tenant.clone();
         self.tell(
             Target::Home(tenant.clone()),
-            NodeRequest::Organization {
+            NodeRequest::Tenant {
                 tenant,
-                request: Box::new(OrgRequest::Slot(SlotRequest {
+                request: Box::new(TenantRequest::Slot(SlotRequest {
                     partition: self.partition,
                     epoch: self.epoch,
                     task: task.clone(),
@@ -139,7 +139,7 @@ impl<P: Plane> Owner<P> {
         );
     }
 
-    /// The partition `home` opened again: the organization actors homed there are new, and know
+    /// The partition `home` opened again: the tenant actors homed there are new, and know
     /// none of the slots asked of the ones before. Each call of a tenant homed there that waits
     /// for its slot asks again; dropped, it would wait forever.
     pub(crate) fn home_reopened(&mut self, home: rewind_core::PartitionId) -> Vec<Effect<P>> {
@@ -199,7 +199,7 @@ impl<P: Plane> Owner<P> {
             )))));
     }
 
-    /// The organization actor granted the task's slot.
+    /// The tenant actor granted the task's slot.
     pub(crate) fn granted(&mut self, task: &TaskRef) {
         let server = match self.flights.get(task) {
             Some(Flight::Asked { server }) => server.clone(),
@@ -239,9 +239,9 @@ impl<P: Plane> Owner<P> {
         let tenant = task.run.tenant.clone();
         self.tell(
             Target::Home(tenant.clone()),
-            NodeRequest::Organization {
+            NodeRequest::Tenant {
                 tenant,
-                request: Box::new(OrgRequest::SlotFreed {
+                request: Box::new(TenantRequest::SlotFreed {
                     task: task.clone(),
                     server,
                 }),
@@ -263,9 +263,9 @@ impl<P: Plane> Owner<P> {
             }) => {
                 unit.then(After::Effect(Effect::Request {
                     to: Target::Home(tenant.clone()),
-                    request: NodeRequest::Organization {
+                    request: NodeRequest::Tenant {
                         tenant: tenant.clone(),
-                        request: Box::new(OrgRequest::SlotFreed {
+                        request: Box::new(TenantRequest::SlotFreed {
                             task: task.clone(),
                             server,
                         }),
@@ -277,9 +277,9 @@ impl<P: Plane> Owner<P> {
                 let gone = matches!(flight, Flight::Handed { .. });
                 unit.then(After::Effect(Effect::Request {
                     to: Target::Home(tenant.clone()),
-                    request: NodeRequest::Organization {
+                    request: NodeRequest::Tenant {
                         tenant: tenant.clone(),
-                        request: Box::new(OrgRequest::HarnessTaskDone {
+                        request: Box::new(TenantRequest::HarnessTaskDone {
                             task: task.clone(),
                             gone,
                         }),
@@ -341,9 +341,9 @@ impl<P: Plane> Owner<P> {
             CallOutcome::Child(child) => match *child {
                 ChildStart::New { start, neighbours } => {
                     let tenant = task.run.tenant.clone();
-                    let request = NodeRequest::Organization {
+                    let request = NodeRequest::Tenant {
                         tenant: tenant.clone(),
-                        request: Box::new(OrgRequest::Admit(crate::ports::link::Admit {
+                        request: Box::new(TenantRequest::Admit(crate::ports::link::Admit {
                             partition: self.partition,
                             epoch: self.epoch,
                             run: start.run.id,
@@ -408,9 +408,9 @@ impl<P: Plane> Owner<P> {
                 let tenant = task.run.tenant.clone();
                 self.tell(
                     Target::Home(tenant.clone()),
-                    NodeRequest::Organization {
+                    NodeRequest::Tenant {
                         tenant,
-                        request: Box::new(OrgRequest::HarnessTask(Box::new(HarnessTaskOffer {
+                        request: Box::new(TenantRequest::HarnessTask(Box::new(HarnessTaskOffer {
                             partition: self.partition,
                             epoch: self.epoch,
                             task: *host,
@@ -643,9 +643,9 @@ impl<P: Plane> Owner<P> {
             }) => {
                 unit.then(After::Effect(Effect::Request {
                     to: Target::Home(tenant.clone()),
-                    request: NodeRequest::Organization {
+                    request: NodeRequest::Tenant {
                         tenant,
-                        request: Box::new(OrgRequest::SlotFreed {
+                        request: Box::new(TenantRequest::SlotFreed {
                             task: task.clone(),
                             server,
                         }),
@@ -656,9 +656,9 @@ impl<P: Plane> Owner<P> {
             Some(flight @ (Flight::Handed { .. } | Flight::Answered)) => {
                 unit.then(After::Effect(Effect::Request {
                     to: Target::Home(tenant.clone()),
-                    request: NodeRequest::Organization {
+                    request: NodeRequest::Tenant {
                         tenant,
-                        request: Box::new(OrgRequest::HarnessTaskDone {
+                        request: Box::new(TenantRequest::HarnessTaskDone {
                             task: task.clone(),
                             gone: matches!(flight, Flight::Handed { .. }),
                         }),

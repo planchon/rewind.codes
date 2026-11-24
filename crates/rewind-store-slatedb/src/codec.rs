@@ -16,11 +16,11 @@ use rewind_core::{Event, Lifecycle, Seq, Timestamp};
 use rewind_engine::ports::{
     ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, DueTimer, Ending,
     FailureCounts, ForkSource, Gauges, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
-    NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind, ParkReason, PartitionError,
-    PayloadRecord, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
-    QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow,
-    ScriptCounts, SecretExpiredReason, SignalUrlTarget, Sketch, Span, SpanId, SpanKind, SpanStatus,
-    StartedBy, TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold, TimerKind,
+    NamespaceName, OutboxEntry, OutboxId, ParkKind, ParkReason, PartitionError, PayloadRecord,
+    Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind,
+    RunCounts, RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow, ScriptCounts,
+    SecretExpiredReason, SignalUrlTarget, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy,
+    TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, TenantState, Threshold, TimerKind,
     TraceContext, TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind,
 };
 use rewind_format::partition as record;
@@ -824,7 +824,7 @@ pub fn gauges_of(record: record::Gauges) -> Gauges {
 }
 
 // -------------------------------------------------------------------------------------------
-// The outbox and the organizations
+// The outbox and the tenants
 
 fn attribute_record(value: &AttributeValue) -> record::Attribute {
     match value {
@@ -1134,8 +1134,8 @@ pub fn projection_of(record: record::Projection) -> Result<Projection, Partition
     })
 }
 
-pub fn organization_record(state: &OrganizationState) -> record::Organization {
-    record::Organization {
+pub fn tenant_state_record(state: &TenantState) -> record::TenantState {
+    record::TenantState {
         alerts: state.alerts.iter().map(alert_record).collect(),
         admissions: state
             .admissions
@@ -1150,8 +1150,8 @@ pub fn organization_record(state: &OrganizationState) -> record::Organization {
     }
 }
 
-pub fn organization_of(record: record::Organization) -> Result<OrganizationState, PartitionError> {
-    Ok(OrganizationState {
+pub fn tenant_state_of(record: record::TenantState) -> Result<TenantState, PartitionError> {
+    Ok(TenantState {
         alerts: record
             .alerts
             .into_iter()

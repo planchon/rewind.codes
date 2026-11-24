@@ -9,9 +9,9 @@ use object_store::ObjectStore;
 use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Shape, Timestamp};
 use rewind_engine::ports::{
     Attempt, Batch, CountedNamespace, Counters, DueTimer, Found, Gauges, InboxItem, IndexedSummary,
-    NamespaceName, NodeId, OrganizationState, Page, PartitionError, PartitionLog, PartitionStore,
-    PayloadRecord, Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, SignalUrlTarget,
-    TaskRecord, TenantId, Watcher, Window,
+    NamespaceName, NodeId, Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord,
+    Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, SignalUrlTarget, TaskRecord, TenantId,
+    TenantState, Watcher, Window,
 };
 use rewind_format::partition as record;
 use slatedb::admin::Admin;
@@ -443,16 +443,16 @@ impl PartitionLog for SlateLog {
                 gauges,
             })
             .collect();
-        let mut organizations = BTreeMap::new();
+        let mut tenants = BTreeMap::new();
         for (key, state) in self
-            .records::<record::Organization>(&keys::Key::new(keys::ORGANIZATION))
+            .records::<record::TenantState>(&keys::Key::new(keys::TENANT_STATE))
             .await?
         {
             let (tenant, _) = key
                 .get(1..)
                 .and_then(keys::read_str)
                 .ok_or_else(|| codec::corrupt("an organization's key"))?;
-            organizations.insert(codec::tenant(tenant)?, codec::organization_of(state)?);
+            tenants.insert(codec::tenant(tenant)?, codec::tenant_state_of(state)?);
         }
         Ok(Recovery {
             runnable,
@@ -462,7 +462,7 @@ impl PartitionLog for SlateLog {
             unsealed,
             outbox,
             counters,
-            organizations,
+            tenants,
         })
     }
 
@@ -773,13 +773,10 @@ impl PartitionLog for SlateLog {
         Ok(shapes)
     }
 
-    async fn organization(
-        &self,
-        tenant: &TenantId,
-    ) -> Result<Option<OrganizationState>, PartitionError> {
-        self.get::<record::Organization>(keys::organization(tenant))
+    async fn tenant(&self, tenant: &TenantId) -> Result<Option<TenantState>, PartitionError> {
+        self.get::<record::TenantState>(keys::tenant_state(tenant))
             .await?
-            .map(codec::organization_of)
+            .map(codec::tenant_state_of)
             .transpose()
     }
 

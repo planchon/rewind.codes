@@ -1689,8 +1689,8 @@ mod operations {
     ///
     /// The limits of its totals across namespaces: the customer's offer. The operator only.
     #[utoipa::path(
-        put, path = "/v1/organizations/{tenant}/quotas", tag = "namespaces", operation_id = "putCeiling",
-        params(("tenant" = String, Path, description = "The tenant (the organization's id).")),
+        put, path = "/v1/organizations/{organization}/quotas", tag = "namespaces", operation_id = "putCeiling",
+        params(("organization" = String, Path, description = "The organization's id.")),
         request_body = PutCeiling,
         responses(
             (status = 204, description = "Changed."),
@@ -1856,8 +1856,8 @@ mod operations {
     /// as the servers that receive signed calls check them (`verifyRewindCall`). Without
     /// authentication; `Cache-Control: max-age=300`.
     #[utoipa::path(
-        get, path = "/organizations/{tenant}/jwks.json", tag = "secrets", operation_id = "getJwks",
-        params(("tenant" = String, Path, description = "The tenant (the organization's id).")),
+        get, path = "/organizations/{organization}/jwks.json", tag = "secrets", operation_id = "getJwks",
+        params(("organization" = String, Path, description = "The organization's id.")),
         security(()),
         responses(
             (status = 200, description = "The public keys.", body = Jwks),

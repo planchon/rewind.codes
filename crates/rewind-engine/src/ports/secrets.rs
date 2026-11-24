@@ -258,7 +258,7 @@ impl fmt::Debug for PrivateKey {
     }
 }
 
-/// The public part of a signing key, as `/organizations/{tenant}/jwks.json` publishes it: an
+/// The public part of a signing key, as `/organizations/{organization}/jwks.json` publishes it: an
 /// Ed25519 JWK (`kty` `OKP`, `crv` `Ed25519`, `alg` `EdDSA`) whose `x` is the key in base64url.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey {

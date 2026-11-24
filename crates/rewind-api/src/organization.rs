@@ -101,10 +101,10 @@ pub enum TokenKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {
-    /// The tenant the caller acts in. Absent for a member signed in without an organization,
-    /// who reaches only the onboarding endpoints.
+    /// The organization the caller acts in, by its id. Absent for a member signed in without
+    /// an organization, who reaches only the onboarding endpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<String>,
+    pub organization_id: Option<String>,
     /// Absent over the embedded server's socket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<Principal>,
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn whoami_names_the_principal_by_kind() {
         let member = Identity {
-            tenant: Some("org_01JABC".into()),
+            organization_id: Some("org_01JABC".into()),
             principal: Some(Principal::User {
                 user: User {
                     id: "user_01JABC".into(),

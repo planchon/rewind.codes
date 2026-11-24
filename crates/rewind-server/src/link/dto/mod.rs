@@ -16,7 +16,7 @@
 //!
 //! - [`requests`]: [`NodeRequest`] and [`NodeReply`], with what an edge asks an owner
 //!   ([`PartitionRequest`], [`PartitionReply`], [`Refusal`]), what an owner asks an organization
-//!   actor ([`OrgRequest`], [`OrgReply`]), the notices ([`OwnerNotice`], [`EdgeNotice`]), the
+//!   actor ([`TenantRequest`], [`TenantReply`]), the notices ([`OwnerNotice`], [`EdgeNotice`]), the
 //!   subscriptions ([`Subscribe`], [`Changed`]);
 //! - [`activations`]: [`ActivationRequest`] and [`ActivationResult`], for a remote executor;
 //! - [`values`]: what both carry (a run, a task, a query, a page of a search, counters).
@@ -46,9 +46,9 @@ pub use activations::{
 };
 pub use requests::{
     Admit, Changed, Counted, CountsReport, Created, Decision, EdgeNotice, Enqueued, HarnessFailure,
-    HarnessTask, HarnessTaskOffer, LostTask, NodeReply, NodeRequest, OrgReply, OrgRequest,
-    OwnerNotice, PartitionReply, PartitionRequest, Refusal, SignalAtOwner, SlotRequest,
-    StartAtOwner, StreamAttach, Subscribe, SubscriptionKey, TaskAnswer,
+    HarnessTask, HarnessTaskOffer, LostTask, NodeReply, NodeRequest, OwnerNotice, PartitionReply,
+    PartitionRequest, Refusal, SignalAtOwner, SlotRequest, StartAtOwner, StreamAttach, Subscribe,
+    SubscriptionKey, TaskAnswer, TenantReply, TenantRequest,
 };
 pub use values::{
     Bound, Counters, DayUsage, Found, Month, Page, Predicate, QuotaExceeded, QuotaKind, QuotaScope,

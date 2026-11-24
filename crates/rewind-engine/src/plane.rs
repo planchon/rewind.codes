@@ -140,7 +140,7 @@ where
 /// Where the tasks of harness actions go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HarnessActions {
-    /// To the SDK streams of the harness, through the organization actor: a server.
+    /// To the SDK streams of the harness, through the tenant actor: a server.
     #[default]
     Streams,
     /// To the dispatcher, as every other call: test runs and the engine's tests, where the

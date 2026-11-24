@@ -16,10 +16,10 @@ use rewind_core::{
 use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
     ActivationRequest, ActivationResult, Admit, Changed, Committed, CountsReport, Decision,
-    EdgeNotice, HarnessFailure, HarnessTask, HarnessTaskOffer, NodeReply, NodeRequest, OrgReply,
-    OrgRequest, OwnerNotice, PartitionReply, PartitionRequest, Purpose, Refusal, RunView,
-    SignalAtOwner, SlotRequest, SourceHistory, StartAtOwner, StreamAttach, StreamId,
-    SubscriptionKey, TaskAnswer,
+    EdgeNotice, HarnessFailure, HarnessTask, HarnessTaskOffer, NodeReply, NodeRequest, OwnerNotice,
+    PartitionReply, PartitionRequest, Purpose, Refusal, RunView, SignalAtOwner, SlotRequest,
+    SourceHistory, StartAtOwner, StreamAttach, StreamId, SubscriptionKey, TaskAnswer, TenantReply,
+    TenantRequest,
 };
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
@@ -954,11 +954,9 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
         round_trip::<_, super::NodeReply>(&NodeReply::Partition(Box::new(
             PartitionReply::Answered(Err(refusal.clone())),
         )));
-        round_trip::<_, super::NodeReply>(&NodeReply::Organization(OrgReply::Admission(Err(
-            refusal,
-        ))));
+        round_trip::<_, super::NodeReply>(&NodeReply::Tenant(TenantReply::Admission(Err(refusal))));
     }
-    round_trip::<_, super::NodeReply>(&NodeReply::Organization(OrgReply::Admission(Ok(()))));
+    round_trip::<_, super::NodeReply>(&NodeReply::Tenant(TenantReply::Admission(Ok(()))));
     round_trip::<_, super::NodeReply>(&NodeReply::Done);
     let json = round_trip::<_, super::NodeReply>(&NodeReply::NotOwner {
         partition: PartitionId::new(5),
@@ -969,7 +967,7 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
 #[test]
 fn every_request_and_notice_of_the_organizations_round_trips() {
     let requests = vec![
-        OrgRequest::Admit(Admit {
+        TenantRequest::Admit(Admit {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
             run: run_id(1),
@@ -977,7 +975,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             code: digest("script"),
             at: T,
         }),
-        OrgRequest::Counts(CountsReport {
+        TenantRequest::Counts(CountsReport {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
             namespace: user(),
@@ -989,7 +987,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             at: T,
         }),
         // What a partition keeps of its tenants' erased namespaces is reported as theirs.
-        OrgRequest::Counts(CountsReport {
+        TenantRequest::Counts(CountsReport {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
             namespace: NamespaceName::erased(PartitionId::new(3)),
@@ -1000,33 +998,33 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             abandoned: Vec::new(),
             at: T,
         }),
-        OrgRequest::Slot(SlotRequest {
+        TenantRequest::Slot(SlotRequest {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
             task: task_ref(1, 2),
             server: "srv".into(),
             limit: 4,
         }),
-        OrgRequest::SlotFreed {
+        TenantRequest::SlotFreed {
             task: task_ref(1, 2),
             server: "srv".into(),
         },
-        OrgRequest::HarnessTask(Box::new(HarnessTaskOffer {
+        TenantRequest::HarnessTask(Box::new(HarnessTaskOffer {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
             task: harness_task(),
             action_set: digest("action_set"),
             grace: Duration::from_secs(60),
         })),
-        OrgRequest::HarnessTaskDone {
+        TenantRequest::HarnessTaskDone {
             task: task_ref(1, 2),
             gone: false,
         },
-        OrgRequest::HarnessTaskDone {
+        TenantRequest::HarnessTaskDone {
             task: task_ref(1, 3),
             gone: true,
         },
-        OrgRequest::Attach(StreamAttach {
+        TenantRequest::Attach(StreamAttach {
             stream: StreamId("stream-1".into()),
             worker: "worker-1".into(),
             node: NodeId::new("node-a").unwrap(),
@@ -1036,12 +1034,12 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             actions: BTreeSet::from(["ask".to_owned()]),
             slots: 4,
         }),
-        OrgRequest::Detach {
+        TenantRequest::Detach {
             stream: StreamId("stream-1".into()),
         },
     ];
     for request in requests {
-        round_trip::<_, super::NodeRequest>(&NodeRequest::Organization {
+        round_trip::<_, super::NodeRequest>(&NodeRequest::Tenant {
             tenant: acme(),
             request: Box::new(request),
         });
@@ -1205,9 +1203,9 @@ fn activations_round_trip() {
 
 #[test]
 fn what_the_engine_refuses_is_refused() {
-    let json = serde_json::to_string(&super::NodeRequest::from(&NodeRequest::Organization {
+    let json = serde_json::to_string(&super::NodeRequest::from(&NodeRequest::Tenant {
         tenant: acme(),
-        request: Box::new(OrgRequest::Detach {
+        request: Box::new(TenantRequest::Detach {
             stream: StreamId("s".into()),
         }),
     }))

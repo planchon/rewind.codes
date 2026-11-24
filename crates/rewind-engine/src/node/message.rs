@@ -29,7 +29,7 @@ pub(crate) type Job<P> = Pin<Box<dyn Future<Output = Message<P>> + Send + 'stati
     reason = "a message is moved once per step: its size does not matter"
 )]
 pub(crate) enum Message<P: Plane> {
-    /// To the owner of a partition held here (and the organization actors it hosts).
+    /// To the owner of a partition held here (and the tenant actors it hosts).
     Owner(PartitionId, OwnerMsg<P>),
     Executors(ExecMsg<P>),
     Calls(CallMsg<P>),
@@ -89,7 +89,7 @@ pub(crate) struct Asker {
 pub(crate) enum Target {
     /// The owner of a partition.
     Partition(PartitionId),
-    /// The organization actor of a tenant: on the owner of its home partition.
+    /// The tenant actor of a tenant: on the owner of its home partition.
     Home(TenantId),
     /// The edge of a node.
     Node(NodeId),
@@ -99,7 +99,7 @@ pub(crate) enum Target {
 pub(crate) enum Effect<P: Plane> {
     /// A message to an actor of this node.
     Local(Message<P>),
-    /// A request to the owner of a partition, an organization actor or an edge, here or on
+    /// A request to the owner of a partition, an tenant actor or an edge, here or on
     /// another node; its answer goes to `asker`.
     Request {
         to: Target,

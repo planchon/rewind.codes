@@ -69,7 +69,7 @@ pub enum CallAuth {
 /// `iss`, `aud`, `jti`, `htm`, `htu`, `body`, `iat` and `exp`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallClaims {
-    /// `iss`: `{public-url}/organizations/{tenant}`; the keys are at `{iss}/jwks.json`.
+    /// `iss`: `{public-url}/organizations/{organization}`; the keys are at `{iss}/jwks.json`.
     pub issuer: String,
     /// `sub`: the run's namespace, the end user.
     pub subject: NamespaceName,
@@ -87,7 +87,7 @@ pub struct CallClaims {
 }
 
 impl CallClaims {
-    /// The issuer of a tenant's signed calls, `{public-url}/organizations/{tenant}`: its public
+    /// The issuer of a tenant's signed calls, `{public-url}/organizations/{organization}`: its public
     /// keys are at `{issuer}/jwks.json`, and a server set up with one issuer accepts no other
     /// tenant's JWT.
     pub fn issuer(public_url: &str, tenant: &TenantId) -> String {

@@ -7,7 +7,7 @@
 //!   Bob's with Bob's; a start that attaches nothing is refused before any run exists, and nothing
 //!   falls back on the organization's secret;
 //! - signed calls: an MCP server and an API check every request with `rewind_outbound::verify`
-//!   against the keys the Rewind server publishes at `/organizations/{tenant}/jwks.json`, and
+//!   against the keys the Rewind server publishes at `/organizations/{organization}/jwks.json`, and
 //!   learn the end user from `sub`; a replaced key still verifies; a signature the server refuses
 //!   parks the call until the harness approves it;
 //! - a secret deleted mid-run parks the call (`secret.expired`, `missing`), a 401 parks it
@@ -66,7 +66,7 @@ use serde_json::{Value, json};
 use support::{ADMIN_KEY, Postgres, TestServer, eventually, wait};
 
 /// The public URL the deployed servers of these tests sign with: the issuer of their JWTs is
-/// `https://rewind.test/organizations/{tenant}`, and the fake servers read the keys at the server's
+/// `https://rewind.test/organizations/{organization}`, and the fake servers read the keys at the server's
 /// own address, as a server behind a proxy would.
 const PUBLIC_URL: &str = "https://rewind.test";
 
@@ -1648,7 +1648,7 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
     let key = server
         .admin
         .create_api_key(&rewind_api::access::CreateApiKey {
-            tenant: Some("acme".into()),
+            organization_id: Some("acme".into()),
             name: "the dev environment".into(),
             role: "harness".into(),
             allowed_labels: [("env", "dev")].into_iter().collect(),

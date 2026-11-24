@@ -78,7 +78,7 @@ pub const NAMESPACE_NAMES: &str = "/v1/organization/namespace-names";
 pub const QUOTA_ALERTS: &str = "/v1/organization/quota-alerts";
 pub const TOKEN_KEYS: &str = "/v1/organization/token-keys";
 pub const TOKEN_KEY: &str = "/v1/organization/token-keys/{kid}";
-pub const ORGANIZATION_QUOTAS: &str = "/v1/organizations/{tenant}/quotas";
+pub const ORGANIZATION_QUOTAS: &str = "/v1/organizations/{organization}/quotas";
 
 pub const SECRETS: &str = "/v1/secrets";
 pub const SECRET: &str = "/v1/secrets/{name}";
@@ -89,7 +89,7 @@ pub const NAMESPACE_SECRET_USAGE: &str = "/v1/namespaces/{name}/secrets/{secret}
 pub const SIGNING_KEYS: &str = "/v1/organization/signing-keys";
 /// The organization's public keys, outside `/v1` and without authentication: what the servers
 /// that receive signed calls check them with.
-pub const JWKS: &str = "/organizations/{tenant}/jwks.json";
+pub const JWKS: &str = "/organizations/{organization}/jwks.json";
 
 pub const CONNECTIONS: &str = "/v1/connections";
 pub const CONNECTION: &str = "/v1/connections/{id}";

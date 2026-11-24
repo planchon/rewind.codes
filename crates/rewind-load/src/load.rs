@@ -278,7 +278,7 @@ async fn key(
 ) -> Result<Client, Error> {
     let key = admin
         .create_api_key(&CreateApiKey {
-            tenant: Some(tenant.to_owned()),
+            organization_id: Some(tenant.to_owned()),
             name: "rewind-load".into(),
             role: role.as_str().to_owned(),
             allowed_labels: Labels::new(),

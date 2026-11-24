@@ -1,7 +1,7 @@
 //! `rewind server`: a node of Rewind's run plane and its HTTP edge, in one process
 //! (`archi/07-code-architecture.md`, "Crates", "Inside a node").
 //!
-//! - The node: the owners of the partitions it holds (on SlateDB), the organization actors they
+//! - The node: the owners of the partitions it holds (on SlateDB), the tenant actors they
 //!   host, its executors (V8) and its call executor, driven by `rewind-engine`'s runtime; its
 //!   membership of the cluster on the control plane (Postgres, or Turso for a single node);
 //!   `--executors-only` and `--pool`.

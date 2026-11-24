@@ -1,4 +1,4 @@
-//! The organization actor (`archi/06-storage-and-scale.md`, "Quotas", "Partitions, owners and
+//! The tenant actor (`archi/06-storage-and-scale.md`, "Quotas", "Partitions, owners and
 //! nodes"; `archi/04-tools.md`, "Call lifecycle", "Policies").
 //!
 //! One per tenant, on the owner of the tenant's home partition, which hosts it: its writes are
@@ -10,7 +10,7 @@
 //!   admission is written before it is answered, and released once a report includes its run.
 //! - **Alerts.** A threshold crossed is recorded once per namespace (or the tenant), quota,
 //!   month and threshold, with an outbox entry that sends `quota.alert`.
-//! - **Slots.** The calls in flight of each MCP server or API across the organization, granted
+//! - **Slots.** The calls in flight of each MCP server or API across the tenant, granted
 //!   in the order they are asked for.
 //! - **Harness tasks.** The SDK streams attached at the edges, and the harness tasks they hold. A
 //!   stream that closes keeps its tasks for their grace; its worker opening a stream again takes
@@ -31,22 +31,22 @@ use crate::node::message::{Effect, Message, ReplyTo, Target, job};
 use crate::partition::OwnerMsg;
 use crate::plane::Plane;
 use crate::ports::link::{
-    Admit, CountsReport, EdgeNotice, HarnessTaskOffer, NodeReply, NodeRequest, OrgReply,
-    OrgRequest, OwnerNotice, Refusal, SlotRequest, StreamAttach, StreamId,
+    Admit, CountsReport, EdgeNotice, HarnessTaskOffer, NodeReply, NodeRequest, OwnerNotice,
+    Refusal, SlotRequest, StreamAttach, StreamId, TenantReply, TenantRequest,
 };
 use crate::ports::{
-    Admission, CatalogStore, Gauges, Month, NamespaceName, OrganizationState, PartitionEpoch,
-    QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, TaskRef, TaskToken,
-    Tenant, TenantId, Threshold, namespace_partition,
+    Admission, CatalogStore, Gauges, Month, NamespaceName, PartitionEpoch, QuotaAlert,
+    QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, TaskRef, TaskToken, Tenant,
+    TenantId, TenantState, Threshold, namespace_partition,
 };
 
-/// A message to an organization actor.
+/// A message to an tenant actor.
 #[allow(
     clippy::large_enum_variant,
     reason = "a message is moved once per step: its size does not matter"
 )]
-pub(crate) enum OrgMsg {
-    Request(Box<OrgRequest>, ReplyTo),
+pub(crate) enum TenantMsg {
+    Request(Box<TenantRequest>, ReplyTo),
     /// The tenant's settings and a namespace's limits, read from the control plane.
     Limits {
         namespace: NamespaceName,
@@ -66,28 +66,28 @@ pub(crate) enum OrgMsg {
     Members(Vec<crate::ports::NodeId>),
 }
 
-impl fmt::Debug for OrgMsg {
+impl fmt::Debug for TenantMsg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OrgMsg::Request(request, reply) => write!(f, "Request({request:?}, {reply:?})"),
-            OrgMsg::Limits { namespace, .. } => write!(f, "Limits({namespace})"),
-            OrgMsg::Grace { stream } => write!(f, "Grace({stream:?})"),
-            OrgMsg::Forget { namespace } => write!(f, "Forget({namespace:?})"),
-            OrgMsg::Members(nodes) => write!(f, "Members({})", nodes.len()),
+            TenantMsg::Request(request, reply) => write!(f, "Request({request:?}, {reply:?})"),
+            TenantMsg::Limits { namespace, .. } => write!(f, "Limits({namespace})"),
+            TenantMsg::Grace { stream } => write!(f, "Grace({stream:?})"),
+            TenantMsg::Forget { namespace } => write!(f, "Forget({namespace:?})"),
+            TenantMsg::Members(nodes) => write!(f, "Members({})", nodes.len()),
         }
     }
 }
 
-/// What an organization actor asks its host for.
+/// What an tenant actor asks its host for.
 #[allow(
     clippy::large_enum_variant,
     reason = "an effect is moved once per step: its size does not matter"
 )]
-pub(crate) enum OrgEffect<P: Plane> {
+pub(crate) enum TenantEffect<P: Plane> {
     /// Write the actor's state in its home partition, with an outbox entry per alert; then
     /// these effects.
     Persist {
-        state: OrganizationState,
+        state: TenantState,
         alerts: Vec<QuotaAlert>,
         then: Vec<Effect<P>>,
     },
@@ -127,13 +127,13 @@ struct Stream {
     open: bool,
 }
 
-/// The organization actor of a tenant.
-pub(crate) struct OrgActor<P: Plane> {
+/// The tenant actor of a tenant.
+pub(crate) struct TenantActor<P: Plane> {
     tenant: TenantId,
     home: PartitionId,
     partitions: NonZeroU16,
     plane: Arc<P>,
-    state: OrganizationState,
+    state: TenantState,
     /// The epoch of each admission in flight, by run: an admission of an owner that is gone is
     /// released when the next owner of its partition reports.
     epochs: BTreeMap<rewind_core::RunId, (PartitionId, PartitionEpoch)>,
@@ -148,9 +148,9 @@ pub(crate) struct OrgActor<P: Plane> {
     streams: BTreeMap<StreamId, Stream>,
 }
 
-impl<P: Plane> fmt::Debug for OrgActor<P> {
+impl<P: Plane> fmt::Debug for TenantActor<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OrgActor")
+        f.debug_struct("TenantActor")
             .field("tenant", &self.tenant)
             .field("home", &self.home)
             .field("admissions", &self.state.admissions.len())
@@ -159,7 +159,7 @@ impl<P: Plane> fmt::Debug for OrgActor<P> {
     }
 }
 
-impl<P: Plane> OrgActor<P> {
+impl<P: Plane> TenantActor<P> {
     /// The actor of `tenant`, with the state its home partition kept. A new actor asks every
     /// owner for the counts of the tenant once.
     pub(crate) fn new(
@@ -167,8 +167,8 @@ impl<P: Plane> OrgActor<P> {
         home: PartitionId,
         partitions: NonZeroU16,
         plane: Arc<P>,
-        state: OrganizationState,
-    ) -> (Self, Vec<OrgEffect<P>>) {
+        state: TenantState,
+    ) -> (Self, Vec<TenantEffect<P>>) {
         let actor = Self {
             tenant: tenant.clone(),
             home,
@@ -187,7 +187,7 @@ impl<P: Plane> OrgActor<P> {
         };
         let asks = (0..partitions.get())
             .map(|partition| {
-                OrgEffect::Effect(Effect::Request {
+                TenantEffect::Effect(Effect::Request {
                     to: Target::Partition(PartitionId::new(partition)),
                     request: NodeRequest::Owner {
                         partition: PartitionId::new(partition),
@@ -202,11 +202,11 @@ impl<P: Plane> OrgActor<P> {
         (actor, asks)
     }
 
-    pub(crate) fn handle(&mut self, message: OrgMsg, now: Timestamp) -> Vec<OrgEffect<P>> {
+    pub(crate) fn handle(&mut self, message: TenantMsg, now: Timestamp) -> Vec<TenantEffect<P>> {
         let mut out = Vec::new();
         match message {
-            OrgMsg::Request(request, reply) => self.request(*request, reply, now, &mut out),
-            OrgMsg::Limits { namespace, read } => {
+            TenantMsg::Request(request, reply) => self.request(*request, reply, now, &mut out),
+            TenantMsg::Limits { namespace, read } => {
                 let waiting = self.waiting.remove(&namespace).unwrap_or_default();
                 match read {
                     Ok((tenant, quotas)) => {
@@ -225,22 +225,22 @@ impl<P: Plane> OrgActor<P> {
                             out.push(reply_admission(
                                 reply,
                                 Err(Refusal::Unavailable(format!(
-                                    "the organization's limits could not be read: {error}"
+                                    "the tenant's limits could not be read: {error}"
                                 ))),
                             ));
                         }
                     }
                 }
             }
-            OrgMsg::Grace { stream } => self.grace_over(&stream, &mut out),
-            OrgMsg::Forget { namespace } => match (namespace, &mut self.limits) {
+            TenantMsg::Grace { stream } => self.grace_over(&stream, &mut out),
+            TenantMsg::Forget { namespace } => match (namespace, &mut self.limits) {
                 (Some(namespace), Some(limits)) => {
                     limits.namespaces.remove(&namespace);
                 }
                 (None, _) => self.limits = None,
                 (Some(_), None) => {}
             },
-            OrgMsg::Members(nodes) => {
+            TenantMsg::Members(nodes) => {
                 let gone: Vec<StreamId> = self
                     .streams
                     .iter()
@@ -257,29 +257,29 @@ impl<P: Plane> OrgActor<P> {
 
     fn request(
         &mut self,
-        request: OrgRequest,
+        request: TenantRequest,
         reply: ReplyTo,
         now: Timestamp,
-        out: &mut Vec<OrgEffect<P>>,
+        out: &mut Vec<TenantEffect<P>>,
     ) {
-        let done = |out: &mut Vec<OrgEffect<P>>, reply: ReplyTo| {
-            out.push(OrgEffect::Effect(Effect::Reply(reply, NodeReply::Done)));
+        let done = |out: &mut Vec<TenantEffect<P>>, reply: ReplyTo| {
+            out.push(TenantEffect::Effect(Effect::Reply(reply, NodeReply::Done)));
         };
         match request {
-            OrgRequest::Admit(admit) => self.admit(admit, reply, now, out),
-            OrgRequest::Counts(report) => {
+            TenantRequest::Admit(admit) => self.admit(admit, reply, now, out),
+            TenantRequest::Counts(report) => {
                 done(out, reply);
                 self.counts(report, now, out);
             }
-            OrgRequest::Slot(slot) => {
+            TenantRequest::Slot(slot) => {
                 done(out, reply);
                 self.slot(slot, out);
             }
-            OrgRequest::SlotFreed { task, server } => {
+            TenantRequest::SlotFreed { task, server } => {
                 done(out, reply);
                 self.free(&server, &task, out);
             }
-            OrgRequest::HarnessTask(offer) => {
+            TenantRequest::HarnessTask(offer) => {
                 done(out, reply);
                 let task = offer.task.task.clone();
                 // An owner that sends a task again (a new owner, a new delivery) replaces it: the
@@ -289,18 +289,18 @@ impl<P: Plane> OrgActor<P> {
                 self.offers.push_back(*offer);
                 self.hand_out(out);
             }
-            OrgRequest::HarnessTaskDone { task, gone } => {
+            TenantRequest::HarnessTaskDone { task, gone } => {
                 done(out, reply);
                 self.offers.retain(|queued| queued.task.task != task);
                 self.release(&task, gone, out);
                 self.hand_out(out);
             }
-            OrgRequest::Attach(attach) => {
+            TenantRequest::Attach(attach) => {
                 done(out, reply);
                 self.attach(attach);
                 self.hand_out(out);
             }
-            OrgRequest::Detach { stream } => {
+            TenantRequest::Detach { stream } => {
                 done(out, reply);
                 self.detach(&stream, now, out);
             }
@@ -310,7 +310,13 @@ impl<P: Plane> OrgActor<P> {
     // ---------------------------------------------------------------------------------------
     // Admission and alerts
 
-    fn admit(&mut self, admit: Admit, reply: ReplyTo, now: Timestamp, out: &mut Vec<OrgEffect<P>>) {
+    fn admit(
+        &mut self,
+        admit: Admit,
+        reply: ReplyTo,
+        now: Timestamp,
+        out: &mut Vec<TenantEffect<P>>,
+    ) {
         let loaded = self
             .limits
             .as_ref()
@@ -323,7 +329,7 @@ impl<P: Plane> OrgActor<P> {
                 .or_default()
                 .push((admit, reply));
             if first {
-                out.push(OrgEffect::Effect(self.read_limits(namespace)));
+                out.push(TenantEffect::Effect(self.read_limits(namespace)));
             }
             return;
         }
@@ -439,7 +445,7 @@ impl<P: Plane> OrgActor<P> {
             if alerts.is_empty() {
                 out.push(refusal);
             } else {
-                out.push(OrgEffect::Persist {
+                out.push(TenantEffect::Persist {
                     state: self.state.clone(),
                     alerts,
                     then: vec![unwrap_effect(refusal)],
@@ -494,7 +500,7 @@ impl<P: Plane> OrgActor<P> {
         });
         self.epochs
             .insert(admit.run, (admit.partition, admit.epoch));
-        out.push(OrgEffect::Persist {
+        out.push(TenantEffect::Persist {
             state: self.state.clone(),
             alerts,
             then: vec![unwrap_effect(reply_admission(reply, Ok(())))],
@@ -523,15 +529,15 @@ impl<P: Plane> OrgActor<P> {
             .await;
             Message::Owner(
                 home,
-                OwnerMsg::Org {
+                OwnerMsg::Tenant {
                     tenant,
-                    message: OrgMsg::Limits { namespace, read },
+                    message: TenantMsg::Limits { namespace, read },
                 },
             )
         })
     }
 
-    fn counts(&mut self, report: CountsReport, now: Timestamp, out: &mut Vec<OrgEffect<P>>) {
+    fn counts(&mut self, report: CountsReport, now: Timestamp, out: &mut Vec<TenantEffect<P>>) {
         let known = self.owners.get(&report.partition).copied();
         if known.is_some_and(|known| known > report.epoch) {
             return;
@@ -613,7 +619,7 @@ impl<P: Plane> OrgActor<P> {
             ));
         }
         if changed || !alerts.is_empty() {
-            out.push(OrgEffect::Persist {
+            out.push(TenantEffect::Persist {
                 state: self.state.clone(),
                 alerts,
                 then: Vec::new(),
@@ -627,7 +633,7 @@ impl<P: Plane> OrgActor<P> {
         &mut self,
         partition: PartitionId,
         epoch: PartitionEpoch,
-        out: &mut Vec<OrgEffect<P>>,
+        out: &mut Vec<TenantEffect<P>>,
     ) {
         let partitions = self.partitions;
         let tenant = self.tenant.clone();
@@ -732,13 +738,13 @@ impl<P: Plane> OrgActor<P> {
     // ---------------------------------------------------------------------------------------
     // Slots
 
-    fn slot(&mut self, slot: SlotRequest, out: &mut Vec<OrgEffect<P>>) {
+    fn slot(&mut self, slot: SlotRequest, out: &mut Vec<TenantEffect<P>>) {
         let server = self.servers.entry(slot.server.clone()).or_default();
         if let Some(held) = server.held.get_mut(&slot.task) {
             // An owner that asks again for a slot it holds lost the grant (a message lost, a new
             // owner of the partition): it is granted again.
             *held = (slot.partition, slot.epoch);
-            out.push(OrgEffect::Effect(Effect::Request {
+            out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Partition(slot.partition),
                 request: NodeRequest::Owner {
                     partition: slot.partition,
@@ -754,7 +760,7 @@ impl<P: Plane> OrgActor<P> {
         self.grant(&name, out);
     }
 
-    fn free(&mut self, server: &str, task: &TaskRef, out: &mut Vec<OrgEffect<P>>) {
+    fn free(&mut self, server: &str, task: &TaskRef, out: &mut Vec<TenantEffect<P>>) {
         if let Some(entry) = self.servers.get_mut(server) {
             entry.held.remove(task);
             entry.queue.retain(|queued| queued.task != *task);
@@ -762,7 +768,7 @@ impl<P: Plane> OrgActor<P> {
         self.grant(server, out);
     }
 
-    fn grant(&mut self, name: &str, out: &mut Vec<OrgEffect<P>>) {
+    fn grant(&mut self, name: &str, out: &mut Vec<TenantEffect<P>>) {
         let Some(server) = self.servers.get_mut(name) else {
             return;
         };
@@ -776,7 +782,7 @@ impl<P: Plane> OrgActor<P> {
             server
                 .held
                 .insert(next.task.clone(), (next.partition, next.epoch));
-            out.push(OrgEffect::Effect(Effect::Request {
+            out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Partition(next.partition),
                 request: NodeRequest::Owner {
                     partition: next.partition,
@@ -829,7 +835,7 @@ impl<P: Plane> OrgActor<P> {
         );
     }
 
-    fn detach(&mut self, id: &StreamId, now: Timestamp, out: &mut Vec<OrgEffect<P>>) {
+    fn detach(&mut self, id: &StreamId, now: Timestamp, out: &mut Vec<TenantEffect<P>>) {
         let Some(stream) = self.streams.get_mut(id) else {
             return;
         };
@@ -845,20 +851,20 @@ impl<P: Plane> OrgActor<P> {
             .map(|(_, offer)| offer.grace)
             .max()
             .unwrap_or_default();
-        out.push(OrgEffect::Effect(Effect::Wake {
+        out.push(TenantEffect::Effect(Effect::Wake {
             at: now.saturating_add(grace),
             alone: false,
             message: Message::Owner(
                 self.home,
-                OwnerMsg::Org {
+                OwnerMsg::Tenant {
                     tenant: self.tenant.clone(),
-                    message: OrgMsg::Grace { stream: id.clone() },
+                    message: TenantMsg::Grace { stream: id.clone() },
                 },
             ),
         }));
     }
 
-    fn grace_over(&mut self, id: &StreamId, out: &mut Vec<OrgEffect<P>>) {
+    fn grace_over(&mut self, id: &StreamId, out: &mut Vec<TenantEffect<P>>) {
         let closed = self.streams.get(id).is_some_and(|stream| !stream.open);
         if !closed {
             return;
@@ -875,7 +881,7 @@ impl<P: Plane> OrgActor<P> {
             }
         }
         for (partition, tasks) in lost {
-            out.push(OrgEffect::Effect(Effect::Request {
+            out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Partition(partition),
                 request: NodeRequest::Owner {
                     partition,
@@ -890,7 +896,7 @@ impl<P: Plane> OrgActor<P> {
     /// Hands the queued tasks to the open streams that take them and have a free slot, in turn.
     /// A task handed on a stream leaves it: its slot is free. `gone`: its token no longer
     /// answers it, and the stream, if open, hears `gone`.
-    fn release(&mut self, task: &TaskRef, gone: bool, out: &mut Vec<OrgEffect<P>>) {
+    fn release(&mut self, task: &TaskRef, gone: bool, out: &mut Vec<TenantEffect<P>>) {
         let Some((id, offer)) = self.handed.remove(task) else {
             return;
         };
@@ -899,7 +905,7 @@ impl<P: Plane> OrgActor<P> {
         };
         stream.held.remove(task);
         if gone && stream.open {
-            out.push(OrgEffect::Effect(Effect::Request {
+            out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Node(stream.attach.node.clone()),
                 request: NodeRequest::Edge(Box::new(EdgeNotice::Gone {
                     stream: id,
@@ -915,7 +921,7 @@ impl<P: Plane> OrgActor<P> {
         &self.state.alerts
     }
 
-    fn hand_out(&mut self, out: &mut Vec<OrgEffect<P>>) {
+    fn hand_out(&mut self, out: &mut Vec<TenantEffect<P>>) {
         let mut kept = VecDeque::new();
         while let Some(offer) = self.offers.pop_front() {
             let stream = self
@@ -938,7 +944,7 @@ impl<P: Plane> OrgActor<P> {
             };
             let task = offer.task.task.clone();
             stream.held.insert(task.clone());
-            out.push(OrgEffect::Effect(Effect::Request {
+            out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Node(stream.attach.node.clone()),
                 request: NodeRequest::Edge(Box::new(EdgeNotice::HandOut {
                     stream: stream_id.clone(),
@@ -990,17 +996,17 @@ fn distinct_new_scripts(
     scripts.len() as u64
 }
 
-fn reply_admission<P: Plane>(reply: ReplyTo, admission: Result<(), Refusal>) -> OrgEffect<P> {
-    OrgEffect::Effect(Effect::Reply(
+fn reply_admission<P: Plane>(reply: ReplyTo, admission: Result<(), Refusal>) -> TenantEffect<P> {
+    TenantEffect::Effect(Effect::Reply(
         reply,
-        NodeReply::Organization(OrgReply::Admission(admission)),
+        NodeReply::Tenant(TenantReply::Admission(admission)),
     ))
 }
 
-fn unwrap_effect<P: Plane>(effect: OrgEffect<P>) -> Effect<P> {
+fn unwrap_effect<P: Plane>(effect: TenantEffect<P>) -> Effect<P> {
     match effect {
-        OrgEffect::Effect(effect) => effect,
-        OrgEffect::Persist { then, .. } => then
+        TenantEffect::Effect(effect) => effect,
+        TenantEffect::Persist { then, .. } => then
             .into_iter()
             .next()
             .unwrap_or(Effect::Local(Message::Nothing)),

@@ -17,7 +17,7 @@ use cluster::{PATIENCE, World, config, epochs, start, until_all};
 use futures_util::StreamExt as _;
 use rewind_core::{Command, Epoch, Event, RunStatus};
 use rewind_engine::ports::link::{
-    NodeReply, NodeRequest, OrgRequest, PartitionRequest, StreamId, SubscriptionKey,
+    NodeReply, NodeRequest, PartitionRequest, StreamId, SubscriptionKey, TenantRequest,
 };
 use rewind_engine::ports::{
     ClusterError, LinkError, NamespaceName, NodeId, NodeInfo, NodeLink, RunRef, TenantId,
@@ -39,9 +39,9 @@ fn namespace(name: &str) -> NamespaceName {
 }
 
 fn detach() -> NodeRequest {
-    NodeRequest::Organization {
+    NodeRequest::Tenant {
         tenant: TenantId::local(),
-        request: Box::new(OrgRequest::Detach {
+        request: Box::new(TenantRequest::Detach {
             stream: StreamId("none".into()),
         }),
     }

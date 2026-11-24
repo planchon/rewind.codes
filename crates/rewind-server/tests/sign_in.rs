@@ -120,7 +120,7 @@ async fn a_code_by_email_signs_in_and_a_member_without_organization_only_onboard
     // Without organization: who am I, my invitations, create one; nothing else.
     let ada = member(&server, &state);
     let me = ada.whoami().await.unwrap();
-    assert_eq!(me.tenant, None);
+    assert_eq!(me.organization_id, None);
     assert!(me.permissions.is_empty() && me.grant.is_none() && me.organizations.is_empty());
     let Some(Principal::User { user }) = me.principal else {
         panic!("a member: {:?}", me.principal);
@@ -151,7 +151,7 @@ async fn a_code_by_email_signs_in_and_a_member_without_organization_only_onboard
     assert_eq!(token(&state).1.as_deref(), Some(acme.id.as_str()));
     let ada = member(&server, &state);
     let me = ada.whoami().await.unwrap();
-    assert_eq!(me.tenant.as_deref(), Some(acme.id.as_str()));
+    assert_eq!(me.organization_id.as_deref(), Some(acme.id.as_str()));
     assert_eq!(me.grant.as_ref().unwrap().role, "owner");
     assert_eq!(me.grant.unwrap().granted_by, None, "the server gave it");
     assert_eq!(me.permissions, Permission::ALL);

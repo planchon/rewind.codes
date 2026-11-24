@@ -74,7 +74,7 @@ gives each node what it needs:
 | `REWIND_PUBLIC_URL` | `http://localhost:8080` | The URL clients reach the edge at: `webhook()` URLs start with it |
 | `REWIND_EGRESS_ALLOW` | `loadgen` | The names the nodes may reach: MCP servers, APIs and their OpenAPI documents, hosts of `http` tools, webhook receivers (spaces or commas). A name allows its subdomains |
 | `REWIND_ALLOW_INTERNAL_ADDRESSES` | `loadgen` | MCP servers and APIs at private addresses the nodes may use (names, `*.domain`, addresses, CIDR networks; commas). Without it a deployed server reaches MCP servers, APIs and OpenAPI documents at public addresses only |
-| `REWIND_QUOTA_ACTIVE_RUNS` | `10000` | The ceiling of the tenants this deployment creates: their active runs across their namespaces; one more is refused with 429. `REWIND_QUOTA_RUNS_PER_MONTH`, `REWIND_QUOTA_CPU_PER_MONTH`, `REWIND_QUOTA_SCRIPTS`, `REWIND_QUOTA_MAX_TTL` and `REWIND_QUOTA_MAX_SCRIPT_LINES` set the others, none by default |
+| `REWIND_QUOTA_ACTIVE_RUNS` | `10000` | The ceiling of the tenants this deployment creates: their active runs across their namespaces; one more is refused with 429. `REWIND_QUOTA_RUNS_PER_MONTH`, `REWIND_QUOTA_CPU_PER_MONTH`, `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_TTL` and `REWIND_QUOTA_MAX_CODE_LINES` set the others, none by default |
 | `REWIND_DEFAULT_TTL`, `REWIND_MAX_TTL` | `30d`, `365d` | A run's TTL when the harness gives none, and the most it may ask for |
 | `REWIND_RETENTION` | `365d` | How long an ended run is kept, for the tenants this deployment creates ([retention](#retention)) |
 | `REWIND_EXECUTORS`, `REWIND_CALLS` | `4`, `256` | Activations run at once (executor threads), and tool calls sent at once, per node |
@@ -100,7 +100,7 @@ it exits.
 | --- | --- | --- |
 | `REWIND_MASTER_KEY` | 32 random bytes in base64. It encrypts each tenant's data key, which encrypts the credentials of toolsets and runs | Every stored credential is unreadable: back it up with the database. The nodes refuse to start without it |
 | `REWIND_CLUSTER_SECRET` | The node link between the nodes, on the private network | A new one, given to every node at once, is enough: nothing is stored under it |
-| `REWIND_ADMIN_KEY` | The first API key: role `operator` in the tenant `REWIND_ADMIN_TENANT`, registered when a node starts. It creates the other keys | Revoke it (`DELETE /v1/api-keys/{id}`, its id is `GET /v1/whoami`'s `principal.id`) and set a new one: a revoked key is never registered again |
+| `REWIND_ADMIN_KEY` | The first API key: role `operator` in the tenant `REWIND_ADMIN_ORGANIZATION`, registered when a node starts. It creates the other keys | Revoke it (`DELETE /v1/api-keys/{id}`, its id is `GET /v1/whoami`'s `principal.id`) and set a new one: a revoked key is never registered again |
 | `WORKOS_API_KEY`, `WORKOS_COOKIE_PASSWORD` | WorkOS's secret key, and the key of the sign-in's sealed cookies ([sign-in](#sign-in)) | A new cookie password signs everyone out; a new WorkOS key is set in WorkOS first |
 | `POSTGRES_PASSWORD`, `MINIO_ROOT_*` | The stores | Change them in the store first, then in `.env` |
 
@@ -180,7 +180,7 @@ The sign-in's cookies are `Secure`: browsers keep them on `https://` origins and
 a client sends; the edge is the only published port), when it is a public address.
 
 A tenant's ceiling is the operator's offer: the admin key changes it with `PUT
-/v1/organizations/{tenant}/quotas`. Its retention is kept in its `tenants` row of the control
+/v1/organizations/{organization}/quotas`. Its retention is kept in its `tenants` row of the control
 plane: change an existing tenant there.
 
 ```sh

@@ -5,7 +5,7 @@
 //! history (from its partition while its attempt is live, from the archive once sealed), its
 //! tasks (those in flight from the owner's memory), a page of a search, counters and gauges by
 //! bucket, the use of its namespaces, shapes. Each read is a job of its own; the quota alerts of
-//! a tenant homed here are answered from its organization actor's state.
+//! a tenant homed here are answered from its tenant actor's state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -263,7 +263,7 @@ impl<P: Plane> Owner<P> {
 }
 
 impl<P: Plane> Owner<P> {
-    /// The alerts of a month an organization actor homed here recorded: of one namespace, or
+    /// The alerts of a month an tenant actor homed here recorded: of one namespace, or
     /// every alert of the tenant, the newest first. A tenant whose actor has not started yet
     /// answers from the state the partition kept of it.
     fn quota_alerts(
@@ -272,10 +272,10 @@ impl<P: Plane> Owner<P> {
         namespace: Option<&NamespaceName>,
         month: Month,
     ) -> Vec<QuotaAlert> {
-        let recorded = match self.orgs.get(tenant) {
+        let recorded = match self.tenants.get(tenant) {
             Some(actor) => actor.alerts(),
             None => self
-                .org_states
+                .tenant_states
                 .get(tenant)
                 .map_or(&[][..], |state| state.alerts.as_slice()),
         };

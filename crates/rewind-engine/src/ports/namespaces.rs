@@ -3,7 +3,7 @@
 //!
 //! The namespace is run metadata, like the tenant: it lives with the ports, never in the core,
 //! and never in an event. The catalog keeps namespaces and their quotas; the partitions count
-//! their use, and the tenant's organization actor checks the quotas where it admits a run and
+//! their use, and the tenant's tenant actor checks the quotas where it admits a run and
 //! raises the alerts.
 
 use std::fmt;

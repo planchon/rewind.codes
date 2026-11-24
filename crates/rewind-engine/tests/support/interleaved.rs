@@ -16,9 +16,9 @@ use rewind_engine::adapters::{MemoryPartitionLog, MemoryPartitions};
 use rewind_engine::ports::partition::Change;
 use rewind_engine::ports::{
     Attempt, Batch, Counters, DueTimer, Found, Gauges, InboxItem, IndexedSummary, NamespaceName,
-    NodeId, OrganizationState, Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord,
-    Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, SignalUrlTarget, TaskRecord, TenantId,
-    Watcher, Window,
+    NodeId, Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord, Recovery, RunHead,
+    RunOrder, RunQuery, RunRef, Scope, SignalUrlTarget, TaskRecord, TenantId, TenantState, Watcher,
+    Window,
 };
 
 #[derive(Debug, Default)]
@@ -228,11 +228,8 @@ impl PartitionLog for InterleavedLog {
         self.inner.shapes(tenant, namespace, actions).await
     }
 
-    async fn organization(
-        &self,
-        tenant: &TenantId,
-    ) -> Result<Option<OrganizationState>, PartitionError> {
-        self.inner.organization(tenant).await
+    async fn tenant(&self, tenant: &TenantId) -> Result<Option<TenantState>, PartitionError> {
+        self.inner.tenant(tenant).await
     }
 
     async fn commit(&self, batch: Batch) -> Result<(), PartitionError> {

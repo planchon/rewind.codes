@@ -2,7 +2,7 @@
 //! batches, the single writer's mistakes refused, signal keys, the end of an attempt, what an
 //! activation writes, failures and quarantine, watchers, signal URL tokens, recovery, seal and
 //! erasure, the search of the index, the counters over whole hours, the gauges, the shapes, the
-//! timers, the organizations, the outbox and tenant isolation.
+//! timers, the tenants, the outbox and tenant isolation.
 //!
 //! The factory creates an empty store. Each check opens the partition [`PARTITION`].
 
@@ -21,13 +21,12 @@ use crate::ports::partition::{Activation, CreateRun};
 use crate::ports::{
     ActionCounts, Admission, Attempt, Batch, CallTask, Change, CounterDelta, Counters, DueTimer,
     FailureCounts, Gauges, Hour, InboxItem, IndexedSummary, LatestRun, Month, NamespaceName,
-    NodeId, OrganizationState, OutboxChange, OutboxEntry, OutboxId, Page, ParkKind, ParkReason,
-    PartitionError, PartitionLog, PartitionStore, PayloadRecord, Predicate, Projection,
-    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
-    QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunOrder, RunQuery, RunRef,
-    RunSummary, Scope, SearchCursor, SignalUrlTarget, TaskChange, TaskPhase, TaskRecord, TaskRef,
-    TaskState, TenantId, Threshold, TimerChange, TimerKind, Trigger, Wait, WaitKind, WaitingFor,
-    Watcher, Window,
+    NodeId, OutboxChange, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionError,
+    PartitionLog, PartitionStore, PayloadRecord, Predicate, Projection, QUARANTINE_AFTER_FAILURES,
+    Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts,
+    RunHead, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, Scope, SearchCursor,
+    SignalUrlTarget, TaskChange, TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, TenantState,
+    Threshold, TimerChange, TimerKind, Trigger, Wait, WaitKind, WaitingFor, Watcher, Window,
 };
 
 /// The partition every check opens.
@@ -496,7 +495,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
     assert_eq!(first.partition(), PARTITION);
     let (r1, r2) = (run(1), run(2));
     let token = Digest::of(b"signal URL token");
-    let state = OrganizationState {
+    let state = TenantState {
         alerts: vec![alert(None)],
         admissions: vec![Admission {
             run: r2.id,
@@ -525,7 +524,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
                 name: "approval".into(),
                 hash: token,
             },
-            Change::Organization {
+            Change::Tenant {
                 tenant: acme(),
                 state: state.clone(),
             },
@@ -575,10 +574,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
             name: "approval".into()
         })
     );
-    assert_eq!(
-        second.organization(&acme()).await.expect("organization"),
-        Some(state)
-    );
+    assert_eq!(second.tenant(&acme()).await.expect("tenant"), Some(state));
     assert_eq!(
         second
             .counters(
@@ -1570,7 +1566,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
     commit(&log, vec![activation.into()]).await;
     end(&log, &unsealed).await;
     end(&log, &sealed).await;
-    let state = OrganizationState {
+    let state = TenantState {
         alerts: vec![alert(Some(alice()))],
         admissions: Vec::new(),
     };
@@ -1585,7 +1581,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
             OutboxChange::Add(Box::new(outbox_entry(2, None))).into(),
             OutboxChange::Remove(OutboxId(1)).into(),
             Change::Counters(vec![hour_delta(&acme(), &bob(), Hour::of(T0), created(1))]),
-            Change::Organization {
+            Change::Tenant {
                 tenant: acme(),
                 state: state.clone(),
             },
@@ -1647,7 +1643,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
         [("alice".to_owned(), 3, 1), ("bob".to_owned(), 0, 0)],
         "every namespace with something counted, with its gauges"
     );
-    assert_eq!(recovery.organizations, BTreeMap::from([(acme(), state)]));
+    assert_eq!(recovery.tenants, BTreeMap::from([(acme(), state)]));
     assert_eq!(
         log.run(&active).await.expect("run"),
         Some(RunHead {
@@ -2661,7 +2657,7 @@ pub async fn shapes_merge_per_action<S: PartitionStore>(store: &S) {
 }
 
 // -------------------------------------------------------------------------------------------
-// Timers, organizations, outbox, tenants
+// Timers, tenant states, outbox, tenants
 
 pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
@@ -2743,8 +2739,8 @@ pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) 
 
 pub async fn organizations_are_kept<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
-    assert_eq!(log.organization(&acme()).await.expect("organization"), None);
-    let first = OrganizationState {
+    assert_eq!(log.tenant(&acme()).await.expect("tenant"), None);
+    let first = TenantState {
         alerts: Vec::new(),
         admissions: vec![Admission {
             run: run(1).id,
@@ -2755,35 +2751,30 @@ pub async fn organizations_are_kept<S: PartitionStore>(store: &S) {
     };
     commit(
         &log,
-        vec![Change::Organization {
+        vec![Change::Tenant {
             tenant: acme(),
             state: first,
         }],
     )
     .await;
-    let second = OrganizationState {
+    let second = TenantState {
         alerts: vec![alert(Some(alice())), alert(None)],
         admissions: Vec::new(),
     };
     commit(
         &log,
-        vec![Change::Organization {
+        vec![Change::Tenant {
             tenant: acme(),
             state: second.clone(),
         }],
     )
     .await;
     assert_eq!(
-        log.organization(&acme()).await.expect("organization"),
+        log.tenant(&acme()).await.expect("tenant"),
         Some(second),
         "a state written again replaces the first"
     );
-    assert_eq!(
-        log.organization(&tenant("other"))
-            .await
-            .expect("organization"),
-        None
-    );
+    assert_eq!(log.tenant(&tenant("other")).await.expect("tenant"), None);
 }
 
 pub async fn outbox_entries_are_added_and_removed<S: PartitionStore>(store: &S) {

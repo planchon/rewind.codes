@@ -104,15 +104,15 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_POOL")]
     pub pool: Option<String>,
 
-    /// A tenant whose activations run on a pool of its own, as `<tenant>=<pool>`: the owners send
-    /// them to the nodes started with `--pool <pool>`. Repeat, or separate with commas; give the
-    /// same list to every node.
+    /// An organization whose activations run on a pool of its own, as `<organization>=<pool>`:
+    /// the owners send them to the nodes started with `--pool <pool>`. Repeat, or separate with
+    /// commas; give the same list to every node.
     #[arg(
-        long = "tenant-pool",
-        env = "REWIND_TENANT_POOLS",
+        long = "organization-pool",
+        env = "REWIND_ORGANIZATION_POOLS",
         value_delimiter = ','
     )]
-    pub tenant_pools: Vec<String>,
+    pub organization_pools: Vec<String>,
 
     /// Where the HTTP API listens.
     #[arg(long, env = "REWIND_LISTEN", default_value = "127.0.0.1:8080")]
@@ -202,9 +202,9 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_ADMIN_KEY", hide_env_values = true)]
     pub admin_key: Option<String>,
 
-    /// The tenant of `--admin-key`.
-    #[arg(long, env = "REWIND_ADMIN_TENANT", default_value = "default")]
-    pub admin_tenant: String,
+    /// The organization of `--admin-key`, by its id.
+    #[arg(long, env = "REWIND_ADMIN_ORGANIZATION", default_value = "default")]
+    pub admin_organization: String,
 
     /// The URL clients reach this server at: `signalUrl(name)` returns `{public-url}/hooks/…`.
     /// Without it, workflows cannot get a signal URL.
@@ -222,7 +222,7 @@ pub struct ServerArgs {
 
     /// The ceiling of the tenants this server creates (`archi/06-storage-and-scale.md`,
     /// "Quotas"): the runs active at once across their namespaces; one more is refused with 429.
-    /// The operator changes a tenant's ceiling with `PUT /v1/organizations/{tenant}/quotas`.
+    /// The operator changes a tenant's ceiling with `PUT /v1/organizations/{organization}/quotas`.
     #[arg(long, env = "REWIND_QUOTA_ACTIVE_RUNS")]
     pub quota_active_runs: Option<u32>,
 
@@ -653,16 +653,19 @@ impl ServerArgs {
         }
         let mut pools = BTreeMap::new();
         for pair in self
-            .tenant_pools
+            .organization_pools
             .iter()
             .map(|pair| pair.trim())
             .filter(|pair| !pair.is_empty())
         {
             let (tenant, pool) = pair.split_once('=').ok_or_else(|| {
-                ConfigError::new(format!("--tenant-pool {pair:?}: expected <tenant>=<pool>"))
+                ConfigError::new(format!(
+                    "--organization-pool {pair:?}: expected <organization>=<pool>"
+                ))
             })?;
-            let tenant = TenantId::new(tenant.trim().to_owned())
-                .map_err(|error| ConfigError::new(format!("--tenant-pool {pair:?}: {error}")))?;
+            let tenant = TenantId::new(tenant.trim().to_owned()).map_err(|error| {
+                ConfigError::new(format!("--organization-pool {pair:?}: {error}"))
+            })?;
             pools.insert(tenant, pool.trim().to_owned());
         }
         let partitions = |default: u16| {
@@ -798,9 +801,12 @@ impl ServerArgs {
                 address: self.link_address.clone(),
                 secret: secret.to_owned(),
             }),
-            _ if self.executors_only || self.pool.is_some() || !self.tenant_pools.is_empty() => {
+            _ if self.executors_only
+                || self.pool.is_some()
+                || !self.organization_pools.is_empty() =>
+            {
                 return Err(ConfigError::new(
-                    "--executors-only, --pool and --tenant-pool are for a deployment of several \
+                    "--executors-only, --pool and --organization-pool are for a deployment of several \
                      nodes on Postgres",
                 ));
             }
@@ -829,7 +835,7 @@ impl ServerArgs {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let master_keys = MasterKeyRing::new(master_key).with_previous(previous);
-        let admin_tenant = TenantId::new(self.admin_tenant.clone())
+        let admin_tenant = TenantId::new(self.admin_organization.clone())
             .map_err(|error| ConfigError::new(error.to_string()))?;
         if let Some(key) = &self.admin_key
             && (!key.starts_with(rewind_api::headers::API_KEY_PREFIX) || key.len() < 32)
@@ -1031,7 +1037,7 @@ mod tests {
             "--executors-only",
             "--pool",
             "acme",
-            "--tenant-pool",
+            "--organization-pool",
             "acme=acme, beta = shared-b",
         ]);
         let executors = parse(&executors).unwrap_or_else(|error| panic!("{error}"));
@@ -1052,7 +1058,7 @@ mod tests {
             [("acme".to_owned(), "acme"), ("beta".to_owned(), "shared-b")]
         );
         let mut wrong = linked.clone();
-        wrong.extend(["--tenant-pool", "acme"]);
+        wrong.extend(["--organization-pool", "acme"]);
         assert!(parse(&wrong).is_err(), "a tenant pool is <tenant>=<pool>");
         assert!(
             parse(&[
@@ -1060,7 +1066,7 @@ mod tests {
                 "turso:/tmp/j.db",
                 "--master-key",
                 &key,
-                "--tenant-pool",
+                "--organization-pool",
                 "acme=a"
             ])
             .is_err(),

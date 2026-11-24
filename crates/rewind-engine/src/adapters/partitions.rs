@@ -6,11 +6,11 @@ use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Seq, Shape, Timestam
 use crate::ports::partition::{Activation, CreateRun};
 use crate::ports::{
     Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters, DueTimer, Found, Gauges,
-    Hour, InboxItem, IndexedSummary, NamespaceName, NodeId, OrganizationState, OutboxChange,
-    OutboxEntry, OutboxId, Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord,
-    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, QuarantineNote, Recovery, RunHead,
-    RunOrder, RunQuery, RunRef, Scope, SearchPosition, SignalUrlTarget, TaskChange, TaskRecord,
-    TenantId, TimerChange, TimerKind, Watcher, Window,
+    Hour, InboxItem, IndexedSummary, NamespaceName, NodeId, OutboxChange, OutboxEntry, OutboxId,
+    Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord, QUARANTINE_AFTER_FAILURES,
+    Quarantine, QuarantineKind, QuarantineNote, Recovery, RunHead, RunOrder, RunQuery, RunRef,
+    Scope, SearchPosition, SignalUrlTarget, TaskChange, TaskRecord, TenantId, TenantState,
+    TimerChange, TimerKind, Watcher, Window,
 };
 
 /// `PartitionStore` in memory: one map of records per partition, shared by every log opened on
@@ -57,7 +57,7 @@ struct PartitionState {
     /// The counters of each namespace and hour, as the deltas added them.
     hours: BTreeMap<(TenantId, NamespaceName, Hour), Counters>,
     shapes: BTreeMap<(TenantId, NamespaceName, String), Shape>,
-    organizations: BTreeMap<TenantId, OrganizationState>,
+    tenants: BTreeMap<TenantId, TenantState>,
 }
 
 #[derive(Debug, Clone)]
@@ -322,8 +322,8 @@ impl PartitionState {
                     }
                 }
             }
-            Change::Organization { tenant, state } => {
-                self.organizations.insert(tenant, state);
+            Change::Tenant { tenant, state } => {
+                self.tenants.insert(tenant, state);
                 Ok(())
             }
         }
@@ -670,7 +670,7 @@ impl PartitionState {
             unsealed,
             outbox: self.outbox.values().cloned().collect(),
             counters,
-            organizations: self.organizations.clone(),
+            tenants: self.tenants.clone(),
         }
     }
 
@@ -952,11 +952,8 @@ impl PartitionLog for MemoryPartitionLog {
         })
     }
 
-    async fn organization(
-        &self,
-        tenant: &TenantId,
-    ) -> Result<Option<OrganizationState>, PartitionError> {
-        self.read(|state| state.organizations.get(tenant).cloned())
+    async fn tenant(&self, tenant: &TenantId) -> Result<Option<TenantState>, PartitionError> {
+        self.read(|state| state.tenants.get(tenant).cloned())
     }
 
     async fn commit(&self, batch: Batch) -> Result<(), PartitionError> {

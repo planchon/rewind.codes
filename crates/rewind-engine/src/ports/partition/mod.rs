@@ -13,7 +13,7 @@
 //! A partition holds, for each run of its namespaces: its head, its history per attempt, its
 //! inbox, its signal keys, its call tasks, its timers, its payload records, its watchers, its
 //! signal URL tokens, its summary in the run index, and its start key; and for the partition: the
-//! counters, the outbox, and the states of the organizations homed there. The keys they are
+//! counters, the outbox, and the states of the tenants homed there. The keys they are
 //! stored under belong to the adapter: the engine never composes one.
 
 mod counters;
@@ -32,7 +32,7 @@ pub use counters::{
     ActionCounts, CounterDelta, Counters, FailureCounts, Gauges, Hour, LATEST_RUNS, LatestRun,
     RunCounts, Scope, ScriptCounts, Sketch, Window,
 };
-pub use outbox::{Admission, OrganizationState, OutboxChange, OutboxEntry, OutboxId, Projection};
+pub use outbox::{Admission, OutboxChange, OutboxEntry, OutboxId, Projection, TenantState};
 pub use run::{Attempt, RunHead, TaskChange, TaskRecord, Watcher};
 pub use search::{Found, IndexedSummary, Page, SCAN_BUDGET, SearchPosition};
 pub use timers::{DueTimer, TimerChange, TimerKind};
@@ -247,10 +247,10 @@ pub trait PartitionLog: Send + Sync {
     ) -> impl Future<Output = Result<BTreeMap<String, Shape>, PartitionError>> + Send;
 
     /// The state of an organization homed in the partition.
-    fn organization(
+    fn tenant(
         &self,
         tenant: &TenantId,
-    ) -> impl Future<Output = Result<Option<OrganizationState>, PartitionError>> + Send;
+    ) -> impl Future<Output = Result<Option<TenantState>, PartitionError>> + Send;
 
     /// Applies a batch, its changes in order, atomically and durably; refused whole with
     /// [`PartitionError::Fenced`] once another node opened the partition, or
@@ -278,8 +278,8 @@ pub struct Recovery {
     /// counters), with its gauges, by tenant and name: the owner reads each one's month with
     /// [`PartitionLog::counters`] and reports both to its organization.
     pub counters: Vec<CountedNamespace>,
-    /// The states of the organizations homed here.
-    pub organizations: BTreeMap<TenantId, OrganizationState>,
+    /// The states of the tenants homed here.
+    pub tenants: BTreeMap<TenantId, TenantState>,
 }
 
 /// A namespace with something counted in a partition.
@@ -415,9 +415,9 @@ pub enum Change {
         hash: Digest,
     },
     /// Writes the state of an organization homed in the partition.
-    Organization {
+    Tenant {
         tenant: TenantId,
-        state: OrganizationState,
+        state: TenantState,
     },
 }
 
@@ -496,7 +496,7 @@ pub fn namespace_partition(
     hashed(format!("{tenant}/{name}").as_bytes(), partitions)
 }
 
-/// The home partition of a tenant, where its organization actor lives and keeps its state:
+/// The home partition of a tenant, where its tenant actor lives and keeps its state:
 /// `hash(tenant) mod partitions`, as [`namespace_partition`] hashes.
 pub fn home_partition(tenant: &TenantId, partitions: NonZeroU16) -> PartitionId {
     hashed(tenant.as_str().as_bytes(), partitions)

@@ -895,7 +895,7 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
     let me = scoped.whoami().await.unwrap();
     let grant = me.grant.unwrap();
     assert_eq!(
-        (me.tenant.as_deref(), grant.role.as_str()),
+        (me.organization_id.as_deref(), grant.role.as_str()),
         (Some("acme"), "harness")
     );
     assert_eq!(
@@ -940,7 +940,7 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
     let made = server
         .admin
         .create_api_key(&rewind_api::access::CreateApiKey {
-            tenant: Some("acme".into()),
+            organization_id: Some("acme".into()),
             name: "revoked".into(),
             role: BuiltInRole::Reader.as_str().into(),
             allowed_labels: Labels::new(),

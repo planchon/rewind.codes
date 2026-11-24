@@ -19,9 +19,9 @@ use crate::partition::commit::{After, Unit};
 use crate::partition::{Ask, Entry, Internal, Owner, OwnerMsg, RunSlot};
 use crate::plane::Plane;
 use crate::ports::link::{
-    ActivationRequest, ActivationResult, Admit, Committed, NodeReply, NodeRequest, OrgReply,
-    OrgRequest, OwnerNotice, PartitionReply, PartitionRequest, Purpose, Refusal, SignalAtOwner,
-    StartAtOwner,
+    ActivationRequest, ActivationResult, Admit, Committed, NodeReply, NodeRequest, OwnerNotice,
+    PartitionReply, PartitionRequest, Purpose, Refusal, SignalAtOwner, StartAtOwner, TenantReply,
+    TenantRequest,
 };
 use crate::ports::partition::{Change, CreateRun};
 use crate::ports::{
@@ -256,7 +256,7 @@ impl<P: Plane> Owner<P> {
             return;
         };
         let admission = match answer {
-            Ok(NodeReply::Organization(OrgReply::Admission(admission))) => admission,
+            Ok(NodeReply::Tenant(TenantReply::Admission(admission))) => admission,
             Ok(NodeReply::NotOwner { .. }) => Err(Refusal::Unavailable(
                 "the organization's actor is moving: try again".into(),
             )),
@@ -547,9 +547,9 @@ impl<P: Plane> Owner<P> {
         let tenant = start.run.tenant.clone();
         (
             Target::Home(tenant.clone()),
-            NodeRequest::Organization {
+            NodeRequest::Tenant {
                 tenant,
-                request: Box::new(OrgRequest::Admit(Admit {
+                request: Box::new(TenantRequest::Admit(Admit {
                     partition: self.partition,
                     epoch: self.epoch,
                     run: start.run.id,

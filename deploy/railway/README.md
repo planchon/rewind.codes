@@ -72,12 +72,12 @@ command takes a new deploy (`railway up`).
 | `REWIND_CLUSTER_SECRET` | node | 32 random bytes in hexadecimal (`openssl rand -hex 32`): it authenticates the node link, and every node of the deployment shares it |
 | `REWIND_NODE_ID` | node | `node`: the node's id, and the `service.instance.id` of its telemetry |
 | `REWIND_LINK_ADDRESS` | node | `${{RAILWAY_PRIVATE_DOMAIN}}:7070`: where the other nodes reach its link |
-| `REWIND_ADMIN_KEY`, `REWIND_ADMIN_TENANT` | node | The operator's key (`rewind_sk_…`), tenant `default` |
+| `REWIND_ADMIN_KEY`, `REWIND_ADMIN_ORGANIZATION` | node | The operator's key (`rewind_sk_…`), tenant `default` |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | node | The WorkOS environment's client (`client_…`) and secret key (`sk_…`) |
 | `WORKOS_COOKIE_PASSWORD` | node | 32 random bytes in hexadecimal (`openssl rand -hex 32`): the key of the sign-in's sealed cookies. Changing it signs everyone out |
 | `WORKOS_REDIRECT_URI` | node | `https://app.rewind.codes/auth/callback`, registered in WorkOS |
 | `REWIND_PUBLIC_URL` | node | `https://api.rewind.codes`: `webhook()` URLs start with it |
-| `REWIND_QUOTA_ACTIVE_RUNS` | node | `10000`: the ceiling of active runs given to each organization created from then on. An organization keeps its own ceiling, which `PUT /v1/organizations/{tenant}/quotas` changes |
+| `REWIND_QUOTA_ACTIVE_RUNS` | node | `10000`: the ceiling of active runs given to each organization created from then on. An organization keeps its own ceiling, which `PUT /v1/organizations/{organization}/quotas` changes |
 | `REWIND_EXECUTORS`, `REWIND_CALLS`, `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | node | `4`, `256`, `500`, `384MiB`, for a 1 GB limit |
 | `REWIND_LOG` | node | `info` |
 

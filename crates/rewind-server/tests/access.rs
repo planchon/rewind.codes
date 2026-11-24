@@ -63,7 +63,7 @@ async fn server_with_roles(
 
 fn create(tenant: Option<&str>, name: &str, role: &str, labels: &[(&str, &str)]) -> CreateApiKey {
     CreateApiKey {
-        tenant: tenant.map(str::to_owned),
+        organization_id: tenant.map(str::to_owned),
         name: name.to_owned(),
         role: role.to_owned(),
         allowed_labels: labels.iter().copied().collect::<Labels>(),
@@ -284,7 +284,7 @@ async fn keys_are_given_within_what_their_creator_holds() {
         .unwrap();
     assert_eq!(
         (
-            harness.tenant.as_str(),
+            harness.organization_id.as_str(),
             harness.name.as_str(),
             harness.role.as_str()
         ),
@@ -304,7 +304,7 @@ async fn keys_are_given_within_what_their_creator_holds() {
     );
     let harness_client = server.client(harness.key.as_deref());
     let identity = harness_client.whoami().await.unwrap();
-    assert_eq!(identity.tenant.as_deref(), Some("acme"));
+    assert_eq!(identity.organization_id.as_deref(), Some("acme"));
     assert_eq!(
         identity.principal,
         Some(CallerPrincipal::Key {
@@ -574,7 +574,7 @@ async fn the_operator_reaches_the_keys_of_every_tenant() {
     let server = TestServer::start(&[]).await;
     let me = server.admin.whoami().await.unwrap();
     assert!(me.operator);
-    assert_eq!(me.tenant.as_deref(), Some("acme"));
+    assert_eq!(me.organization_id.as_deref(), Some("acme"));
     assert_eq!(me.permissions, Permission::ALL);
     assert_eq!(me.grant.unwrap().role, OPERATOR);
 
@@ -584,7 +584,7 @@ async fn the_operator_reaches_the_keys_of_every_tenant() {
         .create_api_key(&create(Some("beta"), "beta's owner", "owner", &[]))
         .await
         .unwrap();
-    assert_eq!(made.tenant, "beta");
+    assert_eq!(made.organization_id, "beta");
     let beta = server.client(made.key.as_deref());
     let beta_keys: Vec<String> = beta
         .list_api_keys()
@@ -609,7 +609,7 @@ async fn the_operator_reaches_the_keys_of_every_tenant() {
             .unwrap()
             .keys
             .iter()
-            .all(|key| key.tenant == "acme")
+            .all(|key| key.organization_id == "acme")
     );
     assert_eq!(
         problem(owner.revoke_api_key(&made.id).await.unwrap_err()).kind(),

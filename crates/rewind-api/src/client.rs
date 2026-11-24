@@ -905,7 +905,7 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /organizations/{tenant}/jwks.json`: the organization's public keys. The server
+    /// `GET /organizations/{organization}/jwks.json`: the organization's public keys. The server
     /// answers it without authentication.
     pub async fn jwks(&self, tenant: &str) -> Result<Jwks, Error> {
         let request = self.request(Method::GET, routes::JWKS, &[tenant])?;
@@ -992,7 +992,7 @@ impl Client {
         self.empty(request).await
     }
 
-    /// `PUT /v1/organizations/{tenant}/quotas`: the operator only.
+    /// `PUT /v1/organizations/{organization}/quotas`: the operator only.
     pub async fn put_ceiling(&self, tenant: &str, ceiling: &PutCeiling) -> Result<(), Error> {
         let request = self
             .request(Method::PUT, routes::ORGANIZATION_QUOTAS, &[tenant])?

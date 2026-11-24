@@ -9,7 +9,7 @@
 //! | `PUT`, `DELETE /v1/namespaces/{name}/secrets/{secret}` | `secrets:write` | a token, its own namespace; not a grant or a token limited to labels |
 //! | `GET /v1/organization/signing-keys` | `secrets:read` | not an end user's token |
 //! | `POST /v1/organization/signing-keys` | `organization:write` | |
-//! | `GET /organizations/{tenant}/jwks.json` | none | `Cache-Control: max-age=300` |
+//! | `GET /organizations/{organization}/jwks.json` | none | `Cache-Control: max-age=300` |
 //!
 //! A value is written and never answered. Putting a secret again makes ready the calls parked by
 //! a refusal or a missing secret in the runs that attach it: the write's change of the control
@@ -244,7 +244,7 @@ pub(super) async fn rotate_signing_key(
     Ok(Json(signing_key(&key.public)))
 }
 
-/// `GET /organizations/{tenant}/jwks.json`, without authentication: the current key and those
+/// `GET /organizations/{organization}/jwks.json`, without authentication: the current key and those
 /// retired less than 24 hours ago. A tenant without a key, or that does not exist, has none.
 pub(super) async fn jwks(
     State(app): State<Arc<App>>,

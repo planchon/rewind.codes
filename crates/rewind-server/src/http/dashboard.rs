@@ -22,7 +22,7 @@ const SERVER_ROOTS: [&str; 8] = [
     "mcp",
     "hooks",
     "assets",
-    // The organizations' public keys (`/organizations/{tenant}/jwks.json`).
+    // The organizations' public keys (`/organizations/{organization}/jwks.json`).
     "organizations",
 ];
 

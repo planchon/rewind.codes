@@ -3,7 +3,7 @@
 //! approves or rejects the calls that wait for it (`archi/04-tools.md`, "Call lifecycle").
 //!
 //! ```text
-//!  GET /v1/calls/stream ── attach_stream ──► organization actor of the tenant (its home owner)
+//!  GET /v1/calls/stream ── attach_stream ──► tenant actor of the tenant (its home owner)
 //!        ▲ call, gone                          hands each task to a stream with a free slot
 //!        └──────────────── this edge ◄──────── EdgeNotice::HandOut (here, or through the link)
 //!  POST /v1/calls/{token}/… ── the token names its run ──► the owner of the run's partition

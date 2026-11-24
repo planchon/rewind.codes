@@ -588,6 +588,10 @@
           "name": {
             "type": "string"
           },
+          "organizationId": {
+            "description": "The organization the key acts in, by its id.",
+            "type": "string"
+          },
           "revokedAt": {
             "format": "date-time",
             "type": [
@@ -598,14 +602,11 @@
           "role": {
             "description": "The role of the key's grant.",
             "type": "string"
-          },
-          "tenant": {
-            "type": "string"
           }
         },
         "required": [
           "id",
-          "tenant",
+          "organizationId",
           "name",
           "role",
           "allowedLabels",
@@ -1703,16 +1704,16 @@
             "description": "What the key is for.",
             "type": "string"
           },
-          "role": {
-            "description": "A built-in role, a role of the tenant, or `operator` (only from the operator).",
-            "type": "string"
-          },
-          "tenant": {
-            "description": "Another tenant than the caller's: only the operator names one, and the tenant is\ncreated with its first key.",
+          "organizationId": {
+            "description": "Another organization than the caller's, by its id: only the operator names one, and the\norganization is created with its first key.",
             "type": [
               "string",
               "null"
             ]
+          },
+          "role": {
+            "description": "A built-in role, a role of the tenant, or `operator` (only from the operator).",
+            "type": "string"
           }
         },
         "required": [
@@ -3388,6 +3389,13 @@
               }
             ]
           },
+          "organizationId": {
+            "description": "The organization the caller acts in, by its id. Absent for a member signed in without\nan organization, who reaches only the onboarding endpoints.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "organizations": {
             "description": "For a member: every organization they belong to.",
             "items": {
@@ -3411,13 +3419,6 @@
               {
                 "type": "null"
               }
-            ]
-          },
-          "tenant": {
-            "description": "The tenant the caller acts in. Absent for a member signed in without an organization,\nwho reaches only the onboarding endpoints.",
-            "type": [
-              "string",
-              "null"
             ]
           }
         },
@@ -3549,7 +3550,7 @@
         "type": "object"
       },
       "Jwks": {
-        "description": "`GET /organizations/{tenant}/jwks.json`: the organization's public keys, as a JSON Web Key\nSet (RFC 7517), served without authentication.",
+        "description": "`GET /organizations/{organization}/jwks.json`: the organization's public keys, as a JSON Web Key\nSet (RFC 7517), served without authentication.",
         "properties": {
           "keys": {
             "items": {
@@ -4650,7 +4651,7 @@
       },
       "PutCeiling": {
         "additionalProperties": false,
-        "description": "`PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling.",
+        "description": "`PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling.",
         "properties": {
           "ceiling": {
             "$ref": "#/components/schemas/Quotas"
@@ -6670,7 +6671,7 @@
         "description": "`GET /v1/organization/signing-keys`: the current key and those retired less than 24 hours\nago, newest first, and where their public keys are.",
         "properties": {
           "issuer": {
-            "description": "The JWT's issuer, `{public-url}/organizations/{tenant}`: what `verifyRewindCall` is\ngiven as `issuer`.",
+            "description": "The JWT's issuer, `{public-url}/organizations/{organization}`: what `verifyRewindCall` is\ngiven as `issuer`.",
             "type": "string"
           },
           "jwksUrl": {
@@ -9817,15 +9818,15 @@
         ]
       }
     },
-    "/organizations/{tenant}/jwks.json": {
+    "/organizations/{organization}/jwks.json": {
       "get": {
         "description": "A JSON Web Key Set: the current signing key and those retired less than 24 hours ago,\nas the servers that receive signed calls check them (`verifyRewindCall`). Without\nauthentication; `Cache-Control: max-age=300`.",
         "operationId": "getJwks",
         "parameters": [
           {
-            "description": "The tenant (the organization's id).",
+            "description": "The organization's id.",
             "in": "path",
-            "name": "tenant",
+            "name": "organization",
             "required": true,
             "schema": {
               "type": "string"
@@ -15540,15 +15541,15 @@
         ]
       }
     },
-    "/v1/organizations/{tenant}/quotas": {
+    "/v1/organizations/{organization}/quotas": {
       "put": {
         "description": "The limits of its totals across namespaces: the customer's offer. The operator only.",
         "operationId": "putCeiling",
         "parameters": [
           {
-            "description": "The tenant (the organization's id).",
+            "description": "The organization's id.",
             "in": "path",
-            "name": "tenant",
+            "name": "organization",
             "required": true,
             "schema": {
               "type": "string"

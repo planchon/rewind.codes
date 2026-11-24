@@ -223,7 +223,7 @@ fn mcp_caller() -> FakeExecutor {
 async fn a_lost_message_is_rebuilt_from_the_records_when_the_partition_moves() {
     let mut world = two_nodes(mcp_caller(), RecordingDispatcher::echo(), 4).await;
     let (a, b) = (node("node-a"), node("node-b"));
-    // The run lives on one node, its tenant's organization actor on the other.
+    // The run lives on one node, its tenant's tenant actor on the other.
     let map = world.driver.map(&a).unwrap();
     let home = home_partition(&TenantId::local(), world.partitions);
     let home_node = map.owner(home).unwrap().clone();
@@ -261,14 +261,14 @@ async fn a_lost_message_is_rebuilt_from_the_records_when_the_partition_moves() {
     assert_eq!(calls[0].delivery, 2);
 }
 
-/// A call that asked its organization actor for a slot, when the actor moves: the actor that
+/// A call that asked its tenant actor for a slot, when the actor moves: the actor that
 /// opens on the next node knows none of the slots asked of the one before, and every call that
 /// waits for one asks it again. The call goes once, the run's partition never moved.
 #[tokio::test]
 async fn a_call_waiting_for_its_slot_asks_again_when_the_organization_moves() {
     let mut world = two_nodes(mcp_caller(), RecordingDispatcher::echo(), 4).await;
     let (a, b) = (node("node-a"), node("node-b"));
-    // The run lives on one node, its tenant's organization actor on the other.
+    // The run lives on one node, its tenant's tenant actor on the other.
     let map = world.driver.map(&a).unwrap();
     let home = home_partition(&TenantId::local(), world.partitions);
     let home_node = map.owner(home).unwrap().clone();
@@ -280,8 +280,8 @@ async fn a_call_waiting_for_its_slot_asks_again_when_the_organization_moves() {
     world.driver.faults().drop_next(1, |request| {
         matches!(
             request,
-            NodeRequest::Organization { request, .. }
-                if matches!(**request, rewind_engine::ports::link::OrgRequest::Slot(_))
+            NodeRequest::Tenant { request, .. }
+                if matches!(**request, rewind_engine::ports::link::TenantRequest::Slot(_))
         )
     });
     let run = world
@@ -450,7 +450,7 @@ fn host() -> FakeExecutor {
     )
 }
 
-/// Two nodes: the stream at one, the organization actor and the run wherever they land.
+/// Two nodes: the stream at one, the tenant actor and the run wherever they land.
 async fn streams_world() -> (World, NodeId) {
     let mut a = config("node-a", 2);
     a.harness_actions = HarnessActions::Streams;
@@ -573,7 +573,7 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
 }
 
 /// A stream held at a node that dies is closed with it: no edge is left to say so, and the
-/// organization actor learns it from the members. Its tasks get their grace, then are handed to
+/// tenant actor learns it from the members. Its tasks get their grace, then are handed to
 /// a stream of another node.
 #[tokio::test]
 async fn a_stream_at_a_node_that_dies_has_its_tasks_handed_again_after_the_grace() {

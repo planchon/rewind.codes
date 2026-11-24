@@ -294,7 +294,7 @@ async fn a_keys_stream_closes_once_the_key_or_its_right_is_gone() {
         async move {
             admin
                 .create_api_key(&CreateApiKey {
-                    tenant: Some("acme".into()),
+                    organization_id: Some("acme".into()),
                     name: format!("a {role} key of the change stream"),
                     role,
                     allowed_labels: Labels::new(),

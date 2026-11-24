@@ -1,5 +1,5 @@
 //! The use cases of the run plane, in the driver: the owner, its executors, its call executor
-//! and its organization actor, with memory adapters and a fake executor
+//! and its tenant actor, with memory adapters and a fake executor
 //! (`archi/07-code-architecture.md`, "Inside a node", "Tests"). The behaviours are those the
 //! history's engine keeps (`tests/engine.rs`, `tests/tasks.rs`, `tests/quotas.rs`).
 
@@ -700,7 +700,7 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
     assert_eq!(error.kind, ActionFailureKind::Timeout);
 }
 
-/// The organization actor of a tenant lives in its home partition's owner: when the partition
+/// The tenant actor of a tenant lives in its home partition's owner: when the partition
 /// is opened again (here after a read found it opened elsewhere), the new actor starts without
 /// the streams the previous one held, and every edge attaches its streams of the tenant again.
 #[tokio::test]
@@ -849,7 +849,7 @@ async fn tasks_in_flight_read_claimed() {
     node.harness_actions = HarnessActions::Streams;
     let mut world = World::with(one_call(), RecordingDispatcher::echo(), 1, &[node]).await;
     let at = world.at.clone();
-    // Recorded `ready`, it is in flight once its owner handed it to the organization actor for
+    // Recorded `ready`, it is in flight once its owner handed it to the tenant actor for
     // a stream: it reads `claimed`, from the owner's memory.
     let run = world.run(request("one_call", json!({}))).await;
     let claimed =
@@ -1169,7 +1169,7 @@ async fn a_quota_crossed_raises_its_alert_once_through_the_outbox() {
         .map(|(_, event)| event.id)
         .collect();
     assert_eq!(alerts.len(), 2, "80 % and 100 %, once each: {alerts:?}");
-    // The organization actor answers the alerts of the month, the newest first.
+    // The tenant actor answers the alerts of the month, the newest first.
     let month = rewind_engine::ports::Month::of(world.now());
     let mut gateway = world.driver.gateway(&world.at.clone());
     let recorded = world

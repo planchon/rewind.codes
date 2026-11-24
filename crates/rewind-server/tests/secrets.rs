@@ -78,7 +78,7 @@ async fn labelled_key(server: &TestServer, labels: &[(&str, &str)]) -> Client {
     let key = server
         .admin
         .create_api_key(&rewind_api::access::CreateApiKey {
-            tenant: Some("acme".into()),
+            organization_id: Some("acme".into()),
             name: "a labelled key of the tests".into(),
             role: BuiltInRole::Harness.as_str().into(),
             allowed_labels: labels.iter().copied().collect(),

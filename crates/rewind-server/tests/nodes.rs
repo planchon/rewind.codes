@@ -127,7 +127,7 @@ impl Deployment {
             &key,
             "--admin-key",
             admin_key,
-            "--admin-tenant",
+            "--admin-organization",
             "acme",
             "--listen",
             "127.0.0.1:0",
@@ -156,7 +156,7 @@ impl Node {
     async fn key_of(&self, tenant: &str, role: BuiltInRole) -> String {
         self.admin()
             .create_api_key(&CreateApiKey {
-                tenant: Some(tenant.into()),
+                organization_id: Some(tenant.into()),
                 name: format!("a {} key of the tests", role.as_str()),
                 role: role.as_str().into(),
                 allowed_labels: Labels::new(),
@@ -395,7 +395,7 @@ async fn a_tenant_with_a_pool_runs_on_the_nodes_of_its_pool_only() {
     };
     // a owns the partitions and runs the activations of every tenant but acme; p, a node of
     // executors only, runs acme's.
-    let pools = ["--tenant-pool", "acme=acme-pool"];
+    let pools = ["--organization-pool", "acme=acme-pool"];
     let mut a = deployment.node_with("node-a", &pools).await;
     let p = deployment
         .launch(
@@ -404,7 +404,7 @@ async fn a_tenant_with_a_pool_runs_on_the_nodes_of_its_pool_only() {
                 "--executors-only",
                 "--pool",
                 "acme-pool",
-                "--tenant-pool",
+                "--organization-pool",
                 "acme=acme-pool",
             ],
         )

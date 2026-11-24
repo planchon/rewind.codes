@@ -11,7 +11,7 @@
 //!   delivery + 1 when its action is idempotent, failed `outcome_unknown` when it is not, in the
 //!   recovery batch;
 //! - the outbox, to the projections; the ended attempts not sealed, to the sealer;
-//! - the counters, reported to their organization actors; the organizations homed here;
+//! - the counters, reported to their tenant actors; the tenants homed here;
 //! - the quarantined runs of the epochs this build runs that no node of this build tried, tried
 //!   once;
 //! - the namespaces of the partition being erased.
@@ -101,7 +101,7 @@ impl<P: Plane> Owner<P> {
             unsealed,
             outbox,
             counters,
-            organizations,
+            tenants,
         } = recovery;
         self.log = Some(log);
         self.phase = Phase::Open;
@@ -113,7 +113,7 @@ impl<P: Plane> Owner<P> {
             .unwrap_or(0)
             .saturating_add(1);
         self.wheel.load(timers);
-        self.org_states = organizations;
+        self.tenant_states = tenants;
         let now = self.now();
         tracing::info!(
             partition = %self.partition,
@@ -121,7 +121,7 @@ impl<P: Plane> Owner<P> {
             tasks = tasks.len(),
             "partition opened"
         );
-        // The organization actors homed here start without streams: every edge attaches its
+        // The tenant actors homed here start without streams: every edge attaches its
         // streams of their tenants again.
         let mut edges: Vec<crate::ports::NodeId> = self
             .nodes

@@ -19,12 +19,12 @@ use rewind_core::{
 use rewind_format::FormatError;
 use rewind_format::partition::{
     ActionCounts, Admission, Attribute, Callsite, Counters, Ending, FailureCounts, FailureKind,
-    ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log, Metadata, Mode,
-    Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
-    QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow, ScriptCounts,
-    SecretExpiredReason, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus,
-    StartKey, StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
-    TraceContext, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind, decode, encode,
+    ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log, Metadata, Mode, Outbox,
+    ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
+    QuotaKind, Record, RunCounts, RunHead, RunWorkflow, ScriptCounts, SecretExpiredReason, Shape,
+    SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status,
+    Summary, Task, TaskPhase, TaskState, TenantState, Threshold, Timer, TimerKind, TraceContext,
+    Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind, decode, encode,
 };
 use serde_json::json;
 
@@ -386,8 +386,8 @@ fn outbox_alert() -> Outbox {
     }
 }
 
-fn organization() -> Organization {
-    Organization {
+fn tenant_state() -> TenantState {
+    TenantState {
         alerts: vec![alert()],
         admissions: vec![Admission {
             run: run(2),
@@ -452,7 +452,7 @@ fn every_record_decodes_from_its_fixture_and_re_encodes_to_the_same_bytes() {
     golden("outbox-otel", outbox_otel());
     golden("outbox-webhooks", outbox_webhooks());
     golden("outbox-quota-alert", outbox_alert());
-    golden("organization", organization());
+    golden("tenant-state", tenant_state());
 }
 
 #[test]
@@ -695,7 +695,7 @@ fn every_variant_round_trips() {
         (QuotaKind::MaxTtl, Threshold::Near),
         (QuotaKind::MaxCodeLines, Threshold::Near),
     ] {
-        let record = Organization {
+        let record = TenantState {
             alerts: vec![QuotaAlert {
                 quota,
                 threshold,
@@ -705,7 +705,7 @@ fn every_variant_round_trips() {
             }],
             admissions: Vec::new(),
         };
-        assert_eq!(decode::<Organization>(&encode(&record)).unwrap(), record);
+        assert_eq!(decode::<TenantState>(&encode(&record)).unwrap(), record);
     }
     let levels = [Level::Debug, Level::Info, Level::Error];
     for level in levels {

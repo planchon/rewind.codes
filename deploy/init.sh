@@ -23,9 +23,9 @@ cat >"$env_file" <<ENV
 REWIND_MASTER_KEY=$(head -c 32 /dev/urandom | base64)
 # The secret every node shares: it authenticates the node link.
 REWIND_CLUSTER_SECRET=$(random 64)
-# The first API key (role operator, tenant \$REWIND_ADMIN_TENANT): it creates the others.
+# The first API key (role operator, tenant \$REWIND_ADMIN_ORGANIZATION): it creates the others.
 REWIND_ADMIN_KEY=rewind_sk_$(random 43)
-REWIND_ADMIN_TENANT=default
+REWIND_ADMIN_ORGANIZATION=default
 
 POSTGRES_PASSWORD=$(random 32)
 MINIO_ROOT_USER=rewind

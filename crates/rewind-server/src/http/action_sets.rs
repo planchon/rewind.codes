@@ -558,7 +558,7 @@ async fn listing_auth(
     })
 }
 
-/// The issuer of the tenant's JWTs: `{public-url}/organizations/{tenant}`, whose keys are at
+/// The issuer of the tenant's JWTs: `{public-url}/organizations/{organization}`, whose keys are at
 /// `{iss}/jwks.json`. A server without a public URL cannot sign: no one could fetch its keys.
 fn issuer(app: &App, tenant: &TenantId, of: &str) -> Result<String, ApiError> {
     match &app.settings.public_url {

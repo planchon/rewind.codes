@@ -1,4 +1,4 @@
-//! What leaves a partition, and what an organization actor keeps in its home partition
+//! What leaves a partition, and what an tenant actor keeps in its home partition
 //! (`archi/06-storage-and-scale.md`, "The outbox", "Quotas").
 
 use std::fmt;
@@ -65,17 +65,17 @@ pub enum OutboxChange {
     Remove(OutboxId),
 }
 
-/// What an organization actor keeps in its tenant's home partition: the alerts it recorded, and
+/// What an tenant actor keeps in its tenant's home partition: the alerts it recorded, and
 /// the admissions it holds until the owners' counts include them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct OrganizationState {
+pub struct TenantState {
     /// Each threshold crossed, recorded once per tenant, namespace (or the tenant), quota,
     /// month and threshold.
     pub alerts: Vec<QuotaAlert>,
     pub admissions: Vec<Admission>,
 }
 
-/// A start the organization actor admitted that the counts of the run's owner do not include
+/// A start the tenant actor admitted that the counts of the run's owner do not include
 /// yet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Admission {

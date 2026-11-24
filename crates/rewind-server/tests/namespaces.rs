@@ -342,7 +342,7 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
 
     // Who she is, and what she may do: the default permissions, nothing else.
     let identity = alice.whoami().await.unwrap();
-    assert_eq!(identity.tenant.as_deref(), Some("acme"));
+    assert_eq!(identity.organization_id.as_deref(), Some("acme"));
     assert_eq!(identity.grant, None);
     assert!(!identity.operator);
     assert_eq!(identity.permissions, Permission::TOKEN_DEFAULT.to_vec());
@@ -767,7 +767,7 @@ async fn harness_secret(server: &TestServer) -> String {
     server
         .admin
         .create_api_key(&rewind_api::access::CreateApiKey {
-            tenant: Some("acme".into()),
+            organization_id: Some("acme".into()),
             name: "raw requests".into(),
             role: BuiltInRole::Harness.as_str().into(),
             allowed_labels: Labels::new(),

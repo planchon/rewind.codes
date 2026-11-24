@@ -616,7 +616,7 @@ pub enum WaitingFor {
 }
 
 // -------------------------------------------------------------------------------------------
-// The outbox and the organizations
+// The outbox and the tenants
 
 /// A delivery waiting to leave the partition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -823,10 +823,10 @@ pub enum Threshold {
     Reached,
 }
 
-/// What an organization actor keeps in its home partition.
+/// What an tenant actor keeps in its home partition.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Organization {
+pub struct TenantState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alerts: Vec<QuotaAlert>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

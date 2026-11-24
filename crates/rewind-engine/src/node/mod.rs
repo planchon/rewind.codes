@@ -2,7 +2,7 @@
 //! `NodeLink`"; `archi/06-storage-and-scale.md`, "Partitions, owners and nodes").
 //!
 //! A [`Node`] holds the actors of one process: the owners of the partitions it holds (and the
-//! organization actors they host), its executors, its call executor, and the node actor, which
+//! tenant actors they host), its executors, its call executor, and the node actor, which
 //! keeps the partition map, opens the partitions the map gives the node and hands over those it
 //! loses. It routes what the actors send each other: to an actor of the node, or to another
 //! node through the link. It holds the edge's side of the SDK streams and of the subscriptions.
@@ -26,19 +26,19 @@ use rewind_core::{Digest, Epoch, PartitionId, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::executors::{ExecMsg, Executors};
-use crate::org::OrgMsg;
 use crate::partition::{Owner, OwnerMsg};
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    Changed, EdgeNotice, NodeReply, NodeRequest, OrgRequest, StreamAttach, StreamId, StreamMessage,
-    SubscriptionKey,
+    Changed, EdgeNotice, NodeReply, NodeRequest, StreamAttach, StreamId, StreamMessage,
+    SubscriptionKey, TenantRequest,
 };
 use crate::ports::{
     CodeExecutor, ControlPlaneChange, Moves, NodeId, NodeInfo, PartitionMap, TenantId,
     home_partition,
 };
 use crate::tasks::calls::Calls;
+use crate::tenant::TenantMsg;
 use message::{Effect, Message, ReplyTo, Target, job};
 
 /// A message to the node actor.
@@ -348,11 +348,11 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                     _ => self.missing_owner(partition, message),
                 }
             }
-            NodeRequest::Organization { tenant, request } => {
+            NodeRequest::Tenant { tenant, request } => {
                 let home = home_partition(&tenant, self.config.partitions);
-                let message = OwnerMsg::Org {
+                let message = OwnerMsg::Tenant {
                     tenant,
-                    message: OrgMsg::Request(request, reply),
+                    message: TenantMsg::Request(request, reply),
                 };
                 match self.owners.get_mut(&home) {
                     Some(owner) if !owner.is_closed() => owner.handle(message),
@@ -389,13 +389,13 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                     .get(&stream)
                     .is_some_and(|(_, _, sink)| sink.send(event).is_ok());
                 if !delivered && let Some(tenant) = tenant {
-                    // The stream closed: its organization actor gives its tasks their grace.
+                    // The stream closed: its tenant actor gives its tasks their grace.
                     self.streams.remove(&stream);
                     effects.push(Effect::Request {
                         to: Target::Home(tenant.clone()),
-                        request: NodeRequest::Organization {
+                        request: NodeRequest::Tenant {
                             tenant,
-                            request: Box::new(OrgRequest::Detach { stream }),
+                            request: Box::new(TenantRequest::Detach { stream }),
                         },
                         asker: None,
                     });
@@ -499,7 +499,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     /// node reads the map after its owner was fenced, and is answered `NotOwner` otherwise.
     fn missing_owner(&mut self, partition: PartitionId, message: OwnerMsg<P>) -> Vec<Effect<P>> {
         match (self.fenced.get_mut(&partition), &message) {
-            (Some(waiting), OwnerMsg::Request(..) | OwnerMsg::Org { .. }) => {
+            (Some(waiting), OwnerMsg::Request(..) | OwnerMsg::Tenant { .. }) => {
                 waiting.push(message);
                 Vec::new()
             }
@@ -601,7 +601,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             effects.extend(self.open(partition));
         }
         effects.extend(self.deliver_fenced());
-        // An organization actor whose home moved lost its streams: they are attached again.
+        // An tenant actor whose home moved lost its streams: they are attached again.
         let moved: Vec<StreamAttach> = self
             .streams
             .values()
@@ -616,9 +616,9 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 let tenant = tenant.clone();
                 effects.push(Effect::Request {
                     to: Target::Home(tenant.clone()),
-                    request: NodeRequest::Organization {
+                    request: NodeRequest::Tenant {
                         tenant,
-                        request: Box::new(OrgRequest::Attach(attach)),
+                        request: Box::new(TenantRequest::Attach(attach)),
                     },
                     asker: None,
                 });
@@ -741,16 +741,16 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         );
         self.route(vec![Effect::Request {
             to: Target::Home(tenant.clone()),
-            request: NodeRequest::Organization {
+            request: NodeRequest::Tenant {
                 tenant,
-                request: Box::new(OrgRequest::Attach(attach)),
+                request: Box::new(TenantRequest::Attach(attach)),
             },
             asker: None,
         }])
     }
 
     /// The streams of this edge whose tenant is homed in `partition`, attached again to the
-    /// tenant's organization actor: the partition was opened, and its actors are new.
+    /// tenant's tenant actor: the partition was opened, and its actors are new.
     fn attach_again(&mut self, partition: PartitionId) -> Vec<Effect<P>> {
         let effects = self
             .streams
@@ -758,9 +758,9 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             .filter(|(tenant, _, _)| home_partition(tenant, self.config.partitions) == partition)
             .map(|(tenant, attach, _)| Effect::Request {
                 to: Target::Home(tenant.clone()),
-                request: NodeRequest::Organization {
+                request: NodeRequest::Tenant {
                     tenant: tenant.clone(),
-                    request: Box::new(OrgRequest::Attach(attach.clone())),
+                    request: Box::new(TenantRequest::Attach(attach.clone())),
                 },
                 asker: None,
             })
@@ -769,7 +769,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     }
 
     /// The calls of this node's owners that wait for a slot of a tenant homed in `partition`,
-    /// asked again of its organization actor: the partition was opened, and its actors are new.
+    /// asked again of its tenant actor: the partition was opened, and its actors are new.
     fn ask_slots_again(&mut self, partition: PartitionId) -> Vec<Effect<P>> {
         let effects: Vec<Effect<P>> = self
             .owners
@@ -786,9 +786,9 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         };
         self.route(vec![Effect::Request {
             to: Target::Home(tenant.clone()),
-            request: NodeRequest::Organization {
+            request: NodeRequest::Tenant {
                 tenant,
-                request: Box::new(OrgRequest::Detach {
+                request: Box::new(TenantRequest::Detach {
                     stream: stream.clone(),
                 }),
             },

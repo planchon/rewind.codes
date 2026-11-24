@@ -486,7 +486,7 @@ async fn the_whole_flow(world: &World) {
         ))
         .await;
     assert_eq!(status, 200, "{whoami}");
-    assert_eq!(whoami["tenant"], world.acme.as_str());
+    assert_eq!(whoami["organizationId"], world.acme.as_str());
     assert_eq!(
         whoami["permissions"],
         json!([
@@ -1460,7 +1460,7 @@ async fn other_callers_repeat_their_own_organization() {
         .server
         .admin
         .create_api_key(&rewind_api::access::CreateApiKey {
-            tenant: Some(world.acme.clone()),
+            organization_id: Some(world.acme.clone()),
             name: "harness".into(),
             role: "harness".into(),
             allowed_labels: Labels::new(),
@@ -1749,7 +1749,7 @@ async fn mcp_tools_follow_the_access_given() {
     let key = world
         .owner
         .create_api_key(&rewind_api::access::CreateApiKey {
-            tenant: None,
+            organization_id: None,
             name: "ci".into(),
             role: "reader".into(),
             allowed_labels: Labels::new(),

@@ -24,7 +24,7 @@ use crate::extract::Body;
 fn key_view(key: &ports::ApiKey, grant: Option<&ports::Grant>, secret: Option<String>) -> ApiKey {
     ApiKey {
         id: key.hash.to_hex(),
-        tenant: key.tenant.as_str().to_owned(),
+        organization_id: key.tenant.as_str().to_owned(),
         name: key.name.clone(),
         role: grant.map(|grant| grant.role.clone()).unwrap_or_default(),
         allowed_labels: grant
@@ -70,7 +70,7 @@ pub(super) async fn create_key(
     Body(request): Body<CreateApiKey>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::ApiKeysWrite)?;
-    let tenant = match request.tenant {
+    let tenant = match request.organization_id {
         Some(tenant) => {
             TenantId::new(tenant).map_err(|error| ApiError::invalid(error.to_string()))?
         }

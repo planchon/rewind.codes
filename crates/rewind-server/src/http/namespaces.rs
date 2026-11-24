@@ -505,7 +505,7 @@ pub(super) async fn alerts(
     }))
 }
 
-/// `PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling.
+/// `PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling.
 pub(super) async fn put_ceiling(
     State(app): State<Arc<App>>,
     caller: Caller,

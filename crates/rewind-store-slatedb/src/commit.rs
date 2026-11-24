@@ -521,9 +521,9 @@ impl Apply<'_> {
                 )?;
                 self.mark(&keys::run_signal_url(&run, hash))
             }
-            Change::Organization { tenant, state } => self.put(
-                &keys::organization(&tenant),
-                &codec::organization_record(&state),
+            Change::Tenant { tenant, state } => self.put(
+                &keys::tenant_state(&tenant),
+                &codec::tenant_state_record(&state),
             ),
         }
     }

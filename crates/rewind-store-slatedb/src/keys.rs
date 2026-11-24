@@ -33,7 +33,7 @@
 //! | `C t n hour:u32` | counters | `counters` of a namespace (a range of hours) |
 //! | `D t hour:u32 n` | counters | `counters` of a tenant (a range of hours) |
 //! | `X t n action` | shape | `shapes` (the namespace's range, or the tenant's) |
-//! | `A t` | organization state | `organization`; the recovery's organizations (the family) |
+//! | `A t` | tenant state | `tenant`; the recovery's tenants (the family) |
 //! | `Q t 00 order position` | run summary | `search` over the tenant |
 //! | `Q t 01 n order position` | run summary | `search` over a namespace |
 //!
@@ -72,7 +72,7 @@ pub(crate) const COUNTED: u8 = b'N';
 pub(crate) const HOUR: u8 = b'C';
 pub(crate) const TENANT_HOUR: u8 = b'D';
 pub(crate) const SHAPE: u8 = b'X';
-pub(crate) const ORGANIZATION: u8 = b'A';
+pub(crate) const TENANT_STATE: u8 = b'A';
 pub(crate) const INDEX: u8 = b'Q';
 
 /// The families of keys a run owns, under `family t r`: what an erasure deletes.
@@ -339,8 +339,8 @@ pub(crate) fn shape(tenant: &TenantId, namespace: &NamespaceName, action: &str) 
     shapes_of(tenant, Some(namespace)).str(action)
 }
 
-pub(crate) fn organization(tenant: &TenantId) -> Key {
-    Key::new(ORGANIZATION).str(tenant.as_str())
+pub(crate) fn tenant_state(tenant: &TenantId) -> Key {
+    Key::new(TENANT_STATE).str(tenant.as_str())
 }
 
 /// The index families, one per order but `started`, which reads `oldest` backwards.

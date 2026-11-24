@@ -36,9 +36,9 @@ pub enum NodeRequest {
         partition: u16,
         request: Box<PartitionRequest>,
     },
-    Organization {
+    Tenant {
         tenant: String,
-        request: Box<OrgRequest>,
+        request: Box<TenantRequest>,
     },
     Owner {
         partition: u16,
@@ -54,7 +54,7 @@ impl From<&link::NodeRequest> for NodeRequest {
                 partition: partition.get(),
                 request: Box::new((&**request).into()),
             },
-            link::NodeRequest::Organization { tenant, request } => NodeRequest::Organization {
+            link::NodeRequest::Tenant { tenant, request } => NodeRequest::Tenant {
                 tenant: tenant.to_string(),
                 request: Box::new((&**request).into()),
             },
@@ -76,10 +76,10 @@ impl TryFrom<NodeRequest> for link::NodeRequest {
                 partition: PartitionId::new(partition),
                 request: Box::new((*request).try_into()?),
             },
-            NodeRequest::Organization {
+            NodeRequest::Tenant {
                 tenant: id,
                 request,
-            } => link::NodeRequest::Organization {
+            } => link::NodeRequest::Tenant {
                 tenant: tenant(id)?,
                 request: Box::new((*request).try_into()?),
             },
@@ -98,7 +98,7 @@ impl TryFrom<NodeRequest> for link::NodeRequest {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeReply {
     Partition(Box<PartitionReply>),
-    Organization(OrgReply),
+    Tenant(TenantReply),
     Done,
     NotOwner { partition: u16 },
 }
@@ -107,7 +107,7 @@ impl From<&link::NodeReply> for NodeReply {
     fn from(reply: &link::NodeReply) -> Self {
         match reply {
             link::NodeReply::Partition(reply) => NodeReply::Partition(Box::new((&**reply).into())),
-            link::NodeReply::Organization(reply) => NodeReply::Organization(reply.into()),
+            link::NodeReply::Tenant(reply) => NodeReply::Tenant(reply.into()),
             link::NodeReply::Done => NodeReply::Done,
             link::NodeReply::NotOwner { partition } => NodeReply::NotOwner {
                 partition: partition.get(),
@@ -124,7 +124,7 @@ impl TryFrom<NodeReply> for link::NodeReply {
             NodeReply::Partition(reply) => {
                 link::NodeReply::Partition(Box::new((*reply).try_into()?))
             }
-            NodeReply::Organization(reply) => link::NodeReply::Organization(reply.try_into()?),
+            NodeReply::Tenant(reply) => link::NodeReply::Tenant(reply.try_into()?),
             NodeReply::Done => link::NodeReply::Done,
             NodeReply::NotOwner { partition } => link::NodeReply::NotOwner {
                 partition: PartitionId::new(partition),
@@ -809,13 +809,13 @@ impl TryFrom<PartitionReply> for link::PartitionReply {
 }
 
 // -------------------------------------------------------------------------------------------
-// The organization actor
+// The tenant actor
 
 /// `{"admit":{…}}`, `{"counts":{…}}`, `{"slot":{…}}`, `{"slot_freed":{…}}`,
 /// `{"harness_task":{…}}`, `{"harness_task_done":{…}}`, `{"attach":{…}}` or `{"detach":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum OrgRequest {
+pub enum TenantRequest {
     Admit(Admit),
     Counts(CountsReport),
     Slot(SlotRequest),
@@ -922,24 +922,24 @@ pub struct StreamAttach {
 /// `{"admission":{"Ok":null}}` or `{"admission":{"Err":{…}}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum OrgReply {
+pub enum TenantReply {
     Admission(Result<(), Refusal>),
 }
 
-impl From<&link::OrgReply> for OrgReply {
-    fn from(reply: &link::OrgReply) -> Self {
+impl From<&link::TenantReply> for TenantReply {
+    fn from(reply: &link::TenantReply) -> Self {
         match reply {
-            link::OrgReply::Admission(result) => OrgReply::Admission(refused(result, |_| ())),
+            link::TenantReply::Admission(result) => TenantReply::Admission(refused(result, |_| ())),
         }
     }
 }
 
-impl TryFrom<OrgReply> for link::OrgReply {
+impl TryFrom<TenantReply> for link::TenantReply {
     type Error = Invalid;
 
-    fn try_from(reply: OrgReply) -> Result<Self, Invalid> {
+    fn try_from(reply: TenantReply) -> Result<Self, Invalid> {
         Ok(match reply {
-            OrgReply::Admission(result) => link::OrgReply::Admission(refused_of(result, Ok)?),
+            TenantReply::Admission(result) => link::TenantReply::Admission(refused_of(result, Ok)?),
         })
     }
 }
@@ -1021,11 +1021,11 @@ impl TryFrom<StreamAttach> for link::StreamAttach {
     }
 }
 
-impl From<&link::OrgRequest> for OrgRequest {
-    fn from(request: &link::OrgRequest) -> Self {
-        use link::OrgRequest as R;
+impl From<&link::TenantRequest> for TenantRequest {
+    fn from(request: &link::TenantRequest) -> Self {
+        use link::TenantRequest as R;
         match request {
-            R::Admit(admit) => OrgRequest::Admit(Admit {
+            R::Admit(admit) => TenantRequest::Admit(Admit {
                 partition: admit.partition.get(),
                 epoch: admit.epoch.0,
                 run: Id(admit.run),
@@ -1033,7 +1033,7 @@ impl From<&link::OrgRequest> for OrgRequest {
                 code: Hex(admit.code),
                 at: admit.at.0,
             }),
-            R::Counts(report) => OrgRequest::Counts(CountsReport {
+            R::Counts(report) => TenantRequest::Counts(CountsReport {
                 partition: report.partition.get(),
                 epoch: report.epoch.0,
                 namespace: report.namespace.to_string(),
@@ -1044,43 +1044,43 @@ impl From<&link::OrgRequest> for OrgRequest {
                 abandoned: report.abandoned.iter().copied().map(Id).collect(),
                 at: report.at.0,
             }),
-            R::Slot(slot) => OrgRequest::Slot(SlotRequest {
+            R::Slot(slot) => TenantRequest::Slot(SlotRequest {
                 partition: slot.partition.get(),
                 epoch: slot.epoch.0,
                 task: (&slot.task).into(),
                 server: slot.server.clone(),
                 limit: slot.limit,
             }),
-            R::SlotFreed { task, server } => OrgRequest::SlotFreed {
+            R::SlotFreed { task, server } => TenantRequest::SlotFreed {
                 task: task.into(),
                 server: server.clone(),
             },
-            R::HarnessTask(offer) => OrgRequest::HarnessTask(Box::new(HarnessTaskOffer {
+            R::HarnessTask(offer) => TenantRequest::HarnessTask(Box::new(HarnessTaskOffer {
                 partition: offer.partition.get(),
                 epoch: offer.epoch.0,
                 task: (&offer.task).into(),
                 action_set: Hex(offer.action_set),
                 grace: offer.grace,
             })),
-            R::HarnessTaskDone { task, gone } => OrgRequest::HarnessTaskDone {
+            R::HarnessTaskDone { task, gone } => TenantRequest::HarnessTaskDone {
                 task: task.into(),
                 gone: *gone,
             },
-            R::Attach(attach) => OrgRequest::Attach(attach.into()),
-            R::Detach { stream } => OrgRequest::Detach {
+            R::Attach(attach) => TenantRequest::Attach(attach.into()),
+            R::Detach { stream } => TenantRequest::Detach {
                 stream: stream.0.clone(),
             },
         }
     }
 }
 
-impl TryFrom<OrgRequest> for link::OrgRequest {
+impl TryFrom<TenantRequest> for link::TenantRequest {
     type Error = Invalid;
 
-    fn try_from(request: OrgRequest) -> Result<Self, Invalid> {
-        use link::OrgRequest as R;
+    fn try_from(request: TenantRequest) -> Result<Self, Invalid> {
+        use link::TenantRequest as R;
         Ok(match request {
-            OrgRequest::Admit(admit) => R::Admit(link::Admit {
+            TenantRequest::Admit(admit) => R::Admit(link::Admit {
                 partition: PartitionId::new(admit.partition),
                 epoch: engine::PartitionEpoch(admit.epoch),
                 run: admit.run.0,
@@ -1088,7 +1088,7 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
                 code: admit.code.0,
                 at: Timestamp(admit.at),
             }),
-            OrgRequest::Counts(report) => R::Counts(link::CountsReport {
+            TenantRequest::Counts(report) => R::Counts(link::CountsReport {
                 partition: PartitionId::new(report.partition),
                 epoch: engine::PartitionEpoch(report.epoch),
                 namespace: namespace(report.namespace)?,
@@ -1099,30 +1099,30 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
                 abandoned: report.abandoned.into_iter().map(|id| id.0).collect(),
                 at: Timestamp(report.at),
             }),
-            OrgRequest::Slot(slot) => R::Slot(link::SlotRequest {
+            TenantRequest::Slot(slot) => R::Slot(link::SlotRequest {
                 partition: PartitionId::new(slot.partition),
                 epoch: engine::PartitionEpoch(slot.epoch),
                 task: slot.task.try_into()?,
                 server: slot.server,
                 limit: slot.limit,
             }),
-            OrgRequest::SlotFreed { task, server } => R::SlotFreed {
+            TenantRequest::SlotFreed { task, server } => R::SlotFreed {
                 task: task.try_into()?,
                 server,
             },
-            OrgRequest::HarnessTask(offer) => R::HarnessTask(Box::new(link::HarnessTaskOffer {
+            TenantRequest::HarnessTask(offer) => R::HarnessTask(Box::new(link::HarnessTaskOffer {
                 partition: PartitionId::new(offer.partition),
                 epoch: engine::PartitionEpoch(offer.epoch),
                 task: offer.task.try_into()?,
                 action_set: offer.action_set.0,
                 grace: offer.grace,
             })),
-            OrgRequest::HarnessTaskDone { task, gone } => R::HarnessTaskDone {
+            TenantRequest::HarnessTaskDone { task, gone } => R::HarnessTaskDone {
                 task: task.try_into()?,
                 gone,
             },
-            OrgRequest::Attach(attach) => R::Attach(attach.try_into()?),
-            OrgRequest::Detach { stream } => R::Detach {
+            TenantRequest::Attach(attach) => R::Attach(attach.try_into()?),
+            TenantRequest::Detach { stream } => R::Detach {
                 stream: link::StreamId(stream),
             },
         })
@@ -1132,7 +1132,7 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
 // -------------------------------------------------------------------------------------------
 // Notices
 
-/// What an organization actor tells an owner: `{"slot_granted":{"task":{…}}}`,
+/// What an tenant actor tells an owner: `{"slot_granted":{"task":{…}}}`,
 /// `{"stream_lost":{"tasks":[{"task":{…},"token":"…"},…]}}` or
 /// `{"counts_wanted":{"tenant":"acme"}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1194,7 +1194,7 @@ impl TryFrom<OwnerNotice> for link::OwnerNotice {
     }
 }
 
-/// What an organization actor tells the edge holding an SDK stream:
+/// What an tenant actor tells the edge holding an SDK stream:
 /// `{"hand_out":{"stream":"…","task":{…}}}` or `{"gone":{"stream":"…","token":"…"}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

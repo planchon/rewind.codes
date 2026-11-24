@@ -3,7 +3,7 @@
 //!
 //! The only writer of its partition. It takes one message at a time from its mailbox: the
 //! edge's requests, the executors' results, the call executor's outcomes, `TimerDue` from its
-//! wheel, the notices of the organization actors, and the answers to what it asked. It answers
+//! wheel, the notices of the tenant actors, and the answers to what it asked. It answers
 //! with effects, never with I/O:
 //!
 //! ```text
@@ -11,7 +11,7 @@
 //!                                                                      of every unit pending
 //!   Durable ─► fan-out: replies, runs to the ready queue, tasks on their way, timers to the
 //!              wheel, ended attempts to the sealer, events to the projections, counts to the
-//!              organization actors, Changed to the subscribed edges
+//!              tenant actors, Changed to the subscribed edges
 //! ```
 //!
 //! The owner keeps in memory what it needs of the runs it touches (their heads, their inbox
@@ -37,7 +37,6 @@ use std::sync::Arc;
 use rewind_core::{ActionSet, Digest, Epoch, PartitionId, RunId, RunMode, Seq, Timestamp};
 
 use crate::node::message::{Effect, Message, ReplyTo, job};
-use crate::org::{OrgActor, OrgEffect, OrgMsg};
 use crate::plane::{LogOf, NodeConfig, Plane};
 use crate::ports::link::{
     ActivationResult, NodeReply, OwnerNotice, PartitionReply, PartitionRequest, Purpose, Refusal,
@@ -46,10 +45,11 @@ use crate::ports::link::{
 use crate::ports::partition::Change;
 use crate::ports::{
     CatalogStore, ControlPlaneChange, DueTimer, IndexedSummary, LinkError, NamespaceName, NodeId,
-    NodeInfo, OrganizationState, OutboxEntry, OutboxId, PartitionEpoch, PartitionError,
-    PartitionLog, RunHead, RunRef, TaskRecord, TaskRef, TenantId, home_partition,
+    NodeInfo, OutboxEntry, OutboxId, PartitionEpoch, PartitionError, PartitionLog, RunHead, RunRef,
+    TaskRecord, TaskRef, TenantId, TenantState, home_partition,
 };
 use crate::tasks::calls::CallDone;
+use crate::tenant::{TenantActor, TenantEffect, TenantMsg};
 pub(crate) use attempt::{AttemptRead, read_attempt};
 use commit::Unit;
 pub(crate) use reads::buckets;
@@ -68,10 +68,13 @@ pub(crate) enum OwnerMsg<P: Plane> {
     OpenFailed(String),
     /// A request of an edge.
     Request(Box<PartitionRequest>, ReplyTo),
-    /// A notice of an organization actor.
+    /// A notice of an tenant actor.
     Notice(Box<OwnerNotice>),
-    /// A message to an organization actor homed in the partition.
-    Org { tenant: TenantId, message: OrgMsg },
+    /// A message to an tenant actor homed in the partition.
+    Tenant {
+        tenant: TenantId,
+        message: TenantMsg,
+    },
     /// The answer to a request the owner asked, by its tag.
     Answer {
         tag: u64,
@@ -122,8 +125,8 @@ impl<P: Plane> OwnerMsg<P> {
     pub(crate) fn into_reply(self) -> Option<ReplyTo> {
         match self {
             OwnerMsg::Request(_, reply)
-            | OwnerMsg::Org {
-                message: OrgMsg::Request(_, reply),
+            | OwnerMsg::Tenant {
+                message: TenantMsg::Request(_, reply),
                 ..
             }
             | OwnerMsg::Fenced(Some(reply))
@@ -146,7 +149,7 @@ impl<P: Plane> fmt::Debug for OwnerMsg<P> {
             OwnerMsg::OpenFailed(error) => write!(f, "OpenFailed({error})"),
             OwnerMsg::Request(request, reply) => write!(f, "Request({request:?}, {reply:?})"),
             OwnerMsg::Notice(notice) => write!(f, "Notice({notice:?})"),
-            OwnerMsg::Org { tenant, message } => write!(f, "Org({tenant}, {message:?})"),
+            OwnerMsg::Tenant { tenant, message } => write!(f, "Tenant({tenant}, {message:?})"),
             OwnerMsg::Answer { tag, answer } => write!(f, "Answer({tag}, {answer:?})"),
             OwnerMsg::Loaded { run, loaded } => {
                 write!(
@@ -188,7 +191,7 @@ pub(crate) enum Internal {
         task: TaskRef,
         token: crate::ports::TaskToken,
     },
-    /// The organization actor granted the task's slot.
+    /// The tenant actor granted the task's slot.
     Granted(TaskRef),
     /// Try the quarantined run once, as a node of a new build does.
     RetryQuarantined(RunRef),
@@ -299,7 +302,7 @@ impl<P: Plane> RunSlot<P> {
 pub(crate) enum Flight {
     /// Waits for the run's own limit of calls of the action in flight.
     Waiting,
-    /// Waits for a slot of its server, asked of the organization actor.
+    /// Waits for a slot of its server, asked of the tenant actor.
     Asked { server: String },
     /// Being prepared by the call executor, before it is handed to an SDK stream.
     Preparing,
@@ -308,7 +311,7 @@ pub(crate) enum Flight {
         server: Option<String>,
         token: Digest,
     },
-    /// Handed to the organization actor for an SDK stream, with this token.
+    /// Handed to the tenant actor for an SDK stream, with this token.
     Handed { token: Digest },
     /// Handed, and answered through its token: what follows frees its stream's slot without
     /// telling the stream it is gone.
@@ -368,9 +371,9 @@ pub(crate) struct Owner<P: Plane> {
     pub(crate) tokens: BTreeMap<Digest, TaskRef>,
     pub(crate) wheel: Wheel,
     pub(crate) outbox: BTreeMap<OutboxId, (OutboxEntry, u32)>,
-    pub(crate) orgs: BTreeMap<TenantId, OrgActor<P>>,
-    /// The states the partition kept of the organizations homed here, for the actors to come.
-    pub(crate) org_states: BTreeMap<TenantId, OrganizationState>,
+    pub(crate) tenants: BTreeMap<TenantId, TenantActor<P>>,
+    /// The states the partition kept of the tenants homed here, for the actors to come.
+    pub(crate) tenant_states: BTreeMap<TenantId, TenantState>,
     pub(crate) counted: BTreeSet<(TenantId, NamespaceName)>,
     pub(crate) deleting: BTreeSet<(TenantId, NamespaceName)>,
     pub(crate) remote: BTreeMap<RunId, NodeId>,
@@ -432,8 +435,8 @@ impl<P: Plane> Owner<P> {
             flights: BTreeMap::new(),
             tokens: BTreeMap::new(),
             outbox: BTreeMap::new(),
-            orgs: BTreeMap::new(),
-            org_states: BTreeMap::new(),
+            tenants: BTreeMap::new(),
+            tenant_states: BTreeMap::new(),
             counted: BTreeSet::new(),
             deleting: BTreeSet::new(),
             remote: BTreeMap::new(),
@@ -556,7 +559,7 @@ impl<P: Plane> Owner<P> {
             OwnerMsg::Opened(_) | OwnerMsg::OpenFailed(_) => {}
             OwnerMsg::Request(request, reply) => self.request(*request, reply),
             OwnerMsg::Notice(notice) => self.notice(*notice),
-            OwnerMsg::Org { tenant, message } => self.org(tenant, message),
+            OwnerMsg::Tenant { tenant, message } => self.send_tenant(tenant, message),
             OwnerMsg::Answer { tag, answer } => self.answer(tag, answer),
             OwnerMsg::Loaded { run, loaded } => self.loaded(run, loaded),
             OwnerMsg::Durable(result) => self.durable(result),
@@ -579,11 +582,11 @@ impl<P: Plane> Owner<P> {
             OwnerMsg::Step(step) => self.step(*step),
             OwnerMsg::ControlPlane(change) => self.control_plane(change),
             OwnerMsg::Nodes(nodes) => {
-                // The streams of the nodes that left are closed for the organization actors.
+                // The streams of the nodes that left are closed for the tenant actors.
                 let members: Vec<NodeId> = nodes.iter().map(|node| node.id.clone()).collect();
-                let tenants: Vec<TenantId> = self.orgs.keys().cloned().collect();
+                let tenants: Vec<TenantId> = self.tenants.keys().cloned().collect();
                 for tenant in tenants {
-                    self.org(tenant, OrgMsg::Members(members.clone()));
+                    self.send_tenant(tenant, TenantMsg::Members(members.clone()));
                 }
                 self.nodes = nodes;
                 let waiting: Vec<RunId> = self.awaiting_nodes.iter().copied().collect();
@@ -783,9 +786,9 @@ impl<P: Plane> Owner<P> {
     // ---------------------------------------------------------------------------------------
     // Organization actors
 
-    fn org(&mut self, tenant: TenantId, message: OrgMsg) {
+    fn send_tenant(&mut self, tenant: TenantId, message: TenantMsg) {
         if home_partition(&tenant, self.config.partitions) != self.partition {
-            if let OrgMsg::Request(_, reply) = message {
+            if let TenantMsg::Request(_, reply) = message {
                 self.out.push(Effect::Reply(
                     reply,
                     NodeReply::NotOwner {
@@ -796,36 +799,36 @@ impl<P: Plane> Owner<P> {
             return;
         }
         let now = self.now();
-        if !self.orgs.contains_key(&tenant) {
-            let state = self.org_states.remove(&tenant).unwrap_or_default();
-            let (actor, effects) = OrgActor::new(
+        if !self.tenants.contains_key(&tenant) {
+            let state = self.tenant_states.remove(&tenant).unwrap_or_default();
+            let (actor, effects) = TenantActor::new(
                 tenant.clone(),
                 self.partition,
                 self.config.partitions,
                 Arc::clone(&self.plane),
                 state,
             );
-            self.orgs.insert(tenant.clone(), actor);
+            self.tenants.insert(tenant.clone(), actor);
             self.org_effects(&tenant, effects);
         }
-        let Some(actor) = self.orgs.get_mut(&tenant) else {
+        let Some(actor) = self.tenants.get_mut(&tenant) else {
             return;
         };
         let effects = actor.handle(message, now);
         self.org_effects(&tenant, effects);
     }
 
-    fn org_effects(&mut self, tenant: &TenantId, effects: Vec<OrgEffect<P>>) {
+    fn org_effects(&mut self, tenant: &TenantId, effects: Vec<TenantEffect<P>>) {
         for effect in effects {
             match effect {
-                OrgEffect::Effect(effect) => self.out.push(effect),
-                OrgEffect::Persist {
+                TenantEffect::Effect(effect) => self.out.push(effect),
+                TenantEffect::Persist {
                     state,
                     alerts,
                     then,
                 } => {
                     let mut unit = Unit::new();
-                    unit.change(Change::Organization {
+                    unit.change(Change::Tenant {
                         tenant: tenant.clone(),
                         state,
                     });
@@ -870,9 +873,9 @@ impl<P: Plane> Owner<P> {
         match change {
             ControlPlaneChange::Secret { tenant, secret } => self.secret_put(tenant, secret),
             ControlPlaneChange::Namespace { tenant, name } => {
-                if let Some(actor) = self.orgs.get_mut(&tenant) {
+                if let Some(actor) = self.tenants.get_mut(&tenant) {
                     let effects = actor.handle(
-                        OrgMsg::Forget {
+                        TenantMsg::Forget {
                             namespace: Some(name.clone()),
                         },
                         crate::ports::Clock::now(self.plane.clock()),
@@ -886,9 +889,9 @@ impl<P: Plane> Owner<P> {
                 }
             }
             ControlPlaneChange::Tenant { tenant } => {
-                if let Some(actor) = self.orgs.get_mut(&tenant) {
+                if let Some(actor) = self.tenants.get_mut(&tenant) {
                     let effects = actor.handle(
-                        OrgMsg::Forget { namespace: None },
+                        TenantMsg::Forget { namespace: None },
                         crate::ports::Clock::now(self.plane.clock()),
                     );
                     self.org_effects(&tenant, effects);

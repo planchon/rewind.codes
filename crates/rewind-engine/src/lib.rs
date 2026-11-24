@@ -2,7 +2,7 @@
 //!
 //! The run plane (`archi/07-code-architecture.md`, "Inside a node"):
 //!
-//! - [`node`]: a node's actors (the owners of its partitions and the organization actors they
+//! - [`node`]: a node's actors (the owners of its partitions and the tenant actors they
 //!   host, its executors, its call executor, the node actor), as state machines that take a
 //!   message and return effects; [`node::runtime`] drives them with tokio in a process.
 //! - [`driver`]: the same actors of every node stepped on one thread in virtual time: the
@@ -23,7 +23,7 @@
 //!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
 //!   signatures and fingerprints that group failed, cancelled and aborted runs.
 //! - [`attachments`]: the secrets a run attaches, and who may attach them.
-//! - [`quotas`]: the alerts of the quotas the organization actors keep.
+//! - [`quotas`]: the alerts of the quotas the tenant actors keep.
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
 //! - [`test`]: test runs: the dispatcher that answers from a test's rules, handlers,
 //!   cassette and static responses.
@@ -64,7 +64,6 @@ pub mod fork;
 pub mod metrics;
 pub mod migrate;
 pub mod node;
-mod org;
 mod partition;
 mod payloads;
 pub mod plane;
@@ -78,6 +77,7 @@ mod start;
 pub mod suites;
 mod tasks;
 pub mod telemetry;
+mod tenant;
 pub mod testing;
 pub mod text;
 pub mod transcript;

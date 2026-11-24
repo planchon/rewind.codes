@@ -3,7 +3,7 @@
 //!
 //! | Claim | Value | From |
 //! | --- | --- | --- |
-//! | `iss` | `{public-url}/organizations/{tenant}` | The engine |
+//! | `iss` | `{public-url}/organizations/{organization}` | The engine |
 //! | `aud` | The API's `baseUrl`, or the MCP server's URL | The dispatcher |
 //! | `sub`, `labels`, `run`, `action`, `idempotency_key` | The run's namespace and labels, the run, the action, `{run_id}/{seq}` | The engine, for the request of a call only |
 //! | `tool` | The action again, under its old name: verifiers on SDK 0.3.0 read it (`archi/08-decisions.md`) | The engine, for the request of a call only |

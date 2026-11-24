@@ -20,7 +20,7 @@ use rewind_engine::edge::Edge;
 use rewind_engine::node::runtime::{self, NodeHandle};
 use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
 use rewind_engine::ports::cluster::Membership;
-use rewind_engine::ports::link::{NodeRequest, OrgRequest, SubscriptionKey};
+use rewind_engine::ports::link::{NodeRequest, SubscriptionKey, TenantRequest};
 use rewind_engine::ports::{
     Cluster, ClusterError, CodeExecutor, Departed, Moves, NodeId, NodeInfo, NodeLink, PartitionMap,
     TenantId,
@@ -164,9 +164,9 @@ async fn two_nodes_run_a_run_through_the_link_in_real_time() {
     let refused = link
         .call(
             b.node(),
-            NodeRequest::Organization {
+            NodeRequest::Tenant {
                 tenant: TenantId::local(),
-                request: Box::new(OrgRequest::Detach {
+                request: Box::new(TenantRequest::Detach {
                     stream: rewind_engine::ports::link::StreamId("none".into()),
                 }),
             },

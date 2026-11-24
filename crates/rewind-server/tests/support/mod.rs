@@ -294,7 +294,7 @@ impl TestServer {
             &key,
             "--admin-key",
             ADMIN_KEY,
-            "--admin-tenant",
+            "--admin-organization",
             "acme",
             "--listen",
             "127.0.0.1:0",
@@ -337,7 +337,7 @@ impl TestServer {
             &key,
             "--admin-key",
             ADMIN_KEY,
-            "--admin-tenant",
+            "--admin-organization",
             "acme",
             "--listen",
             "127.0.0.1:0",
@@ -416,7 +416,7 @@ impl TestServer {
         let key = self
             .admin
             .create_api_key(&CreateApiKey {
-                tenant: Some(tenant.into()),
+                organization_id: Some(tenant.into()),
                 name: format!("a {role} key of the tests"),
                 role: role.into(),
                 allowed_labels: labels.iter().copied().collect::<Labels>(),
@@ -432,7 +432,7 @@ impl TestServer {
         let key = self
             .admin
             .create_api_key(&CreateApiKey {
-                tenant: Some(tenant.into()),
+                organization_id: Some(tenant.into()),
                 name: format!("a {role} key of the tests"),
                 role: role.into(),
                 allowed_labels: Labels::new(),

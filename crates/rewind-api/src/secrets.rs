@@ -5,7 +5,7 @@
 //! written and never read back: every answer gives its metadata only. A run reads the secrets
 //! it attached when it started, by server or API (`secrets` of `POST /v1/runs`, of a fork, of a
 //! workflow version). The organization's signing key signs the calls of the servers whose `auth`
-//! is `rewind`; its public keys are served at `/organizations/{tenant}/jwks.json`.
+//! is `rewind`; its public keys are served at `/organizations/{organization}/jwks.json`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -170,14 +170,14 @@ pub struct SigningKey {
 #[serde(rename_all = "camelCase")]
 pub struct SigningKeyList {
     pub keys: Vec<SigningKey>,
-    /// The JWT's issuer, `{public-url}/organizations/{tenant}`: what `verifyRewindCall` is
+    /// The JWT's issuer, `{public-url}/organizations/{organization}`: what `verifyRewindCall` is
     /// given as `issuer`.
     pub issuer: String,
     /// `{issuer}/jwks.json`.
     pub jwks_url: String,
 }
 
-/// `GET /organizations/{tenant}/jwks.json`: the organization's public keys, as a JSON Web Key
+/// `GET /organizations/{organization}/jwks.json`: the organization's public keys, as a JSON Web Key
 /// Set (RFC 7517), served without authentication.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Jwks {

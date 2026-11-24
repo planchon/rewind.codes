@@ -107,9 +107,9 @@ pub use namespaces::{
 pub use partition::{
     ActionCounts, Admission, Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters,
     DueTimer, FailureCounts, Found, Gauges, Hour, IndexedSummary, LATEST_RUNS, LatestRun,
-    OrganizationState, OutboxChange, OutboxEntry, OutboxId, Page, PartitionError, PartitionLog,
-    PartitionStore, Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, ScriptCounts,
-    SearchPosition, Sketch, TaskChange, TaskRecord, TimerChange, TimerKind, Watcher, Window,
+    OutboxChange, OutboxEntry, OutboxId, Page, PartitionError, PartitionLog, PartitionStore,
+    Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, ScriptCounts, SearchPosition,
+    Sketch, TaskChange, TaskRecord, TenantState, TimerChange, TimerKind, Watcher, Window,
     home_partition, namespace_partition,
 };
 pub use read_model::{
