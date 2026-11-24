@@ -44,6 +44,14 @@ the embedded dashboard, which answers without a key. The edge is
 The node service runs one replica: each node of a deployment is reached by the others at its own
 address (`REWIND_LINK_ADDRESS`), and the replicas of a Railway service share one private name.
 
+The node service carries a volume, `node-handover` (500 MB at `/var/lib/rewind`), that the node
+never writes: with a volume attached, Railway stops the running deployment before it starts the
+next one, as `docker compose up` does. Without it Railway starts the next deployment first and
+stops the old one once the new one answers its health check; but a node holds its id's lock in
+Postgres for as long as it lives, so a second `node` cannot join while the first runs, never
+answers, and the deploy fails. A deploy leaves the API down about 10 s: the old node stops, the
+new one starts and opens its partitions.
+
 A deploy uploads the working tree from the repository's root, one service at a time:
 `railway up --service node`, `--service edge` (`RAILWAY_DOCKERFILE_PATH` is set on each). A
 release build of the server takes Railway about 10 minutes. The deploy that moves runs to
