@@ -8,11 +8,11 @@
 //! - the server no longer lists the tool (removed or renamed);
 //! - its input schema changed, and the call's args do not validate against the new one;
 //! - it declared an output schema when it was pinned, and that schema changed or is gone: the
-//!   script's code reads the result through it.
+//!   code's code reads the result through it.
 //!
 //! An input schema that changed without refusing the args (a new optional property, a new
 //! description), and an output schema the pinned action did not have, do not stop the call: the
-//! script's code still fits. Schemas are compared in their canonical JSON (RFC 8785).
+//! code's code still fits. Schemas are compared in their canonical JSON (RFC 8785).
 
 use rewind_core::{Action, canonical_json};
 use serde_json::Value;
@@ -76,7 +76,7 @@ fn changed(pinned: &Action, current: Option<&rmcp::model::Tool>, args: &Value) -
             }
             Some(output) if canonical_json(&output) != canonical_json(pinned_output) => {
                 return Some(format!(
-                    "{name} changed on its server: its output schema is not the one the script \
+                    "{name} changed on its server: its output schema is not the one the code \
                      was checked against"
                 ));
             }

@@ -4,7 +4,7 @@
 //! Each operation does what `rewind-server`'s handler does (`crates/rewind-server/src/http/`) at
 //! the node's edge, its answers and problems repeated, for one caller: an API key of the tenant
 //! `local`, acting in the namespace `local`, limited to the episode's labels. A run without them
-//! is not found; the runs and the workflows it creates carry them; its runs' scripts reach only
+//! is not found; the runs and the workflows it creates carry them; its runs' workflows reach only
 //! runs carrying them. A wait is virtual time: the world is driven until the run ends or the
 //! wait elapses. A signal or a cancellation is taken at once, at the current virtual time, as
 //! the owner of the run's partition takes them.
@@ -37,8 +37,7 @@ use rewind_api::workflows::{
 };
 use rewind_api::{Problem, ProblemType};
 use rewind_core::{
-    Cassette, Command, Digest, Event, RunId, Script, Test, Timestamp, WorkflowSchemas,
-    canonical_json,
+    Cassette, Code, Command, Digest, Event, RunId, Test, Timestamp, WorkflowSchemas, canonical_json,
 };
 use rewind_engine::edge::{EdgeError, RecordingError};
 use rewind_engine::ports::link::Refusal;
@@ -125,7 +124,7 @@ fn checker_error(error: &CheckerError) -> ApiError {
     problem(
         ProblemType::Unavailable,
         format!(
-            "{error}. The script was neither accepted nor refused: retry, or start it with \
+            "{error}. The code was neither accepted nor refused: retry, or start it with \
              `check: false`"
         ),
     )
@@ -134,11 +133,11 @@ fn checker_error(error: &CheckerError) -> ApiError {
 /// A refused start, as the server answers it.
 fn start_error(error: StartError) -> ApiError {
     match error {
-        StartError::InvalidScript(invalid) => {
-            let diagnostic = view::invalid_script_diagnostic(&invalid);
+        StartError::InvalidCode(invalid) => {
+            let diagnostic = view::invalid_code_diagnostic(&invalid);
             Problem::new(
-                ProblemType::InvalidScript,
-                format!("the script cannot run: {}", invalid.message),
+                ProblemType::InvalidCode,
+                format!("the code cannot run: {}", invalid.message),
             )
             .with_diagnostics(vec![diagnostic])
             .into()
@@ -149,9 +148,9 @@ fn start_error(error: StartError) -> ApiError {
                 .filter(|d| d.severity == rewind_engine::ports::Severity::Error)
                 .count();
             Problem::new(
-                ProblemType::InvalidScript,
+                ProblemType::InvalidCode,
                 format!(
-                    "the script does not type-check ({errors} error{}): fix the diagnostics and \
+                    "the code does not type-check ({errors} error{}): fix the diagnostics and \
                      start it again",
                     if errors == 1 { "" } else { "s" }
                 ),
@@ -172,7 +171,7 @@ fn start_error(error: StartError) -> ApiError {
             ProblemType::NamespaceDeleting,
             "this namespace is being erased: it takes no run",
         ),
-        StartError::ScriptTooLong { .. } => problem(ProblemType::InvalidScript, error.to_string()),
+        StartError::CodeTooLong { .. } => problem(ProblemType::InvalidCode, error.to_string()),
         StartError::Checker(error) => checker_error(&error),
         StartError::Store(error) => store_error(error),
         StartError::WorkflowNotFound(version) => {
@@ -221,7 +220,7 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::ActionSetNotFound(digest) => not_found(format!(
             "no action set {digest} for this tenant: register it with POST /v1/action-sets"
         )),
-        RegisterError::InvalidScript(invalid) => start_error(StartError::InvalidScript(invalid)),
+        RegisterError::InvalidCode(invalid) => start_error(StartError::InvalidCode(invalid)),
         RegisterError::TypeErrors(diagnostics) => start_error(StartError::TypeErrors(diagnostics)),
         RegisterError::NulCharacter(error) => invalid(error.to_string()),
         RegisterError::Suite(error) => suite_error(error.into()),
@@ -261,7 +260,7 @@ fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
         .collect();
     Problem::tests_failed(
         format!(
-            "{} of {} tests of {suite} did not pass: {}. Fix the script, or retire a test that is \
+            "{} of {} tests of {suite} did not pass: {}. Fix the code, or retire a test that is \
              deprecated or update one whose state or result is out of date, each with a reason",
             failed.len(),
             reports.len(),
@@ -591,8 +590,8 @@ impl World {
     }
 
     /// Before a fork of a run of a workflow: its version's suite must pass against the
-    /// corrected script (`rewind-server`'s `testing::gate_fork`).
-    async fn gate_fork(&self, parent: &RunHead, script: &Script) -> Result<(), ApiError> {
+    /// corrected code (`rewind-server`'s `testing::gate_fork`).
+    async fn gate_fork(&self, parent: &RunHead, code: &Code) -> Result<(), ApiError> {
         let Some(of) = &parent.metadata.workflow else {
             return Ok(());
         };
@@ -623,7 +622,7 @@ impl World {
         let reports = self
             .run_suite(
                 &Subject {
-                    script,
+                    code,
                     action_set: &action_set,
                     interface: Some(stored.workflow.schemas()),
                 },
@@ -675,8 +674,8 @@ impl Api for World {
     ) -> Result<Run, ApiError> {
         if start.workflow.is_some() {
             return Err(invalid(
-                "the evals' world starts a script with its action set, not a workflow by name: \
-                 scripts start workflows from rewind:workflows",
+                "the evals' world starts a code with its action set, not a workflow by name: \
+                 workflows start workflows from rewind:workflows",
             ));
         }
         if !start.secrets.is_empty() {
@@ -685,7 +684,7 @@ impl Api for World {
         let labels = self.within(start.labels.0.clone())?;
         let stored = self.stored_action_set(start.action_set.as_deref()).await?;
         let mut request = rewind_engine::StartRun::new(
-            Script::new(start.script.clone()),
+            Code::new(start.code.clone()),
             stored.action_set,
             start.input.clone(),
         );
@@ -694,7 +693,7 @@ impl Api for World {
         request.metadata.labels = labels;
         request.metadata.trace_context =
             trace_context(start.traceparent.as_ref(), start.tracestate.as_ref())?;
-        // What the run's scripts reach: the runs carrying the caller's labels.
+        // What the run's workflows reach: the runs carrying the caller's labels.
         request.metadata.scope = self.labels.clone();
         request.idempotency_key = key.map(|key| key.as_str().to_owned());
         let created = self
@@ -752,7 +751,7 @@ impl Api for World {
         let mut runs = Vec::new();
         for summary in summaries.iter().skip(offset).take(limit) {
             let mut shown = view::summary(summary).map_err(edge_error)?;
-            shown.script_title = view::script_title(self, &summary.run.tenant, summary.script)
+            shown.script_title = view::script_title(self, &summary.run.tenant, summary.code)
                 .await
                 .map_err(edge_error)?
                 .map(|(title, _, _)| title);
@@ -854,9 +853,9 @@ impl Api for World {
             .as_ref()
             .map(|labels| self.within(labels.0.clone()))
             .transpose()?;
-        let script = Script::new(fork.script.clone());
-        self.gate_fork(&record, &script).await?;
-        let mut request = rewind_engine::ForkRun::new(parent, script);
+        let code = Code::new(fork.code.clone());
+        self.gate_fork(&record, &code).await?;
+        let mut request = rewind_engine::ForkRun::new(parent, code);
         request.at = fork.at;
         request.input.clone_from(&fork.input);
         request.ttl = fork.ttl.map(Duration::get);
@@ -872,18 +871,18 @@ impl Api for World {
     }
 
     async fn check(&self, check: &CheckRequest) -> Result<CheckResult, ApiError> {
-        use rewind_engine::ports::ScriptExecutor as _;
+        use rewind_engine::ports::CodeExecutor as _;
         let stored = self.stored_action_set(check.action_set.as_deref()).await?;
-        let script = Script::new(check.script.clone());
-        if let Err(invalid) = self.plane.executor.compile(&script, &stored.action_set) {
+        let code = Code::new(check.code.clone());
+        if let Err(invalid) = self.plane.executor.compile(&code, &stored.action_set) {
             return Ok(CheckResult {
                 ok: false,
-                diagnostics: vec![view::invalid_script_diagnostic(&invalid)],
+                diagnostics: vec![view::invalid_code_diagnostic(&invalid)],
             });
         }
         let diagnostics = self
             .checker
-            .check(&script, &stored.declarations)
+            .check(&code, &stored.declarations)
             .await
             .map_err(|error| checker_error(&error))?;
         Ok(view::check_result(&diagnostics))
@@ -895,10 +894,10 @@ impl Api for World {
             Some(reference) => Some(self.resolve(reference).await?),
             None => None,
         };
-        let Some(script) = &test.script else {
-            return Err(invalid("the evals' world tests a script: give `script`"));
+        let Some(code) = &test.code else {
+            return Err(invalid("the evals' world tests a code: give `code`"));
         };
-        let script = Script::new(script.clone());
+        let code = Code::new(code.clone());
         // The action set given; the version's only when none is.
         let action_set = match (&test.action_set, &version) {
             (None, Some(version)) => {
@@ -926,7 +925,7 @@ impl Api for World {
         let reports = self
             .run_suite(
                 &Subject {
-                    script: &script,
+                    code: &code,
                     action_set: &action_set.action_set,
                     interface,
                 },
@@ -941,7 +940,7 @@ impl Api for World {
     }
 
     async fn get_script(&self, digest: &str) -> Result<ApiScript, ApiError> {
-        let missing = || not_found(format!("no script {digest} for this tenant"));
+        let missing = || not_found(format!("no code {digest} for this tenant"));
         let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
         let tenant = TenantId::local();
         let stored = self
@@ -950,7 +949,7 @@ impl Api for World {
             .await
             .map_err(catalog_error)?
             .ok_or_else(missing)?;
-        // What the caller's runs of the script did.
+        // What the caller's runs of the code did.
         let summaries = self.summaries().await.map_err(edge_error)?;
         let mut runs = RunCounts::default();
         let mut actions = BTreeSet::new();
@@ -958,7 +957,7 @@ impl Api for World {
         let mut last = None;
         for summary in summaries
             .iter()
-            .filter(|summary| summary.script == parsed && self.sees(&summary.labels))
+            .filter(|summary| summary.code == parsed && self.sees(&summary.labels))
         {
             let count = match ApiRunStatus::from(summary.status) {
                 ApiRunStatus::Pending => &mut runs.pending,
@@ -978,7 +977,7 @@ impl Api for World {
                 }
             }
         }
-        let source = stored.script.source().to_owned();
+        let source = stored.code.source().to_owned();
         let title = crate::view::script_title(self, &tenant, parsed)
             .await
             .map_err(edge_error)?;
@@ -1148,7 +1147,7 @@ impl Api for World {
                     tenant: TenantId::local(),
                     name: workflow.name.clone(),
                     description: workflow.description.clone(),
-                    script: Script::new(workflow.script.clone()),
+                    code: Code::new(workflow.code.clone()),
                     action_set,
                     schemas,
                     labels: self.labels.clone(),

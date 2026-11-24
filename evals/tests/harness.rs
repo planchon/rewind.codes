@@ -237,7 +237,7 @@ fn next_offset(text: &str) -> Option<u64> {
         .ok()
 }
 
-/// A model that solves `id` with its reference solution: it runs the script, pages through an
+/// A model that solves `id` with its reference solution: it runs the code, pages through an
 /// output too large for one answer, and answers with what it read.
 fn reference(id: &'static str) -> Model {
     Model::Scripted(Scripted::from_fn(
@@ -293,12 +293,12 @@ fn reference(id: &'static str) -> Model {
                     }),
                 )),
                 // Read the workflow, see its tests go stale against the new server, then save
-                // the adapted script with its tests updated or retired, each with a reason.
+                // the adapted code with its tests updated or retired, each with a reason.
                 ("upgrade_workflow_suite", 0) => {
                     Some(call("get_workflow", json!({ "name": "bug_digest" })))
                 }
                 ("upgrade_workflow_suite", 1) => Some(call(
-                    "test_script",
+                    "test_workflow",
                     json!({ "code": solution(id), "workflow": "bug_digest" }),
                 )),
                 ("upgrade_workflow_suite", 2) => Some(call(
@@ -306,7 +306,7 @@ fn reference(id: &'static str) -> Model {
                     bug_digest(&solution(id), upgraded_suite()),
                 )),
                 (_, 0) => Some(call(
-                    "run_script",
+                    "run_workflow",
                     json!({ "code": solution(id), "wait": "2m" }),
                 )),
                 _ => {
@@ -413,8 +413,11 @@ async fn a_script_refused_first_counts_against_the_first_try() {
     let model = Model::Scripted(Scripted::turns(
         "scripted",
         vec![
-            call("run_script", json!({ "code": wrong })),
-            call("run_script", json!({ "code": solution("customer_email") })),
+            call("run_workflow", json!({ "code": wrong })),
+            call(
+                "run_workflow",
+                json!({ "code": solution("customer_email") }),
+            ),
             episode::answer("crm says: see above"),
         ],
     ));
@@ -431,7 +434,7 @@ async fn a_script_refused_first_counts_against_the_first_try() {
     assert!(results[0].is_error);
     assert!(
         results[0].content.starts_with(
-            "The script was refused before anything ran: the script does not type-check (1 error): fix the diagnostics and start it again"
+            "The code was refused before anything ran: the code does not type-check (1 error): fix the diagnostics and start it again"
         ),
         "{}",
         results[0].content
@@ -456,7 +459,7 @@ async fn retrying_with_new_request_ids_duplicates_shipments() {
         );
     let model = Model::Scripted(Scripted::turns(
         "scripted",
-        vec![call("run_script", json!({ "code": naive, "wait": "2m" }))],
+        vec![call("run_workflow", json!({ "code": naive, "wait": "2m" }))],
     ));
     let episode = run(&task("ship_orders_with_retries"), &model).await;
     assert!(episode.record.error.is_none(), "{:?}", episode.record.error);
@@ -471,7 +474,7 @@ async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
     let code = "import { crm } from \"rewind:actions\";\n\nexport default async function main() {\n  return (await crm.get_order({ id: \"O-504\" })).json();\n}\n";
     let model = Model::Scripted(Scripted::turns(
         "scripted",
-        vec![call("run_script", json!({ "code": code }))],
+        vec![call("run_workflow", json!({ "code": code }))],
     ));
     let episode = run(&task("missing_orders"), &model).await;
     let Turn::ToolResults { results } = &episode.turns[2] else {
@@ -481,7 +484,7 @@ async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
     assert!(results[0].is_error);
     assert!(text.contains(" failed.\nActionError: "), "{text}");
     assert!(
-        text.contains("The call that failed: crm.get_order (call 1 at script.ts:4:"),
+        text.contains("The call that failed: crm.get_order (call 1 at workflow.ts:4:"),
         "{text}"
     );
     assert!(text.contains("{\"id\":\"O-504\"}"), "{text}");
@@ -494,7 +497,7 @@ async fn a_waiting_run_is_reported_as_suspended_and_goes_on_after_the_conversati
     let model = Model::Scripted(Scripted::turns(
         "scripted",
         vec![call(
-            "run_script",
+            "run_workflow",
             json!({ "code": solution("approve_refunds"), "wait": "30s" }),
         )],
     ));
@@ -505,7 +508,7 @@ async fn a_waiting_run_is_reported_as_suspended_and_goes_on_after_the_conversati
     let text = &results[0].content;
     assert!(text.contains("is suspended, waiting for:"), "{text}");
     assert!(
-        text.contains("- the signal \"refund_approval\" at script.ts:5:"),
+        text.contains("- the signal \"refund_approval\" at workflow.ts:5:"),
         "{text}"
     );
     assert!(episode.record.success, "{:?}", episode.record.failure);
@@ -669,7 +672,7 @@ async fn a_fix_run_anew_instead_of_finishing_the_failed_run_fails_the_task() {
                 ),
             )),
             3 => Some(call(
-                "run_script",
+                "run_workflow",
                 json!({
                     "code": solution("fix_workflow_regression"),
                     "input": { "orders": ["A-1003", "P-1004", "A-1005"] }
@@ -743,10 +746,10 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
         "scripted",
         vec![
             calls(vec![
-                ("test_script", json!({ "code": code })),
-                ("test_script", json!({ "code": code, "tests": {} })),
-                ("test_script", json!({ "code": code, "workflow": 3 })),
-                ("test_script", json!({ "code": code, "tests": ["00"] })),
+                ("test_workflow", json!({ "code": code })),
+                ("test_workflow", json!({ "code": code, "tests": {} })),
+                ("test_workflow", json!({ "code": code, "workflow": 3 })),
+                ("test_workflow", json!({ "code": code, "tests": ["00"] })),
                 ("save_workflow", with("input", json!("string"))),
                 ("save_workflow", with("signals", json!([]))),
                 ("save_workflow", with("retire", json!([{ "names": ["a"] }]))),
@@ -775,7 +778,7 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
                 ("record_tests", json!({ "workflow": "nope" })),
                 ("record_tests", json!({ "workflow": "ship_orders" })),
                 (
-                    "test_script",
+                    "test_workflow",
                     json!({ "code": code, "workflow": "ship_orders" }),
                 ),
             ]),
@@ -789,9 +792,9 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
         .map(|result| result.content.as_str())
         .collect();
     let expected = [
-        "test_script: give `tests`, or a `workflow` whose suite runs against the script, or both.",
-        "test_script: `tests` must be an array of tests: each one an object, or the digest of a recorded test as a string.",
-        "test_script: `workflow` must be a non-empty string.",
+        "test_workflow: give `tests`, or a `workflow` whose suite runs against the code, or both.",
+        "test_workflow: `tests` must be an array of tests: each one an object, or the digest of a recorded test as a string.",
+        "test_workflow: `workflow` must be a non-empty string.",
         "The tests were refused before running: \"00\" is not a test's digest: 64 lowercase hex digits, as record_tests returns them",
         "save_workflow: `input` must be a JSON Schema: an object.",
         "save_workflow: `signals` must be an object of JSON Schemas by signal name.",

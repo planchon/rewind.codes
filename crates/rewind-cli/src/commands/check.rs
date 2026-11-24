@@ -1,18 +1,18 @@
-//! `rewind check script.ts [--action-set id|file]`: type-checks a script (`archi/04-tools.md`,
+//! `rewind check workflow.ts [--action-set id|file]`: type-checks a code (`archi/04-tools.md`,
 //! "Type-checking").
 //!
 //! In this process, without a server: the checks at start of the runtime (syntax, imports,
 //! default export), then tsgo and the checker's own rules against the sandbox lib and the
 //! declarations of the action set file, pinned here. An action set registered on a server lives
-//! there, with the result types observed in its runs: the server checks the script against it
+//! there, with the result types observed in its runs: the server checks the code against it
 //! (`POST /v1/check`).
 
 use std::collections::BTreeMap;
 
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_check::TsgoChecker;
-use rewind_core::{ActionSet, Script};
-use rewind_engine::ports::{self, DiagnosticSource, ScriptExecutor};
+use rewind_core::{ActionSet, Code};
+use rewind_engine::ports::{self, CodeExecutor, DiagnosticSource};
 use rewind_runtime::{SandboxLimits, V8Executor};
 
 use super::Server;
@@ -25,14 +25,14 @@ use crate::output::Console;
 use crate::render;
 
 /// The code of a diagnostic from the runtime's checks at start.
-const START_CHECK: &str = "rewind/invalid-script";
+const START_CHECK: &str = "rewind/invalid-code";
 
 pub(super) async fn check(
     server: &Server<'_>,
     args: CheckArgs,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
-    let source = input::read_text(&args.script)?;
+    let source = input::read_text(&args.code)?;
     let action_set = args
         .action_set
         .as_deref()
@@ -43,7 +43,7 @@ pub(super) async fn check(
             let client = server.client().await?;
             client
                 .check(&CheckRequest {
-                    script: source,
+                    code: source,
                     action_set: Some(id),
                 })
                 .await?
@@ -61,13 +61,13 @@ pub(super) async fn check(
     if console.json() {
         console.print_json(&result)?;
     } else {
-        let file = args.script.display().to_string();
+        let file = args.code.display().to_string();
         console.text(&render::diagnostics(&file, &result.diagnostics));
     }
     Ok(if result.ok {
         Exit::Success
     } else {
-        Exit::ScriptRefused
+        Exit::CodeRefused
     })
 }
 
@@ -76,11 +76,11 @@ pub(crate) async fn check_locally(
     source: &str,
     action_set: &ActionSet,
 ) -> Result<CheckResult, CliError> {
-    let script = Script::new(source);
+    let code = Code::new(source);
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| CliError::internal(error.to_string()))?;
     let mut diagnostics = Vec::new();
-    if let Err(invalid) = executor.compile(&script, action_set) {
+    if let Err(invalid) = executor.compile(&code, action_set) {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             code: START_CHECK.into(),

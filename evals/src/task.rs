@@ -21,7 +21,7 @@ pub enum Difficulty {
 /// about.
 #[derive(Debug, Clone, Copy)]
 pub enum Setup {
-    /// A run of a script.
+    /// A run of a code.
     Run(&'static str),
     /// A workflow saved through the gate, with its suite.
     Workflow(fn() -> SetupWorkflow),
@@ -40,7 +40,7 @@ pub type MakeActionSet = fn(&rewind_core::ActionSet) -> Result<rewind_core::Acti
 pub struct SetupWorkflow {
     pub name: &'static str,
     pub description: &'static str,
-    pub script: &'static str,
+    pub code: &'static str,
     pub input: Value,
     pub output: Value,
     pub signals: BTreeMap<String, Value>,
@@ -90,7 +90,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// The runs the agent started during the conversation, and those its scripts started.
+    /// The runs the agent started during the conversation, and those its workflows started.
     pub fn agent_runs(&self) -> impl Iterator<Item = &RunReport> {
         self.runs
             .iter()

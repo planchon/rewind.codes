@@ -63,7 +63,7 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         namespace: "local".parse().unwrap(),
         status,
         quarantine: None,
-        script: "aa".repeat(32),
+        code_digest: "aa".repeat(32),
         script_title: None,
         action_set: "bb".repeat(32),
         epoch: 1,
@@ -128,7 +128,7 @@ fn see(
     });
 }
 
-/// The run a script asks for: a script naming `fails`, `waits` or `refused` gets that.
+/// The run a code asks for: a code naming `fails`, `waits` or `refused` gets that.
 async fn start(
     State(stub): State<Shared>,
     headers: HeaderMap,
@@ -137,8 +137,8 @@ async fn start(
 ) -> Response {
     see(&stub, "start", &headers, query, body.clone());
     let start: StartRun = serde_json::from_value(body).unwrap();
-    if start.script.contains("refused") {
-        let problem = Problem::new(ProblemType::InvalidScript, "the script does not type-check")
+    if start.code.contains("refused") {
+        let problem = Problem::new(ProblemType::InvalidCode, "the code does not type-check")
             .with_diagnostics(vec![Diagnostic {
                 severity: Severity::Error,
                 code: "TS2322".into(),
@@ -164,7 +164,7 @@ async fn start(
     let mut run = base_run(&id, RunStatus::Active);
     run.labels = start.labels.clone();
     run.input = Some(Payload::of(start.input.clone(), 262_144));
-    if start.script.contains("fails") {
+    if start.code.contains("fails") {
         run.status = RunStatus::Failed;
         run.error = Some(RunError {
             name: "TypeError".into(),
@@ -174,7 +174,7 @@ async fn start(
             frame: Some("5 | issue.close()".into()),
             failed_call: None,
         });
-    } else if start.script.contains("waits") {
+    } else if start.code.contains("waits") {
         run.waiting_for = vec![Waiting::Signal {
             name: "approval".into(),
             timeout_at: None,
@@ -366,7 +366,7 @@ async fn list(
             namespace: run.namespace.clone(),
             status: run.status,
             quarantined: run.quarantine.is_some(),
-            script: run.script.clone(),
+            code_digest: run.code_digest.clone(),
             script_title: run.script_title.clone(),
             headline: "export default async () => 1;".into(),
             action_set: run.action_set.clone(),
@@ -402,7 +402,7 @@ async fn trace(State(stub): State<Shared>, UrlPath(id): UrlPath<String>) -> Resp
     axum::Json(Trace {
         run_id: id,
         format: TraceFormat::Llm,
-        text: "run completed\n#1 0ms script.ts:3 github.get_issue({number:4}) → {…}\n".into(),
+        text: "run completed\n#1 0ms workflow.ts:3 github.get_issue({number:4}) → {…}\n".into(),
     })
     .into_response()
 }
@@ -559,11 +559,11 @@ impl Embedded {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_starts_a_run_and_waits_for_it() {
     let server = Embedded::start().await;
-    let script = server.write("hello.ts", "export default async () => 1;\n");
+    let code = server.write("hello.ts", "export default async () => 1;\n");
     let (exit, out, err) = server
         .rewind(&[
             "run",
-            script.to_str().unwrap(),
+            code.to_str().unwrap(),
             "--input",
             r#"{"repo":"acme/api"}"#,
             "--label",
@@ -617,7 +617,7 @@ async fn run_exits_with_the_runs_outcome() {
     let (exit, out, _) = server.rewind(&["run", fails.to_str().unwrap()]).await;
     assert_eq!(exit, Exit::Failed);
     assert!(
-        out.contains("TypeError: issue is undefined\n  at script.ts:5:3"),
+        out.contains("TypeError: issue is undefined\n  at workflow.ts:5:3"),
         "{out}"
     );
 
@@ -627,7 +627,7 @@ async fn run_exits_with_the_runs_outcome() {
         .await;
     assert_eq!(exit, Exit::Waiting);
     assert!(
-        out.contains("waiting for:\n  - signal \"approval\" (script.ts:4:9)"),
+        out.contains("waiting for:\n  - signal \"approval\" (workflow.ts:4:9)"),
         "{out}"
     );
 
@@ -656,33 +656,33 @@ async fn run_exits_with_the_runs_outcome() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_script_exits_65_with_its_diagnostics() {
     let server = Embedded::start().await;
-    let script = server.write("refused.ts", "// refused\n");
-    let (exit, out, err) = server.rewind(&["run", script.to_str().unwrap()]).await;
-    assert_eq!(exit, Exit::ScriptRefused);
+    let code = server.write("refused.ts", "// refused\n");
+    let (exit, out, err) = server.rewind(&["run", code.to_str().unwrap()]).await;
+    assert_eq!(exit, Exit::CodeRefused);
     assert!(out.is_empty());
     assert!(
-        err.contains("error: The script was refused: the script does not type-check"),
+        err.contains("error: The code was refused: the code does not type-check"),
         "{err}"
     );
     assert_eq!(
-        err.matches("script.ts:3:28 error TS2322").count(),
+        err.matches("workflow.ts:3:28 error TS2322").count(),
         1,
         "each diagnostic is printed once: {err}"
     );
 
     let (exit, _, err) = server
-        .rewind(&["--json", "run", script.to_str().unwrap()])
+        .rewind(&["--json", "run", code.to_str().unwrap()])
         .await;
-    assert_eq!(exit, Exit::ScriptRefused);
+    assert_eq!(exit, Exit::CodeRefused);
     let problem: Problem = serde_json::from_str(err.trim()).unwrap();
-    assert!(problem.is(ProblemType::InvalidScript));
+    assert!(problem.is(ProblemType::InvalidCode));
     assert_eq!(problem.diagnostics.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_action_set_file_is_registered_before_the_run() {
     let server = Embedded::start().await;
-    let script = server.write("hello.ts", "export default async () => 1;\n");
+    let code = server.write("hello.ts", "export default async () => 1;\n");
     let action_set = server.write(
         "action_set.json",
         r#"{"harness": [{"name": "ask_user", "description": "Ask.", "inputSchema": {"type": "object"}}]}"#,
@@ -690,7 +690,7 @@ async fn an_action_set_file_is_registered_before_the_run() {
     let (exit, _, _) = server
         .rewind(&[
             "run",
-            script.to_str().unwrap(),
+            code.to_str().unwrap(),
             "--action-set",
             action_set.to_str().unwrap(),
         ])
@@ -704,18 +704,18 @@ async fn an_action_set_file_is_registered_before_the_run() {
     let (exit, _, err) = server
         .rewind(&[
             "run",
-            script.to_str().unwrap(),
+            code.to_str().unwrap(),
             "--action-set",
             "missing.json",
         ])
         .await;
     assert_eq!(exit, Exit::Usage, "{err}");
 
-    // A registered action set lives on the server: the server checks the script against it.
+    // A registered action set lives on the server: the server checks the code against it.
     let (exit, out, _) = server
         .rewind(&[
             "check",
-            script.to_str().unwrap(),
+            code.to_str().unwrap(),
             "--action-set",
             ACTION_SET_ID,
         ])
@@ -778,9 +778,9 @@ async fn signals_and_cancellations() {
 #[tokio::test(flavor = "multi_thread")]
 async fn status_runs_trace_fork_and_release() {
     let server = Embedded::start().await;
-    let script = server.write("hello.ts", "export default async () => 1;\n");
+    let code = server.write("hello.ts", "export default async () => 1;\n");
     server
-        .rewind(&["run", script.to_str().unwrap(), "--wait", "0"])
+        .rewind(&["run", code.to_str().unwrap(), "--wait", "0"])
         .await;
 
     let (exit, out, _) = server.rewind(&["status", "run-1"]).await;
@@ -840,7 +840,7 @@ async fn status_runs_trace_fork_and_release() {
         .rewind(&[
             "fork",
             "run-1",
-            "--script",
+            "--code",
             fixed.to_str().unwrap(),
             "--at",
             "3",
@@ -869,7 +869,7 @@ async fn status_runs_trace_fork_and_release() {
         .rewind(&[
             "fork",
             "run-1",
-            "--script",
+            "--code",
             fixed.to_str().unwrap(),
             "--secret",
             "github=org/github",
@@ -886,7 +886,7 @@ async fn status_runs_trace_fork_and_release() {
         .rewind(&[
             "fork",
             "run-1",
-            "--script",
+            "--code",
             fixed.to_str().unwrap(),
             "--secret",
             "github",
@@ -923,7 +923,7 @@ async fn a_run_is_exported_and_replayed_here() {
     // `rewind replay <run>` exports the journal and replays it in this process.
     let (exit, out, err) = server.rewind(&["replay", "run-1"]).await;
     assert_eq!(exit, Exit::Success, "{out}{err}");
-    assert!(out.contains("the script replays the 4 entries"), "{out}");
+    assert!(out.contains("the code replays the 4 entries"), "{out}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -933,8 +933,8 @@ async fn a_remote_server_gets_the_api_key() {
     let stub = Shared::default();
     tokio::spawn(axum::serve(listener, app(stub.clone())).into_future());
     let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("hello.ts");
-    std::fs::write(&script, "export default async () => 1;\n").unwrap();
+    let code = dir.path().join("hello.ts");
+    std::fs::write(&code, "export default async () => 1;\n").unwrap();
 
     let state = dir.path().join(".rewind");
     let rewind = |key: &'static str, namespace: Option<&'static str>| {
@@ -949,7 +949,7 @@ async fn a_remote_server_gets_the_api_key() {
         if let Some(namespace) = namespace {
             argv.extend(["--namespace".to_owned(), namespace.to_owned()]);
         }
-        argv.extend(["run".to_owned(), script.display().to_string()]);
+        argv.extend(["run".to_owned(), code.display().to_string()]);
         async move {
             let (mut console, captured) = Console::captured();
             let exit = rewind_cli::run(argv, &mut console).await;
@@ -999,7 +999,7 @@ async fn usage_errors_exit_64() {
     assert!(captured.stdout().contains("Exit codes: 0 completed"));
     let (mut console, _) = Console::captured();
     assert_eq!(
-        rewind_cli::run(["run", "/nonexistent/script.ts"], &mut console).await,
+        rewind_cli::run(["run", "/nonexistent/workflow.ts"], &mut console).await,
         Exit::Usage
     );
     let (mut console, captured) = Console::captured();

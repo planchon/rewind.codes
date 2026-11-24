@@ -10,13 +10,13 @@ use rewind_api::common::{Duration, RunStatus};
 #[command(
     name = "rewind",
     version,
-    about = "Rewind: durable TypeScript scripts that call actions, in a deterministic sandbox.",
-    long_about = "Rewind: durable TypeScript scripts that call actions, in a deterministic sandbox.\n\n\
+    about = "Rewind: durable TypeScript workflows that call actions, in a deterministic sandbox.",
+    long_about = "Rewind: durable TypeScript workflows that call actions, in a deterministic sandbox.\n\n\
         Commands about runs go to a server: the remote one of --url (REWIND_URL) with its API key \
         (REWIND_API_KEY), or else the embedded server of the state directory (.rewind/), started on \
         demand. `rewind check`, `rewind test` and the replay of an exported journal run in this \
         process.\n\nExit codes: 0 completed or success, 1 failed, 2 cancelled, 3 aborted, 4 \
-        still waiting, 5 quarantined, 6 refused, 64 usage error, 65 script refused, 70 internal \
+        still waiting, 5 quarantined, 6 refused, 64 usage error, 65 code refused, 70 internal \
         error, 130 interrupted.",
     disable_help_subcommand = true
 )]
@@ -65,7 +65,7 @@ pub(crate) struct Global {
 pub(crate) enum Command {
     /// Start a run and wait for it, up to --wait.
     Run(RunArgs),
-    /// Type-check a script against the sandbox and an action set's declarations.
+    /// Type-check a code against the sandbox and an action set's declarations.
     Check(CheckArgs),
     /// Run tests in virtual time: in this process, or on the server for a workflow's suite.
     Test(TestArgs),
@@ -77,7 +77,7 @@ pub(crate) enum Command {
     Status(StatusArgs),
     /// Replay a run, or an exported journal, in this process, and check determinism.
     Replay(ReplayArgs),
-    /// Start a fork of a run with a corrected script.
+    /// Start a fork of a run with a corrected code.
     Fork(ForkArgs),
     /// The LLM-readable trace of a run, or one entry in full.
     Trace(TraceArgs),
@@ -169,7 +169,7 @@ pub(crate) struct StartOptions {
     /// An idempotency key: a request repeated with it returns the same run.
     #[arg(long, value_name = "KEY")]
     pub(crate) key: Option<String>,
-    /// Do not type-check the script before starting it.
+    /// Do not type-check the code before starting it.
     #[arg(long)]
     pub(crate) no_check: bool,
     /// A secret the run reads, for an MCP server or an API whose calls need one:
@@ -181,8 +181,8 @@ pub(crate) struct StartOptions {
 
 #[derive(Debug, Args)]
 pub(crate) struct RunArgs {
-    /// The TypeScript script.
-    pub(crate) script: PathBuf,
+    /// The TypeScript code.
+    pub(crate) code: PathBuf,
     /// The input of main: JSON, or @file.json.
     #[arg(long, value_name = "JSON")]
     pub(crate) input: Option<String>,
@@ -195,19 +195,19 @@ pub(crate) struct RunArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct CheckArgs {
-    /// The TypeScript script.
-    pub(crate) script: PathBuf,
+    /// The TypeScript code.
+    pub(crate) code: PathBuf,
     /// The action set: an action set file, pinned in this process, or the id of an action set
-    /// registered on the server, which then checks the script.
+    /// registered on the server, which then checks the code.
     #[arg(long, value_name = "ID|FILE")]
     pub(crate) action_set: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TestArgs {
-    /// The script under test. With --workflow, the version's own when absent.
-    pub(crate) script: Option<PathBuf>,
-    /// The tests: a JSON array of tests. Default: script.tests.json next to the script.
+    /// The code under test. With --workflow, the version's own when absent.
+    pub(crate) code: Option<PathBuf>,
+    /// The tests: a JSON array of tests. Default: <name>.tests.json next to the code, for <name>.ts.
     #[arg(long, value_name = "FILE")]
     pub(crate) tests: Option<PathBuf>,
     /// A workflow, `triage`, `triage@<version>` or `triage@v12`: its suite runs too, on the
@@ -242,7 +242,7 @@ pub(crate) struct SignalArgs {
 pub(crate) struct CancelArgs {
     /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
-    /// The message of the CancelledError the script sees.
+    /// The message of the CancelledError the code sees.
     #[arg(long)]
     pub(crate) reason: Option<String>,
     /// Wait up to this long for the run to end, and exit with its status.
@@ -263,12 +263,12 @@ pub(crate) struct StatusArgs {
 pub(crate) struct ReplayArgs {
     /// A run, by its handle or its id, or the path of an exported journal document.
     pub(crate) run: String,
-    /// Check whether this corrected script is compatible with the journal instead, and what a
+    /// Check whether this corrected code is compatible with the journal instead, and what a
     /// fork with it would reuse.
     #[arg(long, value_name = "FILE")]
-    pub(crate) script: Option<PathBuf>,
-    /// With --script: a fork would go live from this entry.
-    #[arg(long, value_name = "INDEX", requires = "script")]
+    pub(crate) code: Option<PathBuf>,
+    /// With --code: a fork would go live from this entry.
+    #[arg(long, value_name = "INDEX", requires = "code")]
     pub(crate) at: Option<u64>,
 }
 
@@ -276,9 +276,9 @@ pub(crate) struct ReplayArgs {
 pub(crate) struct ForkArgs {
     /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
-    /// The corrected script.
+    /// The corrected code.
     #[arg(long, value_name = "FILE")]
-    pub(crate) script: PathBuf,
+    pub(crate) code: PathBuf,
     /// Go live from this journal entry even if the commands still match.
     #[arg(long, value_name = "INDEX")]
     pub(crate) at: Option<u64>,
@@ -318,7 +318,7 @@ pub(crate) struct RunsArgs {
     /// Only runs that called this action.
     #[arg(long)]
     pub(crate) action: Option<String>,
-    /// Only runs of this script (digest).
+    /// Only runs of this code (its digest).
     #[arg(long)]
     pub(crate) script: Option<String>,
     /// Only runs whose calls failed with this kind, or that failed with this error name.
@@ -469,7 +469,7 @@ pub(crate) struct NamespacesListArgs {
     /// Only those that used at least this share of one of their limits: 0.8 for 80 %.
     #[arg(long, value_name = "SHARE")]
     pub(crate) above: Option<f64>,
-    /// The order: the most CPU (the default), runs or scripts of the month first, or by name.
+    /// The order: the most CPU (the default), runs or workflows of the month first, or by name.
     #[arg(long, value_enum)]
     pub(crate) order: Option<NamespaceOrderArg>,
     /// The month whose use is listed, such as 2026-11; the current one by default.
@@ -487,7 +487,7 @@ pub(crate) struct NamespacesListArgs {
 pub(crate) enum NamespaceOrderArg {
     Cpu,
     Runs,
-    Scripts,
+    Workflows,
     Name,
 }
 
@@ -496,7 +496,7 @@ impl From<NamespaceOrderArg> for rewind_api::namespaces::NamespaceOrder {
         match order {
             NamespaceOrderArg::Cpu => Self::Cpu,
             NamespaceOrderArg::Runs => Self::Runs,
-            NamespaceOrderArg::Scripts => Self::Scripts,
+            NamespaceOrderArg::Workflows => Self::Workflows,
             NamespaceOrderArg::Name => Self::Name,
         }
     }
@@ -544,7 +544,7 @@ pub(crate) struct QuotasArgs {
     /// Set the default limits of every namespace without an exception instead.
     #[arg(long)]
     pub(crate) defaults: bool,
-    /// CPU time of the scripts in a calendar month, such as 2h: alerts at 80 % and 100 %.
+    /// CPU time of the workflows in a calendar month, such as 2h: alerts at 80 % and 100 %.
     #[arg(long, value_name = "DURATION|none")]
     pub(crate) cpu_per_month: Option<Limit<Duration>>,
     /// Runs active at once.
@@ -553,15 +553,15 @@ pub(crate) struct QuotasArgs {
     /// Runs created in a calendar month, forks included.
     #[arg(long, value_name = "N|none")]
     pub(crate) runs_per_month: Option<Limit<u64>>,
-    /// Distinct scripts with a run kept.
+    /// Distinct workflows with a run kept.
     #[arg(long, value_name = "N|none")]
-    pub(crate) scripts: Option<Limit<u64>>,
+    pub(crate) workflows: Option<Limit<u64>>,
     /// The longest TTL a run may ask for.
     #[arg(long, value_name = "DURATION|none")]
     pub(crate) max_ttl: Option<Limit<Duration>>,
-    /// The most lines a script may have.
+    /// The most lines a code may have.
     #[arg(long, value_name = "N|none")]
-    pub(crate) max_script_lines: Option<Limit<u32>>,
+    pub(crate) max_code_lines: Option<Limit<u32>>,
 }
 
 impl QuotasArgs {
@@ -570,9 +570,9 @@ impl QuotasArgs {
         self.cpu_per_month.is_some()
             || self.active_runs.is_some()
             || self.runs_per_month.is_some()
-            || self.scripts.is_some()
+            || self.workflows.is_some()
             || self.max_ttl.is_some()
-            || self.max_script_lines.is_some()
+            || self.max_code_lines.is_some()
     }
 
     /// `quotas` with the limits given set or removed, the others kept.
@@ -586,14 +586,14 @@ impl QuotasArgs {
         if let Some(limit) = self.runs_per_month {
             limit.apply(&mut quotas.runs_per_month);
         }
-        if let Some(limit) = self.scripts {
-            limit.apply(&mut quotas.scripts);
+        if let Some(limit) = self.workflows {
+            limit.apply(&mut quotas.workflows);
         }
         if let Some(limit) = self.max_ttl {
             limit.apply(&mut quotas.max_ttl);
         }
-        if let Some(limit) = self.max_script_lines {
-            limit.apply(&mut quotas.max_script_lines);
+        if let Some(limit) = self.max_code_lines {
+            limit.apply(&mut quotas.max_code_lines);
         }
     }
 }
@@ -652,13 +652,13 @@ mod tests {
         assert_eq!(quotas.max_ttl, Some(Limit::None));
         let mut limits = rewind_api::namespaces::Quotas {
             max_ttl: Some("1h".parse().unwrap()),
-            scripts: Some(9),
+            workflows: Some(9),
             ..Default::default()
         };
         quotas.apply(&mut limits);
         assert_eq!(limits.active_runs, Some(5));
         assert_eq!(limits.max_ttl, None);
-        assert_eq!(limits.scripts, Some(9), "a limit not given is kept");
+        assert_eq!(limits.workflows, Some(9), "a limit not given is kept");
         assert_eq!(limits.cpu_per_month, Some("2h".parse().unwrap()));
 
         assert!(Cli::try_parse_from(["rewind", "namespaces", "quotas"]).is_err());
@@ -671,7 +671,7 @@ mod tests {
                 "namespaces",
                 "quotas",
                 "--defaults",
-                "--scripts",
+                "--workflows",
                 "x"
             ])
             .is_err()

@@ -242,7 +242,7 @@ mod tests {
         let reply = parse(&json!({
             "content": [
                 { "type": "text", "text": "Checking." },
-                { "type": "tool_use", "id": "toolu_9", "name": "run_script", "input": { "code": "x" } }
+                { "type": "tool_use", "id": "toolu_9", "name": "run_workflow", "input": { "code": "x" } }
             ],
             "stop_reason": "tool_use",
             "usage": { "input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 7 }

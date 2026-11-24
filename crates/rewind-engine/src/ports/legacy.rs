@@ -44,7 +44,7 @@ pub struct LegacyRun {
     /// stays the same (`archi/06-storage-and-scale.md`, "Run handles").
     pub origin: String,
     pub suffix_len: u8,
-    pub script: Digest,
+    pub code: Digest,
     pub action_set: Digest,
     /// The determinism epoch of its `run_started`.
     pub epoch: Epoch,
@@ -68,7 +68,7 @@ pub struct LegacyRun {
     pub inbox: Vec<InboxItem>,
     /// The idempotency keys of the signals it took.
     pub signal_keys: Vec<String>,
-    /// Its script's timers not fired yet, by `seq`.
+    /// Its code's timers not fired yet, by `seq`.
     pub timers: Vec<(Seq, Timestamp)>,
     /// Its call tasks, by `seq`.
     pub tasks: Vec<LegacyTask>,

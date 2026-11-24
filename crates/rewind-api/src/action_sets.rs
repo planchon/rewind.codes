@@ -47,7 +47,7 @@ pub struct CreateActionSet {
     /// name `group.action` puts the action in the `group` namespace of `rewind:actions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness: Vec<HarnessAction>,
-    /// Enables the built-in `http` action, and `fetch` in scripts, for these hosts only.
+    /// Enables the built-in `http` action, and `fetch` in workflows, for these hosts only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http: Option<HttpAction>,
     /// The organization's secrets that list the actions of the MCP servers whose `auth` takes one,
@@ -55,9 +55,9 @@ pub struct CreateActionSet {
     /// are not part of the action set's id. Requires `secrets:use`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: crate::secrets::Attachments,
-    /// The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
+    /// The workflows its workflows may start, from `rewind:workflows`: `triage` pins the latest
     /// version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
-    /// action set's scripts are checked against them, and start them, for their whole life.
+    /// action set's workflows are checked against them, and start them, for their whole life.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<String>,
     /// Derives the action set from a registered one: its servers, actions and workflows are kept as
@@ -249,7 +249,7 @@ pub enum SecretEncoding {
     Base64,
 }
 
-/// A function of the harness, called by scripts and executed by the harness's SDK worker.
+/// A function of the harness, called by workflows and executed by the harness's SDK worker.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HarnessAction {
@@ -317,12 +317,12 @@ pub struct ActionSet {
     /// The digest of the pinned action set (SHA-256, lowercase hex). Runs record it.
     pub id: String,
     pub servers: Vec<ServerSummary>,
-    /// Every action a script of this action set can call, sorted by name.
+    /// Every action a code of this action set can call, sorted by name.
     pub actions: Vec<Action>,
     /// Its APIs, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<ApiSummary>,
-    /// The workflows its scripts may start, sorted by name.
+    /// The workflows its workflows may start, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<crate::workflows::PinnedWorkflow>,
     pub declarations: Declarations,
@@ -405,7 +405,7 @@ pub enum McpTransport {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
-    /// As scripts call it: `github.list_issues`, `ask_user`, `http`.
+    /// As workflows call it: `github.list_issues`, `ask_user`, `http`.
     pub name: String,
     pub route: Route,
     /// The MCP server, for an MCP action.

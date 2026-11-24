@@ -1,7 +1,7 @@
-//! `rewind test [script.ts] [--tests file] [--workflow name] [--action-set id|file]`: runs tests in
+//! `rewind test [workflow.ts] [--tests file] [--workflow name] [--action-set id|file]`: runs tests in
 //! mock mode, in virtual time (`archi/05-testing-and-observability.md`, "Running tests").
 //!
-//! A tests file is a JSON array of tests, `script.tests.json` next to the script by default:
+//! A tests file is a JSON array of tests, `workflow.tests.json` next to `workflow.ts` by default:
 //!
 //! ```json
 //! [{
@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use rewind_api::scripts::TestRequest;
 use rewind_api::testing::{Test as ApiTest, TestInput, TestResult, TestRun};
-use rewind_core::{Script, Test};
+use rewind_core::{Code, Test};
 use rewind_engine::StartError;
 use rewind_engine::testing::{Subject, TestError, TestOptions, run_tests};
 use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
@@ -46,9 +46,9 @@ use crate::output::Console;
 /// The static responses read next to the tests.
 pub(crate) const ACTIONS_FILE: &str = "rewind.actions.json";
 
-/// The tests file next to a script: `triage.ts` → `triage.tests.json`.
-fn tests_file_of(script: &Path) -> PathBuf {
-    script.with_extension("tests.json")
+/// The tests file next to a code: `triage.ts` → `triage.tests.json`.
+fn tests_file_of(code: &Path) -> PathBuf {
+    code.with_extension("tests.json")
 }
 
 pub(super) async fn test(
@@ -56,14 +56,14 @@ pub(super) async fn test(
     args: TestArgs,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
-    if args.script.is_none() && args.workflow.is_none() {
+    if args.code.is_none() && args.workflow.is_none() {
         return Err(CliError::usage(
-            "give the script to test, or --workflow to run a workflow's suite",
+            "give the code to test, or --workflow to run a workflow's suite",
         ));
     }
-    let tests_file = match (&args.tests, &args.script) {
+    let tests_file = match (&args.tests, &args.code) {
         (Some(path), _) => Some(path.clone()),
-        (None, Some(script)) => Some(tests_file_of(script)).filter(|path| path.exists()),
+        (None, Some(code)) => Some(tests_file_of(code)).filter(|path| path.exists()),
         (None, None) => None,
     };
     let tests = match &tests_file {
@@ -73,14 +73,14 @@ pub(super) async fn test(
     if tests.is_empty() && args.workflow.is_none() {
         return Err(CliError::usage(format!(
             "no test to run: write them in {}, or give --tests",
-            args.script
+            args.code
                 .as_deref()
                 .map(tests_file_of)
                 .unwrap_or_default()
                 .display()
         )));
     }
-    let source = args.script.as_deref().map(input::read_text).transpose()?;
+    let source = args.code.as_deref().map(input::read_text).transpose()?;
     let action_set = args
         .action_set
         .as_deref()
@@ -167,7 +167,7 @@ fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
 /// On the server: `POST /v1/test`.
 async fn remote(
     server: &Server<'_>,
-    script: Option<String>,
+    code: Option<String>,
     action_set: Option<String>,
     tests: Vec<ApiTest>,
     workflow: Option<String>,
@@ -175,7 +175,7 @@ async fn remote(
     let client = server.client().await?;
     Ok(client
         .test(&TestRequest {
-            script,
+            code,
             action_set,
             tests: tests
                 .into_iter()
@@ -253,12 +253,12 @@ async fn local(
     };
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| CliError::internal(error.to_string()))?;
-    let script = Script::new(source);
+    let code = Code::new(source);
     let reports = run_tests(
         &executor,
         &TsMockLoader::default(),
         &Subject {
-            script: &script,
+            code: &code,
             action_set: &action_set,
             interface: None,
         },
@@ -267,7 +267,7 @@ async fn local(
     )
     .await
     .map_err(|error| match error {
-        TestError::Start(refused @ StartError::InvalidScript(_)) => CliError::ScriptRefused {
+        TestError::Start(refused @ StartError::InvalidCode(_)) => CliError::CodeRefused {
             message: refused.to_string(),
             diagnostics: Vec::new(),
         },

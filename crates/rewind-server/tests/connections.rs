@@ -509,7 +509,7 @@ async fn the_whole_flow(world: &World) {
                 )
                 .header("Rewind-Namespace", "claude")
                 .json(&json!({
-                    "script": "export default async function main() { return 1; }",
+                    "code": "export default async function main() { return 1; }",
                     "check": false,
                 })),
         )
@@ -1209,7 +1209,7 @@ async fn a_connection_never_holds_more_than_its_person() {
                 )
                 .header("Rewind-Namespace", "claude")
                 .json(
-                    &json!({ "script": "export default async function main() {}", "check": false }),
+                    &json!({ "code": "export default async function main() {}", "check": false }),
                 ),
         )
         .await;
@@ -1661,7 +1661,7 @@ async fn claude_runs_a_script_over_mcp() {
         "list_orgs",
         "list_namespaces",
         "list_action_sets",
-        "run_script",
+        "run_workflow",
         "cancel_run",
     ] {
         assert!(
@@ -1679,12 +1679,12 @@ async fn claude_runs_a_script_over_mcp() {
     assert!(text.contains(&world.acme), "{text}");
 
     // The namespace is named per call; without it, the model is told to give one.
-    let script = "export default async function main() {\n  return 41 + 1;\n}\n";
+    let code = "export default async function main() {\n  return 41 + 1;\n}\n";
     let (text, error) = call(
         &world,
         &tokens.access,
-        "run_script",
-        json!({ "code": script }),
+        "run_workflow",
+        json!({ "code": code }),
     )
     .await;
     assert!(error, "{text}");
@@ -1693,8 +1693,8 @@ async fn claude_runs_a_script_over_mcp() {
     let (text, error) = call(
         &world,
         &tokens.access,
-        "run_script",
-        json!({ "code": script, "namespace": "demo", "wait": "30s" }),
+        "run_workflow",
+        json!({ "code": code, "namespace": "demo", "wait": "30s" }),
     )
     .await;
     assert!(!error, "{text}");
@@ -1733,13 +1733,13 @@ async fn mcp_tools_follow_the_access_given() {
     let names = action_names(&world, &tokens.access).await;
     assert!(names.iter().any(|action| action == "get_run"), "{names:?}");
     assert!(
-        !names.iter().any(|action| action == "run_script"),
+        !names.iter().any(|action| action == "run_workflow"),
         "{names:?}"
     );
     let (text, error) = call(
         &world,
         &tokens.access,
-        "run_script",
+        "run_workflow",
         json!({ "code": "export default () => 1;\n", "namespace": "demo" }),
     )
     .await;
@@ -1763,7 +1763,7 @@ async fn mcp_tools_follow_the_access_given() {
     assert!(text.contains(&world.acme), "{text}");
     let names = action_names(&world, &key).await;
     assert!(
-        !names.iter().any(|action| action == "run_script"),
+        !names.iter().any(|action| action == "run_workflow"),
         "{names:?}"
     );
 }

@@ -2,7 +2,7 @@
 //! [`ActionDispatcher`] for mock mode.
 //!
 //! The handlers run in an isolate of their own, on a thread of their own: nothing they do can
-//! reach the script's isolate, so they cannot break its determinism, and what they return is
+//! reach the code's isolate, so they cannot break its determinism, and what they return is
 //! journaled like any action result. Their isolate is the sandbox of the latest epoch: the same
 //! globals, randomness seeded with zeros, and the time of the clock the dispatcher is given.
 //!
@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use deno_core::{ModuleSpecifier, PollEventLoopOptions, v8};
 use rewind_core::{
-    ActionFailure, ActionFailureKind, ActionSet, Annotation, RunId, Script, Seed, Timestamp,
+    ActionFailure, ActionFailureKind, ActionSet, Annotation, Code, RunId, Seed, Timestamp,
 };
 use rewind_engine::adapters::VirtualClock;
 use rewind_engine::mock::Mocks as Answering;
@@ -68,7 +68,7 @@ impl MockLoader for TsMockLoader {
         start: Timestamp,
     ) -> Result<Answering<TsMocks>, MockLoadError> {
         let clock: Arc<dyn Clock> = Arc::new(VirtualClock::new(start));
-        let handlers = TsMocks::new(&Script::new(source), clock, self.limits.clone())
+        let handlers = TsMocks::new(&Code::new(source), clock, self.limits.clone())
             .await
             .map_err(|error| match error {
                 MockError::Invalid(message) => MockLoadError::Invalid(message),
@@ -116,7 +116,7 @@ impl TsMocks {
     /// Compiles and loads a module of mock handlers. `clock` is the time the handlers see;
     /// `limits` bound each call (CPU time) and the isolate (heap).
     pub async fn new(
-        source: &Script,
+        source: &Code,
         clock: Arc<dyn Clock>,
         limits: SandboxLimits,
     ) -> Result<Self, MockError> {
@@ -364,7 +364,7 @@ impl Mocks {
             return Err(format!(
                 "the mock handler of {} {}",
                 request.action,
-                limit.to_string().trim_start_matches("the script ")
+                limit.to_string().trim_start_matches("the code ")
             ));
         }
         let json = settled?.ok_or_else(|| {

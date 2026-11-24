@@ -13,7 +13,7 @@
 //!      ended: its attempt sealed in the archive, then one batch:
 //!             head, history, payload records, summary, counters; Seal; its retention's timer
 //!      live:  one batch: head, history, payload records, summary, counters; its inbox, signal
-//!             keys, call tasks (in flight: ready), timers (its script's, its deadline, a
+//!             keys, call tasks (in flight: ready), timers (its code's, its deadline, a
 //!             backoff), watchers, webhook tokens
 //!      its legacy_runs row: the router finds its version 7 id
 //!  every run moved ───────────────────────────────────────► the tables dropped
@@ -21,11 +21,11 @@
 //!
 //! A run keeps its version 7 id. Its head and summary are derived from its history as an
 //! activation derives them; the counters it moves (created, started, ended by status, its calls,
-//! its script, its failure group, the shapes of its results) are written with it, so statistics
+//! its code, its failure group, the shapes of its results) are written with it, so statistics
 //! and quotas count it; the CPU time it used is not known per run and is not counted. A task in
 //! flight (claimed, or deferred with a token the run plane cannot route) is written `ready`:
 //! recovery sends it again with delivery + 1, or fails it when its action is not idempotent. A run
-//! that cannot be moved (its script, its action set, a blob or its journal missing, its history
+//! that cannot be moved (its code, its action set, a blob or its journal missing, its history
 //! corrupt) is reported and left in the tables, which are then not dropped; the command can run
 //! again: what moved is skipped.
 //!
@@ -252,12 +252,12 @@ where
                     Refused::Run(format!("its archived journal {document} is missing"))
                 })?,
         };
-        let script = self
+        let code = self
             .catalog
-            .get_script(tenant, legacy.script)
+            .get_script(tenant, legacy.code)
             .await?
-            .ok_or_else(|| Refused::Run(format!("its script {} is missing", legacy.script)))?
-            .script;
+            .ok_or_else(|| Refused::Run(format!("its code {} is missing", legacy.code)))?
+            .code;
         let action_set = self
             .catalog
             .get_action_set(tenant, legacy.action_set)
@@ -311,7 +311,7 @@ where
             namespace: legacy.namespace.clone(),
             origin: legacy.origin.clone(),
             suffix_len: legacy.suffix_len,
-            script: legacy.script,
+            code: legacy.code,
             action_set: legacy.action_set,
             status: rewind_core::RunStatus::Pending,
             epoch: legacy.epoch,
@@ -331,7 +331,7 @@ where
                 .map_or(legacy.updated_at, |entry| entry.recorded_at),
             ended_at: None,
         };
-        let headline = crate::projector::headline(script.source());
+        let headline = crate::projector::headline(code.source());
         let summary = derive::summary_of(
             &head,
             &headline,
@@ -385,7 +385,7 @@ where
                 .put(&SealedAttempt {
                     run: run.clone(),
                     attempt: Attempt::FIRST,
-                    script,
+                    code,
                     action_set,
                     entries: sealed,
                 })
@@ -459,7 +459,7 @@ fn live(batch: &mut Batch, legacy: &LegacyRun, tasks: Vec<TaskRecord>, now: Time
     for (seq, at) in &legacy.timers {
         batch.push(Change::Timer(TimerChange::Set(DueTimer {
             at: *at,
-            kind: TimerKind::Script {
+            kind: TimerKind::Code {
                 run: run.clone(),
                 seq: *seq,
             },

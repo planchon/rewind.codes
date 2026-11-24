@@ -7,7 +7,7 @@
 //! the bytes must hash to the pinned integrity. The tarball is embedded as it is, and extracted
 //! to a cache directory when the checker is first used.
 //!
-//! A new version of tsgo changes the diagnostics scripts get: change `VERSION` and every
+//! A new version of tsgo changes the diagnostics workflows get: change `VERSION` and every
 //! integrity together, from the registry's metadata
 //! (`https://registry.npmjs.org/@typescript/typescript-<platform>/<version>`, `dist.integrity`).
 

@@ -478,7 +478,7 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     assert_eq!(quarantine.kind, QuarantineKind::NonDeterminism);
     assert_eq!(
         quarantine.reason,
-        "history entry 1 is call #1 a({\"n\":0}), but the script emitted call #1 a({\"n\":1})"
+        "history entry 1 is call #1 a({\"n\":0}), but the code emitted call #1 a({\"n\":1})"
     );
     assert!(
         view.summary.unwrap().quarantine.is_some(),
@@ -523,7 +523,7 @@ async fn a_quarantined_run_is_given_up_at_its_deadline() {
 
 #[tokio::test]
 async fn failing_activations_are_tried_again_by_a_timer_then_quarantined() {
-    // The script loads once; every later start fails inside the executor: a replay that cannot
+    // The code loads once; every later start fails inside the executor: a replay that cannot
     // go on, worth trying again later.
     let starts = Arc::new(AtomicU32::new(0));
     let programs = FakeExecutor::new().with(
@@ -1432,7 +1432,7 @@ async fn a_series_and_the_namespaces_use_are_one_request_per_partition() {
     let of_alice = &used[&alice];
     assert_eq!(of_alice.runs_started, 4);
     assert_eq!(of_alice.active_runs, 1);
-    assert_eq!(of_alice.scripts, 2);
+    assert_eq!(of_alice.workflows, 2);
     assert!(of_alice.cpu > Duration::ZERO);
     assert!(of_alice.days.is_empty());
     assert_eq!(used[&bob].runs_started, 1);

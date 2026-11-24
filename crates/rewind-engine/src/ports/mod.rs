@@ -1,7 +1,7 @@
 //! What the engine needs from the outside world (`archi/07-code-architecture.md`, "Ports").
 //!
 //! Every source of non-determinism and every I/O goes through one of these traits: storage,
-//! access, identity, payload values, the script sandbox, calls, type-checking,
+//! access, identity, payload values, the code sandbox, calls, type-checking,
 //! projections, telemetry, secrets, webhooks, time, ids and seeds. Ports are shaped by the
 //! domain's invariants, not by tables. They return `impl Future + Send`, and the engine is
 //! generic over them (static dispatch): composition roots pick the concrete adapters.
@@ -16,7 +16,7 @@
 //! | [`AccessStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
 //! | [`BlobStore`] | memory, `rewind-blob` (files, S3) |
-//! | [`ScriptExecutor`] / [`ScriptInstance`] | `rewind-runtime` (V8) |
+//! | [`CodeExecutor`] / [`CodeInstance`] | `rewind-runtime` (V8) |
 //! | [`ActionDispatcher`] | static responses (memory), mocks, `rewind-mcp`, `rewind-openapi` |
 //! | [`TypeChecker`] | static (memory), `rewind-check` (tsgo) |
 //! | [`SpanExporter`] | memory, `rewind-otel` |
@@ -90,8 +90,8 @@ pub use connections::{
 };
 pub use dispatcher::{ActionDispatcher, Call, CallAuth, CallClaims, Dispatched, RETRY_AFTER_DATA};
 pub use executor::{
-    CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
-    ScriptInstance, StartScript,
+    CodeExecutor, CodeInstance, CompiledCode, Delivery, Emitted, ExecutorError, InvalidCode,
+    StartCode,
 };
 pub use identity::{
     AccessClaims, Authentication, Client, IdentityError, IdentityProvider, Invitation,
@@ -101,7 +101,7 @@ pub use identity::{
 pub use journal::{
     CallTask, Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
-    StartedBy, StoreError, StoredActionSet, StoredScript, StoredWorkflow, TEST_GRACE, TaskRef,
+    StartedBy, StoreError, StoredActionSet, StoredCode, StoredWorkflow, TEST_GRACE, TaskRef,
     TaskState, TaskToken, TestRecord, TraceContext, Trigger, WebhookTarget, WebhookToken,
     WorkflowFilter, deferred_timeout_failure,
 };

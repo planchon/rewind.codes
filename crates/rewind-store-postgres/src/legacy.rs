@@ -171,7 +171,7 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
         origin: row.text(31)?,
         suffix_len: u8::try_from(suffix_len)
             .map_err(|_| corrupt(format!("a suffix of {suffix_len} characters")))?,
-        script: row.digest(3)?,
+        code: row.digest(3)?,
         action_set: row.digest(4)?,
         epoch: Epoch(u32_of(row.u64(5)?)?),
         expires_at: row.ts(6)?,

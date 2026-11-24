@@ -1,4 +1,4 @@
-//! The sandbox lib: what the type-checker declares to scripts, the contract between this
+//! The sandbox lib: what the type-checker declares to workflows, the contract between this
 //! runtime and `rewind-check` (`archi/04-tools.md`, "Type-checking"). **What type-checks is what
 //! exists**: the files declare exactly the globals the isolate has and the exports of the `rewind`
 //! module, for the latest epoch, which every new run starts under.
@@ -15,7 +15,7 @@
 //! | `tsconfig.json` | tsgo's options: strict, `verbatimModuleSyntax`, ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), without shared memory, weak references and decorators, no DOM |
 //! | `globals.json` | The declared global names, the `rewind` exports, and a hint for each absent global models reach for |
 //!
-//! The checker writes the script as `script.ts` next to these files and the action set's
+//! The checker writes the code as `workflow.ts` next to these files and the action set's
 //! `rewind-actions.d.ts`; `tsconfig.json` includes every `*.ts` of its directory.
 
 use std::collections::BTreeSet;
@@ -34,7 +34,7 @@ pub const TSCONFIG_JSON: &str = include_str!("../lib/tsconfig.json");
 /// The declared names, machine-readable.
 pub const GLOBALS_JSON: &str = include_str!("../lib/globals.json");
 
-/// The files the checker writes next to `script.ts` and `rewind-actions.d.ts`, by file name.
+/// The files the checker writes next to `workflow.ts` and `rewind-actions.d.ts`, by file name.
 pub fn files(http_action: bool) -> Vec<(&'static str, &'static str)> {
     let mut files = vec![
         ("tsconfig.json", TSCONFIG_JSON),
@@ -71,7 +71,7 @@ pub struct AbsentGlobal {
 }
 
 impl DeclaredGlobals {
-    /// Every global name of a script's `globalThis`: what the isolate must have, exactly.
+    /// Every global name of a code's `globalThis`: what the isolate must have, exactly.
     pub fn names(&self, http_action: bool) -> BTreeSet<&str> {
         let mut names: BTreeSet<&str> = self
             .ecmascript
@@ -165,8 +165,8 @@ mod tests {
         })
         .unwrap_or_else(|error| panic!("{name}: {error}"));
         match parsed.program_ref() {
-            ProgramRef::Script(script) => script.body.clone(),
-            ProgramRef::Module(_) => panic!("{name} must be a script: its declarations are global"),
+            ProgramRef::Script(code) => code.body.clone(),
+            ProgramRef::Module(_) => panic!("{name} must be a code: its declarations are global"),
         }
     }
 

@@ -1,4 +1,4 @@
-// `fetch`, for a script whose action set enables the built-in `http` action (archi/04-tools.md,
+// `fetch`, for a code whose action set enables the built-in `http` action (archi/04-tools.md,
 // "The `http` action and egress"). The type-checker gives this file to tsgo only then: without the
 // `http` action there is no `fetch`.
 //

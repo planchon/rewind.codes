@@ -1,5 +1,5 @@
 {
-  "description": "A 10-day sleep and a setTimeout are durable timers; logical time jumps to their fire_at, so the script sees exactly 10 days and 1.5 seconds pass.",
+  "description": "A 10-day sleep and a setTimeout are durable timers; logical time jumps to their fire_at, so the code sees exactly 10 days and 1.5 seconds pass.",
   "expect": {
     "status": "completed",
     "output": {

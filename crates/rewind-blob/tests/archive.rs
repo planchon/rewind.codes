@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rewind_blob::{CachedArchive, DEFAULT_ARCHIVE_CACHE_CAPACITY, FileArchive, FileBlobs};
 use rewind_core::{
-    ActionSet, Digest, Epoch, Event, HistoryEntry, Lifecycle, RunMode, RunStarted, Script, Seed,
+    ActionSet, Code, Digest, Epoch, Event, HistoryEntry, Lifecycle, RunMode, RunStarted, Seed,
     Timestamp, canonical_json,
 };
 use rewind_engine::conformance::{archive, tenant};
@@ -25,7 +25,7 @@ fn run(tenant_name: &str) -> RunRef {
 }
 
 fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
-    let script = Script::new("export default async (input) => input");
+    let code = Code::new("export default async (input) => input");
     let action_set = ActionSet::from_harness_actions(["github.close_issue"]).expect("action set");
     SealedAttempt {
         run: run.clone(),
@@ -34,7 +34,7 @@ fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
             index: 0,
             recorded_at: Timestamp(1),
             event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-                script: script.digest(),
+                code: code.digest(),
                 action_set: action_set.digest(),
                 input: json!({ "text": input }).into(),
                 seed: Seed::from_bytes([1; 32]),
@@ -43,7 +43,7 @@ fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
                 mode: RunMode::Live,
             })),
         }],
-        script,
+        code,
         action_set,
     }
 }

@@ -1,4 +1,4 @@
-//! The ops: the only way the script's glue talks to Rust.
+//! The ops: the only way the code's glue talks to Rust.
 //!
 //! Ops are synchronous: they record a command, assign its `seq` and return it. Nothing is
 //! asynchronous from V8's point of view; the glue turns a `seq` into a promise that a later
@@ -38,7 +38,7 @@ pub(crate) struct ExecState {
     max_emitted_bytes: usize,
     /// The heap limit, which bounds the elements one built-in call may create.
     heap_bytes: usize,
-    /// Why the execution was terminated, once the script emitted more than the bounds allow.
+    /// Why the execution was terminated, once the code emitted more than the bounds allow.
     overflow: Option<String>,
     /// Terminates the execution from an op.
     isolate: Option<v8::IsolateHandle>,
@@ -106,7 +106,7 @@ impl ExecState {
         })
     }
 
-    /// Bounds what the script may emit reacting to one trigger, in the isolate `isolate`.
+    /// Bounds what the code may emit reacting to one trigger, in the isolate `isolate`.
     pub(crate) fn bound(&mut self, limits: &SandboxLimits, isolate: v8::IsolateHandle) {
         self.max_emitted = limits.emitted_per_trigger;
         self.max_emitted_bytes = limits.emitted_bytes_per_trigger;
@@ -119,7 +119,7 @@ impl ExecState {
         std::mem::take(&mut self.emitted)
     }
 
-    /// Why the execution was terminated, if the script emitted more than the bounds allow or
+    /// Why the execution was terminated, if the code emitted more than the bounds allow or
     /// asked a built-in for more than the heap holds.
     pub(crate) fn overflow(&mut self) -> Option<String> {
         self.overflow.clone()
@@ -137,7 +137,7 @@ impl ExecState {
 
     /// Makes room for one more command or annotation carrying `bytes` of text. Past the bounds,
     /// nothing more is kept and the execution is terminated: the call ends with a limit
-    /// exceeded, and whatever the script runs before the termination takes effect is dropped.
+    /// exceeded, and whatever the code runs before the termination takes effect is dropped.
     fn admit(&mut self, bytes: usize) -> bool {
         if self.overflow.is_some() {
             return false;
@@ -152,7 +152,7 @@ impl ExecState {
             return true;
         };
         self.overflow = Some(format!(
-            "the script emitted more than {exceeded} reacting to one trigger"
+            "the code emitted more than {exceeded} reacting to one trigger"
         ));
         if let Some(isolate) = &self.isolate {
             isolate.terminate_execution();
@@ -184,7 +184,7 @@ impl ExecState {
     fn take_seq(&mut self) -> Result<Seq, JsErrorBox> {
         let seq = self
             .next_seq
-            .ok_or_else(|| JsErrorBox::range_error("the script emitted too many commands"))?;
+            .ok_or_else(|| JsErrorBox::range_error("the code emitted too many commands"))?;
         self.next_seq = seq.next();
         Ok(seq)
     }
@@ -199,7 +199,7 @@ impl ExecState {
 
     /// Checks a call against the run's action set and the action's pinned input schema
     /// (`archi/04-tools.md`, "Action sets and code generation"). The message is the `TypeError`
-    /// the script sees at its call.
+    /// the code sees at its call.
     fn check_call(&mut self, action: &str, args: &Value) -> Result<(), String> {
         let Some(pinned) = self.action_set.action(action) else {
             return Err(match action {
@@ -367,7 +367,7 @@ impl ExecState {
     }
 }
 
-/// A value a workflow's schema refused, as the `TypeError` the script sees.
+/// A value a workflow's schema refused, as the `TypeError` the code sees.
 fn refused_value(invalid: &str, schema: &str, refused: Refused) -> String {
     match refused {
         Refused::Invalid(problems) => format!("{invalid}: {problems}"),
@@ -388,7 +388,7 @@ fn derive_key(domain: &[u8], seed: &Seed) -> [u8; 32] {
 /// How the heap limit ends a call.
 pub(crate) fn heap_exceeded(heap_bytes: usize) -> String {
     format!(
-        "the script used more than {} MiB of heap",
+        "the code used more than {} MiB of heap",
         heap_bytes / (1024 * 1024)
     )
 }
@@ -408,7 +408,7 @@ fn size(bytes: usize) -> String {
     }
 }
 
-/// Checks an action's args, as the `TypeError` the script sees at its call.
+/// Checks an action's args, as the `TypeError` the code sees at its call.
 fn check_args(validator: &Validator, action: &str, args: &Value) -> Result<(), String> {
     validator
         .check("args", args)
@@ -421,7 +421,7 @@ fn check_args(validator: &Validator, action: &str, args: &Value) -> Result<(), S
         })
 }
 
-/// A position from the glue: 0 when the command was not issued from the script's source.
+/// A position from the glue: 0 when the command was not issued from the code's source.
 fn callsite(line: u32, column: u32) -> Option<Callsite> {
     (line > 0).then_some(Callsite { line, column })
 }
@@ -532,9 +532,9 @@ fn op_rewind_start_timer(
 }
 
 /// The error of an op whose command was dropped: the execution is already terminating, so the
-/// script never sees it.
+/// code never sees it.
 fn over_bound() -> JsErrorBox {
-    JsErrorBox::range_error("the script emitted more than one trigger's response may hold")
+    JsErrorBox::range_error("the code emitted more than one trigger's response may hold")
 }
 
 #[op2(fast)]

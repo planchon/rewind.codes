@@ -1,20 +1,20 @@
-//! Workflows: scripts with a name and a typed interface, that scripts start and signal
+//! Workflows: workflows with a name and a typed interface, that workflows start and signal
 //! (`archi/01-product.md`, "Workflows"; `archi/03-execution.md`, "Workflows across runs").
 //!
 //! ```text
 //! Workflow (a version: immutable, content-addressed)
 //! ├── name, description?
-//! ├── script, action set            digests: what its runs execute
+//! ├── code, action set            digests: what its runs execute
 //! ├── schemas                    { input, output, signals: { <name>: schema } }
 //! ├── suite                      parent?, tests, retired, updated: the tests it passed
 //! ├── labels                     the scope it was saved under; {} for a tenant-wide save
 //! └── secrets                    its attachments: { <server>: org/<name> | ns/<name> }
 //!
-//! PinnedWorkflow (what an action set pins: the interface, without the script)
+//! PinnedWorkflow (what an action set pins: the interface, without the code)
 //! └── name, version (the Workflow's digest), description?, schemas
 //! ```
 //!
-//! A script starts and signals runs of a pinned workflow through two built-ins, and the end of
+//! A code starts and signals runs of a pinned workflow through two built-ins, and the end of
 //! a run comes back to the runs that watch it as the reserved signal `rewind:ended:<run id>`,
 //! whose payload is a [`RunEnd`].
 
@@ -78,7 +78,7 @@ impl WorkflowSchemas {
     }
 }
 
-/// A version of a workflow: a script with a name and a typed interface. Immutable and
+/// A version of a workflow: a code with a name and a typed interface. Immutable and
 /// content-addressed: its [`version`](Self::version) is the digest of its document, the workflow
 /// version document of the stored format v1 (`archi/02-journal.md`).
 ///
@@ -95,7 +95,7 @@ impl WorkflowSchemas {
 pub struct Workflow {
     name: String,
     description: Option<String>,
-    script: Digest,
+    code: Digest,
     action_set: Digest,
     schemas: WorkflowSchemas,
     suite: Suite,
@@ -240,7 +240,7 @@ pub const ERASED_TEST_REASON: &str = "recorded from an erased namespace";
 pub enum InvalidWorkflow {
     #[error(
         "invalid workflow name {0:?}: expected an identifier (letters, digits, _ and $) that is \
-         not a reserved word of JavaScript, since scripts import it from rewind:workflows"
+         not a reserved word of JavaScript, since workflows import it from rewind:workflows"
     )]
     Name(String),
     #[error("invalid signal name {0:?}: expected a name without control characters")]
@@ -256,11 +256,11 @@ pub enum InvalidWorkflow {
 }
 
 impl Workflow {
-    /// A version of the workflow `name`, whose runs execute `script` with `action_set`.
+    /// A version of the workflow `name`, whose runs execute `code` with `action_set`.
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,
-        script: Digest,
+        code: Digest,
         action_set: Digest,
         schemas: WorkflowSchemas,
     ) -> Result<Self, InvalidWorkflow> {
@@ -269,7 +269,7 @@ impl Workflow {
         Ok(Self {
             name,
             description,
-            script,
+            code,
             action_set,
             schemas,
             suite: Suite::default(),
@@ -317,9 +317,9 @@ impl Workflow {
         &self.secrets
     }
 
-    /// Digest of the script its runs execute.
-    pub fn script(&self) -> Digest {
-        self.script
+    /// Digest of the code its runs execute.
+    pub fn code(&self) -> Digest {
+        self.code
     }
 
     /// Digest of the action set its runs call.
@@ -360,7 +360,7 @@ impl Workflow {
         if let Some(description) = &self.description {
             object.insert("description".into(), json!(description));
         }
-        object.insert("script".into(), json!(self.script.to_hex()));
+        object.insert("code".into(), json!(self.code.to_hex()));
         object.insert("action_set".into(), json!(self.action_set.to_hex()));
         object.insert("schemas".into(), self.schemas.to_json());
         self.suite.insert_into(&mut object);
@@ -386,7 +386,7 @@ impl fmt::Display for Workflow {
     }
 }
 
-/// A workflow as an action set pins it: its name, version and interface. Scripts of that action set
+/// A workflow as an action set pins it: its name, version and interface. Workflows of that action set
 /// start runs of exactly this version, and are checked against these schemas.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinnedWorkflow {
@@ -669,10 +669,10 @@ mod tests {
         let workflow = triage();
         let document = format!(
             concat!(
-                r#"{{"action_set":"{}","description":"Triage the stale issues","name":"triage","#,
-                r#""schemas":{{"input":{{"properties":{{"repo":{{"type":"string"}}}},"type":"object"}},"#,
-                r#""output":{{"type":"object"}},"signals":{{"approval":{{"type":"object"}}}}}},"#,
-                r#""script":"{}","v":1}}"#
+                r#"{{"action_set":"{}","code":"{}","description":"Triage the stale issues","#,
+                r#""name":"triage","schemas":{{"input":{{"properties":{{"repo":{{"type":"string"}}}},"#,
+                r#""type":"object"}},"output":{{"type":"object"}},"signals":{{"approval":{{"type":"object"}}}}}},"#,
+                r#""v":1}}"#
             ),
             Digest::of(b"action_set").to_hex(),
             Digest::of(b"script").to_hex(),
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn every_field_changes_the_version() {
         let base = triage().version();
-        let with = |name: &str, description: Option<&str>, script: &[u8], signals: &[&str]| {
+        let with = |name: &str, description: Option<&str>, code: &[u8], signals: &[&str]| {
             let mut schemas = schemas();
             schemas.signals = signals
                 .iter()
@@ -745,7 +745,7 @@ mod tests {
             Workflow::new(
                 name,
                 description.map(str::to_owned),
-                Digest::of(script),
+                Digest::of(code),
                 Digest::of(b"action_set"),
                 schemas,
             )
@@ -873,7 +873,7 @@ mod tests {
         let error = ScriptError {
             name: "TypeError".into(),
             message: "x is undefined".into(),
-            stack: Some("at main (script.ts:3:7)".into()),
+            stack: Some("at main (workflow.ts:3:7)".into()),
         };
         let cancelled = ScriptError {
             name: ScriptError::CANCELLED.into(),

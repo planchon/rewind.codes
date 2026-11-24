@@ -1,5 +1,5 @@
 {
-  "description": "A run fails at its last step; a fork with the corrected script reuses the recorded results of the first steps, which are not called again, and calls the actions only from where its commands differ.",
+  "description": "A run fails at its last step; a fork with the corrected code reuses the recorded results of the first steps, which are not called again, and calls the actions only from where its commands differ.",
   "input": {
     "repo": "acme/api"
   },
@@ -27,7 +27,7 @@
     }
   },
   "fork": {
-    "script": "fixed.ts"
+    "code": "fixed.ts"
   },
   "expect": {
     "status": "completed",

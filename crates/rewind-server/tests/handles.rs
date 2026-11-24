@@ -1,7 +1,7 @@
-//! Runs named by their handles, scripts' titles and workflows' version numbers over HTTP, on
-//! the embedded server (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script
+//! Runs named by their handles, workflows' titles and workflows' version numbers over HTTP, on
+//! the embedded server (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Code
 //! titles"): a handle names a run wherever its id does, a run and its summary show their handle
-//! and their script's title, a person's title comes before the comment's, and `name@v<number>`
+//! and their code's title, a person's title comes before the comment's, and `name@v<number>`
 //! names a workflow's version.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -21,7 +21,7 @@ use rewind_core::SUFFIX_LEN;
 use serde_json::json;
 use support::{TestServer, eventually, test_namespace, wait};
 
-/// A script whose comment gives it a title and a description.
+/// A code whose comment gives it a title and a description.
 const APPROVAL: &str = r#"/**
  * Wait for approval
  *
@@ -53,7 +53,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
 
-    // The handle: the namespace, the script's title as a slug, the run's suffix.
+    // The handle: the namespace, the code's title as a slug, the run's suffix.
     let run = harness
         .start_run(&StartRun::new(APPROVAL), None)
         .await
@@ -157,7 +157,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     );
     assert_eq!(refused.status, 400, "{}", refused.detail);
 
-    // The summaries show the handle and the script's title.
+    // The summaries show the handle and the code's title.
     let listed = eventually(|| async {
         let page = harness.list_runs(&RunFilter::default()).await.unwrap();
         page.runs.into_iter().find(|summary| summary.id == run.id)
@@ -194,11 +194,11 @@ async fn a_person_titles_a_script_over_its_comment() {
         .start_run(&StartRun::new(APPROVAL), None)
         .await
         .unwrap();
-    let script = run.script.clone();
+    let code = run.code_digest.clone();
 
     // The comment's title and description, until a person gives others. A key bound to a
-    // namespace reads the script once the read model lists its run.
-    let read = eventually(|| async { harness.get_script(&script).await.ok() }).await;
+    // namespace reads the code once the read model lists its run.
+    let read = eventually(|| async { harness.get_script(&code).await.ok() }).await;
     assert_eq!(
         (read.title.as_deref(), read.title_source),
         (Some("Wait for approval"), Some(TitleSource::Comment))
@@ -211,7 +211,7 @@ async fn a_person_titles_a_script_over_its_comment() {
     // A person's title, trimmed, for the whole organization.
     let given = harness
         .set_script_title(
-            &script,
+            &code,
             &titled(
                 Some("  Approve a deploy  "),
                 Some(" Asks the on-call person. "),
@@ -248,7 +248,7 @@ async fn a_person_titles_a_script_over_its_comment() {
             .unwrap()
             .scripts
             .into_iter()
-            .find(|summary| summary.digest == script)
+            .find(|summary| summary.digest == code)
     })
     .await;
     assert_eq!(
@@ -261,7 +261,7 @@ async fn a_person_titles_a_script_over_its_comment() {
     })
     .await;
     assert_eq!(summary.script_title.as_deref(), Some("Approve a deploy"));
-    // A new run of the script takes its origin from the person's title; the first keeps its own.
+    // A new run of the code takes its origin from the person's title; the first keeps its own.
     let again = harness
         .start_run(&StartRun::new(APPROVAL), None)
         .await
@@ -275,7 +275,7 @@ async fn a_person_titles_a_script_over_its_comment() {
 
     // Removed, the comment's show again.
     let removed = harness
-        .set_script_title(&script, &titled(None, None))
+        .set_script_title(&code, &titled(None, None))
         .await
         .unwrap();
     assert_eq!(
@@ -291,7 +291,7 @@ async fn a_person_titles_a_script_over_its_comment() {
     ] {
         let refused = problem(
             harness
-                .set_script_title(&script, &titled(Some(title), description.as_deref()))
+                .set_script_title(&code, &titled(Some(title), description.as_deref()))
                 .await
                 .unwrap_err(),
         );
@@ -303,10 +303,10 @@ async fn a_person_titles_a_script_over_its_comment() {
         );
     }
     assert_eq!(
-        harness.get_script(&script).await.unwrap().title_source,
+        harness.get_script(&code).await.unwrap().title_source,
         Some(TitleSource::Comment)
     );
-    // A script the tenant does not have, or that is no digest.
+    // A code the tenant does not have, or that is no digest.
     for unknown in ["00".repeat(32), "nope".to_owned()] {
         let missing = problem(
             harness
@@ -320,7 +320,7 @@ async fn a_person_titles_a_script_over_its_comment() {
     let reader = server.key(BuiltInRole::Reader, &[]).await;
     let forbidden = problem(
         reader
-            .set_script_title(&script, &titled(Some("Mine"), None))
+            .set_script_title(&code, &titled(Some("Mine"), None))
             .await
             .unwrap_err(),
     );
@@ -331,7 +331,7 @@ async fn a_person_titles_a_script_over_its_comment() {
         forbidden.detail
     );
 
-    // A script without a comment has no title.
+    // A code without a comment has no title.
     let bare = harness
         .start_run(
             &StartRun::new("export default async function main() {\n  return 1;\n}\n"),
@@ -341,7 +341,7 @@ async fn a_person_titles_a_script_over_its_comment() {
         .unwrap();
     assert_eq!(bare.script_title, None);
     assert!(bare.handle.contains("/script/"), "{}", bare.handle);
-    let read = eventually(|| async { harness.get_script(&bare.script).await.ok() }).await;
+    let read = eventually(|| async { harness.get_script(&bare.code_digest).await.ok() }).await;
     assert_eq!(
         (read.title, read.description, read.title_source),
         (None, None, None)
@@ -357,12 +357,12 @@ export default async function main(input: { repo: string }) {
 }
 "#;
 
-fn triage(action_set: &str, script: &str) -> CreateWorkflow {
+fn triage(action_set: &str, code: &str) -> CreateWorkflow {
     CreateWorkflow {
         name: "triage".into(),
         description: None,
         action_set: action_set.into(),
-        script: script.into(),
+        code: code.into(),
         input: json!({
             "type": "object",
             "properties": { "repo": { "type": "string" } },

@@ -101,7 +101,7 @@ async fn get(socket: &Path, path: &str) -> Value {
 
 fn sleeping(duration: &str) -> Value {
     json!({
-        "script": format!(
+        "code": format!(
             "import {{ sleep }} from \"rewind\";\nexport default async function main() {{\n  await sleep(\"{duration}\");\n  return \"woke\";\n}}\n"
         )
     })

@@ -1,20 +1,20 @@
-//! Scripts' titles (`archi/04-tools.md`, "Script titles"): the title and description a person
-//! gave a script, for the organization, else those of the comment at the top of its source.
+//! Workflows' titles (`archi/04-tools.md`, "Script titles"): the title and description a person
+//! gave a code, for the organization, else those of the comment at the top of its source.
 //!
 //! A source never changes, so what its comment says is read once per tenant and digest and kept;
-//! the titles people give are read from the catalog, once per page for the scripts it shows.
+//! the titles people give are read from the catalog, once per page for the workflows it shows.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use rewind_api::scripts::TitleSource;
-use rewind_core::{Digest, ScriptDoc, script_doc};
+use rewind_core::{CodeDoc, Digest, code_doc};
 use rewind_engine::ports::{CatalogError, CatalogStore, ScriptTitle, TenantId};
 
-/// The scripts whose text a server keeps before it forgets them all.
+/// The workflows whose text a server keeps before it forgets them all.
 const KEPT: usize = 10_000;
 
-/// A script's title as the API shows it.
+/// A code's title as the API shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Title {
     pub(crate) title: String,
@@ -22,9 +22,9 @@ pub(crate) struct Title {
     pub(crate) source: TitleSource,
 }
 
-/// The title a script shows: the one a person gave it, with their description, else its
+/// The title a code shows: the one a person gave it, with their description, else its
 /// comment's.
-pub(crate) fn shown(given: Option<&ScriptTitle>, doc: Option<&ScriptDoc>) -> Option<Title> {
+pub(crate) fn shown(given: Option<&ScriptTitle>, doc: Option<&CodeDoc>) -> Option<Title> {
     match (given, doc) {
         (Some(given), _) => Some(Title {
             title: given.title.clone(),
@@ -40,37 +40,37 @@ pub(crate) fn shown(given: Option<&ScriptTitle>, doc: Option<&ScriptDoc>) -> Opt
     }
 }
 
-/// What a script's source says of it: its first line that is not blank, and its comment.
+/// What a code's source says of it: its first line that is not blank, and its comment.
 #[derive(Debug)]
-pub(crate) struct ScriptText {
+pub(crate) struct CodeText {
     pub(crate) headline: String,
-    pub(crate) doc: Option<ScriptDoc>,
+    pub(crate) doc: Option<CodeDoc>,
 }
 
-impl ScriptText {
+impl CodeText {
     pub(crate) fn of(source: &str) -> Self {
         Self {
             headline: rewind_api::scripts::headline(source),
-            doc: script_doc(source),
+            doc: code_doc(source),
         }
     }
 }
 
-/// The text of the scripts read so far, by tenant and digest.
+/// The text of the workflows read so far, by tenant and digest.
 #[derive(Debug, Default)]
-pub(crate) struct ScriptTexts {
-    kept: Mutex<HashMap<(TenantId, Digest), Arc<ScriptText>>>,
+pub(crate) struct CodeTexts {
+    kept: Mutex<HashMap<(TenantId, Digest), Arc<CodeText>>>,
 }
 
-impl ScriptTexts {
-    /// What the script's source says of it; `None` when the tenant has no such script, or the
+impl CodeTexts {
+    /// What the code's source says of it; `None` when the tenant has no such code, or the
     /// store cannot be read (nothing is kept then).
     pub(crate) async fn text<C: CatalogStore>(
         &self,
         catalog: &C,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Option<Arc<ScriptText>> {
+    ) -> Option<Arc<CodeText>> {
         let key = (tenant.clone(), digest);
         if let Some(text) = self
             .kept
@@ -81,10 +81,10 @@ impl ScriptTexts {
             return Some(text);
         }
         let text = match catalog.get_script(tenant, digest).await {
-            Ok(Some(stored)) => Arc::new(ScriptText::of(stored.script.source())),
+            Ok(Some(stored)) => Arc::new(CodeText::of(stored.code.source())),
             Ok(None) => return None,
             Err(error) => {
-                tracing::warn!(%digest, %error, "the script's text was not read");
+                tracing::warn!(%digest, %error, "the code's text was not read");
                 return None;
             }
         };
@@ -97,7 +97,7 @@ impl ScriptTexts {
         Some(text)
     }
 
-    /// The titles of these scripts of the tenant, for those that have one: one read of the
+    /// The titles of these workflows of the tenant, for those that have one: one read of the
     /// titles people gave, the comments of the sources kept.
     pub(crate) async fn titles<C: CatalogStore>(
         &self,
@@ -119,16 +119,16 @@ impl ScriptTexts {
             .into_iter()
             .collect();
         let mut titles = BTreeMap::new();
-        for script in scripts {
-            let title = match given.get(&script) {
+        for code in scripts {
+            let title = match given.get(&code) {
                 Some(given) => shown(Some(given), None),
                 None => self
-                    .text(catalog, tenant, script)
+                    .text(catalog, tenant, code)
                     .await
                     .and_then(|text| shown(None, text.doc.as_ref())),
             };
             if let Some(title) = title {
-                titles.insert(script, title);
+                titles.insert(code, title);
             }
         }
         Ok(titles)
@@ -143,9 +143,8 @@ mod tests {
 
     #[test]
     fn a_title_a_person_gave_comes_before_the_comment() {
-        let doc =
-            script_doc("/** Daily digest\n *\n * Posts the day's issues. */\nexport default 1")
-                .expect("a doc");
+        let doc = code_doc("/** Daily digest\n *\n * Posts the day's issues. */\nexport default 1")
+            .expect("a doc");
         let given = ScriptTitle {
             title: "Morning digest".into(),
             description: None,

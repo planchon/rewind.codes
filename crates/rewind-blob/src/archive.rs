@@ -47,7 +47,7 @@ fn decode(run: &RunRef, attempt: Attempt, bytes: &[u8]) -> Result<SealedAttempt,
     Ok(SealedAttempt {
         run: run.clone(),
         attempt,
-        script: document.script,
+        code: document.code,
         action_set: document.action_set,
         entries: document.entries,
     })

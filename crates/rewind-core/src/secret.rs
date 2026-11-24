@@ -150,11 +150,11 @@ pub struct InvalidSecretRef(pub String);
 
 /// The secrets a run reads, one per MCP server or API whose `auth` takes a secret, by the
 /// server's or the API's name: `{ "github": "ns/github", "zendesk": "org/zendesk" }`
-/// (`archi/04-tools.md`, "Secrets"). Given in the request that gives the script, never in the
-/// script; a workflow version carries its own in its document.
+/// (`archi/04-tools.md`, "Secrets"). Given in the request that gives the code, never in the
+/// code; a workflow version carries its own in its document.
 ///
 /// The keys are not checked against an action set here: whether each names a server that takes a
-/// secret, and whether every such server the script imports has one, is checked when a run
+/// secret, and whether every such server the code imports has one, is checked when a run
 /// starts or a version is saved.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Attachments(BTreeMap<String, SecretRef>);

@@ -1,9 +1,9 @@
 {
-  "description": "A script that returns while a run it started attached is still running ends only once that run has ended, as it does with a call in flight: its end is in the journal before complete_run.",
+  "description": "A code that returns while a run it started attached is still running ends only once that run has ended, as it does with a call in flight: its end is in the journal before complete_run.",
   "live": true,
   "workflows": {
     "triage": {
-      "script": "triage.ts",
+      "code": "triage.ts",
       "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
       "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
       "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }

@@ -6,7 +6,7 @@
           "limit_exceeded",
           "non_determinism",
           "cancelled",
-          "invalid_script",
+          "invalid_code",
           "internal"
         ],
         "type": "string"
@@ -52,7 +52,7 @@
             "type": "object"
           },
           "name": {
-            "description": "As scripts call it: `github.list_issues`, `ask_user`, `http`.",
+            "description": "As workflows call it: `github.list_issues`, `ask_user`, `http`.",
             "type": "string"
           },
           "outputSchema": {
@@ -86,7 +86,7 @@
         "type": "object"
       },
       "ActionFailure": {
-        "description": "How a call failed, as the script sees it (a thrown `ActionError`).",
+        "description": "How a call failed, as the code sees it (a thrown `ActionError`).",
         "properties": {
           "data": {},
           "kind": {
@@ -310,7 +310,7 @@
         "description": "A registered action set, as pinned.",
         "properties": {
           "actions": {
-            "description": "Every action a script of this action set can call, sorted by name.",
+            "description": "Every action a code of this action set can call, sorted by name.",
             "items": {
               "$ref": "#/components/schemas/Action"
             },
@@ -344,7 +344,7 @@
             "type": "array"
           },
           "workflows": {
-            "description": "The workflows its scripts may start, sorted by name.",
+            "description": "The workflows its workflows may start, sorted by name.",
             "items": {
               "$ref": "#/components/schemas/PinnedWorkflow"
             },
@@ -1041,7 +1041,7 @@
         ]
       },
       "Callsite": {
-        "description": "A position in the script's TypeScript source (`script.ts`), 1-based.",
+        "description": "A position in the code's TypeScript source (`workflow.ts`), 1-based.",
         "properties": {
           "column": {
             "format": "int32",
@@ -1070,7 +1070,7 @@
       },
       "CancelRun": {
         "additionalProperties": false,
-        "description": "`POST /v1/runs/{id}/cancel`: every pending await of the script rejects with\n`CancelledError`; the script gets one activation to clean up.",
+        "description": "`POST /v1/runs/{id}/cancel`: every pending await of the code rejects with\n`CancelledError`; the code gets one activation to clean up.",
         "properties": {
           "reason": {
             "description": "The message of the `CancelledError`.",
@@ -1094,7 +1094,7 @@
         "type": "object"
       },
       "ChangeEvent": {
-        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
+        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `code`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/RunSummary",
@@ -1102,7 +1102,7 @@
           },
           {
             "$ref": "#/components/schemas/ScriptChanged",
-            "description": "`script`: the organization's runs ran a script for the first time, or a person gave it a\ntitle or removed it."
+            "description": "`code`: the organization's runs ran a code for the first time, or a person gave it a\ntitle or removed it."
           },
           {
             "$ref": "#/components/schemas/WorkflowChanged",
@@ -1128,27 +1128,27 @@
       },
       "CheckRequest": {
         "additionalProperties": false,
-        "description": "`POST /v1/check`: type-checks a script against the sandbox lib and an action set's\ndeclarations, in strict mode, before anything runs.",
+        "description": "`POST /v1/check`: type-checks a code against the sandbox lib and an action set's\ndeclarations, in strict mode, before anything runs.",
         "properties": {
           "actionSet": {
-            "description": "The action set whose `rewind:actions` the script imports. Without one, `rewind:actions` is\nempty.",
+            "description": "The action set whose `rewind:actions` the code imports. Without one, `rewind:actions` is\nempty.",
             "type": [
               "string",
               "null"
             ]
           },
-          "script": {
+          "code": {
             "description": "The TypeScript source: a single ES module whose default export is the entry point.",
             "type": "string"
           }
         },
         "required": [
-          "script"
+          "code"
         ],
         "type": "object"
       },
       "CheckResult": {
-        "description": "The diagnostics of a check. A script with only warnings passes.",
+        "description": "The diagnostics of a check. A code with only warnings passes.",
         "properties": {
           "diagnostics": {
             "items": {
@@ -1253,7 +1253,7 @@
       },
       "CompleteCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/calls/{token}/complete`: the action's result, delivered to the script.",
+        "description": "`POST /v1/calls/{token}/complete`: the action's result, delivered to the code.",
         "properties": {
           "result": {}
         },
@@ -1663,7 +1663,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/HttpAction",
-                "description": "Enables the built-in `http` action, and `fetch` in scripts, for these hosts only."
+                "description": "Enables the built-in `http` action, and `fetch` in workflows, for these hosts only."
               },
               {
                 "type": "null"
@@ -1682,7 +1682,7 @@
             "description": "The organization's secrets that list the actions of the MCP servers whose `auth` takes one,\nby server: `{ \"github\": \"org/github\" }`. Only `org/` secrets; no run keeps them, and they\nare not part of the action set's id. Requires `secrets:use`."
           },
           "workflows": {
-            "description": "The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest\nversion, `triage@<version>` or `triage@v12` one version. The versions are pinned: the\naction set's scripts are checked against them, and start them, for their whole life.",
+            "description": "The workflows its workflows may start, from `rewind:workflows`: `triage` pins the latest\nversion, `triage@<version>` or `triage@v12` one version. The versions are pinned: the\naction set's workflows are checked against them, and start them, for their whole life.",
             "items": {
               "type": "string"
             },
@@ -1842,9 +1842,10 @@
       },
       "CreateWorkflow": {
         "additionalProperties": false,
-        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked\nagainst its action set and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain under the same labels returns the version saved first (200): the labels of a key limited\nto labels are part of the version, so such a key saves a version of its own.",
+        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its code is checked\nagainst its action set and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain under the same labels returns the version saved first (200): the labels of a key limited\nto labels are part of the version, so such a key saves a version of its own.",
         "example": {
           "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+          "code": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
           "description": "Triage the stale issues of a repository, after approval.",
           "input": {
             "properties": {
@@ -1869,7 +1870,6 @@
             ],
             "type": "object"
           },
-          "script": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
           "signals": {
             "approval": {
               "properties": {
@@ -1889,6 +1889,10 @@
             "description": "The id of the action set its runs call, already registered.",
             "type": "string"
           },
+          "code": {
+            "description": "The TypeScript source: a single ES module whose default export is the entry point.",
+            "type": "string"
+          },
           "description": {
             "description": "Shown to the model in the declarations.",
             "type": [
@@ -1901,7 +1905,7 @@
             "type": "object"
           },
           "name": {
-            "description": "What scripts import from `rewind:workflows`: an identifier that is not a reserved word of\nJavaScript.",
+            "description": "What workflows import from `rewind:workflows`: an identifier that is not a reserved word of\nJavaScript.",
             "type": "string"
           },
           "output": {
@@ -1921,10 +1925,6 @@
               "$ref": "#/components/schemas/TestRetirement"
             },
             "type": "array"
-          },
-          "script": {
-            "description": "The TypeScript source: a single ES module whose default export is the entry point.",
-            "type": "string"
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
@@ -1952,7 +1952,7 @@
         "required": [
           "name",
           "actionSet",
-          "script",
+          "code",
           "input",
           "output"
         ],
@@ -2187,7 +2187,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Location",
-                "description": "Where in `script.ts`; absent for a diagnostic about the script as a whole."
+                "description": "Where in `workflow.ts`; absent for a diagnostic about the code as a whole."
               },
               {
                 "type": "null"
@@ -2291,7 +2291,7 @@
             "type": "integer"
           },
           "recordedAt": {
-            "description": "When the entry was committed; monotonic per run. Once a trigger is delivered, it is the\nscript's logical time.",
+            "description": "When the entry was committed; monotonic per run. Once a trigger is delivered, it is the\ncode's logical time.",
             "format": "date-time",
             "type": "string"
           }
@@ -2312,6 +2312,9 @@
               "actionSet": {
                 "type": "string"
               },
+              "code": {
+                "type": "string"
+              },
               "epoch": {
                 "format": "int32",
                 "minimum": 0,
@@ -2327,9 +2330,6 @@
               "mode": {
                 "$ref": "#/components/schemas/RunMode"
               },
-              "script": {
-                "type": "string"
-              },
               "type": {
                 "enum": [
                   "run_started"
@@ -2338,7 +2338,7 @@
               }
             },
             "required": [
-              "script",
+              "code",
               "actionSet",
               "input",
               "epoch",
@@ -2649,7 +2649,7 @@
             "type": "object"
           },
           {
-            "description": "The script started waiting for a signal whose mailbox was empty.",
+            "description": "The code started waiting for a signal whose mailbox was empty.",
             "properties": {
               "callsite": {
                 "oneOf": [
@@ -2876,7 +2876,7 @@
       },
       "FailCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the\nfailure is retryable and the action is idempotent: the call is then delivered again, with\nbackoff.",
+        "description": "`POST /v1/calls/{token}/fail`: the action failed. The code gets an `ActionError`, unless the\nfailure is retryable and the action is idempotent: the call is then delivered again, with\nbackoff.",
         "properties": {
           "data": {
             "description": "`ActionError.data`."
@@ -2961,7 +2961,7 @@
             "description": "The run that ended last."
           },
           "line": {
-            "description": "The line of `script.ts` most of its runs ended at.",
+            "description": "The line of `workflow.ts` most of its runs ended at.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -2975,7 +2975,7 @@
             "type": "integer"
           },
           "scripts": {
-            "description": "Distinct scripts.",
+            "description": "Distinct workflows.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -3107,7 +3107,7 @@
       },
       "ForkRun": {
         "additionalProperties": false,
-        "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected script. While its\ncommands match the parent's, the parent's recorded results are reused and no action is called\nagain; it continues live at the first difference, at `at`, or at the end of the parent's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
+        "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its\ncommands match the parent's, the parent's recorded results are reused and no action is called\nagain; it continues live at the first difference, at `at`, or at the end of the parent's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
         "properties": {
           "at": {
             "description": "Go live from this journal entry even if the commands still match.",
@@ -3119,11 +3119,15 @@
             ]
           },
           "check": {
-            "description": "Type-check the corrected script first. `true` by default.",
+            "description": "Type-check the corrected code first. `true` by default.",
             "type": [
               "boolean",
               "null"
             ]
+          },
+          "code": {
+            "description": "The corrected TypeScript source.",
+            "type": "string"
           },
           "input": {
             "description": "The fork's input. The parent's when absent."
@@ -3139,15 +3143,11 @@
               }
             ]
           },
-          "script": {
-            "description": "The corrected TypeScript source.",
-            "type": "string"
-          },
           "secrets": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BTreeMap",
-                "description": "The fork's attachments, as `POST /v1/runs` takes them. The parent's when absent. Either\nway they are checked against the caller: the script is new code."
+                "description": "The fork's attachments, as `POST /v1/runs` takes them. The parent's when absent. Either\nway they are checked against the caller: the code is new code."
               },
               {
                 "type": "null"
@@ -3190,7 +3190,7 @@
           }
         },
         "required": [
-          "script"
+          "code"
         ],
         "type": "object"
       },
@@ -3308,7 +3308,7 @@
       },
       "HarnessAction": {
         "additionalProperties": false,
-        "description": "A function of the harness, called by scripts and executed by the harness's SDK worker.",
+        "description": "A function of the harness, called by workflows and executed by the harness's SDK worker.",
         "properties": {
           "description": {
             "description": "Shown to the model in the declarations.",
@@ -3607,7 +3607,7 @@
         "additionalProperties": {
           "type": "string"
         },
-        "description": "Run labels: a bounded string map set when a run starts (agent, conversation, end user…).\nThey filter runs and scope API keys and webhooks. The script never sees them.",
+        "description": "Run labels: a bounded string map set when a run starts (agent, conversation, end user…).\nThey filter runs and scope API keys and webhooks. The code never sees them.",
         "propertyNames": {
           "type": "string"
         },
@@ -3683,7 +3683,7 @@
         "type": "object"
       },
       "Location": {
-        "description": "A span in `script.ts`, 1-based, the end exclusive.",
+        "description": "A span in `workflow.ts`, 1-based, the end exclusive.",
         "properties": {
           "column": {
             "format": "int32",
@@ -3728,7 +3728,7 @@
         "type": "string"
       },
       "LogLine": {
-        "description": "One line of the script's console.",
+        "description": "One line of the code's console.",
         "properties": {
           "at": {
             "format": "date-time",
@@ -4561,7 +4561,7 @@
                 "type": "string"
               },
               "diagnostics": {
-                "description": "With `invalid-script`: why the script was refused, with locations in `script.ts`.",
+                "description": "With `invalid-code`: why the code was refused, with locations in `workflow.ts`.",
                 "items": {
                   "$ref": "#/components/schemas/Diagnostic"
                 },
@@ -4873,9 +4873,9 @@
           "cpu_per_month",
           "active_runs",
           "runs_per_month",
-          "scripts",
+          "workflows",
           "max_ttl",
-          "max_script_lines"
+          "max_code_lines"
         ],
         "type": "string"
       },
@@ -4943,8 +4943,8 @@
             "minimum": 0,
             "type": "integer"
           },
-          "scripts": {
-            "description": "Distinct scripts with at least one run kept.",
+          "workflows": {
+            "description": "Distinct workflows with at least one run kept.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -4954,7 +4954,7 @@
           "cpu",
           "activeRuns",
           "runsStarted",
-          "scripts"
+          "workflows"
         ],
         "type": "object"
       },
@@ -4975,15 +4975,15 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "CPU time of the isolates running the namespace's scripts in a calendar month (UTC),\nreplays excluded. Never refused: crossing 80 % and 100 % sends `quota.alert`."
+                "description": "CPU time of the isolates running the namespace's workflows in a calendar month (UTC),\nreplays excluded. Never refused: crossing 80 % and 100 % sends `quota.alert`."
               },
               {
                 "type": "null"
               }
             ]
           },
-          "maxScriptLines": {
-            "description": "The most lines a script may have (422 `invalid-script` above it).",
+          "maxCodeLines": {
+            "description": "The most lines a code may have (422 `invalid-code` above it).",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -5011,8 +5011,8 @@
               "null"
             ]
           },
-          "scripts": {
-            "description": "Distinct scripts with at least one run kept in the namespace (429 for a new one above\nit).",
+          "workflows": {
+            "description": "Distinct workflows with at least one run kept in the namespace (429 for a new one above\nit).",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -5388,6 +5388,10 @@
             "description": "Digest of the pinned action set.",
             "type": "string"
           },
+          "codeDigest": {
+            "description": "Digest of the run's code, its TypeScript source (`GET /v1/scripts/{digest}`).",
+            "type": "string"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -5416,7 +5420,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/RunError",
-                "description": "With `failed` or `cancelled`: how the script failed."
+                "description": "With `failed` or `cancelled`: how the code failed."
               },
               {
                 "type": "null"
@@ -5458,7 +5462,7 @@
             "$ref": "#/components/schemas/Labels"
           },
           "logs": {
-            "description": "The last log lines of the script (`console.*`), oldest first, at most 20.",
+            "description": "The last log lines of the code (`console.*`), oldest first, at most 20.",
             "items": {
               "$ref": "#/components/schemas/LogLine"
             },
@@ -5504,12 +5508,8 @@
               }
             ]
           },
-          "script": {
-            "description": "Digest of the TypeScript source (`GET /v1/scripts/{digest}`).",
-            "type": "string"
-          },
           "scriptTitle": {
-            "description": "The script's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the\nfirst line of the comment at its top. Absent when it has neither.",
+            "description": "The code's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the\nfirst line of the comment at its top. Absent when it has neither.",
             "type": [
               "string",
               "null"
@@ -5523,7 +5523,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/StartedBy",
-                "description": "For a run a script started, that run and the call."
+                "description": "For a run a code started, that run and the call."
               },
               {
                 "type": "null"
@@ -5565,7 +5565,7 @@
           "handle",
           "namespace",
           "status",
-          "script",
+          "codeDigest",
           "actionSet",
           "epoch",
           "mode",
@@ -5623,13 +5623,13 @@
         "type": "object"
       },
       "RunError": {
-        "description": "How a script failed, with where, for a model to fix it.",
+        "description": "How a code failed, with where, for a model to fix it.",
         "properties": {
           "failedCall": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/FailedCall",
-                "description": "The call whose failure the script did not catch, if that is how it failed."
+                "description": "The call whose failure the code did not catch, if that is how it failed."
               },
               {
                 "type": "null"
@@ -5647,7 +5647,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Callsite",
-                "description": "The innermost frame of the stack in `script.ts`."
+                "description": "The innermost frame of the stack in `workflow.ts`."
               },
               {
                 "type": "null"
@@ -5662,7 +5662,7 @@
             "type": "string"
           },
           "stack": {
-            "description": "Source-mapped to `script.ts`, without the runtime's frames.",
+            "description": "Source-mapped to `workflow.ts`, without the runtime's frames.",
             "type": [
               "string",
               "null"
@@ -5810,6 +5810,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "codeDigest": {
+            "description": "Digest of the run's code, as `Run.codeDigest`.",
+            "type": "string"
+          },
           "endedAt": {
             "format": "date-time",
             "type": [
@@ -5825,7 +5829,7 @@
             ]
           },
           "errorLine": {
-            "description": "With `error`: the innermost line of `script.ts` in the error's stack, if any.",
+            "description": "With `error`: the innermost line of `workflow.ts` in the error's stack, if any.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -5859,7 +5863,7 @@
             "type": "string"
           },
           "headline": {
-            "description": "The first line of the script that is not blank, for display.",
+            "description": "The first line of the code that is not blank, for display.",
             "type": "string"
           },
           "historyLen": {
@@ -5889,11 +5893,8 @@
           "quarantined": {
             "type": "boolean"
           },
-          "script": {
-            "type": "string"
-          },
           "scriptTitle": {
-            "description": "The script's title, as `Run.scriptTitle`. Absent when it has none.",
+            "description": "The code's title, as `Run.scriptTitle`. Absent when it has none.",
             "type": [
               "string",
               "null"
@@ -5904,7 +5905,7 @@
             "type": "string"
           },
           "startedBy": {
-            "description": "For a run a script started, that run.",
+            "description": "For a run a code started, that run.",
             "type": [
               "string",
               "null"
@@ -5942,7 +5943,7 @@
           "namespace",
           "status",
           "quarantined",
-          "script",
+          "codeDigest",
           "headline",
           "actionSet",
           "labels",
@@ -6030,7 +6031,7 @@
         "type": "object"
       },
       "Script": {
-        "description": "`GET /v1/scripts/{digest}`: one script's source, and what its runs did.",
+        "description": "`GET /v1/scripts/{digest}`: one code's source, and what its runs did.",
         "properties": {
           "actions": {
             "description": "The actions its runs called.",
@@ -6069,14 +6070,14 @@
           },
           "runs": {
             "$ref": "#/components/schemas/RunCounts",
-            "description": "Runs of this script, by status, as the read model keeps them."
+            "description": "Runs of this code, by status, as the read model keeps them."
           },
           "source": {
             "description": "The TypeScript source, as submitted.",
             "type": "string"
           },
           "title": {
-            "description": "The script's title, as in `ScriptSummary.title`.",
+            "description": "The code's title, as in `ScriptSummary.title`.",
             "type": [
               "string",
               "null"
@@ -6104,7 +6105,7 @@
         "type": "object"
       },
       "ScriptChanged": {
-        "description": "The data of a `script` event: a script the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists, or whose title a person gave or removed.",
+        "description": "The data of a `code` event: a code the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists, or whose title a person gave or removed.",
         "properties": {
           "digest": {
             "description": "SHA-256 of the TypeScript source, lowercase hex.",
@@ -6117,7 +6118,7 @@
         "type": "object"
       },
       "ScriptError": {
-        "description": "How a script failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,\nor `CancelledError`.",
+        "description": "How a code failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,\nor `CancelledError`.",
         "properties": {
           "message": {
             "type": "string"
@@ -6126,7 +6127,7 @@
             "type": "string"
           },
           "stack": {
-            "description": "The stack, source-mapped to `script.ts`, without the runtime's own frames.",
+            "description": "The stack, source-mapped to `workflow.ts`, without the runtime's own frames.",
             "type": [
               "string",
               "null"
@@ -6161,7 +6162,7 @@
         "type": "object"
       },
       "ScriptSummary": {
-        "description": "A distinct script: content-addressed, so every run of the same source counts here.",
+        "description": "A distinct code: content-addressed, so every run of the same source counts here.",
         "properties": {
           "actions": {
             "description": "The actions its runs called.",
@@ -6195,10 +6196,10 @@
           },
           "runs": {
             "$ref": "#/components/schemas/RunCounts",
-            "description": "Runs of this script, by status."
+            "description": "Runs of this code, by status."
           },
           "title": {
-            "description": "The script's title: the one a person gave it, else the first line of the comment at its\ntop. Absent when it has neither.",
+            "description": "The code's title: the one a person gave it, else the first line of the comment at its\ntop. Absent when it has neither.",
             "type": [
               "string",
               "null"
@@ -6550,7 +6551,7 @@
       },
       "SetScriptTitle": {
         "additionalProperties": false,
-        "description": "`PATCH /v1/scripts/{digest}`: the title and description of a script, for the whole\norganization, over those of the comment at its top. The source does not change: a script is\nits digest.",
+        "description": "`PATCH /v1/scripts/{digest}`: the title and description of a code, for the whole\norganization, over those of the comment at its top. The source does not change: a code is\nits digest.",
         "example": {
           "description": "Labels each new issue, and asks for an approval before closing duplicates.",
           "title": "Triage new GitHub issues"
@@ -6761,9 +6762,10 @@
       },
       "StartRun": {
         "additionalProperties": false,
-        "description": "`POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a\nscript that cannot run is refused (`invalid-script`) before any run exists.\n\nWith the `Idempotency-Key` header, a request repeated with the same key returns the run the\nfirst one started, instead of starting a second one.",
+        "description": "`POST /v1/runs`: starts a run. The code is compiled, checked and type-checked first; a\ncode that cannot run is refused (`invalid-code`) before any run exists.\n\nWith the `Idempotency-Key` header, a request repeated with the same key returns the run the\nfirst one started, instead of starting a second one.",
         "example": {
           "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+          "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
           "input": {
             "repo": "acme/api"
           },
@@ -6771,7 +6773,6 @@
             "agent": "triage",
             "conversation": "c-42"
           },
-          "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
           "secrets": {
             "github": "ns/github"
           },
@@ -6779,36 +6780,36 @@
         },
         "properties": {
           "actionSet": {
-            "description": "The action set the script imports from `rewind:actions`. Without one, `rewind:actions` is\nempty.",
+            "description": "The action set the code imports from `rewind:actions`. Without one, `rewind:actions` is\nempty.",
             "type": [
               "string",
               "null"
             ]
           },
           "check": {
-            "description": "Type-check the script before starting it. `true` by default.",
+            "description": "Type-check the code before starting it. `true` by default.",
             "type": [
               "boolean",
               "null"
             ]
+          },
+          "code": {
+            "description": "The TypeScript source: a single ES module whose default export is the entry point.\nWithout it, `workflow` names what the run executes.",
+            "type": "string"
           },
           "input": {
             "description": "The input of `main`. `{}` when absent."
           },
           "labels": {
             "$ref": "#/components/schemas/Labels",
-            "description": "Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The script never\nsees them."
-          },
-          "script": {
-            "description": "The TypeScript source: a single ES module whose default export is the entry point.\nWithout it, `workflow` names what the run executes.",
-            "type": "string"
+            "description": "Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The code never\nsees them."
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
-            "description": "The secrets the run reads, by MCP server or API: `{ \"github\": \"ns/github\", \"zendesk\":\n\"org/zendesk\" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).\nRequired for each server the script imports whose `auth` takes a secret; checked against\nthe caller's rights (`secret-required`). A run of a `workflow` gives none: its version's\nare read."
+            "description": "The secrets the run reads, by MCP server or API: `{ \"github\": \"ns/github\", \"zendesk\":\n\"org/zendesk\" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).\nRequired for each server the code imports whose `auth` takes a secret; checked against\nthe caller's rights (`secret-required`). A run of a `workflow` gives none: its version's\nare read."
           },
           "traceparent": {
-            "description": "W3C trace context of the caller (typically the LLM call that wrote the script): the run\nappears under it in the caller's trace.",
+            "description": "W3C trace context of the caller (typically the LLM call that wrote the code): the run\nappears under it in the caller's trace.",
             "type": [
               "string",
               "null"
@@ -6843,7 +6844,7 @@
             ]
           },
           "workflow": {
-            "description": "Instead of `script` and `actionSet`: a run of this workflow, `triage` for its latest version\nor `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one\nversion. Its input is checked against the workflow's input schema (`invalid-input`); the\nscript is not checked again.",
+            "description": "Instead of `code` and `actionSet`: a run of this workflow, `triage` for its latest version\nor `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one\nversion. Its input is checked against the workflow's input schema (`invalid-input`); the\ncode is not checked again.",
             "type": [
               "string",
               "null"
@@ -7044,7 +7045,7 @@
       },
       "Test": {
         "additionalProperties": false,
-        "description": "A test: what the run is given (its input, the actions' answers, signals), and what must hold\nat the end. It never names its script.",
+        "description": "A test: what the run is given (its input, the actions' answers, signals), and what must hold\nat the end. It never names its code.",
         "example": {
           "expect": {
             "calls": [
@@ -7210,9 +7211,9 @@
       },
       "TestRequest": {
         "additionalProperties": false,
-        "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the script; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected script, or the version on a new action set.",
+        "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the code; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected code, or the version on a new action set.",
         "example": {
-          "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+          "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
           "tests": [
             {
               "expect": {
@@ -7241,13 +7242,13 @@
         },
         "properties": {
           "actionSet": {
-            "description": "The action set the script imports from `rewind:actions`. With `workflow`, the version's own\nwhen absent.",
+            "description": "The action set the code imports from `rewind:actions`. With `workflow`, the version's own\nwhen absent.",
             "type": [
               "string",
               "null"
             ]
           },
-          "script": {
+          "code": {
             "description": "The TypeScript source. With `workflow`, the version's own when absent.",
             "type": [
               "string",
@@ -7454,7 +7455,7 @@
         "type": "object"
       },
       "TitleSource": {
-        "description": "Where a script's title comes from.",
+        "description": "Where a code's title comes from.",
         "enum": [
           "person",
           "comment"
@@ -8044,7 +8045,7 @@
             "type": "object"
           },
           {
-            "description": "The script failed: `data.run.error` says how.",
+            "description": "The code failed: `data.run.error` says how.",
             "properties": {
               "data": {
                 "$ref": "#/components/schemas/RunEvent"
@@ -8259,13 +8260,17 @@
             "description": "The id of the action set its runs call.",
             "type": "string"
           },
+          "codeDigest": {
+            "description": "Digest of its code (`GET /v1/scripts/{digest}`).",
+            "type": "string"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
           },
           "declarations": {
             "$ref": "#/components/schemas/Declarations",
-            "description": "How a script that starts it sees it: its declaration in `rewind:workflows`, and its line\nof the prompt rendering."
+            "description": "How a code that starts it sees it: its declaration in `rewind:workflows`, and its line\nof the prompt rendering."
           },
           "description": {
             "type": [
@@ -8306,10 +8311,6 @@
             },
             "type": "array"
           },
-          "script": {
-            "description": "Digest of its script (`GET /v1/scripts/{digest}`).",
-            "type": "string"
-          },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
             "description": "The secrets its runs attach, part of the version."
@@ -8340,7 +8341,7 @@
           "version",
           "number",
           "actionSet",
-          "script",
+          "codeDigest",
           "input",
           "output",
           "signals",
@@ -8393,7 +8394,7 @@
         "type": "object"
       },
       "WorkflowPage": {
-        "description": "`GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every\nversion whose script it is, newest first, on one page.",
+        "description": "`GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every\nversion whose code it is, newest first, on one page.",
         "properties": {
           "next": {
             "description": "Pass it as `after` to read the next page; absent on the last page.",
@@ -8485,7 +8486,7 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness calls, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
+    "description": "The HTTP API /v1 of Rewind: action sets, workflows, runs, harness calls, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a code, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
@@ -9429,7 +9430,7 @@
     },
     "/hooks/{token}": {
       "post": {
-        "description": "At the URL a script got from `webhook(name)`. A JSON body is the signal's payload; any\nother body becomes the payload as a string; an empty body is `null`. The first of\n`Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's\nidempotency key.",
+        "description": "At the URL a code got from `webhook(name)`. A JSON body is the signal's payload; any\nother body becomes the payload as a string; an empty body is `null`. The first of\n`Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's\nidempotency key.",
         "operationId": "postHook",
         "parameters": [
           {
@@ -11536,7 +11537,7 @@
     },
     "/v1/changes": {
       "get": {
-        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `script`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
+        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `code`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
         "operationId": "streamChanges",
         "parameters": [
           {
@@ -11567,7 +11568,7 @@
                 }
               }
             },
-            "description": "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`."
+            "description": "A stream of server-sent events `run`, `code`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`."
           },
           "400": {
             "content": {
@@ -11629,7 +11630,7 @@
     "/v1/check": {
       "post": {
         "description": "Against the sandbox lib and the action set's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs.",
-        "operationId": "checkScript",
+        "operationId": "checkWorkflow",
         "parameters": [
           {
             "description": "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.",
@@ -11735,9 +11736,9 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Type-check a script (`check_script`)",
+        "summary": "Type-check code (`check_workflow`)",
         "tags": [
-          "scripts"
+          "checks"
         ]
       }
     },
@@ -12217,7 +12218,7 @@
     },
     "/v1/namespaces": {
       "get": {
-        "description": "The end users of the organization, each with the limits that apply, its exceptions and\nits use of a month, by CPU, runs, scripts or name. Requires `namespaces:read`.",
+        "description": "The end users of the organization, each with the limits that apply, its exceptions and\nits use of a month, by CPU, runs, workflows or name. Requires `namespaces:read`.",
         "operationId": "listNamespaces",
         "parameters": [
           {
@@ -12248,7 +12249,7 @@
               "enum": [
                 "cpu",
                 "runs",
-                "scripts",
+                "workflows",
                 "name"
               ],
               "type": "string"
@@ -16235,7 +16236,7 @@
             }
           },
           {
-            "description": "Only runs of this script (digest).",
+            "description": "Only runs of this code (its digest).",
             "in": "query",
             "name": "script",
             "required": false,
@@ -16415,7 +16416,7 @@
         ]
       },
       "post": {
-        "description": "Compiles, checks and type-checks the script, then starts the run. With `wait`, the one\nrequest is answered when the run ends or is quarantined, or when `wait` passes, whichever\ncomes first, however long `wait` is.",
+        "description": "Compiles, checks and type-checks the code, then starts the run. With `wait`, the one\nrequest is answered when the run ends or is quarantined, or when `wait` passes, whichever\ncomes first, however long `wait` is.",
         "operationId": "startRun",
         "parameters": [
           {
@@ -16551,7 +16552,7 @@
                 }
               }
             },
-            "description": "The script was refused before any run exists (`invalid-script`), with `diagnostics`; or the input does not match the workflow (`invalid-input`)."
+            "description": "The code was refused before any run exists (`invalid-code`), with `diagnostics`; or the input does not match the workflow (`invalid-input`)."
           },
           "429": {
             "content": {
@@ -16584,7 +16585,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Start a run (`run_script`)",
+        "summary": "Start a run (`run_workflow`)",
         "tags": [
           "runs"
         ]
@@ -16592,7 +16593,7 @@
     },
     "/v1/runs/failures": {
       "get": {
-        "description": "From the hourly counters, over a window of whole hours: the failed, cancelled and aborted\nruns of a namespace or the tenant, ended in the window, grouped by fingerprint: across\nscripts, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes\nit.",
+        "description": "From the hourly counters, over a window of whole hours: the failed, cancelled and aborted\nruns of a namespace or the tenant, ended in the window, grouped by fingerprint: across\nworkflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes\nit.",
         "operationId": "listRunFailures",
         "parameters": [
           {
@@ -17619,7 +17620,7 @@
                 }
               }
             },
-            "description": "The corrected script was refused (`invalid-script`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`)."
+            "description": "The corrected code was refused (`invalid-code`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`)."
           },
           "429": {
             "content": {
@@ -17652,7 +17653,7 @@
             "description": "A run of a workflow forked on a server without the worker role (`unavailable`)."
           }
         },
-        "summary": "Fork a run with a corrected script (`retry_run`)",
+        "summary": "Fork a run with a corrected code (`retry_run`)",
         "tags": [
           "runs"
         ]
@@ -18027,7 +18028,7 @@
     },
     "/v1/runs/{id}/signals/{name}": {
       "post": {
-        "description": "The body, any JSON value, is the signal's payload (`null` when empty). It resolves the\nscript's `signal(name)`, now or the next time the script waits for that name.",
+        "description": "The body, any JSON value, is the signal's payload (`null` when empty). It resolves the\ncode's `signal(name)`, now or the next time the code waits for that name.",
         "operationId": "signalRun",
         "parameters": [
           {
@@ -18319,7 +18320,7 @@
     },
     "/v1/scripts": {
       "get": {
-        "description": "From the hourly counters, over a window of whole hours: each script the runs of a\nnamespace or the tenant ran, with its runs by status and the actions it called. The scope as\n`GET /v1/runs/stats` takes it.",
+        "description": "From the hourly counters, over a window of whole hours: each code the runs of a\nnamespace or the tenant ran, with its runs by status and the actions it called. The scope as\n`GET /v1/runs/stats` takes it.",
         "operationId": "listScripts",
         "parameters": [
           {
@@ -18352,7 +18353,7 @@
             }
           },
           {
-            "description": "Only this script: its digest.",
+            "description": "Only this code: its digest.",
             "in": "query",
             "name": "digest",
             "required": false,
@@ -18361,7 +18362,7 @@
             }
           },
           {
-            "description": "Only scripts that called this action.",
+            "description": "Only workflows that called this action.",
             "in": "query",
             "name": "action",
             "required": false,
@@ -18370,7 +18371,7 @@
             }
           },
           {
-            "description": "At most this many scripts (50 by default, 500 at most).",
+            "description": "At most this many workflows (50 by default, 500 at most).",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -18417,7 +18418,7 @@
                 }
               }
             },
-            "description": "A page of scripts, most recently run first."
+            "description": "A page of workflows, most recently run first."
           },
           "400": {
             "content": {
@@ -18470,7 +18471,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "List the distinct scripts executed",
+        "summary": "List the distinct workflows executed",
         "tags": [
           "reading"
         ]
@@ -18517,7 +18518,7 @@
                 }
               }
             },
-            "description": "The script."
+            "description": "The code."
           },
           "400": {
             "content": {
@@ -18557,7 +18558,7 @@
                 }
               }
             },
-            "description": "No such script."
+            "description": "No such code."
           },
           "500": {
             "content": {
@@ -18580,13 +18581,13 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "One script's source",
+        "summary": "One code's source",
         "tags": [
           "reading"
         ]
       },
       "patch": {
-        "description": "The title and description people see for the script, for the whole organization, over\nthose of the comment at its top: the source does not change. `title: null` removes them,\nand the comment's show again. A new run of the script takes its origin from the title.\nRequires `scripts:write`.",
+        "description": "The title and description people see for the code, for the whole organization, over\nthose of the comment at its top: the source does not change. `title: null` removes them,\nand the comment's show again. A new run of the code takes its origin from the title.\nRequires `scripts:write`.",
         "operationId": "setScriptTitle",
         "parameters": [
           {
@@ -18636,7 +18637,7 @@
                 }
               }
             },
-            "description": "The script, with its title as it now is."
+            "description": "The code, with its title as it now is."
           },
           "400": {
             "content": {
@@ -18676,7 +18677,7 @@
                 }
               }
             },
-            "description": "No such script, or not one the caller sees."
+            "description": "No such code, or not one the caller sees."
           },
           "422": {
             "content": {
@@ -18709,7 +18710,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Give a script a title",
+        "summary": "Give a code a title",
         "tags": [
           "reading"
         ]
@@ -19533,8 +19534,8 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or action set. Served by a server with the worker role.",
-        "operationId": "testScript",
+        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven code or action set. Served by a server with the worker role.",
+        "operationId": "testWorkflow",
         "parameters": [
           {
             "description": "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.",
@@ -19627,7 +19628,7 @@
                 }
               }
             },
-            "description": "The script was refused at start (`invalid-script`), or a test (`invalid-test`)."
+            "description": "The code was refused at start (`invalid-code`), or a test (`invalid-test`)."
           },
           "500": {
             "content": {
@@ -19650,9 +19651,9 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Run tests in mock mode (`test_script`)",
+        "summary": "Run tests in mock mode (`test_workflow`)",
         "tags": [
-          "scripts"
+          "checks"
         ]
       }
     },
@@ -19957,7 +19958,7 @@
     },
     "/v1/workflows": {
       "get": {
-        "description": "The latest version of each workflow the caller sees, by name; with `script`, every version\nwhose script it is, newest first.",
+        "description": "The latest version of each workflow the caller sees, by name; with `code`, every version\nwhose code it is, newest first.",
         "operationId": "listWorkflows",
         "parameters": [
           {
@@ -19981,7 +19982,7 @@
             }
           },
           {
-            "description": "The digest of a script: every version of any workflow whose script it is, newest first,\nrather than the latest version of each workflow. `after` and `limit` do not apply.",
+            "description": "The digest of a code: every version of any workflow whose code it is, newest first,\nrather than the latest version of each workflow. `after` and `limit` do not apply.",
             "in": "query",
             "name": "script",
             "required": false,
@@ -20067,7 +20068,7 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's script against its action set and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the script's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
+        "description": "Checks the workflow's code against its action set and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the code's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
         "operationId": "createWorkflow",
         "parameters": [
           {
@@ -20159,7 +20160,7 @@
                 }
               }
             },
-            "description": "The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`)."
+            "description": "The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`)."
           },
           "500": {
             "content": {
@@ -20419,12 +20420,12 @@
       "name": "action-sets"
     },
     {
-      "description": "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal.",
+      "description": "Workflows: named code with typed inputs, outputs and signals, which other workflows start and signal.",
       "name": "workflows"
     },
     {
-      "description": "Type-check scripts, and run them as scenarios in mock mode.",
-      "name": "scripts"
+      "description": "Type-check code, and run tests as test runs, in virtual time.",
+      "name": "checks"
     },
     {
       "description": "Start, follow, steer, fork and erase runs.",
@@ -20439,7 +20440,7 @@
       "name": "webhooks"
     },
     {
-      "description": "The scripts executed on the platform, action statistics and payloads, for the dashboard.",
+      "description": "The workflows executed on the platform, action statistics and payloads, for the dashboard.",
       "name": "reading"
     },
     {

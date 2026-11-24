@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use rewind_core::{Command, Event, Payload, Script};
+use rewind_core::{Code, Command, Event, Payload};
 use rewind_e2e::{Case, Color, Mode, Replayed};
 use serde_json::json;
 
@@ -28,7 +28,7 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
     };
     *args = Payload::Value(json!({ "number": 20, "repo": "acme/api" }));
 
-    let replayed = rewind_e2e::replay_journal(&case, &document, &case.script).await;
+    let replayed = rewind_e2e::replay_journal(&case, &document, &case.code).await;
     let Replayed::Fails(message) = replayed else {
         panic!("{replayed:?}")
     };
@@ -39,9 +39,9 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
 
     // The same journal, untouched, replays.
     let document = rewind_format::decode_journal(&journal).unwrap();
-    assert_eq!(document.script, case.script);
+    assert_eq!(document.code, case.code);
     assert!(matches!(
-        rewind_e2e::replay_journal(&case, &document, &case.script).await,
+        rewind_e2e::replay_journal(&case, &document, &case.code).await,
         Replayed::Matches(_)
     ));
 }
@@ -49,7 +49,7 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
 #[tokio::test]
 async fn a_script_that_changed_is_reported_by_the_recording() {
     let mut case = Case::load("epoch-1/blue/forgotten_await").unwrap();
-    case.script = Script::new(case.script.source().replace("triaged", "closed"));
+    case.code = Code::new(case.code.source().replace("triaged", "closed"));
     let failures = rewind_e2e::check(&case, Mode::Verify).await;
     assert!(
         failures

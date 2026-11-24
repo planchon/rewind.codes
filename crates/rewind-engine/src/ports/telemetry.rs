@@ -77,7 +77,7 @@ pub struct Span {
     pub attributes: BTreeMap<String, AttributeValue>,
 }
 
-/// A `console.*` log of a script, as an OpenTelemetry log record correlated with the trace.
+/// A `console.*` log of a code, as an OpenTelemetry log record correlated with the trace.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogRecord {
     pub trace_id: TraceId,
@@ -96,7 +96,7 @@ pub enum ExportError {
 }
 
 /// Exports run telemetry, projected from committed entries (`archi/07-code-architecture.md`,
-/// "The other ports"). Nothing about a script is exported from the isolate, the runtime or a
+/// "The other ports"). Nothing about a code is exported from the isolate, the runtime or a
 /// replay.
 ///
 /// Spans have deterministic ids: exporting one twice gives the same span. A partition's

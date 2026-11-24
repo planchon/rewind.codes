@@ -1,16 +1,16 @@
 //! The limits of `archi/03-execution.md` ("Resource limits", "Run TTL") through the HTTP API,
-//! with the server's defaults: 5 s of CPU time per call into the script, 128 MiB of heap,
+//! with the server's defaults: 5 s of CPU time per call into the code, 128 MiB of heap,
 //! 10,000 commands per activation, 50,000 history entries, 8 MiB per payload, and the TTL
 //! bounded by the deployment's maximum.
 //!
-//! A limit exceeded by the script ends the run with `run_aborted { limit_exceeded }`: the trigger
-//! is committed with it, and what the script emitted in response is dropped. A payload the API
+//! A limit exceeded by the code ends the run with `run_aborted { limit_exceeded }`: the trigger
+//! is committed with it, and what the code emitted in response is dropped. A payload the API
 //! receives above the limit is refused with 413 before anything is stored.
 //!
 //! Proved elsewhere: the quota of active runs (429) in `api.rs`
 //! (`a_tenant_above_its_quota_is_refused_with_429`), and the same limits, lowered, at the
 //! engine's level in the e2e corpus (`red/cpu_limit`, `red/heap_limit`, `red/too_many_commands`
-//! …). The 256 KiB bound of `run_script` is the SDK's (`sdk/typescript/test/live.test.ts`).
+//! …). The 256 KiB bound of `run_workflow` is the SDK's (`sdk/typescript/test/live.test.ts`).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -31,8 +31,8 @@ use support::{TestServer, wait};
 /// The payload limit of the engine's defaults, in bytes of canonical JSON.
 const MAX_PAYLOAD: usize = 8 * 1024 * 1024;
 
-fn start(script: &str) -> StartRun {
-    let mut start = StartRun::new(script);
+fn start(code: &str) -> StartRun {
+    let mut start = StartRun::new(code);
     start.check = Some(false);
     start
 }
@@ -169,7 +169,7 @@ export default async function main() {
         .unwrap();
     let run = ended(&harness, &run.id, Duration::from_secs(120)).await;
     assert_limit(&run, "more than 10000 commands in one activation");
-    // Nothing the script emitted in response is kept, and no timer was started.
+    // Nothing the code emitted in response is kept, and no timer was started.
     assert_eq!(
         events(&harness, &run.id).await,
         ["run_started", "run_aborted"]
@@ -298,7 +298,7 @@ export default async function main() {
         Some(json!({ "got": 1, "signalled": "small" }))
     );
 
-    // What the script emits above the limit ends the run: a call's arguments, its output.
+    // What the code emits above the limit ends the run: a call's arguments, its output.
     let mut args = start(
         r#"import { store } from "rewind:actions";
 export default async function main() {
@@ -332,10 +332,10 @@ export default async function main() {
 async fn ttls_are_bounded_by_the_deployment() {
     let server = TestServer::start(&["--default-ttl", "1h", "--max-ttl", "1d"]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let script = r#"import { signal } from "rewind";
+    let code = r#"import { signal } from "rewind";
 export default async function main() { await signal("never"); }"#;
 
-    let run = harness.start_run(&start(script), None).await.unwrap();
+    let run = harness.start_run(&start(code), None).await.unwrap();
     let ttl = run.expires_at.duration_since(run.created_at).unsigned_abs();
     assert_eq!(
         ttl,
@@ -343,7 +343,7 @@ export default async function main() { await signal("never"); }"#;
         "the deployment's default TTL"
     );
 
-    let mut longer = start(script);
+    let mut longer = start(code);
     longer.ttl = Some("2d".parse().unwrap());
     let refused = problem(harness.start_run(&longer, None).await.unwrap_err());
     assert_eq!(
@@ -353,7 +353,7 @@ export default async function main() { await signal("never"); }"#;
     );
     assert!(refused.detail.contains("TTL"), "{}", refused.detail);
 
-    let mut shorter = start(script);
+    let mut shorter = start(code);
     shorter.ttl = Some("12h".parse().unwrap());
     let run = harness.start_run(&shorter, None).await.unwrap();
     assert_eq!(

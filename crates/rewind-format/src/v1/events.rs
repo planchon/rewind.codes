@@ -27,7 +27,7 @@ pub(crate) struct EntryV1 {
 pub(crate) enum EventV1 {
     // Lifecycle
     RunStarted {
-        script: String,
+        code: String,
         action_set: String,
         input: PayloadV1,
         seed: String,
@@ -144,7 +144,7 @@ pub(crate) enum AbortKindV1 {
     LimitExceeded,
     NonDeterminism,
     Cancelled,
-    InvalidScript,
+    InvalidCode,
     Internal,
 }
 
@@ -238,7 +238,7 @@ impl From<&Event> for EventV1 {
     fn from(event: &Event) -> Self {
         match event {
             Event::Lifecycle(Lifecycle::RunStarted(started)) => EventV1::RunStarted {
-                script: started.script.to_hex(),
+                code: started.code.to_hex(),
                 action_set: started.action_set.to_hex(),
                 input: (&started.input).into(),
                 seed: hex(started.seed.as_bytes()),
@@ -386,7 +386,7 @@ impl From<AbortKind> for AbortKindV1 {
             AbortKind::LimitExceeded => AbortKindV1::LimitExceeded,
             AbortKind::NonDeterminism => AbortKindV1::NonDeterminism,
             AbortKind::Cancelled => AbortKindV1::Cancelled,
-            AbortKind::InvalidScript => AbortKindV1::InvalidScript,
+            AbortKind::InvalidCode => AbortKindV1::InvalidCode,
             AbortKind::Internal => AbortKindV1::Internal,
         }
     }
@@ -432,7 +432,7 @@ impl TryFrom<EventV1> for Event {
     fn try_from(dto: EventV1) -> Result<Self, String> {
         Ok(match dto {
             EventV1::RunStarted {
-                script,
+                code,
                 action_set,
                 input,
                 seed,
@@ -440,7 +440,7 @@ impl TryFrom<EventV1> for Event {
                 expires_at,
                 mode,
             } => Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-                script: digest(&script)?,
+                code: digest(&code)?,
                 action_set: digest(&action_set)?,
                 input: input.try_into()?,
                 seed: Seed::from_bytes(unhex(&seed).ok_or_else(|| {
@@ -572,7 +572,7 @@ impl From<AbortKindV1> for AbortKind {
             AbortKindV1::LimitExceeded => AbortKind::LimitExceeded,
             AbortKindV1::NonDeterminism => AbortKind::NonDeterminism,
             AbortKindV1::Cancelled => AbortKind::Cancelled,
-            AbortKindV1::InvalidScript => AbortKind::InvalidScript,
+            AbortKindV1::InvalidCode => AbortKind::InvalidCode,
             AbortKindV1::Internal => AbortKind::Internal,
         }
     }

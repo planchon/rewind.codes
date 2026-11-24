@@ -4,7 +4,7 @@
 //! does not pay for the bootstrap again.
 //!
 //! A snapshot is built once per process, the first time an instance of its epoch starts, on a
-//! thread of its own: it holds the ops of this crate, so it cannot be built by a build script
+//! thread of its own: it holds the ops of this crate, so it cannot be built by a build code
 //! without compiling them, and V8, a second time. What belongs to one run (its id, its seed, its
 //! start, whether `fetch` exists) is not in the snapshot: the glue's `init` hook sets it.
 

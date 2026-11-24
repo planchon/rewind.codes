@@ -19,7 +19,7 @@ use utoipa::ToSchema;
 use crate::common::{AbortReason, ActionFailureKind, RunStatus, ScriptError, Timestamp, timestamp};
 
 /// A test: what the run is given (its input, the actions' answers, signals), and what must hold
-/// at the end. It never names its script.
+/// at the end. It never names its code.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({

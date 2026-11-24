@@ -1,8 +1,8 @@
-//! Checking a script and compiling it: TypeScript → JavaScript with a source map (deno_ast,
+//! Checking a code and compiling it: TypeScript → JavaScript with a source map (deno_ast,
 //! that is swc).
 //!
-//! Everything that can be refused without running the script is refused here, so that a run
-//! is never created for a script that cannot load (`archi/03-execution.md`, "Starting a
+//! Everything that can be refused without running the code is refused here, so that a run
+//! is never created for a code that cannot load (`archi/03-execution.md`, "Starting a
 //! run"): syntax errors, dynamic `import()`, imports of modules other than `rewind`,
 //! `rewind:actions` and `rewind:workflows`, imports of names those modules do not export, a
 //! missing default export. The old names code already written uses are accepted without being
@@ -20,22 +20,22 @@ use deno_ast::{
     EmitOptions, MediaType, ModuleSpecifier, ParseParams, ParsedSource, ProgramRef,
     SourceMapOption, SourcePos, TranspileModuleOptions, TranspileOptions,
 };
-use rewind_core::{ActionSet, Script};
-use rewind_engine::ports::{CompiledScript, InvalidScript};
+use rewind_core::{ActionSet, Code};
+use rewind_engine::ports::{CompiledCode, InvalidCode};
 
 use crate::epochs::Glue;
 use crate::loader::OLD_ACTIONS_SPECIFIER;
 
-/// Specifier of the model's script inside the isolate. Stack traces and callsites refer to it.
-pub(crate) const SCRIPT_SPECIFIER: &str = "file:///script.ts";
+/// Specifier of the model's code inside the isolate. Stack traces and callsites refer to it.
+pub(crate) const CODE_SPECIFIER: &str = "file:///workflow.ts";
 
-/// Checks a script against the modules it may import under `glue`, and compiles it.
+/// Checks a code against the modules it may import under `glue`, and compiles it.
 pub(crate) fn compile(
-    script: &Script,
+    code: &Code,
     action_set: &ActionSet,
     glue: &Glue,
-) -> Result<CompiledScript, InvalidScript> {
-    let parsed = parse(script, SCRIPT_SPECIFIER)?;
+) -> Result<CompiledCode, InvalidCode> {
+    let parsed = parse(code, CODE_SPECIFIER)?;
     Checker {
         parsed: &parsed,
         std: glue
@@ -52,17 +52,17 @@ pub(crate) fn compile(
         javascript,
         source_map,
     } = emit(parsed)?;
-    Ok(CompiledScript {
+    Ok(CompiledCode {
         javascript,
         source_map,
     })
 }
 
-/// The names a script imports from `rewind:actions`, from its syntax tree; `None` when it may
+/// The names a code imports from `rewind:actions`, from its syntax tree; `None` when it may
 /// reach every one: it imports or re-exports the whole module, or it does not parse. Type-only
-/// imports are left out: they are erased before the script loads.
-pub(crate) fn action_imports(script: &Script) -> Option<BTreeSet<String>> {
-    let parsed = parse(script, SCRIPT_SPECIFIER).ok()?;
+/// imports are left out: they are erased before the code loads.
+pub(crate) fn action_imports(code: &Code) -> Option<BTreeSet<String>> {
+    let parsed = parse(code, CODE_SPECIFIER).ok()?;
     let ProgramRef::Module(module) = parsed.program_ref() else {
         return Some(BTreeSet::new());
     };
@@ -124,12 +124,12 @@ pub(crate) struct Transpiled {
     pub(crate) source_map: String,
 }
 
-/// Compiles a module without the checks of a script: a module of mock handlers.
-pub(crate) fn transpile(source: &Script, specifier: &str) -> Result<Transpiled, InvalidScript> {
+/// Compiles a module without the checks of a code: a module of mock handlers.
+pub(crate) fn transpile(source: &Code, specifier: &str) -> Result<Transpiled, InvalidCode> {
     emit(parse(source, specifier)?)
 }
 
-fn parse(source: &Script, specifier: &str) -> Result<ParsedSource, InvalidScript> {
+fn parse(source: &Code, specifier: &str) -> Result<ParsedSource, InvalidCode> {
     let file = specifier.trim_start_matches("file:///");
     deno_ast::parse_module(ParseParams {
         specifier: ModuleSpecifier::parse(specifier)
@@ -144,7 +144,7 @@ fn parse(source: &Script, specifier: &str) -> Result<ParsedSource, InvalidScript
     .map_err(|err| invalid(err.to_string().replace(specifier, file)))
 }
 
-fn emit(parsed: ParsedSource) -> Result<Transpiled, InvalidScript> {
+fn emit(parsed: ParsedSource) -> Result<Transpiled, InvalidCode> {
     let emitted = parsed
         .transpile(
             &TranspileOptions::default(),
@@ -163,12 +163,12 @@ fn emit(parsed: ParsedSource) -> Result<Transpiled, InvalidScript> {
     })
 }
 
-fn invalid(message: String) -> InvalidScript {
-    InvalidScript { message }
+fn invalid(message: String) -> InvalidCode {
+    InvalidCode { message }
 }
 
 /// The module rules, checked on the syntax tree. Type-only imports and exports are skipped:
-/// they are erased before the script loads.
+/// they are erased before the code loads.
 struct Checker<'a> {
     parsed: &'a ParsedSource,
     /// What `rewind` exports.
@@ -182,13 +182,13 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
-    fn check(&self) -> Result<(), InvalidScript> {
+    fn check(&self) -> Result<(), InvalidCode> {
         let mut dynamic = DynamicImports::default();
         self.parsed.program().visit_with(&mut dynamic);
         if let Some(position) = dynamic.first {
             return Err(invalid(format!(
-                "dynamic import() is not available in Rewind scripts ({}): import from \"rewind\", \
-                 \"rewind:actions\" and \"rewind:workflows\" at the top of the script",
+                "dynamic import() is not available in Rewind workflows ({}): import from \"rewind\", \
+                 \"rewind:actions\" and \"rewind:workflows\" at the top of the code",
                 self.at(position)
             )));
         }
@@ -197,7 +197,7 @@ impl Checker<'_> {
         self.parsed.program().visit_with(&mut requires);
         if let Some(position) = requires.first.filter(|_| !requires.bound) {
             return Err(invalid(format!(
-                "require() is not available in Rewind scripts ({}): use `import` from \"rewind\", \
+                "require() is not available in Rewind workflows ({}): use `import` from \"rewind\", \
                  \"rewind:actions\" and \"rewind:workflows\"",
                 self.at(position)
             )));
@@ -274,7 +274,7 @@ impl Checker<'_> {
                 ModuleDecl::TsImportEquals(import) => {
                     if let TsModuleRef::TsExternalModuleRef(require) = &import.module_ref {
                         return Err(invalid(format!(
-                            "require() is not available in Rewind scripts ({}): use `import` \
+                            "require() is not available in Rewind workflows ({}): use `import` \
                              from \"rewind\", \"rewind:actions\" and \"rewind:workflows\"",
                             self.at(SourcePos::unsafely_from_byte_pos(require.span.lo))
                         )));
@@ -294,21 +294,21 @@ impl Checker<'_> {
             Ok(())
         } else {
             Err(invalid(
-                "the script has no default export: it must `export default` its main function, \
+                "the code has no default export: it must `export default` its main function, \
                  as in `export default async function main(input) { … }`"
                     .into(),
             ))
         }
     }
 
-    /// The names a module the script imports exports, or why it cannot be imported.
-    fn module(&self, src: &Str) -> Result<&BTreeSet<String>, InvalidScript> {
+    /// The names a module the code imports exports, or why it cannot be imported.
+    fn module(&self, src: &Str) -> Result<&BTreeSet<String>, InvalidCode> {
         match src.value.to_atom_lossy().as_str() {
             "rewind" => Ok(&self.std),
             "rewind:actions" | OLD_ACTIONS_SPECIFIER => Ok(&self.actions),
             "rewind:workflows" => Ok(&self.workflows),
             other => Err(invalid(format!(
-                "cannot import {other:?} ({}): scripts can only import \"rewind\", \"rewind:actions\" \
+                "cannot import {other:?} ({}): workflows can only import \"rewind\", \"rewind:actions\" \
                  and \"rewind:workflows\"",
                 self.at(SourcePos::unsafely_from_byte_pos(src.span.lo))
             ))),
@@ -321,7 +321,7 @@ impl Checker<'_> {
         exports: &BTreeSet<String>,
         name: &str,
         position: deno_ast::swc::common::BytePos,
-    ) -> Result<(), InvalidScript> {
+    ) -> Result<(), InvalidCode> {
         if exports.contains(name)
             || (std::ptr::eq(exports, &self.std) && self.std_aliases.contains(&name))
         {
@@ -340,9 +340,9 @@ impl Checker<'_> {
         )))
     }
 
-    fn not_a_function(&self, position: deno_ast::swc::common::BytePos) -> InvalidScript {
+    fn not_a_function(&self, position: deno_ast::swc::common::BytePos) -> InvalidCode {
         invalid(format!(
-            "the script must `export default` its main function ({})",
+            "the code must `export default` its main function ({})",
             self.at(SourcePos::unsafely_from_byte_pos(position))
         ))
     }
@@ -352,7 +352,7 @@ impl Checker<'_> {
             .parsed
             .text_info_lazy()
             .line_and_column_display(position);
-        format!("script.ts:{}:{}", at.line_number, at.column_number)
+        format!("workflow.ts:{}:{}", at.line_number, at.column_number)
     }
 }
 
@@ -365,7 +365,7 @@ fn quoted(src: &Str) -> String {
 }
 
 /// Whether an expression may evaluate to a function. Only what is certainly not one is
-/// refused; the rest is checked when the script loads.
+/// refused; the rest is checked when the code loads.
 fn may_be_a_function(expr: &Expr) -> bool {
     match expr {
         Expr::Paren(inner) => may_be_a_function(&inner.expr),
@@ -395,7 +395,7 @@ impl Visit for DynamicImports {
 }
 
 /// Finds the first call of `require(…)`, the CommonJS loader the sandbox does not have
-/// (`archi/03-execution.md`, "Starting a run"), unless the script binds the name `require`
+/// (`archi/03-execution.md`, "Starting a run"), unless the code binds the name `require`
 /// itself, as a function or a variable it may call.
 #[derive(Default)]
 struct Requires {
@@ -441,11 +441,11 @@ mod tests {
     use super::*;
     use crate::epochs::EPOCHS;
 
-    fn check(source: &str) -> Result<CompiledScript, InvalidScript> {
+    fn check(source: &str) -> Result<CompiledCode, InvalidCode> {
         let action_set =
             ActionSet::from_harness_actions(["github.list_issues", "ask_user"]).unwrap();
         let glue = EPOCHS.last().expect("an epoch");
-        compile(&Script::new(source), &action_set, glue)
+        compile(&Code::new(source), &action_set, glue)
     }
 
     fn refused(source: &str) -> String {
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn tells_what_a_script_imports_from_rewind_actions() {
-        let imports = |source: &str| action_imports(&Script::new(source));
+        let imports = |source: &str| action_imports(&Code::new(source));
         let names = |names: &[&str]| Some(names.iter().map(|name| (*name).to_owned()).collect());
         assert_eq!(
             imports(
@@ -519,7 +519,7 @@ mod tests {
     fn reports_syntax_errors_with_their_location() {
         let message = refused("export default function (");
         assert!(message.starts_with("SyntaxError: "), "{message}");
-        assert!(message.contains(" at script.ts:1:"), "{message}");
+        assert!(message.contains(" at workflow.ts:1:"), "{message}");
     }
 
     #[test]
@@ -528,8 +528,8 @@ mod tests {
             refused(
                 "export default async function main() {\n  return await import(\"rewind\");\n}"
             ),
-            "dynamic import() is not available in Rewind scripts (script.ts:2:16): import from \
-             \"rewind\", \"rewind:actions\" and \"rewind:workflows\" at the top of the script"
+            "dynamic import() is not available in Rewind workflows (workflow.ts:2:16): import from \
+             \"rewind\", \"rewind:actions\" and \"rewind:workflows\" at the top of the code"
         );
     }
 
@@ -537,7 +537,7 @@ mod tests {
     fn refuses_other_modules() {
         assert_eq!(
             refused("import fs from \"node:fs\";\nexport default async () => fs;"),
-            "cannot import \"node:fs\" (script.ts:1:16): scripts can only import \"rewind\", \
+            "cannot import \"node:fs\" (workflow.ts:1:16): workflows can only import \"rewind\", \
              \"rewind:actions\" and \"rewind:workflows\""
         );
         assert!(
@@ -554,7 +554,7 @@ mod tests {
         );
         assert_eq!(
             refused("export default async function main() {\n  return require(\"fs\");\n}"),
-            "require() is not available in Rewind scripts (script.ts:2:10): use `import` from \
+            "require() is not available in Rewind workflows (workflow.ts:2:10): use `import` from \
              \"rewind\", \"rewind:actions\" and \"rewind:workflows\""
         );
     }
@@ -577,12 +577,12 @@ mod tests {
     fn refuses_names_the_modules_do_not_export() {
         assert_eq!(
             refused("import { fetch } from \"rewind\";\nexport default async () => fetch;"),
-            "\"rewind\" has no export named \"fetch\" (script.ts:1:10); it exports ActionError, \
+            "\"rewind\" has no export named \"fetch\" (workflow.ts:1:10); it exports ActionError, \
              CancelledError, WorkflowError, run, signal, sleep, webhook"
         );
         assert_eq!(
             refused("import { jira } from \"rewind:actions\";\nexport default async () => jira;"),
-            "\"rewind:actions\" has no export named \"jira\" (script.ts:1:10); it exports ask_user, \
+            "\"rewind:actions\" has no export named \"jira\" (workflow.ts:1:10); it exports ask_user, \
              github"
         );
         assert!(
@@ -593,7 +593,7 @@ mod tests {
         );
         assert!(
             refused("import rewind from \"rewind\";\nexport default async () => rewind;")
-                .starts_with("\"rewind\" has no default export (script.ts:1:8)")
+                .starts_with("\"rewind\" has no default export (workflow.ts:1:8)")
         );
     }
 
@@ -605,7 +605,7 @@ mod tests {
             "export type Default = number;",
         ] {
             assert!(
-                refused(source).starts_with("the script has no default export"),
+                refused(source).starts_with("the code has no default export"),
                 "{source}"
             );
         }
@@ -615,7 +615,7 @@ mod tests {
             "export default class Main {}",
         ] {
             assert!(
-                refused(source).starts_with("the script must `export default` its main function"),
+                refused(source).starts_with("the code must `export default` its main function"),
                 "{source}"
             );
         }

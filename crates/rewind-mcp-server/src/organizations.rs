@@ -150,11 +150,11 @@ mod tests {
             organization("org_2", Some("ACME")),
         ];
         assert_eq!(
-            resolve("run_script", &twins, Some(&json!("acme"))).unwrap_err(),
-            "run_script: 2 of the organizations you reach are named \"acme\": give one of their ids as `org`:\n- Acme (id org_1)\n- ACME (id org_2)"
+            resolve("run_workflow", &twins, Some(&json!("acme"))).unwrap_err(),
+            "run_workflow: 2 of the organizations you reach are named \"acme\": give one of their ids as `org`:\n- Acme (id org_1)\n- ACME (id org_2)"
         );
         assert_eq!(
-            resolve("run_script", &twins, Some(&json!("org_2")))
+            resolve("run_workflow", &twins, Some(&json!("org_2")))
                 .unwrap()
                 .id,
             "org_2"

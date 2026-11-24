@@ -217,7 +217,7 @@ fn a_run_sleeps_is_interrupted_and_resumes_in_another_process() {
 
     let ran = project.rewind(&["replay", &id]);
     assert_eq!(ran.code, 0, "{ran:?}");
-    assert!(ran.stdout.contains("the script replays"), "{}", ran.stdout);
+    assert!(ran.stdout.contains("the code replays"), "{}", ran.stdout);
 
     let ran = project.rewind(&["export", &id, "--output", "run.json"]);
     assert_eq!(ran.code, 0, "{ran:?}");
@@ -388,7 +388,7 @@ fn slow_registration_server() -> (
 #[test]
 fn a_first_ctrl_c_before_the_start_starts_no_run() {
     let project = Project::new();
-    project.write("script.ts", "export default async () => 1;\n");
+    project.write("workflow.ts", "export default async () => 1;\n");
     project.write("action_set.json", "{}");
     let (url, requests, release) = slow_registration_server();
     let running: Child = project
@@ -398,7 +398,7 @@ fn a_first_ctrl_c_before_the_start_starts_no_run() {
             "--namespace",
             "alice",
             "run",
-            "script.ts",
+            "workflow.ts",
             "--action-set",
             "action_set.json",
         ])
@@ -451,7 +451,7 @@ fn a_server_killed_mid_activation_is_replaced() {
 }
 
 /// Every committed journal of the corpus replays through `rewind replay <file>`, and the red
-/// cases that alter their replay with another script fail with the divergence they specify.
+/// cases that alter their replay with another code fail with the divergence they specify.
 #[test]
 fn the_corpus_journals_replay_through_the_binary() {
     let project = Project::new();
@@ -465,14 +465,14 @@ fn the_corpus_journals_replay_through_the_binary() {
         assert_eq!(ran.code, 0, "{name}: {ran:?}");
         replayed += 1;
         let scenario = scenario(&case);
-        if let Some(script) = scenario["replay"]["script"].as_str() {
+        if let Some(code) = scenario["replay"]["code"].as_str() {
             let expected = scenario["replay"]["diverges"].as_str().unwrap();
-            let script = case.join(script);
+            let code = case.join(code);
             let ran = project.rewind(&[
                 "replay",
                 journal.to_str().unwrap(),
-                "--script",
-                script.to_str().unwrap(),
+                "--code",
+                code.to_str().unwrap(),
             ]);
             assert_eq!(ran.code, 1, "{name}: {ran:?}");
             assert!(ran.stdout.contains(expected), "{name}: {ran:?}");
@@ -536,15 +536,15 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             .cloned()
             .unwrap_or(json!({}))
             .to_string();
-        let script = case.join("script.ts");
+        let code = case.join("workflow.ts");
         let status = expect["status"].as_str().unwrap_or("completed");
         // A run that waits for the outside world is seen waiting.
         let wait = if status == "active" { "3s" } else { "60s" };
-        // The corpus checks scripts at start, not their types.
+        // The corpus checks workflows at start, not their types.
         let mut args = vec![
             "--json".to_owned(),
             "run".to_owned(),
-            script.to_str().unwrap().to_owned(),
+            code.to_str().unwrap().to_owned(),
             "--input".to_owned(),
             input,
             "--wait".to_owned(),
@@ -584,7 +584,7 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             let problem: Value = serde_json::from_str(ran.stderr.trim()).unwrap();
             // The server words the refusal its own way; the reason is the engine's.
             let reason = message
-                .strip_prefix("the script is invalid: ")
+                .strip_prefix("the code is invalid: ")
                 .unwrap_or(message);
             let detail = problem["detail"].as_str().unwrap_or_default();
             assert!(detail.contains(reason), "{name}: {problem}");
@@ -687,7 +687,7 @@ fn work(
             .unwrap();
         let mut tasks = Tasks::open(&client, action_set).await;
         while child.try_wait().unwrap().is_none() {
-            // What the stream hands at once, answered in the order the script called it.
+            // What the stream hands at once, answered in the order the code called it.
             let mut handed: Vec<Value> = tasks
                 .next(std::time::Duration::from_millis(500))
                 .await
@@ -737,7 +737,7 @@ fn work(
 }
 
 /// `rewind test` replays a run of the embedded server as a test, from its cassette; `rewind fork`
-/// continues a failed run with a corrected script without calling again what it recorded.
+/// continues a failed run with a corrected code without calling again what it recorded.
 #[test]
 fn a_recorded_run_is_tested_and_its_failure_forked() {
     let project = Project::new();
@@ -784,7 +784,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     assert_eq!(code, 1, "the run failed: {run}");
     assert_eq!(run["error"]["name"], "TypeError", "{run}");
 
-    // The recorded run as a cassette, for `rewind test` with the corrected script.
+    // The recorded run as a cassette, for `rewind test` with the corrected code.
     let ran = project.rewind(&[
         "export",
         &id,
@@ -811,8 +811,8 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     assert_eq!(ran.code, 0, "{ran:?}");
     assert!(ran.stdout.starts_with("PASS"), "{}", ran.stdout);
 
-    // What a fork would reuse: the corrected script diverges where the run failed.
-    let ran = project.rewind(&["replay", &id, "--script", "fixed.ts"]);
+    // What a fork would reuse: the corrected code diverges where the run failed.
+    let ran = project.rewind(&["replay", &id, "--code", "fixed.ts"]);
     assert_eq!(ran.code, 1, "{ran:?}");
     assert!(ran.stdout.contains("diverges"), "{}", ran.stdout);
     assert!(
@@ -824,7 +824,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     let (code, fork) = project.json(&[
         "fork",
         &id,
-        "--script",
+        "--code",
         "fixed.ts",
         "--wait",
         "60s",

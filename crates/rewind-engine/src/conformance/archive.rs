@@ -5,8 +5,8 @@
 //! returns the archive and that store, over the same backend.
 
 use rewind_core::{
-    ActionSet, Annotation, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, PartitionId,
-    RunId, RunMode, RunStarted, Script, Seed, Timestamp, canonical_json,
+    ActionSet, Annotation, Code, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel,
+    PartitionId, RunId, RunMode, RunStarted, Seed, Timestamp, canonical_json,
 };
 use serde_json::json;
 
@@ -35,8 +35,8 @@ fn run(tenant_name: &str, n: u64) -> RunRef {
     )
 }
 
-fn script() -> Script {
-    Script::new("export default async (input) => input")
+fn code() -> Code {
+    Code::new("export default async (input) => input")
 }
 
 fn action_set() -> ActionSet {
@@ -45,7 +45,7 @@ fn action_set() -> ActionSet {
 
 fn sealed(run: &RunRef, attempt: Attempt, logs: u64) -> SealedAttempt {
     let started = RunStarted {
-        script: script().digest(),
+        code: code().digest(),
         action_set: action_set().digest(),
         input: json!({ "issue": 7, "body": "x".repeat(2_000) }).into(),
         seed: Seed::from_bytes([3; 32]),
@@ -72,7 +72,7 @@ fn sealed(run: &RunRef, attempt: Attempt, logs: u64) -> SealedAttempt {
     SealedAttempt {
         run: run.clone(),
         attempt,
-        script: script(),
+        code: code(),
         action_set: action_set(),
         entries,
     }

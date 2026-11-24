@@ -201,7 +201,7 @@ impl Caller {
         }
     }
 
-    /// Who writes, as what it writes names it (a secret, a script's title): a principal
+    /// Who writes, as what it writes names it (a secret, a code's title): a principal
     /// (`user:…`, `key:…`, `connection:…`), `token:<namespace>` for an end user's token, `local`
     /// over the embedded server's socket.
     pub(crate) fn writer(&self) -> String {

@@ -18,7 +18,7 @@
     }
   ],
   "fork": {
-    "script": "script.ts"
+    "code": "workflow.ts"
   },
   "expect": {
     "status": "completed",

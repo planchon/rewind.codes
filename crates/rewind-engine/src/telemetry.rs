@@ -389,7 +389,7 @@ fn int(n: u64) -> AttributeValue {
 }
 
 fn callsite_attribute(callsite: &Callsite) -> AttributeValue {
-    AttributeValue::String(format!("script.ts:{}", callsite.line))
+    AttributeValue::String(format!("workflow.ts:{}", callsite.line))
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -756,7 +756,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
 
         let record = self.run.head;
         let mut attributes = self.run.base_attributes();
-        attributes.insert("rewind.script".into(), string(&record.script.to_hex()));
+        attributes.insert("rewind.code".into(), string(&record.code.to_hex()));
         attributes.insert(
             "rewind.action_set".into(),
             string(&record.action_set.to_hex()),
@@ -821,7 +821,7 @@ mod tests {
             namespace: crate::ports::NamespaceName::migrated(),
             origin: "script".into(),
             suffix_len: 12,
-            script: Digest::of(b"s"),
+            code: Digest::of(b"s"),
             action_set: Digest::of(b"t"),
             status: rewind_core::RunStatus::Active,
             epoch: rewind_core::Epoch(1),
@@ -902,7 +902,7 @@ mod tests {
 
     fn history(mode: RunMode, events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
         let started = Event::Lifecycle(Lifecycle::RunStarted(rewind_core::RunStarted {
-            script: Digest::of(b"s"),
+            code: Digest::of(b"s"),
             action_set: Digest::of(b"t"),
             input: Payload::Value(serde_json::json!({})),
             seed: rewind_core::Seed::from_bytes([0; 32]),

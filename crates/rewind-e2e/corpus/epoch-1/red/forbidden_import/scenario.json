@@ -1,6 +1,6 @@
 {
   "description": "Scripts may only import \"rewind\" and \"rewind:actions\": anything else is refused at start.",
   "expect": {
-    "start_error": "the script is invalid: cannot import \"node:fs\" (script.ts:1:16): scripts can only import \"rewind\", \"rewind:actions\" and \"rewind:workflows\""
+    "start_error": "the code is invalid: cannot import \"node:fs\" (workflow.ts:1:16): workflows can only import \"rewind\", \"rewind:actions\" and \"rewind:workflows\""
   }
 }

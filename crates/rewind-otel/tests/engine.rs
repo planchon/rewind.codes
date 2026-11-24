@@ -4,7 +4,7 @@
 //! projections included.
 //!
 //! The run plane runs in the engine's driver: one node of one partition over the memory
-//! adapters, a virtual clock and a fake executor whose scripts are Rust closures, on this
+//! adapters, a virtual clock and a fake executor whose workflows are Rust closures, on this
 //! thread, under the layer of `ServiceTelemetry`.
 
 use std::num::NonZeroU16;
@@ -17,8 +17,8 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
 use rewind_core::{
-    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Command, Epoch, JsonValue,
-    McpServer, McpTransport, Payload, Script, Seq, Timestamp,
+    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Code, Command, Epoch,
+    JsonValue, McpServer, McpTransport, Payload, Seq, Timestamp,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -30,8 +30,8 @@ use rewind_engine::edge::Edge;
 use rewind_engine::metrics;
 use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::{
-    ActionDispatcher, Call, CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError,
-    InvalidScript, NodeId, QuarantineKind, RunRef, ScriptExecutor, ScriptInstance, StartScript,
+    ActionDispatcher, Call, CallAuth, CodeExecutor, CodeInstance, CompiledCode, Delivery,
+    Dispatched, Emitted, ExecutorError, InvalidCode, NodeId, QuarantineKind, RunRef, StartCode,
 };
 use rewind_engine::telemetry::{SpanKey, TelemetryConfig, span_id};
 use rewind_engine::{CacheConfig, StartRun};
@@ -200,7 +200,7 @@ async fn replays_cache_misses_and_quarantines_are_measured() {
     .await;
     let run = world.start(request("diverge")).await;
     world.driver.run_until_idle_virtual().await.expect("driven");
-    // The script changes under the run: its next replay diverges.
+    // The code changes under the run: its next replay diverges.
     programs.changed.store(true, Ordering::SeqCst);
     {
         let World {
@@ -410,7 +410,7 @@ impl World {
     }
 }
 
-/// A run of the script `name`, with the MCP action `github.get_issue`.
+/// A run of the code `name`, with the MCP action `github.get_issue`.
 fn request(name: &str) -> StartRun {
     let server = McpServer::new(
         "github",
@@ -426,7 +426,7 @@ fn request(name: &str) -> StartRun {
         json!({}),
     );
     let action_set = ActionSet::new([server], [issue]).expect("an action set");
-    StartRun::new(Script::new(name), action_set, json!({}))
+    StartRun::new(Code::new(name), action_set, json!({}))
 }
 
 /// Answers each call with a function of it.
@@ -448,7 +448,7 @@ impl ActionDispatcher for Dispatcher {
     }
 }
 
-/// Two scripts. `flow` calls `github.get_issue` and completes with its result. `diverge` calls
+/// Two workflows. `flow` calls `github.get_issue` and completes with its result. `diverge` calls
 /// it with `{"n": 1}` (`{"n": 2}` once `changed` is set), then waits for the signal `go`.
 #[derive(Clone, Default)]
 struct Programs {
@@ -456,7 +456,7 @@ struct Programs {
 }
 
 struct Instance {
-    script: String,
+    code: String,
 }
 
 fn call(args: JsonValue) -> Emitted {
@@ -468,42 +468,38 @@ fn call(args: JsonValue) -> Emitted {
     })
 }
 
-impl ScriptExecutor for Programs {
+impl CodeExecutor for Programs {
     type Instance = Instance;
 
     fn epochs(&self) -> &[Epoch] {
         &[Epoch(1)]
     }
 
-    fn compile(
-        &self,
-        script: &Script,
-        _action_set: &ActionSet,
-    ) -> Result<CompiledScript, InvalidScript> {
-        Ok(CompiledScript {
-            javascript: script.source().into(),
+    fn compile(&self, code: &Code, _action_set: &ActionSet) -> Result<CompiledCode, InvalidCode> {
+        Ok(CompiledCode {
+            javascript: code.source().into(),
             source_map: String::new(),
         })
     }
 
-    async fn start(&self, start: StartScript) -> Result<(Instance, Vec<Emitted>), ExecutorError> {
-        let script = start.compiled.javascript;
-        let args = match script.as_str() {
+    async fn start(&self, start: StartCode) -> Result<(Instance, Vec<Emitted>), ExecutorError> {
+        let code = start.compiled.javascript;
+        let args = match code.as_str() {
             "diverge" if self.changed.load(Ordering::SeqCst) => json!({ "n": 2 }),
             "diverge" | "flow" => json!({ "n": 1 }),
-            other => return Err(ExecutorError::Internal(format!("no script {other}"))),
+            other => return Err(ExecutorError::Internal(format!("no code {other}"))),
         };
-        Ok((Instance { script }, vec![call(args)]))
+        Ok((Instance { code }, vec![call(args)]))
     }
 }
 
-impl ScriptInstance for Instance {
+impl CodeInstance for Instance {
     async fn deliver(
         &mut self,
         delivery: Delivery,
         _now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
-        Ok(match (self.script.as_str(), delivery) {
+        Ok(match (self.code.as_str(), delivery) {
             ("flow", Delivery::CallCompleted { result, .. }) => {
                 vec![Emitted::Command(Command::CompleteRun {
                     output: Payload::Value(result),

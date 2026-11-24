@@ -1,6 +1,6 @@
 //! A run's handle: `<namespace>/<origin>/<suffix>`, what people read, copy and type to name a
 //! run (`archi/06-storage-and-scale.md`, "Run handles"). The run's id stays its UUID; the handle
-//! says for whom it ran (its namespace), what ran (its origin: the workflow, or the script's
+//! says for whom it ran (its namespace), what ran (its origin: the workflow, or the code's
 //! title as a slug) and which run it is (its suffix).
 //!
 //! The suffix is the start of the run's UUID in Crockford base32, its version and variant left
@@ -22,7 +22,7 @@ pub const SUFFIX_LEN: usize = 12;
 /// The characters of the longest suffix: every bit of the UUID but its version and variant.
 pub const MAX_SUFFIX_LEN: usize = 25;
 
-/// The origin of a run without a workflow and whose script has no title.
+/// The origin of a run without a workflow and whose code has no title.
 pub const SCRIPT_ORIGIN: &str = "script";
 
 /// The longest origin, in characters.
@@ -136,7 +136,7 @@ pub fn suffix_ranges(suffix: &str) -> Option<[(RunId, RunId); 2]> {
     }))
 }
 
-/// The origin a script's title gives a run: lower case ASCII letters and digits, every other run
+/// The origin a code's title gives a run: lower case ASCII letters and digits, every other run
 /// of characters a `-`, at most [`MAX_ORIGIN_LEN`] characters. `None` when nothing is left.
 pub fn origin_slug(title: &str) -> Option<String> {
     let mut slug = String::new();

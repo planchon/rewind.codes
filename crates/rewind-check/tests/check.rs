@@ -1,4 +1,4 @@
-//! Checks with the real tsgo: good and bad scripts, against hand-written declarations of the
+//! Checks with the real tsgo: good and bad workflows, against hand-written declarations of the
 //! kind `rewind-codegen` generates.
 
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use rewind_check::{CheckError, HTTP_ACTION_REFERENCE, TSGO_VERSION, TsgoChecker};
-use rewind_core::Script;
+use rewind_core::Code;
 use rewind_engine::ports::{
     ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
 };
@@ -37,7 +37,7 @@ const ACTIONS: &str = r##"declare module "rewind:actions" {
 }
 "##;
 
-/// The script of `archi/01-product.md`, "What the model writes".
+/// The code of `archi/01-product.md`, "What the model writes".
 const GOOD: &str = r##"import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
@@ -115,7 +115,7 @@ async fn a_good_script_has_no_diagnostics() {
 
 #[tokio::test]
 async fn the_sandbox_and_rewind_type_check() {
-    let script = main_with(
+    let code = main_with(
         r##"  const id: string = run.id;
   const started: Date = run.startedAt;
   const hook = await webhook("merged");
@@ -136,14 +136,14 @@ async fn the_sandbox_and_rewind_type_check() {
   }
   return { instant: instant.toString(), evens, union: [...union] };"##,
     );
-    assert_eq!(check(&script).await, []);
+    assert_eq!(check(&code).await, []);
 }
 
 #[tokio::test]
 async fn a_type_error_is_located_in_the_script_with_a_frame() {
-    let script =
+    let code =
         main_with("  const issues = await github.list_issues({ repo: 42 });\n  return issues;");
-    let diagnostics = check(&script).await;
+    let diagnostics = check(&code).await;
     assert_eq!(
         summary(&diagnostics),
         [(
@@ -158,14 +158,14 @@ async fn a_type_error_is_located_in_the_script_with_a_frame() {
     assert_eq!(diagnostic.hint, None);
     assert_eq!(
         diagnostic.to_string(),
-        "script.ts:5:45 error TS2322: Type 'number' is not assignable to type 'string'.\n4 | export default async function main(input: { repo: string }) {\n5 |   const issues = await github.list_issues({ repo: 42 });\n  |                                             ^^^^\n6 |   return issues;"
+        "workflow.ts:5:45 error TS2322: Type 'number' is not assignable to type 'string'.\n4 | export default async function main(input: { repo: string }) {\n5 |   const issues = await github.list_issues({ repo: 42 });\n  |                                             ^^^^\n6 |   return issues;"
     );
 }
 
 #[tokio::test]
 async fn chained_messages_keep_their_lines() {
-    let script = main_with("  const f: (a: string) => void = (a: number) => {};\n  return f;");
-    let diagnostics = check(&script).await;
+    let code = main_with("  const f: (a: string) => void = (a: number) => {};\n  return f;");
+    let diagnostics = check(&code).await;
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(
         diagnostics[0].message,
@@ -175,7 +175,7 @@ async fn chained_messages_keep_their_lines() {
 
 #[tokio::test]
 async fn misuses_of_the_actions_and_of_rewind_are_found() {
-    let script = main_with(
+    let code = main_with(
         r##"  const issues = await github.list_issues({ repo: input.repo, state: "all" });
   await github.close_issue({ repo: input.repo });
   await slack.post_message({ channel: "#x", text: "y", extra: true });
@@ -183,20 +183,20 @@ async fn misuses_of_the_actions_and_of_rewind_are_found() {
   const close: boolean = decision.close;
   throw new ActionError("no");"##,
     );
-    let codes = sources(&check(&script).await);
+    let codes = sources(&check(&code).await);
     assert_eq!(codes, ["TS2322", "TS2741", "TS2353", "TS18048", "TS2673"]);
 }
 
 #[tokio::test]
 async fn absent_globals_get_a_hint_instead_of_tsgo_advice() {
-    let script = main_with(
+    let code = main_with(
         r##"  const token = process.env.TOKEN;
   const fs = require("fs");
   const bytes: Buffer = Buffer.from("x");
   const page = await fetch("https://example.com");
   return { token, fs, bytes, page };"##,
     );
-    let diagnostics = check(&script).await;
+    let diagnostics = check(&code).await;
     assert_eq!(
         summary(&diagnostics),
         [
@@ -204,31 +204,31 @@ async fn absent_globals_get_a_hint_instead_of_tsgo_advice() {
                 5,
                 17,
                 "absent-global".into(),
-                "`process` does not exist in Rewind scripts.".into()
+                "`process` does not exist in Rewind workflows.".into()
             ),
             (
                 6,
                 14,
                 "absent-global".into(),
-                "`require` does not exist in Rewind scripts.".into()
+                "`require` does not exist in Rewind workflows.".into()
             ),
             (
                 7,
                 16,
                 "absent-global".into(),
-                "`Buffer` does not exist in Rewind scripts.".into()
+                "`Buffer` does not exist in Rewind workflows.".into()
             ),
             (
                 7,
                 25,
                 "absent-global".into(),
-                "`Buffer` does not exist in Rewind scripts.".into()
+                "`Buffer` does not exist in Rewind workflows.".into()
             ),
             (
                 8,
                 22,
                 "absent-global".into(),
-                "`fetch` does not exist in Rewind scripts.".into()
+                "`fetch` does not exist in Rewind workflows.".into()
             ),
         ]
     );
@@ -243,24 +243,24 @@ async fn absent_globals_get_a_hint_instead_of_tsgo_advice() {
 
 #[tokio::test]
 async fn fetch_exists_only_with_the_http_action() {
-    let script = main_with(
+    let code = main_with(
         r##"  const response = await fetch("https://api.example.com/x", { method: "POST", body: "{}" });
   const text: string = await response.text();
   fetch("https://api.example.com/y");
   return { ok: response.ok, status: response.status, text };"##,
     );
     let http = format!("{HTTP_ACTION_REFERENCE}\n{ACTIONS}");
-    let diagnostics = check_with(&script, &http).await;
+    let diagnostics = check_with(&code, &http).await;
     assert_eq!(
         summary(&diagnostics),
         [(
             7,
             3,
             "floating-promise".into(),
-            "`fetch(…)` calls an action, and its promise is neither awaited, returned nor assigned: the script goes on without waiting for the call, and loses its result and its errors.".into()
+            "`fetch(…)` calls an action, and its promise is neither awaited, returned nor assigned: the code goes on without waiting for the call, and loses its result and its errors.".into()
         )]
     );
-    let without = check(&script).await;
+    let without = check(&code).await;
     assert_eq!(
         sources(&without),
         ["absent-global", "absent-global"],
@@ -270,7 +270,7 @@ async fn fetch_exists_only_with_the_http_action() {
 
 #[tokio::test]
 async fn the_rules_join_tsgo_diagnostics() {
-    let script = main_with(
+    let code = main_with(
         r##"  const issues = await github.list_issues({ repo: input.repo });
   issues.forEach(async (issue) => {
     await github.close_issue({ repo: input.repo, number: issue.number });
@@ -280,7 +280,7 @@ async fn the_rules_join_tsgo_diagnostics() {
   void slack.post_message({ channel: "#x", text: "y" });
   return issues.length;"##,
     );
-    let diagnostics = check(&script).await;
+    let diagnostics = check(&code).await;
     assert_eq!(
         summary(&diagnostics)
             .into_iter()
@@ -296,7 +296,7 @@ async fn the_rules_join_tsgo_diagnostics() {
     let floating = &diagnostics[1];
     assert_eq!(
         floating.to_string(),
-        "script.ts:9:3 error floating-promise: `sleep(…)` returns a promise that is neither awaited, returned nor assigned: the script goes on at once instead of waiting.\n  hint: Write `await` before the call. If not waiting for it is intended, write `void` before it.\n 8 |   });\n 9 |   sleep(\"1h\");\n   |   ^^^^^\n10 |   slack.post_message({ channel: \"#x\", text: 42 });"
+        "workflow.ts:9:3 error floating-promise: `sleep(…)` returns a promise that is neither awaited, returned nor assigned: the code goes on at once instead of waiting.\n  hint: Write `await` before the call. If not waiting for it is intended, write `void` before it.\n 8 |   });\n 9 |   sleep(\"1h\");\n   |   ^^^^^\n10 |   slack.post_message({ channel: \"#x\", text: 42 });"
     );
 }
 
@@ -310,12 +310,12 @@ async fn nothing_outside_the_check_is_read() {
     )
     .unwrap();
     let path = secret.display().to_string();
-    let script = format!(
+    let code = format!(
         "/// <reference path=\"{path}\" />\nimport {{ secret }} from \"{}\";\nimport type {{ Secret }} from \"../../../../../../../../../../..{}\";\nexport default async function main() {{\n  const n: number = secret;\n  const s: Secret = 1;\n  return [n, s];\n}}\n",
         path.trim_end_matches(".ts"),
         path.trim_end_matches(".ts"),
     );
-    let diagnostics = check(&script).await;
+    let diagnostics = check(&code).await;
     for diagnostic in &diagnostics {
         assert!(
             !diagnostic.message.contains("hunter2"),
@@ -331,8 +331,8 @@ async fn nothing_outside_the_check_is_read() {
 
 #[tokio::test]
 async fn a_script_cannot_add_the_dom_or_node() {
-    let script = "/// <reference lib=\"dom\" />\n/// <reference types=\"node\" />\nexport default async function main() {\n  return [document.title, new WeakRef({}), new SharedArrayBuffer(1), Atomics, WebAssembly];\n}\n";
-    let diagnostics = check(script).await;
+    let code = "/// <reference lib=\"dom\" />\n/// <reference types=\"node\" />\nexport default async function main() {\n  return [document.title, new WeakRef({}), new SharedArrayBuffer(1), Atomics, WebAssembly];\n}\n";
+    let diagnostics = check(code).await;
     assert_eq!(
         summary(&diagnostics),
         [
@@ -375,11 +375,11 @@ async fn no_spelling_of_a_directive_adds_the_dom() {
         "// a\n\u{feff}/// <reference lib=\"dom\" />",
         "// a\n\u{200b}/// <reference lib=\"dom\" />",
     ] {
-        let script = format!(
+        let code = format!(
             "{header}\nexport default async function main() {{\n  return document.title;\n}}\n"
         );
         let line = 2 + u32::try_from(header.lines().count()).unwrap();
-        let diagnostics = check(&script).await;
+        let diagnostics = check(&code).await;
         assert_eq!(
             summary(&diagnostics),
             [(
@@ -395,8 +395,8 @@ async fn no_spelling_of_a_directive_adds_the_dom() {
 
 #[tokio::test]
 async fn without_actions_rewind_actions_exports_nothing() {
-    let script = "import { github } from \"rewind:actions\";\nexport default async function main() {\n  return github;\n}\n";
-    let diagnostics = check_with(script, "").await;
+    let code = "import { github } from \"rewind:actions\";\nexport default async function main() {\n  return github;\n}\n";
+    let diagnostics = check_with(code, "").await;
     assert_eq!(
         summary(&diagnostics),
         [(
@@ -430,8 +430,8 @@ async fn declarations_that_do_not_check_are_a_fault_of_the_platform() {
 
 #[tokio::test]
 async fn a_conflict_the_script_declares_is_the_scripts() {
-    let script = "declare global {\n  interface Console {\n    log: number;\n  }\n  var crypto: number;\n}\nexport default async function main() {\n  return 1;\n}\n";
-    let diagnostics = check(script).await;
+    let code = "declare global {\n  interface Console {\n    log: number;\n  }\n  var crypto: number;\n}\nexport default async function main() {\n  return 1;\n}\n";
+    let diagnostics = check(code).await;
     assert_eq!(
         summary(&diagnostics),
         [
@@ -469,8 +469,8 @@ async fn syntax_errors_are_reported() {
 
 #[tokio::test]
 async fn columns_count_characters() {
-    let script = main_with("  const label = \"😀😀 é\"; const n: number = label;\n  return n;");
-    let diagnostics = check(&script).await;
+    let code = main_with("  const label = \"😀😀 é\"; const n: number = label;\n  return n;");
+    let diagnostics = check(&code).await;
     assert_eq!(
         summary(&diagnostics),
         [(
@@ -492,15 +492,15 @@ async fn columns_count_characters() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn checks_are_deterministic_and_run_in_parallel() {
-    let script = main_with(
+    let code = main_with(
         "  const issues = await github.list_issues({ repo: 1, state: \"x\" });\n  sleep(1);\n  return process;",
     );
-    let first = check(&script).await;
+    let first = check(&code).await;
     assert_eq!(first.len(), 4, "{first:?}");
     let checks: Vec<_> = (0..8)
         .map(|_| {
-            let script = script.clone();
-            tokio::spawn(async move { CHECKER.check_source(&script, ACTIONS).await.unwrap() })
+            let code = code.clone();
+            tokio::spawn(async move { CHECKER.check_source(&code, ACTIONS).await.unwrap() })
         })
         .collect();
     for check in checks {
@@ -515,13 +515,13 @@ async fn the_port_checks_a_script_against_an_action_sets_declarations() {
         prompt: String::new(),
     };
     let checker: &TsgoChecker = &CHECKER;
-    let diagnostics = TypeChecker::check(checker, &Script::new(GOOD), &declarations)
+    let diagnostics = TypeChecker::check(checker, &Code::new(GOOD), &declarations)
         .await
         .unwrap();
     assert_eq!(diagnostics, []);
     let diagnostics = TypeChecker::check(
         checker,
-        &Script::new("export default async () => { const x: string = 1; return x; };\n"),
+        &Code::new("export default async () => { const x: string = 1; return x; };\n"),
         &declarations,
     )
     .await
@@ -575,7 +575,7 @@ async fn tsgo_is_extracted_once_into_the_cache_directory() {
     assert_eq!(checker.check_source(GOOD, ACTIONS).await.unwrap(), []);
 }
 
-/// Check latency, measured on the good script: `cargo test -p rewind-check --release --test
+/// Check latency, measured on the good code: `cargo test -p rewind-check --release --test
 /// check -- --ignored --nocapture latency`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "a measure, not a test"]
@@ -619,13 +619,13 @@ async fn latency() {
     );
 }
 
-/// A script with errors everywhere gets the first of them by position, not all: their number,
-/// and tsgo's output, are bounded whatever the size of the script.
+/// A code with errors everywhere gets the first of them by position, not all: their number,
+/// and tsgo's output, are bounded whatever the size of the code.
 #[tokio::test]
 async fn the_diagnostics_of_a_script_are_bounded() {
     let body = "x;\nfetch;\n".repeat(100_000);
-    let script = format!("export default async function main() {{\n{body}}}\n");
-    let diagnostics = check(&script).await;
+    let code = format!("export default async function main() {{\n{body}}}\n");
+    let diagnostics = check(&code).await;
     assert_eq!(diagnostics.len(), TsgoChecker::MAX_DIAGNOSTICS);
     let lines: Vec<u32> = diagnostics
         .iter()
@@ -727,7 +727,7 @@ async fn an_action_set_without_workflows_declares_an_empty_module() {
     );
 }
 
-/// What `rewind-codegen` writes for `triage`'s own script.
+/// What `rewind-codegen` writes for `triage`'s own code.
 const SIGNALS: &str = r##"declare module "rewind" {
   export interface Signals {
     approval: { close: boolean };
@@ -736,7 +736,7 @@ const SIGNALS: &str = r##"declare module "rewind" {
 }
 "##;
 
-const ENTRY: &str = r##"import main from "./script";
+const ENTRY: &str = r##"import main from "./workflow";
 
 type Input = { repo: string };
 type Output = { closed: number };
@@ -793,7 +793,7 @@ async fn a_default_export_that_does_not_match_the_schemas_is_reported_at_it() {
         "main(input: { repo: number })",
     ))
     .await;
-    // The script also passes `repo` on as a string, which it no longer is.
+    // The code also passes `repo` on as a string, which it no longer is.
     let (line, column, source, message) = input
         .iter()
         .find(|(_, _, _, message)| message.starts_with("the default export"))

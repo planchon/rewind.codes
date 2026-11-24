@@ -73,8 +73,8 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn start(script: &str) -> StartRun {
-    StartRun::new(script)
+fn start(code: &str) -> StartRun {
+    StartRun::new(code)
 }
 
 fn ask_action_set(policy: ActionPolicy) -> CreateActionSet {
@@ -156,16 +156,16 @@ async fn a_run_starts_waits_and_is_read_back() {
     assert_eq!(listed.headline, "import { sleep } from \"rewind\";");
     let scripts = harness
         .list_scripts(&ScriptFilter {
-            digest: Some(run.script.clone()),
+            digest: Some(run.code_digest.clone()),
             ..ScriptFilter::default()
         })
         .await
         .unwrap();
     assert_eq!(scripts.scripts.len(), 1);
     assert_eq!(scripts.scripts[0].runs.completed, 1);
-    let script = harness.get_script(&run.script).await.unwrap();
-    assert_eq!(script.source, SLEEP);
-    assert_eq!(script.runs.completed, 1);
+    let code = harness.get_script(&run.code_digest).await.unwrap();
+    assert_eq!(code.source, SLEEP);
+    assert_eq!(code.runs.completed, 1);
 
     harness.delete_run(&run.id).await.unwrap();
     assert_eq!(
@@ -179,9 +179,9 @@ async fn a_run_starts_waits_and_is_read_back() {
 async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skipped() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let script = "export default function main() {\n  const n: string = 42;\n  return n;\n}\n";
-    let refused = problem(harness.start_run(&start(script), None).await.unwrap_err());
-    assert_eq!(refused.kind(), Some(ProblemType::InvalidScript));
+    let code = "export default function main() {\n  const n: string = 42;\n  return n;\n}\n";
+    let refused = problem(harness.start_run(&start(code), None).await.unwrap_err());
+    assert_eq!(refused.kind(), Some(ProblemType::InvalidCode));
     assert_eq!(refused.status, 422);
     let diagnostic = &refused.diagnostics[0];
     assert_eq!(diagnostic.code, "TS2322");
@@ -189,14 +189,14 @@ async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skippe
 
     let checked = harness
         .check(&CheckRequest {
-            script: script.into(),
+            code: code.into(),
             action_set: None,
         })
         .await
         .unwrap();
     assert!(!checked.ok);
 
-    let mut skipped = start(script);
+    let mut skipped = start(code);
     skipped.check = Some(false);
     skipped.wait = wait("20s");
     let run = harness.start_run(&skipped, None).await.unwrap();
@@ -212,8 +212,8 @@ async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skippe
             .await
             .unwrap_err(),
     );
-    assert_eq!(invalid.kind(), Some(ProblemType::InvalidScript));
-    assert_eq!(invalid.diagnostics[0].code, "rewind/invalid-script");
+    assert_eq!(invalid.kind(), Some(ProblemType::InvalidCode));
+    assert_eq!(invalid.diagnostics[0].code, "rewind/invalid-code");
     server.stop().await;
 }
 
@@ -251,7 +251,7 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
     let mut wrong = start(&ASK.replace("\"ready?\"", "42"));
     wrong.action_set = Some(action_set.id.clone());
     let refused = problem(harness.start_run(&wrong, None).await.unwrap_err());
-    assert_eq!(refused.kind(), Some(ProblemType::InvalidScript));
+    assert_eq!(refused.kind(), Some(ProblemType::InvalidCode));
     assert_eq!(refused.diagnostics[0].code, "TS2322", "{refused}");
 
     let mut request = start(ASK);
@@ -367,7 +367,7 @@ async fn a_run_failed_by_an_uncaught_action_error_names_the_call() {
         .await
         .unwrap();
     // The first failure is caught; the second is not.
-    let script = r#"import { ask_user } from "rewind:actions";
+    let code = r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   try {
     await ask_user({ question: "first?" });
@@ -376,7 +376,7 @@ export default async function main() {
   return { answer };
 }
 "#;
-    let mut request = start(script);
+    let mut request = start(code);
     request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
     let query = CallStreamQuery {
@@ -1068,7 +1068,7 @@ async fn the_http_action_is_pinned_with_its_allow_list_only() {
     );
     let checked = harness
         .check(&CheckRequest {
-            script: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
+            code: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
             action_set: Some(action_set.id.clone()),
         })
         .await
@@ -1076,7 +1076,7 @@ async fn the_http_action_is_pinned_with_its_allow_list_only() {
     assert!(checked.ok, "{:?}", checked.diagnostics);
     let without = harness
         .check(&CheckRequest {
-            script: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
+            code: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
             action_set: None,
         })
         .await
@@ -1098,7 +1098,7 @@ async fn the_http_action_is_pinned_with_its_allow_list_only() {
     server.stop().await;
 }
 
-/// A script that waits for a signal, its input unused: a run that stays active.
+/// A code that waits for a signal, its input unused: a run that stays active.
 fn waiting_run(marker: &str, text: &str) -> StartRun {
     let mut request = start(&format!("// {marker}\n{SIGNAL}"));
     request.input = json!({ "text": text });
@@ -1139,14 +1139,14 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
     let their_input = input(&harness, theirs.id.clone()).await;
     let my_input = input(&scoped, mine.id.clone()).await;
 
-    // Scripts: only those of the runs the key sees.
-    eventually(|| async { scoped.get_script(&mine.script).await.ok() }).await;
+    // Workflows: only those of the runs the key sees.
+    eventually(|| async { scoped.get_script(&mine.code_digest).await.ok() }).await;
     assert_eq!(
-        problem(scoped.get_script(&theirs.script).await.unwrap_err()).kind(),
+        problem(scoped.get_script(&theirs.code_digest).await.unwrap_err()).kind(),
         Some(ProblemType::NotFound),
-        "the script of a run the key does not see"
+        "the code of a run the key does not see"
     );
-    reader.get_script(&theirs.script).await.unwrap();
+    reader.get_script(&theirs.code_digest).await.unwrap();
 
     // Payloads: through a run the key sees, which references them.
     assert_eq!(
@@ -1450,8 +1450,8 @@ fn sorted(mut ids: Vec<String>) -> Vec<String> {
 async fn runs_are_searched_counted_and_grouped_by_failure() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let labelled = |script: &str, labels: &[(&str, &str)]| {
-        let mut request = start(script);
+    let labelled = |code: &str, labels: &[(&str, &str)]| {
+        let mut request = start(code);
         request.labels = labels.iter().copied().collect();
         request
     };

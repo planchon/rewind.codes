@@ -6,7 +6,7 @@
 //! no message is left it runs the oldest job to its end; when no job is left it fires the timers
 //! and wakes due now, then what the cluster's memberships tell. In virtual time, when nothing
 //! is left to do, it moves the clock to the earliest timer that wakes a run by itself (a
-//! script's timer, a retry, a backoff), or to an earlier run deadline, and goes on. The same
+//! code's timer, a retry, a backoff), or to an earlier run deadline, and goes on. The same
 //! inputs always give the same steps in the same order.
 //!
 //! Messages between nodes go through the driver's link, which the tests may cut, drop or hold
@@ -37,7 +37,7 @@ use crate::ports::link::{
     SubscriptionKey,
 };
 use crate::ports::{
-    Cluster, ClusterError, Departed, LinkError, NodeId, NodeInfo, PartitionMap, ScriptExecutor,
+    Cluster, ClusterError, CodeExecutor, Departed, LinkError, NodeId, NodeInfo, PartitionMap,
     VirtualTime,
 };
 

@@ -118,11 +118,11 @@ impl WaitingFor {
 /// How a run that failed, was cancelled or was aborted ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ending {
-    /// The script error's name (`ActionError`, `TypeError`, `CancelledError`…), or the abort's
+    /// The code error's name (`ActionError`, `TypeError`, `CancelledError`…), or the abort's
     /// kind (`limit_exceeded`…).
     pub error: String,
     pub message: String,
-    /// The innermost line of `script.ts` in the error's stack or message, if any.
+    /// The innermost line of `workflow.ts` in the error's stack or message, if any.
     pub line: Option<u32>,
     /// The error's name and its message with the parts that vary replaced by placeholders: what
     /// the runs of a failure group share, for display.
@@ -173,7 +173,7 @@ pub struct RunSummary {
     /// What ran, and the characters of its handle's suffix, as its record has them.
     pub origin: String,
     pub suffix_len: u8,
-    pub script: Digest,
+    pub code: Digest,
     pub headline: String,
     pub action_set: Digest,
     /// `pending` until its first activation commits, then `active` until a terminal entry.
@@ -183,7 +183,7 @@ pub struct RunSummary {
     pub parent: Option<RunId>,
     /// For a run of a workflow, the workflow's name.
     pub workflow: Option<String>,
-    /// For a run a script started, that run.
+    /// For a run a code started, that run.
     pub started_by: Option<RunId>,
     /// `recorded_at` of `run_started`, once committed.
     pub started_at: Option<Timestamp>,
@@ -298,7 +298,7 @@ pub enum Predicate {
         key: String,
         values: Vec<TextMatch>,
     },
-    /// The script's digest, in lowercase hexadecimal, starts with one of these.
+    /// The code's digest, in lowercase hexadecimal, starts with one of these.
     Script(Vec<String>),
     /// The action set's digest, in lowercase hexadecimal, starts with one of these.
     ActionSet(Vec<String>),

@@ -1,5 +1,5 @@
 //! What a run's history, inbox and call tasks are made of, and what the catalog keeps of the
-//! scripts, action sets and workflow versions they run (`archi/02-journal.md`,
+//! workflows, action sets and workflow versions they run (`archi/02-journal.md`,
 //! `archi/03-execution.md`, "Activations", "Workflows across runs"; `archi/04-tools.md`,
 //! "Call lifecycle"). The records the stores keep them in are their adapters':
 //! [`PartitionStore`](crate::ports::PartitionStore) for a run, [`CatalogStore`](
@@ -10,7 +10,7 @@ mod runs;
 mod tasks;
 mod workflows;
 
-use rewind_core::{ActionSet, RunId, Script, Timestamp};
+use rewind_core::{ActionSet, Code, RunId, Timestamp};
 
 pub use activation::{InboxItem, PayloadRecord, Trigger};
 pub use runs::{
@@ -25,17 +25,17 @@ pub use workflows::{
 };
 
 use super::checker::ActionDeclarations;
-use super::executor::CompiledScript;
+use super::executor::CompiledCode;
 use super::tenancy::RunRef;
 
-/// A script as stored: only scripts that compile are stored.
+/// A code as stored: only workflows that compile are stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredScript {
-    pub script: Script,
-    pub compiled: CompiledScript,
+pub struct StoredCode {
+    pub code: Code,
+    pub compiled: CompiledCode,
 }
 
-/// The title and description a person gave a script, for the organization, over the comment at
+/// The title and description a person gave a code, for the organization, over the comment at
 /// its top (`archi/04-tools.md`, "Script titles").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptTitle {

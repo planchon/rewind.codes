@@ -1,7 +1,7 @@
 //! JSON Schemas compiled once, whose problems are written for the model that wrote the value
 //! (`archi/04-tools.md`, "Action sets and code generation").
 //!
-//! The sandbox checks action args with it, inside the op, so its messages reach scripts and its
+//! The sandbox checks action args with it, inside the op, so its messages reach workflows and its
 //! version is part of the determinism epoch. The engine checks with it what other runs and the
 //! API send to a workflow: inputs and signals.
 
@@ -62,7 +62,7 @@ impl Validator {
         }
     }
 
-    /// Checks `value`. Each problem is at its place written from `root`, as a script writes it:
+    /// Checks `value`. Each problem is at its place written from `root`, as a code writes it:
     /// `args`, `args.repo`, `args.labels[0]`, `args["a-b"]`. Problems are sorted, so that the
     /// message does not depend on the order the validator walks the schema in.
     pub fn check(&self, root: &str, value: &Value) -> Result<(), Refused> {
@@ -90,7 +90,7 @@ impl Validator {
     }
 }
 
-/// A place in a value as a script writes it, from `root`.
+/// A place in a value as a code writes it, from `root`.
 fn path(root: &str, value: &Value, location: &jsonschema::paths::Location) -> String {
     let mut path = String::from(root);
     let mut value = Some(value);

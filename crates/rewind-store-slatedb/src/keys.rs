@@ -238,7 +238,7 @@ pub(crate) fn unsealed(run: RunId) -> Key {
 /// The rank of a kind among the timers of a run due together: [`TimerKind`]'s order.
 fn rank(kind: &TimerKind) -> u8 {
     match kind {
-        TimerKind::Script { .. } => 0,
+        TimerKind::Code { .. } => 0,
         TimerKind::CallTimeout { .. } => 1,
         TimerKind::DeferredDeadline { .. } => 2,
         TimerKind::RedeliveryBackoff { .. } => 3,
@@ -469,12 +469,12 @@ mod tests {
         for at in [5, 10] {
             for kind in [
                 TimerKind::RetentionEnd { run: r2.clone() },
-                TimerKind::Script {
+                TimerKind::Code {
                     run: r1.clone(),
                     seq: Seq(2),
                 },
                 TimerKind::RunDeadline { run: r1.clone() },
-                TimerKind::Script {
+                TimerKind::Code {
                     run: r1.clone(),
                     seq: Seq(1),
                 },
@@ -486,7 +486,7 @@ mod tests {
                     run: other.clone(),
                     seq: Seq(1),
                 },
-                TimerKind::Script {
+                TimerKind::Code {
                     run: r2.clone(),
                     seq: Seq(300),
                 },

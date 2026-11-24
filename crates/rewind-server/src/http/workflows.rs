@@ -20,7 +20,7 @@ use rewind_api::workflows::{
     CreateWorkflow, RetiredTest, SuiteTest, UpdatedTest, Workflow as ApiWorkflow, WorkflowPage,
     WorkflowQuery, WorkflowVersions,
 };
-use rewind_core::{ActionSet, Digest, Script, WorkflowSchemas};
+use rewind_core::{ActionSet, Code, Digest, WorkflowSchemas};
 use rewind_engine::ports::{
     CatalogStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
 };
@@ -58,7 +58,7 @@ pub(super) async fn create(
         signals: request.signals,
     };
     let generated = rewind_codegen::workflow_declarations(&request.name, &schemas);
-    let script = Script::new(request.script);
+    let code = Code::new(request.code);
     let parent = match &request.parent {
         Some(reference) => Some(parent_of(&app, &caller, &request.name, reference).await?),
         None => None,
@@ -113,7 +113,7 @@ pub(super) async fn create(
                 tenant: caller.tenant.clone(),
                 name: request.name,
                 description: request.description,
-                script,
+                code,
                 action_set,
                 schemas,
                 labels: caller.labels.clone(),
@@ -171,13 +171,13 @@ pub(super) async fn list(
     Query(query): Query<WorkflowQuery>,
 ) -> Result<Json<WorkflowPage>, ApiError> {
     caller.require(Permission::ActionsRead)?;
-    if let Some(script) = &query.script {
-        let script = Digest::from_hex(script).map_err(|_| {
-            ApiError::invalid("script: the digest of a script, 64 lowercase hexadecimal digits")
+    if let Some(code) = &query.script {
+        let code = Digest::from_hex(code).map_err(|_| {
+            ApiError::invalid("code: the digest of a code, 64 lowercase hexadecimal digits")
         })?;
         let found = app
             .store
-            .workflows_with_script(&caller.tenant, script, &caller.labels)
+            .workflows_with_code(&caller.tenant, code, &caller.labels)
             .await?;
         return Ok(Json(WorkflowPage {
             workflows: found.iter().map(view).collect(),
@@ -323,7 +323,7 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
         number: stored.number,
         description: workflow.description().map(str::to_owned),
         action_set: workflow.action_set().to_hex(),
-        script: workflow.script().to_hex(),
+        code_digest: workflow.code().to_hex(),
         input: workflow.schemas().input.clone(),
         output: workflow.schemas().output.clone(),
         signals: workflow.schemas().signals.clone(),
@@ -396,8 +396,8 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::ActionSetNotFound(digest) => ApiError::not_found(format!(
             "no action set {digest} for this tenant: register it with POST /v1/action-sets"
         )),
-        RegisterError::InvalidScript(invalid) => {
-            rewind_engine::StartError::InvalidScript(invalid).into()
+        RegisterError::InvalidCode(invalid) => {
+            rewind_engine::StartError::InvalidCode(invalid).into()
         }
         RegisterError::TypeErrors(diagnostics) => {
             rewind_engine::StartError::TypeErrors(diagnostics).into()

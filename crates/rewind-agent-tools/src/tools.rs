@@ -2,7 +2,7 @@
 //! (`sdk/typescript/src/agent-tools/agent-tools.ts`): the same inputs, the same calls of `/v1`,
 //! the same checks of labels, the same bounded plain-text results.
 //!
-//! A mistake the model can fix (a bad argument, a refused script, a run that has ended: a
+//! A mistake the model can fix (a bad argument, a refused code, a run that has ended: a
 //! problem of `/v1` with a 4xx status but 401) is a result with `is_error`; a fault of the
 //! platform or of the harness is an [`AgentError`].
 
@@ -50,19 +50,19 @@ pub struct AgentToolResult {
     pub workflow: Option<Workflow>,
     /// The action set `save_workflow` derived: the one the tools use from then on.
     pub action_set: Option<ActionSet>,
-    /// The outcome of each test: those `test_script` ran, or those of the suite that refused a
+    /// The outcome of each test: those `test_workflow` ran, or those of the suite that refused a
     /// save (`save_workflow`) or a fork (`retry_run`).
     pub tests: Option<Vec<TestResult>>,
-    /// For a call that hands in a script (`run_script`, `check_script`, `test_script`,
+    /// For a call that hands in a code (`run_workflow`, `check_workflow`, `test_workflow`,
     /// `retry_run`, `save_workflow`): whether the checks before anything runs passed it. `None`
-    /// when the call carried no script, or failed before the checks (a bad argument, another
+    /// when the call carried no code, or failed before the checks (a bad argument, another
     /// refusal): what a harness measures as the first-try check rate.
-    pub script: Option<ScriptVerdict>,
+    pub code: Option<CodeVerdict>,
 }
 
-/// What the checks before anything runs said of a script.
+/// What the checks before anything runs said of a code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptVerdict {
+pub enum CodeVerdict {
     Passed,
     Refused,
 }
@@ -75,7 +75,7 @@ pub(crate) fn result(content: String, is_error: bool) -> AgentToolResult {
         workflow: None,
         action_set: None,
         tests: None,
-        script: None,
+        code: None,
     }
 }
 
@@ -118,11 +118,11 @@ impl From<ApiError> for Failure {
 
 pub(crate) type Handled = Result<AgentToolResult, Failure>;
 
-/// The tools that hand in a script.
-fn carries_script(name: &str) -> bool {
+/// The tools that hand in a code.
+fn carries_code(name: &str) -> bool {
     matches!(
         name,
-        "run_script" | "check_script" | "test_script" | "retry_run" | "save_workflow"
+        "run_workflow" | "check_workflow" | "test_workflow" | "retry_run" | "save_workflow"
     )
 }
 
@@ -135,15 +135,15 @@ pub(crate) fn finish(
 ) -> Result<AgentToolResult, AgentError> {
     let mut finished = match handled {
         Ok(mut handled) => {
-            if carries_script(name) && handled.script.is_none() {
-                handled.script = Some(ScriptVerdict::Passed);
+            if carries_code(name) && handled.code.is_none() {
+                handled.code = Some(CodeVerdict::Passed);
             }
             handled
         }
         Err(Failure::Input(error)) => result(format!("{name}: {}", error.0), true),
-        Err(Failure::Api(ApiError::Problem(problem))) if problem.is(ProblemType::InvalidScript) => {
+        Err(Failure::Api(ApiError::Problem(problem))) if problem.is(ProblemType::InvalidCode) => {
             AgentToolResult {
-                script: Some(ScriptVerdict::Refused),
+                code: Some(CodeVerdict::Refused),
                 ..result(
                     describe_refusal(&problem.detail, &problem.diagnostics, limits),
                     true,
@@ -160,7 +160,7 @@ pub(crate) fn finish(
         Err(Failure::Api(error)) => return Err(AgentError::Api(error)),
         Err(Failure::Agent(error)) => return Err(error),
     };
-    // Each part is bounded; this bounds what a script, a server or a tool wrote unbounded.
+    // Each part is bounded; this bounds what a code, a server or a tool wrote unbounded.
     finished.content = truncate_middle(&finished.content, limits.total);
     Ok(finished)
 }
@@ -193,11 +193,11 @@ fn from_values<T: serde::de::DeserializeOwned>(values: Vec<Value>) -> Result<Vec
 /// context.
 #[derive(Debug, Clone, Default)]
 pub struct HandleOptions {
-    /// The model's tool call id. It becomes the `Idempotency-Key` of `run_script`, `retry_run`
+    /// The model's tool call id. It becomes the `Idempotency-Key` of `run_workflow`, `retry_run`
     /// and `signal_run`, so handling the same tool call again returns the same run or delivers
     /// one signal.
     pub tool_call_id: Option<String>,
-    /// W3C trace context of the LLM call that wrote the script.
+    /// W3C trace context of the LLM call that wrote the code.
     pub traceparent: Option<String>,
     pub tracestate: Option<String>,
 }
@@ -215,7 +215,7 @@ pub(crate) struct Session<'a, A> {
 }
 
 impl<A: Api> Session<'_, A> {
-    pub(crate) async fn run_script(&self, input: &Values) -> Handled {
+    pub(crate) async fn run_workflow(&self, input: &Values) -> Handled {
         let code = require_string(input, "code")?;
         let wait = self.wait_of(input.get("wait"))?;
         let secrets = optional_attachments(input)?;
@@ -235,38 +235,38 @@ impl<A: Api> Session<'_, A> {
         self.report(run, true, failed).await
     }
 
-    pub(crate) async fn check_script(&self, input: &Values) -> Handled {
+    pub(crate) async fn check_workflow(&self, input: &Values) -> Handled {
         let check = CheckRequest {
-            script: require_string(input, "code")?,
+            code: require_string(input, "code")?,
             action_set: self.action_set.clone(),
         };
         let checked = self.api.check(&check).await?;
         let mut content = describe_check(&checked, &self.limits);
-        if rewind_core::script_doc(&check.script).is_none() {
+        if rewind_core::code_doc(&check.code).is_none() {
             content = format!("{content}\n{UNTITLED_NOTE}");
         }
         Ok(AgentToolResult {
-            script: Some(if checked.ok {
-                ScriptVerdict::Passed
+            code: Some(if checked.ok {
+                CodeVerdict::Passed
             } else {
-                ScriptVerdict::Refused
+                CodeVerdict::Refused
             }),
             ..result(content, !checked.ok)
         })
     }
 
-    pub(crate) async fn test_script(&self, input: &Values) -> Handled {
+    pub(crate) async fn test_workflow(&self, input: &Values) -> Handled {
         let code = require_string(input, "code")?;
         let tests = optional_tests(input, "tests")?;
         let workflow = optional_string(input, "workflow")?;
         if tests.is_none() && workflow.is_none() {
             return Err(InputError::new(
-                "give `tests`, or a `workflow` whose suite runs against the script, or both.",
+                "give `tests`, or a `workflow` whose suite runs against the code, or both.",
             )
             .into());
         }
         let request = TestRequest {
-            script: Some(code),
+            code: Some(code),
             action_set: self.action_set.clone(),
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
             workflow,
@@ -546,7 +546,7 @@ impl<A: Api> Session<'_, A> {
             name: name.clone(),
             description: Some(description),
             action_set,
-            script: code,
+            code,
             input: schema_input,
             output: schema_output,
             signals,
@@ -558,9 +558,9 @@ impl<A: Api> Session<'_, A> {
         };
         match self.api.create_workflow(&request).await {
             Ok(workflow) => Ok(Ok(workflow)),
-            Err(ApiError::Problem(problem)) if problem.is(ProblemType::InvalidScript) => {
+            Err(ApiError::Problem(problem)) if problem.is(ProblemType::InvalidCode) => {
                 Ok(Err(AgentToolResult {
-                    script: Some(ScriptVerdict::Refused),
+                    code: Some(CodeVerdict::Refused),
                     ..result(
                         describe_workflow_refusal(
                             &problem.detail,
@@ -601,7 +601,7 @@ impl<A: Api> Session<'_, A> {
         let Some(latest) = versions.first().cloned() else {
             return Err(InputError::new(format!("the workflow {name} has no version.")).into());
         };
-        let script = self.api.get_script(&latest.script);
+        let code = self.api.get_script(&latest.code_digest);
         let tests = stream::iter(latest.tests.iter().cloned())
             .map(|test| async move {
                 match self.api.get_test(&test.digest).await {
@@ -624,10 +624,10 @@ impl<A: Api> Session<'_, A> {
             })
             .buffered(8)
             .try_collect::<Vec<_>>();
-        let (script, tests) = futures_util::future::try_join(script, tests).await?;
+        let (code, tests) = futures_util::future::try_join(code, tests).await?;
         let details = WorkflowDetails {
             versions,
-            source: script.source,
+            source: code.source,
             tests,
         };
         Ok(AgentToolResult {
@@ -701,22 +701,23 @@ impl<A: Api> Session<'_, A> {
     /// A key the server already knows returns the run it started, whoever started it. The key
     /// of a run is scoped by the agent's labels, so this is a safety net: an agent without
     /// labels, or two agents with the same labels whose tool call ids repeat, would get another
-    /// conversation's run, or the run of an earlier script. Such a run is the harness's fault,
+    /// conversation's run, or the run of an earlier code. Such a run is the harness's fault,
     /// never shown to the model: it must carry the agent's labels and be a run of this very
-    /// script.
+    /// code.
     fn check_answered(
         &self,
         run: &Run,
         code: &str,
         key: Option<&IdempotencyKey>,
     ) -> Result<(), Failure> {
-        if key.is_none() || (has_labels(&run.labels, self.labels) && run.script == sha256_hex(code))
+        if key.is_none()
+            || (has_labels(&run.labels, self.labels) && run.code_digest == sha256_hex(code))
         {
             return Ok(());
         }
         Err(Failure::Agent(AgentError::Harness(format!(
             "the tool call id {:?} is already the idempotency key of another run (of another \
-             script, or with other labels): give each tool call a unique id",
+             code, or with other labels): give each tool call a unique id",
             self.call.tool_call_id.as_deref().unwrap_or_default()
         ))))
     }
@@ -769,7 +770,7 @@ fn has_labels(labels: &Labels, required: &BTreeMap<String, String>) -> bool {
 /// How the agent tools of the SDK's set behave: the SDK's `AgentToolsOptions`.
 #[derive(Debug, Clone)]
 pub struct AgentOptions {
-    /// The action set the model's scripts import from `rewind:actions`. `search_actions`,
+    /// The action set the model's workflows import from `rewind:actions`. `search_actions`,
     /// `save_workflow`, `get_workflow` and `record_tests` need one. Each workflow
     /// `save_workflow` saves derives a new action set from it, which the later calls use.
     pub action_set: Option<String>,
@@ -779,7 +780,7 @@ pub struct AgentOptions {
     /// The tools to give the model; all of them by default, those that need an action set only with
     /// one.
     pub tools: Option<Vec<String>>,
-    /// How long `run_script`, `retry_run` and `cancel_run` wait for the run to end: 30 s.
+    /// How long `run_workflow`, `retry_run` and `cancel_run` wait for the run to end: 30 s.
     pub wait: Duration,
     /// The longest wait the model may ask for: 2 minutes.
     pub max_wait: Duration,
@@ -811,7 +812,7 @@ pub struct AgentTools<A> {
     options: AgentOptions,
     names: Vec<&'static str>,
     limits: Limits,
-    /// The action set of the model's scripts: the one given, then the last one `save_workflow`
+    /// The action set of the model's workflows: the one given, then the last one `save_workflow`
     /// derived.
     current: Mutex<Option<String>>,
     /// One derivation of the action set at a time, so concurrent saves all end up in it.
@@ -872,7 +873,7 @@ impl<A: Api> AgentTools<A> {
         self.names.contains(&name)
     }
 
-    /// The action set the model's scripts run with: the one given, or the last one `save_workflow`
+    /// The action set the model's workflows run with: the one given, or the last one `save_workflow`
     /// derived from it. A harness that creates the agent tools again for each turn keeps it with
     /// the conversation, and passes it as `action_set` the next time.
     pub fn action_set(&self) -> Option<String> {
@@ -906,9 +907,9 @@ impl<A: Api> AgentTools<A> {
         };
         let handled = match crate::input::parse(name, input) {
             Ok(values) => match name {
-                "run_script" => session.run_script(&values).await,
-                "check_script" => session.check_script(&values).await,
-                "test_script" => session.test_script(&values).await,
+                "run_workflow" => session.run_workflow(&values).await,
+                "check_workflow" => session.check_workflow(&values).await,
+                "test_workflow" => session.test_workflow(&values).await,
                 "get_run" => session.get_run(&values).await,
                 "list_runs" => session.list_runs(&values).await,
                 "signal_run" => session.signal_run(&values).await,
@@ -930,7 +931,7 @@ impl<A: Api> AgentTools<A> {
     }
 
     /// Saves a workflow with the agent's action set, then derives from that action set one that
-    /// pins this version of it: the later scripts of the model import it from `rewind:workflows`.
+    /// pins this version of it: the later workflows of the model import it from `rewind:workflows`.
     async fn save_workflow(&self, session: &Session<'_, A>, input: &Values) -> Handled {
         let workflow = match session.create_workflow(input).await? {
             Ok(workflow) => workflow,
@@ -943,7 +944,7 @@ impl<A: Api> AgentTools<A> {
                     workflow: Some(workflow.clone()),
                     ..result(
                         format!(
-                            "The workflow {} was saved, but your scripts cannot start it yet: \
+                            "The workflow {} was saved, but your workflows cannot start it yet: \
                              adding it to your tools failed: {}",
                             workflow.name,
                             truncate_end(&problem.detail, self.limits.value)

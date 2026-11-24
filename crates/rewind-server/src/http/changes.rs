@@ -4,7 +4,7 @@
 //!
 //! ```text
 //!  owners of the scope's partitions ── Changed (once durable) ──► run {summary}
-//!  Membership::changes ───────────── ControlPlaneChange ────────► script, workflow, secret,
+//!  Membership::changes ───────────── ControlPlaneChange ────────► code, workflow, secret,
 //!                                                                 namespace, connection
 //!  a subscription lost, changes lost ────────────────────────────► resync, then closed
 //! ```
@@ -92,8 +92,8 @@ struct Follow {
     runs: UnboundedReceiver<Changed>,
     control: broadcast::Receiver<Control>,
     pending: VecDeque<Event>,
-    /// The titles of the scripts the stream's runs ran, read once and forgotten when the
-    /// script's `script` change comes (a title given or removed).
+    /// The titles of the workflows the stream's runs ran, read once and forgotten when the
+    /// code's `code` change comes (a title given or removed).
     titles: HashMap<Digest, Option<String>>,
     /// A subscription was lost: the stream ends once `pending` is sent.
     closing: bool,
@@ -128,7 +128,7 @@ impl Follow {
         }
     }
 
-    /// A run's summary, with its script's title, if the caller may see the run.
+    /// A run's summary, with its code's title, if the caller may see the run.
     async fn run(&mut self, changed: Changed) {
         let caller = self.rights.caller();
         let Some(summary) = changed.summary else {
@@ -140,15 +140,15 @@ impl Follow {
         {
             return;
         }
-        let script = summary.script;
-        let title = match self.titles.get(&script) {
+        let code = summary.code;
+        let title = match self.titles.get(&code) {
             Some(title) => title.clone(),
             None => {
                 // A title that cannot be read now is left out, and read again next time.
-                match self.app.titles(&caller.tenant, [script]).await {
+                match self.app.titles(&caller.tenant, [code]).await {
                     Ok(mut titles) => {
-                        let title = titles.remove(&script).map(|title| title.title);
-                        self.titles.insert(script, title.clone());
+                        let title = titles.remove(&code).map(|title| title.title);
+                        self.titles.insert(code, title.clone());
                         title
                     }
                     Err(_) => None,

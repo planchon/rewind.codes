@@ -1,5 +1,5 @@
 {
-  "description": "One mailbox per signal name: a signal sent before the script waits is kept; a signal that arrives cancels its timeout timer; a timeout resolves to undefined.",
+  "description": "One mailbox per signal name: a signal sent before the code waits is kept; a signal that arrives cancels its timeout timer; a timeout resolves to undefined.",
   "steps": [
     {
       "signal": {

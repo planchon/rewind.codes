@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, RunId, RunMode, RunOutcome,
-    RunState, Script, Seq, Timestamp,
+    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Code, RunId, RunMode,
+    RunOutcome, RunState, Seq, Timestamp,
 };
 use rewind_engine::ports::{
     ActionDispatcher, Call, CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId,
@@ -71,7 +71,7 @@ fn clock() -> Arc<dyn Clock> {
 }
 
 async fn mocks(source: &str) -> Result<TsMocks, MockError> {
-    TsMocks::new(&Script::new(source), clock(), SandboxLimits::default()).await
+    TsMocks::new(&Code::new(source), clock(), SandboxLimits::default()).await
 }
 
 fn call(action: &str, args: Value) -> Call {
@@ -197,7 +197,7 @@ async fn handlers_are_deterministic() {
 #[tokio::test]
 async fn a_handler_that_spins_is_stopped_and_the_mocks_stop() {
     let mocks = TsMocks::new(
-        &Script::new(MOCKS),
+        &Code::new(MOCKS),
         clock(),
         SandboxLimits {
             cpu_per_trigger: Duration::from_millis(100),
@@ -216,13 +216,13 @@ async fn a_handler_that_spins_is_stopped_and_the_mocks_stop() {
 }
 
 /// What a handler logs is kept outside V8's heap until the call ends: a flood is stopped, like
-/// one of the script's.
+/// one of the code's.
 #[tokio::test]
 async fn a_handler_that_floods_its_logs_is_stopped() {
     let source = "export default { noisy: () => { const big = \"x\".repeat(1 << 20); \
                   for (;;) console.log(big); } };";
     let mocks = TsMocks::new(
-        &Script::new(source),
+        &Code::new(source),
         clock(),
         SandboxLimits {
             emitted_bytes_per_trigger: 4 * 1024 * 1024,
@@ -285,7 +285,7 @@ async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
         ActionSet::from_harness_actions(["github.get_issue", "github.close_issue", "fails"])
             .unwrap();
     let mut request = StartRun::new(
-        Script::new(
+        Code::new(
             r#"
 import { github, fails } from "rewind:actions";
 

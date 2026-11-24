@@ -1,5 +1,5 @@
 {
-  "description": "The example of archi/01-product.md: actions, a human approval with a timeout, parallel effects and a 10-day sleep, in one durable script.",
+  "description": "The example of archi/01-product.md: actions, a human approval with a timeout, parallel effects and a 10-day sleep, in one durable code.",
   "input": {
     "repo": "acme/api"
   },

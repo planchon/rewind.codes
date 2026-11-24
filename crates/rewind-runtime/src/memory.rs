@@ -8,7 +8,7 @@
 //! (`new ArrayBuffer(2 ** 36)`) made V8 abort the process, and 1.5 GiB of typed arrays fitted
 //! under a 64 MiB heap. The allocator refuses an allocation that would take the bytes it holds
 //! past its budget. V8 then collects garbage and retries, so it fails only when the buffers the
-//! script can still reach leave no room, and the script gets V8's own
+//! code can still reach leave no room, and the code gets V8's own
 //! `RangeError: Array buffer allocation failed`.
 //!
 //! V8 asks the near-heap-limit callback at the start of that last collection, whatever the
@@ -17,8 +17,8 @@
 //! collection, and a refusal V8 makes after asking the callback ends the sequence.
 //!
 //! [`pin_stack`] sets the limit of V8's stack a fixed distance below the frame that calls into
-//! JavaScript. V8 sets it once, [`SCRIPT_STACK`] below the top of the isolate's thread, so the
-//! depth a script reached (and could catch, and observe) depended on every Rust frame between
+//! JavaScript. V8 sets it once, [`CODE_STACK`] below the top of the isolate's thread, so the
+//! depth a code reached (and could catch, and observe) depended on every Rust frame between
 //! the thread's start and the call: on the build. Pinned before each call, it depends on V8 and
 //! on the few frames of rusty_v8 between the call and V8.
 
@@ -36,9 +36,9 @@ use deno_core::v8;
 const ALIGN: usize = 16;
 
 /// The stack a call into JavaScript may use: V8's default `--stack-size` on 64-bit hosts.
-pub(crate) const SCRIPT_STACK: usize = 984 * 1024;
+pub(crate) const CODE_STACK: usize = 984 * 1024;
 
-/// The stack of an isolate's thread: the script's, the Rust frames above it, and room below the
+/// The stack of an isolate's thread: the code's, the Rust frames above it, and room below the
 /// limit for what V8 runs in C++ once JavaScript reached it.
 pub(crate) const ISOLATE_THREAD_STACK: usize = 4 * 1024 * 1024;
 
@@ -255,16 +255,16 @@ unsafe extern "C" {
     fn v8_isolate_set_stack_limit(isolate: v8::UnsafeRawIsolatePtr, stack_limit: usize);
 }
 
-/// Sets the limit of `isolate`'s stack [`SCRIPT_STACK`] bytes below the caller's frame. Call it
+/// Sets the limit of `isolate`'s stack [`CODE_STACK`] bytes below the caller's frame. Call it
 /// right before calling into JavaScript, on a thread of [`ISOLATE_THREAD_STACK`] bytes.
 #[inline(never)]
 pub(crate) fn pin_stack(isolate: &mut v8::Isolate) {
     let frame = 0u8;
     let here = std::hint::black_box(std::ptr::from_ref(&frame)).addr();
-    let limit = here.saturating_sub(SCRIPT_STACK);
+    let limit = here.saturating_sub(CODE_STACK);
     // SAFETY: `isolate` is a live isolate this thread uses, and the declaration above matches the
     // function V8 exports. The limit lies within this thread's stack, with room below it: the
-    // isolate threads have ISOLATE_THREAD_STACK bytes, far more than SCRIPT_STACK and the frames
+    // isolate threads have ISOLATE_THREAD_STACK bytes, far more than CODE_STACK and the frames
     // above this one.
     unsafe { v8_isolate_set_stack_limit(isolate.as_raw_isolate_ptr(), limit) };
 }
@@ -346,7 +346,7 @@ mod tests {
         let scope = &mut v8::ContextScope::new(scope, context);
         v8::tc_scope!(let scope, scope);
         let source = v8::String::new(scope, source).unwrap();
-        match v8::Script::compile(scope, source, None).and_then(|script| script.run(scope)) {
+        match v8::Script::compile(scope, source, None).and_then(|code| code.run(scope)) {
             Some(value) => value.to_rust_string_lossy(scope),
             None => {
                 let exception = scope.exception().unwrap();
@@ -355,8 +355,8 @@ mod tests {
         }
     }
 
-    /// In V8: a buffer past the budget is a `RangeError` the script can catch, never an abort of
-    /// the process, and buffers the script dropped give their bytes back.
+    /// In V8: a buffer past the budget is a `RangeError` the code can catch, never an abort of
+    /// the process, and buffers the code dropped give their bytes back.
     #[test]
     fn v8_throws_a_range_error_past_the_budget_and_frees_what_is_dropped() {
         let (mut isolate, budget) = isolate(8 * MIB);
@@ -404,7 +404,7 @@ mod tests {
 
     const DEPTH: &str = "function f(n) { try { return f(n + 1) } catch { return n } } f(0)";
 
-    /// The depth a script reaches does not depend on the Rust frames above the call into V8:
+    /// The depth a code reaches does not depend on the Rust frames above the call into V8:
     /// they change from one build to the next.
     #[test]
     fn the_stack_limit_is_pinned_below_the_call() {
@@ -419,15 +419,15 @@ mod tests {
                         below(kib, &mut || run(&mut pinned, DEPTH))
                     })
                     .collect();
-                // V8's own limit, set when the isolate was created: deeper Rust, shallower script.
+                // V8's own limit, set when the isolate was created: deeper Rust, shallower code.
                 let (mut fresh, _) = isolate(MIB);
                 let unpinned = below(256, &mut || {
                     v8::scope!(let scope, &mut fresh);
                     let context = v8::Context::new(scope, Default::default());
                     let scope = &mut v8::ContextScope::new(scope, context);
                     let source = v8::String::new(scope, DEPTH).unwrap();
-                    let script = v8::Script::compile(scope, source, None).unwrap();
-                    script.run(scope).unwrap().to_rust_string_lossy(scope)
+                    let code = v8::Script::compile(scope, source, None).unwrap();
+                    code.run(scope).unwrap().to_rust_string_lossy(scope)
                 });
                 (pinned, unpinned)
             })

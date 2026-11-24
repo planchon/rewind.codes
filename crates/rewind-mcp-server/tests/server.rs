@@ -72,7 +72,7 @@ type Log = Arc<Mutex<Vec<String>>>;
 fn run(id: &str, output: Value) -> Run {
     serde_json::from_value(json!({
         "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
-        "status": "completed", "script": "s", "actionSet": "t",
+        "status": "completed", "codeDigest": "s", "actionSet": "t",
         "epoch": 1, "mode": "live", "labels": { "via": "claude" }, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
         "endedAt": "2026-11-19T10:00:01Z", "expiresAt": "2026-12-19T10:00:00Z",
@@ -109,7 +109,7 @@ impl Api for FakeApi {
         _key: Option<&IdempotencyKey>,
     ) -> Result<Run, ApiError> {
         self.saw("start_run");
-        let output = if start.script.contains("big") {
+        let output = if start.code.contains("big") {
             json!("x".repeat(300_000))
         } else {
             json!({ "ok": true, "actionSet": start.action_set, "wait": start.wait })
@@ -276,7 +276,7 @@ impl McpApi for FakeApi {
                 "name": "alice",
                 "displayName": "Alice Martin",
                 "limits": {}, "exceptions": {},
-                "usage": { "cpu": "1s", "activeRuns": 1, "runsStarted": 12, "scripts": 3 },
+                "usage": { "cpu": "1s", "activeRuns": 1, "runsStarted": 12, "workflows": 3 },
                 "createdAt": "2026-11-01T00:00:00Z", "lastActiveAt": "2026-11-18T10:00:00Z"
             }]
         }))
@@ -427,7 +427,7 @@ async fn every_tool_has_a_title_and_its_annotations() {
         );
         assert_eq!(
             annotations.open_world_hint,
-            Some(matches!(name, "run_script" | "retry_run")),
+            Some(matches!(name, "run_workflow" | "retry_run")),
             "{name}"
         );
         assert!(annotations.idempotent_hint.is_some(), "{name}");
@@ -435,7 +435,7 @@ async fn every_tool_has_a_title_and_its_annotations() {
             read_only,
             !matches!(
                 name,
-                "run_script" | "retry_run" | "signal_run" | "cancel_run" | "record_tests"
+                "run_workflow" | "retry_run" | "signal_run" | "cancel_run" | "record_tests"
             ),
             "{name}"
         );
@@ -462,9 +462,9 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
         "list_action_sets",
         "search_actions",
         "list_secrets",
-        "check_script",
-        "test_script",
-        "run_script",
+        "check_workflow",
+        "test_workflow",
+        "run_workflow",
     ] {
         assert!(INSTRUCTIONS.contains(step), "{step}");
     }
@@ -568,20 +568,20 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
     let client = client(connector).await;
     let refused = call(
         &client,
-        "run_script",
+        "run_workflow",
         json!({ "org": "Acme", "namespace": "alice", "code": "export default async () => 1;" }),
     )
     .await;
     assert_eq!(refused.is_error, Some(true));
     assert_eq!(
         text(&refused),
-        "run_script: you may not use it in the organization Acme (id org_1): it needs the permission runs:start, which you do not hold there. list_orgs says what you may do in each organization."
+        "run_workflow: you may not use it in the organization Acme (id org_1): it needs the permission runs:start, which you do not hold there. list_orgs says what you may do in each organization."
     );
     assert!(log.lock().unwrap().is_empty(), "nothing reached the API");
 
     let ran = call(
         &client,
-        "run_script",
+        "run_workflow",
         json!({ "org": "Globex", "namespace": "alice", "action_set": "ts1", "code": "export default async () => 1;" }),
     )
     .await;
@@ -605,7 +605,7 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
 async fn checking_testing_and_running_need_a_namespace() {
     let (connector, log) = FakeConnector::new(vec![organization("org_1", None, &RUN)]);
     let client = client(connector).await;
-    for tool in ["check_script", "test_script", "run_script"] {
+    for tool in ["check_workflow", "test_workflow", "run_workflow"] {
         let refused = call(
             &client,
             tool,
@@ -616,31 +616,31 @@ async fn checking_testing_and_running_need_a_namespace() {
         assert_eq!(
             text(&refused),
             format!(
-                "{tool}: `namespace` must be a non-empty string: the namespace (the end user) the script acts for, a name list_namespaces gives or a new one."
+                "{tool}: `namespace` must be a non-empty string: the namespace (the end user) the code acts for, a name list_namespaces gives or a new one."
             )
         );
     }
     let invalid = call(
         &client,
-        "check_script",
+        "check_workflow",
         json!({ "namespace": "alice smith", "code": "export default async () => 1;" }),
     )
     .await;
     assert_eq!(invalid.is_error, Some(true));
     assert_eq!(
         text(&invalid),
-        "check_script: `namespace`: invalid namespace: \"alice smith\": expected 1 to 128 ASCII letters, digits, -, _, ., : and @, not starting with rewind:"
+        "check_workflow: `namespace`: invalid namespace: \"alice smith\": expected 1 to 128 ASCII letters, digits, -, _, ., : and @, not starting with rewind:"
     );
     assert!(log.lock().unwrap().is_empty());
 
     let checked = call(
         &client,
-        "check_script",
+        "check_workflow",
         json!({ "namespace": "alice", "code": "/** Count to one */\nexport default async () => 1;" }),
     )
     .await;
     assert_eq!(checked.is_error, Some(false));
-    assert_eq!(text(&checked), "The script type-checks.");
+    assert_eq!(text(&checked), "The code type-checks.");
     assert_eq!(
         log.lock().unwrap()[0],
         "check action_set=- org=org_1 ns=alice"
@@ -659,7 +659,7 @@ async fn a_result_holds_at_most_80_000_characters_and_pages_the_rest() {
     let client = client(connector).await;
     let ran = call(
         &client,
-        "run_script",
+        "run_workflow",
         json!({ "namespace": "alice", "code": "// big\nexport default async () => 1;" }),
     )
     .await;
@@ -798,7 +798,7 @@ async fn a_whole_exchange_over_streamable_http_without_session() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     assert!(
-        tools.contains(&"get_run") && !tools.contains(&"run_script"),
+        tools.contains(&"get_run") && !tools.contains(&"run_workflow"),
         "{tools:?}"
     );
     assert_eq!(listed["result"]["cacheScope"], "private");
@@ -822,7 +822,7 @@ async fn a_whole_exchange_over_streamable_http_without_session() {
         "{listed_text}"
     );
     assert!(
-        listed_text.ends_with("Give one's name, not its display name in parentheses, as `namespace` to check_script, test_script and run_script."),
+        listed_text.ends_with("Give one's name, not its display name in parentheses, as `namespace` to check_workflow, test_workflow and run_workflow."),
         "{listed_text}"
     );
     assert_eq!(

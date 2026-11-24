@@ -69,10 +69,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::CHECK, post(scripts::check))
         .route(routes::TEST, post(testing::test))
         .route(routes::SCRIPTS, get(stats::scripts))
-        .route(
-            routes::SCRIPT,
-            get(reading::script).patch(reading::set_title),
-        )
+        .route(routes::SCRIPT, get(reading::code).patch(reading::set_title))
         .route(routes::RUNS, post(runs::start).get(runs::list))
         .route(routes::RUN_STATS, get(stats::runs))
         .route(routes::RUN_FAILURES, get(stats::failures))

@@ -826,7 +826,7 @@ pub enum OrgRequest {
     Detach { stream: String },
 }
 
-/// `{"partition":3,"epoch":7,"run":"0196…","namespace":"user-1","script":"<hex>","at":…}`.
+/// `{"partition":3,"epoch":7,"run":"0196…","namespace":"user-1","code":"<hex>","at":…}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Admit {
@@ -834,7 +834,7 @@ pub struct Admit {
     pub epoch: u64,
     pub run: Id,
     pub namespace: String,
-    pub script: Hex,
+    pub code: Hex,
     pub at: u64,
 }
 
@@ -1030,7 +1030,7 @@ impl From<&link::OrgRequest> for OrgRequest {
                 epoch: admit.epoch.0,
                 run: Id(admit.run),
                 namespace: admit.namespace.to_string(),
-                script: Hex(admit.script),
+                code: Hex(admit.code),
                 at: admit.at.0,
             }),
             R::Counts(report) => OrgRequest::Counts(CountsReport {
@@ -1085,7 +1085,7 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
                 epoch: engine::PartitionEpoch(admit.epoch),
                 run: admit.run.0,
                 namespace: namespace(admit.namespace)?,
-                script: admit.script.0,
+                code: admit.code.0,
                 at: Timestamp(admit.at),
             }),
             OrgRequest::Counts(report) => R::Counts(link::CountsReport {

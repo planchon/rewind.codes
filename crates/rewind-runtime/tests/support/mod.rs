@@ -11,7 +11,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{HistoryEntry, JsonValue, Script, Timestamp};
+use rewind_core::{Code, HistoryEntry, JsonValue, Timestamp};
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
     MemoryPartitions, MemorySecrets, MemorySpanExporter, MemoryWebhooks, SeededEntropy,
@@ -154,11 +154,11 @@ impl<D: ActionDispatcher + 'static> World<D> {
             .entries
     }
 
-    /// Replays the run's journal with its script, or `script`.
-    pub async fn replay(&self, run: &RunRef, script: Option<&Script>) -> ReplayVerdict {
+    /// Replays the run's journal with its code, or `code`.
+    pub async fn replay(&self, run: &RunRef, code: Option<&Code>) -> ReplayVerdict {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
-        self.edge.replay(&mut gateway, run, script).await.unwrap()
+        self.edge.replay(&mut gateway, run, code).await.unwrap()
     }
 
     pub async fn signal(

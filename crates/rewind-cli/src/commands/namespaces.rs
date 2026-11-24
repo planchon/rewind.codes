@@ -184,7 +184,7 @@ fn listing(page: &NamespaceList) -> String {
         "CPU".to_owned(),
         "ACTIVE".to_owned(),
         "RUNS".to_owned(),
-        "SCRIPTS".to_owned(),
+        "WORKFLOWS".to_owned(),
         "LAST ACTIVE".to_owned(),
     ]];
     for namespace in &page.namespaces {
@@ -199,7 +199,7 @@ fn listing(page: &NamespaceList) -> String {
             against(usage.cpu, limits.cpu_per_month),
             against(usage.active_runs, limits.active_runs),
             against(usage.runs_started, limits.runs_per_month),
-            against(usage.scripts, limits.scripts),
+            against(usage.workflows, limits.workflows),
             namespace.last_active_at.to_string(),
         ]);
     }
@@ -238,10 +238,10 @@ fn quota_rows(
             usage.runs_started.to_string(),
         ],
         [
-            "scripts".into(),
-            or_dash(first.scripts),
-            or_dash(second.scripts),
-            usage.scripts.to_string(),
+            "workflows".into(),
+            or_dash(first.workflows),
+            or_dash(second.workflows),
+            usage.workflows.to_string(),
         ],
         [
             "max_ttl".into(),
@@ -250,9 +250,9 @@ fn quota_rows(
             "-".into(),
         ],
         [
-            "max_script_lines".into(),
-            or_dash(first.max_script_lines),
-            or_dash(second.max_script_lines),
+            "max_code_lines".into(),
+            or_dash(first.max_code_lines),
+            or_dash(second.max_code_lines),
             "-".into(),
         ],
     ]
@@ -357,7 +357,7 @@ mod tests {
                     cpu: "30m".parse().unwrap(),
                     active_runs: 3,
                     runs_started: 12,
-                    scripts: 2,
+                    workflows: 2,
                 },
                 created_at: at(),
                 last_active_at: at(),

@@ -18,23 +18,23 @@ use crate::connector::{Connector, ConnectorError};
 use crate::organizations;
 
 /// What `initialize` tells the model: from an organization to a run.
-pub const INSTRUCTIONS: &str = "Rewind runs TypeScript scripts that call actions, durably: a \
-script can sleep for days and wait for signals, every call it makes is recorded, and a failed run \
+pub const INSTRUCTIONS: &str = "Rewind runs TypeScript workflows that call actions, durably: a \
+code can sleep for days and wait for signals, every call it makes is recorded, and a failed run \
 is fixed without calling again what it already called. From an organization to a run:\n\
 1. list_orgs: the organizations you reach. Give one as `org` to the other tools, by its id or \
 its name; leave it out when you reach only one.\n\
-2. list_namespaces: the namespaces of the organization, each one end user. A script runs in the \
+2. list_namespaces: the namespaces of the organization, each one end user. A code runs in the \
 namespace you give as `namespace`; a new name creates one.\n\
-3. list_action_sets: the action sets, the MCP servers and actions a script imports from \
+3. list_action_sets: the action sets, the MCP servers and actions a code imports from \
 \"rewind:actions\". Give the action set's id as `action_set`.\n\
 4. search_actions: the TypeScript declarations of the actions you need, before you write the \
-script.\n\
+code.\n\
 5. list_secrets: the secrets you may attach, by name, never a value: the end user's own \
 (ns/<name>) and the organization's (org/<name>). A server whose calls need one takes it in \
-`secrets` of run_script and retry_run: {\"github\": \"ns/github\"}.\n\
-6. check_script, then test_script: type-check the script, then test it in virtual time against \
+`secrets` of run_workflow and retry_run: {\"github\": \"ns/github\"}.\n\
+6. check_workflow, then test_workflow: type-check the code, then test it in virtual time against \
 answers you give for its calls, without calling anything or reading any secret.\n\
-7. run_script: run it with the secrets its servers need. You get its output, or the run's id and \
+7. run_workflow: run it with the secrets its servers need. You get its output, or the run's id and \
 what it waits for: follow it with get_run, answer it with signal_run, stop it with cancel_run, \
 and fix a failed run with retry_run.\n\
 When the person has not said which organization, namespace or action set to use and a list holds \

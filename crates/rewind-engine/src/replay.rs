@@ -1,9 +1,9 @@
-//! Rebuilding a script instance from a history (`archi/03-execution.md`, "Replay").
+//! Rebuilding a code instance from a history (`archi/03-execution.md`, "Replay").
 //!
 //! Replay creates a fresh instance, runs `main(input)`, and walks the history with the
 //! domain's [`ReplayCursor`]: recorded completions are delivered, and every command the
-//! script emits must match the history. No action is called and nothing is written: annotations
-//! the script emits are already recorded, so they are dropped, and nothing about the script is
+//! code emits must match the history. No action is called and nothing is written: annotations
+//! the code emits are already recorded, so they are dropped, and nothing about the code is
 //! emitted as telemetry. The replay itself is a span of service telemetry, timed as
 //! `rewind.replay.duration`.
 
@@ -32,28 +32,28 @@ impl PayloadSource for InJournal {
 }
 
 use crate::ports::{
-    BlobError, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef, ScriptExecutor,
-    ScriptInstance, StartScript,
+    BlobError, CodeExecutor, CodeInstance, CompiledCode, Emitted, ExecutorError, InvalidCode,
+    RunRef, StartCode,
 };
 use crate::{metrics, payloads};
 
 /// What to replay.
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayInput<'a> {
-    /// The run: its id, which the script can read (`run.id`), and its tenant, whose payloads
+    /// The run: its id, which the code can read (`run.id`), and its tenant, whose payloads
     /// the history references.
     pub run: &'a RunRef,
-    /// The script as compiled, or why it does not compile.
-    pub compiled: Result<&'a CompiledScript, &'a InvalidScript>,
+    /// The code as compiled, or why it does not compile.
+    pub compiled: Result<&'a CompiledCode, &'a InvalidCode>,
     pub action_set: &'a ActionSet,
     pub history: &'a [HistoryEntry],
 }
 
-/// A script rebuilt from its history.
+/// A code rebuilt from its history.
 #[derive(Debug)]
 pub struct Rebuilt<I> {
     /// The instance, in exactly the state it was in after the last commit. `None` when the
-    /// original run was aborted before the script could start.
+    /// original run was aborted before the code could start.
     pub instance: Option<I>,
     pub end: ReplayEnd,
 }
@@ -78,14 +78,14 @@ pub enum ReplayError {
     Blob(#[from] BlobError),
 }
 
-/// Re-executes a script against a history, loading the payloads it delivers from `payloads`.
+/// Re-executes a code against a history, loading the payloads it delivers from `payloads`.
 pub async fn replay<X, P>(
     executor: &X,
     payloads: &P,
     input: ReplayInput<'_>,
 ) -> Result<Rebuilt<X::Instance>, ReplayError>
 where
-    X: ScriptExecutor,
+    X: CodeExecutor,
     P: PayloadSource,
 {
     let span = tracing::info_span!(
@@ -107,20 +107,20 @@ async fn rebuild<X, P>(
     input: ReplayInput<'_>,
 ) -> Result<Rebuilt<X::Instance>, ReplayError>
 where
-    X: ScriptExecutor,
+    X: CodeExecutor,
     P: PayloadSource,
 {
     let mut cursor = ReplayCursor::new(input.history)?;
     let compiled = match input.compiled {
         Ok(compiled) => compiled.clone(),
         Err(invalid) => {
-            let err = ExecutorError::InvalidScript(invalid.message.clone());
+            let err = ExecutorError::InvalidCode(invalid.message.clone());
             return stopped::<X::Instance>(&mut cursor, None, err);
         }
     };
     let started = cursor.run_started();
     let tenant = &input.run.tenant;
-    let start = StartScript {
+    let start = StartCode {
         run_id: input.run.id,
         compiled,
         action_set: input.action_set.clone(),
@@ -177,7 +177,7 @@ fn check<'h>(
     Ok(None)
 }
 
-/// The script could not go on. That is a faithful replay if the original run was aborted at
+/// The code could not go on. That is a faithful replay if the original run was aborted at
 /// the same point (it could not load, or hit the same limit), and an error otherwise.
 fn stopped<I>(
     cursor: &mut ReplayCursor<'_>,
@@ -197,13 +197,13 @@ fn aborted<I>(instance: Option<I>, reason: &AbortReason) -> Rebuilt<I> {
     }
 }
 
-/// The verdict of a replay of a run with its script, or another one ([`Edge::replay`](crate::edge::Edge::replay)).
+/// The verdict of a replay of a run with its code, or another one ([`Edge::replay`](crate::edge::Edge::replay)).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplayVerdict {
-    /// The script reproduces the history.
+    /// The code reproduces the history.
     Matches(ReplayEnd),
-    /// The script diverges from the history, at the entry the error names.
+    /// The code diverges from the history, at the entry the error names.
     Diverges(NonDeterminism),
-    /// The script could not go on where the original run went on.
+    /// The code could not go on where the original run went on.
     Fails(ExecutorError),
 }

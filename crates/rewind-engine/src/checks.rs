@@ -28,7 +28,7 @@ pub(crate) enum BoundsError {
 }
 
 /// The bounds of a start or a fork in a namespace: the largest TTL (the deployment's, the
-/// namespace's and the tenant's `maxTtl`) and the most lines of a script.
+/// namespace's and the tenant's `maxTtl`) and the most lines of a code.
 pub(crate) async fn bounds<C: CatalogStore>(
     catalog: &C,
     config: &NodeConfig,
@@ -59,7 +59,7 @@ pub(crate) async fn bounds<C: CatalogStore>(
     Ok(NamespaceBounds {
         max_ttl,
         default_ttl: config.default_ttl.min(max_ttl),
-        max_script_lines: bounds.max_script_lines.map(u64::from),
+        max_code_lines: bounds.max_code_lines.map(u64::from),
     })
 }
 

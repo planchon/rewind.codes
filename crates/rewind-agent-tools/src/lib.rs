@@ -1,7 +1,7 @@
 //! The agent tools of Rewind, in Rust (`archi/01-product.md`, "Agent tools";
 //! `archi/07-code-architecture.md`, "Crates").
 //!
-//! The tools a model uses to write, check, test, run, follow and repair its scripts, as the
+//! The tools a model uses to write, check, test, run, follow and repair its workflows, as the
 //! TypeScript SDK defines them (`sdk/typescript/src/agent-tools/`), which stays the reference:
 //!
 //! - [`definitions`]: the tools for a model. The SDK's set, word for word; the MCP set, with
@@ -15,7 +15,7 @@
 //! `rewind_api::Client` implements both ports: the CLI's `rewind mcp` and `rewind-server` use it.
 //! The evals implement [`Api`] with the engine in process.
 //!
-//! A mistake the model can fix (a bad argument, a refused script, a run that has ended: a
+//! A mistake the model can fix (a bad argument, a refused code, a run that has ended: a
 //! problem of `/v1` with a 4xx status but 401) is a result with `is_error`; a fault of the
 //! platform (unreachable, a 401, a 5xx) or of the harness is an [`AgentError`].
 
@@ -34,5 +34,5 @@ pub use api::{Api, ApiError, McpApi};
 pub use keys::{idempotency_key, run_key};
 pub use mcp::{MCP_DEFAULT_WAIT, MCP_MAX_WAIT, McpTools, Organization};
 pub use tools::{
-    AgentError, AgentOptions, AgentToolResult, AgentTools, HandleOptions, ScriptVerdict,
+    AgentError, AgentOptions, AgentToolResult, AgentTools, CodeVerdict, HandleOptions,
 };

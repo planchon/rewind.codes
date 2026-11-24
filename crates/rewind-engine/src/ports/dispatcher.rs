@@ -77,7 +77,7 @@ pub struct CallClaims {
     pub labels: BTreeMap<String, String>,
     /// `run`.
     pub run: RunId,
-    /// `action`: the action's name, as scripts call it.
+    /// `action`: the action's name, as workflows call it.
     pub action: String,
     /// `idempotency_key`: `{run_id}/{seq}`, or a fork's inherited key.
     pub idempotency_key: String,
@@ -112,9 +112,9 @@ pub const RETRY_AFTER_DATA: &str = "retryAfter";
 /// What became of one delivery (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dispatched {
-    /// The action answered: the script receives this result.
+    /// The action answered: the code receives this result.
     Result(JsonValue),
-    /// The action failed for good: the script receives this failure as an `ActionError`.
+    /// The action failed for good: the code receives this failure as an `ActionError`.
     Failed(ActionFailure),
     /// A failure worth delivering again (unreachable, overloaded, timed out): when the action is
     /// idempotent, the engine puts the task back to `ready` with backoff; otherwise it fails the

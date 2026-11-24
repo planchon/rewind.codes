@@ -17,7 +17,7 @@ pub fn idempotency_key(call_id: Option<&str>) -> Option<IdempotencyKey> {
         .ok()
 }
 
-/// The idempotency key of the run a tool call starts (`run_script`, `retry_run`): the SHA-256
+/// The idempotency key of the run a tool call starts (`run_workflow`, `retry_run`): the SHA-256
 /// of `[labels, call_id]` in compact JSON, the labels as `[key, value]` pairs sorted by key. A
 /// run's key is unique per tenant, and harnesses number their tool calls alike (`call_0`,
 /// `call_1`…): agents with other labels never share a key. `None` for a call without an id.
@@ -30,7 +30,7 @@ pub fn run_key(labels: &BTreeMap<String, String>, call_id: Option<&str>) -> Opti
     IdempotencyKey::new(sha256_hex(&json!([scope, call_id]).to_string())).ok()
 }
 
-/// The SHA-256 of a text's UTF-8, in hexadecimal: a script's digest, as the server computes it.
+/// The SHA-256 of a text's UTF-8, in hexadecimal: a code's digest, as the server computes it.
 pub(crate) fn sha256_hex(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()

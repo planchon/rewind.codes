@@ -203,7 +203,7 @@ pub(super) async fn permissions(_caller: Caller) -> Json<PermissionList> {
 
 /// `GET /v1/server`: any caller.
 pub(super) async fn server(State(app): State<Arc<App>>, _caller: Caller) -> Json<ServerInfo> {
-    use rewind_engine::ports::ScriptExecutor as _;
+    use rewind_engine::ports::CodeExecutor as _;
     use rewind_engine::ports::cluster::Membership as _;
     let nodes = match app.membership.nodes().await {
         Ok(nodes) => u32::try_from(nodes.len()).unwrap_or(u32::MAX),

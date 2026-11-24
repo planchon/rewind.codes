@@ -5,7 +5,7 @@ use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rewind_core::Script;
+use rewind_core::Code;
 use rewind_engine::ports::{
     ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
     WorkflowDeclarations,
@@ -14,7 +14,7 @@ use tokio::sync::{OnceCell, Semaphore};
 
 use crate::error::CheckError;
 use crate::rules::{self, Finding};
-use crate::sandbox::{self, ACTIONS, ENTRY, FETCH, SCRIPT, WORKFLOW};
+use crate::sandbox::{self, ACTIONS, CODE_FILE, ENTRY, FETCH, WORKFLOW};
 use crate::source::{SourceText, blank_directives};
 use crate::tsgo::{self, Reported};
 
@@ -35,7 +35,7 @@ const OLD_CONTENT: &str = "declare module \"rewind:tools\" {\n  \
 /// nothing.
 const NO_WORKFLOWS: &str = "\ndeclare module \"rewind:workflows\" {}\n";
 
-/// What a workflow's own script is also checked against: its signals and its entry.
+/// What a workflow's own code is also checked against: its signals and its entry.
 #[derive(Clone, Copy)]
 struct Workflow<'a> {
     signals: &'a str,
@@ -46,11 +46,11 @@ struct Workflow<'a> {
 /// binary and driven as a CLI, and the checker's own rules (`archi/04-tools.md`,
 /// "Type-checking").
 ///
-/// A check writes the script as `script.ts` in a directory of its own, next to the sandbox lib
+/// A check writes the code as `workflow.ts` in a directory of its own, next to the sandbox lib
 /// and the action set's `rewind-actions.d.ts`, and runs tsgo there in strict mode. tsgo is
 /// extracted to the cache directory at first use. Diagnostics are written for a model: a location
-/// in `script.ts` (columns count characters), the message, a hint for the checker's own rules,
-/// and a short code frame. They come sorted by position, and the same script and declarations
+/// in `workflow.ts` (columns count characters), the message, a hint for the checker's own rules,
+/// and a short code frame. They come sorted by position, and the same code and declarations
 /// always give the same diagnostics.
 ///
 /// Checks run at most `concurrency` tsgo processes at a time (the number of CPUs by default),
@@ -68,7 +68,7 @@ impl TsgoChecker {
     /// can take much longer.
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
-    /// The diagnostics a check returns at most: the first, by position. A script with errors
+    /// The diagnostics a check returns at most: the first, by position. A code with errors
     /// on every line would otherwise give millions, and as many allocations.
     pub const MAX_DIAGNOSTICS: usize = 1_000;
 
@@ -121,12 +121,12 @@ impl TsgoChecker {
             .map(PathBuf::as_path)
     }
 
-    /// Type-checks a script against the sandbox lib and `declarations`, the action set's
+    /// Type-checks a code against the sandbox lib and `declarations`, the action set's
     /// `rewind-actions.d.ts`, and runs the checker's own rules.
     ///
     /// `declarations` declare the module `rewind:actions` (`declare module "rewind:actions" { …
     /// }`); empty, the module exports nothing. When they start with [`HTTP_ACTION_REFERENCE`], the
-    /// action set enables the `http` action, and the script has `fetch`.
+    /// action set enables the `http` action, and the code has `fetch`.
     pub async fn check_source(
         &self,
         source: &str,
@@ -135,10 +135,10 @@ impl TsgoChecker {
         self.check_with(source, declarations, None).await
     }
 
-    /// Type-checks a workflow's script as [`check_source`](Self::check_source) does, with the
+    /// Type-checks a workflow's code as [`check_source`](Self::check_source) does, with the
     /// workflow's own declarations too (`rewind-codegen`'s `workflow_declarations`): its
     /// signals, which type `signal()` and `webhook()`, and `entry.ts`, whose diagnostics are
-    /// reported at the script's default export: it does not take the workflow's input, or does
+    /// reported at the code's default export: it does not take the workflow's input, or does
     /// not return its output.
     pub async fn check_workflow_source(
         &self,
@@ -158,7 +158,7 @@ impl TsgoChecker {
         workflow: Option<Workflow<'_>>,
     ) -> Result<Vec<Diagnostic>, CheckError> {
         let executable = self.install().await?;
-        // Neither the script nor the declarations may add files or libs to the check: the DOM
+        // Neither the code nor the declarations may add files or libs to the check: the DOM
         // lib would declare what does not exist.
         let (declarations, directives) = blank_directives(declarations);
         let http_action = directives.iter().any(|directive| {
@@ -172,7 +172,7 @@ impl TsgoChecker {
         if !declarations.contains("declare module \"rewind:workflows\"") {
             declarations.to_mut().push_str(NO_WORKFLOWS);
         }
-        let (script, _) = blank_directives(source);
+        let (code, _) = blank_directives(source);
         let (signals, entry) = match workflow {
             Some(workflow) => (
                 Some(blank_directives(workflow.signals).0),
@@ -193,23 +193,17 @@ impl TsgoChecker {
 
         let findings = rules::check(source, http_action);
         let reported = self
-            .tsgo(
-                executable,
-                &script,
-                &declarations,
-                http_action,
-                extra(entry),
-            )
+            .tsgo(executable, &code, &declarations, http_action, extra(entry))
             .await?;
-        let (in_script, rest): (Vec<_>, Vec<_>) = reported.into_iter().partition(
-            |reported| matches!(&reported.location, Some((file, _, _)) if file == SCRIPT),
+        let (in_code, rest): (Vec<_>, Vec<_>) = reported.into_iter().partition(
+            |reported| matches!(&reported.location, Some((file, _, _)) if file == CODE_FILE),
         );
         let (in_entry, elsewhere): (Vec<_>, Vec<_>) = rest.into_iter().partition(
             |reported| matches!(&reported.location, Some((file, _, _)) if file == ENTRY),
         );
         if !elsewhere.is_empty() {
-            // Whether the script caused them: checked again with an empty script, and without
-            // the entry, which needs the script, the declarations must have no diagnostic.
+            // Whether the code caused them: checked again with an empty code, and without
+            // the entry, which needs the code, the declarations must have no diagnostic.
             let alone = self
                 .tsgo(
                     executable,
@@ -223,7 +217,7 @@ impl TsgoChecker {
                 return Err(CheckError::Declarations(render(&alone)));
             }
         }
-        let mut diagnostics = diagnostics(source, &findings, in_script, elsewhere);
+        let mut diagnostics = diagnostics(source, &findings, in_code, elsewhere);
         diagnostics.extend(entry_diagnostics(source, in_entry));
         diagnostics.sort_by(|a, b| key(a).cmp(&key(b)));
         diagnostics.dedup();
@@ -231,11 +225,11 @@ impl TsgoChecker {
         Ok(diagnostics)
     }
 
-    /// Runs tsgo on a script and declarations, in a directory of their own.
+    /// Runs tsgo on a code and declarations, in a directory of their own.
     async fn tsgo(
         &self,
         executable: &Path,
-        script: &str,
+        code: &str,
         declarations: &str,
         http_action: bool,
         extra: Vec<(&'static str, String)>,
@@ -254,7 +248,7 @@ impl TsgoChecker {
         let files = sandbox::files(http_action)
             .into_iter()
             .chain(old_content)
-            .chain([(ACTIONS, declarations), (SCRIPT, script)]);
+            .chain([(ACTIONS, declarations), (CODE_FILE, code)]);
         for (name, text) in files {
             fs::write(dir.path().join(name), text).map_err(CheckError::Files)?;
         }
@@ -267,7 +261,7 @@ impl TsgoChecker {
             .into_iter()
             .partition(|reported| reported.location.is_some());
         if !global.is_empty() {
-            // About the configuration, the lib files or the options: never about the script.
+            // About the configuration, the lib files or the options: never about the code.
             return Err(CheckError::Failed {
                 status: "diagnostics without a location".into(),
                 output: render(&global),
@@ -280,23 +274,23 @@ impl TsgoChecker {
 impl TypeChecker for TsgoChecker {
     async fn check(
         &self,
-        script: &Script,
+        code: &Code,
         declarations: &ActionDeclarations,
     ) -> Result<Vec<Diagnostic>, CheckerError> {
         Ok(self
-            .check_source(script.source(), &declarations.typescript)
+            .check_source(code.source(), &declarations.typescript)
             .await?)
     }
 
     async fn check_workflow(
         &self,
-        script: &Script,
+        code: &Code,
         declarations: &ActionDeclarations,
         workflow: &WorkflowDeclarations,
     ) -> Result<Vec<Diagnostic>, CheckerError> {
         Ok(self
             .check_workflow_source(
-                script.source(),
+                code.source(),
                 &declarations.typescript,
                 &workflow.signals,
                 &workflow.entry,
@@ -305,7 +299,7 @@ impl TypeChecker for TsgoChecker {
     }
 }
 
-/// What tsgo reported in a workflow's `entry.ts`: the script's default export does not take
+/// What tsgo reported in a workflow's `entry.ts`: the code's default export does not take
 /// the workflow's input or does not return its output. Reported at the default export.
 fn entry_diagnostics(source: &str, in_entry: Vec<Reported>) -> Vec<Diagnostic> {
     let text = SourceText::new(source);
@@ -338,7 +332,7 @@ fn entry_diagnostics(source: &str, in_entry: Vec<Reported>) -> Vec<Diagnostic> {
 fn diagnostics(
     source: &str,
     findings: &[Finding],
-    in_script: Vec<Reported>,
+    in_code: Vec<Reported>,
     elsewhere: Vec<Reported>,
 ) -> Vec<Diagnostic> {
     let text = SourceText::new(source);
@@ -357,7 +351,7 @@ fn diagnostics(
             }
         })
         .collect();
-    for reported in in_script {
+    for reported in in_code {
         let Some((_, line, column)) = reported.location else {
             continue;
         };
@@ -386,9 +380,9 @@ fn diagnostics(
             frame: text.frame(start, text.token_end(start)),
         });
     }
-    // Caused by the script, but found in another file: a `declare global` that conflicts with
+    // Caused by the code, but found in another file: a `declare global` that conflicts with
     // the sandbox's globals. tsgo reports most conflicts on both sides; the other side is
-    // shown, at the start of the script with where tsgo found it, only when the script has no
+    // shown, at the start of the code with where tsgo found it, only when the code has no
     // diagnostic of its own.
     let own = diagnostics
         .iter()
@@ -488,7 +482,7 @@ mod tests {
             start: 10,
             end: 17,
             rule: ABSENT_GLOBAL,
-            message: "`process` does not exist in Rewind scripts.".into(),
+            message: "`process` does not exist in Rewind workflows.".into(),
             hint: Some("Pass values through the input.".into()),
             global: Some("process".into()),
         }
@@ -501,20 +495,20 @@ mod tests {
             &[absent_process()],
             vec![
                 reported(
-                    SCRIPT,
+                    CODE_FILE,
                     2,
                     7,
                     2322,
                     "Type 'string' is not assignable to type 'number'.",
                 ),
                 reported(
-                    SCRIPT,
+                    CODE_FILE,
                     1,
                     11,
                     2591,
                     "Cannot find name 'process'. Do you need to install type definitions for node?",
                 ),
-                reported(SCRIPT, 1, 11, 9999, "Another problem with 'env'."),
+                reported(CODE_FILE, 1, 11, 9999, "Another problem with 'env'."),
             ],
             Vec::new(),
         );
@@ -522,7 +516,11 @@ mod tests {
             summary(&diagnostics),
             [
                 (1, 11, "Another problem with 'env'.".into()),
-                (1, 11, "`process` does not exist in Rewind scripts.".into()),
+                (
+                    1,
+                    11,
+                    "`process` does not exist in Rewind workflows.".into()
+                ),
                 (
                     2,
                     7,
@@ -564,7 +562,13 @@ mod tests {
         let with_own = diagnostics(
             SOURCE,
             &[],
-            vec![reported(SCRIPT, 2, 7, 2300, "Duplicate identifier 'log'.")],
+            vec![reported(
+                CODE_FILE,
+                2,
+                7,
+                2300,
+                "Duplicate identifier 'log'.",
+            )],
             elsewhere(),
         );
         assert_eq!(

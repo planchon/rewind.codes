@@ -1,4 +1,4 @@
-//! The sandbox lib: what tsgo is given next to the script (`archi/04-tools.md`,
+//! The sandbox lib: what tsgo is given next to the code (`archi/04-tools.md`,
 //! "Type-checking"). The files live in `crates/rewind-runtime/lib/`, which describes what the
 //! runtime has; two adapters cannot depend on each other, so they are embedded by path.
 
@@ -20,8 +20,8 @@ const TSCONFIG_JSON: &str = include_str!("../../rewind-runtime/lib/tsconfig.json
 /// The declared names and the hints for absent globals.
 const GLOBALS_JSON: &str = include_str!("../../rewind-runtime/lib/globals.json");
 
-/// Where the script is written, and the name diagnostics give it.
-pub(crate) const SCRIPT: &str = "script.ts";
+/// Where the code is written, and the name diagnostics give it.
+pub(crate) const CODE_FILE: &str = "workflow.ts";
 /// Where the action set's declarations are written.
 pub(crate) const ACTIONS: &str = "rewind-actions.d.ts";
 /// The declaration file of `fetch`, as the action set's declarations reference it.
@@ -31,7 +31,7 @@ pub(crate) const WORKFLOW: &str = "rewind-workflow.d.ts";
 /// Where a workflow's entry is written: its default export against its schemas.
 pub(crate) const ENTRY: &str = "entry.ts";
 
-/// The files written next to the script and the action set's declarations, by name.
+/// The files written next to the code and the action set's declarations, by name.
 pub(crate) fn files(http_action: bool) -> Vec<(&'static str, &'static str)> {
     let mut files = vec![
         ("tsconfig.json", TSCONFIG_JSON),

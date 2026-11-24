@@ -1,7 +1,7 @@
 //! Webhooks, both ways.
 //!
 //! - **Inbound**: `POST /hooks/{token}`, at the unguessable URL `webhook(name)` returned to a
-//!   script. Anything posted there becomes a signal on the run. No API key: the token is the
+//!   code. Anything posted there becomes a signal on the run. No API key: the token is the
 //!   credential.
 //! - **Outbound**: the harness subscribes (`POST /v1/subscriptions`) and receives lifecycle
 //!   events ([`WebhookEvent`]), signed with HMAC-SHA256 following the Standard Webhooks
@@ -142,7 +142,7 @@ pub enum WebhookEvent {
         timestamp: Timestamp,
         data: RunEvent,
     },
-    /// The script failed: `data.run.error` says how.
+    /// The code failed: `data.run.error` says how.
     #[serde(rename = "run.failed")]
     RunFailed {
         timestamp: Timestamp,

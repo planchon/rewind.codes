@@ -217,8 +217,8 @@ mod tests {
     use super::*;
     use crate::ports::TenantId;
 
-    fn script(n: u32) -> TimerKind {
-        TimerKind::Script {
+    fn code(n: u32) -> TimerKind {
+        TimerKind::Code {
             run: RunRef::new(TenantId::local(), RunId::from_u128(1)),
             seq: Seq(n),
         }
@@ -230,17 +230,17 @@ mod tests {
         let mut wheel = Wheel::new(Timestamp(0), hour);
         wheel.apply(&TimerChange::Set(DueTimer {
             at: Timestamp(10),
-            kind: script(1),
+            kind: code(1),
         }));
         wheel.apply(&TimerChange::Set(DueTimer {
             at: Timestamp(4_000_000),
-            kind: script(2),
+            kind: code(2),
         }));
         assert_eq!(wheel.len(), 1, "the second is past the horizon");
         // Moved, then cancelled: the last change wins.
         wheel.apply(&TimerChange::Set(DueTimer {
             at: Timestamp(20),
-            kind: script(1),
+            kind: code(1),
         }));
         assert_eq!(wheel.next().map(|timer| timer.at), Some(Timestamp(20)));
         assert!(wheel.due(Timestamp(19)).is_empty());
@@ -249,15 +249,15 @@ mod tests {
         let (from, to) = wheel.advance();
         assert_eq!((from, to), (Timestamp(3_600_000), Timestamp(7_200_000)));
         // Cancelled while the hour was read: the read does not bring it back.
-        wheel.apply(&TimerChange::Cancel(script(3)));
+        wheel.apply(&TimerChange::Cancel(code(3)));
         wheel.read(vec![
             DueTimer {
                 at: Timestamp(4_000_000),
-                kind: script(2),
+                kind: code(2),
             },
             DueTimer {
                 at: Timestamp(5_000_000),
-                kind: script(3),
+                kind: code(3),
             },
         ]);
         assert_eq!(wheel.len(), 1);

@@ -1,5 +1,5 @@
-//! Scripts: type-checking (`POST /v1/check`), scenarios in mock mode (`POST /v1/test`), and
-//! the distinct scripts executed on the platform (`GET /v1/scripts`).
+//! Workflows: type-checking (`POST /v1/check`), scenarios in mock mode (`POST /v1/test`), and
+//! the distinct workflows executed on the platform (`GET /v1/scripts`).
 
 use std::fmt;
 
@@ -9,20 +9,20 @@ use utoipa::{IntoParams, ToSchema};
 use crate::common::Timestamp;
 use crate::testing::TestInput;
 
-/// `POST /v1/check`: type-checks a script against the sandbox lib and an action set's
+/// `POST /v1/check`: type-checks a code against the sandbox lib and an action set's
 /// declarations, in strict mode, before anything runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckRequest {
     /// The TypeScript source: a single ES module whose default export is the entry point.
-    pub script: String,
-    /// The action set whose `rewind:actions` the script imports. Without one, `rewind:actions` is
+    pub code: String,
+    /// The action set whose `rewind:actions` the code imports. Without one, `rewind:actions` is
     /// empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
 }
 
-/// The diagnostics of a check. A script with only warnings passes.
+/// The diagnostics of a check. A code with only warnings passes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckResult {
@@ -48,7 +48,7 @@ pub struct Diagnostic {
     /// (`rewind/floating-promise`, `rewind/ignored-async-callback`, `rewind/absent-global`…).
     pub code: String,
     pub message: String,
-    /// Where in `script.ts`; absent for a diagnostic about the script as a whole.
+    /// Where in `workflow.ts`; absent for a diagnostic about the code as a whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<Location>,
     /// A few lines of the source around the location, with the span underlined.
@@ -62,8 +62,8 @@ pub struct Diagnostic {
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.location {
-            Some(location) => write!(f, "script.ts:{}:{}", location.line, location.column)?,
-            None => f.write_str("script.ts")?,
+            Some(location) => write!(f, "workflow.ts:{}:{}", location.line, location.column)?,
+            None => f.write_str("workflow.ts")?,
         }
         write!(
             f,
@@ -98,7 +98,7 @@ impl Severity {
     }
 }
 
-/// A span in `script.ts`, 1-based, the end exclusive.
+/// A span in `workflow.ts`, 1-based, the end exclusive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Location {
@@ -114,13 +114,13 @@ pub struct Location {
 // Tests
 
 /// `POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,
-/// "Running tests"). The given tests run against the script; with `workflow`, that version's
+/// "Running tests"). The given tests run against the code; with `workflow`, that version's
 /// suite runs too, and its interface checks every test. This is how a candidate is checked
-/// before it is saved: a corrected script, or the version on a new action set.
+/// before it is saved: a corrected code, or the version on a new action set.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
-    "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+    "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
     "tests": [{
         "name": "counts the open issues",
         "input": { "repo": "acme/api" },
@@ -131,8 +131,8 @@ pub struct Location {
 pub struct TestRequest {
     /// The TypeScript source. With `workflow`, the version's own when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script: Option<String>,
-    /// The action set the script imports from `rewind:actions`. With `workflow`, the version's own
+    pub code: Option<String>,
+    /// The action set the code imports from `rewind:actions`. With `workflow`, the version's own
     /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
@@ -145,9 +145,9 @@ pub struct TestRequest {
 }
 
 // -------------------------------------------------------------------------------------------
-// Scripts executed on the platform
+// Workflows executed on the platform
 
-/// `GET /v1/scripts`: every distinct script the runs of a scope ran in a window, most recently run
+/// `GET /v1/scripts`: every distinct code the runs of a scope ran in a window, most recently run
 /// first, each with its runs by status and the actions it called, from the hourly counters. A scope
 /// and a window, as `GET /v1/runs/stats` takes them (`crate::runs::RunStatsQuery`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
@@ -166,13 +166,13 @@ pub struct ScriptFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,
-    /// Only this script: its digest.
+    /// Only this code: its digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-    /// Only scripts that called this action.
+    /// Only workflows that called this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
-    /// At most this many scripts (50 by default, 500 at most).
+    /// At most this many workflows (50 by default, 500 at most).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     /// The `nextCursor` of the previous page.
@@ -189,13 +189,13 @@ pub struct ScriptPage {
     pub next_cursor: Option<String>,
 }
 
-/// A distinct script: content-addressed, so every run of the same source counts here.
+/// A distinct code: content-addressed, so every run of the same source counts here.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptSummary {
     /// SHA-256 of the TypeScript source, lowercase hex.
     pub digest: String,
-    /// The script's title: the one a person gave it, else the first line of the comment at its
+    /// The code's title: the one a person gave it, else the first line of the comment at its
     /// top. Absent when it has neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -210,7 +210,7 @@ pub struct ScriptSummary {
     pub headline: String,
     pub first_run_at: Timestamp,
     pub last_run_at: Timestamp,
-    /// Runs of this script, by status.
+    /// Runs of this code, by status.
     pub runs: RunCounts,
     /// The actions its runs called.
     pub actions: Vec<String>,
@@ -228,12 +228,12 @@ pub struct RunCounts {
     pub aborted: u64,
 }
 
-/// `GET /v1/scripts/{digest}`: one script's source, and what its runs did.
+/// `GET /v1/scripts/{digest}`: one code's source, and what its runs did.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Script {
     pub digest: String,
-    /// The script's title, as in `ScriptSummary.title`.
+    /// The code's title, as in `ScriptSummary.title`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,7 +245,7 @@ pub struct Script {
     pub source: String,
     /// The first line of the source that is not blank, for display.
     pub headline: String,
-    /// Runs of this script, by status, as the read model keeps them.
+    /// Runs of this code, by status, as the read model keeps them.
     pub runs: RunCounts,
     /// The actions its runs called.
     pub actions: Vec<String>,
@@ -256,7 +256,7 @@ pub struct Script {
     pub last_run_at: Option<Timestamp>,
 }
 
-/// Where a script's title comes from.
+/// Where a code's title comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleSource {
@@ -266,8 +266,8 @@ pub enum TitleSource {
     Comment,
 }
 
-/// `PATCH /v1/scripts/{digest}`: the title and description of a script, for the whole
-/// organization, over those of the comment at its top. The source does not change: a script is
+/// `PATCH /v1/scripts/{digest}`: the title and description of a code, for the whole
+/// organization, over those of the comment at its top. The source does not change: a code is
 /// its digest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -291,7 +291,7 @@ fn nullable<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<
     Option::<String>::deserialize(deserializer)
 }
 
-/// The first line of a source that is not blank, trimmed, cut at 120 characters: how a script
+/// The first line of a source that is not blank, trimmed, cut at 120 characters: how a code
 /// is shown in a list.
 pub fn headline(source: &str) -> String {
     let line = source

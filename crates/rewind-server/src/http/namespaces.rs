@@ -44,7 +44,7 @@ const CATALOG_PAGE: usize = 1_000;
 enum NamespaceOrder {
     Cpu,
     Runs,
-    Scripts,
+    Workflows,
     Name,
 }
 
@@ -168,7 +168,7 @@ fn order_key(order: NamespaceOrder, usage: &Usage) -> u64 {
     match order {
         NamespaceOrder::Cpu => usage.of(QuotaKind::CpuPerMonth).unwrap_or(0),
         NamespaceOrder::Runs => usage.runs_started,
-        NamespaceOrder::Scripts => usage.scripts,
+        NamespaceOrder::Workflows => usage.workflows,
         NamespaceOrder::Name => 0,
     }
 }
@@ -193,7 +193,7 @@ fn above(usage: &Usage, limits: &rewind_engine::ports::Quotas, percent: u32) -> 
         QuotaKind::CpuPerMonth,
         QuotaKind::ActiveRuns,
         QuotaKind::RunsPerMonth,
-        QuotaKind::Scripts,
+        QuotaKind::Workflows,
     ]
     .into_iter()
     .any(|quota| match (usage.of(quota), limits.limit(quota)) {
@@ -229,7 +229,7 @@ pub(super) async fn list(
     let order = match query.order.unwrap_or_default() {
         ApiOrder::Cpu => NamespaceOrder::Cpu,
         ApiOrder::Runs => NamespaceOrder::Runs,
-        ApiOrder::Scripts => NamespaceOrder::Scripts,
+        ApiOrder::Workflows => NamespaceOrder::Workflows,
         ApiOrder::Name => NamespaceOrder::Name,
     };
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);

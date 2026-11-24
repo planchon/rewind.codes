@@ -1,5 +1,5 @@
 {
-  "description": "A cancellation rejects every pending await with CancelledError; a script that catches it may end by itself within its grace.",
+  "description": "A cancellation rejects every pending await with CancelledError; a code that catches it may end by itself within its grace.",
   "steps": [
     {
       "cancel": {

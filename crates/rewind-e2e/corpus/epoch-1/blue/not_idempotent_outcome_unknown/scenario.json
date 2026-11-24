@@ -1,5 +1,5 @@
 {
-  "description": "The harness's worker dies while it charges: an action that is not idempotent is not called again, and the script gets an ActionError whose outcome is unknown, which it checks with another call.",
+  "description": "The harness's worker dies while it charges: an action that is not idempotent is not called again, and the code gets an ActionError whose outcome is unknown, which it checks with another call.",
   "input": { "amount": 100 },
   "harness_worker": true,
   "actions": {

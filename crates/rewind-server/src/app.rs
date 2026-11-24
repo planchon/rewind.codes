@@ -32,7 +32,7 @@ use crate::follow;
 use crate::idle::Idle;
 use crate::link::SharedMembership;
 use crate::oauth::OAuthServer;
-use crate::titles::{ScriptTexts, Title};
+use crate::titles::{CodeTexts, Title};
 use crate::views::Views;
 use crate::wiring::actions::{Actions, Dispatcher};
 use crate::wiring::bucket::{Archive, Blobs};
@@ -115,9 +115,9 @@ pub(crate) struct App {
     /// The OAuth authorization server of people's connections: with a public URL and a
     /// sign-in only.
     pub(crate) oauth: Option<OAuthServer>,
-    /// What scripts' sources say of them, by tenant and digest: a script never changes. The
+    /// What workflows' sources say of them, by tenant and digest: a code never changes. The
     /// webhooks' rendering shares it.
-    pub(crate) texts: Arc<ScriptTexts>,
+    pub(crate) texts: Arc<CodeTexts>,
     /// Tenants known to have their record: a tenant is never deleted.
     tenants: Mutex<HashSet<TenantId>>,
 }
@@ -177,7 +177,7 @@ impl App {
             stop: watch::Sender::new(false),
             sign_in: parts.sign_in,
             oauth: parts.oauth,
-            texts: Arc::new(ScriptTexts::default()),
+            texts: Arc::new(CodeTexts::default()),
             tenants: Mutex::new(HashSet::new()),
         }
     }
@@ -369,7 +369,7 @@ impl App {
         })
     }
 
-    /// The first non-blank line of a script.
+    /// The first non-blank line of a code.
     pub(crate) async fn headline(&self, tenant: &TenantId, digest: Digest) -> String {
         self.texts
             .text(self.catalog(), tenant, digest)
@@ -378,7 +378,7 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// The titles of these scripts of the tenant, for those that have one.
+    /// The titles of these workflows of the tenant, for those that have one.
     pub(crate) async fn titles(
         &self,
         tenant: &TenantId,

@@ -311,7 +311,7 @@ pub(crate) fn buckets(window: Window, bucket: Option<NonZeroU32>) -> Vec<Window>
 }
 
 /// The use in `month` of each namespace counted here: CPU time and runs created over the month,
-/// with its days up to `now` when `days`; its active runs and distinct scripts now. A namespace
+/// with its days up to `now` when `days`; its active runs and distinct workflows now. A namespace
 /// that used nothing is left out.
 async fn usage<L: PartitionLog>(
     log: &L,
@@ -332,7 +332,7 @@ async fn usage<L: PartitionLog>(
             cpu: counters.cpu,
             runs_started: counters.created,
             active_runs: gauges.active_runs,
-            scripts: gauges.distinct_scripts(),
+            workflows: gauges.distinct_scripts(),
             days: Vec::new(),
         };
         if days && !counters.is_empty() {

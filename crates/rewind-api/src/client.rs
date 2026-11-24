@@ -259,7 +259,7 @@ impl Client {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Scripts
+    // Workflows
 
     /// `POST /v1/check`.
     pub async fn check(&self, check: &CheckRequest) -> Result<CheckResult, Error> {

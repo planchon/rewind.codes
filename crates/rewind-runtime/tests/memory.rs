@@ -3,9 +3,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use rewind_core::{ActionSet, Epoch, RunId, RunStatus, Script, Seed};
+use rewind_core::{ActionSet, Code, Epoch, RunId, RunStatus, Seed};
 use rewind_engine::adapters::StaticDispatcher;
-use rewind_engine::ports::{Delivery, RunRef, ScriptExecutor, ScriptInstance, StartScript};
+use rewind_engine::ports::{CodeExecutor, CodeInstance, Delivery, RunRef, StartCode};
 use rewind_engine::{CacheConfig, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
@@ -41,11 +41,11 @@ fn executor() -> V8Executor {
     V8Executor::new(SandboxLimits::default()).unwrap()
 }
 
-fn start(executor: &V8Executor, input: u64) -> StartScript {
-    StartScript {
+fn start(executor: &V8Executor, input: u64) -> StartCode {
+    StartCode {
         run_id: RunId::from_u128(1),
         compiled: executor
-            .compile(&Script::new(HOARDER), &ActionSet::default())
+            .compile(&Code::new(HOARDER), &ActionSet::default())
             .unwrap(),
         action_set: ActionSet::default(),
         input: json!(input),
@@ -89,7 +89,7 @@ async fn three_hoarders(cache: CacheConfig) -> usize {
     .await;
     let mut runs: Vec<RunRef> = Vec::new();
     for _ in 0..3 {
-        let request = StartRun::new(Script::new(HOARDER), ActionSet::default(), json!(2_000_000));
+        let request = StartRun::new(Code::new(HOARDER), ActionSet::default(), json!(2_000_000));
         runs.push(world.start(request).await.unwrap());
         world.idle().await;
     }

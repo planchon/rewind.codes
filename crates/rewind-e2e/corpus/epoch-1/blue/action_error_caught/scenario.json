@@ -1,5 +1,5 @@
 {
-  "description": "An action failure reaches the script as an ActionError; an unknown outcome (the call may have taken effect) is checked rather than called again.",
+  "description": "An action failure reaches the code as an ActionError; an unknown outcome (the call may have taken effect) is checked rather than called again.",
   "actions": {
     "payments.charge": {
       "$error": "connection reset",

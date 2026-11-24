@@ -181,7 +181,7 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
             .map_err(|_| corrupt(format!("invalid namespace {namespace:?}")))?,
         origin: row.text(31)?,
         suffix_len: row.suffix_len(32)?,
-        script: row.digest(3)?,
+        code: row.digest(3)?,
         action_set: row.digest(4)?,
         epoch: Epoch(u32_of(row.u64(5)?)?),
         expires_at: row.ts(6)?,

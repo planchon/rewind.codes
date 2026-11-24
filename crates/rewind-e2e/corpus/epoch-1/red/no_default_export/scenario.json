@@ -1,6 +1,6 @@
 {
-  "description": "The entry point is the default export: a script without one is refused at start.",
+  "description": "The entry point is the default export: a code without one is refused at start.",
   "expect": {
-    "start_error": "the script is invalid: the script has no default export"
+    "start_error": "the code is invalid: the code has no default export"
   }
 }

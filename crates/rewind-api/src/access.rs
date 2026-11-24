@@ -178,10 +178,10 @@ impl Permission {
         match self {
             Permission::RunsRead => {
                 "Read runs, their statistics and failure groups, a run's state, trace, entries, \
-                 event stream and journal, the scripts, the action statistics and payloads."
+                 event stream and journal, the workflows, the action statistics and payloads."
             }
             Permission::RunsStart => {
-                "Start and fork runs, and check and test scripts (`/v1/check`, `/v1/test`)."
+                "Start and fork runs, and check and test workflows (`/v1/check`, `/v1/test`)."
             }
             Permission::RunsControl => "Send signals to runs and cancel them.",
             Permission::RunsQuarantine => "Release a quarantined run, or give it up.",
@@ -191,7 +191,7 @@ impl Permission {
             }
             Permission::ActionsWrite => "Register an action set, and save a workflow.",
             Permission::ScriptsWrite => {
-                "Give a script a title and a description for the organization, or remove them."
+                "Give a code a title and a description for the organization, or remove them."
             }
             Permission::SecretsRead => {
                 "List the secrets of the organization and of the namespaces, their metadata and \

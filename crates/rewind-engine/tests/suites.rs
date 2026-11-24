@@ -9,8 +9,8 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionOutcome, ActionRule, ActionSet, ERASED_TEST_REASON, Expectations, ExpectedCall,
-    RunStatus, Script, Test, TestOrigin, TestSignal, WorkflowSchemas,
+    ActionOutcome, ActionRule, ActionSet, Code, ERASED_TEST_REASON, Expectations, ExpectedCall,
+    RunStatus, Test, TestOrigin, TestSignal, WorkflowSchemas,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::{RecordFrom, RecordingError};
@@ -72,12 +72,12 @@ fn schemas() -> WorkflowSchemas {
     }
 }
 
-fn save(script: &str, suite: SuiteChanges) -> RegisterWorkflow {
+fn save(code: &str, suite: SuiteChanges) -> RegisterWorkflow {
     RegisterWorkflow {
         tenant: TenantId::local(),
         name: "triage".into(),
         description: None,
-        script: Script::new(script),
+        code: Code::new(code),
         action_set: action_set().digest(),
         schemas: schemas(),
         labels: BTreeMap::new(),
@@ -638,7 +638,7 @@ async fn recording_keeps_the_newest_run_of_each_path() {
         recorder.skipped[0].reason,
         "it is active: only a run that completed or failed is recorded"
     );
-    // A recorded test passes against the script it was recorded from.
+    // A recorded test passes against the code it was recorded from.
     let test = &recorder.recorded[0].test;
     assert_eq!(test.expect.output, Some(json!({ "closed": 3 })));
     let _: &[TestSignal] = &test.signals;

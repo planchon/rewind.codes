@@ -1,5 +1,5 @@
 // The `rewind` module: the standard library of scripts (archi/01-product.md, "Modules available to
-// scripts"). The type-checker gives this file to tsgo next to the script; it declares what the
+// scripts"). The type-checker gives this file to tsgo next to the code; it declares what the
 // runtime's `rewind` module exports, and nothing else.
 
 declare module "rewind" {
@@ -10,9 +10,9 @@ declare module "rewind" {
   export type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d" | "w"}` | string;
 
   /**
-   * The signals this run accepts, by name, with their payload's type. For the script of a
+   * The signals this run accepts, by name, with their payload's type. For the code of a
    * workflow, its declared signals fill it, and `signal()` and `webhook()` only take their
-   * names. Empty for any other script: they take any name.
+   * names. Empty for any other code: they take any name.
    */
   export interface Signals {}
 
@@ -35,7 +35,7 @@ declare module "rewind" {
 
   /**
    * Waits for the next signal named `name` sent to this run, and returns its payload. A
-   * signal sent before the script waits is kept in the name's mailbox, first in first out, so
+   * signal sent before the code waits is kept in the name's mailbox, first in first out, so
    * none is lost. Without a timeout, the wait lasts as long as the run. Names starting with
    * `rewind:` are reserved.
    */
@@ -84,8 +84,8 @@ declare module "rewind" {
   }
 
   /**
-   * Rejects every pending `await` of the script when the run is cancelled. Catch it to clean
-   * up: the script then has one chance to end by itself.
+   * Rejects every pending `await` of the code when the run is cancelled. Catch it to clean
+   * up: the code then has one chance to end by itself.
    */
   export class CancelledError extends Error {}
 

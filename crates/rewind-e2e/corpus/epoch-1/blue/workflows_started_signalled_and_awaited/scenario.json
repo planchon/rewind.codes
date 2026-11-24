@@ -1,5 +1,5 @@
 {
-  "description": "A script starts a run of a workflow per repository, approves each with a signal and adds up their results: the runs really run, and their ends come back to the script as signals.",
+  "description": "A code starts a run of a workflow per repository, approves each with a signal and adds up their results: the runs really run, and their ends come back to the code as signals.",
   "live": true,
   "input": { "repos": ["acme/api", "acme/web"] },
   "actions": {
@@ -9,7 +9,7 @@
   "workflows": {
     "triage": {
       "description": "Triage the stale issues of a repository, after approval.",
-      "script": "triage.ts",
+      "code": "triage.ts",
       "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
       "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
       "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }

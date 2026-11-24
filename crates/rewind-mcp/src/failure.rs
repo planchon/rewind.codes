@@ -33,7 +33,7 @@ use rewind_outbound::{Egress, SigningError};
 
 use crate::McpError;
 
-/// Characters of a message from a server kept in a failure: the script and the model read it.
+/// Characters of a message from a server kept in a failure: the code and the model read it.
 const MESSAGE: usize = 2000;
 
 /// Whether a failure may quote what the server answered over HTTP.

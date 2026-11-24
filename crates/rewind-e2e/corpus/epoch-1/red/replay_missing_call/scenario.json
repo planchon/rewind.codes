@@ -1,5 +1,5 @@
 {
-  "description": "A script changed after the run: it goes idle where the journal says it made a call.",
+  "description": "A code changed after the run: it goes idle where the journal says it made a call.",
   "actions": {
     "audit.record": {
       "ok": true
@@ -9,7 +9,7 @@
     "status": "completed"
   },
   "replay": {
-    "script": "changed.ts",
-    "diverges": "history entry 3 is call #2 audit.record({\"step\":2}), but the script went idle without emitting it"
+    "code": "changed.ts",
+    "diverges": "history entry 3 is call #2 audit.record({\"step\":2}), but the code went idle without emitting it"
   }
 }

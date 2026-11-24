@@ -57,7 +57,7 @@ pub struct WorkflowFilter {
     pub limit: Option<usize>,
 }
 
-/// A run a script started: that run, the call, and whether it is detached
+/// A run a code started: that run, the call, and whether it is detached
 /// (`archi/03-execution.md`, "Workflows across runs").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartedBy {

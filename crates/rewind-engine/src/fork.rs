@@ -1,15 +1,15 @@
 //! Forks (`archi/03-execution.md`, "Forks"; `archi/05-testing-and-observability.md`, "Replay,
 //! debugging and forks").
 //!
-//! A fork is a new run started from an existing one with a corrected script, so that an agent
+//! A fork is a new run started from an existing one with a corrected code, so that an agent
 //! can fix step 7 without redoing the side effects of steps 1 to 6. It has its own id, the
 //! parent's seed, input (unless overridden) and action set, and a new TTL.
 //!
 //! Starting a fork only creates the run, with its parent and `at` as run metadata. Its first
-//! activation replays the new script against the parent's history, in the same transaction as
+//! activation replays the new code against the parent's history, in the same transaction as
 //! everything else it commits:
 //!
-//! - While the script's commands match the parent's, the parent's triggers are copied into the
+//! - While the code's commands match the parent's, the parent's triggers are copied into the
 //!   fork's history, with their recorded results and `recorded_at`: no action is called again.
 //! - At the first command that differs, at the entry `at`, at the parent's cancellation or
 //!   abort, or at the end of the parent's history, the fork goes live.
@@ -25,9 +25,9 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Attachments, Command, Completion, Event, HistoryEntry, JournalDocument, JsonValue,
-    Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted, RunStatus,
-    Script, Seq,
+    ActionSet, Attachments, Code, Command, Completion, Event, HistoryEntry, JournalDocument,
+    JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted,
+    RunStatus, Seq,
 };
 
 use crate::attachments::AttachRights;
@@ -36,8 +36,8 @@ use crate::batch::{Batch, CountCpu, Grace, abort_reason};
 use crate::payloads;
 use crate::plane::Limits;
 use crate::ports::{
-    CompiledScript, Emitted, ForkParent, RunRef, ScriptExecutor, ScriptInstance, StartScript,
-    StoreError, TraceContext,
+    CodeExecutor, CodeInstance, CompiledCode, Emitted, ForkParent, RunRef, StartCode, StoreError,
+    TraceContext,
 };
 use crate::start::StartError;
 
@@ -45,8 +45,8 @@ use crate::start::StartError;
 #[derive(Debug, Clone)]
 pub struct ForkRun {
     pub parent: RunRef,
-    /// The corrected script.
-    pub script: Script,
+    /// The corrected code.
+    pub code: Code,
     /// Go live from this entry of the parent's history, even if the commands still match.
     pub at: Option<u64>,
     /// The fork's input; the parent's when `None`.
@@ -61,17 +61,17 @@ pub struct ForkRun {
     /// A retried request with the same key returns the same fork.
     pub idempotency_key: Option<String>,
     /// The fork's attachments; the parent's when `None`. Either way they are checked against
-    /// `attach`: the script is new code (`archi/04-tools.md`, "Secrets").
+    /// `attach`: the code is new code (`archi/04-tools.md`, "Secrets").
     pub secrets: Option<Attachments>,
     /// What the caller may attach.
     pub attach: AttachRights,
 }
 
 impl ForkRun {
-    pub fn new(parent: RunRef, script: Script) -> Self {
+    pub fn new(parent: RunRef, code: Code) -> Self {
         Self {
             parent,
-            script,
+            code,
             at: None,
             input: None,
             ttl: None,
@@ -90,7 +90,7 @@ pub enum ForkError {
     ParentNotFound(RunId),
     #[error("run {0} has not started yet: there is nothing to fork")]
     ParentNotStarted(RunId),
-    /// The fork cannot start, for the reasons a run cannot: an invalid script, TTL or input, the
+    /// The fork cannot start, for the reasons a run cannot: an invalid code, TTL or input, the
     /// tenant's quota.
     #[error(transparent)]
     Start(StartError),
@@ -107,7 +107,7 @@ impl From<StoreError> for ForkError {
 /// Where a fork stops following its parent and goes live.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForkPoint {
-    /// The script emitted a command the parent did not: the fork goes live there.
+    /// The code emitted a command the parent did not: the fork goes live there.
     Diverged(NonDeterminism),
     /// The entry `at` of the request: the commands still matched.
     At(u64),
@@ -115,10 +115,10 @@ pub enum ForkPoint {
     ParentCancelled(u64),
     /// The parent was aborted at this entry.
     ParentAborted(u64),
-    /// The script followed the whole history of the parent, its end included when the parent
+    /// The code followed the whole history of the parent, its end included when the parent
     /// ended by itself.
     EndOfParent,
-    /// The fork's script could not go on while it followed its parent: it could not load, or
+    /// The fork's code could not go on while it followed its parent: it could not load, or
     /// hit a limit. The fork is aborted.
     Stopped,
 }
@@ -133,13 +133,13 @@ impl fmt::Display for ForkPoint {
             }
             ForkPoint::ParentAborted(index) => write!(f, "the parent was aborted at entry {index}"),
             ForkPoint::EndOfParent => f.write_str("it follows the parent's whole history"),
-            ForkPoint::Stopped => f.write_str("the script could not go on"),
+            ForkPoint::Stopped => f.write_str("the code could not go on"),
         }
     }
 }
 
-/// Whether a corrected script is compatible with a run's history, and what a fork of the run
-/// with it would reuse (`rewind replay <run> --script fixed.ts`).
+/// Whether a corrected code is compatible with a run's history, and what a fork of the run
+/// with it would reuse (`rewind replay <run> --code fixed.ts`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Compatibility {
     pub point: ForkPoint,
@@ -157,7 +157,7 @@ pub struct Compatibility {
 }
 
 impl Compatibility {
-    /// Whether the script reproduces the whole history: replay stops at a cancellation or an
+    /// Whether the code reproduces the whole history: replay stops at a cancellation or an
     /// abort of the run.
     pub fn is_compatible(&self) -> bool {
         matches!(
@@ -172,7 +172,7 @@ pub(crate) struct ForkSource<'a> {
     pub(crate) run: &'a RunRef,
     pub(crate) parent: ForkParent,
     pub(crate) started: RunStarted,
-    pub(crate) compiled: &'a CompiledScript,
+    pub(crate) compiled: &'a CompiledCode,
     pub(crate) action_set: &'a ActionSet,
 }
 
@@ -186,23 +186,23 @@ pub(crate) struct Followed<I> {
 }
 
 /// What following a parent's history runs on: the executor, where the payloads are loaded
-/// from, and what counts the CPU time of the calls into the script.
+/// from, and what counts the CPU time of the calls into the code.
 pub(crate) struct FollowWith<'a, X, S, C> {
     pub(crate) executor: &'a X,
     pub(crate) payloads: &'a S,
     pub(crate) cpu: &'a C,
 }
 
-/// Whether `script` is compatible with a run's journal, and if not, where it diverges; and what
-/// a fork of the run with it would reuse (`rewind replay <run> --script fixed.ts`,
-/// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The script is
+/// Whether `code` is compatible with a run's journal, and if not, where it diverges; and what
+/// a fork of the run with it would reuse (`rewind replay <run> --code fixed.ts`,
+/// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The code is
 /// followed against the journal on `executor` as a fork's first activation follows its parent,
 /// as the run itself (it reads the run's id); every payload of the journal is held as a value.
 /// Nothing is written and no action is called.
-pub async fn compatibility<X: ScriptExecutor>(
+pub async fn compatibility<X: CodeExecutor>(
     executor: &X,
     journal: &JournalDocument,
-    script: &Script,
+    code: &Code,
     at: Option<u64>,
     limits: &Limits,
 ) -> Result<Compatibility, ForkError> {
@@ -214,10 +214,10 @@ pub async fn compatibility<X: ScriptExecutor>(
         return Err(ForkError::ParentNotStarted(journal.run));
     };
     let compiled = executor
-        .compile(script, &journal.action_set)
-        .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
+        .compile(code, &journal.action_set)
+        .map_err(|invalid| ForkError::Start(StartError::InvalidCode(invalid)))?;
     let started = RunStarted {
-        script: script.digest(),
+        code: code.digest(),
         ..started.clone()
     };
     let run = RunRef::new(crate::ports::TenantId::local(), journal.run);
@@ -267,8 +267,8 @@ impl CountCpu for Uncounted {
     }
 }
 
-/// Runs the fork's script against the parent's history, copying the parent's triggers into
-/// `batch` while the script's commands match the parent's.
+/// Runs the fork's code against the parent's history, copying the parent's triggers into
+/// `batch` while the code's commands match the parent's.
 pub(crate) async fn follow_parent<X, S, C>(
     with: &FollowWith<'_, X, S, C>,
     batch: &mut Batch<'_>,
@@ -276,7 +276,7 @@ pub(crate) async fn follow_parent<X, S, C>(
     history: &[HistoryEntry],
 ) -> Result<Followed<X::Instance>, EngineError>
 where
-    X: ScriptExecutor,
+    X: CodeExecutor,
     S: payloads::PayloadSource,
     C: CountCpu,
 {
@@ -310,7 +310,7 @@ where
         // follows it.
         let recorded_at = batch.recorded_at(cursor.started_at());
         let input = payloads::load(with.payloads, tenant, &source.started.input).await?;
-        let start = StartScript {
+        let start = StartCode {
             run_id: source.run.id,
             compiled: source.compiled.clone(),
             action_set: source.action_set.clone(),
@@ -323,7 +323,7 @@ where
         let mut inherited = BTreeSet::new();
         let (mut instance, mut point) = match with.executor.start(start).await {
             Ok((instance, emitted)) => {
-                // The fork's script runs for the first time: its calls execute, though they
+                // The fork's code runs for the first time: its calls execute, though they
                 // follow the parent's history.
                 batch.count_cpu(with.cpu, instance.cpu_time());
                 let followed = follow(&mut cursor, &emitted, at, &mut inherited);
@@ -348,7 +348,7 @@ where
         };
 
         while point.is_none() {
-            // The script ended as the parent did, its last command matching the parent's; or
+            // The code ended as the parent did, its last command matching the parent's; or
             // the host aborted it.
             if batch.state.is_terminal() {
                 let aborted = batch.entries().last().is_some_and(|entry| {
@@ -519,7 +519,7 @@ pub(crate) fn completion_seq(completion: &Completion) -> Option<Seq> {
     }
 }
 
-/// Matches the commands the fork's script emitted against its parent's. Returns where the fork
+/// Matches the commands the fork's code emitted against its parent's. Returns where the fork
 /// stops following, if it does; the calls matched before `at` are inherited.
 fn follow(
     cursor: &mut ReplayCursor<'_>,

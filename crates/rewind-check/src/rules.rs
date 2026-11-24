@@ -1,10 +1,10 @@
 //! The checker's own rules (`archi/04-tools.md`, "Type-checking"). They run on the swc syntax
-//! tree of the script, with scope analysis and without types: syntactic, and slightly less
+//! tree of the code, with scope analysis and without types: syntactic, and slightly less
 //! precise than rules based on types.
 //!
 //! | Rule | Flags |
 //! | --- | --- |
-//! | `floating-promise` | A promise used as a statement, neither awaited, returned, assigned nor `void`ed: a call to an action (through an import of `rewind:actions`, or `fetch` with the `http` action), to `sleep`, `signal` or `webhook`, to a function of the script declared `async` or returning `Promise<…>`, to `Promise.all` and the like, or an async function called at once; also through `.then`, `.catch`, `.finally`, `,`, `?:`, `&&`, `\|\|` and `??` |
+//! | `floating-promise` | A promise used as a statement, neither awaited, returned, assigned nor `void`ed: a call to an action (through an import of `rewind:actions`, or `fetch` with the `http` action), to `sleep`, `signal` or `webhook`, to a function of the code declared `async` or returning `Promise<…>`, to `Promise.all` and the like, or an async function called at once; also through `.then`, `.catch`, `.finally`, `,`, `?:`, `&&`, `\|\|` and `??` |
 //! | `ignored-async-callback` | An async callback given to `forEach`, which ignores what it returns, or to `filter`, `some`, `every`, `find`, `findIndex`, `findLast`, `findLastIndex`, which read a promise as `true` |
 //! | `absent-global` | A reference to a global the sandbox does not have but models reach for (`fetch` without the `http` action, `require`, `process`, `Buffer`), with what to use instead |
 
@@ -43,7 +43,7 @@ const PREDICATES: [&str; 7] = [
     "findLastIndex",
 ];
 
-/// A problem one of the rules found, as byte offsets in the script.
+/// A problem one of the rules found, as byte offsets in the code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Finding {
     pub(crate) start: usize,
@@ -56,7 +56,7 @@ pub(crate) struct Finding {
     pub(crate) global: Option<String>,
 }
 
-/// Runs the rules on a script. A script that does not parse gets no finding: tsgo reports
+/// Runs the rules on a code. A code that does not parse gets no finding: tsgo reports
 /// its syntax errors.
 pub(crate) fn check(source: &str, http_action: bool) -> Vec<Finding> {
     let Some(parsed) = parse(source) else {
@@ -92,7 +92,7 @@ pub(crate) fn check(source: &str, http_action: bool) -> Vec<Finding> {
     rules.findings
 }
 
-/// Where the script's default export is, as byte offsets: what a workflow's `entry.ts` checks.
+/// Where the code's default export is, as byte offsets: what a workflow's `entry.ts` checks.
 pub(crate) fn default_export(source: &str) -> Option<(usize, usize)> {
     let parsed = parse(source)?;
     let ProgramRef::Module(module) = parsed.program_ref() else {
@@ -130,7 +130,7 @@ pub(crate) fn default_export(source: &str) -> Option<(usize, usize)> {
 
 fn parse(source: &str) -> Option<ParsedSource> {
     deno_ast::parse_module(ParseParams {
-        specifier: ModuleSpecifier::parse("file:///script.ts").ok()?,
+        specifier: ModuleSpecifier::parse("file:///workflow.ts").ok()?,
         text: source.into(),
         media_type: MediaType::TypeScript,
         capture_tokens: false,
@@ -140,9 +140,9 @@ fn parse(source: &str) -> Option<ParsedSource> {
     .ok()
 }
 
-/// What the names of the script refer to.
+/// What the names of the code refer to.
 struct Scope {
-    /// The context of names that refer to no declaration of the script: globals.
+    /// The context of names that refer to no declaration of the code: globals.
     unresolved: SyntaxContext,
     http_action: bool,
     /// Bindings imported from `rewind:actions`, or from `rewind:tools`, its old name: every call
@@ -152,7 +152,7 @@ struct Scope {
     rewind: HashSet<Id>,
     /// `import * as rewind from "rewind"`.
     rewind_namespaces: HashSet<Id>,
-    /// Functions of the script that return a promise.
+    /// Functions of the code that return a promise.
     async_functions: HashSet<Id>,
 }
 
@@ -215,7 +215,7 @@ impl Scope {
                 } else if self.rewind.contains(&id) {
                     Some(Origin::Rewind)
                 } else if self.async_functions.contains(&id) {
-                    Some(Origin::Script)
+                    Some(Origin::Code)
                 } else {
                     None
                 };
@@ -268,13 +268,13 @@ impl Scope {
 enum Origin {
     Action,
     Rewind,
-    Script,
+    Code,
     Combinator,
     /// An async function called where it is written: `(async () => { … })()`.
     Immediate,
 }
 
-/// Collects the functions of the script that return a promise: declared `async` (not async
+/// Collects the functions of the code that return a promise: declared `async` (not async
 /// generators), or annotated as returning `Promise<…>`.
 struct AsyncFunctions<'a>(&'a mut HashSet<Id>);
 
@@ -459,25 +459,25 @@ impl Rules<'_> {
                 let message = match kind {
                     Origin::Action => format!(
                         "{call} calls an action, and its promise is neither awaited, returned nor \
-                         assigned: the script goes on without waiting for the call, and loses \
+                         assigned: the code goes on without waiting for the call, and loses \
                          its result and its errors."
                     ),
                     Origin::Rewind => format!(
                         "{call} returns a promise that is neither awaited, returned nor \
-                         assigned: the script goes on at once instead of waiting."
+                         assigned: the code goes on at once instead of waiting."
                     ),
-                    Origin::Script => format!(
+                    Origin::Code => format!(
                         "{call} is async, and its promise is neither awaited, returned nor \
-                         assigned: the script goes on without waiting for it, and loses its \
+                         assigned: the code goes on without waiting for it, and loses its \
                          errors."
                     ),
                     Origin::Combinator => format!(
                         "{call} returns a promise that is neither awaited, returned nor \
-                         assigned: the script goes on without waiting for the calls it \
+                         assigned: the code goes on without waiting for the calls it \
                          groups, and loses their errors."
                     ),
                     Origin::Immediate => "This async function is called, and its promise is \
-                                           neither awaited, returned nor assigned: the script \
+                                           neither awaited, returned nor assigned: the code \
                                            goes on without waiting for it, and loses its \
                                            errors."
                         .to_owned(),
@@ -522,7 +522,7 @@ impl Rules<'_> {
         let (message, hint) = if method == "forEach" {
             (
                 "`forEach` ignores what its callback returns, so the promises of this async \
-                 callback are never awaited: the calls start together, the script goes on \
+                 callback are never awaited: the calls start together, the code goes on \
                  before they end, and it loses their errors."
                     .to_owned(),
                 format!(
@@ -548,7 +548,7 @@ impl Rules<'_> {
     }
 
     /// The check returns the first diagnostics only: past as many findings, the next ones,
-    /// found further in the script, are not kept.
+    /// found further in the code, are not kept.
     fn is_full(&self) -> bool {
         self.findings.len() >= TsgoChecker::MAX_DIAGNOSTICS
     }
@@ -565,7 +565,7 @@ impl Rules<'_> {
             start,
             end,
             rule: ABSENT_GLOBAL,
-            message: format!("`{name}` does not exist in Rewind scripts."),
+            message: format!("`{name}` does not exist in Rewind workflows."),
             hint: Some(hint.clone()),
             global: Some(name.to_owned()),
         });
@@ -770,7 +770,10 @@ mod tests {
         );
         let first = &check(source, false)[0];
         assert_eq!(first.global.as_deref(), Some("Buffer"));
-        assert_eq!(first.message, "`Buffer` does not exist in Rewind scripts.");
+        assert_eq!(
+            first.message,
+            "`Buffer` does not exist in Rewind workflows."
+        );
         assert!(first.hint.as_deref().unwrap().contains("TextEncoder"));
     }
 

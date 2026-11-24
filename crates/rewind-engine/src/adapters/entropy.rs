@@ -84,7 +84,7 @@ impl Entropy for SystemEntropy {
 
     fn seed(&self) -> Seed {
         let mut bytes = [0u8; 32];
-        // Without a CSPRNG, seeds would be predictable, and so would `crypto` in scripts.
+        // Without a CSPRNG, seeds would be predictable, and so would `crypto` in workflows.
         getrandom::fill(&mut bytes).expect("the operating system's random generator is available");
         Seed::from_bytes(bytes)
     }

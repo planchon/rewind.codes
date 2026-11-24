@@ -1,5 +1,5 @@
 {
-  "description": "A script that allocates without bound reaches the heap limit: the host aborts the run.",
+  "description": "A code that allocates without bound reaches the heap limit: the host aborts the run.",
   "limits": {
     "heap_mb": 64
   },

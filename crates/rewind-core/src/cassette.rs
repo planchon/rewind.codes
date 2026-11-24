@@ -198,7 +198,7 @@ mod tests {
 
     fn started() -> Event {
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: Digest::of(b"s"),
+            code: Digest::of(b"s"),
             action_set: Digest::of(b"t"),
             input: json!({}).into(),
             seed: Seed::from_bytes([0; 32]),

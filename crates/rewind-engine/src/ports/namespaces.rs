@@ -174,12 +174,12 @@ pub struct Quotas {
     pub active_runs: Option<u32>,
     /// Runs created in a calendar month, forks included.
     pub runs_per_month: Option<u64>,
-    /// Distinct scripts with at least one run kept.
-    pub scripts: Option<u64>,
+    /// Distinct workflows with at least one run kept.
+    pub workflows: Option<u64>,
     /// The longest TTL a run may ask for.
     pub max_ttl: Option<Duration>,
-    /// The most lines a script may have.
-    pub max_script_lines: Option<u32>,
+    /// The most lines a code may have.
+    pub max_code_lines: Option<u32>,
 }
 
 impl Quotas {
@@ -190,14 +190,14 @@ impl Quotas {
             cpu_per_month: self.cpu_per_month.or(fallback.cpu_per_month),
             active_runs: self.active_runs.or(fallback.active_runs),
             runs_per_month: self.runs_per_month.or(fallback.runs_per_month),
-            scripts: self.scripts.or(fallback.scripts),
+            workflows: self.workflows.or(fallback.workflows),
             max_ttl: self.max_ttl.or(fallback.max_ttl),
-            max_script_lines: self.max_script_lines.or(fallback.max_script_lines),
+            max_code_lines: self.max_code_lines.or(fallback.max_code_lines),
         }
     }
 
     /// Per quota, the smaller of the two limits: what a request must pass when it is bounded by
-    /// both its namespace's limits and the tenant's ceiling (`max_ttl`, `max_script_lines`).
+    /// both its namespace's limits and the tenant's ceiling (`max_ttl`, `max_code_lines`).
     pub fn tightest(&self, other: &Quotas) -> Quotas {
         fn min<T: Ord + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
             match (a, b) {
@@ -209,9 +209,9 @@ impl Quotas {
             cpu_per_month: min(self.cpu_per_month, other.cpu_per_month),
             active_runs: min(self.active_runs, other.active_runs),
             runs_per_month: min(self.runs_per_month, other.runs_per_month),
-            scripts: min(self.scripts, other.scripts),
+            workflows: min(self.workflows, other.workflows),
             max_ttl: min(self.max_ttl, other.max_ttl),
-            max_script_lines: min(self.max_script_lines, other.max_script_lines),
+            max_code_lines: min(self.max_code_lines, other.max_code_lines),
         }
     }
 
@@ -222,15 +222,15 @@ impl Quotas {
             QuotaKind::CpuPerMonth => self.cpu_per_month.map(millis),
             QuotaKind::ActiveRuns => self.active_runs.map(u64::from),
             QuotaKind::RunsPerMonth => self.runs_per_month,
-            QuotaKind::Scripts => self.scripts,
+            QuotaKind::Workflows => self.workflows,
             QuotaKind::MaxTtl => self.max_ttl.map(millis),
-            QuotaKind::MaxScriptLines => self.max_script_lines.map(u64::from),
+            QuotaKind::MaxCodeLines => self.max_code_lines.map(u64::from),
         }
     }
 }
 
 /// The limits of a namespace: its exceptions over the tenant's defaults. The tenant's ceiling
-/// bounds the tenant's totals; for `max_ttl` and `max_script_lines`, a request passes
+/// bounds the tenant's totals; for `max_ttl` and `max_code_lines`, a request passes
 /// `limits(..).tightest(&tenant.quotas)`.
 pub fn limits(tenant: &Tenant, namespace: Option<&Namespace>) -> Quotas {
     match namespace {
@@ -245,9 +245,9 @@ pub enum QuotaKind {
     CpuPerMonth,
     ActiveRuns,
     RunsPerMonth,
-    Scripts,
+    Workflows,
     MaxTtl,
-    MaxScriptLines,
+    MaxCodeLines,
 }
 
 impl QuotaKind {
@@ -255,9 +255,9 @@ impl QuotaKind {
         QuotaKind::CpuPerMonth,
         QuotaKind::ActiveRuns,
         QuotaKind::RunsPerMonth,
-        QuotaKind::Scripts,
+        QuotaKind::Workflows,
         QuotaKind::MaxTtl,
-        QuotaKind::MaxScriptLines,
+        QuotaKind::MaxCodeLines,
     ];
 
     /// As the API and the store write it: `cpu_per_month`.
@@ -266,9 +266,9 @@ impl QuotaKind {
             QuotaKind::CpuPerMonth => "cpu_per_month",
             QuotaKind::ActiveRuns => "active_runs",
             QuotaKind::RunsPerMonth => "runs_per_month",
-            QuotaKind::Scripts => "scripts",
+            QuotaKind::Workflows => "workflows",
             QuotaKind::MaxTtl => "max_ttl",
-            QuotaKind::MaxScriptLines => "max_script_lines",
+            QuotaKind::MaxCodeLines => "max_code_lines",
         }
     }
 
@@ -295,7 +295,7 @@ pub enum QuotaScope {
 /// What `create_run` refused a run for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuotaExceeded {
-    /// `ActiveRuns`, `RunsPerMonth` or `Scripts`.
+    /// `ActiveRuns`, `RunsPerMonth` or `Workflows`.
     pub quota: QuotaKind,
     pub scope: QuotaScope,
     pub limit: u64,
@@ -489,23 +489,23 @@ pub struct Usage {
     pub runs_started: u64,
     /// Runs active now.
     pub active_runs: u64,
-    /// Distinct scripts with at least one run kept; for the tenant, the sum over its
+    /// Distinct workflows with at least one run kept; for the tenant, the sum over its
     /// namespaces.
-    pub scripts: u64,
+    pub workflows: u64,
     /// The days of the month with some use, oldest first.
     pub days: Vec<(Day, DayUsage)>,
 }
 
 impl Usage {
     /// The use of `quota`, in its unit: milliseconds for CPU time, a count otherwise. `None` for
-    /// the limits that are not counted (`max_ttl`, `max_script_lines`).
+    /// the limits that are not counted (`max_ttl`, `max_code_lines`).
     pub fn of(&self, quota: QuotaKind) -> Option<u64> {
         match quota {
             QuotaKind::CpuPerMonth => Some(u64::try_from(self.cpu.as_millis()).unwrap_or(u64::MAX)),
             QuotaKind::ActiveRuns => Some(self.active_runs),
             QuotaKind::RunsPerMonth => Some(self.runs_started),
-            QuotaKind::Scripts => Some(self.scripts),
-            QuotaKind::MaxTtl | QuotaKind::MaxScriptLines => None,
+            QuotaKind::Workflows => Some(self.workflows),
+            QuotaKind::MaxTtl | QuotaKind::MaxCodeLines => None,
         }
     }
 }

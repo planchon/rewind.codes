@@ -96,7 +96,7 @@ impl From<NamespaceName> for String {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Quotas {
-    /// CPU time of the isolates running the namespace's scripts in a calendar month (UTC),
+    /// CPU time of the isolates running the namespace's workflows in a calendar month (UTC),
     /// replays excluded. Never refused: crossing 80 % and 100 % sends `quota.alert`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_per_month: Option<Duration>,
@@ -106,16 +106,16 @@ pub struct Quotas {
     /// Runs created in a calendar month, forks included (429 above it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runs_per_month: Option<u64>,
-    /// Distinct scripts with at least one run kept in the namespace (429 for a new one above
+    /// Distinct workflows with at least one run kept in the namespace (429 for a new one above
     /// it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scripts: Option<u64>,
+    pub workflows: Option<u64>,
     /// The longest TTL a run may ask for; the default TTL is lowered to it (400 above it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_ttl: Option<Duration>,
-    /// The most lines a script may have (422 `invalid-script` above it).
+    /// The most lines a code may have (422 `invalid-code` above it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_script_lines: Option<u32>,
+    pub max_code_lines: Option<u32>,
 }
 
 /// A quota, as `quota-exceeded` and `quota.alert` name it.
@@ -127,9 +127,9 @@ pub enum QuotaKind {
     CpuPerMonth,
     ActiveRuns,
     RunsPerMonth,
-    Scripts,
+    Workflows,
     MaxTtl,
-    MaxScriptLines,
+    MaxCodeLines,
 }
 
 impl QuotaKind {
@@ -137,9 +137,9 @@ impl QuotaKind {
         QuotaKind::CpuPerMonth,
         QuotaKind::ActiveRuns,
         QuotaKind::RunsPerMonth,
-        QuotaKind::Scripts,
+        QuotaKind::Workflows,
         QuotaKind::MaxTtl,
-        QuotaKind::MaxScriptLines,
+        QuotaKind::MaxCodeLines,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -147,9 +147,9 @@ impl QuotaKind {
             QuotaKind::CpuPerMonth => "cpu_per_month",
             QuotaKind::ActiveRuns => "active_runs",
             QuotaKind::RunsPerMonth => "runs_per_month",
-            QuotaKind::Scripts => "scripts",
+            QuotaKind::Workflows => "workflows",
             QuotaKind::MaxTtl => "max_ttl",
-            QuotaKind::MaxScriptLines => "max_script_lines",
+            QuotaKind::MaxCodeLines => "max_code_lines",
         }
     }
 }
@@ -179,8 +179,8 @@ pub struct QuotaUsage {
     pub active_runs: u64,
     /// Runs created in the month, forks included.
     pub runs_started: u64,
-    /// Distinct scripts with at least one run kept.
-    pub scripts: u64,
+    /// Distinct workflows with at least one run kept.
+    pub workflows: u64,
 }
 
 /// One UTC day of use.
@@ -227,7 +227,7 @@ pub enum NamespaceOrder {
     #[default]
     Cpu,
     Runs,
-    Scripts,
+    Workflows,
     Name,
 }
 
@@ -582,14 +582,14 @@ mod tests {
         let quotas: Quotas = serde_json::from_value(json!({
             "cpuPerMonth": "2h",
             "activeRuns": 10,
-            "maxScriptLines": 300
+            "maxCodeLines": 300
         }))
         .unwrap();
         assert_eq!(quotas.active_runs, Some(10));
         assert_eq!(quotas.runs_per_month, None);
         assert_eq!(
             serde_json::to_value(&quotas).unwrap(),
-            json!({ "cpuPerMonth": "2h", "activeRuns": 10, "maxScriptLines": 300 })
+            json!({ "cpuPerMonth": "2h", "activeRuns": 10, "maxCodeLines": 300 })
         );
         assert_eq!(serde_json::to_value(Quotas::default()).unwrap(), json!({}));
         assert_eq!(

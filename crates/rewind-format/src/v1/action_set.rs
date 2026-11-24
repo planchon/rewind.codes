@@ -34,7 +34,7 @@
 //! "path":"/measures/{id}"}`; no other action has one.
 //!
 //! The workflow version document (the `workflows` table) is
-//! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"script":"<sha-256>",
+//! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"code":"<sha-256>",
 //! "action_set":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
 //! `labels`, the scope of a grant limited to labels it was saved under, is omitted when empty:
 //! a version saved tenant-wide keeps the document it had before versions carried labels. So is
@@ -88,7 +88,7 @@ struct WorkflowV1 {
     name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    script: String,
+    code: String,
     action_set: String,
     schemas: WorkflowSchemasV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -365,7 +365,7 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
     let dto = WorkflowV1 {
         name: workflow.name().to_owned(),
         description: workflow.description().map(str::to_owned),
-        script: workflow.script().to_hex(),
+        code: workflow.code().to_hex(),
         action_set: workflow.action_set().to_hex(),
         schemas: schemas_dto(workflow.schemas()),
         parent: suite.parent.map(|parent| parent.to_hex()),
@@ -464,7 +464,7 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
     Workflow::new(
         dto.name,
         dto.description,
-        digest(&dto.script, "\"script\"")?,
+        digest(&dto.code, "\"code\"")?,
         digest(&dto.action_set, "\"action_set\"")?,
         schemas_from_dto(dto.schemas),
     )

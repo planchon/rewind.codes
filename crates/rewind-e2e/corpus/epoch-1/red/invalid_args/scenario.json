@@ -1,5 +1,5 @@
 {
-  "description": "An invalid call that the script does not catch fails the run with the TypeError, its stack at the script's line; no call was recorded.",
+  "description": "An invalid call that the code does not catch fails the run with the TypeError, its stack at the code's line; no call was recorded.",
   "actions": {
     "slack.post_message": {
       "ok": true

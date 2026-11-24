@@ -8,8 +8,8 @@ mod support;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionOutcome, ActionRule, ActionSet, CallOrder, Expectations, ExpectedCall, ExpectedError,
-    Matching, RunStatus, Script, SignalWhen, Test, TestOrigin, TestSignal,
+    ActionOutcome, ActionRule, ActionSet, CallOrder, Code, Expectations, ExpectedCall,
+    ExpectedError, Matching, RunStatus, SignalWhen, Test, TestOrigin, TestSignal,
 };
 use rewind_engine::ports::Delivery;
 use rewind_engine::testing::{
@@ -41,8 +41,8 @@ fn sleepy() -> FakeExecutor {
     )
 }
 
-fn script() -> Script {
-    Script::new("sleepy")
+fn code() -> Code {
+    Code::new("sleepy")
 }
 
 fn action_set() -> ActionSet {
@@ -67,10 +67,10 @@ fn test() -> Test {
 }
 
 async fn run(test: &Test) -> rewind_engine::testing::TestReport {
-    let script = script();
+    let code = code();
     let action_set = action_set();
     let subject = Subject {
-        script: &script,
+        code: &code,
         action_set: &action_set,
         interface: None,
     };
@@ -142,7 +142,7 @@ async fn failed_expectations_and_unanswered_calls_are_reported_for_a_model() {
         report.failures,
         [
             "the signal \"approval\" was not delivered: the run had already ended",
-            "the script called a({\"n\":1}), which the test's world does not answer",
+            "the code called a({\"n\":1}), which the test's world does not answer",
             "the run is failed (ActionError: no recorded response for `a({\"n\":1})`), expected \
              completed",
             "the run has no output (it is failed), expected one containing {\"approved\":true}",
@@ -155,7 +155,7 @@ async fn failed_expectations_and_unanswered_calls_are_reported_for_a_model() {
 
 #[tokio::test]
 async fn an_unanswered_call_fails_the_test_even_when_the_script_handles_it() {
-    // The script fails with its own error when `a` fails: no expectation says anything about
+    // The code fails with its own error when `a` fails: no expectation says anything about
     // it, yet the test fails, since the world does not answer `a`.
     let mut test = test();
     test.world.actions.clear();
@@ -163,7 +163,7 @@ async fn an_unanswered_call_fails_the_test_even_when_the_script_handles_it() {
     assert!(!report.passed);
     assert!(
         report.failures.contains(
-            &"the script called a({\"n\":1}), which the test's world does not answer".to_owned()
+            &"the code called a({\"n\":1}), which the test's world does not answer".to_owned()
         ),
         "{:?}",
         report.failures
@@ -247,7 +247,7 @@ async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
         report
             .failures
             .iter()
-            .any(|failure| failure.starts_with("the script called a({\"n\":1})")),
+            .any(|failure| failure.starts_with("the code called a({\"n\":1})")),
         "{:?}",
         report.failures
     );
@@ -255,10 +255,10 @@ async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
 
 #[tokio::test]
 async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
-    let script = script();
+    let code = code();
     let action_set = action_set();
     let subject = Subject {
-        script: &script,
+        code: &code,
         action_set: &action_set,
         interface: None,
     };
@@ -319,10 +319,10 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
         }],
     );
     test.expect.output = Some(json!({ "approved": true }));
-    let script = script();
+    let code = code();
     let action_set = action_set();
     let subject = Subject {
-        script: &script,
+        code: &code,
         action_set: &action_set,
         interface: None,
     };
@@ -345,10 +345,10 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
 #[test]
 fn a_run_of_tests_is_a_future_a_server_can_spawn() {
     fn spawnable<T: Send>(_: &T) {}
-    let script = script();
+    let code = code();
     let action_set = action_set();
     let subject = Subject {
-        script: &script,
+        code: &code,
         action_set: &action_set,
         interface: None,
     };

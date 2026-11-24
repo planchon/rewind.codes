@@ -129,7 +129,7 @@ pub(crate) fn secret_texts(auth: &CallAuth) -> Vec<String> {
 }
 
 /// `dispatched` without the attached secret's texts: a server that echoes its credential (an
-/// error quoting the key, a debug endpoint) must not bring it into the journal and the script
+/// error quoting the key, a debug endpoint) must not bring it into the journal and the code
 /// (`archi/04-tools.md`, "Secrets": secrets never enter the journal nor the isolate).
 pub(crate) fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
     if texts.is_empty() {

@@ -26,8 +26,8 @@ use rewind_engine::node::runtime;
 use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    AccessStore, ApiKey, Clock, Cluster, ControlPlaneChange, Grant, MasterKeyId, NodeInfo,
-    PartitionMap, Principal, ScriptExecutor, SecretError, SecretStore, StoreError,
+    AccessStore, ApiKey, Clock, Cluster, CodeExecutor, ControlPlaneChange, Grant, MasterKeyId,
+    NodeInfo, PartitionMap, Principal, SecretError, SecretStore, StoreError,
 };
 use rewind_runtime::{SandboxLimits, V8Executor};
 use tokio::sync::{broadcast, watch};

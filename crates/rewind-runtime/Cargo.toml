@@ -1,6 +1,6 @@
 [package]
 name = "rewind-runtime"
-description = "V8 adapter of Rewind: the deterministic sandbox behind the engine's ScriptExecutor port."
+description = "V8 adapter of Rewind: the deterministic sandbox behind the engine's CodeExecutor port."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

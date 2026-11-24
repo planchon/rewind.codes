@@ -11,7 +11,7 @@
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_call","seq":1,…}`;
 //! - a **journal document** (exports, the archive of a finished run, the epoch corpus):
-//!   `{"v":1,"run":"…","script":"…","action_set":{…},"entries":[{"index":0,"recorded_at":…,
+//!   `{"v":1,"run":"…","code":"…","action_set":{…},"entries":[{"index":0,"recorded_at":…,
 //!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
 //!   action set document and its entries, written with one entry per line so that diffs stay
 //!   readable. It replays on its own;
@@ -21,7 +21,7 @@
 //!   `"apis":[…]` when it calls APIs, a server's or an API's `"auth":{…}` when its calls carry a
 //!   secret or a signature, and `"workflows":[…]` when it pins workflows, in its canonical form,
 //!   so that its bytes hash to the action set's digest;
-//! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
+//! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"code":…,
 //!   "action_set":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
 //!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
 //!   when it attaches secrets, in its canonical form, so that its bytes hash to the version;
@@ -40,7 +40,7 @@ pub mod partition;
 mod v1;
 
 use rewind_core::{
-    ActionSet, Cassette, Digest, Event, JournalDocument, RunId, Script, Test, Workflow,
+    ActionSet, Cassette, Code, Digest, Event, JournalDocument, RunId, Test, Workflow,
     canonical_json,
 };
 use serde::Serialize;
@@ -102,13 +102,13 @@ pub fn decode_event(json: &str) -> Result<Event, FormatError> {
     }
 }
 
-/// A journal document: the version, the run, its script and its action set, then one entry per
+/// A journal document: the version, the run, its code and its action set, then one entry per
 /// line.
 pub fn encode_journal(journal: &JournalDocument) -> String {
     let mut out = format!(
-        "{{\"v\":{VERSION},\"run\":{},\"script\":{},\"action_set\":{},\"entries\":[",
+        "{{\"v\":{VERSION},\"run\":{},\"code\":{},\"action_set\":{},\"entries\":[",
         to_json(&journal.run.to_string()),
-        to_json(&journal.script.source()),
+        to_json(&journal.code.source()),
         encode_action_set(&journal.action_set),
     );
     for (i, entry) in journal.entries.iter().enumerate() {
@@ -122,7 +122,7 @@ pub fn encode_journal(journal: &JournalDocument) -> String {
 /// Decodes a journal document written by [`encode_journal`], of any supported version.
 ///
 /// Only the encoding is checked here. Whether the entries form a valid history, and whether
-/// the script and the action set are those of its `run_started`, is the domain's business
+/// the code and the action set are those of its `run_started`, is the domain's business
 /// ([`JournalDocument::check`]).
 pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
     let mut object = parse_object(json)?;
@@ -136,10 +136,10 @@ pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
                 Some(_) => return Err(invalid("\"run\" is not a string")),
                 None => return Err(invalid("missing \"run\"")),
             };
-            let script = match object.remove("script") {
-                Some(Value::String(source)) => Script::new(source),
-                Some(_) => return Err(invalid("\"script\" is not a string")),
-                None => return Err(invalid("missing \"script\"")),
+            let code = match object.remove("code") {
+                Some(Value::String(source)) => Code::new(source),
+                Some(_) => return Err(invalid("\"code\" is not a string")),
+                None => return Err(invalid("missing \"code\"")),
             };
             let action_set = match object.remove("action_set") {
                 Some(Value::Object(mut action_set)) => match take_version(&mut action_set)? {
@@ -169,7 +169,7 @@ pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
                 .collect::<Result<_, _>>()?;
             Ok(JournalDocument {
                 run,
-                script,
+                code,
                 action_set,
                 entries,
             })

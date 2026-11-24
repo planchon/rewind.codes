@@ -599,12 +599,12 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
     assert_eq!(store.master_keys_in_use().await, Ok(vec![key().id()]));
 }
 
-/// A version of the workflow `name` that runs `script`.
-fn workflow(name: &str, script: &str) -> Workflow {
+/// A version of the workflow `name` that runs `code`.
+fn workflow(name: &str, code: &str) -> Workflow {
     Workflow::new(
         name,
         None,
-        Digest::of(script.as_bytes()),
+        Digest::of(code.as_bytes()),
         Digest::of(b"action_set"),
         WorkflowSchemas {
             input: serde_json::json!({ "type": "object" }),
@@ -619,7 +619,7 @@ fn workflow(name: &str, script: &str) -> Workflow {
 /// the store is upgraded (migration 13, as released), and the runs keep them set aside in
 /// `legacy` for `migrate-runs`. Runs of a tenant whose ids share their first 64 bits take the
 /// full suffix; the others keep the short one, as do the runs of another tenant. A run's origin
-/// is its workflow, or `script`. Versions are numbered by workflow and tenant, by their creation,
+/// is its workflow, or `code`. Versions are numbered by workflow and tenant, by their creation,
 /// then in the order they were stored, and a new one takes the next number.
 async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Postgres) {
     use rewind_core::{MAX_SUFFIX_LEN, SUFFIX_LEN, run_suffix};

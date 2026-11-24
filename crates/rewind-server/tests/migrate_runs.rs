@@ -254,7 +254,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
         json!({ "from": "slow" })
     );
 
-    // The webhook URL the script was given still signals it: its token names no run, and the
+    // The webhook URL the code was given still signals it: its token names no run, and the
     // partition that holds its hash answers.
     let journal = client
         .export_journal(WEBHOOK, JournalExport::Journal)

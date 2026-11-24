@@ -12,8 +12,8 @@
 //! A test runs on a run plane of its own, stepped by the [`Driver`]: one node holding one
 //! partition, wired with in-memory adapters, a virtual clock started at the test's start and an
 //! entropy giving the test's seed; harness actions are dispatched to the test's world as every
-//! other call. Its result is a function of the script, the action set, the test and the epoch. The
-//! script under test is a parameter ([`Subject`]).
+//! other call. Its result is a function of the code, the action set, the test and the epoch. The
+//! code under test is a parameter ([`Subject`]).
 //! TypeScript mock handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
 //! isolate of their own.
 
@@ -26,9 +26,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use futures_util::stream;
 use rewind_core::{
-    AbortReason, ActionOutcome, ActionSet, Command, Event, HistoryEntry, JsonValue, Observed,
-    ObservedCall, PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, Script,
-    ScriptError, Seed, SignalWhen, Test, Timestamp, WorkflowOp, WorkflowSchemas,
+    AbortReason, ActionOutcome, ActionSet, Code, Command, Event, HistoryEntry, JsonValue, Observed,
+    ObservedCall, PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, ScriptError, Seed,
+    SignalWhen, Test, Timestamp, WorkflowOp, WorkflowSchemas,
 };
 
 use crate::adapters::{
@@ -39,7 +39,7 @@ use crate::driver::{DriveError, Driver, PlaneClock, Steps};
 use crate::edge::Edge;
 use crate::mock::{MockDispatcher, Mocks, NoMocks};
 use crate::plane::{HarnessActions, NodeConfig, Wiring};
-use crate::ports::{ActionDispatcher, Enqueued, Entropy, NodeId, QuarantineKind, ScriptExecutor};
+use crate::ports::{ActionDispatcher, CodeExecutor, Enqueued, Entropy, NodeId, QuarantineKind};
 use crate::schema::{Refused, Validator};
 use crate::start::{StartError, StartRun};
 
@@ -50,11 +50,11 @@ pub const DEFAULT_START: Timestamp = Timestamp(1_767_225_600_000);
 /// How many tests of a suite run at once.
 pub const PARALLEL_TESTS: usize = 4;
 
-/// What a test runs against: a script, its action set, and for a test of a workflow, the
+/// What a test runs against: a code, its action set, and for a test of a workflow, the
 /// workflow's interface, against which the test's input and signals are checked.
 #[derive(Debug, Clone, Copy)]
 pub struct Subject<'a> {
-    pub script: &'a Script,
+    pub code: &'a Code,
     pub action_set: &'a ActionSet,
     pub interface: Option<&'a WorkflowSchemas>,
 }
@@ -132,7 +132,7 @@ impl TestReport {
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum TestError {
-    /// The script was refused at start: no test can run.
+    /// The code was refused at start: no test can run.
     #[error(transparent)]
     Start(#[from] StartError),
     /// The run plane a test runs on failed, for a reason that is not the test's.
@@ -310,7 +310,7 @@ fn refused_text(refused: Refused) -> String {
 }
 
 /// Runs every test against the subject, [`PARALLEL_TESTS`] at once, and reports them in the
-/// order given. The script is compiled once first: a script refused at start fails them all.
+/// order given. The code is compiled once first: a code refused at start fails them all.
 /// Each test runs on a clone of `executor`.
 pub async fn run_tests<X, L>(
     executor: &X,
@@ -320,15 +320,15 @@ pub async fn run_tests<X, L>(
     options: &TestOptions,
 ) -> Result<Vec<TestReport>, TestError>
 where
-    X: ScriptExecutor<Instance: 'static> + Clone + 'static,
+    X: CodeExecutor<Instance: 'static> + Clone + 'static,
     L: MockLoader,
 {
     if tests.is_empty() {
         return Ok(Vec::new());
     }
     executor
-        .compile(subject.script, subject.action_set)
-        .map_err(StartError::InvalidScript)?;
+        .compile(subject.code, subject.action_set)
+        .map_err(StartError::InvalidCode)?;
     // The futures are collected before they are streamed: a closure kept in the stream's state
     // would make the future's `Send` depend on a higher-ranked lifetime the compiler cannot
     // prove.
@@ -354,7 +354,7 @@ pub async fn run_test<X, L>(
     options: &TestOptions,
 ) -> Result<TestReport, TestError>
 where
-    X: ScriptExecutor<Instance: 'static> + Clone + 'static,
+    X: CodeExecutor<Instance: 'static> + Clone + 'static,
     L: MockLoader,
 {
     if let Some((problem, failures)) = check_test(test, subject) {
@@ -411,7 +411,7 @@ where
 
     let mut world = TestWorld::new(executor.clone(), dispatcher, start, test.seed).await?;
     let mut request = StartRun::new(
-        subject.script.clone(),
+        subject.code.clone(),
         subject.action_set.clone(),
         test.input.clone(),
     );
@@ -488,7 +488,7 @@ where
     }
     for call in unanswered.list() {
         failures.push(format!(
-            "the script called {call}, which the test's world does not answer"
+            "the code called {call}, which the test's world does not answer"
         ));
     }
 
@@ -542,7 +542,7 @@ where
     })
 }
 
-/// Steps a test's run is driven at most: a guard against scripts that never stop (an endless
+/// Steps a test's run is driven at most: a guard against workflows that never stop (an endless
 /// `setInterval` in virtual time).
 pub const MAX_TEST_STEPS: usize = 100_000;
 
@@ -565,7 +565,7 @@ type TestPlane<X, M> = Wiring<
 /// One node holding the one partition of a test, stepped by the driver.
 struct TestWorld<X, M>
 where
-    X: ScriptExecutor<Instance: 'static> + 'static,
+    X: CodeExecutor<Instance: 'static> + 'static,
     M: ActionDispatcher + 'static,
 {
     driver: Driver<TestPlane<X, M>, MemoryCluster>,
@@ -575,7 +575,7 @@ where
 
 impl<X, M> TestWorld<X, M>
 where
-    X: ScriptExecutor<Instance: 'static> + 'static,
+    X: CodeExecutor<Instance: 'static> + 'static,
     M: ActionDispatcher + 'static,
 {
     async fn new(
@@ -684,9 +684,9 @@ mod tests {
     #[test]
     fn stale_tests_name_what_the_action_set_lost() {
         let action_set = action_set();
-        let script = Script::new("export default async () => 1;");
+        let code = Code::new("export default async () => 1;");
         let subject = Subject {
-            script: &script,
+            code: &code,
             action_set: &action_set,
             interface: None,
         };
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn incompatible_tests_name_what_the_interface_refuses() {
         let action_set = ActionSet::empty();
-        let script = Script::new("export default async () => 1;");
+        let code = Code::new("export default async () => 1;");
         let interface = WorkflowSchemas {
             input: json!({ "type": "object", "required": ["repo"] }),
             output: json!({}),
@@ -731,7 +731,7 @@ mod tests {
             )]),
         };
         let subject = Subject {
-            script: &script,
+            code: &code,
             action_set: &action_set,
             interface: Some(&interface),
         };

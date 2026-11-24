@@ -3,7 +3,7 @@
 //! `MemoryCatalog` of `rewind-engine` is the reference of every behavior here; both pass the same
 //! conformance suite.
 //!
-//! The catalog keeps scripts, action sets, workflows, tests, workflow_tests, tenants, namespaces
+//! The catalog keeps workflows, action sets, workflows, tests, workflow_tests, tenants, namespaces
 //! with each one's `partition`, and subscriptions. Every write is one transaction that sends what
 //! it changed with `NOTIFY` (`crate::changes`); a write that changes nothing sends nothing. Test
 //! rows are locked by tenant and digest: a new version locks the rows of its suite (`FOR SHARE`)
@@ -18,12 +18,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 
-use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogError, CatalogStore, CompiledScript, ControlPlaneChange,
+    ActionDeclarations, CatalogError, CatalogStore, CompiledCode, ControlPlaneChange,
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
-    RunRef, ScriptTitle, Secret, StoredActionSet, StoredScript, StoredWorkflow, Subscription,
+    RunRef, ScriptTitle, Secret, StoredActionSet, StoredCode, StoredWorkflow, Subscription,
     TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, WorkflowFilter,
     namespace_partition,
 };
@@ -711,13 +711,13 @@ impl PostgresCatalog {
 
 impl CatalogStore for PostgresCatalog {
     // ---------------------------------------------------------------------------------------
-    // Scripts and action sets
+    // Workflows and action sets
 
-    async fn put_script(
+    async fn put_code(
         &self,
         tenant_id: &TenantId,
-        script: &Script,
-        compiled: &CompiledScript,
+        code: &Code,
+        compiled: &CompiledCode,
     ) -> Result<(), CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let inserted = sqlx::query(
@@ -725,8 +725,8 @@ impl CatalogStore for PostgresCatalog {
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
         )
         .bind(tenant(tenant_id))
-        .bind(bytes(script.digest()))
-        .bind(script.source())
+        .bind(bytes(code.digest()))
+        .bind(code.source())
         .bind(compiled.javascript.as_str())
         .bind(compiled.source_map.as_str())
         .execute(&mut *tx)
@@ -735,7 +735,7 @@ impl CatalogStore for PostgresCatalog {
         if inserted.rows_affected() > 0 {
             let change = ControlPlaneChange::Script {
                 tenant: tenant_id.clone(),
-                digest: script.digest(),
+                digest: code.digest(),
             };
             notify(&mut tx, &[change]).await?;
         }
@@ -747,7 +747,7 @@ impl CatalogStore for PostgresCatalog {
         &self,
         tenant_id: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredScript>, CatalogError> {
+    ) -> Result<Option<StoredCode>, CatalogError> {
         let row = sqlx::query(
             "SELECT source, transpiled, source_map FROM scripts WHERE tenant = $1 AND digest = $2",
         )
@@ -759,13 +759,13 @@ impl CatalogStore for PostgresCatalog {
         let Some(row) = row else {
             return Ok(None);
         };
-        let script = Script::new(row.text(0)?);
-        if script.digest() != digest {
-            return Err(Error::Corrupt(format!("script {digest} does not hash to its key")).into());
+        let code = Code::new(row.text(0)?);
+        if code.digest() != digest {
+            return Err(Error::Corrupt(format!("code {digest} does not hash to its key")).into());
         }
-        Ok(Some(StoredScript {
-            script,
-            compiled: CompiledScript {
+        Ok(Some(StoredCode {
+            code,
+            compiled: CompiledCode {
                 javascript: row.text(1)?,
                 source_map: row.text(2)?,
             },
@@ -775,18 +775,18 @@ impl CatalogStore for PostgresCatalog {
     async fn set_script_title(
         &self,
         tenant_id: &TenantId,
-        script: Digest,
+        code: Digest,
         title: Option<&ScriptTitle>,
     ) -> Result<bool, CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
-        // A tenant's scripts are never deleted: whether it has the script needs no lock.
+        // A tenant's workflows are never deleted: whether it has the code needs no lock.
         let stored = match title {
             None => sqlx::query_scalar(
                 "WITH removed AS (DELETE FROM script_titles WHERE tenant = $1 AND digest = $2) \
                  SELECT EXISTS (SELECT 1 FROM scripts WHERE tenant = $1 AND digest = $2)",
             )
             .bind(tenant(tenant_id))
-            .bind(bytes(script))
+            .bind(bytes(code))
             .fetch_one(&mut *tx)
             .await
             .map_err(Error::from)?,
@@ -801,7 +801,7 @@ impl CatalogStore for PostgresCatalog {
                          updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at",
                 )
                 .bind(tenant(tenant_id))
-                .bind(bytes(script))
+                .bind(bytes(code))
                 .bind(title.title.as_str())
                 .bind(title.description.as_deref())
                 .bind(title.updated_by.as_str())
@@ -816,7 +816,7 @@ impl CatalogStore for PostgresCatalog {
         if stored {
             let change = ControlPlaneChange::Script {
                 tenant: tenant_id.clone(),
-                digest: script,
+                digest: code,
             };
             notify(&mut tx, &[change]).await?;
         }
@@ -1010,23 +1010,23 @@ impl CatalogStore for PostgresCatalog {
             .collect::<Result<_, Error>>()?)
     }
 
-    async fn workflows_with_script(
+    async fn workflows_with_code(
         &self,
         tenant_id: &TenantId,
-        script: Digest,
+        code: Digest,
         labels: &BTreeMap<String, String>,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        // The script is read from the version's document: a tenant has few versions.
+        // The code is read from the version's document: a tenant has few versions.
         let rows = sqlx::query(concat!(
             "SELECT ",
             workflow_columns!(),
             " FROM workflows WHERE tenant = $1 AND labels @> $2::jsonb \
-             AND (document::jsonb ->> 'script') = $3 \
+             AND (document::jsonb ->> 'code') = $3 \
              ORDER BY created_at DESC, ordinal DESC"
         ))
         .bind(tenant(tenant_id))
         .bind(encode_labels(labels))
-        .bind(script.to_hex())
+        .bind(code.to_hex())
         .fetch_all(&self.pool)
         .await
         .map_err(Error::from)?;

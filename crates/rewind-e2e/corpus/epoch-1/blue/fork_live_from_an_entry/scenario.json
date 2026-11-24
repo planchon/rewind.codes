@@ -16,7 +16,7 @@
     }
   },
   "fork": {
-    "script": "script.ts",
+    "code": "workflow.ts",
     "at": 3
   },
   "expect": {

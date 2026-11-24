@@ -2,16 +2,16 @@
 //! `archi/06-storage-and-scale.md`, "Quotas", "Namespaces").
 //!
 //! The edge checks a start before it asks the owner of the run's partition
-//! ([`Edge::start_run`](crate::edge::Edge::start_run)): the namespace, the script, the TTL, the
+//! ([`Edge::start_run`](crate::edge::Edge::start_run)): the namespace, the code, the TTL, the
 //! input, the attachments, the type-check; the owner applies the start key and the admission.
 
 use std::time::Duration;
 
-use rewind_core::{ActionSet, JsonValue, RunMode, Script};
+use rewind_core::{ActionSet, Code, JsonValue, RunMode};
 
 use crate::attachments::{AttachRights, RefusedAttachments};
 use crate::ports::{
-    ActionDeclarations, CheckerError, Diagnostic, InvalidScript, NamespaceName, QuotaExceeded,
+    ActionDeclarations, CheckerError, Diagnostic, InvalidCode, NamespaceName, QuotaExceeded,
     RunMetadata, SecretError, Severity, StoreError, TenantId, TypeChecker,
 };
 use crate::text::{self, NulCharacter};
@@ -22,7 +22,7 @@ pub struct StartRun {
     pub tenant: TenantId,
     /// The end user the run acts for (`archi/06-storage-and-scale.md`, "Namespaces").
     pub namespace: NamespaceName,
-    pub script: Script,
+    pub code: Code,
     pub action_set: ActionSet,
     /// The declarations generated from the action set, stored with it.
     pub declarations: ActionDeclarations,
@@ -42,12 +42,12 @@ pub struct StartRun {
 impl StartRun {
     /// A live run of the tenant `local`, in its namespace `local`, with no declarations, TTL,
     /// metadata, idempotency key nor attachment.
-    pub fn new(script: Script, action_set: ActionSet, input: JsonValue) -> Self {
+    pub fn new(code: Code, action_set: ActionSet, input: JsonValue) -> Self {
         Self {
             tenant: TenantId::local(),
             namespace: NamespaceName::new(NamespaceName::LOCAL)
                 .unwrap_or_else(|_| NamespaceName::migrated()),
-            script,
+            code,
             action_set,
             declarations: ActionDeclarations::default(),
             input,
@@ -62,25 +62,25 @@ impl StartRun {
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum StartError {
-    /// The script cannot run: it does not compile, imports what does not exist, has no
-    /// default export… The message is written to be read by the model that wrote the script.
-    #[error("the script is invalid: {0}")]
-    InvalidScript(InvalidScript),
-    /// The script does not type-check against the sandbox lib and the action set's declarations:
+    /// The code cannot run: it does not compile, imports what does not exist, has no
+    /// default export… The message is written to be read by the model that wrote the code.
+    #[error("the code is invalid: {0}")]
+    InvalidCode(InvalidCode),
+    /// The code does not type-check against the sandbox lib and the action set's declarations:
     /// at least one diagnostic is an error. Every diagnostic is given, warnings included.
-    #[error("the script does not type-check: {}", first_error(.0))]
+    #[error("the code does not type-check: {}", first_error(.0))]
     TypeErrors(Vec<Diagnostic>),
-    /// The type-checker itself failed: the script was neither accepted nor refused.
+    /// The type-checker itself failed: the code was neither accepted nor refused.
     #[error(transparent)]
     Checker(#[from] CheckerError),
     #[error("invalid TTL {requested:?}: it must be positive and at most {max:?}")]
     InvalidTtl { requested: Duration, max: Duration },
-    /// The script has more lines than its namespace's `max_script_lines`, or its tenant's.
-    #[error("the script has {lines} lines; this namespace accepts at most {max}")]
-    ScriptTooLong { lines: u64, max: u64 },
+    /// The code has more lines than its namespace's `max_code_lines`, or its tenant's.
+    #[error("the code has {lines} lines; this namespace accepts at most {max}")]
+    CodeTooLong { lines: u64, max: u64 },
     #[error("the input is {size} bytes as canonical JSON, above the limit of {max} bytes")]
     InputTooLarge { size: usize, max: usize },
-    /// A text to store (the script, a label, the idempotency key, the trace context, the
+    /// A text to store (the code, a label, the idempotency key, the trace context, the
     /// action set's declarations) holds a NUL character.
     #[error(transparent)]
     NulCharacter(#[from] NulCharacter),
@@ -116,18 +116,18 @@ pub(crate) struct NamespaceBounds {
     pub(crate) max_ttl: Duration,
     /// The deployment's default TTL, lowered to `max_ttl`.
     pub(crate) default_ttl: Duration,
-    pub(crate) max_script_lines: Option<u64>,
+    pub(crate) max_code_lines: Option<u64>,
 }
 
 impl NamespaceBounds {
-    /// Refuses a script with more lines than `max_script_lines`.
-    pub(crate) fn check_lines(&self, script: &Script) -> Result<(), StartError> {
-        let Some(max) = self.max_script_lines else {
+    /// Refuses a code with more lines than `max_code_lines`.
+    pub(crate) fn check_lines(&self, code: &Code) -> Result<(), StartError> {
+        let Some(max) = self.max_code_lines else {
             return Ok(());
         };
-        let lines = script.source().lines().count() as u64;
+        let lines = code.source().lines().count() as u64;
         if lines > max {
-            return Err(StartError::ScriptTooLong { lines, max });
+            return Err(StartError::CodeTooLong { lines, max });
         }
         Ok(())
     }
@@ -140,13 +140,13 @@ fn scope_name(exceeded: &QuotaExceeded) -> &'static str {
     }
 }
 
-/// Type-checks a script; refuses it when a diagnostic is an error.
+/// Type-checks a code; refuses it when a diagnostic is an error.
 pub(crate) async fn type_check<K: TypeChecker>(
     checker: &K,
-    script: &Script,
+    code: &Code,
     declarations: &ActionDeclarations,
 ) -> Result<(), StartError> {
-    let diagnostics = checker.check(script, declarations).await?;
+    let diagnostics = checker.check(code, declarations).await?;
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)

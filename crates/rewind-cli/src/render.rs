@@ -176,7 +176,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
             run.started_at.to_string(),
             run.calls.to_string(),
             run.errors.to_string(),
-            // The script's title, else its first line.
+            // The code's title, else its first line.
             shorten(
                 run.script_title.as_deref().unwrap_or(&run.headline),
                 HEADLINE_CHARS,
@@ -191,7 +191,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
     table(&rows)
 }
 
-/// Characters of a script's title or first line in `rewind runs`.
+/// Characters of a code's title or first line in `rewind runs`.
 const HEADLINE_CHARS: usize = 40;
 
 fn shorten(text: &str, chars: usize) -> String {
@@ -225,7 +225,7 @@ pub(crate) fn table<const N: usize>(rows: &[[String; N]]) -> String {
     text
 }
 
-/// Diagnostics as compiler output, located in the script's own file.
+/// Diagnostics as compiler output, located in the code's own file.
 pub(crate) fn diagnostics(file: &str, diagnostics: &[Diagnostic]) -> String {
     let mut text = String::new();
     for diagnostic in diagnostics {
@@ -313,7 +313,7 @@ mod tests {
             namespace: "local".parse().unwrap(),
             status: RunStatus::Active,
             quarantine: None,
-            script: "s".into(),
+            code_digest: "s".into(),
             script_title: None,
             action_set: "t".into(),
             epoch: 1,
@@ -348,7 +348,7 @@ mod tests {
         let text = run(&active_run());
         assert_eq!(
             text,
-            "run local/script/06bqx3k9f2mt active\nwaiting for:\n  - signal \"approval\" (script.ts:4:9)\n"
+            "run local/script/06bqx3k9f2mt active\nwaiting for:\n  - signal \"approval\" (workflow.ts:4:9)\n"
         );
     }
 
@@ -368,7 +368,7 @@ mod tests {
         let text = run(&failed);
         assert!(
             text.contains(
-                "run local/script/06bqx3k9f2mt failed\nTypeError: x is undefined\n  at script.ts:7:3\n  7 | x.y"
+                "run local/script/06bqx3k9f2mt failed\nTypeError: x is undefined\n  at workflow.ts:7:3\n  7 | x.y"
             )
         );
 

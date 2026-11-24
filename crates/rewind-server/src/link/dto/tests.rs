@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use rewind_core::{
     ActionFailure, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Annotation, Callsite,
-    CancelReason, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel,
-    PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus, Script, SecretRef, Seed, Seq,
+    CancelReason, Code, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle,
+    LogLevel, PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus, SecretRef, Seed, Seq,
     Shape, Timestamp,
 };
 use rewind_engine::metrics::RunMeasurement;
@@ -23,7 +23,7 @@ use rewind_engine::ports::link::{
 };
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
-    ActionCounts, ActionDeclarations, Attempt, AttributeValue, CallTask, CompiledScript,
+    ActionCounts, ActionDeclarations, Attempt, AttributeValue, CallTask, CompiledCode,
     CounterDelta, Counters, Created, CredentialsExpiredReason, Day, DayUsage, DueTimer, Ending,
     Enqueued, FailureCounts, ForkParent, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun,
     LogRecord, Month, NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason,
@@ -31,7 +31,7 @@ use rewind_engine::ports::{
     QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range,
     RunCounts, RunHead, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope,
     ScriptCounts, SealedAttempt, SearchCursor, Sketch, Span, SpanId, SpanKind, SpanStatus,
-    StartedBy, StoredActionSet, StoredScript, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken,
+    StartedBy, StoredActionSet, StoredCode, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken,
     TenantId, Term, TextMatch, Threshold, TimerChange, TimerKind, TraceContext, TraceId, Trigger,
     Usage, Wait, WaitKind, WaitingFor, WebhookEvent, WebhookEventKind, Window,
 };
@@ -124,7 +124,7 @@ fn metadata() -> RunMetadata {
 
 fn started() -> RunStarted {
     RunStarted {
-        script: digest("script"),
+        code: digest("script"),
         action_set: digest("action_set"),
         input: Payload::Value(json!({ "issue": 42 })),
         seed: Seed::from_bytes([7; 32]),
@@ -185,7 +185,7 @@ fn head(n: u128) -> RunHead {
         namespace: user(),
         origin: "triage-new-issues".into(),
         suffix_len: 14,
-        script: digest("script"),
+        code: digest("script"),
         action_set: digest("action_set"),
         status: RunStatus::Active,
         epoch: Epoch(1),
@@ -216,7 +216,7 @@ fn summary(n: u128) -> RunSummary {
         namespace: user(),
         origin: "triage-new-issues".into(),
         suffix_len: 14,
-        script: digest("script"),
+        code: digest("script"),
         headline: "import { signal } from \"rewind\";".into(),
         action_set: digest("action_set"),
         status: RunStatus::Failed,
@@ -403,7 +403,7 @@ fn tasks() -> Vec<TaskRecord> {
 /// A timer of each kind, set, and one cancelled.
 fn timers() -> Vec<TimerChange> {
     let kinds = [
-        TimerKind::Script {
+        TimerKind::Code {
             run: run(1),
             seq: Seq(1),
         },
@@ -910,7 +910,7 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
                 cpu: Duration::new(7, 5),
                 runs_started: 4,
                 active_runs: 1,
-                scripts: 2,
+                workflows: 2,
                 days: vec![(
                     Day::of(T),
                     DayUsage {
@@ -926,7 +926,7 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
                 key: QuotaAlertKey {
                     tenant: acme(),
                     namespace: None,
-                    quota: QuotaKind::Scripts,
+                    quota: QuotaKind::Workflows,
                     period: Month::new(2026, 11).unwrap(),
                     threshold: Threshold::Reached,
                 },
@@ -974,7 +974,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             epoch: PartitionEpoch(7),
             run: run_id(1),
             namespace: user(),
-            script: digest("script"),
+            code: digest("script"),
             at: T,
         }),
         OrgRequest::Counts(CountsReport {
@@ -1115,14 +1115,14 @@ fn activation_request(purpose: Purpose) -> ActivationRequest {
             sealed: Some(Box::new(SealedAttempt {
                 run: RunRef::new(acme(), run_id(9)),
                 attempt: Attempt(1),
-                script: Script::new("export default async () => 1;"),
+                code: Code::new("export default async () => 1;"),
                 action_set: action_set(),
                 entries: history(),
             })),
         }),
-        script: StoredScript {
-            script: Script::new("export default async () => 1;"),
-            compiled: CompiledScript {
+        code: StoredCode {
+            code: Code::new("export default async () => 1;"),
+            compiled: CompiledCode {
                 javascript: "export default async () => 1;".into(),
                 source_map: "{\"version\":3}".into(),
             },

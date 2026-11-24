@@ -1,7 +1,7 @@
 //! The executors of a node, in the driver (`archi/03-execution.md`, "Sticky execution";
 //! `archi/06-storage-and-scale.md`, "Quotas"): a run's instance kept between its activations, a
 //! replay where none is kept, the eviction that bounds the cache, and the CPU time counted for
-//! the calls into a script that execute, never those of a replay.
+//! the calls into a code that execute, never those of a replay.
 
 #![allow(clippy::unwrap_used)]
 
@@ -34,7 +34,7 @@ fn three_calls() -> FakeExecutor {
     )
 }
 
-/// Calls `a`, then `b`, then completes: three calls into the script, of 5, 7 and 11 ms.
+/// Calls `a`, then `b`, then completes: three calls into the code, of 5, 7 and 11 ms.
 fn steps() -> FakeExecutor {
     FakeExecutor::new().with(
         "steps",

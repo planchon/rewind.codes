@@ -1,4 +1,4 @@
-//! What the script receives from an MCP action (`archi/04-tools.md`, "Action sets and code
+//! What the code receives from an MCP action (`archi/04-tools.md`, "Action sets and code
 //! generation"):
 //!
 //! - An action pinned with an output schema returns its `structuredContent`: the value its types

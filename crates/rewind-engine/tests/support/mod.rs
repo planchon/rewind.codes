@@ -12,13 +12,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionFailure, ActionSet, Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId,
-    Script, ScriptError, Seq, Timestamp,
+    ActionFailure, ActionSet, Annotation, Callsite, Code, Command, Epoch, JsonValue, Payload,
+    RunId, ScriptError, Seq, Timestamp,
 };
 use rewind_engine::StartRun;
 use rewind_engine::ports::{
-    ActionDispatcher, Call, CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError,
-    InvalidScript, ScriptExecutor, ScriptInstance, StartScript,
+    ActionDispatcher, Call, CallAuth, CodeExecutor, CodeInstance, CompiledCode, Delivery,
+    Dispatched, Emitted, ExecutorError, InvalidCode, StartCode,
 };
 
 /// 2026-01-01T00:00:00Z
@@ -26,14 +26,14 @@ pub const T0: Timestamp = Timestamp(1_767_225_600_000);
 pub const HOUR: u64 = 3_600_000;
 pub const DAY: u64 = 24 * HOUR;
 
-/// The CPU time a call into a fake script reports, unless its program says otherwise
+/// The CPU time a call into a fake code reports, unless its program says otherwise
 /// ([`FakeRun::spend`]).
 pub const CALL_CPU: Duration = Duration::from_millis(2);
 
 /// A run of the program named `name`.
 pub fn request(name: &str, input: JsonValue) -> StartRun {
     StartRun::new(
-        Script::new(name),
+        Code::new(name),
         ActionSet::from_harness_actions(["a", "b", "cleanup"]).unwrap(),
         input,
     )
@@ -42,7 +42,7 @@ pub fn request(name: &str, input: JsonValue) -> StartRun {
 // -------------------------------------------------------------------------------------------
 // Fake executor
 
-/// A script written in Rust. It reacts to deliveries, as the JS glue would, by emitting
+/// A code written in Rust. It reacts to deliveries, as the JS glue would, by emitting
 /// commands through [`FakeRun`].
 pub trait Program: Send + Sync + 'static {
     fn start(&self, run: &mut FakeRun);
@@ -93,7 +93,7 @@ impl FakeRun {
         self.refused = Some(error);
     }
 
-    /// Makes this call into the script never return, as a script that brings its worker down
+    /// Makes this call into the code never return, as a code that brings its worker down
     /// does: the activation is left without a commit and without a recorded failure.
     pub fn hang(&mut self) {
         self.hung = true;
@@ -164,7 +164,7 @@ impl FakeRun {
     }
 }
 
-/// Programs by name: a script's source is the name of its program. A source starting with
+/// Programs by name: a code's source is the name of its program. A source starting with
 /// `syntax error` does not compile; the program `unloadable` fails to load. A program imports
 /// every name of `rewind:actions` unless [`FakeExecutor::importing`] says which.
 #[derive(Clone, Default)]
@@ -218,42 +218,35 @@ pub struct FakeInstance {
     cpu: Duration,
 }
 
-impl ScriptExecutor for FakeExecutor {
+impl CodeExecutor for FakeExecutor {
     type Instance = FakeInstance;
 
     fn epochs(&self) -> &[Epoch] {
         &[Epoch(1)]
     }
 
-    fn compile(
-        &self,
-        script: &Script,
-        _action_set: &ActionSet,
-    ) -> Result<CompiledScript, InvalidScript> {
-        if script.source().starts_with("syntax error") {
-            return Err(InvalidScript {
-                message: format!("{}: unexpected token", script.source()),
+    fn compile(&self, code: &Code, _action_set: &ActionSet) -> Result<CompiledCode, InvalidCode> {
+        if code.source().starts_with("syntax error") {
+            return Err(InvalidCode {
+                message: format!("{}: unexpected token", code.source()),
             });
         }
-        Ok(CompiledScript {
-            javascript: script.source().into(),
+        Ok(CompiledCode {
+            javascript: code.source().into(),
             source_map: String::new(),
         })
     }
 
-    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        self.imports.get(script.source()).cloned()
+    fn action_imports(&self, code: &Code) -> Option<BTreeSet<String>> {
+        self.imports.get(code.source()).cloned()
     }
 
-    async fn start(
-        &self,
-        start: StartScript,
-    ) -> Result<(FakeInstance, Vec<Emitted>), ExecutorError> {
+    async fn start(&self, start: StartCode) -> Result<(FakeInstance, Vec<Emitted>), ExecutorError> {
         *self.starts.lock().unwrap() += 1;
         let name = start.compiled.javascript.as_str();
         if name == "unloadable" {
-            return Err(ExecutorError::InvalidScript(
-                "Error: top-level failure\n    at script.ts:1:7".into(),
+            return Err(ExecutorError::InvalidCode(
+                "Error: top-level failure\n    at workflow.ts:1:7".into(),
             ));
         }
         let program = self
@@ -284,7 +277,7 @@ impl ScriptExecutor for FakeExecutor {
     }
 }
 
-impl ScriptInstance for FakeInstance {
+impl CodeInstance for FakeInstance {
     async fn deliver(
         &mut self,
         delivery: Delivery,

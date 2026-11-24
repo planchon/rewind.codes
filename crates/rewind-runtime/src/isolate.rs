@@ -1,5 +1,5 @@
 //! One isolate, started from its epoch's snapshot, with its limits. It lives on its own thread
-//! (V8 objects cannot change threads): see `executor.rs` for scripts and `mocks.rs` for mock
+//! (V8 objects cannot change threads): see `executor.rs` for workflows and `mocks.rs` for mock
 //! handlers.
 
 use std::cell::Cell;
@@ -19,7 +19,7 @@ use crate::watchdog::Watchdog;
 /// Resource limits of one instance (`archi/03-execution.md`, "Resource limits").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxLimits {
-    /// CPU time the script may use to react to one trigger (`main(input)`, or one delivery),
+    /// CPU time the code may use to react to one trigger (`main(input)`, or one delivery),
     /// measured on the CPU clock of the isolate's thread: time the thread spends waiting for a
     /// core does not count.
     pub cpu_per_trigger: Duration,
@@ -27,10 +27,10 @@ pub struct SandboxLimits {
     pub heap_bytes: usize,
     /// Bytes the instance's array buffers may hold at once (an `ArrayBuffer`, the memory of a
     /// typed array), which V8 keeps outside its heap. An allocation past it fails with V8's
-    /// `RangeError: Array buffer allocation failed`, which the script can catch. A resizable
+    /// `RangeError: Array buffer allocation failed`, which the code can catch. A resizable
     /// buffer takes its maximum length from it when it is created.
     pub array_buffer_bytes: usize,
-    /// Commands and annotations (logs, signal waits) the script may emit reacting to one
+    /// Commands and annotations (logs, signal waits) the code may emit reacting to one
     /// trigger. What it emits is kept outside V8's heap until the call ends.
     pub emitted_per_trigger: usize,
     /// Bytes of text those may carry, reacting to one trigger: log messages, signal names, action
@@ -105,7 +105,7 @@ impl Isolate {
             let budget = Arc::clone(&budget);
             runtime.add_near_heap_limit_callback(move |current, _initial| {
                 // V8 also calls at the start of the collection it runs before it gives up on an
-                // array buffer, whatever the heap's size: the script then gets a RangeError.
+                // array buffer, whatever the heap's size: the code then gets a RangeError.
                 if budget.took_refusal() && !exceeded.get() {
                     return current;
                 }
@@ -185,7 +185,7 @@ impl Isolate {
         if timed_out {
             self.dead = true;
             return Err(ExecutorError::LimitExceeded(format!(
-                "the script used more than {}ms of CPU time reacting to one trigger",
+                "the code used more than {}ms of CPU time reacting to one trigger",
                 self.limits.cpu_per_trigger.as_millis()
             )));
         }

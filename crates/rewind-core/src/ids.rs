@@ -128,9 +128,9 @@ impl FromStr for RunId {
     }
 }
 
-/// Per-run command number, assigned in the order the script emits commands, from 1.
+/// Per-run command number, assigned in the order the code emits commands, from 1.
 ///
-/// The script is single-threaded and deterministic, so the same script fed the same
+/// The code is single-threaded and deterministic, so the same code fed the same
 /// completions assigns the same `Seq` to the same call, even under `Promise.all`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Seq(pub u32);
@@ -173,7 +173,7 @@ impl fmt::Debug for Seed {
 
 /// The determinism epoch a run started under (`archi/03-execution.md`, "Determinism epoch").
 ///
-/// It versions together everything that can change a `seq`, a digest or a value the script
+/// It versions together everything that can change a `seq`, a digest or a value the code
 /// observes: V8 and ICU, the JS glue, the random generators, the `rewind` library and the
 /// `rewind:actions` codegen. It is not the crate version: most releases leave it unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

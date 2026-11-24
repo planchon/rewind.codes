@@ -18,7 +18,7 @@ use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
 };
 use rewind_api::workflows::{RecordTests, RecordedTest, RecordedTests, SkippedRun};
-use rewind_core::{ActionSet, Cassette, Digest, Script, Test, WorkflowSchemas};
+use rewind_core::{ActionSet, Cassette, Code, Digest, Test, WorkflowSchemas};
 use rewind_engine::edge::{RecordFrom, RecordingError};
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{CatalogStore, StoredWorkflow, TenantId};
@@ -136,7 +136,7 @@ pub(crate) fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
         .collect();
     ApiError(Box::new(rewind_api::Problem::tests_failed(
         format!(
-            "{} of {} tests of {suite} did not pass: {}. Fix the script, or retire a test that is \
+            "{} of {} tests of {suite} did not pass: {}. Fix the code, or retire a test that is \
              deprecated or update one whose state or result is out of date, each with a reason",
             failed.len(),
             reports.len(),
@@ -206,13 +206,13 @@ pub(crate) async fn suite(
         .collect())
 }
 
-async fn source(app: &App, tenant: &TenantId, digest: Digest) -> Result<Script, ApiError> {
+async fn source(app: &App, tenant: &TenantId, digest: Digest) -> Result<Code, ApiError> {
     Ok(app
         .store
         .get_script(tenant, digest)
         .await?
-        .ok_or_else(|| ApiError::internal(format!("script {digest} is missing")))?
-        .script)
+        .ok_or_else(|| ApiError::internal(format!("code {digest} is missing")))?
+        .code)
 }
 
 /// `POST /v1/test`: the given tests, and a workflow's suite, in this process, in virtual time.
@@ -228,12 +228,12 @@ pub(super) async fn test(
         Some(reference) => Some(workflows::resolve(&app, tenant, &caller.labels, reference).await?),
         None => None,
     };
-    let script = match (request.script, &version) {
-        (Some(source), _) => Script::new(source),
-        (None, Some(version)) => source(&app, tenant, version.workflow.script()).await?,
+    let code = match (request.code, &version) {
+        (Some(source), _) => Code::new(source),
+        (None, Some(version)) => source(&app, tenant, version.workflow.code()).await?,
         (None, None) => {
             return Err(ApiError::invalid(
-                "give `script`, or a `workflow` whose script the tests run against",
+                "give `code`, or a `workflow` whose code the tests run against",
             ));
         }
     };
@@ -246,7 +246,7 @@ pub(super) async fn test(
         }
         (None, None) => app.default_action_set(tenant).await?.action_set,
     };
-    super::scripts::check_lines(&script, &bounds)?;
+    super::scripts::check_lines(&code, &bounds)?;
     let mut tests = Vec::with_capacity(request.tests.len());
     for given in request.tests {
         let given = input(given)?;
@@ -270,7 +270,7 @@ pub(super) async fn test(
     let reports = run(
         &app,
         &Subject {
-            script: &script,
+            code: &code,
             action_set: &action_set,
             interface,
         },
@@ -404,12 +404,8 @@ pub(super) async fn record(
 }
 
 /// Before a fork of a run of a workflow: its version's suite must pass against the corrected
-/// script (`archi/05-testing-and-observability.md`, "Suites and the gate").
-pub(crate) async fn gate_fork(
-    app: &App,
-    parent: &RunView,
-    script: &Script,
-) -> Result<(), ApiError> {
+/// code (`archi/05-testing-and-observability.md`, "Suites and the gate").
+pub(crate) async fn gate_fork(app: &App, parent: &RunView, code: &Code) -> Result<(), ApiError> {
     let Some(workflow) = &parent.head.metadata.workflow else {
         return Ok(());
     };
@@ -427,7 +423,7 @@ pub(crate) async fn gate_fork(
     let reports = run(
         app,
         &Subject {
-            script,
+            code,
             action_set: &action_set,
             interface: Some(stored.workflow.schemas()),
         },

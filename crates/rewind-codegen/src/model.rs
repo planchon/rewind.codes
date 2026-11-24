@@ -13,7 +13,7 @@ use crate::ty::{Doc, Names, Ty, is_identifier};
 /// One export of `rewind:actions`.
 #[derive(Debug)]
 pub(crate) struct Export<'a> {
-    /// The name scripts import: the namespace, or the bare action's name.
+    /// The name workflows import: the namespace, or the bare action's name.
     pub(crate) name: &'a str,
     pub(crate) kind: ExportKind,
     /// The named types of its actions.
@@ -35,7 +35,7 @@ pub(crate) enum ExportKind {
 pub(crate) struct Signature<'a> {
     pub(crate) action: &'a Action,
     pub(crate) args: Ty,
-    /// The script may leave the args out: no property is required. The call sends `{}`.
+    /// The code may leave the args out: no property is required. The call sends `{}`.
     pub(crate) args_optional: bool,
     pub(crate) result: Ty,
     /// The result type was inferred from recorded results, not declared.
@@ -43,7 +43,7 @@ pub(crate) struct Signature<'a> {
     pub(crate) doc: Doc,
 }
 
-/// The exports of an action set, sorted by name, built-ins left out: scripts reach them through
+/// The exports of an action set, sorted by name, built-ins left out: workflows reach them through
 /// `fetch` and `webhook` from `rewind`. A bare harness action whose name is not an identifier
 /// cannot be imported, and is left out too.
 pub(crate) fn exports<'a>(

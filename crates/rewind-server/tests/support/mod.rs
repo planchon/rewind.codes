@@ -749,8 +749,8 @@ impl Postgres {
         .to_owned()
     }
 
-    /// Runs the SQL of `script` (a `pg_dump`) in the database `postgres`, with `psql`.
-    pub(crate) fn load(&self, script: &std::path::Path) {
+    /// Runs the SQL of `code` (a `pg_dump`) in the database `postgres`, with `psql`.
+    pub(crate) fn load(&self, code: &std::path::Path) {
         use std::io::Write as _;
         let mut psql = Command::new("docker")
             .args([
@@ -774,7 +774,7 @@ impl Postgres {
         psql.stdin
             .take()
             .unwrap()
-            .write_all(&std::fs::read(script).unwrap())
+            .write_all(&std::fs::read(code).unwrap())
             .unwrap();
         let output = psql.wait_with_output().unwrap();
         assert!(

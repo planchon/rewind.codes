@@ -1,9 +1,9 @@
 {
-  "description": "The run of a workflow fails: result() rejects with a WorkflowError that names the run's failure, and the script that does not catch it fails with it.",
+  "description": "The run of a workflow fails: result() rejects with a WorkflowError that names the run's failure, and the code that does not catch it fails with it.",
   "live": true,
   "workflows": {
     "triage": {
-      "script": "triage.ts",
+      "code": "triage.ts",
       "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
       "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
       "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }

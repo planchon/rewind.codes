@@ -1,4 +1,4 @@
-//! `V8Executor`: the engine's `ScriptExecutor` port on V8.
+//! `V8Executor`: the engine's `CodeExecutor` port on V8.
 //!
 //! V8 objects cannot change threads, so each instance runs on a dedicated thread with its
 //! own single-threaded tokio runtime (for module loading). The engine talks to it through
@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Epoch, Script, Timestamp};
+use rewind_core::{ActionSet, Code, Epoch, Timestamp};
 use rewind_engine::ports::{
-    CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
-    ScriptInstance, StartScript,
+    CodeExecutor, CodeInstance, CompiledCode, Delivery, Emitted, ExecutorError, InvalidCode,
+    StartCode,
 };
 use tokio::sync::oneshot;
 
@@ -30,8 +30,8 @@ pub enum SetupError {
     TimeZoneNotUtc(Option<String>),
 }
 
-/// Runs scripts in V8 isolates, under every determinism epoch whose glue this build embeds. A
-/// clone runs scripts as the original does: each instance has a thread of its own.
+/// Runs workflows in V8 isolates, under every determinism epoch whose glue this build embeds. A
+/// clone runs workflows as the original does: each instance has a thread of its own.
 #[derive(Debug, Clone)]
 pub struct V8Executor {
     limits: SandboxLimits,
@@ -57,8 +57,8 @@ impl V8Executor {
 ///
 /// V8 runs single-threaded: it compiles and collects garbage on the isolate's thread only. With
 /// concurrent compilation, optimized code was installed at a time that varied between two runs
-/// of the same script, and the size of its frames with it: the depth at which recursion
-/// overflows the stack, which a script can catch and observe, was not deterministic.
+/// of the same code, and the size of its frames with it: the depth at which recursion
+/// overflows the stack, which a code can catch and observe, was not deterministic.
 pub(crate) fn init_v8() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
@@ -68,26 +68,22 @@ pub(crate) fn init_v8() {
     });
 }
 
-impl ScriptExecutor for V8Executor {
+impl CodeExecutor for V8Executor {
     type Instance = V8Instance;
 
     fn epochs(&self) -> &[Epoch] {
         &self.epochs
     }
 
-    fn compile(
-        &self,
-        script: &Script,
-        action_set: &ActionSet,
-    ) -> Result<CompiledScript, InvalidScript> {
-        compile::compile(script, action_set, epochs::latest())
+    fn compile(&self, code: &Code, action_set: &ActionSet) -> Result<CompiledCode, InvalidCode> {
+        compile::compile(code, action_set, epochs::latest())
     }
 
-    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        compile::action_imports(script)
+    fn action_imports(&self, code: &Code) -> Option<BTreeSet<String>> {
+        compile::action_imports(code)
     }
 
-    async fn start(&self, start: StartScript) -> Result<(V8Instance, Vec<Emitted>), ExecutorError> {
+    async fn start(&self, start: StartCode) -> Result<(V8Instance, Vec<Emitted>), ExecutorError> {
         let glue = epochs::glue(start.epoch).ok_or(ExecutorError::UnsupportedEpoch(start.epoch))?;
         let (requests, inbox) = mpsc::channel();
         let (started, emitted) = oneshot::channel();
@@ -128,7 +124,7 @@ struct Request {
     reply: Reply,
 }
 
-/// A running script. Dropping it stops its thread and frees the isolate.
+/// A running code. Dropping it stops its thread and frees the isolate.
 #[derive(Debug)]
 pub struct V8Instance {
     // `mpsc::Sender` is `Send` but not `Sync`; the mutex makes the instance `Sync` as well.
@@ -139,7 +135,7 @@ pub struct V8Instance {
     cpu: Duration,
 }
 
-impl ScriptInstance for V8Instance {
+impl CodeInstance for V8Instance {
     async fn deliver(
         &mut self,
         delivery: Delivery,
@@ -184,7 +180,7 @@ fn stopped() -> ExecutorError {
 /// The isolate thread: load, start, then serve deliveries until the instance is dropped or
 /// the isolate dies.
 fn run_isolate(
-    start: StartScript,
+    start: StartCode,
     glue: &'static Glue,
     limits: SandboxLimits,
     started: Reply,

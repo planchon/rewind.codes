@@ -11,13 +11,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rewind_core::{ActionSet, Digest, Epoch, RunId, RunStatus, Script, Test, TestOrigin};
+use rewind_core::{ActionSet, Code, Digest, Epoch, RunId, RunStatus, Test, TestOrigin};
 
 use super::{Edge, EdgeError, Gateway, unavailable};
 use crate::plane::{InstanceOf, Plane};
 use crate::ports::{
-    Clock, CompiledScript, Emitted, ExecutorError, InvalidScript, Page, Predicate, RunOrder,
-    RunQuery, RunRef, Scope, ScriptExecutor, StartScript, TenantId, TextMatch,
+    Clock, CodeExecutor, CompiledCode, Emitted, ExecutorError, InvalidCode, Page, Predicate,
+    RunOrder, RunQuery, RunRef, Scope, StartCode, TenantId, TextMatch,
 };
 use crate::suites::{
     MAX_RECORDED, MAX_RECORDING_CANDIDATES, RecordedTest, Recorder, SkippedRun, SuiteLoadError,
@@ -190,7 +190,7 @@ impl<P: Plane> Edge<P> {
     }
 }
 
-/// The executor of a plane, shared: what a test's own plane runs its script with.
+/// The executor of a plane, shared: what a test's own plane runs its code with.
 struct PlaneExecutor<P>(Arc<P>);
 
 impl<P> Clone for PlaneExecutor<P> {
@@ -199,28 +199,24 @@ impl<P> Clone for PlaneExecutor<P> {
     }
 }
 
-impl<P: Plane> ScriptExecutor for PlaneExecutor<P> {
+impl<P: Plane> CodeExecutor for PlaneExecutor<P> {
     type Instance = InstanceOf<P>;
 
     fn epochs(&self) -> &[Epoch] {
         self.0.executor().epochs()
     }
 
-    fn compile(
-        &self,
-        script: &Script,
-        action_set: &ActionSet,
-    ) -> Result<CompiledScript, InvalidScript> {
-        self.0.executor().compile(script, action_set)
+    fn compile(&self, code: &Code, action_set: &ActionSet) -> Result<CompiledCode, InvalidCode> {
+        self.0.executor().compile(code, action_set)
     }
 
-    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        self.0.executor().action_imports(script)
+    fn action_imports(&self, code: &Code) -> Option<BTreeSet<String>> {
+        self.0.executor().action_imports(code)
     }
 
     async fn start(
         &self,
-        start: StartScript,
+        start: StartCode,
     ) -> Result<(Self::Instance, Vec<Emitted>), ExecutorError> {
         self.0.executor().start(start).await
     }

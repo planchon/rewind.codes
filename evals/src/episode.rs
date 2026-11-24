@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rewind_check::TsgoChecker;
-use rewind_core::{RunId, Script, WorkflowSchemas};
+use rewind_core::{Code, RunId, WorkflowSchemas};
 use rewind_engine::RegisterWorkflow;
 use rewind_engine::ports::{TenantId, WorkflowDeclarations};
 use rewind_engine::suites::{SuiteChanges, TestInput};
@@ -16,8 +16,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use rewind_agent_tools::{
-    AgentError, AgentOptions, AgentToolResult, AgentTools, HandleOptions, ScriptVerdict,
-    definitions,
+    AgentError, AgentOptions, AgentToolResult, AgentTools, CodeVerdict, HandleOptions, definitions,
 };
 
 use crate::clock::rfc3339;
@@ -51,7 +50,7 @@ pub fn labels(episode: &str) -> BTreeMap<String, String> {
     BTreeMap::from([("eval".to_owned(), episode.to_owned())])
 }
 
-/// The tests a tool call gives: `test_script`'s and `save_workflow`'s `tests`, and the tests
+/// The tests a tool call gives: `test_workflow`'s and `save_workflow`'s `tests`, and the tests
 /// `save_workflow` updates.
 fn tests_given(name: &str, input: &serde_json::Value) -> usize {
     let input = match input {
@@ -65,7 +64,7 @@ fn tests_given(name: &str, input: &serde_json::Value) -> usize {
             .map_or(0, Vec::len)
     };
     match name {
-        "test_script" => count("tests"),
+        "test_workflow" => count("tests"),
         "save_workflow" => count("tests") + count("update"),
         _ => 0,
     }
@@ -88,17 +87,17 @@ pub struct EpisodeRecord {
     /// are left out of the rates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Whether the first script the model submitted passed the checks before anything ran
+    /// Whether the first code the model submitted passed the checks before anything ran
     /// (type-check, imports, default export); absent when it submitted none.
     pub first_check: Option<bool>,
     /// Model turns: requests to its API.
     pub iterations: usize,
-    /// Scripts submitted (`run_script`, `check_script`, `test_script`, `retry_run`,
+    /// Workflows submitted (`run_workflow`, `check_workflow`, `test_workflow`, `retry_run`,
     /// `save_workflow`).
     pub scripts: usize,
-    /// Scripts refused by the checks.
+    /// Workflows refused by the checks.
     pub refused: usize,
-    /// Tests the model wrote, unprompted or not: those it gave `test_script` and
+    /// Tests the model wrote, unprompted or not: those it gave `test_workflow` and
     /// `save_workflow`, updates included.
     pub tests_written: usize,
     /// Fixes the gate refused because a test of a workflow's suite did not pass
@@ -254,13 +253,13 @@ async fn converse(
                     workflow: None,
                     action_set: None,
                     tests: None,
-                    script: None,
+                    code: None,
                 },
                 Err(error) => return Err(format!("the harness failed: {error}")),
             };
-            if let Some(verdict) = handled.script {
+            if let Some(verdict) = handled.code {
                 record.scripts += 1;
-                let passed = verdict == ScriptVerdict::Passed;
+                let passed = verdict == CodeVerdict::Passed;
                 if !passed {
                     record.refused += 1;
                 }
@@ -310,8 +309,8 @@ async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
     let mut ids = Vec::new();
     for step in task.setup {
         let run = match step {
-            Setup::Run(script) => {
-                let request = world.start_request(Script::new(*script), json!({}));
+            Setup::Run(code) => {
+                let request = world.start_request(Code::new(*code), json!({}));
                 world
                     .start(request, true)
                     .await
@@ -376,7 +375,7 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
                 tenant: TenantId::local(),
                 name: workflow.name.to_owned(),
                 description: Some(workflow.description.to_owned()),
-                script: Script::new(workflow.script),
+                code: Code::new(workflow.code),
                 action_set: action_set.digest(),
                 schemas,
                 labels: world.labels.clone(),

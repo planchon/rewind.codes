@@ -15,7 +15,7 @@ pub const HOUR: u64 = 60 * MINUTE;
 pub const DAY: u64 = 24 * HOUR;
 
 /// The engine's virtual clock, shared: the fake servers read the time the engine is at, so a
-/// deployment started by a script finishes an hour of virtual time later.
+/// deployment started by a code finishes an hour of virtual time later.
 #[derive(Debug, Clone)]
 pub struct SharedClock(Arc<VirtualClock>);
 

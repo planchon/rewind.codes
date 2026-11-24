@@ -2,24 +2,23 @@
 //! `archi/05-testing-and-observability.md`, "Suites and the gate").
 //!
 //! ```text
-//! register_workflow ── checks (name, schemas, script, attachments, tsgo) ──┐
+//! register_workflow ── checks (name, schemas, code, attachments, tsgo) ──┐
 //!   lineage: the parent named, or the latest version under the same labels │
 //!   the suite: the parent's, retired, updated, added ─► run_tests ─► all pass?
 //!                                     reserve test rows, put their blobs ◄─┘
-//!                                     put_script, put_workflow (the catalog)
+//!                                     put_code, put_workflow (the catalog)
 //! ```
 //!
 //! Everything a save reads and writes is the control plane's: no partition takes part. The suite
 //! runs in the driver, on this process's executor ([`Edge::run_tests`]).
 
-use rewind_core::{ActionSet, Attachments, Script, Workflow};
+use rewind_core::{ActionSet, Attachments, Code, Workflow};
 
 use super::Edge;
 use crate::attachments::{self, AttachRights, AttachmentCheck};
 use crate::plane::Plane;
 use crate::ports::{
-    CatalogStore, Clock, ScriptExecutor, Severity, StoreError, StoredWorkflow, TenantId,
-    TypeChecker,
+    CatalogStore, Clock, CodeExecutor, Severity, StoreError, StoredWorkflow, TenantId, TypeChecker,
 };
 use crate::schema::Validator;
 use crate::suites::{SuiteChanges, SuiteError, Suites, TestFormat, TestKit};
@@ -38,7 +37,7 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Checks a workflow and stores it as a new version: its name and signals, its schemas, its
-    /// script against its action set (the checks at start), its attachments, then tsgo against
+    /// code against its action set (the checks at start), its attachments, then tsgo against
     /// the action set's and its own declarations; then the gate: its suite, composed from its
     /// parent's, runs against it, and the version is stored only if every test passes. Saving
     /// a version again under the same labels changes nothing; under other labels, it is another
@@ -49,7 +48,7 @@ impl<P: Plane> Edge<P> {
         checker: &K,
         kit: &TestKit<'_, L>,
     ) -> Result<StoredWorkflow, RegisterError> {
-        text::refuse_nul("the script", request.script.source())?;
+        text::refuse_nul("the code", request.code.source())?;
         text::refuse_nul("the workflow's name", &request.name)?;
         if let Some(description) = &request.description {
             text::refuse_nul("the workflow's description", description)?;
@@ -58,7 +57,7 @@ impl<P: Plane> Edge<P> {
         let workflow = Workflow::new(
             request.name,
             request.description,
-            request.script.digest(),
+            request.code.digest(),
             request.action_set,
             request.schemas,
         )?
@@ -91,18 +90,18 @@ impl<P: Plane> Edge<P> {
         let compiled = self
             .plane
             .executor()
-            .compile(&request.script, &stored.action_set)
-            .map_err(RegisterError::InvalidScript)?;
+            .compile(&request.code, &stored.action_set)
+            .map_err(RegisterError::InvalidCode)?;
         self.check_saved_attachments(
             &tenant,
-            &request.script,
+            &request.code,
             &stored.action_set,
             workflow.secrets(),
             &request.attach,
         )
         .await?;
         let diagnostics = checker
-            .check_workflow(&request.script, &stored.declarations, &request.declarations)
+            .check_workflow(&request.code, &stored.declarations, &request.declarations)
             .await?;
         if diagnostics
             .iter()
@@ -169,7 +168,7 @@ impl<P: Plane> Edge<P> {
             .run_tests(
                 kit.loader,
                 &Subject {
-                    script: &request.script,
+                    code: &request.code,
                     action_set: &stored.action_set,
                     interface: Some(workflow.schemas()),
                 },
@@ -185,7 +184,7 @@ impl<P: Plane> Edge<P> {
             .store_tests(&tenant, &composed.tests, self.now())
             .await?;
         catalog
-            .put_script(&tenant, &request.script, &compiled)
+            .put_code(&tenant, &request.code, &compiled)
             .await
             .map_err(StoreError::from)?;
         let stored = catalog
@@ -237,14 +236,14 @@ impl<P: Plane> Edge<P> {
             .is_ok_and(|made| made.version() == latest.version()))
     }
 
-    /// Refuses the attachments of a version to save that do not fit its action set and its script,
+    /// Refuses the attachments of a version to save that do not fit its action set and its code,
     /// or that the saver may not attach: an organization's secret must exist and be theirs to
     /// attach; an `ns/` secret is checked by its name only, since no namespace is known yet
     /// (`archi/04-tools.md`, "Secrets": a workflow version is the permission).
     async fn check_saved_attachments(
         &self,
         tenant: &TenantId,
-        script: &Script,
+        code: &Code,
         action_set: &ActionSet,
         secrets: &Attachments,
         rights: &AttachRights,
@@ -252,7 +251,7 @@ impl<P: Plane> Edge<P> {
         if secrets.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
-        let imports = self.plane.executor().action_imports(script);
+        let imports = self.plane.executor().action_imports(code);
         let check = AttachmentCheck {
             tenant,
             namespace: None,

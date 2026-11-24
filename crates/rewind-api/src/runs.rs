@@ -20,15 +20,15 @@ pub use crate::query::WaitKind;
 use crate::secrets::Attachments;
 use crate::workflows::{RunWorkflow, StartedBy};
 
-/// `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
-/// script that cannot run is refused (`invalid-script`) before any run exists.
+/// `POST /v1/runs`: starts a run. The code is compiled, checked and type-checked first; a
+/// code that cannot run is refused (`invalid-code`) before any run exists.
 ///
 /// With the `Idempotency-Key` header, a request repeated with the same key returns the run the
 /// first one started, instead of starting a second one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
-    "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
+    "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
     "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
     "input": { "repo": "acme/api" },
     "wait": "30s",
@@ -39,15 +39,15 @@ pub struct StartRun {
     /// The TypeScript source: a single ES module whose default export is the entry point.
     /// Without it, `workflow` names what the run executes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub script: String,
-    /// The action set the script imports from `rewind:actions`. Without one, `rewind:actions` is
+    pub code: String,
+    /// The action set the code imports from `rewind:actions`. Without one, `rewind:actions` is
     /// empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
-    /// Instead of `script` and `actionSet`: a run of this workflow, `triage` for its latest version
+    /// Instead of `code` and `actionSet`: a run of this workflow, `triage` for its latest version
     /// or `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one
     /// version. Its input is checked against the workflow's input schema (`invalid-input`); the
-    /// script is not checked again.
+    /// code is not checked again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     /// The input of `main`. `{}` when absent.
@@ -58,11 +58,11 @@ pub struct StartRun {
     /// the answer comes as soon as the run exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Duration>,
-    /// Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The script never
+    /// Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The code never
     /// sees them.
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
     pub labels: Labels,
-    /// W3C trace context of the caller (typically the LLM call that wrote the script): the run
+    /// W3C trace context of the caller (typically the LLM call that wrote the code): the run
     /// appears under it in the caller's trace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traceparent: Option<String>,
@@ -72,12 +72,12 @@ pub struct StartRun {
     /// deployment's maximum.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl: Option<Duration>,
-    /// Type-check the script before starting it. `true` by default.
+    /// Type-check the code before starting it. `true` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<bool>,
     /// The secrets the run reads, by MCP server or API: `{ "github": "ns/github", "zendesk":
     /// "org/zendesk" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).
-    /// Required for each server the script imports whose `auth` takes a secret; checked against
+    /// Required for each server the code imports whose `auth` takes a secret; checked against
     /// the caller's rights (`secret-required`). A run of a `workflow` gives none: its version's
     /// are read.
     #[serde(default, skip_serializing_if = "Attachments::is_empty")]
@@ -85,9 +85,9 @@ pub struct StartRun {
 }
 
 impl StartRun {
-    pub fn new(script: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>) -> Self {
         Self {
-            script: script.into(),
+            code: code.into(),
             action_set: None,
             workflow: None,
             input: empty_object(),
@@ -124,9 +124,9 @@ pub struct Run {
     /// given up. Quarantine is not a status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantine: Option<Quarantine>,
-    /// Digest of the TypeScript source (`GET /v1/scripts/{digest}`).
-    pub script: String,
-    /// The script's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the
+    /// Digest of the run's code, its TypeScript source (`GET /v1/scripts/{digest}`).
+    pub code_digest: String,
+    /// The code's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the
     /// first line of the comment at its top. Absent when it has neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_title: Option<String>,
@@ -149,7 +149,7 @@ pub struct Run {
     /// For a run of a workflow, the workflow and its version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RunWorkflow>,
-    /// For a run a script started, that run and the call.
+    /// For a run a code started, that run and the call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<StartedBy>,
     /// The input of `main`. Absent while the run is `pending`: its `run_started` waits in its
@@ -159,7 +159,7 @@ pub struct Run {
     /// With `completed`: what `main` returned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Payload>,
-    /// With `failed` or `cancelled`: how the script failed.
+    /// With `failed` or `cancelled`: how the code failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<RunError>,
     /// With `aborted`: why the host ended the run.
@@ -168,7 +168,7 @@ pub struct Run {
     /// With `active`: what the run waits for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting_for: Vec<Waiting>,
-    /// The last log lines of the script (`console.*`), oldest first, at most 20.
+    /// The last log lines of the code (`console.*`), oldest first, at most 20.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub logs: Vec<LogLine>,
     /// How many times each call was delivered, by seq, for the calls delivered more than once: a
@@ -198,7 +198,7 @@ pub struct Quarantine {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuarantineCause {
-    /// A replay diverged from the journal: a fault of the platform, never of the script.
+    /// A replay diverged from the journal: a fault of the platform, never of the code.
     NonDeterminism,
     /// Its activations failed 5 times in a row.
     RepeatedFailures,
@@ -217,23 +217,23 @@ pub struct ForkParent {
     pub at: Option<u64>,
 }
 
-/// How a script failed, with where, for a model to fix it.
+/// How a code failed, with where, for a model to fix it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunError {
     /// `ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…
     pub name: String,
     pub message: String,
-    /// Source-mapped to `script.ts`, without the runtime's frames.
+    /// Source-mapped to `workflow.ts`, without the runtime's frames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
-    /// The innermost frame of the stack in `script.ts`.
+    /// The innermost frame of the stack in `workflow.ts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<Callsite>,
     /// A few lines of the source around `location`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
-    /// The call whose failure the script did not catch, if that is how it failed.
+    /// The call whose failure the code did not catch, if that is how it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_call: Option<FailedCall>,
 }
@@ -300,7 +300,7 @@ pub enum Waiting {
     },
 }
 
-/// One line of the script's console.
+/// One line of the code's console.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LogLine {
@@ -358,7 +358,7 @@ pub struct RunFilter {
     /// Only runs that called this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
-    /// Only runs of this script (digest).
+    /// Only runs of this code (its digest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
     /// Only runs whose calls failed with this kind (`error`, `timeout`…), or that failed
@@ -455,11 +455,12 @@ pub struct RunSummary {
     pub namespace: NamespaceName,
     pub status: RunStatus,
     pub quarantined: bool,
-    pub script: String,
-    /// The script's title, as `Run.scriptTitle`. Absent when it has none.
+    /// Digest of the run's code, as `Run.codeDigest`.
+    pub code_digest: String,
+    /// The code's title, as `Run.scriptTitle`. Absent when it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_title: Option<String>,
-    /// The first line of the script that is not blank, for display.
+    /// The first line of the code that is not blank, for display.
     pub headline: String,
     pub action_set: String,
     pub labels: Labels,
@@ -477,7 +478,7 @@ pub struct RunSummary {
     /// With `error`: the error's or the abort's message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
-    /// With `error`: the innermost line of `script.ts` in the error's stack, if any.
+    /// With `error`: the innermost line of `workflow.ts` in the error's stack, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_line: Option<u32>,
     /// With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query).
@@ -494,7 +495,7 @@ pub struct RunSummary {
     /// For a run of a workflow, the workflow's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
-    /// For a run a script started, that run.
+    /// For a run a code started, that run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<String>,
 }
@@ -728,11 +729,11 @@ pub struct FailureGroup {
     /// One count per bucket from `since`: the runs that ended in it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub series: Vec<u64>,
-    /// Distinct scripts.
+    /// Distinct workflows.
     pub scripts: u64,
     pub first_ended_at: Timestamp,
     pub last_ended_at: Timestamp,
-    /// The line of `script.ts` most of its runs ended at.
+    /// The line of `workflow.ts` most of its runs ended at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     /// Its runs' most frequent labels, as `key:value`.
@@ -761,8 +762,8 @@ pub struct SignalAccepted {
     pub duplicate: bool,
 }
 
-/// `POST /v1/runs/{id}/cancel`: every pending await of the script rejects with
-/// `CancelledError`; the script gets one activation to clean up.
+/// `POST /v1/runs/{id}/cancel`: every pending await of the code rejects with
+/// `CancelledError`; the code gets one activation to clean up.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CancelRun {
@@ -775,7 +776,7 @@ pub struct CancelRun {
     pub wait: Option<Duration>,
 }
 
-/// `POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected script. While its
+/// `POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its
 /// commands match the parent's, the parent's recorded results are reused and no action is called
 /// again; it continues live at the first difference, at `at`, or at the end of the parent's
 /// history (`archi/03-execution.md`, "Forks"). Takes `Idempotency-Key` as `POST /v1/runs`.
@@ -783,7 +784,7 @@ pub struct CancelRun {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ForkRun {
     /// The corrected TypeScript source.
-    pub script: String,
+    pub code: String,
     /// Go live from this journal entry even if the commands still match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<u64>,
@@ -809,19 +810,19 @@ pub struct ForkRun {
     /// A new TTL, from the fork's start. 30 days by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl: Option<Duration>,
-    /// Type-check the corrected script first. `true` by default.
+    /// Type-check the corrected code first. `true` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<bool>,
     /// The fork's attachments, as `POST /v1/runs` takes them. The parent's when absent. Either
-    /// way they are checked against the caller: the script is new code.
+    /// way they are checked against the caller: the code is new code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Attachments>,
 }
 
 impl ForkRun {
-    pub fn new(script: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>) -> Self {
         Self {
-            script: script.into(),
+            code: code.into(),
             at: None,
             input: None,
             wait: None,
@@ -849,7 +850,7 @@ pub struct TraceQuery {
 #[serde(rename_all = "snake_case")]
 pub enum TraceFormat {
     /// A compact text trace for a model: one line per call, timer and signal, with its
-    /// line in `script.ts`; payloads truncated (`archi/05-testing-and-observability.md`).
+    /// line in `workflow.ts`; payloads truncated (`archi/05-testing-and-observability.md`).
     #[default]
     Llm,
 }
@@ -984,22 +985,21 @@ mod tests {
 
     #[test]
     fn a_fork_keeps_a_null_input_apart_from_no_input() {
-        let fork: ForkRun =
-            serde_json::from_value(json!({ "script": "x", "input": null })).unwrap();
+        let fork: ForkRun = serde_json::from_value(json!({ "code": "x", "input": null })).unwrap();
         assert_eq!(fork.input, Some(Value::Null));
-        let fork: ForkRun = serde_json::from_value(json!({ "script": "x" })).unwrap();
+        let fork: ForkRun = serde_json::from_value(json!({ "code": "x" })).unwrap();
         assert_eq!(fork.input, None);
     }
 
     #[test]
     fn a_start_reads_durations_and_refuses_unknown_fields() {
         let start: StartRun =
-            serde_json::from_value(json!({ "script": "x", "wait": "30s", "ttl": 60000 })).unwrap();
+            serde_json::from_value(json!({ "code": "x", "wait": "30s", "ttl": 60000 })).unwrap();
         assert_eq!(start.wait.unwrap().as_millis(), 30_000);
         assert_eq!(start.ttl.unwrap().as_millis(), 60_000);
         assert_eq!(start.input, json!({}));
         assert!(
-            serde_json::from_value::<StartRun>(json!({ "script": "x", "idempotencyKey": "k" }))
+            serde_json::from_value::<StartRun>(json!({ "code": "x", "idempotencyKey": "k" }))
                 .is_err()
         );
     }

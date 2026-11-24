@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use crate::convert::{fill_log_record, span_data};
 use crate::{OtelError, OtlpConfig, ServiceConfig, otlp};
 
-/// The instrumentation scope of run telemetry: what scripts did, projected from the journal.
+/// The instrumentation scope of run telemetry: what workflows did, projected from the journal.
 pub const RUN_SCOPE: &str = "rewind.run";
 
 /// `SpanExporter` on OpenTelemetry: the spans and log records the projector derived from the

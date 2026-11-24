@@ -239,7 +239,7 @@ fn the_declarations_of_an_action_set_with_the_http_action_start_with_its_referen
     }
 }
 
-/// The type-checker learns that a script has `fetch` from this line only; `rewind-check` holds the
+/// The type-checker learns that a code has `fetch` from this line only; `rewind-check` holds the
 /// same literal and records it in the spec, which both crates are checked against.
 #[test]
 fn the_http_action_reference_is_the_one_the_spec_records() {

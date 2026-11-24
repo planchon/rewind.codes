@@ -1,5 +1,5 @@
 {
-  "description": "The server refuses expired credentials: the call is parked, the run waits, and once the harness renews the credentials the call is sent again and the script gets its answer.",
+  "description": "The server refuses expired credentials: the call is parked, the run waits, and once the harness renews the credentials the call is sent again and the code gets its answer.",
   "input": { "customer": "c-7" },
   "actions": {
     "crm.lookup": {

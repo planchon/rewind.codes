@@ -38,7 +38,7 @@ pub enum DurationError {
     Overflow,
 }
 
-/// Parses a duration the way scripts write them: `"500ms"`, `"10s"`, `"1h30m"`, `"1.5d"`, `"2w"`.
+/// Parses a duration the way workflows write them: `"500ms"`, `"10s"`, `"1h30m"`, `"1.5d"`, `"2w"`.
 ///
 /// Components may be separated by whitespace (`"1h 30m"`). The result is rounded to the
 /// millisecond. A bare number has no unit and is rejected: callers that accept a number of

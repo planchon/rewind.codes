@@ -348,7 +348,7 @@ impl<P: Plane> Owner<P> {
                             epoch: self.epoch,
                             run: start.run.id,
                             namespace: start.namespace.clone(),
-                            script: start.started.script,
+                            code: start.started.code,
                             at: start.created_at,
                         })),
                     };

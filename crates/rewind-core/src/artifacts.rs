@@ -1,4 +1,4 @@
-//! The script, the immutable and content-addressed input of a run. A run records the digest
+//! The code, the immutable and content-addressed input of a run. A run records the digest
 //! it started with. The action set, the other input, is in [`crate::action_set`].
 
 use crate::digest::Digest;
@@ -6,12 +6,12 @@ use crate::digest::Digest;
 /// The TypeScript source the model wrote. Its digest is the SHA-256 of the source, so a run
 /// always replays the exact code that produced it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Script {
+pub struct Code {
     source: String,
     digest: Digest,
 }
 
-impl Script {
+impl Code {
     pub fn new(source: impl Into<String>) -> Self {
         let source = source.into();
         let digest = Digest::of(source.as_bytes());
@@ -33,8 +33,8 @@ mod tests {
 
     #[test]
     fn scripts_are_content_addressed() {
-        assert_eq!(Script::new("a").digest(), Script::new("a").digest());
-        assert_ne!(Script::new("a").digest(), Script::new("b").digest());
-        assert_eq!(Script::new("a").digest(), Digest::of(b"a"));
+        assert_eq!(Code::new("a").digest(), Code::new("a").digest());
+        assert_ne!(Code::new("a").digest(), Code::new("b").digest());
+        assert_eq!(Code::new("a").digest(), Digest::of(b"a"));
     }
 }

@@ -3,7 +3,7 @@
 //! `archi/05-testing-and-observability.md`, "Read model", "Statistics").
 //!
 //! Every process is an edge. A use case checks what it can without the run's partition (the
-//! script, the TTL, the input, the attachments, the namespace, read from the control plane), then
+//! code, the TTL, the input, the attachments, the namespace, read from the control plane), then
 //! asks the owner of the run's partition through a [`Gateway`]: the router of a process
 //! ([`NodeHandle`](crate::node::runtime::NodeHandle)) or the [`Driver`](crate::driver::Driver)
 //! in tests. The owner keeps every rule that needs the partition: start keys, admission, signal
@@ -11,7 +11,7 @@
 //!
 //! | Use case | The edge checks | The owner |
 //! | --- | --- | --- |
-//! | [`Edge::start_run`], [`Edge::start_workflow`], [`Edge::fork`] | the namespace, the script, the TTL, the input, the attachments | the start key, the admission, `CreateRun` |
+//! | [`Edge::start_run`], [`Edge::start_workflow`], [`Edge::fork`] | the namespace, the code, the TTL, the input, the attachments | the start key, the admission, `CreateRun` |
 //! | [`Edge::signal`], [`Edge::cancel`], [`Edge::webhook`] | NUL characters | the run, its workflow's signals, the signal key |
 //! | [`Edge::release`], [`Edge::give_up`], [`Edge::erase`] | | the quarantine, the archive, the records |
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    HistoryEntry, JournalDocument, JsonValue, PartitionId, Payload, RunHandle, RunId, RunMode,
-    RunStarted, SCRIPT_ORIGIN, Script, Shape, origin_slug, script_doc,
+    Code, HistoryEntry, JournalDocument, JsonValue, PartitionId, Payload, RunHandle, RunId,
+    RunMode, RunStarted, SCRIPT_ORIGIN, Shape, code_doc, origin_slug,
 };
 
 use crate::attachments::{self, AttachmentCheck};
@@ -48,9 +48,9 @@ use crate::ports::link::{
     SignalAtOwner, StartAtOwner, TaskAnswer,
 };
 use crate::ports::{
-    BlobOwner, CallTask, CatalogStore, Clock, Counters, Created, Enqueued, Entropy, Found, Gauges,
-    Month, NamespaceName, NamespaceWrite, Page, QuotaAlert, RunOrder, RunQuery, RunRef,
-    RunWorkflow, Scope, ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken,
+    BlobOwner, CallTask, CatalogStore, Clock, CodeExecutor, Counters, Created, Enqueued, Entropy,
+    Found, Gauges, Month, NamespaceName, NamespaceWrite, Page, QuotaAlert, RunOrder, RunQuery,
+    RunRef, RunWorkflow, Scope, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken,
     TenantId, TypeChecker, Usage, Window, home_partition, namespace_partition,
 };
 use crate::start::{StartError, StartRun, refuse_nul_in_metadata, type_check};
@@ -158,7 +158,7 @@ impl<P: Plane> Edge<P> {
     // ---------------------------------------------------------------------------------------
     // Starts
 
-    /// Checks the script and starts a run (`POST /v1/runs` with a script).
+    /// Checks the code and starts a run (`POST /v1/runs` with a code).
     pub async fn start_run<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -190,7 +190,7 @@ impl<P: Plane> Edge<P> {
     ) -> Result<Created, StartError> {
         // What the request alone refuses is refused before its namespace's first use.
         let input = self.bounded_input(request.input)?;
-        text::refuse_nul("the script", request.script.source())?;
+        text::refuse_nul("the code", request.code.source())?;
         text::refuse_nul(text::ACTION_SET_TEXT, &request.declarations.typescript)?;
         text::refuse_nul(text::ACTION_SET_TEXT, &request.declarations.prompt)?;
         refuse_nul_in_metadata(&request.metadata, request.idempotency_key.as_deref())?;
@@ -201,17 +201,17 @@ impl<P: Plane> Edge<P> {
                 requested,
                 max: bounds.max_ttl,
             })?;
-        bounds.check_lines(&request.script)?;
+        bounds.check_lines(&request.code)?;
         let executor = self.plane.executor();
         let epoch = *executor.epochs().last().ok_or(StartError::NoEpoch)?;
         let compiled = executor
-            .compile(&request.script, &request.action_set)
-            .map_err(StartError::InvalidScript)?;
+            .compile(&request.code, &request.action_set)
+            .map_err(StartError::InvalidCode)?;
         if request.mode == RunMode::Live {
             self.check_attachments(
                 &request.tenant,
                 &request.namespace,
-                &request.script,
+                &request.code,
                 &request.action_set,
                 &request.metadata.secrets,
                 &request.attach,
@@ -219,11 +219,11 @@ impl<P: Plane> Edge<P> {
             .await?;
         }
         if let Some(checker) = checker {
-            type_check(checker, &request.script, &request.declarations).await?;
+            type_check(checker, &request.code, &request.declarations).await?;
         }
         let catalog = self.plane.catalog();
         catalog
-            .put_script(&request.tenant, &request.script, &compiled)
+            .put_code(&request.tenant, &request.code, &compiled)
             .await
             .map_err(start_unavailable)?;
         catalog
@@ -233,7 +233,7 @@ impl<P: Plane> Edge<P> {
         // The run is created now: its deadline is its TTL from then.
         let now = self.now();
         let started = |seed| RunStarted {
-            script: request.script.digest(),
+            code: request.code.digest(),
             action_set: request.action_set.digest(),
             input,
             seed,
@@ -247,7 +247,7 @@ impl<P: Plane> Edge<P> {
         );
         let seed = self.plane.entropy().seed();
         let origin = self
-            .origin_of(&request.tenant, &request.script, &request.metadata)
+            .origin_of(&request.tenant, &request.code, &request.metadata)
             .await?;
         self.create(
             gateway,
@@ -259,7 +259,7 @@ impl<P: Plane> Edge<P> {
                 started: started(seed),
                 metadata: request.metadata,
                 start_key: request.idempotency_key,
-                headline: projector::headline(request.script.source()),
+                headline: projector::headline(request.code.source()),
                 created_at: now,
             },
         )
@@ -296,12 +296,12 @@ impl<P: Plane> Edge<P> {
                 requested,
                 max: bounds.max_ttl,
             })?;
-        let script = catalog
-            .get_script(&request.tenant, workflow.script())
+        let code = catalog
+            .get_script(&request.tenant, workflow.code())
             .await
             .map_err(start_unavailable)?
-            .ok_or_else(|| start_unavailable(format!("the script of {workflow} is not stored")))?;
-        bounds.check_lines(&script.script)?;
+            .ok_or_else(|| start_unavailable(format!("the code of {workflow} is not stored")))?;
+        bounds.check_lines(&code.code)?;
         match checks::version_attachments(
             self.plane.secrets(),
             self.now(),
@@ -342,7 +342,7 @@ impl<P: Plane> Edge<P> {
                 // A workflow's run is the run of its workflow.
                 origin: workflow.name().to_owned(),
                 started: RunStarted {
-                    script: workflow.script(),
+                    code: workflow.code(),
                     action_set: workflow.action_set(),
                     input,
                     seed,
@@ -352,14 +352,14 @@ impl<P: Plane> Edge<P> {
                 },
                 metadata,
                 start_key: request.idempotency_key,
-                headline: projector::headline(script.script.source()),
+                headline: projector::headline(code.code.source()),
                 created_at: now,
             },
         )
         .await
     }
 
-    /// Forks a run with a corrected script (`POST /v1/runs/{id}/fork`). The fork lives in its
+    /// Forks a run with a corrected code (`POST /v1/runs/{id}/fork`). The fork lives in its
     /// parent's namespace, and so in its partition.
     pub async fn fork<G: Gateway>(
         &self,
@@ -425,9 +425,9 @@ impl<P: Plane> Edge<P> {
                 max: bounds.max_ttl,
             })
         })?;
-        bounds.check_lines(&request.script).map_err(start_failed)?;
+        bounds.check_lines(&request.code).map_err(start_failed)?;
         let refused = |nul| ForkError::Start(StartError::NulCharacter(nul));
-        text::refuse_nul("the script", request.script.source()).map_err(refused)?;
+        text::refuse_nul("the code", request.code.source()).map_err(refused)?;
         let metadata = crate::ports::RunMetadata {
             labels: request.labels.unwrap_or(head.metadata.labels.clone()),
             trace_context: request.trace_context,
@@ -460,13 +460,13 @@ impl<P: Plane> Edge<P> {
         let compiled = self
             .plane
             .executor()
-            .compile(&request.script, &action_set)
-            .map_err(|invalid| start_failed(StartError::InvalidScript(invalid)))?;
+            .compile(&request.code, &action_set)
+            .map_err(|invalid| start_failed(StartError::InvalidCode(invalid)))?;
         if parent_started.mode == RunMode::Live {
             self.check_attachments(
                 &parent.tenant,
                 &head.namespace,
-                &request.script,
+                &request.code,
                 &action_set,
                 &metadata.secrets,
                 &request.attach,
@@ -475,7 +475,7 @@ impl<P: Plane> Edge<P> {
             .map_err(start_failed)?;
         }
         if let Some(checker) = checker {
-            type_check(checker, &request.script, &stored.declarations)
+            type_check(checker, &request.code, &stored.declarations)
                 .await
                 .map_err(start_failed)?;
         }
@@ -495,7 +495,7 @@ impl<P: Plane> Edge<P> {
         let input = self.bounded_input(input).map_err(start_failed)?;
         self.plane
             .catalog()
-            .put_script(&parent.tenant, &request.script, &compiled)
+            .put_code(&parent.tenant, &request.code, &compiled)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?;
         let run = RunRef::new(
@@ -509,7 +509,7 @@ impl<P: Plane> Edge<P> {
             // A fork is the run of what its parent ran.
             origin: head.origin.clone(),
             started: RunStarted {
-                script: request.script.digest(),
+                code: request.code.digest(),
                 action_set: head.action_set,
                 input,
                 seed: parent_started.seed,
@@ -519,7 +519,7 @@ impl<P: Plane> Edge<P> {
             },
             metadata,
             start_key: request.idempotency_key,
-            headline: projector::headline(request.script.source()),
+            headline: projector::headline(request.code.source()),
             created_at: now,
         };
         self.create(gateway, partition, start)
@@ -528,12 +528,12 @@ impl<P: Plane> Edge<P> {
     }
 
     /// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
-    /// "Run handles"): its workflow's name; else its script's title as a slug, the title a
-    /// person gave the script or else the one of the comment at its top; else `script`.
+    /// "Run handles"): its workflow's name; else its code's title as a slug, the title a
+    /// person gave the code or else the one of the comment at its top; else `code`.
     async fn origin_of(
         &self,
         tenant: &TenantId,
-        script: &Script,
+        code: &Code,
         metadata: &crate::ports::RunMetadata,
     ) -> Result<String, StartError> {
         if let Some(workflow) = &metadata.workflow {
@@ -542,13 +542,13 @@ impl<P: Plane> Edge<P> {
         let given = self
             .plane
             .catalog()
-            .script_titles(tenant, &[script.digest()])
+            .script_titles(tenant, &[code.digest()])
             .await
             .map_err(start_unavailable)?
             .into_iter()
             .next()
             .map(|(_, title)| title.title);
-        let title = given.or_else(|| script_doc(script.source()).map(|doc| doc.title));
+        let title = given.or_else(|| code_doc(code.source()).map(|doc| doc.title));
         Ok(title
             .as_deref()
             .and_then(origin_slug)
@@ -620,7 +620,7 @@ impl<P: Plane> Edge<P> {
         &self,
         tenant: &TenantId,
         namespace: &NamespaceName,
-        script: &Script,
+        code: &Code,
         action_set: &rewind_core::ActionSet,
         attachments: &rewind_core::Attachments,
         rights: &attachments::AttachRights,
@@ -628,7 +628,7 @@ impl<P: Plane> Edge<P> {
         if attachments.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
-        let imports = self.plane.executor().action_imports(script);
+        let imports = self.plane.executor().action_imports(code);
         let check = AttachmentCheck {
             tenant,
             namespace: Some(namespace),
@@ -981,11 +981,11 @@ impl<P: Plane> Edge<P> {
             .await
             .map_err(unavailable)?;
         let catalog = self.plane.catalog();
-        let script = catalog
-            .get_script(&run.tenant, view.head.script)
+        let code = catalog
+            .get_script(&run.tenant, view.head.code)
             .await
             .map_err(unavailable)?
-            .ok_or_else(|| unavailable(format!("script {} not found", view.head.script)))?;
+            .ok_or_else(|| unavailable(format!("code {} not found", view.head.code)))?;
         let action_set = catalog
             .get_action_set(&run.tenant, view.head.action_set)
             .await
@@ -993,24 +993,24 @@ impl<P: Plane> Edge<P> {
             .ok_or_else(|| unavailable(format!("action set {} not found", view.head.action_set)))?;
         Ok(JournalDocument {
             run: run.id,
-            script: script.script,
+            code: code.code,
             action_set: action_set.action_set,
             entries,
         })
     }
 
-    /// Replays a run's journal with its script, or another one, on this node's executor:
+    /// Replays a run's journal with its code, or another one, on this node's executor:
     /// whether it reproduces the history. Nothing is written and no action is called.
     pub async fn replay<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
-        script: Option<&Script>,
+        code: Option<&Code>,
     ) -> Result<crate::replay::ReplayVerdict, EdgeError> {
         let journal = self.export_journal(gateway, run).await?;
-        let script = script.cloned().unwrap_or(journal.script.clone());
+        let code = code.cloned().unwrap_or(journal.code.clone());
         let executor = self.plane.executor();
-        let compiled = executor.compile(&script, &journal.action_set);
+        let compiled = executor.compile(&code, &journal.action_set);
         let input = crate::replay::ReplayInput {
             run,
             compiled: compiled.as_ref(),
@@ -1172,7 +1172,7 @@ impl<P: Plane> Edge<P> {
 
     /// The use in a month of each namespace of the scope, from the partitions that hold it: CPU
     /// time and runs created over the month, with its days when `days`; active runs and distinct
-    /// scripts now (`GET /v1/namespaces`, `GET /v1/namespaces/{name}`). A namespace that used
+    /// workflows now (`GET /v1/namespaces`, `GET /v1/namespaces/{name}`). A namespace that used
     /// nothing is left out; the tenant's use is the sum of its namespaces'.
     pub async fn usage<G: Gateway>(
         &self,

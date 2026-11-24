@@ -1,7 +1,7 @@
 //! The type-checking adapter of Rewind: the engine's `TypeChecker` port, with tsgo and the
 //! checker's own rules (`archi/04-tools.md`, "Type-checking").
 //!
-//! [`TsgoChecker`] type-checks a script in strict mode against what the sandbox has, and
+//! [`TsgoChecker`] type-checks a code in strict mode against what the sandbox has, and
 //! nothing else:
 //!
 //! | Declarations | From |

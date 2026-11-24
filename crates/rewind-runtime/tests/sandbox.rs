@@ -1,5 +1,5 @@
 //! The sandbox, driven by the engine's run plane in its driver, with memory adapters and virtual
-//! time: determinism, durable time, signals, imports, callsites, cancellation, how a script ends,
+//! time: determinism, durable time, signals, imports, callsites, cancellation, how a code ends,
 //! and limits.
 
 #![allow(clippy::unwrap_used)]
@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use rewind_core::{
     AbortKind, Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Annotation,
-    Builtin, Callsite, Command, Completion, Epoch, Event, HistoryEntry, McpServer, McpTransport,
-    RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp,
+    Builtin, Callsite, Code, Command, Completion, Epoch, Event, HistoryEntry, McpServer,
+    McpTransport, RunId, RunOutcome, RunState, RunStatus, ScriptError, Seed, Seq, Timestamp,
     canonical_json,
 };
 use rewind_engine::ports::{
-    ActionDispatcher, Call, CallAuth, CompiledScript, Dispatched, ExecutorError, RunRef,
-    ScriptExecutor, StartScript,
+    ActionDispatcher, Call, CallAuth, CodeExecutor, CompiledCode, Dispatched, ExecutorError,
+    RunRef, StartCode,
 };
 use rewind_engine::replay::ReplayEnd;
 use rewind_engine::{ReplayVerdict, StartError, StartRun};
@@ -196,7 +196,7 @@ impl Harness {
         input: Value,
         action_set: ActionSet,
     ) -> Result<RunRef, StartError> {
-        let mut request = StartRun::new(Script::new(source), action_set, input);
+        let mut request = StartRun::new(Code::new(source), action_set, input);
         request.mode = rewind_core::RunMode::Mock;
         self.world.start(request).await
     }
@@ -232,7 +232,7 @@ impl Harness {
         self.get(&id).await
     }
 
-    /// Replays the run with its own script: it must match, to the end of its history.
+    /// Replays the run with its own code: it must match, to the end of its history.
     async fn assert_replays(&self, run: &Run) {
         let verdict = self.world.replay(&run.id, None).await;
         assert!(matches!(verdict, ReplayVerdict::Matches(_)), "{verdict:?}");
@@ -342,7 +342,7 @@ async fn time_and_randomness_are_deterministic_and_keyed_by_the_seed() {
 
 /// The depth at which recursion overflows the stack depends on the size of the frames, which
 /// changes when V8 installs optimized code. Compiled concurrently, it was installed at a time
-/// that varied from one isolate to the next: the same script caught its first overflow at
+/// that varied from one isolate to the next: the same code caught its first overflow at
 /// different depths, and its replay diverged.
 #[tokio::test]
 async fn the_depth_of_a_stack_overflow_does_not_vary() {
@@ -387,9 +387,9 @@ async fn crypto_is_chacha20_keyed_by_the_seed() {
       return Array.from(crypto.getRandomValues(new Uint8Array(8)));
     }"#;
     let compiled = executor
-        .compile(&Script::new(source), &ActionSet::default())
+        .compile(&Code::new(source), &ActionSet::default())
         .unwrap();
-    let start = |seed| StartScript {
+    let start = |seed| StartCode {
         run_id: RunId::from_u128(1),
         compiled: compiled.clone(),
         action_set: ActionSet::default(),
@@ -418,7 +418,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     let harness = harness().await;
     let run = harness.run(FAN_OUT, json!({ "repo": "acme/api" })).await;
 
-    let changed_args = Script::new(FAN_OUT.replace("[1, 2, 3]", "[1, 2, 4]"));
+    let changed_args = Code::new(FAN_OUT.replace("[1, 2, 3]", "[1, 2, 4]"));
     let verdict = harness.world.replay(&run.id, Some(&changed_args)).await;
     let ReplayVerdict::Diverges(mismatch) = verdict else {
         panic!("{verdict:?}")
@@ -426,10 +426,10 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     assert_eq!(
         mismatch.to_string(),
         "history entry 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), \
-         but the script emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
+         but the code emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
     );
 
-    let extra_call = Script::new(FAN_OUT.replace(
+    let extra_call = Code::new(FAN_OUT.replace(
         "return { titles",
         "await github.close_issue({ number: 1 });\n  return { titles",
     ));
@@ -443,7 +443,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     );
 
     // Moving code around without changing behavior is allowed: callsites are ignored.
-    let moved = Script::new(format!("\n\n// a comment\n{FAN_OUT}"));
+    let moved = Code::new(format!("\n\n// a comment\n{FAN_OUT}"));
     let verdict = harness.world.replay(&run.id, Some(&moved)).await;
     assert_eq!(verdict, ReplayVerdict::Matches(ReplayEnd::EndOfHistory));
 }
@@ -509,7 +509,7 @@ export default async function main() {
         .await
         .unwrap();
 
-    // One hour later, the sleep ends and the script waits for "comment".
+    // One hour later, the sleep ends and the code waits for "comment".
     harness.world.advance_to(Timestamp(T0.0 + HOUR));
     harness.world.settle().await;
     let waiting = harness.get(&id).await;
@@ -642,15 +642,15 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
     for (source, expected) in [
         (
             "import fs from \"node:fs\";\nexport default async function main() { return typeof fs; }",
-            "cannot import \"node:fs\" (script.ts:1:16): scripts can only import",
+            "cannot import \"node:fs\" (workflow.ts:1:16): workflows can only import",
         ),
         (
             "import hooks from \"rewind:internal\";\nexport default async function main() { return typeof hooks; }",
-            "scripts can only import",
+            "workflows can only import",
         ),
         (
             "import { jira } from \"rewind:actions\";\nexport default async () => jira;",
-            "\"rewind:actions\" has no export named \"jira\" (script.ts:1:10); it exports audit, \
+            "\"rewind:actions\" has no export named \"jira\" (workflow.ts:1:10); it exports audit, \
              failing, flaky, github, slow",
         ),
         (
@@ -661,7 +661,7 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
             "export default 42;",
             "must `export default` its main function",
         ),
-        ("export default async function main( {", "script.ts:1"),
+        ("export default async function main( {", "workflow.ts:1"),
         (
             "export default async function main() { return await import(\"rewind\"); }",
             "dynamic import() is not available",
@@ -669,7 +669,7 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
     ] {
         let refused = harness.try_start(source, json!({})).await.unwrap_err();
         assert!(
-            matches!(refused, StartError::InvalidScript(_)),
+            matches!(refused, StartError::InvalidCode(_)),
             "{source}: {refused:?}"
         );
         assert!(
@@ -681,7 +681,7 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
     assert!(runs.is_empty(), "no run was created: {runs:?}");
 }
 
-/// What only shows when the script runs, such as an error thrown by its top-level code, aborts
+/// What only shows when the code runs, such as an error thrown by its top-level code, aborts
 /// the run when it loads.
 #[tokio::test]
 async fn scripts_that_fail_while_loading_are_aborted_as_invalid() {
@@ -698,7 +698,7 @@ async fn scripts_that_fail_while_loading_are_aborted_as_invalid() {
     ] {
         let run = harness.run(source, json!({})).await;
         let (kind, message) = run.abort();
-        assert_eq!(kind, AbortKind::InvalidScript, "{source}");
+        assert_eq!(kind, AbortKind::InvalidCode, "{source}");
         assert!(message.contains(expected), "{source}: {message}");
         assert_eq!(run.events(), ["run_started", "run_aborted"]);
         harness.assert_replays(&run).await;
@@ -734,7 +734,7 @@ export default async function main() {
         "gave up: flaky failed: connection reset (flaky, {\"status\":503})"
     );
     assert!(
-        error.stack.as_deref().unwrap().contains("script.ts:10"),
+        error.stack.as_deref().unwrap().contains("workflow.ts:10"),
         "{error:?}"
     );
     assert_eq!(run.state.status(), RunStatus::Failed);
@@ -851,7 +851,7 @@ export default async function main() { await slow({}); }
 }
 
 // ---------------------------------------------------------------------------------------------
-// How a script ends (archi/03-execution.md)
+// How a code ends (archi/03-execution.md)
 
 #[tokio::test]
 async fn a_forgotten_await_is_harmless_the_run_waits_for_the_call() {
@@ -940,7 +940,7 @@ async fn nothing_left_to_wake_the_script_is_a_deadlock() {
     assert_eq!(run.events(), ["run_started", "fail_run"]);
     harness.assert_replays(&run).await;
 
-    // Waiting for a signal is not a deadlock: something outside can still wake the script.
+    // Waiting for a signal is not a deadlock: something outside can still wake the code.
     let waiting = harness
         .run(
             "import { signal } from \"rewind\";\nexport default async function main() { return await signal(\"go\"); }",
@@ -1093,8 +1093,8 @@ async fn the_process_survives_an_array_buffer_of_2_pow_36() {
     assert_eq!(run.output(), &json!(8));
 }
 
-/// The buffers an instance holds share one budget. A buffer the script dropped gives its bytes
-/// back before an allocation fails, so where it fails depends only on what the script holds:
+/// The buffers an instance holds share one budget. A buffer the code dropped gives its bytes
+/// back before an allocation fails, so where it fails depends only on what the code holds:
 /// the same on replay.
 #[tokio::test]
 async fn array_buffers_share_one_budget_and_fail_where_replay_does() {
@@ -1248,10 +1248,7 @@ async fn built_ins_that_would_outgrow_the_heap_end_the_call_at_once() {
             .await;
         let (kind, message) = run.abort();
         assert_eq!(kind, AbortKind::LimitExceeded, "{call}");
-        assert_eq!(
-            message, "the script used more than 64 MiB of heap",
-            "{call}"
-        );
+        assert_eq!(message, "the code used more than 64 MiB of heap", "{call}");
         assert_eq!(run.events(), ["run_started", "run_aborted"], "{call}");
     }
 
@@ -1322,10 +1319,10 @@ async fn one_allocation_past_the_heap_limit_ends_the_call_not_the_process() {
         .await;
     let (kind, message) = run.abort();
     assert_eq!(kind, AbortKind::LimitExceeded);
-    assert_eq!(message, "the script used more than 64 MiB of heap");
+    assert_eq!(message, "the code used more than 64 MiB of heap");
 }
 
-/// What a script emits is kept outside V8's heap until the call ends: a flood of logs, of action
+/// What a code emits is kept outside V8's heap until the call ends: a flood of logs, of action
 /// arguments or of signal names is stopped once one trigger's response holds more than its
 /// bound, and nothing of it is recorded.
 #[tokio::test]
@@ -1359,7 +1356,7 @@ async fn what_one_trigger_emits_is_bounded_in_bytes() {
         assert_eq!(kind, AbortKind::LimitExceeded, "{flood}");
         assert_eq!(
             message,
-            "the script emitted more than 4 MiB of commands and logs reacting to one trigger",
+            "the code emitted more than 4 MiB of commands and logs reacting to one trigger",
             "{flood}"
         );
         assert_eq!(run.events(), ["run_started", "run_aborted"], "{flood}");
@@ -1386,7 +1383,7 @@ async fn what_one_trigger_emits_is_bounded_in_number() {
     assert_eq!(kind, AbortKind::LimitExceeded);
     assert_eq!(
         message,
-        "the script emitted more than 100 commands and logs reacting to one trigger"
+        "the code emitted more than 100 commands and logs reacting to one trigger"
     );
 }
 
@@ -1464,9 +1461,9 @@ export default async function main() {
 async fn an_unsupported_epoch_is_refused() {
     let executor = V8Executor::new(SandboxLimits::default()).unwrap();
     assert_eq!(executor.epochs(), [Epoch(1)]);
-    let start = StartScript {
+    let start = StartCode {
         run_id: RunId::from_u128(1),
-        compiled: CompiledScript {
+        compiled: CompiledCode {
             javascript: "export default () => 1".into(),
             source_map: String::new(),
         },
@@ -1532,10 +1529,10 @@ async fn only_the_action_set_is_callable() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Found by review: each of these broke determinism or the rules of how a script ends.
+// Found by review: each of these broke determinism or the rules of how a code ends.
 
 /// A value delivered live and the same value loaded back from storage must look the same to
-/// the script, or its replay diverges and a healthy run is quarantined.
+/// the code, or its replay diverges and a healthy run is quarantined.
 #[tokio::test]
 async fn object_keys_are_the_same_live_and_on_replay() {
     let harness = harness().await;
@@ -1798,7 +1795,7 @@ export default async function main() {
 #[tokio::test]
 async fn invalid_args_throw_a_type_error_at_the_call_site_and_record_nothing() {
     let harness = harness().await;
-    let script = r#"
+    let code = r#"
 import { github } from "rewind:actions";
 
 export default async function main() {
@@ -1813,7 +1810,7 @@ export default async function main() {
 }
 "#;
     let id = harness
-        .start_with(script, json!({}), builtins_action_set())
+        .start_with(code, json!({}), builtins_action_set())
         .await;
     harness.drive().await;
     let run = harness.get(&id).await;
@@ -1823,10 +1820,10 @@ export default async function main() {
         error.message,
         "invalid arguments for github.get_issue: args.number: \"4\" is not of type \"integer\""
     );
-    // The stack starts at the script's call, without frames of the glue.
+    // The stack starts at the code's call, without frames of the glue.
     let stack = error.stack.as_deref().unwrap();
     assert!(
-        stack.contains("at main (file:///script.ts:12:16)"),
+        stack.contains("at main (file:///workflow.ts:12:16)"),
         "{stack}"
     );
     assert!(!stack.contains("rewind:"), "{stack}");

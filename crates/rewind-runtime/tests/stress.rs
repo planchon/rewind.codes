@@ -11,8 +11,8 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Epoch, RunId, Script, Seed, Seq, Timestamp};
-use rewind_engine::ports::{Delivery, ScriptExecutor, ScriptInstance, StartScript};
+use rewind_core::{ActionSet, Code, Epoch, RunId, Seed, Seq, Timestamp};
+use rewind_engine::ports::{CodeExecutor, CodeInstance, Delivery, StartCode};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
@@ -45,11 +45,11 @@ fn rounds(default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-fn start(executor: &V8Executor, n: u64, source: &str) -> StartScript {
-    StartScript {
+fn start(executor: &V8Executor, n: u64, source: &str) -> StartCode {
+    StartCode {
         run_id: RunId::from_u128(u128::from(n) + 1),
         compiled: executor
-            .compile(&Script::new(source), &ActionSet::default())
+            .compile(&Code::new(source), &ActionSet::default())
             .unwrap(),
         action_set: ActionSet::default(),
         input: json!(n),

@@ -74,7 +74,7 @@ fn now() -> Timestamp {
 enum Stored {
     Authenticated {
         access_token: String,
-        /// Kept here only: never given to the browser's scripts.
+        /// Kept here only: never given to the browser's workflows.
         refresh_token: String,
         session: String,
         user: User,

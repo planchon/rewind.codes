@@ -67,10 +67,10 @@ fn refused<T: std::fmt::Debug>(result: Result<T, rewind_api::Error>) -> (u16, Op
     (problem.status, problem.kind())
 }
 
-/// One test of `script`, without a world or expectations.
-fn scenario(script: &str) -> TestRequest {
+/// One test of `code`, without a world or expectations.
+fn scenario(code: &str) -> TestRequest {
     TestRequest {
-        script: Some(script.into()),
+        code: Some(code.into()),
         tests: vec![rewind_api::testing::TestInput::Inline(Box::new(
             serde_json::from_value(json!({ "name": "runs" })).unwrap(),
         ))],
@@ -82,7 +82,7 @@ fn ns(name: &str) -> NamespaceName {
     name.parse().unwrap()
 }
 
-/// A run of `script`, marked so that each run of a test has its own script.
+/// A run of `code`, marked so that each run of a test has its own code.
 fn waiting(marker: &str) -> StartRun {
     StartRun::new(format!("// {marker}\n{SIGNAL}"))
 }
@@ -272,11 +272,11 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         (404, Some(ProblemType::NotFound))
     );
     assert_eq!(
-        refused(alice.get_script(&his.script).await),
+        refused(alice.get_script(&his.code_digest).await),
         (404, Some(ProblemType::NotFound)),
-        "a script her namespace never ran"
+        "a code her namespace never ran"
     );
-    alice.get_script(&hers.script).await.unwrap();
+    alice.get_script(&hers.code_digest).await.unwrap();
     let her_input = hers.input.clone().unwrap().digest;
     // Read once the run's first activation has committed its input.
     let input = eventually(|| async { alice.get_payload(&her_input, &hers.id).await.ok() }).await;
@@ -286,7 +286,7 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         (404, Some(ProblemType::NotFound))
     );
 
-    // Lists, statistics and scripts hold her namespace only.
+    // Lists, statistics and workflows hold her namespace only.
     let listed = eventually(|| async {
         let page = alice.list_runs(&RunFilter::default()).await.unwrap();
         (!page.runs.is_empty()).then_some(page)
@@ -308,7 +308,7 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         scripts
             .scripts
             .iter()
-            .all(|script| script.digest != his.script)
+            .all(|code| code.digest != his.code_digest)
     );
     let stats = alice
         .run_stats(&rewind_api::runs::RunStatsQuery::default())
@@ -475,7 +475,7 @@ async fn the_customer_names_the_namespace_of_its_requests() {
         refusal.detail
     );
     let check = CheckRequest {
-        script: SHORT.into(),
+        code: SHORT.into(),
         action_set: None,
     };
     assert_eq!(
@@ -560,7 +560,7 @@ async fn the_customer_names_the_namespace_of_its_requests() {
 // -------------------------------------------------------------------------------------------
 // Quotas
 
-/// `maxScriptLines` and `maxTtl` refuse the request, at start, fork, check and test; the
+/// `maxCodeLines` and `maxTtl` refuse the request, at start, fork, check and test; the
 /// counted quotas refuse a start with 429, and a monthly one says when it frees.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn quotas_refuse_what_they_bound() {
@@ -569,7 +569,7 @@ async fn quotas_refuse_what_they_bound() {
     customer
         .put_namespace_defaults(&PutNamespaceDefaults {
             defaults: Quotas {
-                max_script_lines: Some(3),
+                max_code_lines: Some(3),
                 max_ttl: Some("1h".parse().unwrap()),
                 ..Quotas::default()
             },
@@ -578,14 +578,10 @@ async fn quotas_refuse_what_they_bound() {
         .unwrap();
     let alice = customer.with_namespace(ns("alice"));
 
-    // maxScriptLines: 422 invalid-script with its diagnostic, from start, fork, check and test.
+    // maxCodeLines: 422 invalid-code with its diagnostic, from start, fork, check and test.
     let too_long = |refusal: Problem| {
-        assert_eq!(
-            refusal.kind(),
-            Some(ProblemType::InvalidScript),
-            "{refusal}"
-        );
-        assert_eq!(refusal.diagnostics[0].code, "rewind/max-script-lines");
+        assert_eq!(refusal.kind(), Some(ProblemType::InvalidCode), "{refusal}");
+        assert_eq!(refusal.diagnostics[0].code, "rewind/max-code-lines");
     };
     too_long(problem(
         alice
@@ -596,7 +592,7 @@ async fn quotas_refuse_what_they_bound() {
     too_long(problem(
         alice
             .check(&CheckRequest {
-                script: SIGNAL.into(),
+                code: SIGNAL.into(),
                 action_set: None,
             })
             .await
@@ -636,7 +632,7 @@ async fn quotas_refuse_what_they_bound() {
             &ns("vip"),
             &PutNamespace {
                 exceptions: Quotas {
-                    max_script_lines: Some(100),
+                    max_code_lines: Some(100),
                     ..Quotas::default()
                 },
             },
@@ -671,7 +667,7 @@ async fn quotas_refuse_what_they_bound() {
         .post(format!("{}/v1/runs", server.url))
         .bearer_auth(harness_secret(&server).await)
         .header("Rewind-Namespace", "monthly")
-        .json(&json!({ "script": SHORT }))
+        .json(&json!({ "code": SHORT }))
         .send()
         .await
         .unwrap();
@@ -738,7 +734,7 @@ async fn quotas_refuse_what_they_bound() {
             "acme",
             &PutCeiling {
                 ceiling: Quotas {
-                    scripts: Some(1),
+                    workflows: Some(1),
                     ..Quotas::default()
                 },
             },
@@ -758,14 +754,14 @@ async fn quotas_refuse_what_they_bound() {
     let reached = ceiling.quota.unwrap();
     assert_eq!(
         (reached.quota, reached.scope),
-        (QuotaKind::Scripts, QuotaScope::Organization)
+        (QuotaKind::Workflows, QuotaScope::Organization)
     );
     let defaults = customer
         .namespace_defaults(&NamespaceQuery::default())
         .await
         .unwrap();
-    assert_eq!(defaults.ceiling.scripts, Some(1));
-    assert_eq!(defaults.defaults.max_script_lines, Some(3));
+    assert_eq!(defaults.ceiling.workflows, Some(1));
+    assert_eq!(defaults.defaults.max_code_lines, Some(3));
     assert!(defaults.usage.runs_started >= 3, "{defaults:?}");
     server.stop().await;
 }

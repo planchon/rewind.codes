@@ -74,16 +74,16 @@ fn namespace(name: &str, exceptions: &Quotas) -> Namespace {
             cpu_per_month: exceptions.cpu_per_month,
             active_runs: exceptions.active_runs.or(defaults.active_runs),
             runs_per_month: exceptions.runs_per_month.or(defaults.runs_per_month),
-            scripts: exceptions.scripts,
+            workflows: exceptions.workflows,
             max_ttl: exceptions.max_ttl,
-            max_script_lines: exceptions.max_script_lines,
+            max_code_lines: exceptions.max_code_lines,
         },
         exceptions: exceptions.clone(),
         usage: QuotaUsage {
             cpu: "12m".parse().unwrap(),
             active_runs: 2,
             runs_started: 840,
-            scripts: 3,
+            workflows: 3,
         },
         created_at: at(),
         last_active_at: at(),
@@ -383,12 +383,12 @@ async fn namespaces_are_listed_and_shown_across_namespaces() {
 async fn quotas_change_only_the_limits_given() {
     let server = Embedded::start(Stub {
         exceptions: Quotas {
-            scripts: Some(9),
+            workflows: Some(9),
             max_ttl: Some("1h".parse().unwrap()),
             ..Quotas::default()
         },
         defaults: Quotas {
-            max_script_lines: Some(300),
+            max_code_lines: Some(300),
             ..Quotas::default()
         },
         display_name: None,
@@ -420,17 +420,17 @@ async fn quotas_change_only_the_limits_given() {
     assert_eq!(seen[1].what, "put alice");
     assert_eq!(
         seen[1].body,
-        json!({ "exceptions": { "activeRuns": 5, "scripts": 9 } }),
+        json!({ "exceptions": { "activeRuns": 5, "workflows": 9 } }),
         "the exceptions given change, the others stay, none removes one"
     );
 
     // A namespace not created yet starts without exceptions.
     let (exit, _, err) = server
-        .rewind(&["namespaces", "quotas", "bob", "--scripts", "3"])
+        .rewind(&["namespaces", "quotas", "bob", "--workflows", "3"])
         .await;
     assert_eq!(exit, Exit::Success, "{err}");
     let seen = server.seen();
-    assert_eq!(seen[1].body, json!({ "exceptions": { "scripts": 3 } }));
+    assert_eq!(seen[1].body, json!({ "exceptions": { "workflows": 3 } }));
 
     // The defaults.
     let (exit, out, err) = server
@@ -448,7 +448,7 @@ async fn quotas_change_only_the_limits_given() {
     assert_eq!(seen[0].what, "get defaults");
     assert_eq!(
         seen[1].body,
-        json!({ "defaults": { "cpuPerMonth": "2h", "maxScriptLines": 300 } })
+        json!({ "defaults": { "cpuPerMonth": "2h", "maxCodeLines": 300 } })
     );
 }
 

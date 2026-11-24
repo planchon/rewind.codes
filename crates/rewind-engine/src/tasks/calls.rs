@@ -36,10 +36,10 @@ use crate::partition::OwnerMsg;
 use crate::plane::{LogOf, NodeConfig, Plane};
 use crate::ports::link::{HarnessTask, StartAtOwner};
 use crate::ports::{
-    ActionDispatcher, BlobOwner, Call, CallAuth, CallClaims, CatalogStore, Clock, Dispatched,
-    Entropy, ParkKind, ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata, RunRef,
-    RunWorkflow, ScriptExecutor, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord,
-    TaskRef, TaskToken,
+    ActionDispatcher, BlobOwner, Call, CallAuth, CallClaims, CatalogStore, Clock, CodeExecutor,
+    Dispatched, Entropy, ParkKind, ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata,
+    RunRef, RunWorkflow, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord, TaskRef,
+    TaskToken,
 };
 use crate::tasks::idempotency_key;
 use crate::tasks::{redacted, secret_texts};
@@ -651,12 +651,12 @@ async fn start_child<P: Plane>(
             ));
         }
     };
-    let script = match plane.catalog().get_script(tenant, workflow.script()).await {
-        Ok(Some(stored)) => stored.script,
-        Ok(None) => return not_sent(format!("the script of {workflow} is not stored")),
-        Err(error) => return not_sent(format!("the workflow's script could not be read: {error}")),
+    let code = match plane.catalog().get_script(tenant, workflow.code()).await {
+        Ok(Some(stored)) => stored.code,
+        Ok(None) => return not_sent(format!("the code of {workflow} is not stored")),
+        Err(error) => return not_sent(format!("the workflow's code could not be read: {error}")),
     };
-    if let Err(error) = bounds.check_lines(&script) {
+    if let Err(error) = bounds.check_lines(&code) {
         return failed(format!("no run of {workflow} was started: {error}"));
     }
     let input = Payload::Value(args.input);
@@ -724,7 +724,7 @@ async fn start_child<P: Plane>(
         // A workflow's run is the run of its workflow.
         origin: workflow.name().to_owned(),
         started: RunStarted {
-            script: workflow.script(),
+            code: workflow.code(),
             action_set: workflow.action_set(),
             input,
             seed,
@@ -734,7 +734,7 @@ async fn start_child<P: Plane>(
         },
         metadata,
         start_key: Some(key),
-        headline: crate::projector::headline(script.source()),
+        headline: crate::projector::headline(code.source()),
         created_at: now,
     });
     CallOutcome::Child(Box::new(ChildStart::New { start, neighbours }))

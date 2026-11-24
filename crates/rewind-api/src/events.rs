@@ -24,7 +24,7 @@ pub struct Entry {
     /// Position in the history: from 0, contiguous.
     pub idx: u64,
     /// When the entry was committed; monotonic per run. Once a trigger is delivered, it is the
-    /// script's logical time.
+    /// code's logical time.
     pub recorded_at: Timestamp,
     pub event: Event,
 }
@@ -51,7 +51,7 @@ pub enum Event {
     /// The run's first entry. The seed is left out: it is only in the exported journal.
     #[serde(rename_all = "camelCase")]
     RunStarted {
-        script: String,
+        code: String,
         action_set: String,
         input: Payload,
         epoch: u32,
@@ -113,7 +113,7 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         callsite: Option<Callsite>,
     },
-    /// The script started waiting for a signal whose mailbox was empty.
+    /// The code started waiting for a signal whose mailbox was empty.
     SignalAwaited {
         name: String,
         /// The `seq` of the timer of its timeout.
@@ -165,7 +165,7 @@ impl Event {
         let callsite = |callsite: &Option<rewind_core::Callsite>| callsite.map(Callsite::from);
         match event {
             rewind_core::Event::Lifecycle(Lifecycle::RunStarted(started)) => Event::RunStarted {
-                script: started.script.to_hex(),
+                code: started.code.to_hex(),
                 action_set: started.action_set.to_hex(),
                 input: payload(&started.input),
                 epoch: started.epoch.0,
@@ -316,7 +316,7 @@ impl StreamEvent {
 /// One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
 /// whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
 /// summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
-/// durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
+/// durable; for `code`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
 /// control plane, by its name or id (the client reads again the views that show it); for
 /// `resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:
 /// the stream is not resumed, the client reads again what it shows. While it sends nothing else,
@@ -326,7 +326,7 @@ impl StreamEvent {
 pub enum ChangeEvent {
     /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
     Run(Box<RunSummary>),
-    /// `script`: the organization's runs ran a script for the first time, or a person gave it a
+    /// `code`: the organization's runs ran a code for the first time, or a person gave it a
     /// title or removed it.
     Script(ScriptChanged),
     /// `workflow`: a workflow has a new version.
@@ -343,7 +343,7 @@ pub enum ChangeEvent {
     Resync(Resync),
 }
 
-/// The data of a `script` event: a script the organization's runs ran for the first time, which
+/// The data of a `code` event: a code the organization's runs ran for the first time, which
 /// `GET /v1/scripts` now lists, or whose title a person gave or removed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -396,7 +396,7 @@ pub struct ConnectionChanged {
 pub struct Resync {}
 
 impl ChangeEvent {
-    /// The SSE `event` field: `run`, `script`, `workflow`, `secret`, `namespace`, `connection`
+    /// The SSE `event` field: `run`, `code`, `workflow`, `secret`, `namespace`, `connection`
     /// or `resync`.
     pub fn sse_event(&self) -> &'static str {
         match self {
@@ -524,7 +524,7 @@ mod tests {
             "namespace": "alice",
             "status": "active",
             "quarantined": false,
-            "script": "ab",
+            "codeDigest": "ab",
             "headline": "// x",
             "actionSet": "cd",
             "labels": {},

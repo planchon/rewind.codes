@@ -1,7 +1,7 @@
 //! The `CatalogStore` port: the control plane's catalog (`archi/07-code-architecture.md`,
 //! "`CatalogStore`"; `archi/06-storage-and-scale.md`, "The control plane").
 //!
-//! Scripts, action sets and workflow versions by digest, the index of tests and the suite of each
+//! Workflows, action sets and workflow versions by digest, the index of tests and the suite of each
 //! version; tenants; namespaces, with their partition, display name, exceptions and erasure;
 //! subscriptions. It is written at the pace of people, and every write sends its
 //! [`ControlPlaneChange`](crate::ports::cluster::ControlPlaneChange) in the same transaction, which
@@ -12,12 +12,12 @@ use std::future::Future;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
 
 use crate::ports::checker::ActionDeclarations;
-use crate::ports::executor::CompiledScript;
+use crate::ports::executor::CompiledCode;
 use crate::ports::journal::{
-    ScriptTitle, StoredActionSet, StoredScript, StoredWorkflow, TestRecord, WorkflowFilter,
+    ScriptTitle, StoredActionSet, StoredCode, StoredWorkflow, TestRecord, WorkflowFilter,
 };
 use crate::ports::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
@@ -80,17 +80,17 @@ pub struct NamespacePage {
 /// The contract, checked by the conformance suite (feature `conformance`, module
 /// `conformance::catalog`):
 ///
-/// - **Tenants.** Every key starts with the tenant: a script, an action set, a version, a test, a
+/// - **Tenants.** Every key starts with the tenant: a code, an action set, a version, a test, a
 ///   namespace or a subscription of one tenant is never visible to another.
-/// - **Content.** Scripts and action sets are stored by digest, and a second put changes nothing.
-///   Only scripts that compile are stored.
-/// - **Titles.** `set_script_title` gives a stored script the title and description a person
-///   wrote, or removes them, and answers `false` for a script the tenant does not have;
-///   `script_titles` reads them for the scripts that have one.
+/// - **Content.** Workflows and action sets are stored by digest, and a second put changes nothing.
+///   Only workflows that compile are stored.
+/// - **Titles.** `set_script_title` gives a stored code the title and description a person
+///   wrote, or removes them, and answers `false` for a code the tenant does not have;
+///   `script_titles` reads them for the workflows that have one.
 /// - **Workflows.** A version is immutable: a second `put_workflow` of a version changes nothing
 ///   and returns the first. `workflow_versions` lists a name's versions carrying `labels`,
 ///   newest first (created last first, then stored last first): the first is the latest;
-///   `workflows_with_script` lists the versions of any name whose script is `script`, in the
+///   `workflows_with_code` lists the versions of any name whose code is `code`, in the
 ///   same order; `latest_workflows` gives the latest version of each name, by name. A new
 ///   version takes the next number of its name in its tenant, from 1 in the order they were
 ///   stored; `workflow_number` finds a version by its number, whatever its labels.
@@ -108,41 +108,41 @@ pub struct NamespacePage {
 ///   `delete_namespace` marks it; `namespaces_to_erase` lists the marked ones, the oldest mark
 ///   first; `drop_namespace` removes a marked one, once its partition holds nothing of it.
 /// - **Changes.** Every write sends what it changed as a `ControlPlaneChange`, in the same
-///   transaction: a script, an action set, a workflow version, a test, a subscription, a tenant, a
+///   transaction: a code, an action set, a workflow version, a test, a subscription, a tenant, a
 ///   namespace.
 /// - **Time.** The catalog never reads a clock: every method that depends on time takes `now`.
 ///
 /// [`namespace_partition`]: crate::ports::partition::namespace_partition
 pub trait CatalogStore: Send + Sync {
     // ---------------------------------------------------------------------------------------
-    // Scripts and action sets
+    // Workflows and action sets
 
-    /// Stores a script and its compiled form. Idempotent by digest: a second put changes
+    /// Stores a code and its compiled form. Idempotent by digest: a second put changes
     /// nothing.
-    fn put_script(
+    fn put_code(
         &self,
         tenant: &TenantId,
-        script: &Script,
-        compiled: &CompiledScript,
+        code: &Code,
+        compiled: &CompiledCode,
     ) -> impl Future<Output = Result<(), CatalogError>> + Send;
 
     fn get_script(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> impl Future<Output = Result<Option<StoredScript>, CatalogError>> + Send;
+    ) -> impl Future<Output = Result<Option<StoredCode>, CatalogError>> + Send;
 
-    /// Sets the title a person gave a stored script, or removes it (`None`)
-    /// (`archi/04-tools.md`, "Script titles"). `false` when the tenant has no such script:
+    /// Sets the title a person gave a stored code, or removes it (`None`)
+    /// (`archi/04-tools.md`, "Script titles"). `false` when the tenant has no such code:
     /// nothing is stored.
     fn set_script_title(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         title: Option<&ScriptTitle>,
     ) -> impl Future<Output = Result<bool, CatalogError>> + Send;
 
-    /// The titles people gave these scripts, for those that have one.
+    /// The titles people gave these workflows, for those that have one.
     fn script_titles(
         &self,
         tenant: &TenantId,
@@ -206,12 +206,12 @@ pub trait CatalogStore: Send + Sync {
         labels: &BTreeMap<String, String>,
     ) -> impl Future<Output = Result<Vec<StoredWorkflow>, CatalogError>> + Send;
 
-    /// The versions of any workflow whose script is `script` and that carry all of `labels`,
+    /// The versions of any workflow whose code is `code` and that carry all of `labels`,
     /// newest first.
-    fn workflows_with_script(
+    fn workflows_with_code(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         labels: &BTreeMap<String, String>,
     ) -> impl Future<Output = Result<Vec<StoredWorkflow>, CatalogError>> + Send;
 

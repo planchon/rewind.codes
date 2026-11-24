@@ -266,7 +266,7 @@ impl Runs {
                 namespace: namespace.clone(),
                 origin: "script".into(),
                 suffix_len: 12,
-                script: Digest::of(b"script"),
+                code: Digest::of(b"script"),
                 action_set: Digest::of(b"action_set"),
                 status: RunStatus::Pending,
                 epoch: Epoch(1),
@@ -296,7 +296,7 @@ impl Runs {
                     namespace: namespace.clone(),
                     origin: "script".into(),
                     suffix_len: 12,
-                    script: Digest::of(b"script"),
+                    code: Digest::of(b"script"),
                     headline: "export default async ({ issue }) => {".into(),
                     action_set: Digest::of(b"action_set"),
                     status: RunStatus::Pending,
@@ -330,7 +330,7 @@ impl Runs {
 
     fn started(&self) -> RunStarted {
         RunStarted {
-            script: Digest::of(b"script"),
+            code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
             input: json!({ "issue": 42, "title": "x".repeat(200) }).into(),
             seed: Seed::from_bytes([7; 32]),

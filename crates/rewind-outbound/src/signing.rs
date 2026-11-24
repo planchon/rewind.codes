@@ -44,7 +44,7 @@ pub struct CallIdentity {
     pub labels: BTreeMap<String, String>,
     /// `run`: the run's id.
     pub run: String,
-    /// `action`: the action's name, as scripts call it.
+    /// `action`: the action's name, as workflows call it.
     pub action: String,
     /// `idempotency_key`: `{run_id}/{seq}`.
     pub idempotency_key: String,

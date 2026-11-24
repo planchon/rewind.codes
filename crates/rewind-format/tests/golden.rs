@@ -31,7 +31,7 @@ fn digest(hex: &str) -> Digest {
 fn every_fixture_decodes_to_a_valid_journal_and_re_encodes_to_the_same_bytes() {
     for (name, fixture) in FIXTURES {
         let journal = decode_journal(fixture).unwrap_or_else(|err| panic!("{name}: {err}"));
-        // The history is valid, and the script and action set are those of its run_started.
+        // The history is valid, and the code and action set are those of its run_started.
         journal
             .check()
             .unwrap_or_else(|err| panic!("{name}: {err}"));
@@ -58,7 +58,7 @@ fn decodes_to_the_expected_domain_values() {
     );
     assert!(
         journal
-            .script
+            .code
             .source()
             .starts_with("import { github } from \"rewind:tools\";")
     );
@@ -68,7 +68,7 @@ fn decodes_to_the_expected_domain_values() {
     assert_eq!(
         history[0].event,
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: digest("88b30ba7a18c0a5dcd87a939c120336570ea6c747836b1a6b59ce93108d57c31"),
+            code: digest("88b30ba7a18c0a5dcd87a939c120336570ea6c747836b1a6b59ce93108d57c31"),
             action_set: digest("2ff7b72e331ef568c6041bd5c9509e3fb44ed29516f6b47bc815ea2a4dd537e3"),
             input: json!({ "repo": "acme/api" }).into(),
             seed: Seed::from_bytes(
@@ -197,8 +197,8 @@ fn pins_the_spelling_of_every_variant() {
             r#"{"v":1,"type":"run_aborted","reason":{"kind":"cancelled","message":"m"}}"#,
         ),
         (
-            abort(AbortKind::InvalidScript),
-            r#"{"v":1,"type":"run_aborted","reason":{"kind":"invalid_script","message":"m"}}"#,
+            abort(AbortKind::InvalidCode),
+            r#"{"v":1,"type":"run_aborted","reason":{"kind":"invalid_code","message":"m"}}"#,
         ),
         (
             abort(AbortKind::Internal),
@@ -331,26 +331,26 @@ fn rejects_what_v1_does_not_define() {
     let action_set = r#"{"actions":[],"servers":[],"v":1}"#;
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     let valid = document(&format!(
-        r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[]"#
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[]"#
     ));
     assert_eq!(decode_journal(&valid).unwrap().entries, vec![]);
     let invalid_documents = [
         // An unknown field.
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[],"x":1"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[],"x":1"#
         ),
         // A missing field.
         r#""entries":[]"#.to_owned(),
-        format!(r#""script":"s","action_set":{action_set},"entries":[]"#),
+        format!(r#""code":"s","action_set":{action_set},"entries":[]"#),
         format!(
             r#""run":"019b7a3c-8f00-7000-8000-000000000003","action_set":{action_set},"entries":[]"#
         ),
-        r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","entries":[]"#.to_owned(),
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","entries":[]"#.to_owned(),
         // A run that is not a run id.
-        format!(r#""run":"x","script":"s","action_set":{action_set},"entries":[]"#),
-        // A script that is not a source.
+        format!(r#""run":"x","code":"s","action_set":{action_set},"entries":[]"#),
+        // A code that is not a source.
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":1,"action_set":{action_set},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":1,"action_set":{action_set},"entries":[]"#
         ),
     ];
     for json in invalid_documents {
@@ -363,13 +363,13 @@ fn rejects_what_v1_does_not_define() {
     }
     assert!(matches!(
         decode_journal(&document(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{"servers":[],"v":1},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{"servers":[],"v":1},"entries":[]"#
         )),
         Err(FormatError::InvalidActionSet(_))
     ));
     assert!(matches!(
         decode_journal(&document(&format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[{{"index":0,"recorded_at":0}}]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[{{"index":0,"recorded_at":0}}]"#
         ))),
         Err(FormatError::InvalidEntry { position: 0, .. })
     ));

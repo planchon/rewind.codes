@@ -1,5 +1,5 @@
 //! What the namespaces of a tenant use (`archi/06-storage-and-scale.md`, "Quotas"): the CPU time
-//! of a month, the runs created in it, the runs active and the scripts kept now, from the
+//! of a month, the runs created in it, the runs active and the workflows kept now, from the
 //! counters and gauges of the partitions that hold them (one request per partition), and the
 //! quota alerts of the tenant's organization actor.
 
@@ -31,7 +31,7 @@ pub(crate) async fn of_scope(app: &App, scope: &Scope, month: Month) -> Result<U
         total.cpu += used.cpu;
         total.runs_started += used.runs_started;
         total.active_runs += used.active_runs;
-        total.scripts += used.scripts;
+        total.workflows += used.workflows;
     }
     Ok(total)
 }

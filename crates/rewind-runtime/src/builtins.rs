@@ -18,9 +18,9 @@
 //!
 //! The URL is absolute (`http:` or `https:`), parsed and serialized by the sandbox's `URL`.
 //! The method is a token, upper-cased when it is one of `DELETE`, `GET`, `HEAD`, `OPTIONS`,
-//! `POST`, `PUT`. Header names are lower-cased, in the order the script gave them, repeated
+//! `POST`, `PUT`. Header names are lower-cased, in the order the code gave them, repeated
 //! names kept; a string or `URLSearchParams` body adds the matching `content-type` if the
-//! script set none. `body` is absent without a body, the text for a string or
+//! code set none. `body` is absent without a body, the text for a string or
 //! `URLSearchParams`, and the bytes in base64 with `"bodyEncoding": "base64"` for an
 //! `ArrayBuffer` or a typed array. It resolves to a `Response` built from the result:
 //!
@@ -34,7 +34,7 @@
 //! `"bodyEncoding": "base64"` otherwise; `url` is the URL after redirects. Reading a result,
 //! only `status` is required: a mock may leave out the rest, which defaults to empty. A status
 //! outside 2xx is a response, not a failure: a request the dispatcher refuses or cannot send
-//! fails the call, and the script gets an `ActionError`.
+//! fails the call, and the code gets an `ActionError`.
 
 use serde_json::{Value, json};
 

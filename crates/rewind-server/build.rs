@@ -2,7 +2,7 @@
 //! "Dashboard").
 //!
 //! `dashboard/dist/` is not committed. When its `index.html` is missing, or older than a source
-//! of the dashboard, this script builds it with `pnpm --dir dashboard install --frozen-lockfile`
+//! of the dashboard, this code builds it with `pnpm --dir dashboard install --frozen-lockfile`
 //! and `pnpm --dir dashboard build`; without pnpm it fails and says what to install.
 //! `REWIND_DASHBOARD_DIST` names a build made elsewhere instead (a CI cache, a package).
 //!

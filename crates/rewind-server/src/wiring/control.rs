@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryAccess, MemoryCatalog, MemoryCluster, MemoryMembership,
     MemorySecrets,
@@ -32,14 +32,14 @@ use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
     AccessStore, ActionDeclarations, ApiKey, CatalogError, CatalogStore, ClientKind, Cluster,
-    ClusterError, CodeRedemption, CompiledScript, Connection, ConnectionToken, ControlPlaneChange,
+    ClusterError, CodeRedemption, CompiledCode, Connection, ConnectionToken, ControlPlaneChange,
     Day, DeleteNamespace, Departed, DisplayName, DropNamespace, Grant, GrantClaim, GrantDeletion,
     GrantWrite, MasterKeyId, Moves, Namespace, NamespaceName, NamespaceWrite, NewConnection,
     NewSecret, NewToken, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization,
     PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef,
     ScriptTitle, Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader,
-    SecretStore, SigningKey, StoreError, StoredActionSet, StoredScript, StoredWorkflow,
-    Subscription, Tenant, TenantId, TestRecord, Token, TokenKey, UserId, WorkflowFilter,
+    SecretStore, SigningKey, StoreError, StoredActionSet, StoredCode, StoredWorkflow, Subscription,
+    Tenant, TenantId, TestRecord, Token, TokenKey, UserId, WorkflowFilter,
 };
 use rewind_store_postgres::{PostgresCatalog, PostgresCluster, PostgresMembership, PostgresStore};
 use rewind_store_turso::{TursoCatalog, TursoCluster, TursoMembership, TursoStore};
@@ -613,30 +613,30 @@ macro_rules! catalog {
 }
 
 impl CatalogStore for Catalog {
-    async fn put_script(
+    async fn put_code(
         &self,
         tenant: &TenantId,
-        script: &Script,
-        compiled: &CompiledScript,
+        code: &Code,
+        compiled: &CompiledCode,
     ) -> Result<(), CatalogError> {
-        catalog!(self, catalog => catalog.put_script(tenant, script, compiled).await)
+        catalog!(self, catalog => catalog.put_code(tenant, code, compiled).await)
     }
 
     async fn get_script(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredScript>, CatalogError> {
+    ) -> Result<Option<StoredCode>, CatalogError> {
         catalog!(self, catalog => catalog.get_script(tenant, digest).await)
     }
 
     async fn set_script_title(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         title: Option<&ScriptTitle>,
     ) -> Result<bool, CatalogError> {
-        catalog!(self, catalog => catalog.set_script_title(tenant, script, title).await)
+        catalog!(self, catalog => catalog.set_script_title(tenant, code, title).await)
     }
 
     async fn script_titles(
@@ -706,13 +706,13 @@ impl CatalogStore for Catalog {
         catalog!(self, catalog => catalog.workflow_versions(tenant, name, labels).await)
     }
 
-    async fn workflows_with_script(
+    async fn workflows_with_code(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         labels: &BTreeMap<String, String>,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        catalog!(self, catalog => catalog.workflows_with_script(tenant, script, labels).await)
+        catalog!(self, catalog => catalog.workflows_with_code(tenant, code, labels).await)
     }
 
     async fn latest_workflows(
@@ -886,33 +886,33 @@ impl CatalogStore for Catalog {
     }
 }
 
-/// The control plane is its catalog too: what the edge and the routes read of scripts,
+/// The control plane is its catalog too: what the edge and the routes read of workflows,
 /// action sets, workflows, tenants, namespaces and subscriptions.
 impl CatalogStore for ControlPlane {
-    async fn put_script(
+    async fn put_code(
         &self,
         tenant: &TenantId,
-        script: &Script,
-        compiled: &CompiledScript,
+        code: &Code,
+        compiled: &CompiledCode,
     ) -> Result<(), CatalogError> {
-        self.catalog().put_script(tenant, script, compiled).await
+        self.catalog().put_code(tenant, code, compiled).await
     }
 
     async fn get_script(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredScript>, CatalogError> {
+    ) -> Result<Option<StoredCode>, CatalogError> {
         self.catalog().get_script(tenant, digest).await
     }
 
     async fn set_script_title(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         title: Option<&ScriptTitle>,
     ) -> Result<bool, CatalogError> {
-        self.catalog().set_script_title(tenant, script, title).await
+        self.catalog().set_script_title(tenant, code, title).await
     }
 
     async fn script_titles(
@@ -984,14 +984,14 @@ impl CatalogStore for ControlPlane {
         self.catalog().workflow_versions(tenant, name, labels).await
     }
 
-    async fn workflows_with_script(
+    async fn workflows_with_code(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         labels: &BTreeMap<String, String>,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
         self.catalog()
-            .workflows_with_script(tenant, script, labels)
+            .workflows_with_code(tenant, code, labels)
             .await
     }
 

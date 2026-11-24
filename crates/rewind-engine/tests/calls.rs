@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Builtin, Command, Completion,
-    Event, JsonValue, McpServer, McpTransport, RunMode, Script,
+    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Builtin, Code, Command,
+    Completion, Event, JsonValue, McpServer, McpTransport, RunMode,
 };
 use rewind_engine::StartRun;
 use rewind_engine::edge::EdgeError;
@@ -71,7 +71,7 @@ fn action_set() -> ActionSet {
 
 fn calling(action: &str, args: JsonValue) -> StartRun {
     StartRun::new(
-        Script::new("caller"),
+        Code::new("caller"),
         action_set(),
         json!({ "action": action, "args": args }),
     )
@@ -227,7 +227,7 @@ async fn first_result(world: &mut World, run: &RunRef) -> JsonValue {
 async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
     let dispatcher = RecordingDispatcher::new(|_| Ok(json!({ "url": "mock://hook" })));
     let mut world = World::with(hooked(), dispatcher, 1, &[public()]).await;
-    let request = StartRun::new(Script::new("hooked"), action_set(), json!({}));
+    let request = StartRun::new(Code::new("hooked"), action_set(), json!({}));
     let live = world.run(request.clone()).await;
     let mut mock = request;
     mock.mode = RunMode::Mock;

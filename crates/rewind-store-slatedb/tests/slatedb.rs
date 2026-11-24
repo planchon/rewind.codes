@@ -41,7 +41,7 @@ fn create(run: &RunRef) -> Change {
         namespace: namespace.clone(),
         origin: "script".into(),
         suffix_len: 12,
-        script: Digest::of(b"script"),
+        code: Digest::of(b"script"),
         action_set: Digest::of(b"action_set"),
         status: RunStatus::Pending,
         epoch: Epoch(1),
@@ -64,7 +64,7 @@ fn create(run: &RunRef) -> Change {
         namespace,
         origin: "script".into(),
         suffix_len: 12,
-        script: head.script,
+        code: head.code,
         headline: "export default async () => {".into(),
         action_set: head.action_set,
         status: RunStatus::Pending,
@@ -99,7 +99,7 @@ fn started(id: u64) -> InboxItem {
     InboxItem {
         id,
         trigger: Trigger::RunStarted(RunStarted {
-            script: Digest::of(b"script"),
+            code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
             input: json!({ "n": id }).into(),
             seed: Seed::from_bytes([1; 32]),

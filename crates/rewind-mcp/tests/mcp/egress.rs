@@ -38,27 +38,26 @@ fn deployed_with(resolver: Arc<Scripted>, internal: &[&str]) -> McpDispatcher {
     })
 }
 
-/// Answers names from a script: each name has a list of answers, the last one repeated.
+/// Answers names from a code: each name has a list of answers, the last one repeated.
 #[derive(Debug, Default)]
 struct Scripted(Mutex<BTreeMap<String, VecDeque<Vec<IpAddr>>>>);
 
 impl Scripted {
     fn new(answers: &[(&str, &[&str])]) -> Arc<Self> {
-        let mut script: BTreeMap<String, VecDeque<Vec<IpAddr>>> = BTreeMap::new();
+        let mut code: BTreeMap<String, VecDeque<Vec<IpAddr>>> = BTreeMap::new();
         for (name, addresses) in answers {
-            script
-                .entry((*name).to_owned())
+            code.entry((*name).to_owned())
                 .or_default()
                 .push_back(addresses.iter().map(|a| a.parse().unwrap()).collect());
         }
-        Arc::new(Self(Mutex::new(script)))
+        Arc::new(Self(Mutex::new(code)))
     }
 }
 
 impl NameResolver for Scripted {
     fn resolve(&self, host: &str) -> Resolving {
-        let mut script = self.0.lock().unwrap();
-        let answer = match script.get_mut(host) {
+        let mut code = self.0.lock().unwrap();
+        let answer = match code.get_mut(host) {
             Some(queue) if queue.len() > 1 => queue.pop_front(),
             Some(queue) => queue.front().cloned(),
             None => None,

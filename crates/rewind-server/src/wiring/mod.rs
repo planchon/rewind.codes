@@ -6,7 +6,7 @@
 //! | [`control`] | `CatalogStore`, `AccessStore`, `SecretStore`, `Cluster` | `rewind-store-postgres`, `rewind-store-turso`; the engine's in-memory adapters for the tests |
 //! | [`bucket`] | `PartitionStore`, `RunArchive`, `BlobStore` | `rewind-store-slatedb`; `rewind-blob` (files, S3 behind this process's caches) |
 //! | [`link`] | `NodeLink` | in the process |
-//! | [`executor`] | `ScriptExecutor` | `rewind-runtime`'s `V8Executor` |
+//! | [`executor`] | `CodeExecutor` | `rewind-runtime`'s `V8Executor` |
 //! | [`actions`] | `ActionDispatcher`, discovery and declarations | the engine's routing dispatcher |
 //! | [`checker`] | `TypeChecker` | `rewind-check` (tsgo) |
 //! | [`telemetry`] | `SpanExporter`, the `tracing` subscriber | `rewind-otel` |

@@ -35,7 +35,7 @@ use crate::ports::link::{
     SubscriptionKey,
 };
 use crate::ports::{
-    ControlPlaneChange, Moves, NodeId, NodeInfo, PartitionMap, ScriptExecutor, TenantId,
+    CodeExecutor, ControlPlaneChange, Moves, NodeId, NodeInfo, PartitionMap, TenantId,
     home_partition,
 };
 use crate::tasks::calls::Calls;

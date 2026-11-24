@@ -32,7 +32,7 @@ use crate::webhooks::{
 #[openapi(
     info(
         title = "Rewind API",
-        description = "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness calls, \
+        description = "The HTTP API /v1 of Rewind: action sets, workflows, runs, harness calls, \
             webhooks, reading, the organization, access, namespaces and the server; and `/auth`, \
             the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
             (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
@@ -43,7 +43,7 @@ use crate::webhooks::{
             grant's, or its token's: every operation requires \
             one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. \
             A key or a member names the namespace (the end user) a request acts for with the \
-            header `Rewind-Namespace`: required to start a run, check or test a script, it \
+            header `Rewind-Namespace`: required to start a run, check or test a code, it \
             narrows a read to that namespace. An end user's token reaches its own namespace \
             only. `/auth` is for a browser: it \
             reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are \
@@ -64,8 +64,8 @@ use crate::webhooks::{
         operations::get_workflow_versions,
         operations::record_tests,
         operations::get_test,
-        operations::check_script,
-        operations::test_script,
+        operations::check_workflow,
+        operations::test_workflow,
         operations::list_scripts,
         operations::get_script,
         operations::set_script_title,
@@ -187,12 +187,12 @@ use crate::webhooks::{
     security(("bearer" = [])),
     tags(
         (name = "action-sets", description = "Register and pin action sets: their MCP servers, their APIs from OpenAPI documents and how each authenticates its calls; their declarations."),
-        (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
-        (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
+        (name = "workflows", description = "Workflows: named code with typed inputs, outputs and signals, which other workflows start and signal."),
+        (name = "checks", description = "Type-check code, and run tests as test runs, in virtual time."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
         (name = "calls", description = "Harness calls: handed to the harness's SDK worker on its call stream, answered by their token, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
-        (name = "reading", description = "The scripts executed on the platform, action statistics and payloads, for the dashboard."),
+        (name = "reading", description = "The workflows executed on the platform, action statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
         (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, and their tokens."),
@@ -630,12 +630,12 @@ mod operations {
 
     /// Save a workflow (`save_workflow`)
     ///
-    /// Checks the workflow's script against its action set and its own schemas, then runs its
+    /// Checks the workflow's code against its action set and its own schemas, then runs its
     /// suite: its parent's tests, minus those it retires and with those it updates, each with a
     /// reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
     /// every test passes. Saving the same workflow again returns the version saved first (200).
     /// A key limited to labels saves a version of its own, carrying its labels, even when the
-    /// same workflow was saved under other labels or tenant-wide. Runs the script's tests:
+    /// same workflow was saved under other labels or tenant-wide. Runs the code's tests:
     /// served by a server with the worker role (503 on the api role when there is a test to run).
     #[utoipa::path(
         post, path = "/v1/workflows", tag = "workflows", operation_id = "createWorkflow",
@@ -644,7 +644,7 @@ mod operations {
             (status = 201, description = "Saved as a new version.", body = Workflow),
             (status = 200, description = "Saved earlier.", body = Workflow),
             (status = 404, description = "No such action set, or parent.", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
             (status = 503, description = "A server without the worker role, with tests to run (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -652,8 +652,8 @@ mod operations {
 
     /// List the workflows
     ///
-    /// The latest version of each workflow the caller sees, by name; with `script`, every version
-    /// whose script it is, newest first.
+    /// The latest version of each workflow the caller sees, by name; with `code`, every version
+    /// whose code it is, newest first.
     #[utoipa::path(
         get, path = "/v1/workflows", tag = "workflows", operation_id = "listWorkflows",
         params(WorkflowQuery),
@@ -705,14 +705,14 @@ mod operations {
     pub(super) fn get_test() {}
 
     // ---------------------------------------------------------------------------------------
-    // Scripts
+    // Workflows
 
-    /// Type-check a script (`check_script`)
+    /// Type-check code (`check_workflow`)
     ///
     /// Against the sandbox lib and the action set's declarations, in strict mode, with the checks
     /// at start and the checker's own rules. Nothing runs.
     #[utoipa::path(
-        post, path = "/v1/check", tag = "scripts", operation_id = "checkScript",
+        post, path = "/v1/check", tag = "checks", operation_id = "checkWorkflow",
         params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = CheckRequest,
         responses(
@@ -720,65 +720,65 @@ mod operations {
             (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn check_script() {}
+    pub(super) fn check_workflow() {}
 
-    /// Run tests in mock mode (`test_script`)
+    /// Run tests in mock mode (`test_workflow`)
     ///
     /// In virtual time, each test against its world: rules, mock handlers and a cassette. No
     /// action is really called. With `workflow`, the suite of that version runs too, against the
-    /// given script or action set. Served by a server with the worker role.
+    /// given code or action set. Served by a server with the worker role.
     #[utoipa::path(
-        post, path = "/v1/test", tag = "scripts", operation_id = "testScript",
+        post, path = "/v1/test", tag = "checks", operation_id = "testWorkflow",
         params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = TestRequest,
         responses(
             (status = 200, description = "Each test's outcome, and the expectations that do not hold.", body = TestRun),
             (status = 404, description = "No such action set, workflow or stored test.", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The script was refused at start (`invalid-script`), or a test (`invalid-test`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The code was refused at start (`invalid-code`), or a test (`invalid-test`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn test_script() {}
+    pub(super) fn test_workflow() {}
 
-    /// List the distinct scripts executed
+    /// List the distinct workflows executed
     ///
-    /// From the hourly counters, over a window of whole hours: each script the runs of a
+    /// From the hourly counters, over a window of whole hours: each code the runs of a
     /// namespace or the tenant ran, with its runs by status and the actions it called. The scope as
     /// `GET /v1/runs/stats` takes it.
     #[utoipa::path(
         get, path = "/v1/scripts", tag = "reading", operation_id = "listScripts",
         params(ScriptFilter),
         responses(
-            (status = 200, description = "A page of scripts, most recently run first.", body = ScriptPage),
+            (status = 200, description = "A page of workflows, most recently run first.", body = ScriptPage),
             (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
             (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn list_scripts() {}
 
-    /// One script's source
+    /// One code's source
     #[utoipa::path(
         get, path = "/v1/scripts/{digest}", tag = "reading", operation_id = "getScript",
         params(("digest" = String, Path, description = "SHA-256 of the source, lowercase hex.")),
         responses(
-            (status = 200, description = "The script.", body = Script),
-            (status = 404, description = "No such script.", body = Problem, content_type = "application/problem+json"),
+            (status = 200, description = "The code.", body = Script),
+            (status = 404, description = "No such code.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn get_script() {}
 
-    /// Give a script a title
+    /// Give a code a title
     ///
-    /// The title and description people see for the script, for the whole organization, over
+    /// The title and description people see for the code, for the whole organization, over
     /// those of the comment at its top: the source does not change. `title: null` removes them,
-    /// and the comment's show again. A new run of the script takes its origin from the title.
+    /// and the comment's show again. A new run of the code takes its origin from the title.
     /// Requires `scripts:write`.
     #[utoipa::path(
         patch, path = "/v1/scripts/{digest}", tag = "reading", operation_id = "setScriptTitle",
         params(("digest" = String, Path, description = "SHA-256 of the source, lowercase hex.")),
         request_body = SetScriptTitle,
         responses(
-            (status = 200, description = "The script, with its title as it now is.", body = Script),
-            (status = 404, description = "No such script, or not one the caller sees.", body = Problem, content_type = "application/problem+json"),
+            (status = 200, description = "The code, with its title as it now is.", body = Script),
+            (status = 404, description = "No such code, or not one the caller sees.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The title is empty or longer than 120 characters, or the description longer than 2,000 (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -787,9 +787,9 @@ mod operations {
     // ---------------------------------------------------------------------------------------
     // Runs
 
-    /// Start a run (`run_script`)
+    /// Start a run (`run_workflow`)
     ///
-    /// Compiles, checks and type-checks the script, then starts the run. With `wait`, the one
+    /// Compiles, checks and type-checks the code, then starts the run. With `wait`, the one
     /// request is answered when the run ends or is quarantined, or when `wait` passes, whichever
     /// comes first, however long `wait` is.
     #[utoipa::path(
@@ -804,7 +804,7 @@ mod operations {
             (status = 200, description = "Started earlier with the same `Idempotency-Key`.", body = Run),
             (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
             (status = 413, description = "The input is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The script was refused before any run exists (`invalid-script`), with `diagnostics`; or the input does not match the workflow (`invalid-input`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The code was refused before any run exists (`invalid-code`), with `diagnostics`; or the input does not match the workflow (`invalid-input`).", body = Problem, content_type = "application/problem+json"),
             (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
             (status = 429, description = "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
         )
@@ -848,7 +848,7 @@ mod operations {
     ///
     /// From the hourly counters, over a window of whole hours: the failed, cancelled and aborted
     /// runs of a namespace or the tenant, ended in the window, grouped by fingerprint: across
-    /// scripts, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
+    /// workflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
     /// it.
     #[utoipa::path(
         get, path = "/v1/runs/failures", tag = "runs", operation_id = "listRunFailures",
@@ -939,7 +939,7 @@ mod operations {
     /// all. A run the caller cannot open never shows, not even its id. Each event's `event` field
     /// names it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the
     /// same object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's
-    /// owner once its batch is durable (a deleted run is not announced); `script`, `workflow`,
+    /// owner once its batch is durable (a deleted run is not announced); `code`, `workflow`,
     /// `secret`, `namespace` and `connection`, naming what changed in the control plane, whose
     /// views are read again; `resync`, with `{}`, when more changed at once than the server reads
     /// in one pass: read again what is shown. Nothing is read on a timer: after a drop, read again
@@ -952,7 +952,7 @@ mod operations {
     #[utoipa::path(
         get, path = "/v1/changes", tag = "runs", operation_id = "streamChanges",
         responses(
-            (status = 200, description = "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
+            (status = 200, description = "A stream of server-sent events `run`, `code`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
             (status = 401, description = "No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it.", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -961,7 +961,7 @@ mod operations {
     /// Send a signal (`signal_run`)
     ///
     /// The body, any JSON value, is the signal's payload (`null` when empty). It resolves the
-    /// script's `signal(name)`, now or the next time the script waits for that name.
+    /// code's `signal(name)`, now or the next time the code waits for that name.
     #[utoipa::path(
         post, path = "/v1/runs/{id}/signals/{name}", tag = "runs", operation_id = "signalRun",
         params(
@@ -993,7 +993,7 @@ mod operations {
     )]
     pub(super) fn cancel_run() {}
 
-    /// Fork a run with a corrected script (`retry_run`)
+    /// Fork a run with a corrected code (`retry_run`)
     #[utoipa::path(
         post, path = "/v1/runs/{id}/fork", tag = "runs", operation_id = "forkRun",
         params(
@@ -1005,7 +1005,7 @@ mod operations {
             (status = 201, description = "The fork, a new run.", body = Run),
             (status = 200, description = "Started earlier with the same `Idempotency-Key`.", body = Run),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The corrected script was refused (`invalid-script`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The corrected code was refused (`invalid-code`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
             (status = 429, description = "Too many active runs (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
             (status = 503, description = "A run of a workflow forked on a server without the worker role (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
@@ -1156,7 +1156,7 @@ mod operations {
 
     /// Inbound webhook: becomes a signal
     ///
-    /// At the URL a script got from `webhook(name)`. A JSON body is the signal's payload; any
+    /// At the URL a code got from `webhook(name)`. A JSON body is the signal's payload; any
     /// other body becomes the payload as a string; an empty body is `null`. The first of
     /// `Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's
     /// idempotency key.
@@ -1499,7 +1499,7 @@ mod operations {
     /// List the namespaces
     ///
     /// The end users of the organization, each with the limits that apply, its exceptions and
-    /// its use of a month, by CPU, runs, scripts or name. Requires `namespaces:read`.
+    /// its use of a month, by CPU, runs, workflows or name. Requires `namespaces:read`.
     #[utoipa::path(
         get, path = "/v1/namespaces", tag = "namespaces", operation_id = "listNamespaces",
         params(NamespaceListQuery),

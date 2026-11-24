@@ -1,5 +1,5 @@
 //! The built-in `http` action (`archi/04-tools.md`, "The `http` action and egress"): the only way a
-//! script reaches the network, through `fetch`. Requests leave from the dispatcher, never from
+//! code reaches the network, through `fetch`. Requests leave from the dispatcher, never from
 //! the isolate, and each goes through these steps, in order:
 //!
 //! 1. The host must be in the action set's allow-list.
@@ -49,7 +49,7 @@ pub struct HttpConfig {
     /// How long a request may take, redirects included. The action's execution timeout bounds it
     /// too.
     pub timeout: Duration,
-    /// Sent when the script sets no `User-Agent`: some APIs refuse requests without one.
+    /// Sent when the code sets no `User-Agent`: some APIs refuse requests without one.
     pub user_agent: String,
 }
 
@@ -72,7 +72,7 @@ pub fn http_action(allowed_hosts: Vec<String>) -> Action {
         http_input_schema(),
     );
     action.description = Some(
-        "HTTP requests, sent by Rewind to the hosts of the action set's allow-list; scripts call it \
+        "HTTP requests, sent by Rewind to the hosts of the action set's allow-list; workflows call it \
          through fetch."
             .to_owned(),
     );

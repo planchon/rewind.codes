@@ -1,4 +1,4 @@
-//! A script's title and description, from the comment at its top (`archi/04-tools.md`,
+//! A code's title and description, from the comment at its top (`archi/04-tools.md`,
 //! "Script titles"): a block comment (`/** … */` or `/* … */`) or a run of `//` lines, before any
 //! code. Its first line that is not blank is the title; the lines after it, the description.
 
@@ -6,15 +6,15 @@
 pub const MAX_TITLE_CHARS: usize = 120;
 pub const MAX_DESCRIPTION_CHARS: usize = 2_000;
 
-/// What the comment at the top of a script says of it.
+/// What the comment at the top of a code says of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptDoc {
+pub struct CodeDoc {
     pub title: String,
     pub description: Option<String>,
 }
 
 /// The title and description of the comment at the top of `source`, if it has one with text.
-pub fn script_doc(source: &str) -> Option<ScriptDoc> {
+pub fn code_doc(source: &str) -> Option<CodeDoc> {
     let source = source.trim_start_matches('\u{feff}');
     let mut rest = source.trim_start();
     // A shebang is not the comment.
@@ -70,7 +70,7 @@ pub fn script_doc(source: &str) -> Option<ScriptDoc> {
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
-    Some(ScriptDoc {
+    Some(CodeDoc {
         title,
         description: (!description.is_empty()).then(|| cut(&description, MAX_DESCRIPTION_CHARS)),
     })
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn a_block_comment_gives_the_title_then_the_description() {
-        let doc = script_doc(
+        let doc = code_doc(
             "/**\n * Triage new GitHub issues\n *\n * Labels each new issue, and asks for an\n * approval.\n *\n * Then closes duplicates.\n */\nimport { github } from \"rewind:actions\";\n",
         )
         .expect("a doc");
@@ -102,14 +102,13 @@ mod tests {
 
     #[test]
     fn line_comments_count_until_the_code() {
-        let doc = script_doc(
-            "// Daily digest\n// Posts the day's issues.\nimport x from \"y\";\n// later",
-        )
-        .expect("a doc");
+        let doc =
+            code_doc("// Daily digest\n// Posts the day's issues.\nimport x from \"y\";\n// later")
+                .expect("a doc");
         assert_eq!(doc.title, "Daily digest");
         assert_eq!(doc.description.as_deref(), Some("Posts the day's issues."));
         assert_eq!(
-            script_doc("/* One line */ export default 1")
+            code_doc("/* One line */ export default 1")
                 .map(|d| d.title)
                 .as_deref(),
             Some("One line")
@@ -119,17 +118,17 @@ mod tests {
     #[test]
     fn code_first_or_an_empty_comment_has_no_title() {
         assert_eq!(
-            script_doc("import { github } from \"rewind:actions\";\n/** late */"),
+            code_doc("import { github } from \"rewind:actions\";\n/** late */"),
             None
         );
-        assert_eq!(script_doc("/** */\nexport default 1"), None);
-        assert_eq!(script_doc("// @ts-check\nexport default 1"), None);
-        assert_eq!(script_doc(""), None);
+        assert_eq!(code_doc("/** */\nexport default 1"), None);
+        assert_eq!(code_doc("// @ts-check\nexport default 1"), None);
+        assert_eq!(code_doc(""), None);
     }
 
     #[test]
     fn a_long_title_is_cut() {
-        let doc = script_doc(&format!("// {}", "a".repeat(300))).expect("a doc");
+        let doc = code_doc(&format!("// {}", "a".repeat(300))).expect("a doc");
         assert_eq!(doc.title.chars().count(), MAX_TITLE_CHARS + 1);
         assert!(doc.title.ends_with('…'));
     }

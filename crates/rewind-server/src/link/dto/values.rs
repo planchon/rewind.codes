@@ -84,9 +84,9 @@ pub enum QuotaKind {
     CpuPerMonth,
     ActiveRuns,
     RunsPerMonth,
-    Scripts,
+    Workflows,
     MaxTtl,
-    MaxScriptLines,
+    MaxCodeLines,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -103,9 +103,9 @@ impl From<&engine::QuotaExceeded> for QuotaExceeded {
                 engine::QuotaKind::CpuPerMonth => QuotaKind::CpuPerMonth,
                 engine::QuotaKind::ActiveRuns => QuotaKind::ActiveRuns,
                 engine::QuotaKind::RunsPerMonth => QuotaKind::RunsPerMonth,
-                engine::QuotaKind::Scripts => QuotaKind::Scripts,
+                engine::QuotaKind::Workflows => QuotaKind::Workflows,
                 engine::QuotaKind::MaxTtl => QuotaKind::MaxTtl,
-                engine::QuotaKind::MaxScriptLines => QuotaKind::MaxScriptLines,
+                engine::QuotaKind::MaxCodeLines => QuotaKind::MaxCodeLines,
             },
             scope: match exceeded.scope {
                 engine::QuotaScope::Namespace => QuotaScope::Namespace,
@@ -125,9 +125,9 @@ impl From<QuotaExceeded> for engine::QuotaExceeded {
                 QuotaKind::CpuPerMonth => engine::QuotaKind::CpuPerMonth,
                 QuotaKind::ActiveRuns => engine::QuotaKind::ActiveRuns,
                 QuotaKind::RunsPerMonth => engine::QuotaKind::RunsPerMonth,
-                QuotaKind::Scripts => engine::QuotaKind::Scripts,
+                QuotaKind::Workflows => engine::QuotaKind::Workflows,
                 QuotaKind::MaxTtl => engine::QuotaKind::MaxTtl,
-                QuotaKind::MaxScriptLines => engine::QuotaKind::MaxScriptLines,
+                QuotaKind::MaxCodeLines => engine::QuotaKind::MaxCodeLines,
             },
             scope: match exceeded.scope {
                 QuotaScope::Namespace => engine::QuotaScope::Namespace,
@@ -457,14 +457,14 @@ impl TryFrom<Month> for engine::Month {
 }
 
 /// What a namespace used in a month: `{"cpu":{"secs":…,"nanos":…},"runs_started":4,
-/// "active_runs":1,"scripts":2,"days":[{"day":20412,"cpu":{…},"runs_started":3},…]}`.
+/// "active_runs":1,"workflows":2,"days":[{"day":20412,"cpu":{…},"runs_started":3},…]}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Usage {
     pub cpu: Duration,
     pub runs_started: u64,
     pub active_runs: u64,
-    pub scripts: u64,
+    pub workflows: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub days: Vec<DayUsage>,
 }
@@ -484,7 +484,7 @@ impl From<&engine::Usage> for Usage {
             cpu: usage.cpu,
             runs_started: usage.runs_started,
             active_runs: usage.active_runs,
-            scripts: usage.scripts,
+            workflows: usage.workflows,
             days: usage
                 .days
                 .iter()
@@ -504,7 +504,7 @@ impl From<Usage> for engine::Usage {
             cpu: usage.cpu,
             runs_started: usage.runs_started,
             active_runs: usage.active_runs,
-            scripts: usage.scripts,
+            workflows: usage.workflows,
             days: usage
                 .days
                 .into_iter()

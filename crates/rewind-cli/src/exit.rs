@@ -10,7 +10,7 @@ pub enum Exit {
     /// The run completed, or the command succeeded.
     Success,
     /// The run failed. Also: `rewind test` found an expectation that does not hold, `rewind replay`
-    /// found that the script does not reproduce the journal.
+    /// found that the code does not reproduce the journal.
     Failed,
     /// The run was cancelled.
     Cancelled,
@@ -25,8 +25,8 @@ pub enum Exit {
     Refused,
     /// Usage error: arguments, or a file the command cannot read.
     Usage,
-    /// The script was refused at start, or `rewind check` found errors.
-    ScriptRefused,
+    /// The code was refused at start, or `rewind check` found errors.
+    CodeRefused,
     /// Internal error: the server is unreachable or failed.
     Internal,
     /// Interrupted by a second Ctrl-C, or by a first one before a call that changes something
@@ -45,7 +45,7 @@ impl Exit {
             Exit::Quarantined => 5,
             Exit::Refused => 6,
             Exit::Usage => 64,
-            Exit::ScriptRefused => 65,
+            Exit::CodeRefused => 65,
             Exit::Internal => 70,
             Exit::Interrupted => 130,
         }
@@ -91,7 +91,7 @@ mod tests {
             Exit::Quarantined,
             Exit::Refused,
             Exit::Usage,
-            Exit::ScriptRefused,
+            Exit::CodeRefused,
             Exit::Internal,
             Exit::Interrupted,
         ];

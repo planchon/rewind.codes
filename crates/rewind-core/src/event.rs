@@ -5,12 +5,12 @@
 //! | Family | Events |
 //! | --- | --- |
 //! | [`Lifecycle`] | `run_started`, `run_aborted` |
-//! | [`Command`] (emitted by the script) | `schedule_call`, `start_timer`, `cancel_timer`, `complete_run`, `fail_run` |
-//! | [`Completion`] (delivered to the script) | `call_completed`, `call_failed`, `timer_fired`, `signal_received`, `cancel_requested` |
+//! | [`Command`] (emitted by the code) | `schedule_call`, `start_timer`, `cancel_timer`, `complete_run`, `fail_run` |
+//! | [`Completion`] (delivered to the code) | `call_completed`, `call_failed`, `timer_fired`, `signal_received`, `cancel_requested` |
 //! | [`Annotation`] (observability only) | `log`, `signal_awaited` |
 //!
-//! **Triggers** are `run_started` and every completion: a trigger wakes the script up, and
-//! commands are what the script does in response.
+//! **Triggers** are `run_started` and every completion: a trigger wakes the code up, and
+//! commands are what the code does in response.
 
 use std::fmt;
 
@@ -38,19 +38,19 @@ pub struct HistoryEntry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Lifecycle(Lifecycle),
-    /// Something the script asked for. Checked on replay.
+    /// Something the code asked for. Checked on replay.
     Command(Command),
-    /// Something from the outside world, delivered to the script.
+    /// Something from the outside world, delivered to the code.
     Completion(Completion),
     /// Information about the run that does not affect it. Not checked on replay.
     Annotation(Annotation),
 }
 
 impl Event {
-    /// Whether the event wakes the script up: `run_started` and every completion.
+    /// Whether the event wakes the code up: `run_started` and every completion.
     ///
     /// Commit invariant: a trigger is committed in the same transaction as every entry the
-    /// script emitted in response to it.
+    /// code emitted in response to it.
     pub fn is_trigger(&self) -> bool {
         matches!(
             self,
@@ -84,8 +84,8 @@ impl fmt::Display for Event {
         match self {
             Event::Lifecycle(Lifecycle::RunStarted(started)) => write!(
                 f,
-                "run started (script {}, {}, input {})",
-                started.script.short(),
+                "run started (code {}, {}, input {})",
+                started.code.short(),
                 started.epoch,
                 started.input.preview(PREVIEW_CHARS)
             ),
@@ -103,9 +103,9 @@ impl fmt::Display for Event {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Lifecycle {
     RunStarted(RunStarted),
-    /// The host ended the run: a limit was exceeded, the script could not be loaded, the
+    /// The host ended the run: a limit was exceeded, the code could not be loaded, the
     /// cancellation grace ran out, a quarantined run was given up, or an internal error
-    /// occurred. Unlike `fail_run`, the script did not produce it: replay stops here instead of
+    /// occurred. Unlike `fail_run`, the code did not produce it: replay stops here instead of
     /// reproducing it.
     RunAborted(AbortReason),
 }
@@ -114,7 +114,7 @@ pub enum Lifecycle {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunStarted {
     /// Digest of the TypeScript source. A run always replays the exact code that produced it.
-    pub script: Digest,
+    pub code: Digest,
     /// Digest of the action set the run may call.
     pub action_set: Digest,
     pub input: Payload,
@@ -153,10 +153,10 @@ pub enum AbortKind {
     LimitExceeded,
     /// A quarantined run was given up, by an operator or at its deadline.
     NonDeterminism,
-    /// The script did not end within its cancellation grace.
+    /// The code did not end within its cancellation grace.
     Cancelled,
-    /// The script could not be loaded.
-    InvalidScript,
+    /// The code could not be loaded.
+    InvalidCode,
     /// A fault of the platform.
     Internal,
 }
@@ -166,7 +166,7 @@ impl AbortKind {
         AbortKind::LimitExceeded,
         AbortKind::NonDeterminism,
         AbortKind::Cancelled,
-        AbortKind::InvalidScript,
+        AbortKind::InvalidCode,
         AbortKind::Internal,
     ];
 
@@ -175,7 +175,7 @@ impl AbortKind {
             AbortKind::LimitExceeded => "limit_exceeded",
             AbortKind::NonDeterminism => "non_determinism",
             AbortKind::Cancelled => "cancelled",
-            AbortKind::InvalidScript => "invalid_script",
+            AbortKind::InvalidCode => "invalid_code",
             AbortKind::Internal => "internal",
         }
     }
@@ -207,12 +207,12 @@ pub enum Command {
     CancelTimer {
         seq: Seq,
     },
-    /// The script succeeded. Emitted once `main` returned and no call is pending.
+    /// The code succeeded. Emitted once `main` returned and no call is pending.
     CompleteRun {
         output: Payload,
     },
-    /// The script failed: `main` threw, a rejection was left unhandled, or nothing can wake
-    /// the script any more (`DeadlockError`). Emitted once no call is pending.
+    /// The code failed: `main` threw, a rejection was left unhandled, or nothing can wake
+    /// the code any more (`DeadlockError`). Emitted once no call is pending.
     FailRun {
         error: ScriptError,
     },
@@ -314,7 +314,7 @@ impl fmt::Display for Command {
     }
 }
 
-/// What a failed script reports. Besides what `main` throws, the runtime fails a script with
+/// What a failed code reports. Besides what `main` throws, the runtime fails a code with
 /// the rejection it left unhandled, or with the name `DeadlockError`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptError {
@@ -324,7 +324,7 @@ pub struct ScriptError {
 }
 
 impl ScriptError {
-    /// The name of the error a run fails with when nothing can wake the script any more.
+    /// The name of the error a run fails with when nothing can wake the code any more.
     pub const DEADLOCK: &'static str = "DeadlockError";
     /// The name of the error that rejects every pending await on cancellation. A run that
     /// fails with it is `cancelled`.
@@ -343,7 +343,7 @@ impl ScriptError {
     /// The error records no `seq`: the runtime builds it from the call's recorded
     /// `call_failed` completion and the action its `schedule_call` names. The call is
     /// the last recorded failure that builds exactly this error. `None` when the error is not an
-    /// `ActionError`, or when no recorded failure builds it (the script threw one it made itself
+    /// `ActionError`, or when no recorded failure builds it (the code threw one it made itself
     /// from another error's message, say).
     pub fn failed_call(&self, history: &[HistoryEntry]) -> Option<Seq> {
         if self.name != Self::ACTION_ERROR {
@@ -371,7 +371,7 @@ impl ScriptError {
     }
 }
 
-/// Position in the script's TypeScript source, 1-based.
+/// Position in the code's TypeScript source, 1-based.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Callsite {
     pub line: u32,
@@ -400,7 +400,7 @@ pub enum Completion {
     TimerFired {
         seq: Seq,
     },
-    /// Kept in the name's mailbox until the script awaits it, first in first out.
+    /// Kept in the name's mailbox until the code awaits it, first in first out.
     SignalReceived {
         name: String,
         payload: Payload,
@@ -460,7 +460,7 @@ pub struct ActionFailure {
 }
 
 /// The outcome of a call: what the dispatcher or the harness's worker reports, and what a
-/// cassette replays. It reaches the script as a [`Completion`] of the call's `seq`.
+/// cassette replays. It reaches the code as a [`Completion`] of the call's `seq`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActionOutcome {
     Result(Value),
@@ -532,7 +532,7 @@ pub enum Annotation {
         message: String,
         callsite: Option<Callsite>,
     },
-    /// The script started waiting for a signal whose mailbox was empty.
+    /// The code started waiting for a signal whose mailbox was empty.
     SignalAwaited {
         name: String,
         /// The `seq` of the timer that implements the timeout, if any.
@@ -645,8 +645,8 @@ mod tests {
             },
         };
         assert!(
-            fail("x is undefined", "at main (script.ts:3:1)")
-                .matches(&fail("x is undefined", "at main (script.ts:4:1)"))
+            fail("x is undefined", "at main (workflow.ts:3:1)")
+                .matches(&fail("x is undefined", "at main (workflow.ts:4:1)"))
         );
         assert!(!fail("x is undefined", "").matches(&fail("y is undefined", "")));
     }
@@ -678,7 +678,7 @@ mod tests {
                 },
             })
         };
-        // The script caught the first failure, then left the third uncaught.
+        // The code caught the first failure, then left the third uncaught.
         let history = [
             entry(1, schedule(1, "payments.charge")),
             entry(2, failed(1, "card declined")),

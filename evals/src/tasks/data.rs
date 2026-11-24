@@ -31,7 +31,7 @@ pub(super) fn tasks() -> Vec<Task> {
             setup: &[],
             prompt: |_| {
                 "Fetch the customers C-1001 to C-1012 concurrently, with Promise.all, and return \
-                 the sum of their lifetime values in cents as the script's output."
+                 the sum of their lifetime values in cents as the code's output."
                     .into()
             },
             check: |outcome| {
@@ -90,7 +90,7 @@ pub(super) fn tasks() -> Vec<Task> {
             setup: &[],
             prompt: |_| {
                 "Get the orders O-501 to O-512; some of them may not exist. Return \
-                 { total_cents, missing } as the script's output: the sum of the totals of the \
+                 { total_cents, missing } as the code's output: the sum of the totals of the \
                  orders that exist, and the ids of those that do not."
                     .into()
             },
@@ -160,7 +160,7 @@ pub(super) fn tasks() -> Vec<Task> {
             world: || world(&["ops"]),
             setup: &[],
             prompt: |_| {
-                "Return every audit event of February 2026 as the script's output: one array, in \
+                "Return every audit event of February 2026 as the code's output: one array, in \
                  their original order (there are a few thousand). Then tell me the id of the \
                  last one."
                     .into()
@@ -193,7 +193,7 @@ pub(super) fn tasks() -> Vec<Task> {
             setup: &[],
             prompt: |_| {
                 "Compute the total sales of February 2026 per region, in cents, and return an \
-                 object such as { amer: 123, emea: 456, … } as the script's output."
+                 object such as { amer: 123, emea: 456, … } as the code's output."
                     .into()
             },
             check: |outcome| {

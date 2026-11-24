@@ -118,7 +118,7 @@ fn run_span() -> Span {
         end: at(9_000),
         status: SpanStatus::Ok,
         attributes: attributes([
-            ("rewind.script", string(&"ab".repeat(32))),
+            ("rewind.code", string(&"ab".repeat(32))),
             ("rewind.action_set", string(&"cd".repeat(32))),
             ("rewind.outcome", string("completed")),
             ("rewind.label.agent", string("triage")),
@@ -141,7 +141,7 @@ fn call_span(seq: u32) -> Span {
         attributes: attributes([
             ("rewind.seq", AttributeValue::Int(i64::from(seq))),
             ("rewind.action", string("github.list_issues")),
-            ("rewind.callsite", string("script.ts:5")),
+            ("rewind.callsite", string("workflow.ts:5")),
             ("rewind.outcome", string("completed")),
             ("rewind.args.digest", string(&"ef".repeat(32))),
             ("rewind.args.size", AttributeValue::Int(34)),
@@ -199,7 +199,7 @@ fn log(level: LogLevel, message: &str, span: Option<SpanId>, ms: u64) -> LogReco
                 "rewind.index",
                 AttributeValue::Int(i64::try_from(ms).unwrap_or(0)),
             ),
-            ("rewind.callsite", string("script.ts:7")),
+            ("rewind.callsite", string("workflow.ts:7")),
         ]),
     }
 }

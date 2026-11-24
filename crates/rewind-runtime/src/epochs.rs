@@ -1,7 +1,7 @@
 //! The JavaScript embedded in the binary, one version per supported determinism epoch
 //! (`archi/03-execution.md`, "Determinism epoch").
 //!
-//! Changing anything here that a script can observe (a `seq`, a digest, a value, a global)
+//! Changing anything here that a code can observe (a `seq`, a digest, a value, a global)
 //! requires a new epoch: a new `js/epochN/` directory and a new entry in [`EPOCHS`], while the
 //! previous epochs stay as they are for the runs that started under them. The epoch corpus
 //! (`rewind-e2e`) fails the build when a supported epoch stops replaying.
@@ -16,26 +16,26 @@ use rewind_core::{Action, ActionRoute, ActionSet, Epoch};
 pub(crate) struct Glue {
     pub(crate) epoch: Epoch,
     /// Runs once per isolate, before any module: deterministic globals, removed capabilities,
-    /// and the hooks Rust drives the script with.
+    /// and the hooks Rust drives the code with.
     pub(crate) bootstrap: &'static str,
     /// `rewind:entry`, the module the runtime loads.
     pub(crate) entry: &'static str,
     /// `rewind:internal`, the hand-over from the bootstrap to the `rewind` modules.
     pub(crate) internal: &'static str,
-    /// `rewind`, the standard library of scripts.
+    /// `rewind`, the standard library of workflows.
     pub(crate) std: &'static str,
-    /// The names `rewind` exports, checked when a script is compiled.
+    /// The names `rewind` exports, checked when a code is compiled.
     pub(crate) std_exports: &'static [&'static str],
-    /// The old names `rewind` still exports for code already written, accepted when a script is
+    /// The old names `rewind` still exports for code already written, accepted when a code is
     /// compiled but never declared nor listed (`archi/08-decisions.md`, R1).
     pub(crate) std_aliases: &'static [&'static str],
     /// Generates `rewind:actions` from the run's action set.
     pub(crate) actions: fn(&ActionSet) -> String,
-    /// The names `rewind:actions` exports for an action set, checked when a script is compiled.
+    /// The names `rewind:actions` exports for an action set, checked when a code is compiled.
     pub(crate) action_exports: fn(&ActionSet) -> BTreeSet<String>,
     /// Generates `rewind:workflows` from the run's action set.
     pub(crate) workflows: fn(&ActionSet) -> String,
-    /// The names `rewind:workflows` exports for an action set, checked when a script is compiled.
+    /// The names `rewind:workflows` exports for an action set, checked when a code is compiled.
     pub(crate) workflow_exports: fn(&ActionSet) -> BTreeSet<String>,
 }
 
@@ -75,7 +75,7 @@ pub(crate) fn latest() -> &'static Glue {
 
 /// The actions of an action set as `rewind:actions` exposes them in epoch 1, from their routes: one
 /// object per group (an MCP server, an API or a group of harness actions), and the harness actions
-/// without a group by name. The built-ins are not exported: scripts reach them through `fetch` and
+/// without a group by name. The built-ins are not exported: workflows reach them through `fetch` and
 /// `webhook`.
 struct ActionExportsV1<'a> {
     groups: BTreeMap<&'a str, Vec<&'a Action>>,
@@ -93,7 +93,7 @@ impl<'a> ActionExportsV1<'a> {
             match action.group() {
                 Some(group) => groups.entry(group).or_default().push(action),
                 None if is_identifier(&action.name) => bare.push(action),
-                // Unreachable from a script: there is no name to import it by.
+                // Unreachable from a code: there is no name to import it by.
                 None => {}
             }
         }

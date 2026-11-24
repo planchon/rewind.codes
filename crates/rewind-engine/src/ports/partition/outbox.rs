@@ -81,6 +81,6 @@ pub struct OrganizationState {
 pub struct Admission {
     pub run: RunId,
     pub namespace: NamespaceName,
-    pub script: Digest,
+    pub code: Digest,
     pub admitted_at: Timestamp,
 }

@@ -1,6 +1,6 @@
 //! The instance cache of sticky execution (`archi/03-execution.md`, "Sticky execution").
 //!
-//! After a commit, the executors of a node keep the script instance, with the run's state and
+//! After a commit, the executors of a node keep the code instance, with the run's state and
 //! history, in a cache bounded by a number of instances and by the memory they hold. The next
 //! activation of the run on this node is a **hit** when the cached state's history length is
 //! the one the run's commit made durable: only the new triggers are delivered, without a replay.
@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use rewind_core::RunState;
 
-use crate::ports::{RunRef, ScriptInstance};
+use crate::ports::{CodeInstance, RunRef};
 
 /// The bounds of a node's instance cache. When either is passed, the least recently used
 /// instances are evicted.
@@ -62,7 +62,7 @@ struct Entry<I> {
     bytes: u64,
 }
 
-impl<I: ScriptInstance> InstanceCache<I> {
+impl<I: CodeInstance> InstanceCache<I> {
     pub(crate) fn new(config: CacheConfig) -> Self {
         Self {
             config,
@@ -138,7 +138,7 @@ mod tests {
     #[derive(Debug)]
     struct Sized(u64);
 
-    impl ScriptInstance for Sized {
+    impl CodeInstance for Sized {
         async fn deliver(
             &mut self,
             _delivery: Delivery,

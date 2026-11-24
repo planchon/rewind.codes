@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 pub use activations::{
     Activation, ActivationRequest, ActivationResult, Child, Committed, CounterDelta, Measurement,
-    ParentHistory, Purpose, SealedAttempt, StoredActionSet, StoredScript, TimerChange,
+    ParentHistory, Purpose, SealedAttempt, StoredActionSet, StoredCode, TimerChange,
 };
 pub use requests::{
     Admit, Changed, Counted, CountsReport, Created, Decision, EdgeNotice, Enqueued, HarnessFailure,

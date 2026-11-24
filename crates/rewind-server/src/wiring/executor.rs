@@ -1,13 +1,13 @@
-//! The script executor: `rewind-runtime`'s `V8Executor`, whose every start and delivery pushes
+//! The code executor: `rewind-runtime`'s `V8Executor`, whose every start and delivery pushes
 //! back the embedded server's idle stop ([`Idle`]): an activation is work in progress.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Epoch, Script, Timestamp};
+use rewind_core::{ActionSet, Code, Epoch, Timestamp};
 use rewind_engine::ports::{
-    CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
-    ScriptInstance, StartScript,
+    CodeExecutor, CodeInstance, CompiledCode, Delivery, Emitted, ExecutorError, InvalidCode,
+    StartCode,
 };
 use rewind_runtime::{V8Executor, V8Instance};
 
@@ -20,26 +20,22 @@ pub(crate) struct Executor {
     pub(crate) idle: Idle,
 }
 
-impl ScriptExecutor for Executor {
+impl CodeExecutor for Executor {
     type Instance = Instance;
 
     fn epochs(&self) -> &[Epoch] {
         self.v8.epochs()
     }
 
-    fn compile(
-        &self,
-        script: &Script,
-        action_set: &ActionSet,
-    ) -> Result<CompiledScript, InvalidScript> {
-        self.v8.compile(script, action_set)
+    fn compile(&self, code: &Code, action_set: &ActionSet) -> Result<CompiledCode, InvalidCode> {
+        self.v8.compile(code, action_set)
     }
 
-    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        self.v8.action_imports(script)
+    fn action_imports(&self, code: &Code) -> Option<BTreeSet<String>> {
+        self.v8.action_imports(code)
     }
 
-    async fn start(&self, start: StartScript) -> Result<(Instance, Vec<Emitted>), ExecutorError> {
+    async fn start(&self, start: StartCode) -> Result<(Instance, Vec<Emitted>), ExecutorError> {
         self.idle.touch();
         let (v8, emitted) = self.v8.start(start).await?;
         Ok((
@@ -52,14 +48,14 @@ impl ScriptExecutor for Executor {
     }
 }
 
-/// A script instance of this node.
+/// A code instance of this node.
 #[derive(Debug)]
 pub(crate) struct Instance {
     v8: V8Instance,
     idle: Idle,
 }
 
-impl ScriptInstance for Instance {
+impl CodeInstance for Instance {
     async fn deliver(
         &mut self,
         delivery: Delivery,

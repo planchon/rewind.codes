@@ -235,7 +235,7 @@ pub enum McpTransport {
 /// One action, as pinned.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Action {
-    /// The full name scripts call it by, such as `github.list_issues`.
+    /// The full name workflows call it by, such as `github.list_issues`.
     pub name: String,
     pub route: ActionRoute,
     /// For an API action, and only for one: how its request is built.
@@ -340,7 +340,7 @@ impl ActionRoute {
 /// The built-in actions. An action set enables one by listing it, named as the built-in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Builtin {
-    /// `http`: the only way a script reaches the network, through `fetch`. Requests leave from
+    /// `http`: the only way a code reaches the network, through `fetch`. Requests leave from
     /// the dispatcher, only toward these hosts (`archi/04-tools.md`, "The `http` action and
     /// egress"). Hosts are lowercase, sorted and unique, and there is at least one.
     Http { allowed_hosts: Vec<String> },
@@ -353,7 +353,7 @@ pub enum Builtin {
 }
 
 impl Builtin {
-    /// The name of the action, as scripts call it.
+    /// The name of the action, as workflows call it.
     pub fn name(&self) -> String {
         match self {
             Builtin::Http { .. } => "http".into(),
@@ -655,7 +655,7 @@ impl ActionSet {
             .map(|index| &self.workflows[index])
     }
 
-    /// An action scripts may call: one the action set declares, or a built-in of a pinned workflow.
+    /// An action workflows may call: one the action set declares, or a built-in of a pinned workflow.
     pub fn action(&self, name: &str) -> Option<&Action> {
         let find = |actions: &'_ [Action]| {
             actions
@@ -894,7 +894,7 @@ fn check_action(
             }
             if is_reserved(group) {
                 return Err(invalid(format!(
-                    "its group {group:?} is a reserved word of JavaScript: scripts could not \
+                    "its group {group:?} is a reserved word of JavaScript: workflows could not \
                      import it"
                 )));
             }
@@ -914,7 +914,7 @@ fn check_action(
             }
             if is_reserved(name) {
                 return Err(invalid(
-                    "its name is a reserved word of JavaScript: scripts could not import it, \
+                    "its name is a reserved word of JavaScript: workflows could not import it, \
                      unless it is put in a group of harness actions"
                         .into(),
                 ));

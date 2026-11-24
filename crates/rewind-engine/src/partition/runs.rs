@@ -554,7 +554,7 @@ impl<P: Plane> Owner<P> {
                     epoch: self.epoch,
                     run: start.run.id,
                     namespace: start.namespace.clone(),
-                    script: start.started.script,
+                    code: start.started.code,
                     at: start.created_at,
                 })),
             },
@@ -647,7 +647,7 @@ impl<P: Plane> Owner<P> {
             namespace: namespace.clone(),
             origin,
             suffix_len,
-            script: started.script,
+            code: started.code,
             action_set: started.action_set,
             status: RunStatus::Pending,
             epoch: started.epoch,
@@ -1676,7 +1676,7 @@ impl<P: Plane> Owner<P> {
         let mut unit = Unit::new();
         unit.change(Change::Timer(TimerChange::Cancel(kind.clone())));
         match &kind {
-            TimerKind::Script { seq, .. } if !ended => {
+            TimerKind::Code { seq, .. } if !ended => {
                 self.enqueue(
                     &mut unit,
                     &run,
@@ -2000,12 +2000,12 @@ async fn seal_attempt<P: Plane>(
             }
         }
     }
-    let script = plane
+    let code = plane
         .catalog()
-        .get_script(&run.tenant, head.script)
+        .get_script(&run.tenant, head.code)
         .await
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("script {} not found", head.script))?;
+        .ok_or_else(|| format!("code {} not found", head.code))?;
     let action_set = plane
         .catalog()
         .get_action_set(&run.tenant, head.action_set)
@@ -2017,7 +2017,7 @@ async fn seal_attempt<P: Plane>(
         .put(&crate::ports::SealedAttempt {
             run: run.clone(),
             attempt: head.attempt,
-            script: script.script,
+            code: code.code,
             action_set: action_set.action_set,
             entries,
         })

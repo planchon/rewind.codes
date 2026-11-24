@@ -59,7 +59,7 @@ fn write_value(value: &Value, out: &mut String) {
 /// The value with the keys of every object in canonical order: the value its canonical JSON
 /// parses back to.
 ///
-/// What a script observes of a value must not depend on where it comes from. A value
+/// What a code observes of a value must not depend on where it comes from. A value
 /// delivered live (as an action or the harness built it) and the same value loaded back from
 /// storage (written in canonical form) must have their keys in the same order, or
 /// `Object.keys` would differ between a run and its replay.

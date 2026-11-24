@@ -28,14 +28,14 @@ pub struct RunHead {
     pub run: RunId,
     pub tenant: String,
     pub namespace: String,
-    /// What ran, the middle of the run's handle; `script` when left out.
+    /// What ran, the middle of the run's handle; `code` when left out.
     #[serde(default = "script_origin", skip_serializing_if = "is_script_origin")]
     pub origin: String,
     /// The characters of its handle's suffix; 12 when left out.
     #[serde(default = "suffix_len", skip_serializing_if = "is_suffix_len")]
     pub suffix_len: u8,
     #[serde(with = "with::digest")]
-    pub script: Digest,
+    pub code: Digest,
     #[serde(with = "with::digest")]
     pub action_set: Digest,
     pub status: Status,
@@ -243,7 +243,7 @@ pub struct Task {
     pub token_hash: Option<Digest>,
 }
 
-/// The origin of a run without a workflow and whose script has no title
+/// The origin of a run without a workflow and whose code has no title
 /// ([`rewind_core::SCRIPT_ORIGIN`]).
 fn script_origin() -> String {
     rewind_core::SCRIPT_ORIGIN.to_owned()
@@ -299,7 +299,7 @@ pub struct Timer {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TimerKind {
-    Script {
+    Code {
         #[serde(with = "with::run_id")]
         run: RunId,
         seq: u32,
@@ -387,7 +387,7 @@ pub struct Summary {
     #[serde(default = "suffix_len", skip_serializing_if = "is_suffix_len")]
     pub suffix_len: u8,
     #[serde(with = "with::digest")]
-    pub script: Digest,
+    pub code: Digest,
     pub headline: String,
     #[serde(with = "with::digest")]
     pub action_set: Digest,
@@ -810,9 +810,9 @@ pub enum QuotaKind {
     CpuPerMonth,
     ActiveRuns,
     RunsPerMonth,
-    Scripts,
+    Workflows,
     MaxTtl,
-    MaxScriptLines,
+    MaxCodeLines,
 }
 
 /// `near`: 80 % of the limit; `reached`: 100 %.
@@ -840,7 +840,7 @@ pub struct Admission {
     pub run: RunId,
     pub namespace: String,
     #[serde(with = "with::digest")]
-    pub script: Digest,
+    pub code: Digest,
     pub admitted_at: u64,
 }
 

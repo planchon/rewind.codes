@@ -1,5 +1,5 @@
 {
-  "description": "The CPU budget applies to each call into the script, on the CPU clock of the isolate's thread: a run reacting to many triggers, and waiting days between them, stays within a small budget.",
+  "description": "The CPU budget applies to each call into the code, on the CPU clock of the isolate's thread: a run reacting to many triggers, and waiting days between them, stays within a small budget.",
   "actions": {
     "audit.record": {
       "ok": true

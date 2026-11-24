@@ -113,7 +113,7 @@ fn waiting_for(state: &RunState, action_set: Option<&ActionSet>) -> Vec<String> 
     waiting
 }
 
-/// The first line of a script that is not blank, trimmed: what free text searches in a script.
+/// The first line of a code that is not blank, trimmed: what free text searches in a code.
 pub fn headline(source: &str) -> String {
     source
         .lines()
@@ -172,7 +172,7 @@ pub(crate) fn waits(
     state: &RunState,
     action_set: Option<&ActionSet>,
 ) -> Vec<Wait> {
-    // The entry that opened a timer or a call: when, and where in the script.
+    // The entry that opened a timer or a call: when, and where in the code.
     let opened = |seq: &Seq| -> Option<(Timestamp, Option<Callsite>)> {
         let entry = opening(history, state, *seq)?;
         match &entry.event {

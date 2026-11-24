@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Stream, StreamExt as _};
-use rewind_core::{ActionSet, JsonValue, PartitionId, RunId, RunStatus, Script, Timestamp};
+use rewind_core::{ActionSet, Code, JsonValue, PartitionId, RunId, RunStatus, Timestamp};
 use rewind_engine::StartRun;
 use rewind_engine::adapters::{
     ChangeStream, ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -33,8 +33,8 @@ use rewind_engine::ports::link::{
     Changed, PartitionReply, PartitionRequest, RunView, SubscriptionKey,
 };
 use rewind_engine::ports::{
-    Cluster, ControlPlaneChange, Enqueued, NamespaceName, NodeId, NodeInfo, PartitionMap, RunRef,
-    ScriptExecutor, TenantId, namespace_partition,
+    Cluster, CodeExecutor, ControlPlaneChange, Enqueued, NamespaceName, NodeId, NodeInfo,
+    PartitionMap, RunRef, TenantId, namespace_partition,
 };
 use rewind_runtime::{SandboxLimits, V8Executor};
 use rewind_server::link::{self, ClusterSecret, HttpLink, MembersOf, SharedMembership};
@@ -317,7 +317,7 @@ impl World {
 
 /// A start of `source` in `namespace`, with no action.
 pub fn start(source: &str, namespace: &NamespaceName, input: JsonValue) -> StartRun {
-    let mut request = StartRun::new(Script::new(source), ActionSet::empty(), input);
+    let mut request = StartRun::new(Code::new(source), ActionSet::empty(), input);
     request.namespace = namespace.clone();
     request
 }

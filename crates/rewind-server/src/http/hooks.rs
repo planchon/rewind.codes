@@ -1,5 +1,5 @@
 //! Inbound webhooks: `POST /hooks/{token}`, at the unguessable URL `webhook(name)` returned to a
-//! script. Whatever is posted becomes a signal on the run (`archi/01-product.md`, "Signals").
+//! code. Whatever is posted becomes a signal on the run (`archi/01-product.md`, "Signals").
 //! No API key: the token is the credential, and it names its run: any process routes it to the
 //! run's owner, which resolves it.
 

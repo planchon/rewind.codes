@@ -1,10 +1,10 @@
 //! A run's journal as one self-contained document (`archi/02-journal.md`, "Stored format v1"):
-//! the run's id, its script and action set, and its history. It is what a journal export, the
+//! the run's id, its code and action set, and its history. It is what a journal export, the
 //! archive of a finished run and the epoch corpus hold, so that each replays on its own: the
-//! script reads `run.id`, and replay needs the exact script and action set the run started with.
+//! code reads `run.id`, and replay needs the exact code and action set the run started with.
 
 use crate::action_set::ActionSet;
-use crate::artifacts::Script;
+use crate::artifacts::Code;
 use crate::digest::Digest;
 use crate::event::HistoryEntry;
 use crate::history::{HistoryError, validate_history};
@@ -14,8 +14,8 @@ use crate::ids::RunId;
 #[derive(Clone, Debug, PartialEq)]
 pub struct JournalDocument {
     pub run: RunId,
-    /// The script the run started with: its digest is `run_started.script`.
-    pub script: Script,
+    /// The code the run started with: its digest is `run_started.code`.
+    pub code: Code,
     /// The pinned action set the run started with: its digest is `run_started.action_set`.
     pub action_set: ActionSet,
     pub entries: Vec<HistoryEntry>,
@@ -26,22 +26,22 @@ pub struct JournalDocument {
 pub enum JournalError {
     #[error("invalid history: {0}")]
     History(#[from] HistoryError),
-    #[error("the script's digest is {actual}, but run_started records {recorded}")]
-    ScriptMismatch { recorded: Digest, actual: Digest },
+    #[error("the code's digest is {actual}, but run_started records {recorded}")]
+    CodeMismatch { recorded: Digest, actual: Digest },
     #[error("the action set's digest is {actual}, but run_started records {recorded}")]
     ActionSetMismatch { recorded: Digest, actual: Digest },
 }
 
 impl JournalDocument {
-    /// Checks that the history is well formed and that the script and the action set are the ones
+    /// Checks that the history is well formed and that the code and the action set are the ones
     /// its `run_started` records.
     pub fn check(&self) -> Result<(), JournalError> {
         let started = validate_history(&self.entries)?;
-        let script = self.script.digest();
-        if script != started.script {
-            return Err(JournalError::ScriptMismatch {
-                recorded: started.script,
-                actual: script,
+        let code = self.code.digest();
+        if code != started.code {
+            return Err(JournalError::CodeMismatch {
+                recorded: started.code,
+                actual: code,
             });
         }
         let action_set = self.action_set.digest();
@@ -64,16 +64,16 @@ mod tests {
     use crate::ids::{Epoch, Seed};
     use crate::time::Timestamp;
 
-    fn document(script: &Script, action_set: &ActionSet) -> JournalDocument {
+    fn document(code: &Code, action_set: &ActionSet) -> JournalDocument {
         JournalDocument {
             run: RunId::from_u128(7),
-            script: script.clone(),
+            code: code.clone(),
             action_set: action_set.clone(),
             entries: vec![HistoryEntry {
                 index: 0,
                 recorded_at: Timestamp(1_000),
                 event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-                    script: script.digest(),
+                    code: code.digest(),
                     action_set: action_set.digest(),
                     input: json!({}).into(),
                     seed: Seed::from_bytes([1; 32]),
@@ -87,25 +87,25 @@ mod tests {
 
     #[test]
     fn a_document_holds_the_script_and_action_set_its_run_started_with() {
-        let script = Script::new("export default () => 1");
+        let code = Code::new("export default () => 1");
         let action_set = ActionSet::from_harness_actions(["a"]).unwrap();
-        assert_eq!(document(&script, &action_set).check(), Ok(()));
+        assert_eq!(document(&code, &action_set).check(), Ok(()));
 
-        let mut other_script = document(&script, &action_set);
-        other_script.script = Script::new("export default () => 2");
+        let mut other_code = document(&code, &action_set);
+        other_code.code = Code::new("export default () => 2");
         assert!(matches!(
-            other_script.check(),
-            Err(JournalError::ScriptMismatch { .. })
+            other_code.check(),
+            Err(JournalError::CodeMismatch { .. })
         ));
 
-        let mut other_action_set = document(&script, &action_set);
+        let mut other_action_set = document(&code, &action_set);
         other_action_set.action_set = ActionSet::empty();
         assert!(matches!(
             other_action_set.check(),
             Err(JournalError::ActionSetMismatch { .. })
         ));
 
-        let mut empty = document(&script, &action_set);
+        let mut empty = document(&code, &action_set);
         empty.entries.clear();
         assert_eq!(
             empty.check(),

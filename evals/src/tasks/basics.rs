@@ -98,7 +98,7 @@ pub(super) fn tasks() -> Vec<Task> {
             setup: &[],
             prompt: |_| {
                 "What is the average p95 latency, in ms, of the services api, web and worker? \
-                 Return it as the script's output."
+                 Return it as the code's output."
                     .into()
             },
             check: |outcome| {

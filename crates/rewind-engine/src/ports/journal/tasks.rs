@@ -146,7 +146,7 @@ pub struct CallTask {
 }
 
 /// The failure a deferred task ends with when no answer came before its deadline. Every store
-/// writes this one, so that scripts see the same failure whatever the backend.
+/// writes this one, so that workflows see the same failure whatever the backend.
 pub fn deferred_timeout_failure() -> ActionFailure {
     ActionFailure {
         kind: ActionFailureKind::Timeout,

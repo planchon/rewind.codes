@@ -88,7 +88,7 @@ pub struct Scenario {
     pub fork: Option<Fork>,
     #[serde(default)]
     pub expect: Expect,
-    /// A check of the recorded journal against another script, or a tampered journal.
+    /// A check of the recorded journal against another code, or a tampered journal.
     #[serde(default)]
     pub replay: Option<ReplayCheck>,
 }
@@ -99,8 +99,8 @@ pub struct Scenario {
 pub struct WorkflowCase {
     #[serde(default)]
     pub description: Option<String>,
-    /// Its script, next to `scenario.json`.
-    pub script: String,
+    /// Its code, next to `scenario.json`.
+    pub code: String,
     /// Its JSON Schemas. `{}` (anything) when absent.
     #[serde(default = "empty_object")]
     pub input: Value,
@@ -117,8 +117,8 @@ pub struct WorkflowCase {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fork {
-    /// The corrected script, next to `scenario.json`.
-    pub script: String,
+    /// The corrected code, next to `scenario.json`.
+    pub code: String,
     /// Go live from this entry of the parent's history.
     #[serde(default)]
     pub at: Option<u64>,
@@ -257,8 +257,8 @@ pub struct ExpectedAbort {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayCheck {
-    /// Another script, next to `scenario.json`, replayed against the recorded journal.
-    pub script: Option<String>,
+    /// Another code, next to `scenario.json`, replayed against the recorded journal.
+    pub code: Option<String>,
     /// Removes this entry from the recorded journal before replaying it.
     pub drop_entry: Option<usize>,
     /// The replay diverges with exactly this message.

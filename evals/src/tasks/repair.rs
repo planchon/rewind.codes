@@ -58,7 +58,7 @@ fn ship_orders() -> SetupWorkflow {
     SetupWorkflow {
         name: "ship_orders",
         description: "Buy a shipping label for each order, and give each order's tracking number.",
-        script: SHIP_ORDERS,
+        code: SHIP_ORDERS,
         input: object_schema(
             json!({ "orders": { "type": "array", "items": { "type": "string" } } }),
             &["orders"],
@@ -230,7 +230,7 @@ fn bug_digest() -> SetupWorkflow {
     SetupWorkflow {
         name: "bug_digest",
         description: "Post the open bugs of a repository to #bugs.",
-        script: BUG_DIGEST,
+        code: BUG_DIGEST,
         input: object_schema(json!({ "repo": { "type": "string" } }), &["repo"]),
         output: object_schema(
             json!({ "posted": { "type": "integer" }, "truncated": { "type": "boolean" } }),

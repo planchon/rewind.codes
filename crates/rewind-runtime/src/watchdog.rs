@@ -1,13 +1,13 @@
 //! The CPU-time limit (`archi/03-execution.md`, "Resource limits"): the budget of a call into
-//! the script is CPU time of the isolate's thread, not wall-clock time, so a loaded host does
-//! not make a script exceed it.
+//! the code is CPU time of the isolate's thread, not wall-clock time, so a loaded host does
+//! not make a code exceed it.
 //!
 //! A thread's CPU clock can be read portably only from the thread itself
-//! (`CLOCK_THREAD_CPUTIME_ID`). So the watchdog thread asks V8 to interrupt the script; the
+//! (`CLOCK_THREAD_CPUTIME_ID`). So the watchdog thread asks V8 to interrupt the code; the
 //! interrupt runs on the isolate's thread between two JavaScript instructions, reads the clock,
 //! and terminates the execution once the budget is spent. On one thread, CPU time never runs
 //! faster than wall-clock time: the watchdog first waits for the whole budget, then for what is
-//! left of it at the last reading. A script that is never descheduled is interrupted about once,
+//! left of it at the last reading. A code that is never descheduled is interrupted about once,
 //! at the end of its budget.
 //!
 //! The watchdog also reports the CPU time each call used, from the same clock: the engine counts
@@ -97,7 +97,7 @@ extern "C" fn on_interrupt(_isolate: UnsafeRawIsolatePtr, _data: *mut c_void) {
     });
 }
 
-/// What a call into the script did to its budget.
+/// What a call into the code did to its budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Disarmed {
     /// The watchdog terminated the execution: the budget ran out.
@@ -107,7 +107,7 @@ pub(crate) struct Disarmed {
 }
 
 /// One watchdog thread per isolate, created on the isolate's thread. [`Watchdog::arm`] before
-/// calling into the script, [`Watchdog::disarm`] after: it tells whether the budget ran out
+/// calling into the code, [`Watchdog::disarm`] after: it tells whether the budget ran out
 /// meanwhile, and the CPU time the call used.
 pub(crate) struct Watchdog {
     shared: Arc<Shared>,

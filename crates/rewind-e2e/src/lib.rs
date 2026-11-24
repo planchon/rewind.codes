@@ -1,15 +1,15 @@
-//! End-to-end corpus of Rewind: TypeScript scripts run by the engine's run plane and the V8
+//! End-to-end corpus of Rewind: TypeScript workflows run by the engine's run plane and the V8
 //! sandbox, over the memory adapters in virtual time; their journals are recorded in the stored
 //! format and replayed (`archi/07-code-architecture.md`, "Tests": the epoch corpus).
 //!
 //! A case is a directory `corpus/epoch-<n>/<blue|red>/<name>/` holding:
 //!
-//! - `script.ts`, the script;
+//! - `workflow.ts`, the code;
 //! - `scenario.json`, its input, actions, steps and expectations ([`Scenario`]);
 //! - `journal.v1.json`, the journal document recorded from it (`rewind-format` v1): the run's id,
-//!   its script, its action set and its entries, committed.
+//!   its code, its action set and its entries, committed.
 //!
-//! A case may fork its run with a corrected script (`fork` in the scenario): the expectations,
+//! A case may fork its run with a corrected code (`fork` in the scenario): the expectations,
 //! the recorded journal and the replays are then the fork's.
 //!
 //! **Blue** cases end as they should succeed: the run completes, or waits for the outside
@@ -24,7 +24,7 @@
 //! 2. **Recorded**: the journal it produced is byte for byte the committed `journal.v1.json`.
 //!    `REWIND_E2E_RECORD=1 cargo test -p rewind-e2e` writes the files instead: review the diff.
 //! 3. **Replayed**: the committed journal, decoded from its file, replays identically with the
-//!    script it holds, which must be the case's, on a fresh executor with no store. This is the
+//!    code it holds, which must be the case's, on a fresh executor with no store. This is the
 //!    epoch contract: a build that stops replaying a journal of an epoch it supports fails
 //!    here.
 
@@ -40,12 +40,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rewind_core::{
-    Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Command, Event, HistoryEntry,
-    JournalDocument, Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState, Script,
+    Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Code, Command, Event,
+    HistoryEntry, JournalDocument, Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState,
     SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
-use rewind_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId};
+use rewind_engine::ports::{CodeExecutor, Entropy, RunRef, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_runtime::V8Executor;
 use serde_json::Value;
@@ -101,11 +101,11 @@ pub struct Case {
     pub dir: PathBuf,
     pub color: Color,
     pub scenario: Scenario,
-    pub script: Script,
-    /// The corrected script of the fork, if the case forks its run.
-    pub fork_script: Option<Script>,
-    /// The scripts of the scenario's workflows, by name.
-    pub workflow_scripts: BTreeMap<String, Script>,
+    pub code: Code,
+    /// The corrected code of the fork, if the case forks its run.
+    pub fork_code: Option<Code>,
+    /// The workflows of the scenario's workflows, by name.
+    pub workflow_scripts: BTreeMap<String, Code>,
 }
 
 impl Case {
@@ -127,25 +127,22 @@ impl Case {
         };
         let scenario: Scenario = serde_json::from_str(&read(&dir.join("scenario.json"))?)
             .map_err(|err| format!("{name}/scenario.json: {err}"))?;
-        let script = Script::new(read(&dir.join("script.ts"))?);
-        let fork_script = match &scenario.fork {
-            Some(fork) => Some(Script::new(read(&dir.join(&fork.script))?)),
+        let code = Code::new(read(&dir.join("workflow.ts"))?);
+        let fork_code = match &scenario.fork {
+            Some(fork) => Some(Code::new(read(&dir.join(&fork.code))?)),
             None => None,
         };
         let mut workflow_scripts = BTreeMap::new();
         for (workflow, case) in &scenario.workflows {
-            workflow_scripts.insert(
-                workflow.clone(),
-                Script::new(read(&dir.join(&case.script))?),
-            );
+            workflow_scripts.insert(workflow.clone(), Code::new(read(&dir.join(&case.code))?));
         }
         let case = Self {
             name: name.to_owned(),
             dir,
             color,
             scenario,
-            script,
-            fork_script,
+            code,
+            fork_code,
             workflow_scripts,
         };
         case.check_color()?;
@@ -229,9 +226,9 @@ impl Case {
         entropy.run_id()
     }
 
-    /// The script of the run the case records: the fork's, if it forks.
-    pub fn recorded_script(&self) -> &Script {
-        self.fork_script.as_ref().unwrap_or(&self.script)
+    /// The code of the run the case records: the fork's, if it forks.
+    pub fn recorded_code(&self) -> &Code {
+        self.fork_code.as_ref().unwrap_or(&self.code)
     }
 
     /// A blue case expects no failure; a red case expects one.
@@ -488,11 +485,11 @@ pub enum Replayed {
     Fails(String),
 }
 
-/// Replays a journal document's entries with a script on a fresh executor, without any store:
+/// Replays a journal document's entries with a code on a fresh executor, without any store:
 /// the document holds the run's id and action set.
-pub async fn replay_journal(case: &Case, journal: &JournalDocument, script: &Script) -> Replayed {
+pub async fn replay_journal(case: &Case, journal: &JournalDocument, code: &Code) -> Replayed {
     let executor = executor(&case.scenario);
-    let compiled = executor.compile(script, &journal.action_set);
+    let compiled = executor.compile(code, &journal.action_set);
     let run = RunRef::new(TenantId::local(), journal.run);
     let input = ReplayInput {
         run: &run,
@@ -755,7 +752,7 @@ fn first_difference(a: &str, b: &str) -> usize {
 }
 
 async fn check_replays(case: &Case, recorded: &Recorded, failures: &mut Vec<String>) {
-    // The committed journal, decoded from its file, holds the case's script and replays with
+    // The committed journal, decoded from its file, holds the case's code and replays with
     // it.
     let committed = match std::fs::read_to_string(case.journal_path())
         .map_err(|err| err.to_string())
@@ -770,14 +767,14 @@ async fn check_replays(case: &Case, recorded: &Recorded, failures: &mut Vec<Stri
     if let Err(err) = committed.check() {
         failures.push(format!("the committed journal is inconsistent: {err}"));
     }
-    if &committed.script != case.recorded_script() {
-        failures.push("the committed journal holds another script than the case's".into());
+    if &committed.code != case.recorded_code() {
+        failures.push("the committed journal holds another code than the case's".into());
     }
     let expected_end = match committed.entries.last().map(|entry| &entry.event) {
         Some(Event::Lifecycle(Lifecycle::RunAborted(reason))) => ReplayEnd::Aborted(reason.clone()),
         _ => ReplayEnd::EndOfHistory,
     };
-    let replayed = replay_journal(case, &committed, case.recorded_script()).await;
+    let replayed = replay_journal(case, &committed, case.recorded_code()).await;
     if replayed != Replayed::Matches(expected_end.clone()) {
         failures.push(format!(
             "the committed journal does not replay: {replayed:?} (expected {expected_end:?})"
@@ -804,17 +801,17 @@ async fn check_altered_replay(
         }
         history.remove(index);
     }
-    let script = match &check.script {
+    let code = match &check.code {
         Some(file) => match read(&case.dir.join(file)) {
-            Ok(source) => Script::new(source),
+            Ok(source) => Code::new(source),
             Err(err) => {
                 failures.push(err);
                 return;
             }
         },
-        None => case.recorded_script().clone(),
+        None => case.recorded_code().clone(),
     };
-    let replayed = replay_journal(case, &journal, &script).await;
+    let replayed = replay_journal(case, &journal, &code).await;
     let expected = check.diverges.as_ref().or(check.error.as_ref());
     match (&replayed, expected) {
         (Replayed::Fails(message), Some(expected)) if message == expected => {}

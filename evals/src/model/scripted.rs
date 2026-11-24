@@ -13,7 +13,7 @@ use super::{AssistantTurn, Conversation, ModelError, Reply, Stop, Turn, Usage};
 
 type Respond = dyn Fn(&Conversation) -> Option<AssistantTurn> + Send + Sync;
 
-/// A model that answers from a script.
+/// A model that answers from a code.
 pub struct Scripted {
     pub name: String,
     respond: Box<Respond>,
@@ -54,9 +54,9 @@ impl Scripted {
     /// Turns from a JSON file: an array of `{ "text"?, "calls"?: [{ "id"?, "name", "input" }] }`.
     pub fn from_file(path: &str) -> Result<Self, ModelError> {
         let text = std::fs::read_to_string(path)
-            .map_err(|err| ModelError::Script(format!("{path}: {err}")))?;
+            .map_err(|err| ModelError::Code(format!("{path}: {err}")))?;
         let raw: Vec<Value> = serde_json::from_str(&text)
-            .map_err(|err| ModelError::Script(format!("{path}: {err}")))?;
+            .map_err(|err| ModelError::Code(format!("{path}: {err}")))?;
         let mut turns = Vec::new();
         for (index, turn) in raw.into_iter().enumerate() {
             let mut turn = turn;
@@ -68,7 +68,7 @@ impl Scripted {
                 }
             }
             let turn: AssistantTurn = serde_json::from_value(turn)
-                .map_err(|err| ModelError::Script(format!("{path}: turn {index}: {err}")))?;
+                .map_err(|err| ModelError::Code(format!("{path}: turn {index}: {err}")))?;
             turns.push(turn);
         }
         let stem = std::path::Path::new(path)
@@ -191,7 +191,7 @@ mod tests {
                     text: String::new(),
                     calls: vec![Call {
                         id: "1".into(),
-                        name: "run_script".into(),
+                        name: "run_workflow".into(),
                         input: json!({ "code": "x" }),
                     }],
                     raw: Value::Null,

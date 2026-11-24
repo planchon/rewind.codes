@@ -41,7 +41,7 @@ impl Subscription {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WebhookEventType {
     RunCompleted,
-    /// The script failed.
+    /// The code failed.
     RunFailed,
     /// The run ended `cancelled`.
     RunCancelled,
@@ -117,7 +117,7 @@ pub enum WebhookEventKind {
     RunFailed {
         /// `failed`, `cancelled` or `aborted`.
         status: RunStatus,
-        /// The error, written for a model: the script's error or the abort reason.
+        /// The error, written for a model: the code's error or the abort reason.
         error: String,
     },
     RunSuspended {

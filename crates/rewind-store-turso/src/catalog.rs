@@ -3,7 +3,7 @@
 //! control plane"). The in-memory `MemoryCatalog` of `rewind-engine` is the reference of every
 //! behavior here; both pass the same conformance suite.
 //!
-//! The catalog keeps scripts, action sets, workflows, tests, workflow_tests, tenants, namespaces
+//! The catalog keeps workflows, action sets, workflows, tests, workflow_tests, tenants, namespaces
 //! with each one's `partition`, and subscriptions. Every call holds the store's one connection;
 //! a write that changes something sends its change once it committed, while it still holds the
 //! connection, so changes leave in commit order ([`TursoStore::changes`]). A write that changes
@@ -14,12 +14,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 
-use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogError, CatalogStore, CompiledScript, ControlPlaneChange,
+    ActionDeclarations, CatalogError, CatalogStore, CompiledCode, ControlPlaneChange,
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
-    RunRef, ScriptTitle, Secret, StoredActionSet, StoredScript, StoredWorkflow, Subscription,
+    RunRef, ScriptTitle, Secret, StoredActionSet, StoredCode, StoredWorkflow, Subscription,
     TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, WorkflowFilter,
     namespace_partition,
 };
@@ -311,13 +311,13 @@ impl TursoCatalog {
 
 impl CatalogStore for TursoCatalog {
     // ---------------------------------------------------------------------------------------
-    // Scripts and action sets
+    // Workflows and action sets
 
-    async fn put_script(
+    async fn put_code(
         &self,
         tenant_id: &TenantId,
-        script: &Script,
-        compiled: &CompiledScript,
+        code: &Code,
+        compiled: &CompiledCode,
     ) -> Result<(), CatalogError> {
         let connection = self.store.connection().await?;
         let inserted = sql::execute(
@@ -326,8 +326,8 @@ impl CatalogStore for TursoCatalog {
              VALUES (?, ?, ?, ?, ?)",
             vec![
                 tenant(tenant_id),
-                digest(script.digest()),
-                text(script.source()),
+                digest(code.digest()),
+                text(code.source()),
                 text(compiled.javascript.as_str()),
                 text(compiled.source_map.as_str()),
             ],
@@ -336,7 +336,7 @@ impl CatalogStore for TursoCatalog {
         if inserted > 0 {
             self.send([ControlPlaneChange::Script {
                 tenant: tenant_id.clone(),
-                digest: script.digest(),
+                digest: code.digest(),
             }]);
         }
         Ok(())
@@ -346,7 +346,7 @@ impl CatalogStore for TursoCatalog {
         &self,
         tenant_id: &TenantId,
         key: Digest,
-    ) -> Result<Option<StoredScript>, CatalogError> {
+    ) -> Result<Option<StoredCode>, CatalogError> {
         let connection = self.store.connection().await?;
         let row = sql::query_row(
             &connection,
@@ -357,13 +357,13 @@ impl CatalogStore for TursoCatalog {
         let Some(row) = row else {
             return Ok(None);
         };
-        let script = Script::new(row.text(0)?);
-        if script.digest() != key {
-            return Err(Error::Corrupt(format!("script {key} does not hash to its key")).into());
+        let code = Code::new(row.text(0)?);
+        if code.digest() != key {
+            return Err(Error::Corrupt(format!("code {key} does not hash to its key")).into());
         }
-        Ok(Some(StoredScript {
-            script,
-            compiled: CompiledScript {
+        Ok(Some(StoredCode {
+            code,
+            compiled: CompiledCode {
                 javascript: row.text(1)?,
                 source_map: row.text(2)?,
             },
@@ -373,7 +373,7 @@ impl CatalogStore for TursoCatalog {
     async fn set_script_title(
         &self,
         tenant_id: &TenantId,
-        script: Digest,
+        code: Digest,
         title: Option<&ScriptTitle>,
     ) -> Result<bool, CatalogError> {
         let connection = self.store.connection().await?;
@@ -382,7 +382,7 @@ impl CatalogStore for TursoCatalog {
             let stored = sql::query_row(
                 connection,
                 "SELECT 1 FROM scripts WHERE tenant = ? AND digest = ?",
-                vec![tenant(tenant_id), digest(script)],
+                vec![tenant(tenant_id), digest(code)],
             )
             .await?;
             if stored.is_none() {
@@ -396,7 +396,7 @@ impl CatalogStore for TursoCatalog {
                          description, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                         vec![
                             tenant(tenant_id),
-                            digest(script),
+                            digest(code),
                             text(title.title.as_str()),
                             opt_text(title.description.as_deref()),
                             text(title.updated_by.as_str()),
@@ -409,7 +409,7 @@ impl CatalogStore for TursoCatalog {
                     sql::execute(
                         connection,
                         "DELETE FROM script_titles WHERE tenant = ? AND digest = ?",
-                        vec![tenant(tenant_id), digest(script)],
+                        vec![tenant(tenant_id), digest(code)],
                     )
                     .await?
                 }
@@ -420,7 +420,7 @@ impl CatalogStore for TursoCatalog {
         if stored {
             self.send([ControlPlaneChange::Script {
                 tenant: tenant_id.clone(),
-                digest: script,
+                digest: code,
             }]);
         }
         Ok(stored)
@@ -433,17 +433,17 @@ impl CatalogStore for TursoCatalog {
     ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
         let connection = self.store.connection().await?;
         let mut titles = BTreeMap::new();
-        for script in scripts.iter().collect::<BTreeSet<_>>() {
+        for code in scripts.iter().collect::<BTreeSet<_>>() {
             let row = sql::query_row(
                 &connection,
                 "SELECT title, description, updated_by, updated_at FROM script_titles \
                  WHERE tenant = ? AND digest = ?",
-                vec![tenant(tenant_id), digest(*script)],
+                vec![tenant(tenant_id), digest(*code)],
             )
             .await?;
             if let Some(row) = row {
                 titles.insert(
-                    *script,
+                    *code,
                     ScriptTitle {
                         title: row.text(0)?,
                         description: row.opt_text(1)?,
@@ -685,23 +685,23 @@ impl CatalogStore for TursoCatalog {
         Ok(versions)
     }
 
-    async fn workflows_with_script(
+    async fn workflows_with_code(
         &self,
         tenant_id: &TenantId,
-        script: Digest,
+        code: Digest,
         labels: &BTreeMap<String, String>,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
         let connection = self.store.connection().await?;
-        // The script is read from the version's document: a tenant has few versions.
+        // The code is read from the version's document: a tenant has few versions.
         let rows = sql::query(
             &connection,
             concat!(
                 "SELECT ",
                 workflow_columns!(),
-                " FROM workflows WHERE tenant = ? AND json_extract(document, '$.script') = ? \
+                " FROM workflows WHERE tenant = ? AND json_extract(document, '$.code') = ? \
                  ORDER BY created_at DESC, stored_order DESC"
             ),
-            vec![tenant(tenant_id), text(script.to_hex())],
+            vec![tenant(tenant_id), text(code.to_hex())],
         )
         .await?;
         let mut versions = Vec::new();

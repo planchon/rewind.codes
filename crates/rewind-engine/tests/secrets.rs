@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use rewind_core::{
     Action, ActionAuth, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Attachments,
-    Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus, Script, SecretName,
+    Code, Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus, SecretName,
     SecretPlacement, SecretRef, Seq, WorkflowSchemas,
 };
 use rewind_engine::StartWorkflow;
@@ -166,7 +166,7 @@ fn start(
     rights: &RightsTo,
 ) -> StartRun {
     let mut request = StartRun::new(
-        Script::new(program),
+        Code::new(program),
         action_set(),
         json!({ "action": action }),
     );
@@ -269,11 +269,11 @@ async fn a_start_without_the_secret_an_imported_server_needs_is_refused() {
             }],
             attachable: vec![secret_ref("org/zendesk"), secret_ref("ns/github")],
         },
-        "github, which the script imports; not linear, which it does not; the organization's \
+        "github, which the code imports; not linear, which it does not; the organization's \
          secrets and alice's, not bob's"
     );
     assert!(
-        message.contains("the script imports github, which needs a secret")
+        message.contains("the code imports github, which needs a secret")
             && message.ends_with("The secrets you may attach: org/zendesk, ns/github"),
         "{message}"
     );
@@ -292,7 +292,7 @@ async fn a_start_without_the_secret_an_imported_server_needs_is_refused() {
         .unwrap_err();
     assert_eq!(refused(error).attachable, [secret_ref("ns/linear")]);
 
-    // A script that imports none of them needs nothing.
+    // A code that imports none of them needs nothing.
     world
         .start(start("quiet", "", &alice(), &[], &RightsTo::Namespace))
         .await
@@ -708,13 +708,13 @@ async fn a_fork_inherits_its_parent_s_attachments_checked_against_its_caller() {
         ))
         .await;
     let request = |secrets: Option<&[(&str, &str)]>, rights: RightsTo| {
-        let mut request = ForkRun::new(parent.clone(), Script::new("caller"));
+        let mut request = ForkRun::new(parent.clone(), Code::new("caller"));
         request.secrets = secrets.map(attaching);
         request.attach = rights.rights();
         request
     };
 
-    // The script is new code: the parent's org/github is checked against the caller.
+    // The code is new code: the parent's org/github is checked against the caller.
     let error = fork(&mut world, request(None, RightsTo::Namespace))
         .await
         .unwrap_err();
@@ -761,7 +761,7 @@ fn save(secrets: &[(&str, &str)], rights: &RightsTo) -> RegisterWorkflow {
         tenant: tenant(),
         name: "triage".into(),
         description: None,
-        script: Script::new("caller"),
+        code: Code::new("caller"),
         action_set: action_set().digest(),
         schemas: WorkflowSchemas {
             input: json!({ "type": "object" }),
@@ -816,7 +816,7 @@ async fn a_version_is_saved_with_attachments_its_saver_may_attach() {
         [AttachmentProblem::Missing {
             server: "github".into()
         }],
-        "its script imports github: every run of it would need one"
+        "its code imports github: every run of it would need one"
     );
     assert_eq!(
         saver_refused(

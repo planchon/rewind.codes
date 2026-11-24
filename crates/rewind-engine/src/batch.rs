@@ -1,9 +1,9 @@
 //! The entries of one activation, as they are appended (`archi/02-journal.md`, "The commit
-//! invariant"; `archi/03-execution.md`, "Activations", "How a script ends").
+//! invariant"; `archi/03-execution.md`, "Activations", "How a code ends").
 //!
-//! A trigger is always appended with everything the script emitted in response to it. When the
-//! host must end the run instead (the script cannot load, a limit is exceeded, the cancellation
-//! grace runs out), the trigger is appended with `run_aborted` and what the script emitted in
+//! A trigger is always appended with everything the code emitted in response to it. When the
+//! host must end the run instead (the code cannot load, a limit is exceeded, the cancellation
+//! grace runs out), the trigger is appended with `run_aborted` and what the code emitted in
 //! response to it is dropped. The run's state is folded as the entries are appended, so a
 //! terminal entry ends the batch. An activation that fails otherwise appends nothing: its
 //! [`EngineError`] reaches the owner, which records the failure.
@@ -48,7 +48,7 @@ pub enum EngineError {
 }
 
 /// Whether delivering a trigger ends the cancellation grace: after `cancel_requested`, the
-/// script gets this one delivery to end by itself.
+/// code gets this one delivery to end by itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Grace {
     No,
@@ -57,18 +57,18 @@ pub(crate) enum Grace {
 
 pub(crate) fn abort_reason(err: ExecutorError) -> AbortReason {
     let kind = match &err {
-        ExecutorError::InvalidScript(_) => AbortKind::InvalidScript,
+        ExecutorError::InvalidCode(_) => AbortKind::InvalidCode,
         ExecutorError::LimitExceeded(_) => AbortKind::LimitExceeded,
         ExecutorError::UnsupportedEpoch(_) | ExecutorError::Internal(_) => AbortKind::Internal,
     };
     let message = match err {
-        ExecutorError::InvalidScript(message) | ExecutorError::LimitExceeded(message) => message,
+        ExecutorError::InvalidCode(message) | ExecutorError::LimitExceeded(message) => message,
         other => other.to_string(),
     };
     AbortReason { kind, message }
 }
 
-/// Where the CPU time of the calls into a script that execute is counted, toward a namespace's
+/// Where the CPU time of the calls into a code that execute is counted, toward a namespace's
 /// `cpuPerMonth` (`archi/06-storage-and-scale.md`, "Quotas").
 pub(crate) trait CountCpu {
     fn count_cpu(
@@ -92,7 +92,7 @@ pub(crate) struct Finished {
 pub(crate) struct Batch<'l> {
     pub(crate) run_id: rewind_core::RunId,
     pub(crate) tenant: crate::ports::TenantId,
-    /// The namespace whose `cpu_per_month` the calls into the script count toward; `None` when
+    /// The namespace whose `cpu_per_month` the calls into the code count toward; `None` when
     /// they run nothing of a run's, as a fork's compatibility check.
     namespace: Option<crate::ports::NamespaceName>,
     pub(crate) state: RunState,
@@ -131,13 +131,13 @@ impl<'l> Batch<'l> {
         }
     }
 
-    /// An empty batch for a run whose history is empty, whose calls into the script count
+    /// An empty batch for a run whose history is empty, whose calls into the code count
     /// toward no namespace: a fork's compatibility check.
     pub(crate) fn for_check(run: &RunRef, limits: &'l Limits) -> Self {
         Self::new(run, None, RunState::new(), Timestamp(0), limits)
     }
 
-    /// Counts the CPU time of a call into the script that executed, toward the namespace of
+    /// Counts the CPU time of a call into the code that executed, toward the namespace of
     /// the run: never a call of a replay (`archi/06-storage-and-scale.md`, "Quotas").
     pub(crate) fn count_cpu(&self, sink: &impl CountCpu, cpu: Duration) {
         if let Some(namespace) = &self.namespace {
@@ -167,7 +167,7 @@ impl<'l> Batch<'l> {
         &self.entries
     }
 
-    /// Appends a trigger and what the script emitted in response, or the trigger and
+    /// Appends a trigger and what the code emitted in response, or the trigger and
     /// `run_aborted` if the response breaks a limit or the cancellation grace.
     pub(crate) fn respond(
         &mut self,
@@ -203,7 +203,7 @@ impl<'l> Batch<'l> {
         if refused.is_none() && grace == Grace::Ends && !self.state.is_terminal() {
             refused = Some(AbortReason {
                 kind: AbortKind::Cancelled,
-                message: "the script did not end within its cancellation grace".into(),
+                message: "the code did not end within its cancellation grace".into(),
             });
         }
         if let Some(reason) = refused {
@@ -267,7 +267,7 @@ impl<'l> Batch<'l> {
             .count();
         if !self.copying && self.commands + commands > limits.max_commands_per_activation {
             return limit_exceeded(format!(
-                "the script emitted more than {} commands in one activation",
+                "the code emitted more than {} commands in one activation",
                 limits.max_commands_per_activation
             ));
         }

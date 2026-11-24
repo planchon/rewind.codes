@@ -340,10 +340,10 @@ impl<P: Plane> OrgActor<P> {
         let in_flight = &self.state.admissions;
         let of_namespace = |admission: &&Admission| admission.namespace == admit.namespace;
         let reported = self.reported.get(&admit.namespace);
-        let new_script = !reported
-            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admit.script))
+        let new_code = !reported
+            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admit.code))
             && !in_flight.iter().any(|admission| {
-                admission.namespace == admit.namespace && admission.script == admit.script
+                admission.namespace == admit.namespace && admission.code == admit.code
             });
         let active_namespace = reported.map_or(0, |counts| counts.gauges.active_runs)
             + in_flight.iter().filter(of_namespace).count() as u64;
@@ -371,7 +371,7 @@ impl<P: Plane> OrgActor<P> {
             tenant_scripts.extend(counts.gauges.scripts.keys().copied());
         }
         for admission in in_flight {
-            tenant_scripts.insert(admission.script);
+            tenant_scripts.insert(admission.code);
         }
         let scripts_tenant = tenant_scripts.len() as u64;
         let checks = [
@@ -400,15 +400,15 @@ impl<P: Plane> OrgActor<P> {
                 runs_tenant,
             ),
             (
-                QuotaKind::Scripts,
+                QuotaKind::Workflows,
                 QuotaScope::Namespace,
-                namespace_limits.scripts.filter(|_| new_script),
+                namespace_limits.workflows.filter(|_| new_code),
                 scripts_namespace,
             ),
             (
-                QuotaKind::Scripts,
+                QuotaKind::Workflows,
                 QuotaScope::Tenant,
-                ceiling.scripts.filter(|_| new_script),
+                ceiling.workflows.filter(|_| new_code),
                 scripts_tenant,
             ),
         ];
@@ -465,19 +465,19 @@ impl<P: Plane> OrgActor<P> {
         for (namespace, quota, used, limit) in crossed {
             alerts.extend(self.crossed(namespace, quota, month, used, used + 1, limit, now));
         }
-        if new_script {
+        if new_code {
             let crossed = [
                 (
                     Some(admit.namespace.clone()),
                     scripts_namespace,
-                    namespace_limits.scripts,
+                    namespace_limits.workflows,
                 ),
-                (None, scripts_tenant, ceiling.scripts),
+                (None, scripts_tenant, ceiling.workflows),
             ];
             for (namespace, used, limit) in crossed {
                 alerts.extend(self.crossed(
                     namespace,
-                    QuotaKind::Scripts,
+                    QuotaKind::Workflows,
                     month,
                     used,
                     used + 1,
@@ -489,7 +489,7 @@ impl<P: Plane> OrgActor<P> {
         self.state.admissions.push(Admission {
             run: admit.run,
             namespace: admit.namespace.clone(),
-            script: admit.script,
+            code: admit.code,
             admitted_at: admit.at,
         });
         self.epochs
@@ -969,7 +969,7 @@ fn takes(stream: &StreamAttach, offer: &HarnessTaskOffer) -> bool {
         && (stream.actions.is_empty() || stream.actions.contains(&task.action))
 }
 
-/// The scripts new to a namespace among the admissions in flight.
+/// The workflows new to a namespace among the admissions in flight.
 fn distinct_new_scripts(
     in_flight: &[Admission],
     namespace: Option<&NamespaceName>,
@@ -982,9 +982,9 @@ fn distinct_new_scripts(
         }
         let known = reported
             .get(&admission.namespace)
-            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admission.script));
+            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admission.code));
         if !known {
-            scripts.insert(admission.script);
+            scripts.insert(admission.code);
         }
     }
     scripts.len() as u64

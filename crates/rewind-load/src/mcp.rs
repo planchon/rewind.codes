@@ -85,7 +85,7 @@ fn schema(value: Value) -> Arc<Map<String, Value>> {
     }
 }
 
-/// The actions, with output schemas: a script gets their structured content as it is.
+/// The actions, with output schemas: a code gets their structured content as it is.
 fn tools() -> Vec<Tool> {
     let input = json!({
         "type": "object",

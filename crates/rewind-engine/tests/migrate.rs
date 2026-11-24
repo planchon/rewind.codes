@@ -186,7 +186,7 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
             namespace: NamespaceName::new(namespace).unwrap(),
             origin: "triage".into(),
             suffix_len: 13,
-            script: head.script,
+            code: head.code,
             action_set: head.action_set,
             epoch: head.epoch,
             expires_at: head.expires_at,
@@ -217,20 +217,20 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
         moved.push((RunRef::new(tenant.clone(), id), values));
     }
 
-    // Moved into a plane of four partitions, its scripts and action sets in its catalog.
+    // Moved into a plane of four partitions, its workflows and action sets in its catalog.
     let (plane, cluster) = plane(4);
     for run in [&ended, &waiting] {
         let head = source.view(run).await.head;
-        let script = source
+        let code = source
             .plane
             .catalog
-            .get_script(&tenant, head.script)
+            .get_script(&tenant, head.code)
             .await
             .unwrap()
             .unwrap();
         plane
             .catalog
-            .put_script(&tenant, &script.script, &script.compiled)
+            .put_code(&tenant, &code.code, &code.compiled)
             .await
             .unwrap();
         let action_set = source

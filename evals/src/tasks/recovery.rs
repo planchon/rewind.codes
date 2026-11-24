@@ -215,7 +215,7 @@ pub(super) fn tasks() -> Vec<Task> {
                     "Run {} failed halfway: it opens one onboarding issue in acme/support per \
                      customer. Fix it so that every customer gets exactly one issue, titled \
                      \"Onboard <company name> (<id>)\", or with the customer's own name when the \
-                     customer has no company, without creating any duplicate. Its script was:\n\n\
+                     customer has no company, without creating any duplicate. Its code was:\n\n\
                      ```ts\n{ONBOARDING}```",
                     setup_run(setup, 0)
                 )

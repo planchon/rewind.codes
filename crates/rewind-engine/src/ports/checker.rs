@@ -1,7 +1,7 @@
 use std::fmt;
 use std::future::Future;
 
-use rewind_core::Script;
+use rewind_core::Code;
 
 /// What `rewind-codegen` generated from a pinned action set, stored with it: the declarations of
 /// `rewind:actions` for the type-checker, and their compact rendering for the model's prompt
@@ -14,7 +14,7 @@ pub struct ActionDeclarations {
     pub prompt: String,
 }
 
-/// What `rewind-codegen` generates from a workflow's schemas, to check its own script when it is
+/// What `rewind-codegen` generates from a workflow's schemas, to check its own code when it is
 /// registered (`archi/04-tools.md`, "Type-checking").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkflowDeclarations {
@@ -22,16 +22,16 @@ pub struct WorkflowDeclarations {
     /// interface, so that `signal()` and `webhook()` take only their names and `signal()`
     /// returns their types.
     pub signals: String,
-    /// `entry.ts`: a module that imports the script's default export from `./script` and
+    /// `entry.ts`: a module that imports the code's default export from `./code` and
     /// assigns it to a function from the input type to the output type. A diagnostic there
     /// means the default export does not match the workflow's schemas.
     pub entry: String,
 }
 
-/// One problem found in a script, written for a model.
+/// One problem found in a code, written for a model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
-    /// Position in `script.ts`, 1-based.
+    /// Position in `workflow.ts`, 1-based.
     pub line: u32,
     pub column: u32,
     pub severity: Severity,
@@ -39,13 +39,13 @@ pub struct Diagnostic {
     pub message: String,
     /// What to do instead, for the checker's own rules (`fetch` is absent: use…).
     pub hint: Option<String>,
-    /// A few lines of the script around the position, the position marked.
+    /// A few lines of the code around the position, the position marked.
     pub frame: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Severity {
-    /// The script is refused.
+    /// The code is refused.
     Error,
     /// Reported, not refused.
     Warning,
@@ -61,7 +61,7 @@ pub enum DiagnosticSource {
 }
 
 impl fmt::Display for Diagnostic {
-    /// `script.ts:3:28 error TS2322: Type 'number' is not assignable to type 'string'.`, then
+    /// `workflow.ts:3:28 error TS2322: Type 'number' is not assignable to type 'string'.`, then
     /// the hint and the frame.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let severity = match self.severity {
@@ -74,7 +74,7 @@ impl fmt::Display for Diagnostic {
         };
         write!(
             f,
-            "script.ts:{}:{} {severity} {source}: {}",
+            "workflow.ts:{}:{} {severity} {source}: {}",
             self.line, self.column, self.message
         )?;
         if let Some(hint) = &self.hint {
@@ -94,25 +94,25 @@ pub enum CheckerError {
     Internal(String),
 }
 
-/// Type-checks a script against the sandbox lib and an action set's declarations, in strict mode,
+/// Type-checks a code against the sandbox lib and an action set's declarations, in strict mode,
 /// before anything runs (`archi/04-tools.md`, "Type-checking").
 ///
-/// Deterministic: the same script and declarations give the same diagnostics, in the order of
-/// their positions. The diagnostics include the checker's own rules. A script is refused when a
+/// Deterministic: the same code and declarations give the same diagnostics, in the order of
+/// their positions. The diagnostics include the checker's own rules. A code is refused when a
 /// diagnostic is an [`Severity::Error`].
 pub trait TypeChecker: Send + Sync {
     fn check(
         &self,
-        script: &Script,
+        code: &Code,
         declarations: &ActionDeclarations,
     ) -> impl Future<Output = Result<Vec<Diagnostic>, CheckerError>> + Send;
 
-    /// Type-checks a workflow's script as [`check`](Self::check) does, with the workflow's own
+    /// Type-checks a workflow's code as [`check`](Self::check) does, with the workflow's own
     /// declarations too: its signals, and its `entry.ts`, whose diagnostics are reported at the
-    /// script's default export.
+    /// code's default export.
     fn check_workflow(
         &self,
-        script: &Script,
+        code: &Code,
         declarations: &ActionDeclarations,
         workflow: &WorkflowDeclarations,
     ) -> impl Future<Output = Result<Vec<Diagnostic>, CheckerError>> + Send;
@@ -135,7 +135,7 @@ mod tests {
         };
         assert_eq!(
             diagnostic.to_string(),
-            "script.ts:3:28 error TS2322: Type 'number' is not assignable to type 'string'.\n3 | github.list_issues({ repo: 42 })\n  |                            ^"
+            "workflow.ts:3:28 error TS2322: Type 'number' is not assignable to type 'string'.\n3 | github.list_issues({ repo: 42 })\n  |                            ^"
         );
         let rule = Diagnostic {
             source: DiagnosticSource::Rule("absent-global".into()),
@@ -145,7 +145,7 @@ mod tests {
         };
         assert_eq!(
             rule.to_string(),
-            "script.ts:3:28 error absent-global: Type 'number' is not assignable to type 'string'.\n  hint: use the http action"
+            "workflow.ts:3:28 error absent-global: Type 'number' is not assignable to type 'string'.\n  hint: use the http action"
         );
     }
 }

@@ -9,7 +9,7 @@
 //! | above | in a blob of the run (`BlobOwner::Run`), put before the batch |
 //!
 //! A payload that leaves the event keeps only its digest there, and gets a payload record
-//! (digest, size, preview, and the value in the table tier). On delivery to the script, values
+//! (digest, size, preview, and the value in the table tier). On delivery to the code, values
 //! are loaded back from where they live: the records first, then the run's blobs. A run's
 //! sealed journal inlines every value up to the table tier; its blobs are erased with it.
 
@@ -144,7 +144,7 @@ pub(crate) async fn offload_into_run<B: BlobStore>(
 }
 
 /// The value of a payload, loaded from `source` if only its digest is held, with its keys in
-/// canonical order: a script observes the same value live and on replay, wherever it was loaded
+/// canonical order: a code observes the same value live and on replay, wherever it was loaded
 /// from. A loaded value is checked against its digest.
 pub(crate) async fn load<P: PayloadSource>(
     source: &P,

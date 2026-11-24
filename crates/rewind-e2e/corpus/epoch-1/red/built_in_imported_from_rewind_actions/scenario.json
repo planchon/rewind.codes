@@ -14,6 +14,6 @@
   },
   "http_hosts": ["api.example.com"],
   "expect": {
-    "start_error": "\"rewind:actions\" has no export named \"http\" (script.ts:1:10); it exports audit"
+    "start_error": "\"rewind:actions\" has no export named \"http\" (workflow.ts:1:10); it exports audit"
   }
 }

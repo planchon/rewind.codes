@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use rewind_core::{JsonValue, PartitionId, Script, Seq};
+use rewind_core::{Code, JsonValue, PartitionId, Seq};
 use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports as engine;
 use rewind_engine::ports::link;
@@ -28,7 +28,7 @@ where
 
 /// An activation an owner sends: `{"partition":3,"head":<run head record>,"summary":<summary
 /// record>,"inbox":[<inbox item record>,…],"history":[<history entry record>,…],
-/// "payloads":[<payload record>,…],"parent":{…},"script":{…},"action_set":{…},
+/// "payloads":[<payload record>,…],"parent":{…},"code":{…},"action_set":{…},
 /// "purpose":"runnable","tasks":[<call task record>,…]}`; `history` left out when the owner
 /// expects the executor's instance cache to hold the run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct ActivationRequest {
     pub payloads: Vec<record::PayloadValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<ParentHistory>,
-    pub script: StoredScript,
+    pub code: StoredCode,
     pub action_set: StoredActionSet,
     pub purpose: Purpose,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -75,10 +75,10 @@ pub struct SealedAttempt {
     pub journal: Box<RawValue>,
 }
 
-/// A script as stored: `{"source":"…","javascript":"…","source_map":"…"}`.
+/// A code as stored: `{"source":"…","javascript":"…","source_map":"…"}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StoredScript {
+pub struct StoredCode {
     pub source: String,
     pub javascript: String,
     pub source_map: String,
@@ -294,10 +294,10 @@ impl From<&link::ActivationRequest> for ActivationRequest {
                     .as_ref()
                     .map(|sealed| Box::new((&**sealed).into())),
             }),
-            script: StoredScript {
-                source: request.script.script.source().to_owned(),
-                javascript: request.script.compiled.javascript.clone(),
-                source_map: request.script.compiled.source_map.clone(),
+            code: StoredCode {
+                source: request.code.code.source().to_owned(),
+                javascript: request.code.compiled.javascript.clone(),
+                source_map: request.code.compiled.source_map.clone(),
             },
             action_set: StoredActionSet {
                 action_set: RawValue::from_string(rewind_format::encode_action_set(
@@ -348,11 +348,11 @@ impl TryFrom<ActivationRequest> for link::ActivationRequest {
                     })
                 })
                 .transpose()?,
-            script: engine::StoredScript {
-                script: Script::new(request.script.source),
-                compiled: engine::CompiledScript {
-                    javascript: request.script.javascript,
-                    source_map: request.script.source_map,
+            code: engine::StoredCode {
+                code: Code::new(request.code.source),
+                compiled: engine::CompiledCode {
+                    javascript: request.code.javascript,
+                    source_map: request.code.source_map,
                 },
             },
             action_set: engine::StoredActionSet {
@@ -392,7 +392,7 @@ impl TryFrom<SealedAttempt> for engine::SealedAttempt {
         Ok(engine::SealedAttempt {
             run: engine::RunRef::new(tenant(sealed.tenant)?, journal.run),
             attempt: engine::Attempt(sealed.attempt),
-            script: journal.script,
+            code: journal.code,
             action_set: journal.action_set,
             entries: journal.entries,
         })

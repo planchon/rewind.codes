@@ -274,7 +274,7 @@ impl<P: Plane> Executors<P> {
 
 /// Reads what an activation of a run needs from its partition: its inbox, its tasks, its
 /// history unless the instance cache holds the run (`with_history`), the payload records the
-/// history and the inbox hold by digest, a fork's parent at its first activation, its script
+/// history and the inbox hold by digest, a fork's parent at its first activation, its code
 /// and its action set.
 pub(crate) async fn prepare<P: Plane>(
     plane: &P,
@@ -316,12 +316,12 @@ pub(crate) async fn prepare<P: Plane>(
         _ => None,
     };
     let tenant = &run.tenant;
-    let script = plane
+    let code = plane
         .catalog()
-        .get_script(tenant, head.script)
+        .get_script(tenant, head.code)
         .await
-        .map_err(|error| failed("the script", error.to_string()))?
-        .ok_or_else(|| format!("script {} not found", head.script))?;
+        .map_err(|error| failed("the code", error.to_string()))?
+        .ok_or_else(|| format!("code {} not found", head.code))?;
     let action_set = plane
         .catalog()
         .get_action_set(tenant, head.action_set)
@@ -336,7 +336,7 @@ pub(crate) async fn prepare<P: Plane>(
         history,
         payloads,
         parent,
-        script,
+        code,
         action_set,
         purpose,
         tasks,

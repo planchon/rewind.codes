@@ -62,7 +62,7 @@ async fn check_reports_type_errors_rules_and_start_checks() {
         "import { sleep } from \"rewind\";\nexport default async function main() {\n  const name: string = 42;\n  sleep(\"1s\");\n  return name;\n}\n",
     );
     let run = rewind(&["check", bad.to_str().unwrap()]).await;
-    assert_eq!(run.exit, Exit::ScriptRefused, "{}", run.out);
+    assert_eq!(run.exit, Exit::CodeRefused, "{}", run.out);
     assert!(run.out.contains("bad.ts:3:9 error TS2322"), "{}", run.out);
     assert!(
         run.out.contains("error rewind/floating-promise"),
@@ -84,15 +84,11 @@ async fn check_reports_type_errors_rules_and_start_checks() {
         "{codes:?}"
     );
 
-    // The runtime's checks at start join tsgo's: a script without a default export.
+    // The runtime's checks at start join tsgo's: a code without a default export.
     let headless = write(dir.path(), "headless.ts", "export const x = 1;\n");
     let run = rewind(&["check", headless.to_str().unwrap()]).await;
-    assert_eq!(run.exit, Exit::ScriptRefused, "{}", run.out);
-    assert!(
-        run.out.contains("error rewind/invalid-script"),
-        "{}",
-        run.out
-    );
+    assert_eq!(run.exit, Exit::CodeRefused, "{}", run.out);
+    assert!(run.out.contains("error rewind/invalid-code"), "{}", run.out);
 }
 
 #[tokio::test]
@@ -115,19 +111,19 @@ async fn check_reads_an_action_set_file() {
         })
         .to_string(),
     );
-    let script = write(
+    let code = write(
         dir.path(),
         "ask.ts",
         "import { ask_user } from \"rewind:actions\";\nexport default async function main() {\n  const answer = await ask_user({ question: 42 });\n  return answer.toUpperCase();\n}\n",
     );
     let run = rewind(&[
         "check",
-        script.to_str().unwrap(),
+        code.to_str().unwrap(),
         "--action-set",
         action_set.to_str().unwrap(),
     ])
     .await;
-    assert_eq!(run.exit, Exit::ScriptRefused, "{}{}", run.out, run.err);
+    assert_eq!(run.exit, Exit::CodeRefused, "{}{}", run.out, run.err);
     assert!(run.out.contains("ask.ts:3:"), "{}", run.out);
     assert!(run.out.contains("TS2322"), "{}", run.out);
 
@@ -146,7 +142,7 @@ async fn check_reads_an_action_set_file() {
     assert_eq!(run.exit, Exit::Success, "{}", run.out);
     // Without the action set, `rewind:actions` exports nothing.
     let run = rewind(&["check", fixed.to_str().unwrap()]).await;
-    assert_eq!(run.exit, Exit::ScriptRefused, "{}", run.out);
+    assert_eq!(run.exit, Exit::CodeRefused, "{}", run.out);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -174,7 +170,7 @@ export default async function main(input: { repo: string }) {
 #[tokio::test]
 async fn test_runs_tests_with_static_responses_and_mocks() {
     let dir = tempfile::tempdir().unwrap();
-    let script = write(dir.path(), "triage.ts", TRIAGE);
+    let code = write(dir.path(), "triage.ts", TRIAGE);
     // rewind.actions.json next to the tests: tried after each test's own world.
     write(
         dir.path(),
@@ -186,7 +182,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
         "triage.mocks.ts",
         "export default { github: { close_issue: ({ number }) => ({ number, closed: true }) } };\n",
     );
-    // triage.tests.json next to the script, found by default.
+    // triage.tests.json next to the code, found by default.
     write(
         dir.path(),
         "triage.tests.json",
@@ -213,7 +209,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
         }])
         .to_string(),
     );
-    let run = rewind(&["test", script.to_str().unwrap()]).await;
+    let run = rewind(&["test", code.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
     assert!(
         run.out.starts_with("PASS closes the three once approved"),
@@ -222,7 +218,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
     );
     assert!(run.out.contains("1 of 1 tests passed"), "{}", run.out);
 
-    let run = rewind(&["--json", "test", script.to_str().unwrap()]).await;
+    let run = rewind(&["--json", "test", code.to_str().unwrap()]).await;
     let result: TestRun = serde_json::from_str(&run.out).unwrap();
     assert!(result.passed);
     assert_eq!(
@@ -247,7 +243,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
     );
     let run = rewind(&[
         "test",
-        script.to_str().unwrap(),
+        code.to_str().unwrap(),
         "--tests",
         failing.to_str().unwrap(),
     ])
@@ -285,8 +281,8 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
         r#"[{"name": "starts", "expect": {"status": "completed"}}]"#,
     );
     let run = rewind(&["test", broken.to_str().unwrap()]).await;
-    assert_eq!(run.exit, Exit::ScriptRefused, "{}{}", run.out, run.err);
-    assert!(run.err.contains("the script is invalid"), "{}", run.err);
+    assert_eq!(run.exit, Exit::CodeRefused, "{}{}", run.out, run.err);
+    assert!(run.err.contains("the code is invalid"), "{}", run.err);
 
     // No tests: a usage error that names the file it looked for.
     let alone = write(dir.path(), "alone.ts", TRIAGE);
@@ -312,10 +308,10 @@ async fn test_replays_a_recorded_cassette() {
         "recorded.json",
         &rewind_format::encode_cassette(&cassette),
     );
-    std::fs::copy(case.join("script.ts"), dir.path().join("script.ts")).unwrap();
+    std::fs::copy(case.join("workflow.ts"), dir.path().join("workflow.ts")).unwrap();
     write(
         dir.path(),
-        "script.tests.json",
+        "workflow.tests.json",
         &json!([{
             "name": "closes once approved",
             "world": {
@@ -335,8 +331,8 @@ async fn test_replays_a_recorded_cassette() {
         }])
         .to_string(),
     );
-    let script = dir.path().join("script.ts");
-    let run = rewind(&["--json", "test", script.to_str().unwrap()]).await;
+    let code = dir.path().join("workflow.ts");
+    let run = rewind(&["--json", "test", code.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
     let result: TestRun = serde_json::from_str(&run.out).unwrap();
     assert!(result.passed, "{:?}", result.tests[0].failures);
@@ -360,7 +356,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     let run = rewind(&["replay", journal.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
     assert!(
-        run.out.contains("the script replays the 4 entries"),
+        run.out.contains("the code replays the 4 entries"),
         "{}",
         run.out
     );
@@ -374,12 +370,12 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     let run = rewind(&[
         "replay",
         journal.to_str().unwrap(),
-        "--script",
+        "--code",
         moved.to_str().unwrap(),
     ])
     .await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
-    assert!(run.out.contains("the script is compatible"), "{}", run.out);
+    assert!(run.out.contains("the code is compatible"), "{}", run.out);
     assert!(
         run.out.contains("a fork reuses: #1 github.get_issue"),
         "{}",
@@ -396,7 +392,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
         "--json",
         "replay",
         journal.to_str().unwrap(),
-        "--script",
+        "--code",
         changed.to_str().unwrap(),
     ])
     .await;
@@ -446,14 +442,14 @@ async fn the_corpus_replays_through_the_cli() {
             .or_else(|| check.get("error"))
             .and_then(Value::as_str)
             .unwrap();
-        let run = match (check.get("script"), check.get("drop_entry")) {
-            (Some(script), None) => {
-                let script = case.join(script.as_str().unwrap());
+        let run = match (check.get("code"), check.get("drop_entry")) {
+            (Some(code), None) => {
+                let code = case.join(code.as_str().unwrap());
                 rewind(&[
                     "replay",
                     journal.to_str().unwrap(),
-                    "--script",
-                    script.to_str().unwrap(),
+                    "--code",
+                    code.to_str().unwrap(),
                 ])
                 .await
             }
@@ -505,17 +501,17 @@ async fn the_corpus_runs_through_rewind_test() {
         };
         let work = dir.path().join(name.replace('/', "_"));
         std::fs::create_dir_all(&work).unwrap();
-        std::fs::copy(case.join("script.ts"), work.join("script.ts")).unwrap();
+        std::fs::copy(case.join("workflow.ts"), work.join("workflow.ts")).unwrap();
         if let Some(mocks) = &translated.mocks {
             write(&work, "mocks.ts", mocks);
         }
         write(
             &work,
-            "script.tests.json",
+            "workflow.tests.json",
             &Value::Array(vec![translated.test.clone()]).to_string(),
         );
-        let script = work.join("script.ts");
-        let run = rewind(&["--json", "test", script.to_str().unwrap()]).await;
+        let code = work.join("workflow.ts");
+        let run = rewind(&["--json", "test", code.to_str().unwrap()]).await;
         let expect = &scenario["expect"];
         if let Some(message) = expect.get("start_error").and_then(Value::as_str) {
             assert_ne!(run.exit, Exit::Success, "{name}: the start must be refused");
@@ -688,7 +684,7 @@ fn translate(scenario: &Value) -> Option<Translated> {
                 };
                 rules.insert(action, rule);
             }
-            Handler::Script(body) => handlers.push(format!("  {}: {body},", json!(action))),
+            Handler::Code(body) => handlers.push(format!("  {}: {body},", json!(action))),
         }
     }
     let mocks = (!handlers.is_empty()).then(|| {
@@ -727,7 +723,7 @@ fn translate(scenario: &Value) -> Option<Translated> {
 
 enum Handler {
     Static(Value),
-    Script(String),
+    Code(String),
 }
 
 /// How a mock answers one corpus response; `None` for the responses only the corpus's own
@@ -744,7 +740,7 @@ fn handler(response: &Value) -> Option<Handler> {
         return Some(Handler::Static(response.clone()));
     }
     if fields.len() == 1 && fields.get("$echo") == Some(&Value::Bool(true)) {
-        return Some(Handler::Script("(args) => args".into()));
+        return Some(Handler::Code("(args) => args".into()));
     }
     if let Some(error) = fields.get("$error") {
         if fields
@@ -758,7 +754,7 @@ fn handler(response: &Value) -> Option<Handler> {
             "kind": fields.get("$kind").cloned().unwrap_or(json!("error")),
             "data": fields.get("$data").cloned().unwrap_or(Value::Null),
         });
-        return Some(Handler::Script(format!("() => fail({failure})")));
+        return Some(Handler::Code(format!("() => fail({failure})")));
     }
     if let Some(Value::Array(sequence)) = fields.get("$sequence") {
         if fields.len() != 1 {
@@ -771,11 +767,11 @@ fn handler(response: &Value) -> Option<Handler> {
                     format!("() => fail({})", json!({ "message": value["$error"] }))
                 }
                 Handler::Static(value) => format!("() => ({value})"),
-                Handler::Script(body) => body,
+                Handler::Code(body) => body,
             });
         }
         // Past the end, the call fails, as with the corpus's actions.
-        return Some(Handler::Script(format!(
+        return Some(Handler::Code(format!(
             "(args, call) => {{ const answers = [{}]; const n = next(call.action); if (n >= answers.length) fail({{ message: `${{call.action}} has no response left`, kind: \"unavailable\" }}); return answers[n](args); }}",
             answers.join(", ")
         )));

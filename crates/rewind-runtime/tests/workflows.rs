@@ -1,5 +1,5 @@
-//! Workflows across runs in the sandbox: `rewind:workflows`, the handles of the runs a script
-//! starts or signals, `result()`, the attached runs a script waits for, and the checks of the
+//! Workflows across runs in the sandbox: `rewind:workflows`, the handles of the runs a code
+//! starts or signals, `result()`, the attached runs a code waits for, and the checks of the
 //! args inside the op (`archi/03-execution.md`, "Workflows across runs").
 
 #![allow(clippy::unwrap_used)]
@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rewind_core::{
-    ActionFailure, ActionSet, Annotation, Command, Completion, Event, HistoryEntry, RunMode,
-    RunOutcome, RunState, RunStatus, Script, Workflow, WorkflowSchemas,
+    ActionFailure, ActionSet, Annotation, Code, Command, Completion, Event, HistoryEntry, RunMode,
+    RunOutcome, RunState, RunStatus, Workflow, WorkflowSchemas,
 };
 use rewind_engine::ports::{
-    ActionDeclarations, ActionDispatcher, Call, CallAuth, CatalogStore, Dispatched, Predicate,
-    RunRef, ScriptExecutor, TenantId,
+    ActionDeclarations, ActionDispatcher, Call, CallAuth, CatalogStore, CodeExecutor, Dispatched,
+    Predicate, RunRef, TenantId,
 };
 use rewind_engine::{ReplayVerdict, StartError, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
@@ -107,20 +107,17 @@ async fn harness_with(
         .put_action_set(&tenant, &child_action_set, &ActionDeclarations::default())
         .await
         .unwrap();
-    let script = Script::new(TRIAGE);
+    let code = Code::new(TRIAGE);
     let compiled = world
         .plane
         .executor
-        .compile(&script, &child_action_set)
+        .compile(&code, &child_action_set)
         .unwrap();
-    catalog
-        .put_script(&tenant, &script, &compiled)
-        .await
-        .unwrap();
+    catalog.put_code(&tenant, &code, &compiled).await.unwrap();
     let workflow = Workflow::new(
         "triage",
         None,
-        script.digest(),
+        code.digest(),
         child_action_set.digest(),
         schemas(),
     )
@@ -168,7 +165,7 @@ impl Harness {
         input: Value,
         mode: RunMode,
     ) -> Result<RunRef, StartError> {
-        let mut request = StartRun::new(Script::new(source), self.action_set.clone(), input);
+        let mut request = StartRun::new(Code::new(source), self.action_set.clone(), input);
         request.mode = mode;
         self.world.start(request).await
     }
@@ -389,7 +386,7 @@ export default async function main() {
       messages.push(`${error.name}: ${error.message}`);
     }
   };
-  // @ts-ignore: what a script checked by tsgo cannot write
+  // @ts-ignore: what a code checked by tsgo cannot write
   await attempt(() => triage.start({ repo: 42 }));
   // @ts-ignore
   await attempt(() => triage.start({ repo: "a" }, { retries: 2 }));
@@ -476,8 +473,8 @@ async fn importing_a_workflow_the_action_set_does_not_pin_is_refused_at_start() 
         )
         .await
         .unwrap_err();
-    let StartError::InvalidScript(invalid) = error else {
-        panic!("expected an invalid script, got {error:?}");
+    let StartError::InvalidCode(invalid) = error else {
+        panic!("expected an invalid code, got {error:?}");
     };
     assert!(
         invalid

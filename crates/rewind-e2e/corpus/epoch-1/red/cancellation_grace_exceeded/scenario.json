@@ -1,5 +1,5 @@
 {
-  "description": "After cancel_requested the script gets one grace delivery to end; one that does not is aborted, and what it emitted is dropped.",
+  "description": "After cancel_requested the code gets one grace delivery to end; one that does not is aborted, and what it emitted is dropped.",
   "actions": {
     "audit.record": {
       "ok": true

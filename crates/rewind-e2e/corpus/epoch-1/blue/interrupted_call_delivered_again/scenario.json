@@ -1,5 +1,5 @@
 {
-  "description": "The harness's worker dies while it builds a report: the action is idempotent, so the call is handed out again, with the same idempotency key, and the script only sees its answer.",
+  "description": "The harness's worker dies while it builds a report: the action is idempotent, so the call is handed out again, with the same idempotency key, and the code only sees its answer.",
   "harness_worker": true,
   "actions": {
     "reports.build": { "$sequence": [{ "$crash": true }, { "pages": 12 }] }

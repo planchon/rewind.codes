@@ -1,4 +1,4 @@
-//! The CPU time of each call into the script, as the V8 executor reports it: the engine counts
+//! The CPU time of each call into the code, as the V8 executor reports it: the engine counts
 //! the calls that execute toward the namespace's `cpu_per_month`
 //! (`archi/06-storage-and-scale.md`, "Quotas").
 
@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Epoch, RunId, Script, Seed, Timestamp};
-use rewind_engine::ports::{Delivery, ExecutorError, ScriptExecutor, ScriptInstance, StartScript};
+use rewind_core::{ActionSet, Code, Epoch, RunId, Seed, Timestamp};
+use rewind_engine::ports::{CodeExecutor, CodeInstance, Delivery, ExecutorError, StartCode};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
@@ -32,11 +32,11 @@ export default async function main(input: number) {
 }
 "#;
 
-fn start(executor: &V8Executor, input: u64) -> StartScript {
-    StartScript {
+fn start(executor: &V8Executor, input: u64) -> StartCode {
+    StartCode {
         run_id: RunId::from_u128(1),
         compiled: executor
-            .compile(&Script::new(SPINNER), &ActionSet::default())
+            .compile(&Code::new(SPINNER), &ActionSet::default())
             .unwrap(),
         action_set: ActionSet::default(),
         input: json!(input),
@@ -57,7 +57,7 @@ fn spin(iterations: u64) -> Delivery {
 async fn each_call_reports_the_cpu_time_it_used() {
     let executor = V8Executor::new(SandboxLimits::default()).unwrap();
     let (mut instance, _) = executor.start(start(&executor, 0)).await.unwrap();
-    // Loading the script and `main(input)` take some CPU time, however little.
+    // Loading the code and `main(input)` take some CPU time, however little.
     assert!(instance.cpu_time() > Duration::ZERO);
 
     instance.deliver(spin(50_000_000), T0).await.unwrap();

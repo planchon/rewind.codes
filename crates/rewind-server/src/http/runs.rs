@@ -16,7 +16,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
     SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
 };
-use rewind_core::{Attachments, Matching, RunHandle, RunMode, Script, SecretRef, canonical_json};
+use rewind_core::{Attachments, Code, Matching, RunHandle, RunMode, SecretRef, canonical_json};
 use rewind_engine::attachments::AttachRights;
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{Enqueued, Page, RunMetadata, SCAN_BUDGET, TraceContext};
@@ -47,7 +47,7 @@ pub(super) async fn start(
     let metadata = RunMetadata {
         labels,
         trace_context,
-        // What the run's scripts reach: the runs carrying the key's labels.
+        // What the run's workflows reach: the runs carrying the key's labels.
         scope: caller.labels.clone(),
         secrets,
         ..RunMetadata::default()
@@ -61,10 +61,10 @@ pub(super) async fn start(
                      none",
                 ));
             }
-            if !request.script.is_empty() || request.action_set.is_some() {
+            if !request.code.is_empty() || request.action_set.is_some() {
                 return Err(ApiError::invalid(
-                    "give either a workflow, or a script and its action set: a run of a workflow \
-                     executes the workflow's script with its action set",
+                    "give either a workflow, or a code and its action set: a run of a workflow \
+                     executes the workflow's code with its action set",
                 ));
             }
             let stored =
@@ -92,7 +92,7 @@ pub(super) async fn start(
             let start = rewind_engine::StartRun {
                 tenant: caller.tenant.clone(),
                 namespace,
-                script: Script::new(request.script),
+                code: Code::new(request.code),
                 action_set: stored.action_set,
                 declarations: stored.declarations,
                 input: input.clone(),
@@ -176,7 +176,7 @@ pub(super) async fn list(
     let titles = app
         .titles(
             &caller.tenant,
-            found.summaries.iter().map(|summary| summary.script),
+            found.summaries.iter().map(|summary| summary.code),
         )
         .await?;
     let runs = found
@@ -184,7 +184,7 @@ pub(super) async fn list(
         .iter()
         .map(|found| {
             let mut summary = search::summary(found);
-            summary.script_title = titles.get(&found.script).map(|title| title.title.clone());
+            summary.script_title = titles.get(&found.code).map(|title| title.title.clone());
             summary
         })
         .collect();
@@ -403,11 +403,11 @@ pub(super) async fn fork(
         // The parent's: the caller sees them.
         None => None,
     };
-    let script = Script::new(request.script);
-    super::testing::gate_fork(&app, &parent, &script).await?;
+    let code = Code::new(request.code);
+    super::testing::gate_fork(&app, &parent, &code).await?;
     let fork = rewind_engine::ForkRun {
         parent: parent.head.run.clone(),
-        script,
+        code,
         at: request.at,
         input: request.input,
         ttl: request.ttl.map(|ttl| ttl.get()),

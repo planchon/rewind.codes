@@ -1,9 +1,9 @@
 {
-  "description": "A script that fails does not wait for the runs it started attached: its end cancels them.",
+  "description": "A code that fails does not wait for the runs it started attached: its end cancels them.",
   "live": true,
   "workflows": {
     "triage": {
-      "script": "triage.ts",
+      "code": "triage.ts",
       "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
       "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
       "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }

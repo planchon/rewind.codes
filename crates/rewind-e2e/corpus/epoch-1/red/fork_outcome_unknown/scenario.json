@@ -1,5 +1,5 @@
 {
-  "description": "A run cancelled while a call of an action that is not idempotent was in flight leaves it without an outcome. Its fork never calls such an action twice: the call fails with outcomeUnknown, and the script, which does not catch it, fails.",
+  "description": "A run cancelled while a call of an action that is not idempotent was in flight leaves it without an outcome. Its fork never calls such an action twice: the call fails with outcomeUnknown, and the code, which does not catch it, fails.",
   "actions": {
     "payments.charge": {
       "$defer": true
@@ -16,7 +16,7 @@
     }
   ],
   "fork": {
-    "script": "script.ts"
+    "code": "workflow.ts"
   },
   "expect": {
     "status": "failed",

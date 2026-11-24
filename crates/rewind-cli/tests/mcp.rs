@@ -16,7 +16,7 @@ use rmcp::ServiceExt as _;
 use rmcp::model::CallToolRequestParams;
 use serde_json::{Value, json};
 
-/// What the stand-in server was asked: the namespace of each check, and its script.
+/// What the stand-in server was asked: the namespace of each check, and its code.
 type Seen = Arc<Mutex<Vec<(Option<String>, CheckRequest)>>>;
 
 fn app(seen: Seen) -> Router {
@@ -46,7 +46,7 @@ fn app(seen: Seen) -> Router {
                         let namespace = headers
                             .get("rewind-namespace")
                             .map(|value| value.to_str().unwrap().to_owned());
-                        let refused = request.script.contains("42");
+                        let refused = request.code.contains("42");
                         seen.lock().unwrap().push((namespace, request));
                         axum::Json(if refused {
                             CheckResult {
@@ -118,12 +118,12 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .unwrap();
     assert_eq!(
         orgs.content[0].as_text().unwrap().text,
-        "You reach one organization: the tools act in it without `org`.\n- id local: you may read runs and record tests, check, test, run and retry scripts, signal and cancel runs, read action sets and workflows, list namespaces."
+        "You reach one organization: the tools act in it without `org`.\n- id local: you may read runs and record tests, check, test, run and retry workflows, signal and cancel runs, read action sets and workflows, list namespaces."
     );
 
     let checked = client
         .call_tool(
-            CallToolRequestParams::new("check_script").with_arguments(arguments(json!({
+            CallToolRequestParams::new("check_workflow").with_arguments(arguments(json!({
                 "namespace": "alice",
                 "code": "/** Count to one */\nexport default async () => 1;"
             }))),
@@ -133,12 +133,12 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
     assert_eq!(checked.is_error, Some(false));
     assert_eq!(
         checked.content[0].as_text().unwrap().text,
-        "The script type-checks."
+        "The code type-checks."
     );
 
     let refused = client
         .call_tool(
-            CallToolRequestParams::new("check_script").with_arguments(arguments(json!({
+            CallToolRequestParams::new("check_workflow").with_arguments(arguments(json!({
                 "org": "local",
                 "namespace": "bob",
                 "code": "const x: string = 42;\nexport default async () => x;"
@@ -147,11 +147,11 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .await
         .unwrap();
     assert_eq!(refused.is_error, Some(true));
-    // A script without the comment its title is read from gets a note.
+    // A code without the comment its title is read from gets a note.
     assert_eq!(
         refused.content[0].as_text().unwrap().text,
         format!(
-            "The script does not type-check: 1 error.\nscript.ts:1:7 error TS2322: Type 'number' is not assignable to type 'string'.\n{}",
+            "The code does not type-check: 1 error.\nworkflow.ts:1:7 error TS2322: Type 'number' is not assignable to type 'string'.\n{}",
             rewind_agent_tools::render::UNTITLED_NOTE
         )
     );
@@ -160,7 +160,7 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
     assert_eq!(checks.len(), 2);
     assert_eq!(checks[0].0.as_deref(), Some("alice"));
     assert_eq!(
-        checks[0].1.script,
+        checks[0].1.code,
         "/** Count to one */\nexport default async () => 1;"
     );
     assert_eq!(checks[0].1.action_set, None);

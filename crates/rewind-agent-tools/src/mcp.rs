@@ -138,14 +138,16 @@ impl McpTools {
                 let list = api.list_action_sets().await?;
                 return Ok(result(describe_action_sets(&list), false));
             }
-            "check_script" | "test_script" | "run_script" => {
+            "check_workflow" | "test_workflow" | "run_workflow" => {
                 require_namespace(values)?;
             }
             _ => {}
         }
         let action_set = match name {
             "search_actions" => Some(require_action_set(values)?),
-            "check_script" | "test_script" | "run_script" => optional_string(values, "action_set")?,
+            "check_workflow" | "test_workflow" | "run_workflow" => {
+                optional_string(values, "action_set")?
+            }
             _ => None,
         };
         let session = Session {
@@ -164,9 +166,9 @@ impl McpTools {
                 session.list_secrets(namespace.as_deref()).await
             }
             "search_actions" => session.search_actions(values).await,
-            "check_script" => session.check_script(values).await,
-            "test_script" => session.test_script(values).await,
-            "run_script" => session.run_script(values).await,
+            "check_workflow" => session.check_workflow(values).await,
+            "test_workflow" => session.test_workflow(values).await,
+            "run_workflow" => session.run_workflow(values).await,
             "get_run" => session.get_run(values).await,
             "list_runs" => session.list_runs(values).await,
             "signal_run" => session.signal_run(values).await,
@@ -179,12 +181,12 @@ impl McpTools {
     }
 }
 
-/// What checks, tests and runs a script names its namespace: the end user it acts for.
+/// What checks, tests and runs a code names its namespace: the end user it acts for.
 fn require_namespace(values: &Values) -> Result<(), InputError> {
     match values.get("namespace") {
         Some(Value::String(name)) if !name.is_empty() => Ok(()),
         _ => Err(InputError::new(
-            "`namespace` must be a non-empty string: the namespace (the end user) the script acts for, a name list_namespaces gives or a new one.",
+            "`namespace` must be a non-empty string: the namespace (the end user) the code acts for, a name list_namespaces gives or a new one.",
         )),
     }
 }

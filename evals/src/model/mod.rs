@@ -134,7 +134,7 @@ pub enum ModelError {
     #[error("the scripted model has no turn {0}")]
     ScriptEnded(usize),
     #[error("the scripted turns cannot be read: {0}")]
-    Script(String),
+    Code(String),
 }
 
 /// A model under evaluation.

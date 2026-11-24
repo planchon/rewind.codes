@@ -1,8 +1,8 @@
 //! The eval suite of Rewind (`archi/05-testing-and-observability.md`, "Evals").
 //!
 //! Models solve realistic tasks end to end: they get a system prompt with the action set's
-//! declarations in a prompt rendering, and the agent tools of the SDK (`run_script`,
-//! `check_script`, `get_run`…); their scripts run on the real engine and V8 sandbox, in
+//! declarations in a prompt rendering, and the agent tools of the SDK (`run_workflow`,
+//! `check_workflow`, `get_run`…); their workflows run on the real engine and V8 sandbox, in
 //! virtual time, against deterministic fake MCP servers called through the real MCP client.
 //! Each task's checker looks at the world at the end. Reports give, per model and rendering,
 //! the first-try check pass rate, task success, iterations and tokens.

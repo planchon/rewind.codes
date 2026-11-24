@@ -1,5 +1,5 @@
 //! Workflows across runs, in the driver (`archi/03-execution.md`, "Workflows across runs"): a
-//! script starts and signals runs of a workflow, and receives the end of the runs it started;
+//! code starts and signals runs of a workflow, and receives the end of the runs it started;
 //! a version is saved checked, and the signals to its runs are checked against it.
 
 #![allow(clippy::unwrap_used)]
@@ -9,8 +9,8 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionSet, Attachments, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle,
-    RunMode, RunStatus, Script, Seq, WorkflowSchemas, end_signal_name, ended_run,
+    ActionSet, Attachments, Code, Command, Completion, Digest, Event, HistoryEntry, JsonValue,
+    Lifecycle, RunMode, RunStatus, Seq, WorkflowSchemas, end_signal_name, ended_run,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::attachments::AttachRights;
@@ -217,7 +217,7 @@ fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
         tenant: TenantId::local(),
         name: name.into(),
         description: Some("Triage the stale issues of a repository.".into()),
-        script: Script::new("triage"),
+        code: Code::new("triage"),
         action_set: child_action_set().digest(),
         schemas,
         labels: BTreeMap::new(),
@@ -234,7 +234,7 @@ fn local() -> NamespaceName {
 }
 
 fn start_parent(action_set: &ActionSet, input: JsonValue) -> StartRun {
-    let mut request = StartRun::new(Script::new("parent"), action_set.clone(), input);
+    let mut request = StartRun::new(Code::new("parent"), action_set.clone(), input);
     request.metadata.labels = BTreeMap::from([("agent".to_owned(), "triage".to_owned())]);
     request
 }
@@ -297,7 +297,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
 
     let head = world.view(&child).await.head;
     assert_eq!(head.status, RunStatus::Completed);
-    assert_eq!(head.script, Script::new("triage").digest());
+    assert_eq!(head.code, Code::new("triage").digest());
     assert_eq!(head.action_set, child_action_set().digest());
     let workflow = head.metadata.workflow.clone().unwrap();
     assert_eq!(
@@ -421,7 +421,7 @@ async fn signals_to_a_run_of_a_workflow_are_checked_against_its_version() {
     // A run that is no workflow's takes any name, but not Rewind's.
     let ad_hoc = world
         .run(StartRun::new(
-            Script::new("triage"),
+            Code::new("triage"),
             child_action_set(),
             json!({}),
         ))
@@ -498,10 +498,10 @@ async fn registering_checks_the_name_the_schemas_the_action_set_and_the_types() 
         Err(RegisterError::ActionSetNotFound(_))
     ));
     let mut broken = register("triage", schemas());
-    broken.script = Script::new("syntax error here");
+    broken.code = Code::new("syntax error here");
     assert!(matches!(
         world.edge.register_workflow(broken, &checker, &kit()).await,
-        Err(RegisterError::InvalidScript(_))
+        Err(RegisterError::InvalidCode(_))
     ));
     let error = Diagnostic {
         line: 1,
@@ -512,7 +512,7 @@ async fn registering_checks_the_name_the_schemas_the_action_set_and_the_types() 
         hint: None,
         frame: String::new(),
     };
-    let refusing = StaticTypeChecker::default().with(&Script::new("triage"), vec![error]);
+    let refusing = StaticTypeChecker::default().with(&Code::new("triage"), vec![error]);
     assert!(matches!(
         world
             .edge
@@ -562,7 +562,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
         .await
         .unwrap()
         .run;
-    let mut ad_hoc = StartRun::new(Script::new("triage"), child_action_set(), json!({}));
+    let mut ad_hoc = StartRun::new(Code::new("triage"), child_action_set(), json!({}));
     ad_hoc.metadata.labels = scope.clone();
     let ad_hoc = world.start(ad_hoc).await.unwrap().run;
     let unknown: rewind_core::RunId = "0193a5c4-0000-7000-8000-00000000abcd".parse().unwrap();
@@ -570,7 +570,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
 
     let signal = |target: rewind_core::RunId| {
         let mut request = StartRun::new(
-            Script::new("signaller"),
+            Code::new("signaller"),
             action_set.clone(),
             json!({ "target": target.to_string() }),
         );
@@ -610,7 +610,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
 
     // A start may add labels, never contradict the scope.
     let mut conflicting = StartRun::new(
-        Script::new("starter"),
+        Code::new("starter"),
         action_set.clone(),
         json!({ "labels": { "conversation": "c-2" } }),
     );
@@ -626,7 +626,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
 
     // A version saved without the scope's labels is not started from a scoped run: it may attach
     // the organization's secrets of other labels.
-    let mut scoped = StartRun::new(Script::new("starter"), action_set.clone(), json!({}));
+    let mut scoped = StartRun::new(Code::new("starter"), action_set.clone(), json!({}));
     scoped.metadata.scope = scope.clone();
     scoped.metadata.labels = scope.clone();
     let run = world.run(scoped).await;
@@ -645,7 +645,7 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
     let alice = NamespaceName::new("alice").unwrap();
     let bob = NamespaceName::new("bob").unwrap();
 
-    // A run a script starts acts for the same end user as the script.
+    // A run a code starts acts for the same end user as the code.
     let mut parent = start_parent(&action_set, json!({}));
     parent.namespace = alice.clone();
     let parent = world.run(parent).await;
@@ -667,7 +667,7 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
     world.idle().await;
     let signal = |namespace: &NamespaceName| {
         let mut request = StartRun::new(
-            Script::new("signaller"),
+            Code::new("signaller"),
             action_set.clone(),
             json!({ "target": bobs.id.to_string() }),
         );
@@ -684,7 +684,7 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
     );
     assert_eq!(status(&mut world, &bobs).await, RunStatus::Active);
 
-    // Bob's own script reaches it.
+    // Bob's own code reaches it.
     let own = world.run(signal(&bob)).await;
     assert_eq!(status(&mut world, &own).await, RunStatus::Completed);
     assert_eq!(status(&mut world, &bobs).await, RunStatus::Completed);
@@ -697,7 +697,7 @@ async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
         other => panic!("unexpected call of {other}"),
     });
     let (mut world, _, action_set) = registered_with(dispatcher).await;
-    let mut request = StartRun::new(Script::new("starter"), action_set, json!({}));
+    let mut request = StartRun::new(Code::new("starter"), action_set, json!({}));
     request.mode = RunMode::Mock;
     let parent = world.run(request).await;
     assert_eq!(status(&mut world, &parent).await, RunStatus::Completed);
@@ -745,7 +745,7 @@ async fn a_fork_receives_the_end_of_the_runs_its_copied_history_started() {
 
     // The fork follows the start, then signals the child and waits for its end, as `parent`
     // does when it does not give up.
-    let mut request = ForkRun::new(parent.clone(), Script::new("parent"));
+    let mut request = ForkRun::new(parent.clone(), Code::new("parent"));
     request.input = Some(json!({ "detached": true }));
     let mut gateway = world.driver.gateway(&world.at);
     let fork = world.edge.fork(&mut gateway, request).await.unwrap().run;

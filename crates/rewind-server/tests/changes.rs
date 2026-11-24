@@ -28,7 +28,7 @@ export default async function main() {
 }
 "#;
 
-/// A run of `SIGNAL`, marked so that each run of a test has its own script, with `labels`.
+/// A run of `SIGNAL`, marked so that each run of a test has its own code, with `labels`.
 fn waiting(marker: &str, labels: &[(&str, &str)]) -> StartRun {
     let mut start = StartRun::new(format!("// {marker}\n{SIGNAL}"));
     start.labels = labels.iter().copied().collect::<Labels>();

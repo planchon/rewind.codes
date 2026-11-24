@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 use std::sync::{Mutex, MutexGuard};
 
-use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
 
 use crate::adapters::ControlPlaneChanges;
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::{
-    ActionDeclarations, CatalogError, CatalogStore, CompiledScript, ControlPlaneChange,
+    ActionDeclarations, CatalogError, CatalogStore, CompiledCode, ControlPlaneChange,
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
-    RunRef, ScriptTitle, StoredActionSet, StoredScript, StoredWorkflow, Subscription,
+    RunRef, ScriptTitle, StoredActionSet, StoredCode, StoredWorkflow, Subscription,
     TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, WorkflowFilter,
     namespace_partition,
 };
@@ -26,8 +26,8 @@ pub struct MemoryCatalog {
 
 #[derive(Debug, Default)]
 struct State {
-    scripts: BTreeMap<(TenantId, Digest), StoredScript>,
-    /// The titles people gave scripts.
+    scripts: BTreeMap<(TenantId, Digest), StoredCode>,
+    /// The titles people gave workflows.
     titles: BTreeMap<(TenantId, Digest), ScriptTitle>,
     action_sets: BTreeMap<(TenantId, Digest), StoredActionSet>,
     /// Workflow versions, with the order they were stored in.
@@ -137,23 +137,23 @@ fn missing_test(digest: Digest) -> CatalogError {
 }
 
 impl CatalogStore for MemoryCatalog {
-    async fn put_script(
+    async fn put_code(
         &self,
         tenant: &TenantId,
-        script: &Script,
-        compiled: &CompiledScript,
+        code: &Code,
+        compiled: &CompiledCode,
     ) -> Result<(), CatalogError> {
         let mut state = self.lock()?;
         state
             .scripts
-            .entry((tenant.clone(), script.digest()))
-            .or_insert_with(|| StoredScript {
-                script: script.clone(),
+            .entry((tenant.clone(), code.digest()))
+            .or_insert_with(|| StoredCode {
+                code: code.clone(),
                 compiled: compiled.clone(),
             });
         self.send(ControlPlaneChange::Script {
             tenant: tenant.clone(),
-            digest: script.digest(),
+            digest: code.digest(),
         });
         Ok(())
     }
@@ -162,18 +162,18 @@ impl CatalogStore for MemoryCatalog {
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredScript>, CatalogError> {
+    ) -> Result<Option<StoredCode>, CatalogError> {
         Ok(self.lock()?.scripts.get(&(tenant.clone(), digest)).cloned())
     }
 
     async fn set_script_title(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         title: Option<&ScriptTitle>,
     ) -> Result<bool, CatalogError> {
         let mut state = self.lock()?;
-        let key = (tenant.clone(), script);
+        let key = (tenant.clone(), code);
         if !state.scripts.contains_key(&key) {
             return Ok(false);
         }
@@ -183,7 +183,7 @@ impl CatalogStore for MemoryCatalog {
         };
         self.send(ControlPlaneChange::Script {
             tenant: tenant.clone(),
-            digest: script,
+            digest: code,
         });
         Ok(true)
     }
@@ -198,11 +198,11 @@ impl CatalogStore for MemoryCatalog {
             .iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .filter_map(|script| {
+            .filter_map(|code| {
                 state
                     .titles
-                    .get(&(tenant.clone(), *script))
-                    .map(|title| (*script, title.clone()))
+                    .get(&(tenant.clone(), *code))
+                    .map(|title| (*code, title.clone()))
             })
             .collect())
     }
@@ -359,10 +359,10 @@ impl CatalogStore for MemoryCatalog {
             .collect())
     }
 
-    async fn workflows_with_script(
+    async fn workflows_with_code(
         &self,
         tenant: &TenantId,
-        script: Digest,
+        code: Digest,
         labels: &BTreeMap<String, String>,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
         let state = self.lock()?;
@@ -370,7 +370,7 @@ impl CatalogStore for MemoryCatalog {
             .workflows
             .iter()
             .filter(|((owner, _), (_, stored))| {
-                owner == tenant && stored.workflow.script() == script && stored.carries(labels)
+                owner == tenant && stored.workflow.code() == code && stored.carries(labels)
             })
             .map(|(_, row)| row)
             .collect();

@@ -47,7 +47,7 @@ export default async function main() {
 }
 "#;
 
-/// A script whose activation computes for a while before it sleeps and ends.
+/// A code whose activation computes for a while before it sleeps and ends.
 const BUSY: &str = r#"import { sleep } from "rewind";
 export default async function main(input: { n: number }) {
   let x = 0;
@@ -196,8 +196,8 @@ async fn members(node: &Node, nodes: u32) {
     .await;
 }
 
-fn start(script: &str, input: serde_json::Value) -> StartRun {
-    let mut request = StartRun::new(script);
+fn start(code: &str, input: serde_json::Value) -> StartRun {
+    let mut request = StartRun::new(code);
     request.input = input;
     request
 }

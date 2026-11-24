@@ -68,7 +68,7 @@ async fn messages(
         2 => Json(json!({
             "content": [
                 { "type": "thinking", "thinking": "", "signature": "sig-1" },
-                { "type": "tool_use", "id": "toolu_1", "name": "run_script", "input": { "code": SOLUTION } }
+                { "type": "tool_use", "id": "toolu_1", "name": "run_workflow", "input": { "code": SOLUTION } }
             ],
             "stop_reason": "tool_use",
             "usage": { "input_tokens": 1000, "output_tokens": 100, "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 0 }
@@ -99,7 +99,7 @@ async fn responses(
             "status": "completed",
             "output": [
                 { "type": "reasoning", "id": "rs_1", "encrypted_content": "e", "summary": [] },
-                { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "run_script", "arguments": serde_json::to_string(&json!({ "code": SOLUTION })).unwrap() }
+                { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "run_workflow", "arguments": serde_json::to_string(&json!({ "code": SOLUTION })).unwrap() }
             ],
             "usage": { "input_tokens": 1500, "output_tokens": 300, "input_tokens_details": { "cached_tokens": 0 } }
         }))

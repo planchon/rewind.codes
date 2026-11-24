@@ -31,7 +31,7 @@ use crate::ports::archive::SealedAttempt;
 use crate::ports::cluster::{NodeId, PartitionEpoch};
 use crate::ports::journal::{
     Created, Enqueued, InboxItem, PayloadRecord, QuarantineKind, RunMetadata, StoredActionSet,
-    StoredScript, TaskRef, TaskToken, TraceContext,
+    StoredCode, TaskRef, TaskToken, TraceContext,
 };
 use crate::ports::namespaces::{Month, NamespaceName, QuotaAlert, QuotaExceeded, Usage};
 use crate::ports::partition::{
@@ -232,7 +232,7 @@ pub enum PartitionRequest {
         bucket: Option<NonZeroU32>,
     },
     /// The use in a month of each namespace of the scope the partition holds: CPU time and runs
-    /// created over the month, with its days when `days`; active runs and distinct scripts now.
+    /// created over the month, with its days when `days`; active runs and distinct workflows now.
     /// Answered `Used`; a namespace that used nothing is left out.
     Usage {
         scope: Scope,
@@ -286,7 +286,7 @@ pub struct RunView {
     pub started_by: Option<RunHandle>,
 }
 
-/// A start the edge checked (script, TTL, input, attachments, namespace): the owner answers a
+/// A start the edge checked (code, TTL, input, attachments, namespace): the owner answers a
 /// known start key with its run, asks the organization actor to admit it, then creates it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartAtOwner {
@@ -300,7 +300,7 @@ pub struct StartAtOwner {
     pub metadata: RunMetadata,
     /// Unique in the namespace for as long as the run is kept.
     pub start_key: Option<String>,
-    /// The first line of the script that is not blank: what its summary shows.
+    /// The first line of the code that is not blank: what its summary shows.
     pub headline: String,
     pub created_at: Timestamp,
 }
@@ -393,7 +393,7 @@ pub struct Admit {
     pub epoch: PartitionEpoch,
     pub run: RunId,
     pub namespace: NamespaceName,
-    pub script: Digest,
+    pub code: Digest,
     pub at: Timestamp,
 }
 
@@ -404,7 +404,7 @@ pub struct CountsReport {
     pub partition: PartitionId,
     pub epoch: PartitionEpoch,
     pub namespace: NamespaceName,
-    /// Active runs, and runs kept per script.
+    /// Active runs, and runs kept per code.
     pub gauges: Gauges,
     /// Runs created this month.
     pub created_this_month: u64,
@@ -581,7 +581,7 @@ pub struct ActivationRequest {
     pub payloads: Vec<PayloadRecord>,
     /// For a fork's first activation: its parent's history and payloads.
     pub parent: Option<ParentHistory>,
-    pub script: StoredScript,
+    pub code: StoredCode,
     pub action_set: StoredActionSet,
     pub purpose: Purpose,
     /// The run's call tasks: what its summary shows of its calls.
@@ -644,7 +644,7 @@ pub struct Committed {
     pub children: Vec<(Seq, RunId, bool)>,
     /// A fork's first activation copied its parent's history.
     pub copied: bool,
-    /// The CPU time of the calls into the script that executed, toward the namespace's
+    /// The CPU time of the calls into the code that executed, toward the namespace's
     /// `cpuPerMonth`.
     pub cpu: Duration,
     /// The run's mode, from its `run_started`.

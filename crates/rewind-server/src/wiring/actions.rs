@@ -98,7 +98,7 @@ impl Actions {
         );
         action.description = Some(
             "A URL bound to the run and a signal name: what is posted to it becomes that \
-             signal. Scripts call it through webhook() from \"rewind\"."
+             signal. Workflows call it through webhook() from \"rewind\"."
                 .to_owned(),
         );
         action

@@ -28,7 +28,7 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
 use url::Url;
 
-/// A request, as the script sent it.
+/// A request, as the code sent it.
 #[derive(Debug, Clone)]
 pub(crate) struct Request {
     pub(crate) url: String,
@@ -37,7 +37,7 @@ pub(crate) struct Request {
     pub(crate) body: Option<Vec<u8>>,
 }
 
-/// Headers a script cannot set: the transport's own, and those that would let a request pass
+/// Headers a code cannot set: the transport's own, and those that would let a request pass
 /// for another (`Host`).
 const FORBIDDEN_HEADERS: &[&str] = &[
     "connection",

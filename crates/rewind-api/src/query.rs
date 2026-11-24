@@ -94,7 +94,7 @@ pub enum Filter {
     Duration(Comparison<u64>),
     Calls(Comparison<u64>),
     Errors(Comparison<u64>),
-    /// Lowercase hexadecimal prefixes of the script's digest.
+    /// Lowercase hexadecimal prefixes of the code's digest.
     Script(Vec<String>),
     /// Lowercase hexadecimal prefixes of the action set's digest.
     ActionSet(Vec<String>),

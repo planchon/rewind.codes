@@ -106,7 +106,7 @@ pub(crate) fn summary_of(
             namespace: head.namespace.clone(),
             origin: head.origin.clone(),
             suffix_len: head.suffix_len,
-            script: head.script,
+            code: head.code,
             headline: headline.to_owned(),
             action_set: head.action_set,
             status: if history.is_empty() {
@@ -287,7 +287,7 @@ pub(crate) fn effects_of(
                 if state.pending_timers().contains_key(seq) {
                     timers.push(TimerChange::Set(DueTimer {
                         at: *fire_at,
-                        kind: TimerKind::Script {
+                        kind: TimerKind::Code {
                             run: run.clone(),
                             seq: *seq,
                         },
@@ -295,7 +295,7 @@ pub(crate) fn effects_of(
                 }
             }
             Event::Command(Command::CancelTimer { seq }) if !started_here.contains(seq) => {
-                timers.push(TimerChange::Cancel(TimerKind::Script {
+                timers.push(TimerChange::Cancel(TimerKind::Code {
                     run: run.clone(),
                     seq: *seq,
                 }));
@@ -333,7 +333,7 @@ pub(crate) fn shapes_of(
 }
 
 /// The counters the new entries (`from` on) move, per hour of their `recorded_at`: the run's
-/// start and end, its duration and failure group, its workflow and script, the calls of each
+/// start and end, its duration and failure group, its workflow and code, the calls of each
 /// action; and the CPU time of the activation in the hour of `now`.
 pub(crate) fn counters_of(
     head: &RunHead,
@@ -359,17 +359,17 @@ pub(crate) fn counters_of(
                         .or_default()
                         .started += 1;
                 }
-                let script = counters.scripts.entry(head.script).or_default();
-                script.runs.started += 1;
-                script.first_started_at = Some(entry.recorded_at);
-                script.last_started_at = Some(entry.recorded_at);
+                let code = counters.scripts.entry(head.code).or_default();
+                code.runs.started += 1;
+                code.first_started_at = Some(entry.recorded_at);
+                code.last_started_at = Some(entry.recorded_at);
             }
             Event::Command(Command::ScheduleCall { action, .. }) => {
                 let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
                 counters.actions.entry(action.clone()).or_default().calls += 1;
                 counters
                     .scripts
-                    .entry(head.script)
+                    .entry(head.code)
                     .or_default()
                     .actions
                     .insert(action.clone());
@@ -417,7 +417,7 @@ pub(crate) fn counters_of(
             }
             *counters
                 .scripts
-                .entry(head.script)
+                .entry(head.code)
                 .or_default()
                 .runs
                 .ended
@@ -430,7 +430,7 @@ pub(crate) fn counters_of(
                         signature: ending.signature.clone(),
                         error: ending.error.clone(),
                         runs: 1,
-                        scripts: BTreeMap::from([(head.script, 1)]),
+                        scripts: BTreeMap::from([(head.code, 1)]),
                         lines: ending.line.map(|line| (line, 1)).into_iter().collect(),
                         latest: vec![LatestRun {
                             run: head.run.id,
@@ -645,7 +645,7 @@ mod tests {
             namespace: NamespaceName::new("alice").unwrap(),
             origin: "script".into(),
             suffix_len: 12,
-            script: Digest::of(b"script"),
+            code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
             status: RunStatus::Active,
             epoch: Epoch(1),
@@ -686,10 +686,10 @@ mod tests {
 
     /// A long history of every kind of entry: calls completed, failed and left pending; timers
     /// fired, cancelled, used as a signal's timeout, timed out, left pending; signals received
-    /// and left awaited; logs; then a cancellation the script ends with.
+    /// and left awaited; logs; then a cancellation the code ends with.
     fn varied_history(rounds: u32) -> Vec<HistoryEntry> {
         let mut events = vec![Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: Digest::of(b"script"),
+            code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
             input: json!({}).into(),
             seed: Seed::from_bytes([1; 32]),

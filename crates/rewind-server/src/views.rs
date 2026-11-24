@@ -15,7 +15,7 @@ use rewind_core::{
     Annotation, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, RunOutcome, RunState,
     ScriptError, Seq,
 };
-use rewind_engine::failures::script_location;
+use rewind_engine::failures::code_location;
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{
     BlobOwner, BlobStore, CatalogStore, ParkKind, QuarantineKind, RunRef, TaskRecord, TaskRef,
@@ -261,9 +261,9 @@ impl Views<'_> {
         let tenant = &head.run.tenant;
         let script_title = self
             .app
-            .titles(tenant, [head.script])
+            .titles(tenant, [head.code])
             .await?
-            .remove(&head.script)
+            .remove(&head.code)
             .map(|title| title.title);
         // A run named by a handle, or by its id once it is erased.
         let named = |handle: Option<&rewind_core::RunHandle>, run: rewind_core::RunId| {
@@ -295,7 +295,7 @@ impl Views<'_> {
                 },
                 reason: quarantine.reason.clone(),
             }),
-            script: head.script.to_hex(),
+            code_digest: head.code.to_hex(),
             script_title,
             action_set: head.action_set.to_hex(),
             epoch: head.epoch.0,
@@ -349,15 +349,15 @@ impl Views<'_> {
         let location = failure
             .stack
             .as_deref()
-            .and_then(script_location)
-            .or_else(|| script_location(&failure.message));
+            .and_then(code_location)
+            .or_else(|| code_location(&failure.message));
         let frame = match location {
             Some((line, column)) => self
                 .app
                 .catalog()
-                .get_script(&head.run.tenant, head.script)
+                .get_script(&head.run.tenant, head.code)
                 .await?
-                .and_then(|stored| code_frame(stored.script.source(), line, column)),
+                .and_then(|stored| code_frame(stored.code.source(), line, column)),
             None => None,
         };
         let failed_call = failure
@@ -516,7 +516,7 @@ pub(crate) fn view(
     }
 }
 
-/// The last log lines of the script.
+/// The last log lines of the code.
 fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
     let mut lines: Vec<LogLine> = history
         .iter()
@@ -540,7 +540,7 @@ fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
     lines
 }
 
-/// The call whose failure the script did not catch: its `seq`, as `ScriptError::failed_call`
+/// The call whose failure the code did not catch: its `seq`, as `ScriptError::failed_call`
 /// finds it, with its arguments and recorded failure.
 fn failed_call(
     history: &[HistoryEntry],
@@ -592,9 +592,9 @@ pub(crate) fn quotas(quotas: &rewind_engine::ports::Quotas) -> rewind_api::names
         cpu_per_month: quotas.cpu_per_month.map(Into::into),
         active_runs: quotas.active_runs,
         runs_per_month: quotas.runs_per_month,
-        scripts: quotas.scripts,
+        workflows: quotas.workflows,
         max_ttl: quotas.max_ttl.map(Into::into),
-        max_script_lines: quotas.max_script_lines,
+        max_code_lines: quotas.max_code_lines,
     }
 }
 
@@ -606,9 +606,9 @@ pub(crate) fn engine_quotas(
         cpu_per_month: quotas.cpu_per_month.map(|duration| duration.get()),
         active_runs: quotas.active_runs,
         runs_per_month: quotas.runs_per_month,
-        scripts: quotas.scripts,
+        workflows: quotas.workflows,
         max_ttl: quotas.max_ttl.map(|duration| duration.get()),
-        max_script_lines: quotas.max_script_lines,
+        max_code_lines: quotas.max_code_lines,
     }
 }
 
@@ -618,7 +618,7 @@ pub(crate) fn usage(usage: &rewind_engine::ports::Usage) -> rewind_api::namespac
         cpu: usage.cpu.into(),
         active_runs: usage.active_runs,
         runs_started: usage.runs_started,
-        scripts: usage.scripts,
+        workflows: usage.workflows,
     }
 }
 
@@ -634,9 +634,9 @@ pub(crate) fn quota_alert(
             Kind::CpuPerMonth => QuotaKind::CpuPerMonth,
             Kind::ActiveRuns => QuotaKind::ActiveRuns,
             Kind::RunsPerMonth => QuotaKind::RunsPerMonth,
-            Kind::Scripts => QuotaKind::Scripts,
+            Kind::Workflows => QuotaKind::Workflows,
             Kind::MaxTtl => QuotaKind::MaxTtl,
-            Kind::MaxScriptLines => QuotaKind::MaxScriptLines,
+            Kind::MaxCodeLines => QuotaKind::MaxCodeLines,
         },
         threshold: alert.key.threshold.percent(),
         used: alert.used,

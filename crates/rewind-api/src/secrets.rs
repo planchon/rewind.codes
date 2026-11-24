@@ -219,7 +219,7 @@ impl Jwk {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentProblemKind {
-    /// The script imports the server, whose `auth` takes a secret, and nothing is attached.
+    /// The code imports the server, whose `auth` takes a secret, and nothing is attached.
     Missing,
     /// The server or API takes no secret, or the action set has none of that name.
     TakesNone,

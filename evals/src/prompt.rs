@@ -53,21 +53,21 @@ impl FromStr for Rendering {
 }
 
 const INTRODUCTION: &str = "\
-You solve tasks by writing TypeScript scripts that Rewind runs for you, through the tools \
-run_script, check_script, test_script, get_run, list_runs, signal_run, cancel_run, retry_run, \
+You solve tasks by writing TypeScript workflows that Rewind runs for you, through the tools \
+run_workflow, check_workflow, test_workflow, get_run, list_runs, signal_run, cancel_run, retry_run, \
 search_actions, save_workflow, get_workflow and record_tests.
 
-- A script is one ES module whose default export is `async function main(input)`. What `main` \
+- A code is one ES module whose default export is `async function main(input)`. What `main` \
 returns is the run's output, as JSON.
 - It imports its actions from \"rewind:actions\", and `sleep`, `signal`, `webhook`, `run`, \
 `ActionError` and `CancelledError` from \"rewind\". Nothing else can be imported: there is no npm, \
 no `fetch`, no file system and no `process`.
 - A call that fails throws an `ActionError`. Runs are durable: `await sleep(\"2d\")` and \
-`await signal(\"name\")` can last days, and a script sees time move only as its run does.
-- run_script type-checks the script before running it: fix what the diagnostics say and run it \
-again. When a run fails halfway, retry_run starts it again with a corrected script, without \
+`await signal(\"name\")` can last days, and a code sees time move only as its run does.
+- run_workflow type-checks the code before running it: fix what the diagnostics say and run it \
+again. When a run fails halfway, retry_run starts it again with a corrected code, without \
 repeating the calls it already made.
-- A workflow is a script saved with a name and schemas (save_workflow). Each version carries \
+- A workflow is a code saved with a name and schemas (save_workflow). Each version carries \
 its tests, which every later version must pass: a version is saved only if they all do.
 - When the task is done, answer with a short summary of what you did, and the answer if the \
 task asks a question.";

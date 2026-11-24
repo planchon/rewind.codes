@@ -614,7 +614,7 @@ impl Answered<'_> {
     }
 }
 
-/// A successful answer's body as the script receives it.
+/// A successful answer's body as the code receives it.
 fn result(body: &[u8], content_type: Option<&str>) -> Value {
     if body.is_empty() {
         return Value::Null;

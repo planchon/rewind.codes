@@ -1,4 +1,4 @@
-//! `rewind-actions.d.ts`: the declarations of `rewind:actions` that tsgo checks scripts against.
+//! `rewind-actions.d.ts`: the declarations of `rewind:actions` that tsgo checks workflows against.
 //!
 //! ```ts
 //! declare module "rewind:actions" {

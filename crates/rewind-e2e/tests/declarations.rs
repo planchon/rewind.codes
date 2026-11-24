@@ -10,8 +10,8 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use rewind_check::TsgoChecker;
-use rewind_core::{Action, ActionRoute, ActionSet, Builtin, McpServer, McpTransport, Script};
-use rewind_engine::ports::{Diagnostic, DiagnosticSource, ScriptExecutor};
+use rewind_core::{Action, ActionRoute, ActionSet, Builtin, Code, McpServer, McpTransport};
+use rewind_engine::ports::{CodeExecutor, Diagnostic, DiagnosticSource};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
@@ -80,7 +80,7 @@ fn action_set(http_action: bool) -> ActionSet {
     ActionSet::new([server], actions).unwrap()
 }
 
-/// What the checker says of a script, against the declarations codegen writes for the action set.
+/// What the checker says of a code, against the declarations codegen writes for the action set.
 async fn check(source: &str, action_set: &ActionSet) -> Vec<Diagnostic> {
     let declarations = rewind_codegen::generate(action_set, &BTreeMap::new());
     CHECKER
@@ -89,10 +89,10 @@ async fn check(source: &str, action_set: &ActionSet) -> Vec<Diagnostic> {
         .unwrap_or_else(|error| panic!("{error}\n{}", declarations.typescript))
 }
 
-/// What the runtime says of a script when a run starts.
+/// What the runtime says of a code when a run starts.
 fn compile(source: &str, action_set: &ActionSet) -> Result<(), String> {
     EXECUTOR
-        .compile(&Script::new(source), action_set)
+        .compile(&Code::new(source), action_set)
         .map(|_| ())
         .map_err(|invalid| invalid.message)
 }
@@ -155,11 +155,11 @@ export default async function main() {
 #[tokio::test]
 async fn code_written_with_the_old_names_checks_and_starts() {
     let action_set = action_set(false);
-    let script = OLD_NAMES;
-    assert_eq!(summary(&check(script, &action_set).await), []);
-    assert_eq!(compile(script, &action_set), Ok(()));
+    let code = OLD_NAMES;
+    assert_eq!(summary(&check(code, &action_set).await), []);
+    assert_eq!(compile(code, &action_set), Ok(()));
     // The old names reach the same exports: a wrong argument is refused through either.
-    let wrong = script.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
+    let wrong = code.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
     assert_eq!(
         summary(&check(&wrong, &action_set).await),
         [(
@@ -167,7 +167,7 @@ async fn code_written_with_the_old_names_checks_and_starts() {
             "Type 'number' is not assignable to type 'string'.".to_owned()
         )]
     );
-    let missing = script.replace("{ crm, ask_user }", "{ crm, jira }");
+    let missing = code.replace("{ crm, ask_user }", "{ crm, jira }");
     assert!(compile(&missing, &action_set).is_err());
     assert!(!check(&missing, &action_set).await.is_empty());
 }
@@ -184,9 +184,9 @@ async fn the_old_names_are_declared_nowhere() {
 
 #[tokio::test]
 async fn args_of_the_wrong_type_are_refused() {
-    let script = GOOD.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
+    let code = GOOD.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
     assert_eq!(
-        summary(&check(&script, &action_set(true)).await),
+        summary(&check(&code, &action_set(true)).await),
         [(
             "TS2322".into(),
             "Type 'number' is not assignable to type 'string'.".into()
@@ -201,7 +201,7 @@ async fn fetch_needs_the_http_action() {
         summary(&diagnostics),
         [(
             "absent-global".into(),
-            "`fetch` does not exist in Rewind scripts.".into()
+            "`fetch` does not exist in Rewind workflows.".into()
         )]
     );
     assert_eq!(diagnostics[0].line, 12);
@@ -209,10 +209,10 @@ async fn fetch_needs_the_http_action() {
 
 #[tokio::test]
 async fn built_ins_are_not_in_rewind_actions_for_either() {
-    let script = "import { http, webhook } from \"rewind:actions\";\n\nexport default async function main() {\n  return [http, webhook];\n}\n";
+    let code = "import { http, webhook } from \"rewind:actions\";\n\nexport default async function main() {\n  return [http, webhook];\n}\n";
     let action_set = action_set(true);
     assert_eq!(
-        summary(&check(script, &action_set).await),
+        summary(&check(code, &action_set).await),
         [
             (
                 "TS2305".into(),
@@ -224,7 +224,7 @@ async fn built_ins_are_not_in_rewind_actions_for_either() {
             ),
         ]
     );
-    let refused = compile(script, &action_set).unwrap_err();
+    let refused = compile(code, &action_set).unwrap_err();
     assert!(
         refused.starts_with("\"rewind:actions\" has no export named \"http\""),
         "{refused}"
@@ -233,12 +233,12 @@ async fn built_ins_are_not_in_rewind_actions_for_either() {
 
 #[tokio::test]
 async fn types_are_imported_as_types_for_both() {
-    let script = GOOD.replace(
+    let code = GOOD.replace(
         "import { crm, ask_user } from \"rewind:actions\";\nimport type { ActionContent } from \"rewind:actions\";",
         "import { crm, ask_user, ActionContent } from \"rewind:actions\";",
     );
     let action_set = action_set(true);
-    let diagnostics = summary(&check(&script, &action_set).await);
+    let diagnostics = summary(&check(&code, &action_set).await);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].0, "TS1484");
     assert!(
@@ -247,7 +247,7 @@ async fn types_are_imported_as_types_for_both() {
             .starts_with("'ActionContent' is a type and must be imported using a type-only import"),
         "{diagnostics:?}"
     );
-    let refused = compile(&script, &action_set).unwrap_err();
+    let refused = compile(&code, &action_set).unwrap_err();
     assert!(
         refused.starts_with("\"rewind:actions\" has no export named \"ActionContent\""),
         "{refused}"
@@ -265,12 +265,12 @@ async fn the_golden_declarations_of_codegen_check() {
         let Ok(declarations) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let script = "export default async function main() {\n  return 1 + \"x\" * 2;\n}\n";
+        let code = "export default async function main() {\n  return 1 + \"x\" * 2;\n}\n";
         let diagnostics = CHECKER
-            .check_source(script, &declarations)
+            .check_source(code, &declarations)
             .await
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        // The script's own mistake only: the declarations add none.
+        // The code's own mistake only: the declarations add none.
         assert_eq!(
             summary(&diagnostics),
             [(
@@ -289,7 +289,7 @@ async fn the_golden_declarations_of_codegen_check() {
 }
 
 /// An action set in which `name` is a server, a group of harness actions or a harness action
-/// without a group, each action taking `{ q: string }` and returning `{ id: string }`; and a script
+/// without a group, each action taking `{ q: string }` and returning `{ id: string }`; and a code
 /// that calls it.
 fn named(name: &str) -> Vec<(ActionSet, String)> {
     let input = json!({
@@ -350,7 +350,7 @@ fn named(name: &str) -> Vec<(ActionSet, String)> {
 }
 
 /// Names that are keywords somewhere, globals, or the declarations' own types, but not
-/// reserved words: an action set takes them, the checker accepts a script that imports them, and
+/// reserved words: an action set takes them, the checker accepts a code that imports them, and
 /// the runtime starts it. The reserved words are refused by the action set (`rewind-core`).
 #[tokio::test]
 async fn names_that_are_not_reserved_words_check_and_start() {
@@ -371,10 +371,10 @@ async fn names_that_are_not_reserved_words_check_and_start() {
         "ActionContent",
         "Promise",
     ] {
-        for (action_set, script) in named(name) {
-            let diagnostics = summary(&check(&script, &action_set).await);
-            assert_eq!(diagnostics, [], "{name}:\n{script}");
-            assert_eq!(compile(&script, &action_set), Ok(()), "{name}:\n{script}");
+        for (action_set, code) in named(name) {
+            let diagnostics = summary(&check(&code, &action_set).await);
+            assert_eq!(diagnostics, [], "{name}:\n{code}");
+            assert_eq!(compile(&code, &action_set), Ok(()), "{name}:\n{code}");
         }
     }
 }
@@ -386,7 +386,7 @@ fn triage() -> rewind_core::Workflow {
     rewind_core::Workflow::new(
         "triage",
         Some("Triage the stale issues of a repository.".into()),
-        Script::new(TRIAGE).digest(),
+        Code::new(TRIAGE).digest(),
         action_set(false).digest(),
         rewind_core::WorkflowSchemas {
             input: json!({

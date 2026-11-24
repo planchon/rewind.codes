@@ -1,11 +1,11 @@
 // Bootstrap of the Rewind sandbox, determinism epoch 1.
 //
-// FROZEN once 0.1 ships: a change a script can observe (a seq, a digest, a value, a global)
+// FROZEN once 0.1 ships: a change a code can observe (a seq, a digest, a value, a global)
 // needs a new epoch (archi/03-execution.md, "Determinism epoch").
 //
 // It runs once per process, when the epoch's V8 startup snapshot is built: it makes every
 // source of non-determinism deterministic, installs the web-standard globals of deno_web,
-// and leaves the hooks Rust drives the script with in `globalThis.__rewindHooks`. Every instance
+// and leaves the hooks Rust drives the code with in `globalThis.__rewindHooks`. Every instance
 // starts from that snapshot. Rust takes the hooks, then calls init(config) with what belongs to
 // the run (its id, its start, its seed, whether the action set has the http action); init removes the
 // ambient capabilities, `Deno`, `__bootstrap` and the hooks from the global object before any
@@ -210,7 +210,7 @@
   }
 
   // A clone copies the resizable buffers it holds: each copy takes its own reservation. A
-  // clone is plain data made by V8 (no accessor, no proxy), so walking it runs no script code.
+  // clone is plain data made by V8 (no accessor, no proxy), so walking it runs no code code.
   function reserveClonedBuffers(clone) {
     const seen = new primordials.SafeSet();
     const stack = [clone];
@@ -264,7 +264,7 @@
   // 64 MiB heap, and past 2^27 elements V8 aborts the process ("invalid size"). An element takes
   // at least 8 bytes of heap, so a call that must create more than the heap holds can only
   // exceed the heap limit: it ends the call at once, as the heap limit does. A call is measured
-  // only from what reading cannot run script code: the length of an array that is not a proxy,
+  // only from what reading cannot run code code: the length of an array that is not a proxy,
   // or an own data property `length`, and arguments that are primitives. Anything else goes to
   // V8 unchecked.
 
@@ -285,7 +285,7 @@
   const toNumberOrUndefined = (value) =>
     isPrimitive(value) && typeof value !== "symbol" && typeof value !== "bigint" ? +value : undefined;
 
-  // ToLength of a primitive; undefined when converting could run script code or throw.
+  // ToLength of a primitive; undefined when converting could run code code or throw.
   function toLength(value) {
     const number = toNumberOrUndefined(value);
     if (number === undefined) return undefined;
@@ -293,7 +293,7 @@
     return integer <= 0 ? 0 : integer > MAX_SAFE_INTEGER ? MAX_SAFE_INTEGER : integer;
   }
 
-  // The length a built-in reads from `object`, when reading it cannot run script code.
+  // The length a built-in reads from `object`, when reading it cannot run code code.
   function plainLength(object) {
     if (isPrimitive(object) || isProxy(object)) return undefined;
     if (ArrayIsArray(object)) return object.length;
@@ -312,7 +312,7 @@
   }
 
   // Whether nothing on `object`'s prototype chain, `object` included, has `key`, and no proxy
-  // is on it: looking `key` up then runs no script code.
+  // is on it: looking `key` up then runs no code code.
   function plainlyLacks(object, key) {
     for (let current = object; current !== null; current = primordials.ObjectGetPrototypeOf(current)) {
       if (isProxy(current) || ObjectGetOwnPropertyDescriptor(current, key) !== undefined) return false;
@@ -388,7 +388,7 @@
 
   const NativeArray = primordials.Array;
   guard(NativeArray, "from", function (items, mapFn) {
-    // With a function to map elements, each element runs script code, which checks for
+    // With a function to map elements, each element runs code code, which checks for
     // interrupts. An iterable goes through the iteration protocol, which does too.
     if (this !== NativeArray || mapFn !== undefined || isPrimitive(items)) return;
     if (!plainlyLacks(items, primordials.SymbolIterator)) return;
@@ -418,23 +418,23 @@
   });
 
   // ---------------------------------------------------------------------------------------
-  // Stacks: the script's own frames only. Frames of the runtime's modules (`rewind:…`) and of
+  // Stacks: the code's own frames only. Frames of the runtime's modules (`rewind:…`) and of
   // the web globals (`ext:…`) would leak their line numbers into journals.
 
-  const SCRIPT_FRAME = /file:\/\/\/script\.ts:(\d+):(\d+)/;
+  const CODE_FRAME = /file:\/\/\/workflow\.ts:(\d+):(\d+)/;
   // Such as "    at start (rewind:bootstrap:467:16)" or "    at new URL (ext:deno_web/00_url.js:1:2)".
   const INTERNAL_FRAME = /^\s+at (?:.* \()?(?:rewind:\w+|ext:[\w/.-]+):\d+:\d+\)?$/;
 
   function callsite() {
     const stack = new Error().stack ?? "";
     for (const line of StringPrototypeSplit(stack, "\n")) {
-      const match = RegExpPrototypeExec(SCRIPT_FRAME, line);
+      const match = RegExpPrototypeExec(CODE_FRAME, line);
       if (match) return [NumberParseInt(match[1], 10), NumberParseInt(match[2], 10)];
     }
     return [0, 0];
   }
 
-  function scriptStack(stack) {
+  function codeStack(stack) {
     return ArrayPrototypeJoin(
       ArrayPrototypeFilter(
         StringPrototypeSplit(String(stack ?? ""), "\n"),
@@ -444,13 +444,13 @@
     );
   }
 
-  // An error raised by the glue on behalf of a call the script made: a fresh error of the same
-  // kind, whose stack starts at the script's call.
+  // An error raised by the glue on behalf of a call the code made: a fresh error of the same
+  // kind, whose stack starts at the code's call.
   function atCallSite(error) {
     const Kind = ObjectPrototypeIsPrototypeOf(RangeError.prototype, error) ? RangeError : TypeError;
     const raised = new Kind(String(error?.message ?? error));
     ObjectDefineProperty(raised, "stack", {
-      value: scriptStack(raised.stack),
+      value: codeStack(raised.stack),
       writable: true,
       configurable: true,
     });
@@ -474,7 +474,7 @@
     if (args.length === 0) return ReflectConstruct(NativeDate, [now()], new.target);
     return ReflectConstruct(NativeDate, args, new.target);
   };
-  // NativeDate stays private: through it, a script would read the real clock. Only its pure
+  // NativeDate stays private: through it, a code would read the real clock. Only its pure
   // static methods are copied.
   for (const name of ["parse", "UTC"]) {
     ObjectDefineProperty(LogicalDate, name, {
@@ -568,7 +568,7 @@
   );
 
   // ---------------------------------------------------------------------------------------
-  // Errors the script can see. They are created by the glue, outside the script's code, so
+  // Errors the code can see. They are created by the glue, outside the code's code, so
   // their stack is only their name and message: no frame of the glue leaks into a journal.
 
   function ownStack(error) {
@@ -627,7 +627,7 @@
   class DeadlockError extends Error {
     constructor() {
       super(
-        "main has not settled, and nothing can wake the script: no call, timer or signal wait is pending",
+        "main has not settled, and nothing can wake the code: no call, timer or signal wait is pending",
       );
       this.name = "DeadlockError";
       ownStack(this);
@@ -635,16 +635,16 @@
   }
 
   // ---------------------------------------------------------------------------------------
-  // How a script ends (archi/03-execution.md): the outcome is evaluated each time the script
+  // How a code ends (archi/03-execution.md): the outcome is evaluated each time the code
   // goes idle, and the terminal command waits until no call is in flight.
 
   let main;
   let mainState = "running"; // "returned" | "threw"
   // The JSON of main's return value, serialized as soon as main returns: serializing runs the
-  // script's code (toJSON, getters), which must not happen once the outcome is decided.
+  // code's code (toJSON, getters), which must not happen once the outcome is decided.
   let output;
   // { name, message, stack }, captured as soon as the run is known to fail. From then on, no
-  // script code runs any more.
+  // code code runs any more.
   let failure;
   let cancellation; // the message of the cancellation, once one was requested
   let ended = false; // the terminal command was emitted
@@ -669,10 +669,10 @@
       return {
         name: String(error.name),
         message: String(error.message),
-        stack: scriptStack(error.stack),
+        stack: codeStack(error.stack),
       };
     } catch {
-      return { name: "Error", message: "the script failed with a value that cannot be described", stack: "" };
+      return { name: "Error", message: "the code failed with a value that cannot be described", stack: "" };
     }
   }
 
@@ -695,7 +695,7 @@
   }
 
   // What an MCP action pinned without an output schema returns, `{ content, structuredContent? }`,
-  // reaches the script with two helpers (archi/04-tools.md, "Action sets and code generation"),
+  // reaches the code with two helpers (archi/04-tools.md, "Action sets and code generation"),
   // as `rewind-actions.d.ts` declares them in `ActionContent`: `text()` joins the text blocks with
   // newlines; `json()` is `structuredContent` when the action sent it, else `text()` parsed as
   // JSON. They live on a frozen prototype, not enumerable: the value's own keys stay the
@@ -738,7 +738,7 @@
 
   // A call: the op checks the arguments against the action's pinned input schema and
   // records the command. A call without arguments sends `{}`. A call refused before it is
-  // recorded rejects with an error whose stack starts at the script's call. `content`: the
+  // recorded rejects with an error whose stack starts at the code's call. `content`: the
   // result is MCP content, which gets the helpers of `ActionContent`.
   function callAction(action, args, content = false) {
     let json;
@@ -818,7 +818,7 @@
   const mailboxes = new SafeMap(); // name -> [payload]
   const waiters = new SafeMap(); // name -> [{ resolve, reject, timeoutSeq }]
 
-  // Names starting with this prefix are Rewind's: no mailbox the script reads holds them.
+  // Names starting with this prefix are Rewind's: no mailbox the code reads holds them.
   const RESERVED = "rewind:";
 
   function signal(name, options) {
@@ -875,7 +875,7 @@
   // Workflows across runs (archi/03-execution.md): `workflows.<name>.start` and
   // `workflows.<name>.signal` are calls. The end of a run this run started, or watches,
   // comes back as the signal `rewind:ended:<run id>`, which the glue takes itself: it never
-  // reaches a mailbox the script reads. An end may arrive before the start's result: it is kept.
+  // reaches a mailbox the code reads. An end may arrive before the start's result: it is kept.
 
   const ENDED = "rewind:ended:";
   const ends = new SafeMap(); // run id -> its end, as the signal carried it
@@ -1350,7 +1350,7 @@
   function show(value) {
     if (typeof value === "string") return value;
     if (value instanceof Error) {
-      return value.stack === undefined ? `${value.name}: ${value.message}` : scriptStack(value.stack);
+      return value.stack === undefined ? `${value.name}: ${value.message}` : codeStack(value.stack);
     }
     try {
       return JSONStringify(value) ?? String(value);
@@ -1412,7 +1412,7 @@
       workflow,
       setMain(fn) {
         if (typeof fn !== "function") {
-          throw new TypeError("the script must `export default` its main function");
+          throw new TypeError("the code must `export default` its main function");
         }
         main = fn;
       },
@@ -1512,8 +1512,8 @@
     }
   }
 
-  // Called once microtasks are drained: decides whether the script has ended. Once it has,
-  // the terminal command is emitted from what was captured: no script code runs any more.
+  // Called once microtasks are drained: decides whether the code has ended. Once it has,
+  // the terminal command is emitted from what was captured: no code code runs any more.
   function idle() {
     if (ended) return;
     // Rejections still without a handler after the microtask checkpoint are unhandled.
@@ -1527,7 +1527,7 @@
       // cancels them.
       if (callsInFlight === 0 && (attached.size === 0 || cancellation !== undefined)) end();
     } else if (callsInFlight === 0 && !hasPendingTimers() && !hasSignalWaiters()) {
-      // Nothing can wake the script any more. After a cancellation, that is how it ends.
+      // Nothing can wake the code any more. After a cancellation, that is how it ends.
       fail(cancellation === undefined ? new DeadlockError() : new CancelledError(cancellation));
       end();
     }

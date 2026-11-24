@@ -156,14 +156,14 @@ pub struct DeferCall {
     pub timeout: Option<Duration>,
 }
 
-/// `POST /v1/calls/{token}/complete`: the action's result, delivered to the script.
+/// `POST /v1/calls/{token}/complete`: the action's result, delivered to the code.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompleteCall {
     pub result: Value,
 }
 
-/// `POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the
+/// `POST /v1/calls/{token}/fail`: the action failed. The code gets an `ActionError`, unless the
 /// failure is retryable and the action is idempotent: the call is then delivered again, with
 /// backoff.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]

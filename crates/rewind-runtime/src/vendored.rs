@@ -2,7 +2,7 @@
 //!
 //! deno_core records an extension's sources by their path on the build machine
 //! (`LoadedFromFsDuringSnapshot`) and reads them when a snapshot is built, expecting a build
-//! script to build it. This crate builds its snapshots at run time, on whatever machine runs the
+//! code to build it. This crate builds its snapshots at run time, on whatever machine runs the
 //! binary, where that path does not exist: the snapshot build gets these copies from memory
 //! instead (`LoadedFromMemoryDuringSnapshot`). Isolates started from the snapshot never read an
 //! extension's sources.

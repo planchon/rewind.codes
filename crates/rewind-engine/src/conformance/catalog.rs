@@ -1,4 +1,4 @@
-//! The conformance suite of `CatalogStore`: scripts and action sets by digest, workflow versions
+//! The conformance suite of `CatalogStore`: workflows and action sets by digest, workflow versions
 //! and their order, the tests and the suites that reference them, subscriptions, tenants,
 //! namespaces with their partition, display names, listing and erasure, and the change every
 //! write sends.
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::{Stream, StreamExt as _};
 use rewind_core::{
-    ActionSet, Digest, Epoch, Script, Suite, SuiteTest, Timestamp, Workflow, WorkflowSchemas,
+    ActionSet, Code, Digest, Epoch, Suite, SuiteTest, Timestamp, Workflow, WorkflowSchemas,
 };
 use serde_json::json;
 
@@ -19,7 +19,7 @@ use super::{T0, tenant};
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::cluster::Membership;
 use crate::ports::{
-    ActionDeclarations, CatalogError, CatalogStore, Cluster, CompiledScript, ControlPlaneChange,
+    ActionDeclarations, CatalogError, CatalogStore, Cluster, CompiledCode, ControlPlaneChange,
     DeleteNamespace, DisplayName, DropNamespace, NamespaceName, NamespaceWrite, NodeId, NodeInfo,
     Quotas, ScriptTitle, Secret, Subscription, TEST_GRACE, Tenant, TenantId, TestRecord,
     WebhookEventType, WorkflowFilter, namespace_partition,
@@ -89,11 +89,11 @@ fn action_set_digest() -> Digest {
     Digest::of(b"action_set")
 }
 
-fn workflow(name: &str, script: &str) -> Workflow {
+fn workflow(name: &str, code: &str) -> Workflow {
     Workflow::new(
         name,
         Some(format!("The {name} workflow")),
-        Digest::of(script.as_bytes()),
+        Digest::of(code.as_bytes()),
         action_set_digest(),
         WorkflowSchemas {
             input: json!({ "type": "object" }),
@@ -146,47 +146,47 @@ async fn ensure<C: CatalogStore>(catalog: &C, tenant: &TenantId, name: &Namespac
 }
 
 // -------------------------------------------------------------------------------------------
-// Scripts, action sets, workflows
+// Workflows, action sets, workflows
 
 pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogStore>(catalog: &C) {
     let other = tenant("other");
-    let script = Script::new("export default () => 1");
-    let compiled = CompiledScript {
+    let code = Code::new("export default () => 1");
+    let compiled = CompiledCode {
         javascript: "export default () => 1".into(),
         source_map: "{}".into(),
     };
     assert_eq!(
         catalog
-            .get_script(&acme(), script.digest())
+            .get_script(&acme(), code.digest())
             .await
             .expect("get_script"),
         None
     );
     catalog
-        .put_script(&acme(), &script, &compiled)
+        .put_code(&acme(), &code, &compiled)
         .await
-        .expect("put_script");
-    let recompiled = CompiledScript {
+        .expect("put_code");
+    let recompiled = CompiledCode {
         javascript: "changed".into(),
         source_map: String::new(),
     };
     catalog
-        .put_script(&acme(), &script, &recompiled)
+        .put_code(&acme(), &code, &recompiled)
         .await
-        .expect("put_script is idempotent");
+        .expect("put_code is idempotent");
     let stored = catalog
-        .get_script(&acme(), script.digest())
+        .get_script(&acme(), code.digest())
         .await
         .expect("get_script")
         .expect("stored");
     assert_eq!(
-        (stored.script, stored.compiled),
-        (script.clone(), compiled),
+        (stored.code, stored.compiled),
+        (code.clone(), compiled),
         "the first put wins"
     );
     assert_eq!(
         catalog
-            .get_script(&other, script.digest())
+            .get_script(&other, code.digest())
             .await
             .expect("get_script"),
         None,
@@ -371,45 +371,45 @@ pub async fn workflow_versions_are_stored_by_tenant_and_listed_newest_first<C: C
 
     let shared = workflow("digest", "v3").with_labels(scoped.clone());
     put(shared.clone(), later(T0, 60)).await;
-    let with_script = |script: &str, labels: BTreeMap<String, String>| {
-        let script = Digest::of(script.as_bytes());
+    let with_code = |code: &str, labels: BTreeMap<String, String>| {
+        let code = Digest::of(code.as_bytes());
         async move {
             catalog
-                .workflows_with_script(&acme(), script, &labels)
+                .workflows_with_code(&acme(), code, &labels)
                 .await
-                .expect("workflows_with_script")
+                .expect("workflows_with_code")
                 .into_iter()
                 .map(|stored| stored.workflow)
                 .collect::<Vec<_>>()
         }
     };
     assert_eq!(
-        with_script("v3", none.clone()).await,
+        with_code("v3", none.clone()).await,
         [shared.clone(), third],
         "newest first, across workflows"
     );
-    assert_eq!(with_script("v3", scoped).await, [shared]);
-    assert_eq!(with_script("v1", none.clone()).await, [first_scoped, first]);
-    assert_eq!(with_script("nothing", none).await, []);
+    assert_eq!(with_code("v3", scoped).await, [shared]);
+    assert_eq!(with_code("v1", none.clone()).await, [first_scoped, first]);
+    assert_eq!(with_code("nothing", none).await, []);
 }
 
 // -------------------------------------------------------------------------------------------
 // Tests
 
-/// A stored script takes the title and description a person gives it, for its tenant; a new
-/// title replaces the last, `None` removes it, and a script the tenant does not have takes none.
+/// A stored code takes the title and description a person gives it, for its tenant; a new
+/// title replaces the last, `None` removes it, and a code the tenant does not have takes none.
 pub async fn scripts_take_the_titles_people_give_them<C: CatalogStore>(catalog: &C) {
-    let compiled = CompiledScript {
+    let compiled = CompiledCode {
         javascript: "export default () => 1".into(),
         source_map: "{}".into(),
     };
-    let titled = Script::new("// Triage\nexport default () => 1");
-    let plain = Script::new("export default () => 2");
-    for script in [&titled, &plain] {
+    let titled = Code::new("// Triage\nexport default () => 1");
+    let plain = Code::new("export default () => 2");
+    for code in [&titled, &plain] {
         catalog
-            .put_script(&acme(), script, &compiled)
+            .put_code(&acme(), code, &compiled)
             .await
-            .expect("put_script");
+            .expect("put_code");
     }
     let title = |text: &str, description: Option<&str>| ScriptTitle {
         title: text.into(),
@@ -453,14 +453,14 @@ pub async fn scripts_take_the_titles_people_give_them<C: CatalogStore>(catalog: 
             .await
             .expect("script_titles"),
         [],
-        "another tenant's scripts have none"
+        "another tenant's workflows have none"
     );
     assert!(
         !catalog
             .set_script_title(&tenant("other"), titled.digest(), Some(&first))
             .await
             .expect("set_script_title"),
-        "a script the tenant does not have"
+        "a code the tenant does not have"
     );
     assert!(
         !catalog
@@ -865,9 +865,9 @@ pub async fn tenants_are_stored<C: CatalogStore>(catalog: &C) {
         cpu_per_month: Some(Duration::from_secs(3_600)),
         active_runs: Some(100),
         runs_per_month: Some(10_000),
-        scripts: Some(500),
+        workflows: Some(500),
         max_ttl: Some(Duration::from_secs(7 * 86_400)),
-        max_script_lines: Some(2_000),
+        max_code_lines: Some(2_000),
     };
     record.namespace_defaults = Quotas {
         active_runs: Some(10),
@@ -1287,23 +1287,23 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
         .await
         .expect("join");
     let mut changes = member.changes().await.expect("changes");
-    let script = Script::new("export default () => 2");
+    let code = Code::new("export default () => 2");
     catalog
-        .put_script(
+        .put_code(
             &acme(),
-            &script,
-            &CompiledScript {
+            &code,
+            &CompiledCode {
                 javascript: "export default () => 2".into(),
                 source_map: "{}".into(),
             },
         )
         .await
-        .expect("put_script");
+        .expect("put_code");
     assert_eq!(
         next_change(&mut changes).await,
         ControlPlaneChange::Script {
             tenant: acme(),
-            digest: script.digest()
+            digest: code.digest()
         }
     );
     let title = ScriptTitle {
@@ -1314,7 +1314,7 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
     };
     assert!(
         catalog
-            .set_script_title(&acme(), script.digest(), Some(&title))
+            .set_script_title(&acme(), code.digest(), Some(&title))
             .await
             .expect("set_script_title")
     );
@@ -1322,13 +1322,13 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
         next_change(&mut changes).await,
         ControlPlaneChange::Script {
             tenant: acme(),
-            digest: script.digest()
+            digest: code.digest()
         },
         "a title given"
     );
     assert!(
         catalog
-            .set_script_title(&acme(), script.digest(), None)
+            .set_script_title(&acme(), code.digest(), None)
             .await
             .expect("set_script_title")
     );
@@ -1336,7 +1336,7 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
         next_change(&mut changes).await,
         ControlPlaneChange::Script {
             tenant: acme(),
-            digest: script.digest()
+            digest: code.digest()
         },
         "a title removed"
     );

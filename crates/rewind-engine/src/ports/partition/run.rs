@@ -44,14 +44,14 @@ pub struct RunHead {
     pub run: RunRef,
     /// The end user the run belongs to.
     pub namespace: NamespaceName,
-    /// What ran, the middle of the run's handle: its workflow's name, or its script's title as
-    /// a slug, or `script`; a fork's is its parent's (`archi/06-storage-and-scale.md`, "Run
+    /// What ran, the middle of the run's handle: its workflow's name, or its code's title as
+    /// a slug, or `code`; a fork's is its parent's (`archi/06-storage-and-scale.md`, "Run
     /// handles"). Frozen when the run is created.
     pub origin: String,
     /// The characters of the suffix of the run's handle: [`SUFFIX_LEN`](rewind_core::SUFFIX_LEN),
     /// more when another run of its namespace shares them. Frozen when the run is created.
     pub suffix_len: u8,
-    pub script: Digest,
+    pub code: Digest,
     pub action_set: Digest,
     pub status: RunStatus,
     /// The determinism epoch of `run_started`: which executors may run it.

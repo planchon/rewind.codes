@@ -1,4 +1,4 @@
-{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"export default async function main() {\n  const hoard: number[][] = [];\n  for (;;) hoard.push(new Array(100_000).fill(1));\n}\n","action_set":{"actions":[],"servers":[],"v":1},"entries":[
-{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"c0d62089eb9993d280cc7e3b70945182fc14d6b971cd45f2375fc84dfda38a28","action_set":"81d812ec8315850cc4b914c0c07c954d1c49e6272565a210449fa1a9910d3346","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
-{"index":1,"recorded_at":1767225600000,"event":{"type":"run_aborted","reason":{"kind":"limit_exceeded","message":"the script used more than 64 MiB of heap"}}}
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","code":"export default async function main() {\n  const hoard: number[][] = [];\n  for (;;) hoard.push(new Array(100_000).fill(1));\n}\n","action_set":{"actions":[],"servers":[],"v":1},"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","code":"c0d62089eb9993d280cc7e3b70945182fc14d6b971cd45f2375fc84dfda38a28","action_set":"81d812ec8315850cc4b914c0c07c954d1c49e6272565a210449fa1a9910d3346","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"run_aborted","reason":{"kind":"limit_exceeded","message":"the code used more than 64 MiB of heap"}}}
 ]}

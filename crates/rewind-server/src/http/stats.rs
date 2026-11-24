@@ -243,7 +243,7 @@ pub(super) async fn runs(
             counters
                 .scripts
                 .iter()
-                .map(|(digest, script)| (digest.to_hex(), script.runs.started)),
+                .map(|(digest, code)| (digest.to_hex(), code.runs.started)),
             top_n,
         ),
         waiting: top(
@@ -491,7 +491,7 @@ pub(super) async fn actions(
     }))
 }
 
-/// A script's runs by status, as the API counts them: those started and not ended are active.
+/// A code's runs by status, as the API counts them: those started and not ended are active.
 pub(crate) fn run_counts(runs: &Counted) -> RunCounts {
     let ended = ended(runs);
     let finished = ended.completed + ended.failed + ended.cancelled + ended.aborted;
@@ -505,7 +505,7 @@ pub(crate) fn run_counts(runs: &Counted) -> RunCounts {
     }
 }
 
-/// `GET /v1/scripts`: every distinct script the scope's runs ran in the window, most recently
+/// `GET /v1/scripts`: every distinct code the scope's runs ran in the window, most recently
 /// run first.
 pub(super) async fn scripts(
     State(app): State<Arc<App>>,
@@ -533,8 +533,8 @@ pub(super) async fn scripts(
     let mut scripts: Vec<_> = counters
         .scripts
         .iter()
-        .filter(|(script, counts)| {
-            digest.is_none_or(|digest| **script == digest)
+        .filter(|(code, counts)| {
+            digest.is_none_or(|digest| **code == digest)
                 && query
                     .action
                     .as_ref()
@@ -542,10 +542,10 @@ pub(super) async fn scripts(
         })
         .collect();
     // Most recently run first; the digest breaks ties. The cursor is the last one sent.
-    let key = |(script, counts): &(&Digest, &rewind_engine::ports::ScriptCounts)| {
+    let key = |(code, counts): &(&Digest, &rewind_engine::ports::ScriptCounts)| {
         (
             std::cmp::Reverse(counts.last_started_at.map_or(0, |at| at.0)),
-            **script,
+            **code,
         )
     };
     scripts.sort_by_key(key);
@@ -560,26 +560,26 @@ pub(super) async fn scripts(
         scripts.retain(|entry| key(entry) > after);
     }
     let next_cursor = (scripts.len() > limit).then(|| {
-        let (script, counts) = scripts[limit - 1];
+        let (code, counts) = scripts[limit - 1];
         format!(
             "{}.{}",
             counts.last_started_at.map_or(0, |at| at.0),
-            script.to_hex()
+            code.to_hex()
         )
     });
     scripts.truncate(limit);
     let mut titles = app
-        .titles(&caller.tenant, scripts.iter().map(|(script, _)| **script))
+        .titles(&caller.tenant, scripts.iter().map(|(code, _)| **code))
         .await?;
     let mut page = Vec::with_capacity(scripts.len());
-    for (script, counts) in scripts {
-        let title = titles.remove(script);
+    for (code, counts) in scripts {
+        let title = titles.remove(code);
         page.push(ScriptSummary {
-            digest: script.to_hex(),
+            digest: code.to_hex(),
             title_source: title.as_ref().map(|title| title.source),
             description: title.as_ref().and_then(|title| title.description.clone()),
             title: title.map(|title| title.title),
-            headline: app.headline(&caller.tenant, *script).await,
+            headline: app.headline(&caller.tenant, *code).await,
             first_run_at: counts
                 .first_started_at
                 .map_or(Timestamp::UNIX_EPOCH, timestamp),

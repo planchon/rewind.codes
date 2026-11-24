@@ -132,7 +132,7 @@ fn history(events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
 
 fn run_started() -> Event {
     Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-        script: Digest::of(b"script"),
+        code: Digest::of(b"script"),
         action_set: Digest::of(b"action_set"),
         input: json!({}).into(),
         seed: Seed::from_bytes([0; 32]),
@@ -332,7 +332,7 @@ fn a_snapshot_tells_how_the_run_ended() {
                     name: "TypeError".into(),
                     message: message.into(),
                     stack: Some(format!(
-                        "TypeError: {message}\n    at main (file:///script.ts:7:13)"
+                        "TypeError: {message}\n    at main (file:///workflow.ts:7:13)"
                     )),
                 },
             }),
@@ -362,19 +362,19 @@ fn a_snapshot_tells_how_the_run_ended() {
             10,
             Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
                 kind: AbortKind::LimitExceeded,
-                message: "the script used 5000 ms of CPU time".into(),
+                message: "the code used 5000 ms of CPU time".into(),
             })),
         ),
     ]);
     let snapshot = run_snapshot(&aborted, Some(&gated_action_set(false)));
     assert_eq!(snapshot.status, RunStatus::Aborted);
     assert!(snapshot.waits.is_empty(), "an ended run waits for nothing");
-    let signature = "limit_exceeded: the script used <n> ms of CPU time";
+    let signature = "limit_exceeded: the code used <n> ms of CPU time";
     assert_eq!(
         snapshot.ending,
         Some(Ending {
             error: "limit_exceeded".into(),
-            message: "the script used 5000 ms of CPU time".into(),
+            message: "the code used 5000 ms of CPU time".into(),
             line: None,
             signature: signature.into(),
             fingerprint: failures::fingerprint(signature),

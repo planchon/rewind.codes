@@ -22,8 +22,8 @@ use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::link::{NodeRequest, OrgRequest, SubscriptionKey};
 use rewind_engine::ports::{
-    Cluster, ClusterError, Departed, Moves, NodeId, NodeInfo, NodeLink, PartitionMap,
-    ScriptExecutor, TenantId,
+    Cluster, ClusterError, CodeExecutor, Departed, Moves, NodeId, NodeInfo, NodeLink, PartitionMap,
+    TenantId,
 };
 use serde_json::json;
 use support::{FakeExecutor, RecordingDispatcher, request, result_of};

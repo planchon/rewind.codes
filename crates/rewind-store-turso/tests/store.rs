@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::path::Path;
 
-use rewind_core::{ActionSet, RunId, Script, SecretName, Timestamp, Workflow, WorkflowSchemas};
+use rewind_core::{ActionSet, Code, RunId, SecretName, Timestamp, Workflow, WorkflowSchemas};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogStore, CompiledScript, NamespaceName, NamespaceWrite, NewSecret,
+    ActionDeclarations, CatalogStore, CompiledCode, NamespaceName, NamespaceWrite, NewSecret,
     Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
 };
 use rewind_store_turso::{Error, MasterKey, MasterKeys, SCHEMA_VERSION, TursoStore};
@@ -68,7 +68,7 @@ async fn a_newer_schema_is_refused() {
 }
 
 /// The catalog of an embedded server is the same once it opens the file again: its tenant, its
-/// namespace in its partition, its script, action set and workflow.
+/// namespace in its partition, its code, action set and workflow.
 #[tokio::test]
 async fn the_catalog_survives_a_restart() {
     let dir = TempDir::new().expect("temporary directory");
@@ -76,12 +76,12 @@ async fn the_catalog_survives_a_restart() {
     let tenant = TenantId::local();
     let alice = NamespaceName::new("alice").expect("namespace");
     let partitions = NonZeroU16::MIN;
-    let script = Script::new("export default async () => 1;");
+    let code = Code::new("export default async () => 1;");
     let action_set = ActionSet::default();
     let workflow = Workflow::new(
         "triage",
         None,
-        script.digest(),
+        code.digest(),
         action_set.digest(),
         WorkflowSchemas {
             input: json!({ "type": "object" }),
@@ -103,12 +103,12 @@ async fn the_catalog_survives_a_restart() {
         else {
             panic!("alice is not being erased");
         };
-        let compiled = CompiledScript {
-            javascript: script.source().into(),
+        let compiled = CompiledCode {
+            javascript: code.source().into(),
             source_map: String::new(),
         };
         catalog
-            .put_script(&tenant, &script, &compiled)
+            .put_code(&tenant, &code, &compiled)
             .await
             .expect("put_script");
         catalog
@@ -136,11 +136,11 @@ async fn the_catalog_survives_a_restart() {
     );
     assert_eq!(
         catalog
-            .get_script(&tenant, script.digest())
+            .get_script(&tenant, code.digest())
             .await
             .expect("get_script")
-            .map(|stored| stored.script),
-        Some(script)
+            .map(|stored| stored.code),
+        Some(code)
     );
     assert!(
         catalog

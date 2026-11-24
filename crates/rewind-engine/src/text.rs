@@ -45,7 +45,7 @@ pub fn refuse_nul_in_trace(trace: &TraceContext) -> Result<(), NulCharacter> {
 }
 
 /// A diagnostic the engine writes to the store (a quarantine reason), its NUL characters
-/// replaced by U+FFFD: it may quote what a script chose, such as a signal's name.
+/// replaced by U+FFFD: it may quote what a code chose, such as a signal's name.
 pub(crate) fn storable(text: String) -> String {
     if text.contains('\0') {
         text.replace('\0', "\u{FFFD}")

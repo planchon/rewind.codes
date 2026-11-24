@@ -1,5 +1,5 @@
 // The glue of TypeScript mock handlers (archi/05-testing-and-observability.md, "Testing and
-// mocks"). It belongs to no epoch: nothing a mock does reaches a script but its result, which is
+// mocks"). It belongs to no epoch: nothing a mock does reaches a code but its result, which is
 // journaled.
 //
 // Evaluates to setup(handlers), which takes the module's default export and returns
@@ -13,7 +13,7 @@
   const { parse, stringify } = JSON;
   const { entries } = Object;
   const KINDS = ["error", "unavailable", "timeout", "outcome_unknown"];
-  // As in the script's glue: a lone surrogate cannot leave the isolate.
+  // As in the code's glue: a lone surrogate cannot leave the isolate.
   const LONE_SURROGATE = /\\\\|\\ud[89a-f][0-9a-f]{2}/gi;
   const wellFormed = (json) =>
     json.replace(LONE_SURROGATE, (match) => match === "\\\\" ? match : "\\ufffd");

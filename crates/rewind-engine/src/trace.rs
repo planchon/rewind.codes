@@ -1,12 +1,12 @@
 //! The LLM trace of a run (`archi/05-testing-and-observability.md`, "LLM trace and metrics"):
 //! `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--entry n]`, and the trace of a
 //! scenario's report. It is rendered from the history alone, to be read by a model: one line per
-//! call, timer, signal and log, with its line in `script.ts` and its outcome folded in;
+//! call, timer, signal and log, with its line in `workflow.ts` and its outcome folded in;
 //! payloads are truncated, and any entry can be shown in full.
 //!
 //! ```text
 //! run 0198…0001  suspended · waiting for signal "approval" (timeout in 2d 23h)
-//! script 21a0270b7f66 · action set 5598149567a4 · started 2026-01-01T00:00:00Z
+//! code 21a0270b7f66 · action set 5598149567a4 · started 2026-01-01T00:00:00Z
 //!
 //!   idx  at       event                                                    line  outcome
 //!     1  +0.0s    #1 github.list_issues({"repo":"acme/api","state":"open"})  L5   → 37 items · 12.4 KB · 310ms
@@ -52,7 +52,7 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
     } = input;
     let shown = Shown {
         run: head.run.id,
-        script: head.script,
+        code: head.code,
         action_set: head.action_set,
         status: head.status,
         quarantine: head.quarantine.as_ref(),
@@ -64,7 +64,7 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
 /// What a trace shows of a run besides its history.
 struct Shown<'a> {
     run: RunId,
-    script: Digest,
+    code: Digest,
     action_set: Digest,
     status: RunStatus,
     quarantine: Option<&'a Quarantine>,
@@ -87,8 +87,8 @@ fn render(
     );
     let started_at = history.first().map(|entry| entry.recorded_at);
     let mut second = format!(
-        "script {} · action set {}",
-        record.script.short(),
+        "code {} · action set {}",
+        record.code.short(),
         record.action_set.short()
     );
     match started_at {
@@ -448,7 +448,7 @@ fn describe(
             None,
         ),
         Event::Command(Command::FailRun { error }) => {
-            let location = error.stack.as_deref().and_then(script_line);
+            let location = error.stack.as_deref().and_then(code_line);
             line(
                 format!(
                     "failed · {}: {}",
@@ -468,9 +468,9 @@ fn describe(
     }
 }
 
-/// The first `script.ts:<line>` of a stack.
-fn script_line(stack: &str) -> Option<u32> {
-    let after = &stack[stack.find("script.ts:")? + "script.ts:".len()..];
+/// The first `workflow.ts:<line>` of a stack.
+fn code_line(stack: &str) -> Option<u32> {
+    let after = crate::failures::after_code_file(stack)?;
     let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(duration(2 * 86_400_000 + 23 * 3_600_000), "2d 23h");
         assert_eq!(bytes(12_400), "12.4 KB");
         assert_eq!(
-            script_line("Error: x\n    at main (file:///script.ts:12:5)"),
+            code_line("Error: x\n    at main (file:///workflow.ts:12:5)"),
             Some(12)
         );
     }

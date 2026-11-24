@@ -80,9 +80,9 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
         refuse_nul_in_filter("action", action)?;
         with(Predicate::Action(vec![TextMatch::Exact(action.clone())]));
     }
-    if let Some(script) = &filter.script {
-        let digest = Digest::from_hex(script)
-            .map_err(|_| ApiError::invalid(format!("script {script:?}: expected a digest")))?;
+    if let Some(code) = &filter.script {
+        let digest = Digest::from_hex(code)
+            .map_err(|_| ApiError::invalid(format!("script {code:?}: expected a digest")))?;
         with(Predicate::Script(vec![digest.to_hex()]));
     }
     if let Some(error) = &filter.error {
@@ -350,8 +350,8 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
         namespace: crate::views::namespace(&run.namespace),
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
-        script: run.script.to_hex(),
-        // The script's title is not the read model's: the caller gives it.
+        code_digest: run.code.to_hex(),
+        // The code's title is not the read model's: the caller gives it.
         script_title: None,
         headline: run.headline.clone(),
         action_set: run.action_set.to_hex(),

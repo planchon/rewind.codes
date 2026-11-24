@@ -3,9 +3,9 @@
 //!
 //! - **Counters** are exact, per tenant, namespace and UTC hour, written in the batch of what
 //!   they count: runs created, started and ended, durations, CPU time, failure groups, calls per
-//!   action, runs per script. A window of hours sums them; a day and a month are windows.
+//!   action, runs per code. A window of hours sums them; a day and a month are windows.
 //! - **Gauges** count what holds now: the active runs, the runs waiting by what they wait for,
-//!   the quarantined runs, the runs kept per script. They follow from the records kept, so
+//!   the quarantined runs, the runs kept per code. They follow from the records kept, so
 //!   erasing a run takes what it held out of them.
 //! - **Shapes** of the results observed per action merge in any order.
 
@@ -258,9 +258,9 @@ pub struct FailureCounts {
     /// The error's name, or the abort's kind.
     pub error: String,
     pub runs: u64,
-    /// The scripts its runs ran.
+    /// The workflows its runs ran.
     pub scripts: BTreeMap<Digest, u64>,
-    /// The lines of `script.ts` its runs ended at.
+    /// The lines of `workflow.ts` its runs ended at.
     pub lines: BTreeMap<u32, u64>,
     /// The latest runs, the latest end first (the highest run id on a tie).
     pub latest: Vec<LatestRun>,
@@ -310,7 +310,7 @@ impl ActionCounts {
     }
 }
 
-/// The runs of one script.
+/// The runs of one code.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScriptCounts {
     pub runs: RunCounts,
@@ -344,7 +344,7 @@ pub struct Counters {
     pub runs: RunCounts,
     /// From start to end, of the runs that ended.
     pub durations: Sketch,
-    /// CPU time of the isolates running the scripts, replays excluded: what `cpuPerMonth`
+    /// CPU time of the isolates running the workflows, replays excluded: what `cpuPerMonth`
     /// counts.
     pub cpu: Duration,
     /// The runs of each workflow, by name.
@@ -356,7 +356,7 @@ pub struct Counters {
     pub failures: BTreeMap<String, FailureCounts>,
     /// Calls, by action.
     pub actions: BTreeMap<String, ActionCounts>,
-    /// Runs, by script.
+    /// Runs, by code.
     pub scripts: BTreeMap<Digest, ScriptCounts>,
 }
 
@@ -384,7 +384,7 @@ impl Counters {
 
     /// What the counts of an erased namespace leave in its tenant's: what it consumed (runs
     /// created, started and ended, their durations, CPU time, the runs of each workflow), not
-    /// its failures, actions or scripts.
+    /// its failures, actions or workflows.
     pub fn consumed(&self) -> Counters {
         Counters {
             created: self.created,
@@ -416,8 +416,8 @@ impl Counters {
         for (action, calls) in &other.actions {
             self.actions.entry(action.clone()).or_default().add(calls);
         }
-        for (script, runs) in &other.scripts {
-            self.scripts.entry(*script).or_default().add(runs);
+        for (code, runs) in &other.scripts {
+            self.scripts.entry(*code).or_default().add(runs);
         }
     }
 
@@ -451,7 +451,7 @@ pub enum CounterDelta {
     },
 }
 
-/// What holds now among the runs of a scope. Kinds and scripts with nothing are left out.
+/// What holds now among the runs of a scope. Kinds and workflows with nothing are left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Gauges {
     /// Runs that have not ended (pending or active): what `activeRuns` counts.
@@ -460,14 +460,14 @@ pub struct Gauges {
     pub waiting: BTreeMap<WaitingFor, u64>,
     /// Runs quarantined that have not ended.
     pub quarantined: u64,
-    /// Runs kept, by script, ended or not: the number of scripts is what `scripts` counts.
+    /// Runs kept, by code, ended or not: the number of workflows is what `scripts` counts.
     pub scripts: BTreeMap<Digest, u64>,
 }
 
 impl Gauges {
     /// Counts one run kept: its head, and its summary once it has one.
     pub fn count(&mut self, head: &RunHead, summary: Option<&IndexedSummary>) {
-        *self.scripts.entry(head.script).or_default() += 1;
+        *self.scripts.entry(head.code).or_default() += 1;
         if head.is_ended() {
             return;
         }
@@ -503,7 +503,7 @@ impl Gauges {
         self.waiting.get(&kind).copied().unwrap_or(0)
     }
 
-    /// The distinct scripts with a run kept.
+    /// The distinct workflows with a run kept.
     pub fn distinct_scripts(&self) -> u64 {
         u64::try_from(self.scripts.len()).unwrap_or(u64::MAX)
     }

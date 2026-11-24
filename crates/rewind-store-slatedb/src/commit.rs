@@ -876,11 +876,11 @@ fn subtract(gauges: &mut Gauges, held: &Gauges) {
             }
         }
     }
-    for (script, count) in &held.scripts {
-        if let Some(left) = gauges.scripts.get_mut(script) {
+    for (code, count) in &held.scripts {
+        if let Some(left) = gauges.scripts.get_mut(code) {
             *left = left.saturating_sub(*count);
             if *left == 0 {
-                gauges.scripts.remove(script);
+                gauges.scripts.remove(code);
             }
         }
     }

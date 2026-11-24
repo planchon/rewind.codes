@@ -8,7 +8,7 @@ use rewind_core::{Attachments, RunId, Timestamp};
 use super::workflows::{RunWorkflow, StartedBy};
 use crate::ports::tenancy::RunRef;
 
-/// Given by the harness when it starts a run, and stored with the run. The script never sees
+/// Given by the harness when it starts a run, and stored with the run. The code never sees
 /// it and it is not part of the journal's events, so it is never replayed and never ends up
 /// in a cassette (`archi/05-testing-and-observability.md`, "Run metadata"). The tenant is in
 /// the run's [`RunRef`], and the idempotency key is given with the start beside it.
@@ -22,10 +22,10 @@ pub struct RunMetadata {
     pub parent: Option<ForkParent>,
     /// For a run of a workflow, the workflow and the version it executes.
     pub workflow: Option<RunWorkflow>,
-    /// For a run a script started, that run and the call (`archi/03-execution.md`, "Workflows
+    /// For a run a code started, that run and the call (`archi/03-execution.md`, "Workflows
     /// across runs"). The run's creation makes the starter its first watcher.
     pub started_by: Option<StartedBy>,
-    /// The labels every run this run's scripts reach carries: the allowed labels of the API key
+    /// The labels every run this run's workflows reach carries: the allowed labels of the API key
     /// that started the first run of its tree, inherited by every run it starts. Empty: any run
     /// of the tenant.
     pub scope: BTreeMap<String, String>,

@@ -6,7 +6,7 @@
 
 mod support;
 
-use rewind_core::{Event, Lifecycle, RunHandle, SUFFIX_LEN, Script, suffix_len_apart};
+use rewind_core::{Code, Event, Lifecycle, RunHandle, SUFFIX_LEN, suffix_len_apart};
 use rewind_engine::ForkRun;
 use rewind_engine::adapters::{MemoryPartitions, SeededEntropy};
 use rewind_engine::ports::link::{
@@ -40,8 +40,8 @@ async fn find(world: &mut World, handle: &RunHandle) -> Option<RunView> {
         .unwrap()
 }
 
-fn in_namespace(script: &str, namespace: &str) -> rewind_engine::StartRun {
-    let mut start = request(script, json!({}));
+fn in_namespace(code: &str, namespace: &str) -> rewind_engine::StartRun {
+    let mut start = request(code, json!({}));
     start.namespace = NamespaceName::new(namespace).unwrap();
     start
 }
@@ -76,10 +76,7 @@ async fn a_run_is_named_by_its_namespace_its_origin_and_its_suffix() {
     let mut gateway = world.driver.gateway(&world.at.clone());
     let fork = world
         .edge
-        .fork(
-            &mut gateway,
-            ForkRun::new(triage.clone(), Script::new(PLAIN)),
-        )
+        .fork(&mut gateway, ForkRun::new(triage.clone(), Code::new(PLAIN)))
         .await
         .unwrap()
         .run;
@@ -142,7 +139,7 @@ async fn starts_in_flight_together_get_handles_apart() {
         SeededEntropy::sharing_suffixes(9),
     )
     .await;
-    // A first run stores the script and the action set the two others run.
+    // A first run stores the code and the action set the two others run.
     let first = world.run(request(TRIAGE, json!({}))).await;
     let head = world.view(&first).await.head;
     let started = world

@@ -27,7 +27,7 @@ pub enum Access {
     /// action sets, namespaces and the names of secrets.
     Read,
     /// `read`, and `runs:start`, `runs:control` and `secrets:use`: check, test and start
-    /// scripts with the secrets they attach, signal and cancel runs.
+    /// workflows with the secrets they attach, signal and cancel runs.
     Run,
 }
 

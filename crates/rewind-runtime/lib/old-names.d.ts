@@ -1,6 +1,6 @@
 // The old names code written before actions were named still uses, which the runtime still
 // resolves (archi/08-decisions.md, R1): the module `rewind:tools`, `rewind`'s `ToolError` and its
-// `tool`. The type-checker gives this file to tsgo next to the script, so that such code still
+// `tool`. The type-checker gives this file to tsgo next to the code, so that such code still
 // checks; nothing else declares, lists or shows them, and new code is written with the new names.
 
 declare module "rewind:tools" {

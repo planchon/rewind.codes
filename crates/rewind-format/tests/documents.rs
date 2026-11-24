@@ -574,26 +574,26 @@ fn rejects_workflows_v1_does_not_define() {
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     assert!(
         decode_workflow(&document(&format!(
-            r#""name":"triage","script":"{digest}","action_set":"{digest}",{schemas}"#
+            r#""name":"triage","code":"{digest}","action_set":"{digest}",{schemas}"#
         )))
         .is_ok()
     );
     let invalid = [
         document(&format!(
-            r#""name":"triage","script":"{digest}","action_set":"{digest}",{schemas},"x":1"#
+            r#""name":"triage","code":"{digest}","action_set":"{digest}",{schemas},"x":1"#
         )),
-        document(&format!(r#""name":"triage","script":"{digest}",{schemas}"#)),
+        document(&format!(r#""name":"triage","code":"{digest}",{schemas}"#)),
         document(&format!(
-            r#""name":"triage","script":"abc","action_set":"{digest}",{schemas}"#
-        )),
-        document(&format!(
-            r#""name":"default","script":"{digest}","action_set":"{digest}",{schemas}"#
+            r#""name":"triage","code":"abc","action_set":"{digest}",{schemas}"#
         )),
         document(&format!(
-            r#""name":"triage","script":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
+            r#""name":"default","code":"{digest}","action_set":"{digest}",{schemas}"#
         )),
         document(&format!(
-            r#""name":"triage","script":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
+            r#""name":"triage","code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
+        )),
+        document(&format!(
+            r#""name":"triage","code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
         )),
     ];
     for json in &invalid {
@@ -840,7 +840,7 @@ fn rejects_tests_v1_does_not_define() {
 fn rejects_suites_v1_does_not_define() {
     let digest = "0".repeat(64);
     let base = format!(
-        r#""name":"triage","script":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
+        r#""name":"triage","code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
     );
     let document = |fields: &str| format!(r#"{{"v":1,{base},{fields}}}"#);
     assert!(

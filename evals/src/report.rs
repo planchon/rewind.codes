@@ -20,14 +20,14 @@ pub struct Summary {
     pub episodes: usize,
     /// Episodes that could not be measured (an API or harness error): left out of the rates.
     pub errors: usize,
-    /// Of the measured episodes where the model submitted a script, the share whose first
-    /// script passed the checks.
+    /// Of the measured episodes where the model submitted a code, the share whose first
+    /// code passed the checks.
     pub first_check_pass_rate: Option<f64>,
     /// Of the measured episodes, the share whose task was done.
     pub success_rate: Option<f64>,
     /// Model turns per measured episode, on average.
     pub mean_iterations: Option<f64>,
-    /// Scripts submitted per measured episode, on average.
+    /// Workflows submitted per measured episode, on average.
     pub mean_scripts: Option<f64>,
     /// Of the measured episodes, the share where the model wrote at least one test.
     pub tests_written_rate: Option<f64>,
@@ -147,7 +147,7 @@ pub fn markdown(report: &Report, episodes: &[EpisodeRecord]) -> String {
     );
     let _ = writeln!(
         out,
-        "| Model | Rendering | First-try check | Success | Iterations | Scripts | Wrote tests | Gate refusals | Tokens in | Tokens out | Errors |"
+        "| Model | Rendering | First-try check | Success | Iterations | Workflows | Wrote tests | Gate refusals | Tokens in | Tokens out | Errors |"
     );
     let _ = writeln!(
         out,

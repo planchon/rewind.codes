@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use rewind_agent_tools::{
-    AgentError, AgentOptions, AgentTools, Api, ApiError, HandleOptions, ScriptVerdict,
+    AgentError, AgentOptions, AgentTools, Api, ApiError, CodeVerdict, HandleOptions,
 };
 use rewind_api::action_sets::{ActionSearchResults, ActionSet, CreateActionSet, SearchQuery};
 use rewind_api::common::Duration;
@@ -37,10 +37,10 @@ fn sha256(text: &str) -> String {
 }
 
 /// A run of the fake API: its handle is `alice/script/<id>`.
-fn run(id: &str, labels: Value, script: &str, status: &str) -> Run {
+fn run(id: &str, labels: Value, code: &str, status: &str) -> Run {
     serde_json::from_value(json!({
         "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
-        "status": status, "script": script, "actionSet": "t",
+        "status": status, "codeDigest": code, "actionSet": "t",
         "epoch": 1, "mode": "live", "labels": labels, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
         "expiresAt": "2026-12-19T10:00:00Z",
@@ -97,35 +97,35 @@ impl Api for Fake {
         key: Option<&IdempotencyKey>,
     ) -> Result<Run, ApiError> {
         self.saw("start_run", start, key);
-        if start.script.contains("refused") {
+        if start.code.contains("refused") {
             return Err(Problem::new(
-                ProblemType::InvalidScript,
-                "the script does not type-check (1 error): fix the diagnostics and start it again",
+                ProblemType::InvalidCode,
+                "the code does not type-check (1 error): fix the diagnostics and start it again",
             )
             .into());
         }
-        if start.script.contains("busy") {
+        if start.code.contains("busy") {
             return Err(problem(
                 ProblemType::Unavailable,
                 "the store cannot be reached: retry later",
             ));
         }
-        if start.script.contains("quota") {
+        if start.code.contains("quota") {
             return Err(problem(
                 ProblemType::QuotaExceeded,
                 "this namespace has 10 of its 10 active runs",
             ));
         }
-        // A key seen before: the run of another script.
-        let script = if start.script.contains("reused") {
+        // A key seen before: the run of another code.
+        let code = if start.code.contains("reused") {
             sha256("other")
         } else {
-            sha256(&start.script)
+            sha256(&start.code)
         };
         Ok(run(
             "r1",
             serde_json::to_value(&start.labels).unwrap(),
-            &script,
+            &code,
             "completed",
         ))
     }
@@ -213,7 +213,7 @@ impl Api for Fake {
         let mut forked = self::run(
             "r2",
             json!({ "agent": "triage" }),
-            &sha256(&fork.script),
+            &sha256(&fork.code),
             "completed",
         );
         forked.parent = Some(rewind_api::runs::ForkParent {
@@ -284,7 +284,7 @@ impl Api for Fake {
         Ok(serde_json::from_value(json!({
             "name": workflow.name, "version": "9f2c4e1a07b3".repeat(5) + "9f2c", "number": 1,
             "actionSet": workflow.action_set,
-            "script": sha256(&workflow.script), "input": workflow.input, "output": workflow.output,
+            "codeDigest": sha256(&workflow.code), "input": workflow.input, "output": workflow.output,
             "signals": {}, "tests": [], "retired": [], "updated": [],
             "labels": { "agent": "triage" }, "createdAt": "2026-11-19T10:00:00Z",
             "declarations": { "dts": "", "prompt": "" }
@@ -367,14 +367,14 @@ async fn run_script_starts_the_run_with_the_agent_s_action_set_labels_wait_and_k
     let (tools, fake) = tools(Some("ts1"));
     let result = tools
         .handle(
-            "run_script",
+            "run_workflow",
             &json!({ "code": CODE, "wait": "1h" }),
             &call("call_0"),
         )
         .await
         .unwrap();
     assert!(!result.is_error, "{}", result.content);
-    assert_eq!(result.script, Some(ScriptVerdict::Passed));
+    assert_eq!(result.code, Some(CodeVerdict::Passed));
     assert!(
         result.content.starts_with("Run alice/script/r1 completed"),
         "{}",
@@ -386,7 +386,7 @@ async fn run_script_starts_the_run_with_the_agent_s_action_set_labels_wait_and_k
     assert_eq!(
         seen[0].body,
         json!({
-            "script": CODE, "actionSet": "ts1", "input": {}, "wait": "2m",
+            "code": CODE, "actionSet": "ts1", "input": {}, "wait": "2m",
             "labels": { "agent": "triage" }
         })
     );
@@ -406,42 +406,46 @@ async fn run_script_starts_the_run_with_the_agent_s_action_set_labels_wait_and_k
 async fn refusals_are_results_and_faults_are_errors() {
     let (tools, _) = tools(Some("ts1"));
     let refused = tools
-        .handle("run_script", &json!({ "code": "// refused" }), &call("c1"))
+        .handle(
+            "run_workflow",
+            &json!({ "code": "// refused" }),
+            &call("c1"),
+        )
         .await
         .unwrap();
     assert!(refused.is_error);
-    assert_eq!(refused.script, Some(ScriptVerdict::Refused));
+    assert_eq!(refused.code, Some(CodeVerdict::Refused));
     assert_eq!(
         refused.content,
-        "The script was refused before anything ran: the script does not type-check (1 error): fix the diagnostics and start it again"
+        "The code was refused before anything ran: the code does not type-check (1 error): fix the diagnostics and start it again"
     );
 
     let quota = tools
-        .handle("run_script", &json!({ "code": "// quota" }), &call("c2"))
+        .handle("run_workflow", &json!({ "code": "// quota" }), &call("c2"))
         .await
         .unwrap();
     assert!(quota.is_error);
-    assert_eq!(quota.script, None);
+    assert_eq!(quota.code, None);
     assert_eq!(
         quota.content,
-        "run_script failed: this namespace has 10 of its 10 active runs"
+        "run_workflow failed: this namespace has 10 of its 10 active runs"
     );
 
     let busy = tools
-        .handle("run_script", &json!({ "code": "// busy" }), &call("c3"))
+        .handle("run_workflow", &json!({ "code": "// busy" }), &call("c3"))
         .await
         .unwrap_err();
     assert!(matches!(busy, AgentError::Api(_)), "{busy:?}");
 
     let input = tools
-        .handle("run_script", &json!({ "code": "" }), &call("c4"))
+        .handle("run_workflow", &json!({ "code": "" }), &call("c4"))
         .await
         .unwrap();
     assert_eq!(
         input.content,
-        "run_script: `code` must be a non-empty string."
+        "run_workflow: `code` must be a non-empty string."
     );
-    assert_eq!(input.script, None);
+    assert_eq!(input.code, None);
 
     let missing = tools
         .handle("get_run", &json!({ "run_id": "missing" }), &call("c5"))
@@ -454,7 +458,7 @@ async fn refusals_are_results_and_faults_are_errors() {
 
     let invalid_test = tools
         .handle(
-            "test_script",
+            "test_workflow",
             &json!({ "code": CODE, "tests": [{ "name": "a" }] }),
             &call("c6"),
         )
@@ -467,7 +471,7 @@ async fn refusals_are_results_and_faults_are_errors() {
     );
     let unreadable = tools
         .handle(
-            "test_script",
+            "test_workflow",
             &json!({ "code": CODE, "tests": [{ "input": 1 }] }),
             &call("c7"),
         )
@@ -476,7 +480,7 @@ async fn refusals_are_results_and_faults_are_errors() {
     assert!(
         unreadable
             .content
-            .starts_with("test_script failed: the body is not valid: "),
+            .starts_with("test_workflow failed: the body is not valid: "),
         "{}",
         unreadable.content
     );
@@ -521,7 +525,7 @@ async fn a_key_that_answers_another_script_s_run_is_the_harness_s_fault() {
     let (tools, _) = tools(None);
     let error = tools
         .handle(
-            "run_script",
+            "run_workflow",
             &json!({ "code": "// reused" }),
             &call("call_0"),
         )
@@ -529,7 +533,7 @@ async fn a_key_that_answers_another_script_s_run_is_the_harness_s_fault() {
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "the tool call id \"call_0\" is already the idempotency key of another run (of another script, or with other labels): give each tool call a unique id"
+        "the tool call id \"call_0\" is already the idempotency key of another run (of another code, or with other labels): give each tool call a unique id"
     );
 }
 
@@ -584,9 +588,9 @@ async fn the_tools_are_those_given_and_some_need_an_action_set() {
     assert_eq!(
         names,
         [
-            "run_script",
-            "check_script",
-            "test_script",
+            "run_workflow",
+            "check_workflow",
+            "test_workflow",
             "get_run",
             "list_runs",
             "signal_run",
@@ -650,7 +654,7 @@ async fn a_retry_carries_the_agent_s_labels_and_the_default_wait() {
         .unwrap();
     assert_eq!(
         fork.body,
-        json!({ "script": CODE, "labels": { "agent": "triage" }, "wait": "30s" })
+        json!({ "code": CODE, "labels": { "agent": "triage" }, "wait": "30s" })
     );
     let cancelled = tools
         .handle("cancel_run", &json!({ "run_id": "r1" }), &call("c2"))
@@ -692,7 +696,7 @@ async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
     let attached = json!({ "github": "ns/github", "zendesk": "org/zendesk" });
     tools
         .handle(
-            "run_script",
+            "run_workflow",
             &json!({ "code": CODE, "secrets": attached }),
             &call("c1"),
         )
@@ -736,7 +740,7 @@ async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
 
     let refused = tools
         .handle(
-            "run_script",
+            "run_workflow",
             &json!({ "code": CODE, "secrets": { "github": 1 } }),
             &call("c4"),
         )
@@ -744,9 +748,9 @@ async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
         .unwrap();
     assert!(refused.is_error);
     assert!(
-        refused
-            .content
-            .starts_with("run_script: `secrets` must be an object of secrets by MCP server or API"),
+        refused.content.starts_with(
+            "run_workflow: `secrets` must be an object of secrets by MCP server or API"
+        ),
         "{}",
         refused.content
     );
@@ -773,24 +777,24 @@ async fn a_run_is_named_by_its_handle_and_a_script_without_a_title_gets_a_note()
     );
 
     let untitled = tools
-        .handle("check_script", &json!({ "code": CODE }), &call("c2"))
+        .handle("check_workflow", &json!({ "code": CODE }), &call("c2"))
         .await
         .unwrap();
     assert_eq!(
         untitled.content,
         format!(
-            "The script type-checks.\n{}",
+            "The code type-checks.\n{}",
             rewind_agent_tools::render::UNTITLED_NOTE
         )
     );
     assert!(!untitled.is_error, "a note, not an error");
     let titled = tools
         .handle(
-            "check_script",
+            "check_workflow",
             &json!({ "code": format!("/** Count to one\n *\n * Returns 1. */\n{CODE}") }),
             &call("c3"),
         )
         .await
         .unwrap();
-    assert_eq!(titled.content, "The script type-checks.");
+    assert_eq!(titled.content, "The code type-checks.");
 }

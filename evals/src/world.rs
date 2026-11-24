@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use rewind_check::TsgoChecker;
 use rewind_core::{
-    Action, ActionRoute, ActionSet, Builtin, Command, Completion, Digest, Event, HistoryEntry,
-    McpServer, McpTransport, RetiredTest, RunId, RunOutcome, RunState, RunStatus, Script, Seq,
-    Timestamp, UpdatedTest,
+    Action, ActionRoute, ActionSet, Builtin, Code, Command, Completion, Digest, Event,
+    HistoryEntry, McpServer, McpTransport, RetiredTest, RunId, RunOutcome, RunState, RunStatus,
+    Seq, Timestamp, UpdatedTest,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -72,10 +72,10 @@ pub const PUBLIC_URL: &str = "https://rewind.example";
 /// timers end within it.
 pub const SETTLE_HORIZON: u64 = 60 * DAY;
 
-/// Jumps of virtual time in one drive, at most: a guard against scripts that never stop.
+/// Jumps of virtual time in one drive, at most: a guard against workflows that never stop.
 const MAX_STEPS: usize = 20_000;
 
-/// Steps of the driver in one pass at the current time, at most: a guard against scripts that
+/// Steps of the driver in one pass at the current time, at most: a guard against workflows that
 /// never wait.
 const MAX_DRIVER_STEPS: usize = 200_000;
 
@@ -189,7 +189,7 @@ pub struct World {
     pub config: NodeConfig,
     pub clock: SharedClock,
     pub servers: Vec<Running>,
-    /// The pinned action set the agent's scripts import from `rewind:actions`.
+    /// The pinned action set the agent's workflows import from `rewind:actions`.
     pub action_set: ActionSet,
     /// What codegen generated for it.
     pub declarations: rewind_codegen::Declarations,
@@ -361,21 +361,21 @@ impl World {
     }
 
     /// Starts a run of the agent: with its labels, live, in virtual time. The caller has
-    /// type-checked the script.
-    pub fn start_request(&self, script: Script, input: Value) -> StartRun {
-        self.start_request_on(script, &self.action_set, self.action_declarations(), input)
+    /// type-checked the code.
+    pub fn start_request(&self, code: Code, input: Value) -> StartRun {
+        self.start_request_on(code, &self.action_set, self.action_declarations(), input)
     }
 
     /// [`start_request`](Self::start_request), with another action set: one derived from the
     /// world's.
     pub fn start_request_on(
         &self,
-        script: Script,
+        code: Code,
         action_set: &ActionSet,
         declarations: ActionDeclarations,
         input: Value,
     ) -> StartRun {
-        let mut request = StartRun::new(script, action_set.clone(), input);
+        let mut request = StartRun::new(code, action_set.clone(), input);
         request.declarations = declarations;
         request.metadata.labels = self.labels.clone();
         request
@@ -626,10 +626,10 @@ impl World {
                     version: workflow.version(),
                     parent: workflow.suite().parent,
                     action_set: workflow.action_set(),
-                    script: catalog
-                        .get_script(&tenant, workflow.script())
+                    code: catalog
+                        .get_script(&tenant, workflow.code())
                         .await?
-                        .map(|stored| stored.script.source().to_owned())
+                        .map(|stored| stored.code.source().to_owned())
                         .unwrap_or_default(),
                     tests,
                     retired: workflow.suite().retired.clone(),
@@ -969,8 +969,8 @@ pub struct WorkflowReport {
     pub parent: Option<Digest>,
     /// The action set its runs call.
     pub action_set: Digest,
-    /// Its script's source.
-    pub script: String,
+    /// Its code's source.
+    pub code: String,
     /// The tests of its suite, in its order, each loaded.
     pub tests: Vec<LoadedTest>,
     pub retired: Vec<RetiredTest>,

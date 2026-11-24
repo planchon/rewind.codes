@@ -459,14 +459,14 @@ impl<P: Plane> Owner<P> {
     }
 
     /// The earliest timer of the wheel, and whether it wakes the driver by itself in virtual
-    /// time: a deadline, a deferred call's or a retention's does not, a script's timer, a retry
+    /// time: a deadline, a deferred call's or a retention's does not, a code's timer, a retry
     /// or a backoff does.
     pub(crate) fn next_timer(&self) -> Option<(Timestamp, bool)> {
         use crate::ports::TimerKind;
         let next = self.wheel.next()?;
         let alone = matches!(
             next.kind,
-            TimerKind::Script { .. }
+            TimerKind::Code { .. }
                 | TimerKind::RedeliveryBackoff { .. }
                 | TimerKind::ActivationRetry { .. }
                 | TimerKind::WebhookRetry { .. }
@@ -480,7 +480,7 @@ impl<P: Plane> Owner<P> {
         self.wheel.timers_matching(|kind| {
             matches!(
                 kind,
-                TimerKind::Script { .. }
+                TimerKind::Code { .. }
                     | TimerKind::RedeliveryBackoff { .. }
                     | TimerKind::ActivationRetry { .. }
                     | TimerKind::WebhookRetry { .. }

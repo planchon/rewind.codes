@@ -1,5 +1,5 @@
 {
-  "description": "A wait built on setTimeout, cancelled: the timer is dropped, nothing can wake the script any more, and the run ends cancelled, not deadlocked.",
+  "description": "A wait built on setTimeout, cancelled: the timer is dropped, nothing can wake the code any more, and the run ends cancelled, not deadlocked.",
   "steps": [
     {
       "cancel": {

@@ -2,7 +2,7 @@
 //! attaching).
 //!
 //! ```text
-//! POST /v1/runs (script)        the request's    checked against the caller   AttachRights::Caller
+//! POST /v1/runs (code)        the request's    checked against the caller   AttachRights::Caller
 //! POST /v1/runs/{id}/fork       the parent's, or the request's: against the caller
 //! POST /v1/runs (workflow),     the version's    only that its ns/ secrets     AttachRights::Version
 //! workflows.<name>.start                         exist in the run's namespace
@@ -42,7 +42,7 @@ pub enum AttachRights {
 /// Why an attachment refuses a start, a fork or a save.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachmentProblem {
-    /// The script imports this MCP server or API, whose `auth` takes a secret, and nothing is
+    /// The code imports this MCP server or API, whose `auth` takes a secret, and nothing is
     /// attached for it.
     Missing { server: String },
     /// An attachment names a server or an API the action set does not have, or one whose `auth`
@@ -62,7 +62,7 @@ impl fmt::Display for AttachmentProblem {
         match self {
             AttachmentProblem::Missing { server } => write!(
                 f,
-                "the script imports {server}, which needs a secret: attach one in \"secrets\" \
+                "the code imports {server}, which needs a secret: attach one in \"secrets\" \
                  (\"{server}\": \"org/<name>\" or \"ns/<name>\")"
             ),
             AttachmentProblem::TakesNone { server } => write!(
@@ -146,7 +146,7 @@ pub(crate) struct AttachmentCheck<'a> {
     /// has none yet: its `ns/` secrets are checked by name only.
     pub(crate) namespace: Option<&'a NamespaceName>,
     pub(crate) action_set: &'a ActionSet,
-    /// What the script imports from `rewind:actions`; `None`: every name.
+    /// What the code imports from `rewind:actions`; `None`: every name.
     pub(crate) imports: Option<&'a BTreeSet<String>>,
     pub(crate) attachments: &'a Attachments,
     pub(crate) rights: &'a AttachRights,
@@ -154,7 +154,7 @@ pub(crate) struct AttachmentCheck<'a> {
 
 /// Checks attachments (`archi/04-tools.md`, "Secrets": attaching): each names a server or an API
 /// of the action set whose `auth` takes a secret, and a secret that exists and the caller may
-/// attach; each server or API the script imports whose `auth` takes a secret has one. A
+/// attach; each server or API the code imports whose `auth` takes a secret has one. A
 /// version's attachments ([`AttachRights::Version`]) were checked when it was saved: only its
 /// `ns/` secrets' existence in the run's namespace is. `Ok(Err(..))` lists every problem and
 /// what the caller may attach instead.

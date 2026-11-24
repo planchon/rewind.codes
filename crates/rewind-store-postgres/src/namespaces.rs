@@ -29,9 +29,9 @@ pub(crate) fn quotas_from_row(row: &PgRow, first: usize) -> Result<Quotas, Error
         cpu_per_month: row.opt_duration(first)?,
         active_runs: row.opt_u32(first + 1)?,
         runs_per_month: row.opt_u64(first + 2)?,
-        scripts: row.opt_u64(first + 3)?,
+        workflows: row.opt_u64(first + 3)?,
         max_ttl: row.opt_duration(first + 4)?,
-        max_script_lines: row.opt_u32(first + 5)?,
+        max_code_lines: row.opt_u32(first + 5)?,
     })
 }
 
@@ -41,9 +41,9 @@ pub(crate) fn quota_values(quotas: &Quotas) -> [Option<i64>; 6] {
         quotas.cpu_per_month.map(ms),
         quotas.active_runs.map(i64::from),
         quotas.runs_per_month.map(int),
-        quotas.scripts.map(int),
+        quotas.workflows.map(int),
         quotas.max_ttl.map(ms),
-        quotas.max_script_lines.map(i64::from),
+        quotas.max_code_lines.map(i64::from),
     ]
 }
 

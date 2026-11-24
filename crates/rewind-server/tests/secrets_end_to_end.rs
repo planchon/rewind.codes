@@ -707,16 +707,16 @@ export default async function main() {
 }
 "#;
 
-/// Starts `script` in `namespace` with these attachments and labels, waiting up to 60 s.
+/// Starts `code` in `namespace` with these attachments and labels, waiting up to 60 s.
 async fn start(
     client: &Client,
     namespace: &str,
-    script: &str,
+    code: &str,
     action_set: &str,
     secrets: &[(&str, &str)],
     labels: &[(&str, &str)],
 ) -> Result<Run, rewind_api::Error> {
-    let mut request = StartRun::new(script);
+    let mut request = StartRun::new(code);
     request.action_set = Some(action_set.to_owned());
     request.secrets = attachments(secrets);
     request.labels = labels.iter().copied().collect();

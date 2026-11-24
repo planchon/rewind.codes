@@ -4,8 +4,8 @@
 //! A run that failed, was cancelled or was aborted gets a **signature**: its error's name (an
 //! abort's kind) and its message with the parts that vary replaced by placeholders. Its
 //! **fingerprint**, the first 16 hexadecimal digits of the SHA-256 of the signature, names its
-//! failure group: models write a new script for most conversations, so runs are grouped by
-//! cause, across scripts. The activation that ends the run computes both, in the batch that
+//! failure group: models write a new code for most conversations, so runs are grouped by
+//! cause, across workflows. The activation that ends the run computes both, in the batch that
 //! commits its end, so every partition store keeps the same values.
 //!
 //! The message is rewritten by these rules, in this order, each on what the previous ones left:
@@ -100,12 +100,25 @@ pub fn fingerprint(signature: &str) -> String {
     hex
 }
 
-/// The innermost `script.ts:<line>:<column>` of a message or a stack: the first one, since a V8
+/// The names a stack gives the code: `workflow.ts`, and `script.ts` in the stacks recorded before
+/// the rename release, which stay as their runs recorded them.
+const CODE_FILES: [&str; 2] = ["workflow.ts:", "script.ts:"];
+
+/// What follows the first `workflow.ts:` (or `script.ts:`) of a text.
+pub(crate) fn after_code_file(text: &str) -> Option<&str> {
+    CODE_FILES
+        .iter()
+        .filter_map(|file| text.find(file).map(|at| at + file.len()))
+        .min()
+        .map(|at| &text[at..])
+}
+
+/// The innermost `workflow.ts:<line>:<column>` of a message or a stack: the first one, since a V8
 /// stack lists the innermost frame first.
-pub fn script_location(text: &str) -> Option<(u32, u32)> {
+pub fn code_location(text: &str) -> Option<(u32, u32)> {
     let mut rest = text;
-    while let Some(at) = rest.find("script.ts:") {
-        rest = &rest[at + "script.ts:".len()..];
+    while let Some(after) = after_code_file(rest) {
+        rest = after;
         let mut parts = rest.splitn(3, ':');
         let line = parts.next().and_then(|line| line.parse().ok());
         let column = parts.next().and_then(|column| {
@@ -132,8 +145,8 @@ pub fn ending(outcome: &RunOutcome) -> Option<Ending> {
         RunOutcome::Aborted { reason } => (reason.kind.as_str(), reason.message.as_str(), None),
     };
     let line = stack
-        .and_then(script_location)
-        .or_else(|| script_location(message))
+        .and_then(code_location)
+        .or_else(|| code_location(message))
         .map(|(line, _)| line);
     let signature = signature(error, message);
     Some(Ending {
@@ -290,25 +303,30 @@ mod tests {
     #[test]
     fn locations_are_read_from_messages_and_stacks() {
         assert_eq!(
-            script_location("cannot import \"fs\" (script.ts:2:1): scripts can only import"),
+            code_location("cannot import \"fs\" (workflow.ts:2:1): workflows can only import"),
             Some((2, 1))
         );
         assert_eq!(
-            script_location("TypeError: x\n    at main (file:///script.ts:7:13)"),
+            code_location("TypeError: x\n    at main (file:///workflow.ts:7:13)"),
             Some((7, 13))
         );
         assert_eq!(
-            script_location(
-                "Error: x\n    at f (file:///script.ts:3:9)\n    at main (file:///script.ts:12:5)"
+            code_location(
+                "Error: x\n    at f (file:///workflow.ts:3:9)\n    at main (file:///workflow.ts:12:5)"
             ),
             Some((3, 9)),
             "the innermost frame"
         );
         assert_eq!(
-            script_location("script.ts:x:1, then script.ts:4:2"),
+            code_location("workflow.ts:x:1, then workflow.ts:4:2"),
             Some((4, 2))
         );
-        assert_eq!(script_location("no location"), None);
+        assert_eq!(
+            code_location("TypeError: x\n    at main (file:///script.ts:7:13)"),
+            Some((7, 13)),
+            "a stack recorded before the rename release names the code script.ts"
+        );
+        assert_eq!(code_location("no location"), None);
     }
 
     #[test]
@@ -316,9 +334,9 @@ mod tests {
         let failed = RunOutcome::Failed {
             error: ScriptError {
                 name: "TypeError".into(),
-                message: "Cannot read properties of undefined (reading 'id') at script.ts:9:1"
+                message: "Cannot read properties of undefined (reading 'id') at workflow.ts:9:1"
                     .into(),
-                stack: Some("TypeError: x\n    at main (file:///script.ts:7:13)".into()),
+                stack: Some("TypeError: x\n    at main (file:///workflow.ts:7:13)".into()),
             },
         };
         let ending = super::ending(&failed).unwrap();
@@ -326,14 +344,14 @@ mod tests {
         assert_eq!(ending.line, Some(7), "the stack first");
         assert_eq!(
             ending.signature,
-            "TypeError: Cannot read properties of undefined (reading 'id') at script.ts:<n>:<n>"
+            "TypeError: Cannot read properties of undefined (reading 'id') at workflow.ts:<n>:<n>"
         );
         assert_eq!(ending.fingerprint, fingerprint(&ending.signature));
 
         let without_stack = RunOutcome::Failed {
             error: ScriptError {
                 name: "SyntaxError".into(),
-                message: "unexpected token (script.ts:4:2)".into(),
+                message: "unexpected token (workflow.ts:4:2)".into(),
                 stack: None,
             },
         };
@@ -342,7 +360,7 @@ mod tests {
         let aborted = RunOutcome::Aborted {
             reason: AbortReason {
                 kind: AbortKind::LimitExceeded,
-                message: "the script used 5000 ms of CPU time".into(),
+                message: "the code used 5000 ms of CPU time".into(),
             },
         };
         let ending = super::ending(&aborted).unwrap();
@@ -352,7 +370,7 @@ mod tests {
         );
         assert_eq!(
             ending.signature,
-            "limit_exceeded: the script used <n> ms of CPU time"
+            "limit_exceeded: the code used <n> ms of CPU time"
         );
 
         let completed = RunOutcome::Completed {

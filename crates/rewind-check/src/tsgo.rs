@@ -28,7 +28,7 @@ const EXECUTABLE: &str = "lib/tsc";
 
 /// What is read of tsgo's standard output at most: well above the diagnostics a check returns
 /// ([`TsgoChecker::MAX_DIAGNOSTICS`](crate::TsgoChecker::MAX_DIAGNOSTICS)). Past it, tsgo is
-/// stopped and its last line dropped: a script of 2 MiB with an error on each line made tsgo
+/// stopped and its last line dropped: a code of 2 MiB with an error on each line made tsgo
 /// print 700,000 diagnostics.
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
@@ -135,7 +135,7 @@ pub(crate) struct Reported {
 
 /// Type-checks the project in `dir`, as `tsc --project dir`.
 ///
-/// - `--noResolve`: nothing outside `dir` is read. An import or a reference of the script
+/// - `--noResolve`: nothing outside `dir` is read. An import or a reference of the code
 ///   could otherwise make tsgo read any file of the host, and its diagnostics show what they
 ///   read. The ambient modules `rewind` and `rewind:actions` do not need resolution.
 /// - `--singleThreaded`, `--locale en` and an empty environment: the diagnostics depend on
@@ -234,7 +234,7 @@ async fn read_kept(reader: &mut (impl AsyncRead + Unpin), limit: usize) -> io::R
 /// Reads the output of `--pretty false`:
 ///
 /// ```text
-/// script.ts(4,8): error TS2322: Type '(a: number) => void' is not assignable to type '(a: string) => void'.
+/// workflow.ts(4,8): error TS2322: Type '(a: number) => void' is not assignable to type '(a: string) => void'.
 ///   Types of parameters 'a' and 'a' are incompatible.
 /// error TS5023: Unknown compiler option 'x'.
 /// ```
@@ -288,13 +288,13 @@ mod tests {
 
     #[test]
     fn reads_diagnostics_with_their_chained_messages() {
-        let output = "script.ts(4,8): error TS2322: Type '(a: number) => void' is not assignable to type '(a: string) => void'.\n  Types of parameters 'a' and 'a' are incompatible.\n    Type 'string' is not assignable to type 'number'.\nglobals.d.ts(100,13): error TS2403: Subsequent variable declarations must have the same type.  Variable 'URL' must be of type 'x'.\nerror TS5023: Unknown compiler option 'x'.\nscript.ts(1,2): warning TS6133: 'x' is declared but its value is never read.\n";
+        let output = "workflow.ts(4,8): error TS2322: Type '(a: number) => void' is not assignable to type '(a: string) => void'.\n  Types of parameters 'a' and 'a' are incompatible.\n    Type 'string' is not assignable to type 'number'.\nglobals.d.ts(100,13): error TS2403: Subsequent variable declarations must have the same type.  Variable 'URL' must be of type 'x'.\nerror TS5023: Unknown compiler option 'x'.\nworkflow.ts(1,2): warning TS6133: 'x' is declared but its value is never read.\n";
         let diagnostics = parse(output);
         assert_eq!(
             diagnostics,
             [
                 Reported {
-                    location: Some(("script.ts".into(), 4, 8)),
+                    location: Some(("workflow.ts".into(), 4, 8)),
                     warning: false,
                     code: 2322,
                     message: "Type '(a: number) => void' is not assignable to type '(a: string) => void'.\n  Types of parameters 'a' and 'a' are incompatible.\n    Type 'string' is not assignable to type 'number'.".into(),
@@ -312,7 +312,7 @@ mod tests {
                     message: "Unknown compiler option 'x'.".into(),
                 },
                 Reported {
-                    location: Some(("script.ts".into(), 1, 2)),
+                    location: Some(("workflow.ts".into(), 1, 2)),
                     warning: true,
                     code: 6133,
                     message: "'x' is declared but its value is never read.".into(),
@@ -324,10 +324,10 @@ mod tests {
     #[test]
     fn a_message_holding_a_location_is_read_whole() {
         let diagnostics = parse(
-            "script.ts(2,3): error TS2304: Cannot find name 'f(1,2): x'.\nnot a diagnostic\n",
+            "workflow.ts(2,3): error TS2304: Cannot find name 'f(1,2): x'.\nnot a diagnostic\n",
         );
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].location, Some(("script.ts".into(), 2, 3)));
+        assert_eq!(diagnostics[0].location, Some(("workflow.ts".into(), 2, 3)));
         assert_eq!(diagnostics[0].message, "Cannot find name 'f(1,2): x'.");
     }
 

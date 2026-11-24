@@ -16,7 +16,7 @@ use rewind_api::testing::{Test, TestProblem, TestResult};
 use rewind_api::workflows::{RecordedTests, Workflow};
 use serde_json::{Value, json};
 
-/// What `run_script` returns of a run's output at most: 256 KiB, the bound of the API's inline
+/// What `run_workflow` returns of a run's output at most: 256 KiB, the bound of the API's inline
 /// values.
 pub const OUTPUT_LIMIT: usize = 256 * 1024;
 
@@ -253,7 +253,7 @@ fn headline(run: &Run, limits: &Limits) -> String {
                     rewind_api::runs::QuarantineCause::RepeatedFailures => "repeated_failures",
                 };
                 return format!(
-                    "{name} is quarantined ({cause}): {}. It waits for the platform to be fixed; it is not a fault of the script.",
+                    "{name} is quarantined ({cause}): {}. It waits for the platform to be fixed; it is not a fault of the code.",
                     truncate_end(&quarantine.reason, limits.value)
                 );
             }
@@ -271,7 +271,7 @@ fn abort_kind(kind: rewind_api::common::AbortKind) -> &'static str {
         rewind_api::common::AbortKind::LimitExceeded => "limit_exceeded",
         rewind_api::common::AbortKind::NonDeterminism => "non_determinism",
         rewind_api::common::AbortKind::Cancelled => "cancelled",
-        rewind_api::common::AbortKind::InvalidScript => "invalid_script",
+        rewind_api::common::AbortKind::InvalidCode => "invalid_code",
         rewind_api::common::AbortKind::Internal => "internal",
     }
 }
@@ -486,30 +486,30 @@ pub fn describe_check(result: &CheckResult, limits: &Limits) -> String {
         .collect();
     if result.ok {
         return if warnings == 0 {
-            "The script type-checks.".to_owned()
+            "The code type-checks.".to_owned()
         } else {
             format!(
-                "The script type-checks, with {}:\n{}",
+                "The code type-checks, with {}:\n{}",
                 counts.join(" and "),
                 diagnostics_text(&result.diagnostics, limits)
             )
         };
     }
     format!(
-        "The script does not type-check: {}.\n{}",
+        "The code does not type-check: {}.\n{}",
         counts.join(" and "),
         diagnostics_text(&result.diagnostics, limits)
     )
 }
 
-/// What `check_script` adds to its answer for a script without the comment its title is read
+/// What `check_workflow` adds to its answer for a code without the comment its title is read
 /// from.
-pub const UNTITLED_NOTE: &str = "Note: the script does not start with a comment that gives its title. Start it with:\n/** <title>\n *\n * <description> */\nIts title names what the script does in a few words: its runs are named after it.";
+pub const UNTITLED_NOTE: &str = "Note: the code does not start with a comment that gives its title. Start it with:\n/** <title>\n *\n * <description> */\nIts title names what the code does in a few words: its runs are named after it.";
 
-/// A script refused before any run exists.
+/// A code refused before any run exists.
 pub fn describe_refusal(detail: &str, diagnostics: &[Diagnostic], limits: &Limits) -> String {
     let text = format!(
-        "The script was refused before anything ran: {}",
+        "The code was refused before anything ran: {}",
         truncate_end(detail, limits.value)
     );
     if diagnostics.is_empty() {
@@ -526,7 +526,7 @@ pub fn diagnostics_text(diagnostics: &[Diagnostic], limits: &Limits) -> String {
     for d in diagnostics {
         let location = d
             .location
-            .map(|l| format!("script.ts:{}:{} ", l.line, l.column))
+            .map(|l| format!("workflow.ts:{}:{} ", l.line, l.column))
             .unwrap_or_default();
         let mut lines = vec![format!(
             "{location}{} {}: {}",
@@ -676,7 +676,7 @@ pub fn describe_save_refused(
         ),
         describe_test_results(results, limits),
         format!(
-            "Every test must pass: there is no way around it. If the script is wrong, fix it, and check it with test_script({}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
+            "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
             args(&[("code", json!("…")), ("workflow", json!(workflow))])
         ),
     ]
@@ -697,10 +697,10 @@ pub fn describe_retry_refused(
         |workflow| format!("the suite of {workflow}"),
     );
     let check = workflow.map_or_else(
-        || "test_script".to_owned(),
+        || "test_workflow".to_owned(),
         |workflow| {
             format!(
-                "test_script({})",
+                "test_workflow({})",
                 args(&[("code", json!("…")), ("workflow", json!(workflow))])
             )
         },
@@ -712,17 +712,17 @@ pub fn describe_retry_refused(
         ),
         describe_test_results(results, limits),
         format!(
-            "A fix must keep every behavior {suite} pins: there is no way around it. Fix the script, and check it with {check} before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it."
+            "A fix must keep every behavior {suite} pins: there is no way around it. Fix the code, and check it with {check} before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it."
         ),
     ]
     .join("\n")
 }
 
-/// A workflow saved: how the model's scripts use it, and its declaration.
+/// A workflow saved: how the model's workflows use it, and its declaration.
 pub fn describe_workflow(workflow: &Workflow, limits: &Limits) -> String {
     let mut lines = vec![
         format!(
-            "Saved the workflow {}. Your next scripts can import it:",
+            "Saved the workflow {}. Your next workflows can import it:",
             workflow_ref(&workflow.name, &workflow.version)
         ),
         format!("import {{ {} }} from \"rewind:workflows\";", workflow.name),
@@ -739,7 +739,7 @@ pub fn describe_workflow(workflow: &Workflow, limits: &Limits) -> String {
     lines.join("\n")
 }
 
-/// A workflow refused: why, and the diagnostics of its script.
+/// A workflow refused: why, and the diagnostics of its code.
 pub fn describe_workflow_refusal(
     detail: &str,
     diagnostics: &[Diagnostic],
@@ -1094,7 +1094,7 @@ fn payload_text(payload: &Payload, limit: usize) -> String {
 
 fn at(callsite: Option<&Callsite>) -> String {
     callsite
-        .map(|callsite| format!(" at script.ts:{}:{}", callsite.line, callsite.column))
+        .map(|callsite| format!(" at workflow.ts:{}:{}", callsite.line, callsite.column))
         .unwrap_or_default()
 }
 
@@ -1132,7 +1132,7 @@ pub fn plural(count: usize, noun: &str) -> String {
 fn permission_phrase(permission: Permission) -> Option<&'static str> {
     Some(match permission {
         Permission::RunsRead => "read runs and record tests",
-        Permission::RunsStart => "check, test, run and retry scripts",
+        Permission::RunsStart => "check, test, run and retry workflows",
         Permission::RunsControl => "signal and cancel runs",
         Permission::ActionsRead => "read action sets and workflows",
         Permission::NamespacesRead => "list namespaces",
@@ -1233,7 +1233,7 @@ pub fn describe_namespaces(
         .unwrap_or_default();
     if list.namespaces.is_empty() {
         return format!(
-            "No namespace{starting}. A namespace is created by the first run that names it: give a new name as `namespace` to run_script."
+            "No namespace{starting}. A namespace is created by the first run that names it: give a new name as `namespace` to run_workflow."
         );
     }
     let mut lines = vec![format!(
@@ -1278,9 +1278,9 @@ pub fn describe_namespaces(
             .iter()
             .any(|namespace| namespace.display_name.is_some())
         {
-            "Give one's name, not its display name in parentheses, as `namespace` to check_script, test_script and run_script."
+            "Give one's name, not its display name in parentheses, as `namespace` to check_workflow, test_workflow and run_workflow."
         } else {
-            "Give one as `namespace` to check_script, test_script and run_script."
+            "Give one as `namespace` to check_workflow, test_workflow and run_workflow."
         }
         .to_owned(),
     );
@@ -1293,7 +1293,7 @@ const LISTED_ACTIONS: usize = 20;
 /// `list_action_sets`: each action set's id, servers, actions and workflows.
 pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> String {
     if list.action_sets.is_empty() {
-        return "No action set in this organization: a script can only use the built-in `webhook`. An action set is registered with POST /v1/action-sets, outside these tools.".to_owned();
+        return "No action set in this organization: a code can only use the built-in `webhook`. An action set is registered with POST /v1/action-sets, outside these tools.".to_owned();
     }
     let mut lines = vec![format!(
         "{}: give one's id as `action_set`.",
@@ -1338,7 +1338,7 @@ pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> St
         }
     }
     lines.push(
-        "Read the declarations of the actions you need with search_actions before you write a script."
+        "Read the declarations of the actions you need with search_actions before you write a code."
             .to_owned(),
     );
     lines.join("\n")
@@ -1439,7 +1439,7 @@ mod tests {
         let limits = Limits::for_output(64 * 1024);
         let long = "m".repeat(3_000_000);
         let run: Run = serde_json::from_value(json!({
-            "id": "r", "handle": "alice/script/r", "namespace": "alice", "status": "failed", "script": "s", "actionSet": "t", "epoch": 1,
+            "id": "r", "handle": "alice/script/r", "namespace": "alice", "status": "failed", "codeDigest": "s", "actionSet": "t", "epoch": 1,
             "mode": "live", "labels": {}, "traceId": "0", "historyLen": 3,
             "createdAt": "2026-11-12T00:00:00Z", "updatedAt": "2026-11-12T00:00:00Z",
             "expiresAt": "2026-11-13T00:00:00Z",
@@ -1525,7 +1525,7 @@ mod tests {
             "number": 3,
             "description": "Triage the stale issues of a repository, after approval.",
             "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
-            "script": "cd".repeat(32),
+            "codeDigest": "cd".repeat(32),
             "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
             "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
             "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } },
@@ -1623,12 +1623,12 @@ mod tests {
                 {
                     "name": "user_2fQ81", "displayName": "Acme Corp",
                     "limits": {}, "exceptions": {},
-                    "usage": { "cpu": "1s", "activeRuns": 0, "runsStarted": 1, "scripts": 1 },
+                    "usage": { "cpu": "1s", "activeRuns": 0, "runsStarted": 1, "workflows": 1 },
                     "createdAt": "2026-11-01T00:00:00Z", "lastActiveAt": "2026-11-18T10:00:00Z"
                 },
                 {
                     "name": "user_9xZ", "limits": {}, "exceptions": {},
-                    "usage": { "cpu": "0s", "activeRuns": 0, "runsStarted": 0, "scripts": 0 },
+                    "usage": { "cpu": "0s", "activeRuns": 0, "runsStarted": 0, "workflows": 0 },
                     "createdAt": "2026-11-01T00:00:00Z", "lastActiveAt": "2026-11-01T00:00:00Z"
                 }
             ]
@@ -1641,7 +1641,7 @@ mod tests {
         );
         assert!(text.contains("\n- user_9xZ: 0 runs this month"), "{text}");
         assert!(
-            text.ends_with("Give one's name, not its display name in parentheses, as `namespace` to check_script, test_script and run_script."),
+            text.ends_with("Give one's name, not its display name in parentheses, as `namespace` to check_workflow, test_workflow and run_workflow."),
             "{text}"
         );
     }
@@ -1676,7 +1676,7 @@ mod tests {
                 "  Trace:",
                 "#0 run_started\n#1 signal approval\n#2 call github.close_issue",
                 "PASS \"closes once approved\"",
-                "Every test must pass: there is no way around it. If the script is wrong, fix it, and check it with test_script({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
+                "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
             ]
             .join("\n")
         );
@@ -1695,13 +1695,13 @@ mod tests {
         assert_eq!(
             describe_retry_refused(
                 RUN_ID,
-                "1 test of the suite of triage did not pass against the corrected script",
+                "1 test of the suite of triage did not pass against the corrected code",
                 &tests,
                 Some(&workflow),
                 &limits
             ),
             [
-                &format!("Run {RUN_ID} was not retried: 1 test of the suite of triage did not pass against the corrected script"),
+                &format!("Run {RUN_ID} was not retried: 1 test of the suite of triage did not pass against the corrected code"),
                 "1 of 2 tests did not pass.",
                 "PASS \"closes once approved\"",
                 "FAIL \"closes nothing without approval\" (failed): it ran, and expectations do not hold:",
@@ -1711,7 +1711,7 @@ mod tests {
                 "  Calls: github.close_issue ×1, github.list_issues ×1",
                 "  Trace:",
                 "#0 run_started\n#1 call github.close_issue",
-                "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the script, and check it with test_script({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.",
+                "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the code, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.",
             ]
             .join("\n")
         );
@@ -1723,7 +1723,7 @@ mod tests {
         assert_eq!(
             describe_workflow(&saved, &Limits::default()),
             [
-                "Saved the workflow triage@4be1c07a9d3e. Your next scripts can import it:",
+                "Saved the workflow triage@4be1c07a9d3e. Your next workflows can import it:",
                 "import { triage } from \"rewind:workflows\";",
                 &saved.declarations.prompt,
                 "Its declaration:",
@@ -1909,7 +1909,7 @@ mod tests {
     fn runs_say_which_workflow_they_execute_and_which_run_started_them() {
         let run: Run = serde_json::from_value(json!({
             "id": RUN_ID, "handle": "user_2fQ81/triage/06bqx3k9f2mt", "namespace": "user_2fQ81",
-            "status": "completed", "script": "ab".repeat(32),
+            "status": "completed", "codeDigest": "ab".repeat(32),
             "actionSet": "t", "epoch": 1, "mode": "live", "labels": {}, "traceId": "0", "historyLen": 4,
             "createdAt": "2026-11-12T10:00:00Z", "updatedAt": "2026-11-12T10:00:01Z",
             "expiresAt": "2026-12-12T10:00:00Z",
@@ -1930,7 +1930,7 @@ mod tests {
         );
         let summary: RunSummary = serde_json::from_value(json!({
             "id": "r2", "handle": "user_2fQ81/triage/06bqx3k9f2mv", "namespace": "user_2fQ81",
-            "status": "active", "quarantined": false, "script": "s",
+            "status": "active", "quarantined": false, "codeDigest": "s",
             "headline": "", "actionSet": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
             "lastActivityAt": "2026-11-12T10:00:00Z", "calls": 1, "errors": 0, "historyLen": 3,
             "waitingFor": [], "workflow": "triage", "startedBy": "r1"

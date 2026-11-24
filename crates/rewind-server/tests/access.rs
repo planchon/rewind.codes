@@ -162,7 +162,7 @@ impl Request {
             Request::Check => outcome(
                 client
                     .check(&CheckRequest {
-                        script: "export default async function main() {}".into(),
+                        code: "export default async function main() {}".into(),
                         action_set: Some("unknown".into()),
                     })
                     .await,

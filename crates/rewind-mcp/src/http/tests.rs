@@ -28,7 +28,7 @@ fn test_policy(address: IpAddr) -> Option<&'static str> {
     (address != LOCAL).then_some("test-internal")
 }
 
-/// Answers names from a script: each name has a list of answers, the last one repeated.
+/// Answers names from a code: each name has a list of answers, the last one repeated.
 #[derive(Debug, Default)]
 struct ScriptedResolver {
     answers: Mutex<BTreeMap<String, VecDeque<Vec<IpAddr>>>>,

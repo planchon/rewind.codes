@@ -1,10 +1,10 @@
-//! `rewind replay <run|journal.json> [--script fixed.ts [--at n]]`, in this process
+//! `rewind replay <run|journal.json> [--code fixed.ts [--at n]]`, in this process
 //! (`archi/05-testing-and-observability.md`, "Replay, debugging and forks").
 //!
 //! The journal document is read from the file, or exported by the server
 //! (`GET /v1/runs/{id}/journal`); either way the replay runs here, on a fresh V8 executor,
-//! and calls no action. Without `--script`, the run's own script must reproduce the journal
-//! exactly: a divergence is non-determinism. With `--script`, the corrected script is followed
+//! and calls no action. Without `--code`, the run's own code must reproduce the journal
+//! exactly: a divergence is non-determinism. With `--code`, the corrected code is followed
 //! against the journal as a fork would follow it (`rewind_engine::fork::compatibility`): the
 //! report says where it stops following the run, and which calls a fork would reuse, call
 //! again, or fail with `outcome_unknown`.
@@ -13,9 +13,9 @@ use std::path::Path;
 
 use rewind_api::runs::JournalExport;
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, JournalDocument, NonDeterminism, Script, Seq,
+    Code, Command, Completion, Event, HistoryEntry, JournalDocument, NonDeterminism, Seq,
 };
-use rewind_engine::ports::{RunRef, ScriptExecutor, TenantId};
+use rewind_engine::ports::{CodeExecutor, RunRef, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_engine::{Compatibility, ForkError, ForkPoint, Limits};
 use rewind_runtime::{SandboxLimits, V8Executor};
@@ -34,12 +34,12 @@ use crate::output::Console;
 pub(crate) struct ReplayReport {
     pub(crate) run: String,
     pub(crate) entries: u64,
-    /// The script reproduces the journal: its own script, or the corrected one up to the end
+    /// The code reproduces the journal: its own code, or the corrected one up to the end
     /// of the run (or its cancellation or abort).
     pub(crate) matches: bool,
     /// What the replay found, in one sentence.
     pub(crate) verdict: String,
-    /// With `--script`: what a fork with the corrected script would do.
+    /// With `--code`: what a fork with the corrected code would do.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) fork: Option<ForkReport>,
 }
@@ -96,11 +96,11 @@ pub(super) async fn replay(
             )))
         })?
     };
-    let report = match &args.script {
+    let report = match &args.code {
         None => replay_journal(&journal).await?,
         Some(path) => {
-            let script = Script::new(input::read_text(path)?);
-            compatibility(&journal, &script, args.at).await?
+            let code = Code::new(input::read_text(path)?);
+            compatibility(&journal, &code, args.at).await?
         }
     };
     if console.json() {
@@ -147,7 +147,7 @@ fn executor() -> Result<V8Executor, CliError> {
     V8Executor::new(SandboxLimits::default()).map_err(|error| CliError::internal(error.to_string()))
 }
 
-/// Replays a journal with its own script.
+/// Replays a journal with its own code.
 pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayReport, CliError> {
     let entries = journal.entries.len() as u64;
     let mut report = ReplayReport {
@@ -162,7 +162,7 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
         return Ok(report);
     }
     let executor = executor()?;
-    let compiled = executor.compile(&journal.script, &journal.action_set);
+    let compiled = executor.compile(&journal.code, &journal.action_set);
     let run = RunRef::new(TenantId::local(), journal.run);
     let input = ReplayInput {
         run: &run,
@@ -175,11 +175,11 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
             report.matches = true;
             report.verdict = match rebuilt.end {
                 ReplayEnd::EndOfHistory => format!(
-                    "the script replays the {entries} entries of the journal of run {}",
+                    "the code replays the {entries} entries of the journal of run {}",
                     journal.run
                 ),
                 ReplayEnd::Aborted(reason) => format!(
-                    "the script replays the {entries} entries of the journal of run {}, up to its abort ({reason})",
+                    "the code replays the {entries} entries of the journal of run {}, up to its abort ({reason})",
                     journal.run
                 ),
             };
@@ -194,10 +194,10 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
     Ok(report)
 }
 
-/// Follows a journal with a corrected script, as a fork would.
+/// Follows a journal with a corrected code, as a fork would.
 pub(crate) async fn compatibility(
     journal: &JournalDocument,
-    script: &Script,
+    code: &Code,
     at: Option<u64>,
 ) -> Result<ReplayReport, CliError> {
     let entries = journal.entries.len() as u64;
@@ -213,44 +213,39 @@ pub(crate) async fn compatibility(
         return Ok(report);
     }
     let executor = executor()?;
-    let found: Compatibility = match rewind_engine::fork::compatibility(
-        &executor,
-        journal,
-        script,
-        at,
-        &Limits::default(),
-    )
-    .await
-    {
-        Ok(found) => found,
-        Err(ForkError::Start(refused)) => {
-            return Err(CliError::ScriptRefused {
-                message: format!("the corrected script cannot start: {refused}"),
-                diagnostics: Vec::new(),
-            });
-        }
-        Err(error) => {
-            return Err(CliError::internal(format!(
-                "the journal cannot be followed: {error}"
-            )));
-        }
-    };
+    let found: Compatibility =
+        match rewind_engine::fork::compatibility(&executor, journal, code, at, &Limits::default())
+            .await
+        {
+            Ok(found) => found,
+            Err(ForkError::Start(refused)) => {
+                return Err(CliError::CodeRefused {
+                    message: format!("the corrected code cannot start: {refused}"),
+                    diagnostics: Vec::new(),
+                });
+            }
+            Err(error) => {
+                return Err(CliError::internal(format!(
+                    "the journal cannot be followed: {error}"
+                )));
+            }
+        };
     report.matches = found.is_compatible();
     report.verdict = match &found.point {
         ForkPoint::Diverged(mismatch) => {
-            format!("the script diverges from the journal: {mismatch}")
+            format!("the code diverges from the journal: {mismatch}")
         }
         ForkPoint::At(index) => format!(
-            "the script follows the journal of run {} up to entry {index}, where a fork goes live",
+            "the code follows the journal of run {} up to entry {index}, where a fork goes live",
             journal.run
         ),
         ForkPoint::Stopped => {
-            "the script could not go on while it followed the journal: a fork is aborted".to_owned()
+            "the code could not go on while it followed the journal: a fork is aborted".to_owned()
         }
         point @ (ForkPoint::EndOfParent
         | ForkPoint::ParentCancelled(_)
         | ForkPoint::ParentAborted(_)) => format!(
-            "the script is compatible with the journal of run {} ({entries} entries): {point}",
+            "the code is compatible with the journal of run {} ({entries} entries): {point}",
             journal.run
         ),
     };

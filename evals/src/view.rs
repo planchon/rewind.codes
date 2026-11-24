@@ -26,7 +26,7 @@ use rewind_core::{
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CatalogStore, InvalidScript, NamespaceName, ParkKind, QuarantineKind, RunRef, StoredWorkflow,
+    CatalogStore, InvalidCode, NamespaceName, ParkKind, QuarantineKind, RunRef, StoredWorkflow,
 };
 
 use crate::world::World;
@@ -91,10 +91,10 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
         Some(RunOutcome::Failed { error: failure }) => {
             let source = world
                 .catalog()
-                .get_script(&run.tenant, record.script)
+                .get_script(&run.tenant, record.code)
                 .await
                 .map_err(|error| unavailable(error.to_string()))?
-                .map(|stored| stored.script.source().to_owned())
+                .map(|stored| stored.code.source().to_owned())
                 .unwrap_or_default();
             error = Some(run_error(failure, &history, &source));
         }
@@ -106,7 +106,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     } else {
         waiting(world, run, &history, &state).await?
     };
-    let script_title = script_title(world, &run.tenant, record.script)
+    let script_title = script_title(world, &run.tenant, record.code)
         .await?
         .map(|(title, _, _)| title);
     Ok(Run {
@@ -121,7 +121,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
             },
             reason: quarantine.reason.clone(),
         }),
-        script: record.script.to_hex(),
+        code_digest: record.code.to_hex(),
         script_title,
         action_set: record.action_set.to_hex(),
         epoch: record.epoch.0,
@@ -168,17 +168,17 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     })
 }
 
-/// A script's title, its description and where they come from, as the server shows them: the
-/// title a person gave the script, else the comment at the top of its source.
+/// A code's title, its description and where they come from, as the server shows them: the
+/// title a person gave the code, else the comment at the top of its source.
 pub async fn script_title(
     world: &World,
     tenant: &rewind_engine::ports::TenantId,
-    script: rewind_core::Digest,
+    code: rewind_core::Digest,
 ) -> Result<Option<(String, Option<String>, TitleSource)>, EdgeError> {
     let catalog = world.catalog();
     let failed = |error: rewind_engine::ports::CatalogError| unavailable(error.to_string());
     if let Some((_, given)) = catalog
-        .script_titles(tenant, &[script])
+        .script_titles(tenant, &[code])
         .await
         .map_err(failed)?
         .into_iter()
@@ -187,10 +187,10 @@ pub async fn script_title(
         return Ok(Some((given.title, given.description, TitleSource::Person)));
     }
     Ok(catalog
-        .get_script(tenant, script)
+        .get_script(tenant, code)
         .await
         .map_err(failed)?
-        .and_then(|stored| rewind_core::script_doc(stored.script.source()))
+        .and_then(|stored| rewind_core::code_doc(stored.code.source()))
         .map(|doc| (doc.title, doc.description, TitleSource::Comment)))
 }
 
@@ -292,7 +292,7 @@ async fn waiting(
     Ok(waiting)
 }
 
-/// The last log lines of the script.
+/// The last log lines of the code.
 fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
     let mut lines: Vec<LogLine> = history
         .iter()
@@ -325,8 +325,8 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
         namespace: namespace_of(&run.run, &run.namespace)?,
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
-        script: run.script.to_hex(),
-        // The script's title is not the index's: the caller gives it.
+        code_digest: run.code.to_hex(),
+        // The code's title is not the index's: the caller gives it.
         script_title: None,
         headline: run.headline.clone(),
         action_set: run.action_set.to_hex(),
@@ -374,14 +374,14 @@ fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
     }
 }
 
-/// How the script failed, with where: the first position in `script.ts` of its stack, else of
+/// How the code failed, with where: the first position in `workflow.ts` of its stack, else of
 /// its message, and the call whose `ActionError` it did not catch.
 fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source: &str) -> RunError {
     let location = error
         .stack
         .as_deref()
-        .and_then(script_location)
-        .or_else(|| script_location(&error.message));
+        .and_then(code_location)
+        .or_else(|| code_location(&error.message));
     RunError {
         name: error.name.clone(),
         message: error.message.clone(),
@@ -394,7 +394,7 @@ fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source:
     }
 }
 
-/// The call whose `ActionError` the script did not catch, as `ScriptError::failed_call` finds it.
+/// The call whose `ActionError` the code did not catch, as `ScriptError::failed_call` finds it.
 fn failed_call(history: &[HistoryEntry], seq: Seq) -> Option<FailedCall> {
     let failure = history.iter().find_map(|entry| match &entry.event {
         Event::Completion(Completion::CallFailed { seq: failed, error }) if *failed == seq => {
@@ -419,11 +419,11 @@ fn failed_call(history: &[HistoryEntry], seq: Seq) -> Option<FailedCall> {
     })
 }
 
-/// The first `script.ts:<line>:<column>` of a message or a stack.
-pub fn script_location(text: &str) -> Option<(u32, u32)> {
+/// The first `workflow.ts:<line>:<column>` of a message or a stack.
+pub fn code_location(text: &str) -> Option<(u32, u32)> {
     let mut rest = text;
-    while let Some(at) = rest.find("script.ts:") {
-        rest = &rest[at + "script.ts:".len()..];
+    while let Some(at) = rest.find("workflow.ts:") {
+        rest = &rest[at + "workflow.ts:".len()..];
         let mut parts = rest.splitn(3, ':');
         let line = parts.next().and_then(|line| line.parse().ok());
         let column = parts.next().and_then(|column| {
@@ -479,13 +479,13 @@ pub fn diagnostic(diagnostic: &rewind_engine::ports::Diagnostic) -> Diagnostic {
     }
 }
 
-/// The checks at start refused the script: one diagnostic, located where the message says.
-pub fn invalid_script_diagnostic(invalid: &InvalidScript) -> Diagnostic {
+/// The checks at start refused the code: one diagnostic, located where the message says.
+pub fn invalid_code_diagnostic(invalid: &InvalidCode) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
-        code: "rewind/invalid-script".into(),
+        code: "rewind/invalid-code".into(),
         message: invalid.message.clone(),
-        location: script_location(&invalid.message).map(|(line, column)| Location {
+        location: code_location(&invalid.message).map(|(line, column)| Location {
             line,
             column,
             end_line: None,
@@ -537,7 +537,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
         number: stored.number,
         description: workflow.description().map(str::to_owned),
         action_set: workflow.action_set().to_hex(),
-        script: workflow.script().to_hex(),
+        code_digest: workflow.code().to_hex(),
         input: workflow.schemas().input.clone(),
         output: workflow.schemas().output.clone(),
         signals: workflow.schemas().signals.clone(),
@@ -695,14 +695,14 @@ mod tests {
     #[test]
     fn locations_are_read_from_messages_and_stacks() {
         assert_eq!(
-            script_location("RangeError: invalid amount -5\n    at main (file:///script.ts:5:31)"),
+            code_location("RangeError: invalid amount -5\n    at main (file:///workflow.ts:5:31)"),
             Some((5, 31))
         );
         assert_eq!(
-            script_location("cannot import \"node:fs\" (script.ts:1:16): scripts can only…"),
+            code_location("cannot import \"node:fs\" (workflow.ts:1:16): workflows can only…"),
             Some((1, 16))
         );
-        assert_eq!(script_location("ActionError: crm.get_order failed"), None);
+        assert_eq!(code_location("ActionError: crm.get_order failed"), None);
     }
 
     #[test]

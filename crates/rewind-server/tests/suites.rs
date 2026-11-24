@@ -46,12 +46,12 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn triage(action_set: &str, script: &str) -> CreateWorkflow {
+fn triage(action_set: &str, code: &str) -> CreateWorkflow {
     CreateWorkflow {
         name: "triage".into(),
         description: None,
         action_set: action_set.into(),
-        script: script.into(),
+        code: code.into(),
         input: json!({
             "type": "object",
             "properties": { "repo": { "type": "string" } },
@@ -164,19 +164,19 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     assert!(v3.tests.is_empty());
     assert_eq!(v3.retired[0].reason, "gone");
 
-    // The versions whose script is TRIAGE, newest first: the script's page shows their suites.
-    let with_script = |script: &str| WorkflowQuery {
-        script: Some(script.to_owned()),
+    // The versions whose code is TRIAGE, newest first: the code's page shows their suites.
+    let with_code = |code: &str| WorkflowQuery {
+        script: Some(code.to_owned()),
         ..WorkflowQuery::default()
     };
     let page = harness
-        .list_workflows(&with_script(&v1.script))
+        .list_workflows(&with_code(&v1.code_digest))
         .await
         .unwrap();
     let versions: Vec<&str> = page.workflows.iter().map(|w| w.version.as_str()).collect();
     assert_eq!(versions, [v3.version.as_str(), v1.version.as_str()]);
     assert_eq!(page.next, None);
-    assert!(harness.list_workflows(&with_script("nope")).await.is_err());
+    assert!(harness.list_workflows(&with_code("nope")).await.is_err());
 
     // A test given inline cannot claim to be recorded.
     let mut forged = triage(&action_set.id, TRIAGE);
@@ -244,8 +244,8 @@ async fn post_test_runs_a_workflows_suite_against_a_candidate() {
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     harness.create_workflow(&first).await.unwrap();
 
-    let candidate = |script: &str| TestRequest {
-        script: Some(script.into()),
+    let candidate = |code: &str| TestRequest {
+        code: Some(code.into()),
         workflow: Some("triage".into()),
         ..TestRequest::default()
     };
@@ -338,7 +338,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     // Corrected with `from`, a recorded test pins a new behavior without its cassette.
     let corrected = harness
         .test(&TestRequest {
-            script: Some(TWO.into()),
+            code: Some(TWO.into()),
             action_set: Some(action_set.id.clone()),
             tests: vec![TestInput::From(TestFrom {
                 from: named.tests[0].digest.clone(),

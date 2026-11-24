@@ -46,12 +46,12 @@ pub struct CallContext {
 /// A server's answer to a call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
-    /// A result as JSON in a text block, as most servers answer: the script reads it with
+    /// A result as JSON in a text block, as most servers answer: the code reads it with
     /// `.json()`.
     Json(Value),
     /// A result as `structuredContent` (and as text), for a tool with an output schema.
     Structured(Value),
-    /// `isError: true`: the tool reports a failure. The script gets an `ActionError` with this
+    /// `isError: true`: the tool reports a failure. The code gets an `ActionError` with this
     /// message, and `data` as its `data`.
     Error {
         message: String,
@@ -375,7 +375,7 @@ impl Args<'_> {
 }
 
 /// One page of `items`: from the offset the cursor holds, at most `limit` items, and the
-/// cursor of the next page if there is one. Cursors are opaque to scripts.
+/// cursor of the next page if there is one. Cursors are opaque to workflows.
 pub(crate) fn page<T: Clone>(
     items: &[T],
     cursor: Option<&str>,

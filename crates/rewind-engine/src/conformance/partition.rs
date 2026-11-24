@@ -116,7 +116,7 @@ fn run_of(tenant: &TenantId, n: u64) -> RunRef {
     )
 }
 
-fn script(name: &str) -> Digest {
+fn code(name: &str) -> Digest {
     Digest::of(name.as_bytes())
 }
 
@@ -130,7 +130,7 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
         namespace: namespace.clone(),
         origin: "triage".into(),
         suffix_len: 12,
-        script: script("script"),
+        code: code("script"),
         action_set: action_set_digest(),
         status: RunStatus::Pending,
         epoch: Epoch(1),
@@ -175,7 +175,7 @@ fn create_in(run: &RunRef, namespace: &NamespaceName, start_key: Option<&str>) -
 
 fn started() -> RunStarted {
     RunStarted {
-        script: script("script"),
+        code: code("script"),
         action_set: action_set_digest(),
         input: json!({ "n": 1 }).into(),
         seed: Seed::from_bytes([9; 32]),
@@ -251,7 +251,7 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         namespace: namespace.clone(),
         origin: "triage".into(),
         suffix_len: 12,
-        script: script("script"),
+        code: code("script"),
         headline: "export default async () => {".into(),
         action_set: action_set_digest(),
         status: if status == RunStatus::Pending {
@@ -391,8 +391,8 @@ fn set(at: Timestamp, kind: TimerKind) -> TimerChange {
     TimerChange::Set(DueTimer { at, kind })
 }
 
-fn script_timer(run: &RunRef, seq: u32) -> TimerKind {
-    TimerKind::Script {
+fn code_timer(run: &RunRef, seq: u32) -> TimerKind {
+    TimerKind::Code {
         run: run.clone(),
         seq: Seq(seq),
     }
@@ -501,7 +501,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
         admissions: vec![Admission {
             run: r2.id,
             namespace: alice(),
-            script: script("script"),
+            code: code("script"),
             admitted_at: T0,
         }],
     };
@@ -872,7 +872,7 @@ pub async fn changes_to_a_missing_or_erased_run_are_refused<S: PartitionStore>(s
             ("Enqueue", enqueue(gone, started_item(1), None)),
             ("Activation", activation.into()),
             ("Task", put_task(task(gone, 1, ready(T0)))),
-            ("Timer", set(T0, script_timer(gone, 1)).into()),
+            ("Timer", set(T0, code_timer(gone, 1)).into()),
             (
                 "Failure",
                 Change::Failure {
@@ -1051,7 +1051,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
     .await;
     first.tasks = vec![task(&r1, 1, ready(T0)), task(&r1, 2, TaskState::Approval)];
     first.timers = vec![
-        set(later(T0, 1_000), script_timer(&r1, 3)),
+        set(later(T0, 1_000), code_timer(&r1, 3)),
         set(later(T0, DAY), TimerKind::RunDeadline { run: r1.clone() }),
     ];
     first.outbox = vec![outbox_entry(1, Some(&r1))];
@@ -1077,7 +1077,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
                 },
             )
             .into(),
-            set(later(T0, 5), script_timer(&r2, 1)).into(),
+            set(later(T0, 5), code_timer(&r2, 1)).into(),
         ],
     )
     .await;
@@ -1097,7 +1097,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
         [
             DueTimer {
                 at: later(T0, 5),
-                kind: script_timer(&r2, 1)
+                kind: code_timer(&r2, 1)
             },
             DueTimer {
                 at: later(T0, 60_000),
@@ -1165,7 +1165,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
     first.head.updated_at = later(T0, 1);
     first.payloads = vec![payload("large")];
     first.tasks = vec![task(&r1, 1, ready(T0))];
-    first.timers = vec![set(later(T0, 1_000), script_timer(&r1, 2))];
+    first.timers = vec![set(later(T0, 1_000), code_timer(&r1, 2))];
     first.summary.actions.insert("github.close_issue".into());
     first.counters = vec![hour_delta(&acme(), &alice(), Hour::of(T0), created(1))];
     first.outbox = vec![outbox_entry(1, Some(&r1))];
@@ -1214,7 +1214,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
         timers_of(&log).await,
         [DueTimer {
             at: later(T0, 1_000),
-            kind: script_timer(&r1, 2)
+            kind: code_timer(&r1, 2)
         }]
     );
     let head = log.run(&r1).await.expect("run").expect("run");
@@ -1240,7 +1240,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
     );
 
     let mut second = activation(&log, &r1, vec![log_entry(2)], vec![3], RunStatus::Active).await;
-    second.timers = vec![TimerChange::Cancel(script_timer(&r1, 2))];
+    second.timers = vec![TimerChange::Cancel(code_timer(&r1, 2))];
     commit(&log, vec![second.into()]).await;
     assert_eq!(
         log.history(&r1, Attempt::FIRST, 0)
@@ -1558,8 +1558,8 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
         ),
     ];
     activation.timers = vec![
-        set(later(T0, 10), script_timer(&active, 5)),
-        set(later(T0, 2 * HOUR), script_timer(&active, 6)),
+        set(later(T0, 10), code_timer(&active, 5)),
+        set(later(T0, 2 * HOUR), code_timer(&active, 6)),
         set(
             later(T0, DAY),
             TimerKind::RunDeadline {
@@ -1612,7 +1612,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
         recovery.timers,
         [DueTimer {
             at: later(T0, 10),
-            kind: script_timer(&active, 5)
+            kind: code_timer(&active, 5)
         }],
         "the timers due before the horizon"
     );
@@ -1923,7 +1923,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
             .await
             .expect("gauges")
             .scripts
-            .get(&script("script")),
+            .get(&code("script")),
         Some(&2)
     );
 
@@ -1978,7 +1978,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
     );
     let gauges = log.gauges(&Scope::Tenant(acme())).await.expect("gauges");
     assert_eq!(
-        (gauges.active_runs, gauges.scripts.get(&script("script"))),
+        (gauges.active_runs, gauges.scripts.get(&code("script"))),
         (1, Some(&1)),
         "what it held in the gauges"
     );
@@ -2224,7 +2224,7 @@ pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
 
 /// A namespace's counters, shapes and start keys go once the partition holds none of its runs;
 /// what it consumed stays in its tenant's counts, under the partition's
-/// [`NamespaceName::erased`], without its failures, actions or scripts.
+/// [`NamespaceName::erased`], without its failures, actions or workflows.
 pub async fn erase_namespace_drops_its_counters_once_it_holds_no_run<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
     let kept = run(1);
@@ -2377,7 +2377,7 @@ pub async fn counters_sum_whole_hours_of_the_scope<S: PartitionStore>(store: &S)
         signature: "TypeError: <n>".into(),
         error: "TypeError".into(),
         runs: 1,
-        scripts: BTreeMap::from([(script("script"), 1)]),
+        scripts: BTreeMap::from([(code("script"), 1)]),
         lines: BTreeMap::from([(7, 1)]),
         latest: vec![LatestRun {
             run: self::run(run).id,
@@ -2541,7 +2541,7 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
         &log,
         vec![create_with(
             RunHead {
-                script: script("second"),
+                code: code("second"),
                 ..head(&quarantined, &alice())
             },
             None,
@@ -2565,7 +2565,7 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
         &log,
         vec![create_with(
             RunHead {
-                script: script("third"),
+                code: code("third"),
                 ..head(&ended, &alice())
             },
             None,
@@ -2586,11 +2586,7 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
             active_runs: 4,
             waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Approval, 1)]),
             quarantined: 1,
-            scripts: BTreeMap::from([
-                (script("script"), 3),
-                (script("second"), 1),
-                (script("third"), 1)
-            ]),
+            scripts: BTreeMap::from([(code("script"), 3), (code("second"), 1), (code("third"), 1)]),
         },
         "a run waiting for a kind twice counts once in it"
     );
@@ -2604,7 +2600,7 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
             .await
             .expect("gauges")
             .scripts
-            .get(&script("third")),
+            .get(&code("third")),
         None,
         "an erased run is kept no more"
     );
@@ -2675,10 +2671,10 @@ pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) 
     commit(
         &log,
         vec![
-            set(later(T0, 10), script_timer(&r2, 1)).into(),
+            set(later(T0, 10), code_timer(&r2, 1)).into(),
             set(later(T0, 10), TimerKind::RunDeadline { run: r1.clone() }).into(),
-            set(later(T0, 10), script_timer(&r1, 2)).into(),
-            set(later(T0, 5), script_timer(&r1, 1)).into(),
+            set(later(T0, 10), code_timer(&r1, 2)).into(),
+            set(later(T0, 5), code_timer(&r1, 1)).into(),
             set(
                 later(T0, 20),
                 TimerKind::CallTimeout {
@@ -2687,7 +2683,7 @@ pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) 
                 },
             )
             .into(),
-            set(later(T0, 15), script_timer(&r1, 1)).into(),
+            set(later(T0, 15), code_timer(&r1, 1)).into(),
         ],
     )
     .await;
@@ -2698,10 +2694,10 @@ pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) 
     assert_eq!(
         timers_of(&log).await,
         [
-            due(10, script_timer(&r1, 2)),
+            due(10, code_timer(&r1, 2)),
             due(10, TimerKind::RunDeadline { run: r1.clone() }),
-            due(10, script_timer(&r2, 1)),
-            due(15, script_timer(&r1, 1)),
+            due(10, code_timer(&r2, 1)),
+            due(15, code_timer(&r1, 1)),
             due(
                 20,
                 TimerKind::CallTimeout {
@@ -2729,8 +2725,8 @@ pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) 
     commit(
         &log,
         vec![
-            TimerChange::Cancel(script_timer(&r1, 2)).into(),
-            TimerChange::Cancel(script_timer(&r1, 9)).into(),
+            TimerChange::Cancel(code_timer(&r1, 2)).into(),
+            TimerChange::Cancel(code_timer(&r1, 9)).into(),
         ],
     )
     .await;
@@ -2740,7 +2736,7 @@ pub async fn timers_are_ordered_and_read_by_range<S: PartitionStore>(store: &S) 
             .expect("timers"),
         [
             due(10, TimerKind::RunDeadline { run: r1.clone() }),
-            due(10, script_timer(&r2, 1))
+            due(10, code_timer(&r2, 1))
         ],
         "a cancelled timer is gone; cancelling one not set changes nothing"
     );
@@ -2754,7 +2750,7 @@ pub async fn organizations_are_kept<S: PartitionStore>(store: &S) {
         admissions: vec![Admission {
             run: run(1).id,
             namespace: alice(),
-            script: script("script"),
+            code: code("script"),
             admitted_at: T0,
         }],
     };

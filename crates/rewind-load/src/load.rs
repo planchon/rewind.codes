@@ -1,4 +1,4 @@
-//! One load: the action set, the script, the runs driven through the API, the harness's worker,
+//! One load: the action set, the code, the runs driven through the API, the harness's worker,
 //! and the checks once every run has ended.
 //!
 //! Each run makes an MCP call (`fake.echo`), a harness call (`host.square`, answered by this
@@ -28,7 +28,7 @@ use crate::error::Error;
 use crate::mcp::FakeServer;
 use crate::report::{ActionStatsLine, Latencies, Percentiles, Report};
 
-/// The script of every run; `SLEEP` is replaced by the load's sleep.
+/// The code of every run; `SLEEP` is replaced by the load's sleep.
 const SCRIPT: &str = r#"import { signal, sleep } from "rewind";
 import { fake, host } from "rewind:actions";
 
@@ -120,7 +120,7 @@ struct Shared {
     action_set: String,
     labels: Labels,
     id: String,
-    script: String,
+    code: String,
     pad: String,
     stop: CancellationToken,
     deadline: Instant,
@@ -164,7 +164,7 @@ pub(crate) async fn run(
         action_set: action_set.id.clone(),
         labels: [("load", id.as_str())].into_iter().collect(),
         id: id.clone(),
-        script: SCRIPT.replace("SLEEP", &settings.sleep),
+        code: SCRIPT.replace("SLEEP", &settings.sleep),
         pad: "x".repeat(settings.payload_bytes),
         stop: interrupt.clone(),
         deadline: Instant::now() + settings.timeout,
@@ -459,7 +459,7 @@ async fn drive(shared: &Shared, n: usize) -> Outcome {
         outcome.status = "not started".into();
         return outcome;
     }
-    let mut start = StartRun::new(shared.script.clone());
+    let mut start = StartRun::new(shared.code.clone());
     start.action_set = Some(shared.action_set.clone());
     start.input = json!({ "n": n, "pad": shared.pad });
     start.labels = shared.labels.clone();
@@ -491,7 +491,7 @@ async fn drive(shared: &Shared, n: usize) -> Outcome {
     outcome.started = Some(Instant::now());
     outcome.run = Some(run.id.clone());
 
-    // The signal arrives before the script waits for it, twice with the same key. The second is
+    // The signal arrives before the code waits for it, twice with the same key. The second is
     // a duplicate once the first was acknowledged; after a first that failed, the server may or
     // may not have taken it, so either answer holds.
     if let Ok(key) = IdempotencyKey::new(format!("{}-{n}-go", shared.id)) {

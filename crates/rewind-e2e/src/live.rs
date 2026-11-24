@@ -24,8 +24,8 @@ use rewind_engine::edge::Edge;
 use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
 use rewind_engine::ports::link::{HarnessFailure, StreamAttach, StreamEvent, StreamId};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind,
-    Predicate, RunOrder, RunQuery, RunRef, Scope, ScriptExecutor, Secret, SecretId, SecretStore,
+    ActionDeclarations, CatalogStore, Clock, CodeExecutor, Entropy, NamespaceName, NewSecret,
+    NodeId, ParkKind, Predicate, RunOrder, RunQuery, RunRef, Scope, Secret, SecretId, SecretStore,
     TaskRef, TaskState, TenantId, Term, VirtualTime,
 };
 use rewind_engine::{ForkRun, Limits, ReplayVerdict, StartRun};
@@ -285,7 +285,7 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     put_secrets(case, &world).await?;
     register_workflows(case, &world).await?;
     let mut request = StartRun::new(
-        case.script.clone(),
+        case.code.clone(),
         case.action_set(),
         case.scenario.input.clone(),
     );
@@ -318,8 +318,8 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     apply_steps(&mut world, &run, &case.scenario.steps).await?;
     world.drive(true).await?;
 
-    if let (Some(fork), Some(script)) = (&case.scenario.fork, &case.fork_script) {
-        let mut request = ForkRun::new(run.clone(), script.clone());
+    if let (Some(fork), Some(code)) = (&case.scenario.fork, &case.fork_code) {
+        let mut request = ForkRun::new(run.clone(), code.clone());
         request.at = fork.at;
         request.input = fork.input.clone();
         let forked = {
@@ -461,14 +461,14 @@ async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
         .map_err(fail)?;
     for workflow in case.workflows()? {
         let name = workflow.name().to_owned();
-        let script = &case.workflow_scripts[&name];
+        let code = &case.workflow_scripts[&name];
         let compiled = world
             .plane
             .executor
-            .compile(script, &action_set)
+            .compile(code, &action_set)
             .map_err(|err| format!("workflow {name}: {err}"))?;
         catalog
-            .put_script(&tenant, script, &compiled)
+            .put_code(&tenant, code, &compiled)
             .await
             .map_err(fail)?;
         catalog

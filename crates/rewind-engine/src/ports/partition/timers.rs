@@ -16,8 +16,8 @@ use crate::ports::tenancy::{RunRef, TenantId};
 /// moves it to its new due time.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TimerKind {
-    /// A script's `start_timer`: `timer_fired { seq }` when it fires.
-    Script { run: RunRef, seq: Seq },
+    /// A code's `start_timer`: `timer_fired { seq }` when it fires.
+    Code { run: RunRef, seq: Seq },
     /// A call's timeout: `call_failed { timeout }`.
     CallTimeout { run: RunRef, seq: Seq },
     /// The deadline of a deferred task: it ends with its timeout failure.
@@ -39,7 +39,7 @@ impl TimerKind {
     /// outbox entry.
     pub fn run(&self) -> Option<&RunRef> {
         match self {
-            TimerKind::Script { run, .. }
+            TimerKind::Code { run, .. }
             | TimerKind::CallTimeout { run, .. }
             | TimerKind::DeferredDeadline { run, .. }
             | TimerKind::RedeliveryBackoff { run, .. }
@@ -52,7 +52,7 @@ impl TimerKind {
 
     pub fn tenant(&self) -> &TenantId {
         match self {
-            TimerKind::Script { run, .. }
+            TimerKind::Code { run, .. }
             | TimerKind::CallTimeout { run, .. }
             | TimerKind::DeferredDeadline { run, .. }
             | TimerKind::RedeliveryBackoff { run, .. }
@@ -63,10 +63,10 @@ impl TimerKind {
         }
     }
 
-    /// The `seq` of the script's timer or of the call it is about.
+    /// The `seq` of the code's timer or of the call it is about.
     pub fn seq(&self) -> Option<Seq> {
         match self {
-            TimerKind::Script { seq, .. }
+            TimerKind::Code { seq, .. }
             | TimerKind::CallTimeout { seq, .. }
             | TimerKind::DeferredDeadline { seq, .. }
             | TimerKind::RedeliveryBackoff { seq, .. } => Some(*seq),
@@ -85,7 +85,7 @@ impl TimerKind {
 
     fn rank(&self) -> u8 {
         match self {
-            TimerKind::Script { .. } => 0,
+            TimerKind::Code { .. } => 0,
             TimerKind::CallTimeout { .. } => 1,
             TimerKind::DeferredDeadline { .. } => 2,
             TimerKind::RedeliveryBackoff { .. } => 3,

@@ -1,6 +1,6 @@
 //! The modules of an isolate, and the import rules.
 //!
-//! A script may only import `rewind`, `rewind:actions` and `rewind:workflows`; `rewind:internal`
+//! A code may only import `rewind`, `rewind:actions` and `rewind:workflows`; `rewind:internal`
 //! is reserved to the runtime's own modules; there is no dynamic `import()`, no npm, no relative
 //! import. A module of mock handlers imports nothing.
 //!
@@ -16,7 +16,7 @@ use deno_core::{
 };
 use deno_error::JsErrorBox;
 
-use crate::compile::SCRIPT_SPECIFIER;
+use crate::compile::CODE_SPECIFIER;
 use crate::epochs::Glue;
 
 pub(crate) const ENTRY_SPECIFIER: &str = "rewind:entry";
@@ -31,9 +31,9 @@ pub(crate) struct Loader {
 }
 
 enum Modules {
-    Script {
+    Code {
         glue: &'static Glue,
-        script: String,
+        code: String,
         actions: String,
         workflows: String,
     },
@@ -44,18 +44,18 @@ enum Modules {
 
 impl Loader {
     /// The modules of a run: its entry, the glue's `rewind` modules, its `rewind:actions` and
-    /// `rewind:workflows`, its script.
-    pub(crate) fn script(
+    /// `rewind:workflows`, its code.
+    pub(crate) fn code(
         glue: &'static Glue,
-        script: String,
+        code: String,
         source_map: Vec<u8>,
         actions: String,
         workflows: String,
     ) -> Self {
         Self {
-            modules: Modules::Script {
+            modules: Modules::Code {
                 glue,
-                script,
+                code,
                 actions,
                 workflows,
             },
@@ -73,7 +73,7 @@ impl Loader {
 
     fn file_name(&self) -> &'static str {
         match self.modules {
-            Modules::Script { .. } => SCRIPT_SPECIFIER,
+            Modules::Code { .. } => CODE_SPECIFIER,
             Modules::Mocks { .. } => MOCKS_SPECIFIER,
         }
     }
@@ -88,30 +88,28 @@ impl ModuleLoader for Loader {
     ) -> Result<ModuleSpecifier, JsErrorBox> {
         if matches!(kind, ResolutionKind::DynamicImport) {
             return Err(JsErrorBox::type_error(
-                "dynamic import() is not available in Rewind scripts",
+                "dynamic import() is not available in Rewind workflows",
             ));
         }
         let main = matches!(kind, ResolutionKind::MainModule);
         let target = match (&self.modules, referrer, specifier) {
-            (Modules::Script { .. }, _, ENTRY_SPECIFIER) if main => specifier,
-            (Modules::Script { .. }, ENTRY_SPECIFIER, "rewind:internal" | SCRIPT_SPECIFIER) => {
+            (Modules::Code { .. }, _, ENTRY_SPECIFIER) if main => specifier,
+            (Modules::Code { .. }, ENTRY_SPECIFIER, "rewind:internal" | CODE_SPECIFIER) => {
                 specifier
             }
             (
-                Modules::Script { .. },
+                Modules::Code { .. },
                 "rewind:std" | "rewind:actions" | "rewind:workflows",
                 "rewind:internal",
             ) => specifier,
-            (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind") => "rewind:std",
-            (
-                Modules::Script { .. },
-                SCRIPT_SPECIFIER,
-                "rewind:actions" | OLD_ACTIONS_SPECIFIER,
-            ) => "rewind:actions",
-            (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind:workflows") => "rewind:workflows",
-            (Modules::Script { .. }, SCRIPT_SPECIFIER, other) => {
+            (Modules::Code { .. }, CODE_SPECIFIER, "rewind") => "rewind:std",
+            (Modules::Code { .. }, CODE_SPECIFIER, "rewind:actions" | OLD_ACTIONS_SPECIFIER) => {
+                "rewind:actions"
+            }
+            (Modules::Code { .. }, CODE_SPECIFIER, "rewind:workflows") => "rewind:workflows",
+            (Modules::Code { .. }, CODE_SPECIFIER, other) => {
                 return Err(JsErrorBox::type_error(format!(
-                    "cannot import {other:?}: scripts can only import \"rewind\", \
+                    "cannot import {other:?}: workflows can only import \"rewind\", \
                      \"rewind:actions\" and \"rewind:workflows\""
                 )));
             }
@@ -137,12 +135,12 @@ impl ModuleLoader for Loader {
         _options: ModuleLoadOptions,
     ) -> ModuleLoadResponse {
         let code = match (&self.modules, specifier.as_str()) {
-            (Modules::Script { glue, .. }, ENTRY_SPECIFIER) => glue.entry.to_owned(),
-            (Modules::Script { glue, .. }, "rewind:internal") => glue.internal.to_owned(),
-            (Modules::Script { glue, .. }, "rewind:std") => glue.std.to_owned(),
-            (Modules::Script { actions, .. }, "rewind:actions") => actions.clone(),
-            (Modules::Script { workflows, .. }, "rewind:workflows") => workflows.clone(),
-            (Modules::Script { script, .. }, SCRIPT_SPECIFIER) => script.clone(),
+            (Modules::Code { glue, .. }, ENTRY_SPECIFIER) => glue.entry.to_owned(),
+            (Modules::Code { glue, .. }, "rewind:internal") => glue.internal.to_owned(),
+            (Modules::Code { glue, .. }, "rewind:std") => glue.std.to_owned(),
+            (Modules::Code { actions, .. }, "rewind:actions") => actions.clone(),
+            (Modules::Code { workflows, .. }, "rewind:workflows") => workflows.clone(),
+            (Modules::Code { code, .. }, CODE_SPECIFIER) => code.clone(),
             (Modules::Mocks { javascript }, MOCKS_SPECIFIER) => javascript.clone(),
             (_, other) => {
                 return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(

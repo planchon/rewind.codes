@@ -32,7 +32,7 @@ pub(super) async fn run(
     args: RunArgs,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
-    let source = input::read_text(&args.script)?;
+    let source = input::read_text(&args.code)?;
     let mut start = StartRun::new(source);
     if let Some(text) = &args.input {
         start.input = input::json_value("--input", text)?;
@@ -75,7 +75,7 @@ pub(super) async fn fork(
     args: ForkArgs,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
-    let mut fork = ForkRun::new(input::read_text(&args.script)?);
+    let mut fork = ForkRun::new(input::read_text(&args.code)?);
     fork.at = args.at;
     fork.input = args
         .input
@@ -376,7 +376,7 @@ mod tests {
     use super::*;
 
     const RUN: &str = r#"{"id":"r1","handle":"local/script/06bqx3k9f2mt","namespace":"local",
-        "status":"completed","script":"aa",
+        "status":"completed","codeDigest":"aa",
         "actionSet":"bb","epoch":1,"mode":"live","labels":{},"traceId":"00","historyLen":3,
         "createdAt":"2026-11-09T10:00:00Z","updatedAt":"2026-11-09T10:00:01Z",
         "expiresAt":"2026-12-09T10:00:00Z"}"#;

@@ -2,14 +2,14 @@
 
 The eval suite of Rewind ([archi/05](../archi/05-testing-and-observability.md#evals)). Models
 solve realistic tasks end to end, and the choices that are cheap to change (names, error
-formats, the `rewind` library, the prompt rendering, what `run_script` returns) are decided on
+formats, the `rewind` library, the prompt rendering, what `run_workflow` returns) are decided on
 the numbers ([08](../archi/08-decisions.md#taken-while-building-the-evals-november-2026)).
 
 ## What an episode is
 
 ```
 model ──► system prompt (introduction, the rewind module, the action set in one rendering)
-  │        + the agent tools: run_script, check_script, test_script, get_run, list_runs,
+  │        + the agent tools: run_workflow, check_workflow, test_workflow, get_run, list_runs,
   │          signal_run, cancel_run, retry_run, search_tools, save_workflow, get_workflow,
   │          record_tests
   ▼
@@ -26,7 +26,7 @@ agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──
    2026-03-02T09:00:00Z in virtual time. The task's setup, if it has one, is played first, with
    the agent's labels: runs of scripts, workflows saved through the gate with their suite (on
    the action set as it was then, for a server that changed since), runs of those workflows.
-2. The model gets the task and loops: generate a script, check it, run it, fix it. Each tool
+2. The model gets the task and loops: generate a code, check it, run it, fix it. Each tool
    call is handled by `rewind-agent-tools`, the SDK's agent tools in Rust, with the same text
    back: 256 KiB pages, diagnostics with code frames, the trace up to a failure, the tests that
    did not pass. They reach the world through their port `Api`, which the world implements as
@@ -93,7 +93,7 @@ input, `{{run_id}}` stands for the last run id the tool results gave.
 Each run writes to its output directory:
 
 - `summary.md`: per model and rendering, the first-try check pass rate, task success, model
-  turns, scripts, the share of episodes where the model wrote tests (`test_script`,
+  turns, scripts, the share of episodes where the model wrote tests (`test_workflow`,
   `save_workflow`), the fixes the gate refused per episode, tokens and errors; then each
   task's successes per column, and why each failed episode failed.
 - `report.json`: the same summaries, and every episode's record.

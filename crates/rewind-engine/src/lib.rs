@@ -17,8 +17,8 @@
 //!
 //! What the actors share:
 //!
-//! - [`fork`]: following a parent's history with a corrected script, and whether a script is
-//!   compatible with a journal; [`replay`]: rebuilding a script from its history.
+//! - [`fork`]: following a parent's history with a corrected code, and whether a code is
+//!   compatible with a journal; [`replay`]: rebuilding a code from its history.
 //! - [`projector`]: what committed entries project (a run's summary, its lifecycle events);
 //!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
 //!   signatures and fingerprints that group failed, cancelled and aborted runs.
@@ -29,7 +29,7 @@
 //!   cassette and static responses.
 //! - [`suites`]: the suites of workflow versions, composed from their parent's and stored as
 //!   blobs in the control plane; tests recorded from runs.
-//! - [`testing`]: tests run in virtual time against a script, several at once, each on a run
+//! - [`testing`]: tests run in virtual time against a code, several at once, each on a run
 //!   plane of its own in the driver; the checks of a test against its action set and its
 //!   workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
@@ -44,7 +44,7 @@
 //!   `WebhookSender` must pass.
 //!
 //! The engine is deterministic given its ports. Service telemetry (spans, logs and measurements)
-//! goes through the `tracing` facade; what a script did is recorded in its history, never
+//! goes through the `tracing` facade; what a code did is recorded in its history, never
 //! emitted from here.
 
 #![forbid(unsafe_code)]

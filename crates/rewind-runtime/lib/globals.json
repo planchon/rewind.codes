@@ -1,5 +1,5 @@
 {
-  "description": "The global names a script can reach, as the type-checker declares them (archi/01-product.md, 'What exists in the sandbox'). The isolate's globals must be exactly ecmascript + sandbox, plus httpAction when the action set enables the http action. A change here goes with a new determinism epoch.",
+  "description": "The global names a code can reach, as the type-checker declares them (archi/01-product.md, 'What exists in the sandbox'). The isolate's globals must be exactly ecmascript + sandbox, plus httpAction when the action set enables the http action. A change here goes with a new determinism epoch.",
   "ecmascript": [
     "AggregateError",
     "Array",

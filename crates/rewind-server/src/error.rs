@@ -9,7 +9,7 @@ use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
     ArchiveError, BlobError, CatalogError, CheckerError, DiagnosticSource, IdentityError,
-    InvalidScript, SecretError, StoreError,
+    InvalidCode, SecretError, StoreError,
 };
 use rewind_engine::{EngineError, ForkError, NulCharacter, StartError};
 
@@ -31,9 +31,9 @@ impl ApiError {
             Kind::CpuPerMonth => QuotaKind::CpuPerMonth,
             Kind::ActiveRuns => QuotaKind::ActiveRuns,
             Kind::RunsPerMonth => QuotaKind::RunsPerMonth,
-            Kind::Scripts => QuotaKind::Scripts,
+            Kind::Workflows => QuotaKind::Workflows,
             Kind::MaxTtl => QuotaKind::MaxTtl,
-            Kind::MaxScriptLines => QuotaKind::MaxScriptLines,
+            Kind::MaxCodeLines => QuotaKind::MaxCodeLines,
         };
         let (scope, whose) = match exceeded.scope {
             Scope::Namespace => (QuotaScope::Namespace, "this namespace"),
@@ -42,7 +42,9 @@ impl ApiError {
         let what = match exceeded.quota {
             Kind::ActiveRuns => "active runs: wait for runs to end, or cancel some",
             Kind::RunsPerMonth => "runs this month: wait for the next month",
-            Kind::Scripts => "distinct scripts: reuse a script that already ran, or erase old runs",
+            Kind::Workflows => {
+                "distinct workflows: run a workflow that already ran, or erase old runs"
+            }
             _ => "of this quota",
         };
         let detail = format!(
@@ -91,9 +93,9 @@ impl ApiError {
         ))
     }
 
-    pub(crate) fn invalid_script(detail: impl Into<String>, diagnostics: Vec<Diagnostic>) -> Self {
+    pub(crate) fn invalid_code(detail: impl Into<String>, diagnostics: Vec<Diagnostic>) -> Self {
         Self(Box::new(
-            Problem::new(ProblemType::InvalidScript, detail).with_diagnostics(diagnostics),
+            Problem::new(ProblemType::InvalidCode, detail).with_diagnostics(diagnostics),
         ))
     }
 
@@ -293,7 +295,7 @@ impl From<CheckerError> for ApiError {
     fn from(error: CheckerError) -> Self {
         tracing::error!(%error, "the type-checker failed");
         Self::unavailable(format!(
-            "{error}. The script was neither accepted nor refused: retry, or start it with \
+            "{error}. The code was neither accepted nor refused: retry, or start it with \
              `check: false`"
         ))
     }
@@ -312,10 +314,10 @@ impl From<EngineError> for ApiError {
 impl From<StartError> for ApiError {
     fn from(error: StartError) -> Self {
         match error {
-            StartError::InvalidScript(invalid) => {
-                let diagnostic = invalid_script_diagnostic(&invalid);
-                Self::invalid_script(
-                    format!("the script cannot run: {}", invalid.message),
+            StartError::InvalidCode(invalid) => {
+                let diagnostic = invalid_code_diagnostic(&invalid);
+                Self::invalid_code(
+                    format!("the code cannot run: {}", invalid.message),
                     vec![diagnostic],
                 )
             }
@@ -324,9 +326,9 @@ impl From<StartError> for ApiError {
                     .iter()
                     .filter(|d| d.severity == rewind_engine::ports::Severity::Error)
                     .count();
-                Self::invalid_script(
+                Self::invalid_code(
                     format!(
-                        "the script does not type-check ({errors} error{}): fix the diagnostics \
+                        "the code does not type-check ({errors} error{}): fix the diagnostics \
                          and start it again",
                         if errors == 1 { "" } else { "s" }
                     ),
@@ -343,17 +345,17 @@ impl From<StartError> for ApiError {
                 ProblemType::NamespaceDeleting,
                 "this namespace is being erased: it takes no run",
             ),
-            StartError::ScriptTooLong { lines, max } => Self::invalid_script(
+            StartError::CodeTooLong { lines, max } => Self::invalid_code(
                 error.to_string(),
                 vec![Diagnostic {
                     severity: Severity::Error,
-                    code: "rewind/max-script-lines".into(),
+                    code: "rewind/max-code-lines".into(),
                     message: format!(
-                        "the script has {lines} lines; this namespace accepts at most {max}"
+                        "the code has {lines} lines; this namespace accepts at most {max}"
                     ),
                     location: None,
                     frame: None,
-                    hint: Some("split the work into a shorter script".into()),
+                    hint: Some("split the work into a shorter code".into()),
                 }],
             ),
             StartError::Checker(error) => error.into(),
@@ -405,20 +407,20 @@ pub(crate) fn diagnostic(diagnostic: &rewind_engine::ports::Diagnostic) -> Diagn
     }
 }
 
-/// The checks at start refused the script: one diagnostic, located where the message says.
-pub(crate) fn invalid_script_diagnostic(invalid: &InvalidScript) -> Diagnostic {
+/// The checks at start refused the code: one diagnostic, located where the message says.
+pub(crate) fn invalid_code_diagnostic(invalid: &InvalidCode) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
-        code: "rewind/invalid-script".into(),
+        code: "rewind/invalid-code".into(),
         message: invalid.message.clone(),
-        location: rewind_engine::failures::script_location(&invalid.message).map(
-            |(line, column)| Location {
+        location: rewind_engine::failures::code_location(&invalid.message).map(|(line, column)| {
+            Location {
                 line,
                 column,
                 end_line: None,
                 end_column: None,
-            },
-        ),
+            }
+        }),
         frame: None,
         hint: None,
     }

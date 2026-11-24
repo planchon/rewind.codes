@@ -1,5 +1,5 @@
-//! Workflows: scripts with a name and JSON Schemas for their input, their output and the signals
-//! they accept, that scripts start and signal (`archi/01-product.md`, "Workflows").
+//! Workflows: workflows with a name and JSON Schemas for their input, their output and the signals
+//! they accept, that workflows start and signal (`archi/01-product.md`, "Workflows").
 
 use std::collections::BTreeMap;
 
@@ -11,7 +11,7 @@ use crate::action_sets::Declarations;
 use crate::common::{Labels, RunStatus, Timestamp};
 use crate::testing::{Expectations, TestInput};
 
-/// `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
+/// `POST /v1/workflows`: checks a workflow and saves it as a new version. Its code is checked
 /// against its action set and against its own schemas: its default export must take the input and
 /// return the output, and `signal()` only takes the declared names. Saving the same workflow
 /// again under the same labels returns the version saved first (200): the labels of a key limited
@@ -22,13 +22,13 @@ use crate::testing::{Expectations, TestInput};
     "name": "triage",
     "description": "Triage the stale issues of a repository, after approval.",
     "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
-    "script": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
+    "code": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
     "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
     "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
     "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
 }))]
 pub struct CreateWorkflow {
-    /// What scripts import from `rewind:workflows`: an identifier that is not a reserved word of
+    /// What workflows import from `rewind:workflows`: an identifier that is not a reserved word of
     /// JavaScript.
     pub name: String,
     /// Shown to the model in the declarations.
@@ -37,7 +37,7 @@ pub struct CreateWorkflow {
     /// The id of the action set its runs call, already registered.
     pub action_set: String,
     /// The TypeScript source: a single ES module whose default export is the entry point.
-    pub script: String,
+    pub code: String,
     /// JSON Schema of the input of `main`.
     #[schema(value_type = Object)]
     pub input: Value,
@@ -186,8 +186,8 @@ pub struct Workflow {
     pub description: Option<String>,
     /// The id of the action set its runs call.
     pub action_set: String,
-    /// Digest of its script (`GET /v1/scripts/{digest}`).
-    pub script: String,
+    /// Digest of its code (`GET /v1/scripts/{digest}`).
+    pub code_digest: String,
     #[schema(value_type = Object)]
     pub input: Value,
     #[schema(value_type = Object)]
@@ -201,7 +201,7 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: crate::secrets::Attachments,
     pub created_at: Timestamp,
-    /// How a script that starts it sees it: its declaration in `rewind:workflows`, and its line
+    /// How a code that starts it sees it: its declaration in `rewind:workflows`, and its line
     /// of the prompt rendering.
     pub declarations: Declarations,
     /// The version it derives from.
@@ -217,7 +217,7 @@ pub struct Workflow {
 }
 
 /// `GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every
-/// version whose script it is, newest first, on one page.
+/// version whose code it is, newest first, on one page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowPage {
@@ -238,7 +238,7 @@ pub struct WorkflowQuery {
     /// At most this many workflows (50 by default, 500 at most).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// The digest of a script: every version of any workflow whose script it is, newest first,
+    /// The digest of a code: every version of any workflow whose code it is, newest first,
     /// rather than the latest version of each workflow. `after` and `limit` do not apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
@@ -298,7 +298,7 @@ mod tests {
         let workflow: CreateWorkflow = serde_json::from_value(json!({
             "name": "triage",
             "actionSet": "00",
-            "script": "export default async () => 1;",
+            "code": "export default async () => 1;",
             "input": {},
             "output": { "type": "integer" },
         }))
@@ -306,7 +306,7 @@ mod tests {
         assert!(workflow.signals.is_empty());
         assert!(
             serde_json::from_value::<CreateWorkflow>(json!({
-                "name": "triage", "actionSet": "00", "script": "", "input": {}, "output": {}, "x": 1,
+                "name": "triage", "actionSet": "00", "code": "", "input": {}, "output": {}, "x": 1,
             }))
             .is_err(),
             "unknown fields are refused"

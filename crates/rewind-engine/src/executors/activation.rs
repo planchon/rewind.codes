@@ -2,7 +2,7 @@
 //! `archi/03-execution.md`, "Activations", "Sticky execution", "Forks").
 //!
 //! ```text
-//! request ← head, inbox, history unless the cache holds the run at its length, payloads, script
+//! request ← head, inbox, history unless the cache holds the run at its length, payloads, code
 //! instance ← cache[run], or executor.start + ReplayCursor over history
 //! for item in inbox:
 //!     recorded_at ← max(clock.now(), last recorded_at)
@@ -38,9 +38,9 @@ use crate::plane::{InstanceOf, NodeConfig, Plane};
 use crate::ports::link::{ActivationRequest, ActivationResult, Committed, Purpose};
 use crate::ports::partition::Activation;
 use crate::ports::{
-    BlobError, BlobOwner, BlobStore, Clock, ExecutorError, NamespaceName, PayloadRecord,
-    QUARANTINE_AFTER_FAILURES, QuarantineKind, RunHead, RunRef, ScriptExecutor, ScriptInstance,
-    StartScript, TenantId, Trigger,
+    BlobError, BlobOwner, BlobStore, Clock, CodeExecutor, CodeInstance, ExecutorError,
+    NamespaceName, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind, RunHead, RunRef,
+    StartCode, TenantId, Trigger,
 };
 use crate::replay::{self, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 use crate::text;
@@ -98,7 +98,7 @@ pub(crate) async fn activate<P: Plane>(
     done
 }
 
-/// The CPU time of the calls into the script that executed.
+/// The CPU time of the calls into the code that executed.
 #[derive(Debug, Default)]
 struct Tally(Mutex<Duration>);
 
@@ -155,7 +155,7 @@ fn unfinished(head: &RunHead) -> Option<String> {
     if head.attempts < QUARANTINE_AFTER_FAILURES {
         return None;
     }
-    let why = "the node running it stopped during it, as when the script crashes the node's \
+    let why = "the node running it stopped during it, as when the code crashes the node's \
                process or the node is killed for the memory it uses";
     Some(if head.failures == 0 {
         format!(
@@ -187,7 +187,7 @@ async fn work<P: Plane>(
         history,
         payloads,
         parent,
-        script,
+        code,
         action_set,
         purpose,
         tasks,
@@ -254,7 +254,7 @@ async fn work<P: Plane>(
             inbox,
             history,
             &action_set,
-            &script,
+            &code,
             &tasks,
         )
         .await
@@ -285,7 +285,7 @@ async fn work<P: Plane>(
             if !history.is_empty() && !state.is_terminal() {
                 let input = ReplayInput {
                     run: &run,
-                    compiled: Ok(&script.compiled),
+                    compiled: Ok(&code.compiled),
                     action_set: &action_set.action_set,
                     history: &history,
                 };
@@ -311,8 +311,7 @@ async fn work<P: Plane>(
                         ));
                     }
                     Err(ReplayError::Executor(
-                        err
-                        @ (ExecutorError::InvalidScript(_) | ExecutorError::UnsupportedEpoch(_)),
+                        err @ (ExecutorError::InvalidCode(_) | ExecutorError::UnsupportedEpoch(_)),
                     )) => {
                         return Ok((
                             ActivationResult::Quarantined {
@@ -393,7 +392,7 @@ async fn work<P: Plane>(
                         run: &run,
                         parent: link,
                         started,
-                        compiled: &script.compiled,
+                        compiled: &code.compiled,
                         action_set: &action_set.action_set,
                     };
                     instance = start_fork(&with, clock, &mut batch, source_of_fork, parent_history)
@@ -404,9 +403,9 @@ async fn work<P: Plane>(
                 let recorded_at = batch.recorded_at(clock.now());
                 let input = payloads::load(&source, &run.tenant, &started.input).await?;
                 let trigger = Event::Lifecycle(Lifecycle::RunStarted(started.clone()));
-                let start = StartScript {
+                let start = StartCode {
                     run_id,
-                    compiled: script.compiled.clone(),
+                    compiled: code.compiled.clone(),
                     action_set: action_set.action_set.clone(),
                     input,
                     seed: started.seed,
@@ -480,7 +479,7 @@ async fn work<P: Plane>(
             released,
             copied: &copied,
             action_set: &action_set.action_set,
-            headline: &crate::projector::headline(script.script.source()),
+            headline: &crate::projector::headline(code.code.source()),
             tasks: &tasks,
             cpu: tally.total(),
             end,
@@ -638,9 +637,9 @@ async fn commit<P: Plane, B: BlobStore>(
     })
 }
 
-/// Delivers one completion, recorded at `recorded_at`, and appends it with the script's
-/// response, or with `run_aborted` if the script cannot go on.
-async fn deliver<I: ScriptInstance, S: PayloadSource, C: CountCpu>(
+/// Delivers one completion, recorded at `recorded_at`, and appends it with the code's
+/// response, or with `run_aborted` if the code cannot go on.
+async fn deliver<I: CodeInstance, S: PayloadSource, C: CountCpu>(
     source: &S,
     cpu: &C,
     batch: &mut Batch<'_>,
@@ -674,7 +673,7 @@ async fn start_fork<X, S, C, K>(
     parent: &[HistoryEntry],
 ) -> Result<Option<X::Instance>, EngineError>
 where
-    X: ScriptExecutor,
+    X: CodeExecutor,
     S: PayloadSource,
     C: CountCpu,
     K: Clock,
@@ -746,7 +745,7 @@ async fn give_up<P: Plane, B: BlobStore>(
     inbox: Vec<crate::ports::InboxItem>,
     mut history: Vec<HistoryEntry>,
     action_set: &crate::ports::StoredActionSet,
-    script: &crate::ports::StoredScript,
+    code: &crate::ports::StoredCode,
     tasks: &[crate::ports::TaskRecord],
 ) -> Result<ActivationResult, EngineError> {
     let run_id = head.run.id;
@@ -810,7 +809,7 @@ async fn give_up<P: Plane, B: BlobStore>(
             released: false,
             copied: &BTreeMap::new(),
             action_set: &action_set.action_set,
-            headline: &crate::projector::headline(script.script.source()),
+            headline: &crate::projector::headline(code.code.source()),
             tasks,
             cpu: Duration::ZERO,
             end,

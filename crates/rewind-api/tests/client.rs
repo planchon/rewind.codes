@@ -68,7 +68,7 @@ fn run(id: &str) -> Run {
         namespace: "alice".parse().unwrap(),
         status: RunStatus::Completed,
         quarantine: None,
-        script: "aa".repeat(32),
+        code_digest: "aa".repeat(32),
         script_title: None,
         action_set: "bb".repeat(32),
         epoch: 1,

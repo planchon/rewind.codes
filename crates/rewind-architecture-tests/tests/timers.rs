@@ -168,7 +168,7 @@ fn rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 /// `source` with its comments and the contents of its string and character literals blanked,
-/// lines kept: what the guard reads, so that a doc comment or a script in a string never counts.
+/// lines kept: what the guard reads, so that a doc comment or a code in a string never counts.
 fn code_of(source: &str) -> String {
     #[derive(Clone, Copy)]
     enum State {
@@ -586,7 +586,7 @@ use tokio::time::{Instant, sleep};
 // tokio::time::sleep(d) in a comment
 /// Waits: `tokio::time::interval(d)` in a doc comment.
 fn first() {
-    let script = "await sleep(\"1h\"); tokio::time::sleep(x)";
+    let code = "await sleep(\"1h\"); tokio::time::sleep(x)";
     let raw = r#"std::thread::sleep(d) { "#;
     let brace = '{';
     tokio::time::sleep(d).await;

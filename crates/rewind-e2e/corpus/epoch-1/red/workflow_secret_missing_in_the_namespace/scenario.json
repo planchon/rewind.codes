@@ -22,7 +22,7 @@
   },
   "workflows": {
     "triage": {
-      "script": "triage.ts",
+      "code": "triage.ts",
       "input": {
         "type": "object",
         "properties": {

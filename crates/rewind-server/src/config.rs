@@ -207,7 +207,7 @@ pub struct ServerArgs {
     pub admin_tenant: String,
 
     /// The URL clients reach this server at: `webhook(name)` returns `{public-url}/hooks/…`.
-    /// Without it, scripts cannot get a webhook URL.
+    /// Without it, workflows cannot get a webhook URL.
     #[arg(long, env = "REWIND_PUBLIC_URL")]
     pub public_url: Option<String>,
 
@@ -231,26 +231,26 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_QUOTA_RUNS_PER_MONTH")]
     pub quota_runs_per_month: Option<u64>,
 
-    /// The ceiling of the tenants this server creates: the CPU time of their scripts in a
+    /// The ceiling of the tenants this server creates: the CPU time of their workflows in a
     /// calendar month, such as `100h`. Never refused: crossing 80 % and 100 % sends
     /// `quota.alert`.
     #[arg(long, env = "REWIND_QUOTA_CPU_PER_MONTH", value_parser = parse_duration)]
     pub quota_cpu_per_month: Option<Duration>,
 
-    /// The ceiling of the tenants this server creates: the distinct scripts with a run kept,
+    /// The ceiling of the tenants this server creates: the distinct workflows with a run kept,
     /// summed over their namespaces.
-    #[arg(long, env = "REWIND_QUOTA_SCRIPTS")]
-    pub quota_scripts: Option<u64>,
+    #[arg(long, env = "REWIND_QUOTA_WORKFLOWS")]
+    pub quota_workflows: Option<u64>,
 
     /// The ceiling of the tenants this server creates: the longest TTL a run may ask for in any
     /// of their namespaces.
     #[arg(long, env = "REWIND_QUOTA_MAX_TTL", value_parser = parse_duration)]
     pub quota_max_ttl: Option<Duration>,
 
-    /// The ceiling of the tenants this server creates: the most lines a script may have in any
+    /// The ceiling of the tenants this server creates: the most lines a code may have in any
     /// of their namespaces.
-    #[arg(long, env = "REWIND_QUOTA_MAX_SCRIPT_LINES")]
-    pub quota_max_script_lines: Option<u32>,
+    #[arg(long, env = "REWIND_QUOTA_MAX_CODE_LINES")]
+    pub quota_max_code_lines: Option<u32>,
 
     /// Accept action sets with stdio MCP servers: processes this server starts. The embedded
     /// server always does.
@@ -303,7 +303,7 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_MAX_TTL", value_parser = parse_duration)]
     pub max_ttl: Option<Duration>,
 
-    /// The script instances a node keeps in memory after their activation (sticky
+    /// The code instances a node keeps in memory after their activation (sticky
     /// execution): 500 by default. 0 turns the cache off, and every activation replays.
     #[arg(long, env = "REWIND_CACHE_INSTANCES")]
     pub cache_instances: Option<usize>,
@@ -875,9 +875,9 @@ impl ServerArgs {
                 cpu_per_month: self.quota_cpu_per_month,
                 active_runs: self.quota_active_runs,
                 runs_per_month: self.quota_runs_per_month,
-                scripts: self.quota_scripts,
+                workflows: self.quota_workflows,
                 max_ttl: self.quota_max_ttl,
-                max_script_lines: self.quota_max_script_lines,
+                max_code_lines: self.quota_max_code_lines,
             },
             allow_stdio: self.allow_stdio,
             action_egress: ActionEgress::checked(internal_addresses.clone()),

@@ -2,7 +2,7 @@
 //! (`archi/05-testing-and-observability.md`, "Testing and mocks").
 //!
 //! ```text
-//! Test                    never names its script: the script under test is a parameter
+//! Test                    never names its code: the code under test is a parameter
 //! ├── name, input, start?, seed?
 //! ├── world               actions { <action>: [ActionRule] }, mocks?, cassette?
 //! ├── signals             [{ name, payload, when }]
@@ -382,7 +382,7 @@ pub enum RecordError {
     /// Only a run that completed or failed by itself is recorded.
     #[error(
         "the run is {0}: only a run that completed or failed is recorded, since a cancellation, \
-         an abort or a wait does not come from the script"
+         an abort or a wait does not come from the code"
     )]
     Status(RunStatus),
 }
@@ -666,7 +666,7 @@ mod tests {
 
     fn started() -> Event {
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: Digest::of(b"script"),
+            code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
             input: Payload::Value(json!({ "repo": "acme/api" })),
             seed: Seed::from_bytes([7; 32]),
@@ -1018,7 +1018,7 @@ mod tests {
 
     #[test]
     fn expected_values_are_compared_as_javascript_values() {
-        // A script's `4 / 2` is the number 2, whether the test writes 2 or 2.0.
+        // A code's `4 / 2` is the number 2, whether the test writes 2 or 2.0.
         assert!(contains(&json!({ "ratio": 2 }), &json!({ "ratio": 2.0 })));
         assert!(contains(
             &json!([1, { "b": 2.0, "a": 1 }]),

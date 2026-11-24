@@ -1,4 +1,4 @@
-//! Workflows over HTTP, on Turso: saving versions, pinning them in action sets, a script that
+//! Workflows over HTTP, on Turso: saving versions, pinning them in action sets, a code that
 //! starts and signals runs of a workflow and receives their end, runs of a workflow started by the
 //! harness, and the signals a run of a workflow refuses (`archi/01-product.md`, "Workflows").
 
@@ -41,12 +41,12 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn triage(action_set: &str, script: &str) -> CreateWorkflow {
+fn triage(action_set: &str, code: &str) -> CreateWorkflow {
     CreateWorkflow {
         name: "triage".into(),
         description: Some("Triage the stale issues of a repository, after approval.".into()),
         action_set: action_set.into(),
-        script: script.into(),
+        code: code.into(),
         input: json!({
             "type": "object",
             "properties": { "repo": { "type": "string" } },
@@ -82,7 +82,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         .await
         .unwrap();
 
-    // Saving checks the script against its schemas; saving it again returns the same version.
+    // Saving checks the code against its schemas; saving it again returns the same version.
     let saved = harness
         .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
@@ -119,7 +119,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
             .await
             .unwrap_err(),
     );
-    assert_eq!(refused.kind(), Some(ProblemType::InvalidScript));
+    assert_eq!(refused.kind(), Some(ProblemType::InvalidCode));
     assert!(
         refused.diagnostics.iter().any(|diagnostic| diagnostic
             .message
@@ -133,7 +133,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         Some(ProblemType::InvalidWorkflow)
     );
 
-    // An action set pins it; its scripts start it, signal it and receive its end.
+    // An action set pins it; its workflows start it, signal it and receive its end.
     let parent_action_set = harness
         .create_action_set(&CreateActionSet {
             workflows: vec!["triage".into()],

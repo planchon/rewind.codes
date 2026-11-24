@@ -1,9 +1,9 @@
-//! One script instance: an isolate, its glue's hooks, and the run's modules.
+//! One code instance: an isolate, its glue's hooks, and the run's modules.
 
 use std::rc::Rc;
 
 use deno_core::{ModuleSpecifier, PollEventLoopOptions, v8};
-use rewind_engine::ports::{Delivery, Emitted, ExecutorError, StartScript};
+use rewind_engine::ports::{Delivery, Emitted, ExecutorError, StartCode};
 use serde_json::{Value, json};
 
 use crate::epochs::Glue;
@@ -21,13 +21,13 @@ pub(crate) struct Instance {
 
 impl Instance {
     /// Starts an isolate from the epoch's snapshot and evaluates the run's modules. Load
-    /// failures (forbidden import, no default export, top-level error) are `InvalidScript`.
+    /// failures (forbidden import, no default export, top-level error) are `InvalidCode`.
     pub(crate) async fn load(
-        start: &StartScript,
+        start: &StartCode,
         glue: &'static Glue,
         limits: SandboxLimits,
     ) -> Result<Self, ExecutorError> {
-        let loader = Rc::new(Loader::script(
+        let loader = Rc::new(Loader::code(
             glue,
             start.compiled.javascript.clone(),
             start.compiled.source_map.clone().into_bytes(),
@@ -62,7 +62,7 @@ impl Instance {
     }
 
     async fn evaluate_modules(&mut self) -> Result<(), ExecutorError> {
-        let invalid = |err: &dyn std::fmt::Display| ExecutorError::InvalidScript(err.to_string());
+        let invalid = |err: &dyn std::fmt::Display| ExecutorError::InvalidCode(err.to_string());
         let entry = ModuleSpecifier::parse(ENTRY_SPECIFIER).map_err(internal)?;
         self.isolate.begin()?;
         let result = async {
@@ -71,7 +71,7 @@ impl Instance {
                 .load_main_es_module(&entry)
                 .await
                 .map_err(|err| invalid(&err))?;
-            // The script's top-level code runs here, as deep as V8 lets it below this frame.
+            // The code's top-level code runs here, as deep as V8 lets it below this frame.
             memory::pin_stack(runtime.v8_isolate());
             let evaluation = runtime.mod_evaluate(module);
             runtime
@@ -85,13 +85,13 @@ impl Instance {
         result
     }
 
-    /// Runs `main(input)` until the script is idle.
+    /// Runs `main(input)` until the code is idle.
     pub(crate) fn start(&mut self, input: &Value) -> Result<Vec<Emitted>, ExecutorError> {
         let start = self.start.clone();
         self.run(&start, &input.to_string())
     }
 
-    /// Delivers one completion at logical time `now`, and runs the script until it is idle.
+    /// Delivers one completion at logical time `now`, and runs the code until it is idle.
     pub(crate) fn deliver(
         &mut self,
         delivery: &Delivery,
@@ -107,14 +107,14 @@ impl Instance {
         self.isolate.memory_usage()
     }
 
-    /// The CPU time of the isolate's thread in the calls into the script since the last take:
+    /// The CPU time of the isolate's thread in the calls into the code since the last take:
     /// loading the modules and `main(input)` after [`Instance::load`] and [`Instance::start`],
     /// one delivery after [`Instance::deliver`]; whether they succeeded or not.
     pub(crate) fn take_cpu_time(&mut self) -> std::time::Duration {
         self.isolate.take_cpu_time()
     }
 
-    /// Calls a hook with one string argument, drains microtasks, then evaluates the script's
+    /// Calls a hook with one string argument, drains microtasks, then evaluates the code's
     /// outcome (`idle`), all under the CPU budget.
     fn run(
         &mut self,

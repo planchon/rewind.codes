@@ -1,4 +1,4 @@
-//! Reading for the dashboard: a script's source, its title and what the runs did with it, the
+//! Reading for the dashboard: a code's source, its title and what the runs did with it, the
 //! title a person gives it, a payload on demand (`archi/05-testing-and-observability.md`, "Read
 //! model" and "Dashboard"; `archi/04-tools.md`, "Script titles"). The lists and statistics drawn
 //! from the counters are in [`super::stats`].
@@ -28,9 +28,9 @@ use crate::http::search;
 use crate::http::stats::run_counts;
 
 /// `GET /v1/scripts/{digest}`: the source, its title, and what the runs the caller sees did
-/// with it. A caller limited to a namespace or to labels reads only the scripts of the runs it
+/// with it. A caller limited to a namespace or to labels reads only the workflows of the runs it
 /// sees.
-pub(super) async fn script(
+pub(super) async fn code(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(digest): Path<String>,
@@ -39,8 +39,8 @@ pub(super) async fn script(
     Ok(Json(seen_script(&app, &caller, &digest).await?))
 }
 
-/// `PATCH /v1/scripts/{digest}`: the title and description a person gives the script, for the
-/// organization, or their removal. The catalog sends the `script` change: every process, and
+/// `PATCH /v1/scripts/{digest}`: the title and description a person gives the code, for the
+/// organization, or their removal. The catalog sends the `code` change: every process, and
 /// every dashboard following the organization, reads the title again.
 pub(super) async fn set_title(
     State(app): State<Arc<App>>,
@@ -58,15 +58,15 @@ pub(super) async fn set_title(
         }),
         None => None,
     };
-    // Only a script the caller can read is given a title.
+    // Only a code the caller can read is given a title.
     let seen = seen_script(&app, &caller, &digest).await?;
-    let script = Digest::from_hex(&seen.digest).map_err(ApiError::internal)?;
+    let code = Digest::from_hex(&seen.digest).map_err(ApiError::internal)?;
     if !app
         .catalog()
-        .set_script_title(&caller.tenant, script, title.as_ref())
+        .set_script_title(&caller.tenant, code, title.as_ref())
         .await?
     {
-        return Err(no_script(&digest));
+        return Err(no_code(&digest));
     }
     Ok(Json(seen_script(&app, &caller, &digest).await?))
 }
@@ -111,16 +111,16 @@ fn given_description(description: Option<&str>) -> Result<Option<String>, ApiErr
     Ok(Some(description.to_owned()))
 }
 
-fn no_script(digest: &str) -> ApiError {
+fn no_code(digest: &str) -> ApiError {
     ApiError::not_found(format!(
-        "no script {digest} for this tenant: GET /v1/scripts lists the scripts its runs ran"
+        "no code {digest} for this tenant: GET /v1/scripts lists the workflows its runs ran"
     ))
 }
 
-/// The script `digest` names, as `GET /v1/scripts/{digest}` shows it, if the caller may read
+/// The code `digest` names, as `GET /v1/scripts/{digest}` shows it, if the caller may read
 /// it: the source, its title, and what the runs the caller sees did with it.
 async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script, ApiError> {
-    let missing = || no_script(digest);
+    let missing = || no_code(digest);
     let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
     let stored = app
         .catalog()
@@ -169,7 +169,7 @@ async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script,
     } else {
         None
     };
-    let source = stored.script.source().to_owned();
+    let source = stored.code.source().to_owned();
     let title = app.titles(&caller.tenant, [parsed]).await?.remove(&parsed);
     Ok(Script {
         digest: parsed.to_hex(),

@@ -18,8 +18,8 @@
 //! `rewind-actions.d.ts` always declares the module `rewind:actions` (`declare module
 //! "rewind:actions" { … }`), empty for an action set without actions. An action set that pins
 //! workflows also gets the module `rewind:workflows`, one typed export per workflow, and a prompt
-//! line per workflow; the declarations a workflow's own script is checked against come from
-//! [`workflow_declarations`]. Built-ins are not part of it: scripts reach `http` through
+//! line per workflow; the declarations a workflow's own code is checked against come from
+//! [`workflow_declarations`]. Built-ins are not part of it: workflows reach `http` through
 //! `fetch` and `webhook` through the `rewind` module. For an action set that enables `http`, the
 //! file starts with [`HTTP_ACTION_REFERENCE`], from which the type-checker knows to declare
 //! `fetch`. The prompt lists the built-ins too, with the hosts `fetch` may reach.
@@ -41,7 +41,7 @@ mod workflows;
 pub use workflows::{WorkflowDeclarations, workflow_declarations};
 
 /// The first line of the `rewind-actions.d.ts` of an action set that enables the `http` action. It
-/// is how the type-checker learns that the script has `fetch`: it then adds `fetch.d.ts` to the
+/// is how the type-checker learns that the code has `fetch`: it then adds `fetch.d.ts` to the
 /// check. `rewind-check` exports the same line (`HTTP_ACTION_REFERENCE`); `archi/04-tools.md`
 /// records it.
 pub const HTTP_ACTION_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
@@ -61,7 +61,7 @@ pub struct Declarations {
 /// One action's declarations, or one pinned workflow's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionDeclaration {
-    /// As scripts call it: `github.list_issues`, `ask_user`, `http`; `workflows.triage` for the
+    /// As workflows call it: `github.list_issues`, `ask_user`, `http`; `workflows.triage` for the
     /// workflow `triage` of `rewind:workflows`.
     pub name: String,
     /// The action's line of the prompt rendering.

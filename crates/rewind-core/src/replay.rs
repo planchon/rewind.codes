@@ -1,16 +1,16 @@
 //! The determinism check: re-executing a run against its recorded history
 //! (`archi/03-execution.md`, "Replay").
 //!
-//! Whoever drives the script (the engine) drives a [`ReplayCursor`]:
+//! Whoever drives the code (the engine) drives a [`ReplayCursor`]:
 //!
-//! 1. Start the script, and report every command it emits to [`ReplayCursor::on_command`].
-//! 2. When the script is idle, call [`ReplayCursor::on_idle`]:
+//! 1. Start the code, and report every command it emits to [`ReplayCursor::on_command`].
+//! 2. When the code is idle, call [`ReplayCursor::on_idle`]:
 //!    - [`Next::Deliver`]: deliver that completion, then back to step 1;
 //!    - [`Next::Aborted`]: the host aborted the original run here, stop;
-//!    - [`Next::End`]: the history is exhausted. The script is in exactly the state it was in
+//!    - [`Next::End`]: the history is exhausted. The code is in exactly the state it was in
 //!      after the last commit, and the run can continue live.
 //!
-//! This relies on the commit invariant: every entry the script emitted in response to a
+//! This relies on the commit invariant: every entry the code emitted in response to a
 //! trigger is recorded with it. So until `End`, every emitted command has a recorded
 //! counterpart, and every annotation emitted is already recorded.
 
@@ -27,7 +27,7 @@ pub struct ReplayCursor<'h> {
     logical_now: Timestamp,
 }
 
-/// Outcome of a command the script emitted during replay.
+/// Outcome of a command the code emitted during replay.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Replayed<'h> {
     /// The command matches the history entry at `index`.
@@ -36,7 +36,7 @@ pub enum Replayed<'h> {
     Aborted { index: u64, reason: &'h AbortReason },
 }
 
-/// What happens once the script is idle.
+/// What happens once the code is idle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Next<'h> {
     /// Deliver this completion, recorded at the cursor's new [`ReplayCursor::logical_now`].
@@ -50,19 +50,19 @@ pub enum Next<'h> {
     End,
 }
 
-/// The script did not do what the history says it did. Messages are written to be read by a
+/// The code did not do what the history says it did. Messages are written to be read by a
 /// model.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum NonDeterminism {
-    #[error("history entry {index} is {recorded}, but the script emitted {emitted}")]
+    #[error("history entry {index} is {recorded}, but the code emitted {emitted}")]
     CommandMismatch {
         index: u64,
         recorded: Box<Command>,
         emitted: Box<Command>,
     },
-    #[error("the script emitted {emitted}, which the history does not contain (at entry {at})")]
+    #[error("the code emitted {emitted}, which the history does not contain (at entry {at})")]
     UnexpectedCommand { at: u64, emitted: Box<Command> },
-    #[error("history entry {index} is {expected}, but the script went idle without emitting it")]
+    #[error("history entry {index} is {expected}, but the code went idle without emitting it")]
     MissingCommand { index: u64, expected: Box<Command> },
 }
 
@@ -83,7 +83,7 @@ impl<'h> ReplayCursor<'h> {
         self.started
     }
 
-    /// `recorded_at` of `run_started`: the script's `run.startedAt`.
+    /// `recorded_at` of `run_started`: the code's `run.startedAt`.
     pub fn started_at(&self) -> Timestamp {
         self.history[0].recorded_at
     }
@@ -93,7 +93,7 @@ impl<'h> ReplayCursor<'h> {
         self.logical_now
     }
 
-    /// Reports a command the script just emitted.
+    /// Reports a command the code just emitted.
     pub fn on_command(&mut self, emitted: &Command) -> Result<Replayed<'h>, NonDeterminism> {
         let Some(entry) = self.peek() else {
             return Err(NonDeterminism::UnexpectedCommand {
@@ -125,7 +125,7 @@ impl<'h> ReplayCursor<'h> {
         }
     }
 
-    /// Reports that the script is idle, and says what happens next.
+    /// Reports that the code is idle, and says what happens next.
     pub fn on_idle(&mut self) -> Result<Next<'h>, NonDeterminism> {
         let Some(entry) = self.peek() else {
             return Ok(Next::End);
@@ -157,7 +157,7 @@ impl<'h> ReplayCursor<'h> {
     /// The reason the original run was aborted, if it was aborted at this point: the next
     /// entry that is not an annotation is `run_aborted`.
     ///
-    /// When the script cannot go on (it failed to load, or hit a resource limit), this tells
+    /// When the code cannot go on (it failed to load, or hit a resource limit), this tells
     /// whether the original run stopped at the same point.
     pub fn aborted_here(&mut self) -> Option<&'h AbortReason> {
         match &self.peek()?.event {
@@ -189,7 +189,7 @@ mod tests {
 
     fn started() -> Event {
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: Digest::of(b"script"),
+            code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
             input: json!({}).into(),
             seed: Seed::from_bytes([7; 32]),
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "history entry 1 is call #1 github.close_issue({\"number\":4}), \
-             but the script emitted call #1 github.close_issue({\"number\":5})"
+             but the code emitted call #1 github.close_issue({\"number\":5})"
         );
     }
 
@@ -375,7 +375,7 @@ mod tests {
         let err = cursor.on_command(&call(2, "b", json!({}))).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "the script emitted call #2 b({}), which the history does not contain (at entry 3)"
+            "the code emitted call #2 b({}), which the history does not contain (at entry 3)"
         );
     }
 
@@ -394,7 +394,7 @@ mod tests {
         let err = cursor.on_idle().unwrap_err();
         assert_eq!(
             err.to_string(),
-            "history entry 1 is timer #1 (3000ms), but the script went idle without emitting it"
+            "history entry 1 is timer #1 (3000ms), but the code went idle without emitting it"
         );
     }
 
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn tells_whether_the_original_run_was_aborted_at_the_start() {
         let abort = AbortReason {
-            kind: AbortKind::InvalidScript,
+            kind: AbortKind::InvalidCode,
             message: "cannot import \"node:fs\"".into(),
         };
         let h = history(vec![

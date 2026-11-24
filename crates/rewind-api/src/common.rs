@@ -15,7 +15,7 @@ use utoipa::{PartialSchema, ToSchema};
 use crate::Error;
 
 /// Run labels: a bounded string map set when a run starts (agent, conversation, end user…).
-/// They filter runs and scope API keys and webhooks. The script never sees them.
+/// They filter runs and scope API keys and webhooks. The code never sees them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 pub struct Labels(pub BTreeMap<String, String>);
@@ -90,7 +90,7 @@ pub fn timestamp(time: rewind_core::Timestamp) -> Timestamp {
 // -------------------------------------------------------------------------------------------
 // Durations
 
-/// A duration, written as scripts write them (`"500ms"`, `"30s"`, `"1h30m"`, `"2d"`, `"1w"`)
+/// A duration, written as workflows write them (`"500ms"`, `"30s"`, `"1h30m"`, `"2d"`, `"1w"`)
 /// or as a number of milliseconds. Written back in the first form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Duration(std::time::Duration);
@@ -319,11 +319,11 @@ pub enum RunStatus {
     Active,
     /// `main` returned and every call settled.
     Completed,
-    /// The script failed.
+    /// The code failed.
     Failed,
-    /// The script ended with `CancelledError`.
+    /// The code ended with `CancelledError`.
     Cancelled,
-    /// The host ended the run (a limit, a script that cannot load, a given-up quarantine…).
+    /// The host ended the run (a limit, a code that cannot load, a given-up quarantine…).
     Aborted,
 }
 
@@ -394,7 +394,7 @@ impl From<rewind_core::RunMode> for RunMode {
     }
 }
 
-/// A position in the script's TypeScript source (`script.ts`), 1-based.
+/// A position in the code's TypeScript source (`workflow.ts`), 1-based.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 pub struct Callsite {
     pub line: u32,
@@ -412,18 +412,18 @@ impl From<rewind_core::Callsite> for Callsite {
 
 impl fmt::Display for Callsite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "script.ts:{}:{}", self.line, self.column)
+        write!(f, "workflow.ts:{}:{}", self.line, self.column)
     }
 }
 
-/// How a script failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,
+/// How a code failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,
 /// or `CancelledError`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptError {
     pub name: String,
     pub message: String,
-    /// The stack, source-mapped to `script.ts`, without the runtime's own frames.
+    /// The stack, source-mapped to `workflow.ts`, without the runtime's own frames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
 }
@@ -438,7 +438,7 @@ impl From<&rewind_core::ScriptError> for ScriptError {
     }
 }
 
-/// How a call failed, as the script sees it (a thrown `ActionError`).
+/// How a call failed, as the code sees it (a thrown `ActionError`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionFailure {
@@ -517,10 +517,10 @@ pub enum AbortKind {
     LimitExceeded,
     /// A quarantined run was given up after a replay mismatch.
     NonDeterminism,
-    /// The script did not end within its cancellation grace.
+    /// The code did not end within its cancellation grace.
     Cancelled,
-    /// The script could not be loaded.
-    InvalidScript,
+    /// The code could not be loaded.
+    InvalidCode,
     /// A fault of the platform, or a quarantined run given up after repeated failures.
     Internal,
 }
@@ -531,7 +531,7 @@ impl From<rewind_core::AbortKind> for AbortKind {
             rewind_core::AbortKind::LimitExceeded => AbortKind::LimitExceeded,
             rewind_core::AbortKind::NonDeterminism => AbortKind::NonDeterminism,
             rewind_core::AbortKind::Cancelled => AbortKind::Cancelled,
-            rewind_core::AbortKind::InvalidScript => AbortKind::InvalidScript,
+            rewind_core::AbortKind::InvalidCode => AbortKind::InvalidCode,
             rewind_core::AbortKind::Internal => AbortKind::Internal,
         }
     }

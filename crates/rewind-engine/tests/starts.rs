@@ -1,6 +1,6 @@
 //! Starts and forks at the edge, in the driver (`archi/03-execution.md`, "Starting a run",
 //! "Forks"): what is refused before a run exists, a fork that reuses its parent's recorded
-//! calls and goes live where it differs, and whether a corrected script is compatible with a
+//! calls and goes live where it differs, and whether a corrected code is compatible with a
 //! journal.
 
 #![allow(clippy::unwrap_used)]
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionFailure, ActionFailureKind, Event, Lifecycle, RunStatus, Script, Seq, Timestamp,
+    ActionFailure, ActionFailureKind, Code, Event, Lifecycle, RunStatus, Seq, Timestamp,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::ports::{
@@ -100,7 +100,7 @@ async fn invalid_starts_are_refused_before_a_run_exists() {
         .unwrap_err();
     assert_eq!(
         refused.to_string(),
-        "the script is invalid: syntax error here: unexpected token"
+        "the code is invalid: syntax error here: unexpected token"
     );
     let mut too_long = request("buggy", json!({}));
     too_long.ttl = Some(Duration::from_secs(400 * 86_400));
@@ -124,7 +124,7 @@ async fn text_with_a_nul_character_is_refused_at_the_way_in() {
     let mut world = World::new(programs(), dispatcher()).await;
     let refused = |error: String| assert!(error.contains("NUL character (U+0000)"), "{error}");
     let mut source = request("buggy", json!({}));
-    source.script = Script::new("buggy\0");
+    source.code = Code::new("buggy\0");
     let mut label = request("buggy", json!({}));
     label.metadata.labels.insert("agent\0".into(), "x".into());
     let mut key = request("buggy", json!({}));
@@ -147,10 +147,10 @@ async fn text_with_a_nul_character_is_refused_at_the_way_in() {
             .unwrap_err()
             .to_string(),
     );
-    let mut labelled = ForkRun::new(run.clone(), Script::new("fixed"));
+    let mut labelled = ForkRun::new(run.clone(), Code::new("fixed"));
     labelled.labels = Some(BTreeMap::from([("agent".into(), "\0".into())]));
     refused(fork(&mut world, labelled).await.unwrap_err().to_string());
-    let mut keyed = ForkRun::new(run, Script::new("fixed"));
+    let mut keyed = ForkRun::new(run, Code::new("fixed"));
     keyed.idempotency_key = Some("\0".into());
     refused(fork(&mut world, keyed).await.unwrap_err().to_string());
     assert_eq!(runs(&mut world).await, 1);
@@ -173,20 +173,20 @@ async fn a_script_with_a_type_error_is_refused_before_any_run_exists() {
         severity: Severity::Warning,
         ..error.clone()
     };
-    let checker = StaticTypeChecker::new().with(&refused.script, vec![error.clone()]);
+    let checker = StaticTypeChecker::new().with(&refused.code, vec![error.clone()]);
     let mut gateway = world.driver.gateway(&world.at.clone());
     let started = world
         .edge
         .start_run_checked(&mut gateway, refused.clone(), &checker)
         .await;
     let Err(StartError::TypeErrors(diagnostics)) = started else {
-        panic!("a type error refuses the script: {started:?}");
+        panic!("a type error refuses the code: {started:?}");
     };
     assert_eq!(diagnostics, [error]);
     assert_eq!(runs(&mut world).await, 0, "no run exists");
 
     // Warnings alone do not refuse it.
-    let checker = StaticTypeChecker::new().with(&refused.script, vec![warning]);
+    let checker = StaticTypeChecker::new().with(&refused.code, vec![warning]);
     let mut gateway = world.driver.gateway(&world.at.clone());
     assert!(
         world
@@ -204,12 +204,9 @@ async fn a_fork_reuses_the_recorded_calls_and_goes_live_where_it_differs() {
     let parent = failed_parent(&mut world).await;
     let parent_history = world.history(&parent).await;
 
-    let fork = fork(
-        &mut world,
-        ForkRun::new(parent.clone(), Script::new("fixed")),
-    )
-    .await
-    .unwrap();
+    let fork = fork(&mut world, ForkRun::new(parent.clone(), Code::new("fixed")))
+        .await
+        .unwrap();
     world.idle().await;
     assert_eq!(world.view(&fork).await.head.status, RunStatus::Completed);
     let history = world.history(&fork).await;
@@ -241,7 +238,7 @@ async fn a_fork_reuses_the_recorded_calls_and_goes_live_where_it_differs() {
     };
     assert_eq!(started.seed, parent_started.seed);
     assert_eq!(started.input, parent_started.input);
-    assert_eq!(started.script, Script::new("fixed").digest());
+    assert_eq!(started.code, Code::new("fixed").digest());
     assert!(started.expires_at > parent_started.expires_at, "a new TTL");
 
     // `a` was called once, by the parent; `b` twice, the fork's call with the fork's key.
@@ -271,18 +268,18 @@ async fn a_fork_is_refused_like_a_run_that_cannot_start() {
     let parent = failed_parent(&mut world).await;
     let unknown = RunRef::new(parent.tenant.clone(), rewind_core::RunId::from_u128(7));
     assert!(matches!(
-        fork(&mut world, ForkRun::new(unknown.clone(), Script::new("fixed"))).await,
+        fork(&mut world, ForkRun::new(unknown.clone(), Code::new("fixed"))).await,
         Err(ForkError::ParentNotFound(run)) if run == unknown.id
     ));
     assert!(matches!(
         fork(
             &mut world,
-            ForkRun::new(parent.clone(), Script::new("syntax error"))
+            ForkRun::new(parent.clone(), Code::new("syntax error"))
         )
         .await,
-        Err(ForkError::Start(StartError::InvalidScript(_)))
+        Err(ForkError::Start(StartError::InvalidCode(_)))
     ));
-    let mut request = ForkRun::new(parent, Script::new("fixed"));
+    let mut request = ForkRun::new(parent, Code::new("fixed"));
     request.ttl = Some(Duration::ZERO);
     assert!(matches!(
         fork(&mut world, request).await,
@@ -302,12 +299,12 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
         .unwrap();
     let executor = &world.plane.executor;
     let limits = Limits::default();
-    let scripts: BTreeMap<&str, Script> = ["buggy", "fixed", "syntax error"]
+    let scripts: BTreeMap<&str, Code> = ["buggy", "fixed", "syntax error"]
         .into_iter()
-        .map(|name| (name, Script::new(name)))
+        .map(|name| (name, Code::new(name)))
         .collect();
-    let check = |script: &str, at| {
-        rewind_engine::fork::compatibility(executor, &journal, &scripts[script], at, &limits)
+    let check = |code: &str, at| {
+        rewind_engine::fork::compatibility(executor, &journal, &scripts[code], at, &limits)
     };
 
     let same = check("buggy", None).await.unwrap();
@@ -322,7 +319,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
     };
     assert_eq!(
         mismatch.to_string(),
-        "history entry 3 is call #2 b(\"bad\"), but the script emitted call #2 b(\"good\")"
+        "history entry 3 is call #2 b(\"bad\"), but the code emitted call #2 b(\"good\")"
     );
     assert_eq!(fixed.status, RunStatus::Active);
 
@@ -331,6 +328,6 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
     assert_eq!(forced.reused, [Seq(1)], "a's result is reused");
     assert!(matches!(
         check("syntax error", None).await,
-        Err(ForkError::Start(StartError::InvalidScript(_)))
+        Err(ForkError::Start(StartError::InvalidCode(_)))
     ));
 }

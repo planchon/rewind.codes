@@ -22,10 +22,10 @@ pub enum CliError {
     /// The server answered with an error, or could not be reached.
     #[error(transparent)]
     Api(#[from] rewind_api::Error),
-    /// The script cannot start: it does not compile, or the start was refused before any run
+    /// The code cannot start: it does not compile, or the start was refused before any run
     /// existed.
     #[error("{message}")]
-    ScriptRefused {
+    CodeRefused {
         message: String,
         diagnostics: Vec<Diagnostic>,
     },
@@ -64,7 +64,7 @@ impl CliError {
     pub fn exit(&self) -> Exit {
         match self {
             CliError::Usage(_) | CliError::File { .. } => Exit::Usage,
-            CliError::ScriptRefused { .. } => Exit::ScriptRefused,
+            CliError::CodeRefused { .. } => Exit::CodeRefused,
             CliError::Refused(_) => Exit::Refused,
             CliError::Server(_) | CliError::Internal(_) => Exit::Internal,
             CliError::Interrupted(_) => Exit::Interrupted,
@@ -76,10 +76,10 @@ impl CliError {
     pub fn problem(&self) -> Problem {
         match self {
             CliError::Api(rewind_api::Error::Problem(problem)) => problem.as_ref().clone(),
-            CliError::ScriptRefused {
+            CliError::CodeRefused {
                 message,
                 diagnostics,
-            } => Problem::new(ProblemType::InvalidScript, message.clone())
+            } => Problem::new(ProblemType::InvalidCode, message.clone())
                 .with_diagnostics(diagnostics.clone()),
             other => {
                 let kind = match other.exit() {
@@ -93,11 +93,11 @@ impl CliError {
         }
     }
 
-    /// The diagnostics of a refused script, from the server or from the local checks.
+    /// The diagnostics of a refused code, from the server or from the local checks.
     pub fn diagnostics(&self) -> &[Diagnostic] {
         match self {
             CliError::Api(rewind_api::Error::Problem(problem)) => &problem.diagnostics,
-            CliError::ScriptRefused { diagnostics, .. } => diagnostics,
+            CliError::CodeRefused { diagnostics, .. } => diagnostics,
             _ => &[],
         }
     }
@@ -134,7 +134,7 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::SecretRequired,
             ) => Exit::Usage,
             Some(ProblemType::TestsFailed) => Exit::Failed,
-            Some(ProblemType::InvalidScript) => Exit::ScriptRefused,
+            Some(ProblemType::InvalidCode) => Exit::CodeRefused,
             Some(
                 ProblemType::Internal
                 | ProblemType::ActionSetUnavailable
@@ -170,10 +170,7 @@ mod tests {
         assert_eq!(problem(ProblemType::NotQuarantined).exit(), Exit::Refused);
         assert_eq!(problem(ProblemType::QuotaExceeded).exit(), Exit::Refused);
         assert_eq!(problem(ProblemType::InvalidRequest).exit(), Exit::Usage);
-        assert_eq!(
-            problem(ProblemType::InvalidScript).exit(),
-            Exit::ScriptRefused
-        );
+        assert_eq!(problem(ProblemType::InvalidCode).exit(), Exit::CodeRefused);
         assert_eq!(problem(ProblemType::Internal).exit(), Exit::Internal);
         assert_eq!(problem(ProblemType::Unavailable).exit(), Exit::Internal);
         let unknown = CliError::Api(
@@ -204,11 +201,11 @@ mod tests {
         let error = CliError::usage("--input is not JSON");
         assert_eq!(error.exit(), Exit::Usage);
         assert!(error.problem().is(ProblemType::InvalidRequest));
-        let refused = CliError::ScriptRefused {
-            message: "the script does not compile".into(),
+        let refused = CliError::CodeRefused {
+            message: "the code does not compile".into(),
             diagnostics: Vec::new(),
         };
-        assert!(refused.problem().is(ProblemType::InvalidScript));
-        assert_eq!(refused.exit(), Exit::ScriptRefused);
+        assert!(refused.problem().is(ProblemType::InvalidCode));
+        assert_eq!(refused.exit(), Exit::CodeRefused);
     }
 }

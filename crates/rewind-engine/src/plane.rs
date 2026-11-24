@@ -16,8 +16,8 @@ use rewind_core::Epoch;
 use crate::cache::CacheConfig;
 use crate::payloads::PayloadTiers;
 use crate::ports::{
-    ActionDispatcher, BlobStore, CatalogStore, Clock, Entropy, NodeId, PartitionStore, RunArchive,
-    ScriptExecutor, SecretStore, SpanExporter, TenantId, WebhookSender,
+    ActionDispatcher, BlobStore, CatalogStore, Clock, CodeExecutor, Entropy, NodeId,
+    PartitionStore, RunArchive, SecretStore, SpanExporter, TenantId, WebhookSender,
 };
 use crate::tasks::Backoff;
 use crate::telemetry::TelemetryConfig;
@@ -28,7 +28,7 @@ pub trait Plane: Send + Sync + 'static {
     type Partitions: PartitionStore<Log: 'static> + 'static;
     type Archive: RunArchive + 'static;
     type Blobs: BlobStore + 'static;
-    type Executor: ScriptExecutor<Instance: 'static> + 'static;
+    type Executor: CodeExecutor<Instance: 'static> + 'static;
     type Dispatcher: ActionDispatcher + 'static;
     type Secrets: SecretStore + 'static;
     type Spans: SpanExporter + 'static;
@@ -53,7 +53,7 @@ pub trait Plane: Send + Sync + 'static {
 pub type LogOf<P> = <<P as Plane>::Partitions as PartitionStore>::Log;
 
 /// The instance an executor of a plane runs.
-pub type InstanceOf<P> = <<P as Plane>::Executor as ScriptExecutor>::Instance;
+pub type InstanceOf<P> = <<P as Plane>::Executor as CodeExecutor>::Instance;
 
 /// A [`Plane`] made of its adapters.
 pub struct Wiring<C, P, A, B, X, D, S, T, W, K, E> {
@@ -82,7 +82,7 @@ where
     P: PartitionStore<Log: 'static> + 'static,
     A: RunArchive + 'static,
     B: BlobStore + 'static,
-    X: ScriptExecutor<Instance: 'static> + 'static,
+    X: CodeExecutor<Instance: 'static> + 'static,
     D: ActionDispatcher + 'static,
     S: SecretStore + 'static,
     T: SpanExporter + 'static,
@@ -154,9 +154,9 @@ pub enum HarnessActions {
 pub struct Limits {
     /// Entries in a run's history.
     pub max_history_len: u64,
-    /// Commands the script may emit in one activation.
+    /// Commands the code may emit in one activation.
     pub max_commands_per_activation: usize,
-    /// Size of one payload the script emits (action args, output), as canonical JSON.
+    /// Size of one payload the code emits (action args, output), as canonical JSON.
     pub max_payload_bytes: usize,
 }
 

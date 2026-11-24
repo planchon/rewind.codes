@@ -58,7 +58,7 @@ pub fn head_record(head: &RunHead) -> record::RunHead {
         namespace: head.namespace.to_string(),
         origin: head.origin.clone(),
         suffix_len: head.suffix_len,
-        script: head.script,
+        code: head.code,
         action_set: head.action_set,
         status: head.status.into(),
         epoch: head.epoch.0,
@@ -84,7 +84,7 @@ pub fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError> {
         namespace: namespace(record.namespace)?,
         origin: record.origin,
         suffix_len: record.suffix_len,
-        script: record.script,
+        code: record.code,
         action_set: record.action_set,
         status: record.status.into(),
         epoch: rewind_core::Epoch(record.epoch),
@@ -383,7 +383,7 @@ pub fn timer_record(timer: &DueTimer) -> record::Timer {
 /// A timer's kind, without its tenant: [`TimerKind::tenant`] is written beside it.
 pub fn timer_kind_record(kind: &TimerKind) -> record::TimerKind {
     match kind {
-        TimerKind::Script { run, seq } => record::TimerKind::Script {
+        TimerKind::Code { run, seq } => record::TimerKind::Code {
             run: run.id,
             seq: seq.0,
         },
@@ -417,7 +417,7 @@ pub fn timer_of(record: record::Timer) -> Result<DueTimer, PartitionError> {
 pub fn timer_kind_of(tenant: TenantId, kind: record::TimerKind) -> TimerKind {
     let run = |id| RunRef::new(tenant.clone(), id);
     match kind {
-        record::TimerKind::Script { run: id, seq } => TimerKind::Script {
+        record::TimerKind::Code { run: id, seq } => TimerKind::Code {
             run: run(id),
             seq: Seq(seq),
         },
@@ -505,7 +505,7 @@ pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
         namespace: summary.namespace.to_string(),
         origin: summary.origin.clone(),
         suffix_len: summary.suffix_len,
-        script: summary.script,
+        code: summary.code,
         headline: summary.headline.clone(),
         action_set: summary.action_set,
         status: summary.status.into(),
@@ -553,7 +553,7 @@ pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionEr
             namespace: namespace(record.namespace)?,
             origin: record.origin,
             suffix_len: record.suffix_len,
-            script: record.script,
+            code: record.code,
             headline: record.headline,
             action_set: record.action_set,
             status: record.status.into(),
@@ -690,14 +690,14 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
         scripts: counters
             .scripts
             .iter()
-            .map(|(&script, runs)| {
+            .map(|(&code, runs)| {
                 let runs = record::ScriptCounts {
                     runs: runs_record(&runs.runs),
                     actions: runs.actions.clone(),
                     first_started_at: runs.first_started_at.map(|at| at.0),
                     last_started_at: runs.last_started_at.map(|at| at.0),
                 };
-                (script, runs)
+                (code, runs)
             })
             .collect(),
     }
@@ -761,14 +761,14 @@ pub fn counters_of(record: record::Counters) -> Counters {
         scripts: record
             .scripts
             .into_iter()
-            .map(|(script, runs)| {
+            .map(|(code, runs)| {
                 let runs = ScriptCounts {
                     runs: runs_of(runs.runs),
                     actions: runs.actions,
                     first_started_at: runs.first_started_at.map(Timestamp),
                     last_started_at: runs.last_started_at.map(Timestamp),
                 };
-                (script, runs)
+                (code, runs)
             })
             .collect(),
     }
@@ -938,9 +938,9 @@ pub fn alert_record(alert: &QuotaAlert) -> record::QuotaAlert {
             QuotaKind::CpuPerMonth => record::QuotaKind::CpuPerMonth,
             QuotaKind::ActiveRuns => record::QuotaKind::ActiveRuns,
             QuotaKind::RunsPerMonth => record::QuotaKind::RunsPerMonth,
-            QuotaKind::Scripts => record::QuotaKind::Scripts,
+            QuotaKind::Workflows => record::QuotaKind::Workflows,
             QuotaKind::MaxTtl => record::QuotaKind::MaxTtl,
-            QuotaKind::MaxScriptLines => record::QuotaKind::MaxScriptLines,
+            QuotaKind::MaxCodeLines => record::QuotaKind::MaxCodeLines,
         },
         year: key.period.year(),
         month: key.period.month(),
@@ -964,9 +964,9 @@ pub fn alert_of(record: record::QuotaAlert) -> Result<QuotaAlert, PartitionError
                 record::QuotaKind::CpuPerMonth => QuotaKind::CpuPerMonth,
                 record::QuotaKind::ActiveRuns => QuotaKind::ActiveRuns,
                 record::QuotaKind::RunsPerMonth => QuotaKind::RunsPerMonth,
-                record::QuotaKind::Scripts => QuotaKind::Scripts,
+                record::QuotaKind::Workflows => QuotaKind::Workflows,
                 record::QuotaKind::MaxTtl => QuotaKind::MaxTtl,
-                record::QuotaKind::MaxScriptLines => QuotaKind::MaxScriptLines,
+                record::QuotaKind::MaxCodeLines => QuotaKind::MaxCodeLines,
             },
             period: Month::new(record.year, record.month).ok_or_else(|| {
                 corrupt(format!(
@@ -1148,7 +1148,7 @@ pub fn organization_record(state: &OrganizationState) -> record::Organization {
             .map(|admission| record::Admission {
                 run: admission.run,
                 namespace: admission.namespace.to_string(),
-                script: admission.script,
+                code: admission.code,
                 admitted_at: admission.admitted_at.0,
             })
             .collect(),
@@ -1169,7 +1169,7 @@ pub fn organization_of(record: record::Organization) -> Result<OrganizationState
                 Ok(Admission {
                     run: admission.run,
                     namespace: namespace(admission.namespace)?,
-                    script: admission.script,
+                    code: admission.code,
                     admitted_at: Timestamp(admission.admitted_at),
                 })
             })

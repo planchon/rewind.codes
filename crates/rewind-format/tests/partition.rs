@@ -86,7 +86,7 @@ fn run_head() -> RunHead {
         namespace: "alice".into(),
         origin: "script".into(),
         suffix_len: 12,
-        script: digest("script"),
+        code: digest("script"),
         action_set: digest("action_set"),
         status: Status::Active,
         epoch: 1,
@@ -137,7 +137,7 @@ fn entry() -> Entry {
         index: 0,
         recorded_at: T0,
         event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: digest("script"),
+            code: digest("script"),
             action_set: digest("action_set"),
             input: json!({ "b": 1, "a": [1.5, "x"] }).into(),
             seed: Seed::from_bytes([9; 32]),
@@ -193,7 +193,7 @@ fn timer() -> Timer {
     Timer {
         at: T0 + 1_000,
         tenant: "acme".into(),
-        kind: TimerKind::Script {
+        kind: TimerKind::Code {
             run: run(1),
             seq: 3,
         },
@@ -216,7 +216,7 @@ fn summary() -> Summary {
         namespace: "alice".into(),
         origin: "script".into(),
         suffix_len: 12,
-        script: digest("script"),
+        code: digest("script"),
         headline: "export default async () => {".into(),
         action_set: digest("action_set"),
         status: Status::Failed,
@@ -392,7 +392,7 @@ fn organization() -> Organization {
         admissions: vec![Admission {
             run: run(2),
             namespace: "alice".into(),
-            script: digest("script"),
+            code: digest("script"),
             admitted_at: T0,
         }],
     }
@@ -509,7 +509,7 @@ fn every_variant_round_trips() {
         assert_eq!(decode::<Task>(&encode(&record)).unwrap(), record);
     }
     let kinds = [
-        TimerKind::Script {
+        TimerKind::Code {
             run: run(1),
             seq: 1,
         },
@@ -691,9 +691,9 @@ fn every_variant_round_trips() {
     for (quota, threshold) in [
         (QuotaKind::ActiveRuns, Threshold::Reached),
         (QuotaKind::RunsPerMonth, Threshold::Near),
-        (QuotaKind::Scripts, Threshold::Near),
+        (QuotaKind::Workflows, Threshold::Near),
         (QuotaKind::MaxTtl, Threshold::Near),
-        (QuotaKind::MaxScriptLines, Threshold::Near),
+        (QuotaKind::MaxCodeLines, Threshold::Near),
     ] {
         let record = Organization {
             alerts: vec![QuotaAlert {
@@ -797,7 +797,7 @@ fn rejects_what_v1_does_not_define() {
             "a field of a variant",
         ),
         (
-            fixture.replace(r#""type":"script""#, r#""type":"alarm""#),
+            fixture.replace(r#""type":"code""#, r#""type":"alarm""#),
             "a variant",
         ),
         (

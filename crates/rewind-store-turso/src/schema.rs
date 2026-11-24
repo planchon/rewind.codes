@@ -6,7 +6,7 @@
 //! workflows; version 5 the namespaces; version 6 the tests and the suites of workflow versions;
 //! version 7 people's connections and the OAuth clients and codes; version 8 the namespaces'
 //! display names; version 9 named secrets, their reads, the signing keys and the master key of
-//! each data key; version 11 the runs' origins and handle suffixes, the scripts' titles and the
+//! each data key; version 11 the runs' origins and handle suffixes, the workflows' titles and the
 //! numbers of workflow versions; version 12 each namespace's partition, the partition map, and
 //! `legacy_runs`; version 13 set the tables of runs those versions also hold aside, as
 //! `legacy_*`, which `rewind server migrate-runs` reads and drops (`archi/08-decisions.md`,
@@ -439,11 +439,11 @@ ALTER TABLE run_summaries ADD COLUMN started_by TEXT;
 /// belongs to, with idempotency keys unique per namespace (`runs` is rebuilt for its new key,
 /// with the workflow columns of version 3); the tenant's ceiling and its namespaces' defaults, a
 /// column per quota; namespaces with their exceptions, their use per day (`*` the tenant's own
-/// rows), their alerts and the runs kept per script; end users' tokens and the keys that sign
+/// rows), their alerts and the runs kept per code; end users' tokens and the keys that sign
 /// them.
 ///
 /// The runs that existed before namespaces belong to `migrated`, which is created in each tenant
-/// that has runs, with its script counts and the runs started per day, its own and its tenant's.
+/// that has runs, with its code counts and the runs started per day, its own and its tenant's.
 const V5: &str = r#"
 CREATE TABLE runs_v5 (
     id TEXT PRIMARY KEY,
@@ -775,10 +775,10 @@ ALTER TABLE run_summaries ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 "#;
 
-/// Run handles, script titles and the numbers of workflow versions
+/// Run handles, code titles and the numbers of workflow versions
 /// (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script titles"). A run
 /// keeps its origin, the middle of its handle, and the characters of its handle's suffix. A run
-/// stored before handles takes its workflow's name, or `script`, and the short suffix, unless
+/// stored before handles takes its workflow's name, or `code`, and the short suffix, unless
 /// another run of its tenant shares the first 64 bits of its id (the first 18 characters of its
 /// text, `xxxxxxxx-xxxx-xxxx`): every run of such a group then takes the full suffix, which tells
 /// distinct ids apart. A summary takes its run's; a summary whose run the journal no longer holds
@@ -871,7 +871,7 @@ CREATE TABLE legacy_runs (
 /// is the control plane's table of the runs moved): the runs, their histories, inboxes,
 /// signal keys, timers, call tasks, webhook tokens and watchers, the payloads and their
 /// references, the feed, the read model's tables, and the namespaces' use per day, quota alerts
-/// and script counts. `rewind server migrate-runs` reads them, moves each run into the partition
+/// and code counts. `rewind server migrate-runs` reads them, moves each run into the partition
 /// or the archive, and drops them once every run moved.
 ///
 /// A tenant keeps one retention, how long an ended run is kept from its end: `retention_ms`,
@@ -1256,11 +1256,11 @@ mod tests {
         .expect("a workflow version of version 10");
     }
 
-    fn workflow(name: &str, script: &str) -> rewind_core::Workflow {
+    fn workflow(name: &str, code: &str) -> rewind_core::Workflow {
         rewind_core::Workflow::new(
             name,
             None,
-            Digest::of(script.as_bytes()),
+            Digest::of(code.as_bytes()),
             Digest::of(b"action_set"),
             rewind_core::WorkflowSchemas {
                 input: serde_json::json!({ "type": "object" }),
@@ -1274,7 +1274,7 @@ mod tests {
     /// The runs and workflow versions of a database of version 10 get handles and numbers
     /// (version 11, as released), and the runs keep them set aside for `migrate-runs`. Runs of a
     /// tenant whose ids share their first 64 bits take the full suffix; a run's origin is its
-    /// workflow, or `script`. Versions are numbered by creation, ties in the order they were
+    /// workflow, or `code`. Versions are numbered by creation, ties in the order they were
     /// stored, and a new one takes the next number.
     #[tokio::test]
     async fn runs_and_versions_of_version_10_get_handles_and_numbers() {
