@@ -6,7 +6,7 @@
 //! [`InboxItem`], a [`SignalKey`], an action [`Task`], a [`Timer`], a [`PayloadValue`], a
 //! [`Watcher`], a [`SignalUrlToken`], a run's [`Summary`] in the index, a [`StartKey`], the hourly
 //! [`Counters`] of a namespace, the observed [`Shape`] of an action's results, the [`Gauges`] of a
-//! namespace, an [`Outbox`] entry, and the state of an [`Organization`] homed there.
+//! namespace, an [`Outbox`] entry, and the state of a tenant ([`TenantState`]) homed there.
 //!
 //! [`encode`] writes a record `{"v":1,…}`, its fields in their declared order, optional fields
 //! and empty collections left out, payload values in their canonical form (RFC 8785). [`decode`]

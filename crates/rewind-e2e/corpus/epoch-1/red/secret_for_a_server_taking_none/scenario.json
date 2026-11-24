@@ -1,5 +1,5 @@
 {
-  "description": "The start attaches a secret for a server whose calls carry none: it is refused before any run exists.",
+  "description": "The start names a secret for a server whose calls carry none: it is refused before any run exists.",
   "live": true,
   "input": {
     "customer": "c-7"

@@ -16,7 +16,7 @@ use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::common::Labels;
 use rewind_api::namespaces::{CreateToken, NamespaceName};
 use rewind_api::runs::StartRun;
-use rewind_api::secrets::{AttachmentProblemKind, PutSecret, SecretScope};
+use rewind_api::secrets::{PutSecret, SecretProblemKind, SecretScope};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::json;
 use support::TestServer;
@@ -337,9 +337,9 @@ async fn a_token_reaches_its_namespace_s_secrets_only(server: &TestServer) {
     );
 }
 
-/// An attachment for a server that takes no secret refuses the start before any run exists,
-/// as `secret-required` naming the attachment.
-async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &TestServer) {
+/// A secret for a server that takes no secret refuses the start before any run exists,
+/// as `secret-required` naming the secret.
+async fn a_secret_for_a_server_taking_none_is_secret_required(server: &TestServer) {
     let customer = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = customer
         .create_action_set(&CreateActionSet {
@@ -366,13 +366,13 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
         (refusal.status, refusal.kind()),
         (422, Some(ProblemType::SecretRequired))
     );
-    assert_eq!(refusal.attachments.len(), 1);
-    let attachment = &refusal.attachments[0];
+    assert_eq!(refusal.secrets.len(), 1);
+    let at_fault = &refusal.secrets[0];
     assert_eq!(
-        (attachment.server.as_str(), attachment.problem),
-        ("ask_user", AttachmentProblemKind::TakesNone)
+        (at_fault.server.as_str(), at_fault.problem),
+        ("ask_user", SecretProblemKind::TakesNone)
     );
-    assert!(attachment.attachable.is_empty());
+    assert!(at_fault.usable.is_empty());
     assert!(
         refusal.detail.contains("ask_user takes no secret"),
         "{}",
@@ -405,10 +405,10 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
         .collect();
     let refusal = problem(customer.create_action_set(&listed).await.unwrap_err());
     assert_eq!(
-        (refusal.kind(), refusal.attachments[0].problem),
+        (refusal.kind(), refusal.secrets[0].problem),
         (
             Some(ProblemType::SecretRequired),
-            AttachmentProblemKind::TakesNone
+            SecretProblemKind::TakesNone
         ),
         "no MCP server of the request takes it"
     );
@@ -508,9 +508,9 @@ async fn a_token_reaches_its_namespace_s_secrets_only_in_memory() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_attachment_for_a_server_taking_none_is_secret_required_in_memory() {
+async fn a_secret_for_a_server_taking_none_is_secret_required_in_memory() {
     let server = TestServer::in_memory(&[]).await;
-    an_attachment_for_a_server_taking_none_is_secret_required(&server).await;
+    a_secret_for_a_server_taking_none_is_secret_required(&server).await;
     server.stop().await;
 }
 

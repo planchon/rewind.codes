@@ -28,11 +28,11 @@ use rewind_core::{
     Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, Digest, McpServer, McpTransport,
     SecretRef, SecretScope,
 };
-use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, Day, Secret, SecretId, SecretNamespace, SecretReader,
     SecretStore, StoredActionSet, TenantId,
 };
+use rewind_engine::secrets::{RefusedSecrets, SecretProblem};
 use rewind_engine::text::{ACTION_SET_TEXT, refuse_nul};
 use rewind_mcp::ListingAuth;
 use rewind_openapi::{ReadOptions, read};
@@ -313,7 +313,7 @@ async fn pin(
     let mut listing = if request.secrets.is_empty() {
         BTreeMap::new()
     } else {
-        attached_for_listing(app, caller, &request).await?
+        secrets_for_listing(app, caller, &request).await?
     };
     let (apis, mut actions, skipped) = read_apis(app, &request).await?;
     let mut servers = Vec::new();
@@ -359,13 +359,13 @@ async fn pin(
         let mut pinned = McpServer::new(server.name.clone(), transport);
         pinned.auth = auth_of(server.auth.as_ref(), &format!("MCP server {}", server.name))?;
         let secret = listing.remove(&server.name);
-        let attached = secret.is_some();
+        let named = secret.is_some();
         let auth = listing_auth(app, tenant, &pinned, secret).await?;
         let listed = app.actions.discover(tenant, &pinned, auth).await.map_err(
             |DiscoveryError(message)| {
-                let hint = if pinned.auth.takes_secret() && !attached {
+                let hint = if pinned.auth.takes_secret() && !named {
                     format!(
-                        "{message} (the listing carried no secret: attach an organization's \
+                        "{message} (the listing carried no secret: use an organization's \
                          secret for {} in secrets)",
                         pinned.name
                     )
@@ -449,27 +449,27 @@ async fn pin(
     Ok((action_set, skipped))
 }
 
-/// The organization's secrets `secrets` attaches for the listings, read, by server
-/// (`archi/04-tools.md`, "Secrets": `POST /v1/action-sets` attaches an organization's secrets only,
+/// The organization's secrets `secrets` uses for the listings, read, by server
+/// (`archi/04-tools.md`, "Secrets": `POST /v1/action-sets` uses an organization's secrets only,
 /// to list the actions of an MCP server that needs one; no run keeps them). The caller holds
-/// `secrets:use`, and each secret is an organization's it sees (its labels), attached for an
+/// `secrets:use`, and each secret is an organization's it sees (its labels), used for an
 /// MCP server of the request whose `auth` takes a secret. A read is counted as a registration's,
 /// which names no run.
-async fn attached_for_listing(
+async fn secrets_for_listing(
     app: &App,
     caller: &Caller,
     request: &CreateActionSet,
 ) -> Result<BTreeMap<String, Secret>, ApiError> {
     caller.require(Permission::SecretsUse)?;
     let mut problems = Vec::new();
-    let mut attached = Vec::new();
+    let mut named = Vec::new();
     for (server, text) in &request.secrets {
         let secret = SecretRef::parse(text)
             .map_err(|error| ApiError::invalid(format!("secrets.{server}: {error}")))?;
         if secret.scope != SecretScope::Organization {
             return Err(ApiError::invalid(format!(
                 "secrets.{server}: {secret} is a namespace's secret, and a registration has no \
-                 namespace: attach an organization's secret (org/<name>) to list the actions"
+                 namespace: use an organization's secret (org/<name>) to list the actions"
             )));
         }
         let takes_secret = request
@@ -480,17 +480,17 @@ async fn attached_for_listing(
             .transpose()?
             .is_some_and(|auth| auth.takes_secret());
         if !takes_secret {
-            problems.push(AttachmentProblem::TakesNone {
+            problems.push(SecretProblem::TakesNone {
                 server: server.clone(),
             });
             continue;
         }
-        attached.push((server.clone(), secret));
+        named.push((server.clone(), secret));
     }
     let today = Day::of(app.now());
     let mut read = BTreeMap::new();
     let reader = SecretReader::Registration;
-    for (server, secret) in attached {
+    for (server, secret) in named {
         let id = SecretId::organization(secret.name.clone());
         let seen = app
             .store
@@ -513,7 +513,7 @@ async fn attached_for_listing(
             Some(value) => {
                 read.insert(server, value);
             }
-            None => problems.push(AttachmentProblem::Unknown { server, secret }),
+            None => problems.push(SecretProblem::Unknown { server, secret }),
         }
     }
     if problems.is_empty() {
@@ -529,17 +529,14 @@ async fn attached_for_listing(
             today,
         )
         .await?;
-    let mut attachable: Vec<SecretRef> = listed.iter().map(|meta| meta.id.to_ref()).collect();
-    attachable.truncate(rewind_engine::attachments::MAX_ATTACHABLE);
-    let refused = RefusedAttachments {
-        problems,
-        attachable,
-    };
+    let mut usable: Vec<SecretRef> = listed.iter().map(|meta| meta.id.to_ref()).collect();
+    usable.truncate(rewind_engine::secrets::MAX_USABLE);
+    let refused = RefusedSecrets { problems, usable };
     Err(ApiError::secret_required(refused.to_string(), &refused))
 }
 
 /// How the listing of a server's actions authenticates at registration (`archi/04-tools.md`,
-/// "Authenticating calls"): the organization's secret attached for it, if any; or a JWT signed
+/// "Authenticating calls"): the organization's secret used for it, if any; or a JWT signed
 /// with the tenant's key, made with the first action set that needs it, without the claims of a
 /// call (`iss`, `aud`, `jti`, `htm`, `htu`, `body`, `iat`, `exp`).
 async fn listing_auth(

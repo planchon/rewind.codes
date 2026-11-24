@@ -51,7 +51,7 @@ pub(super) async fn create(
 ) -> Result<Response, ApiError> {
     caller.require(Permission::ActionsWrite)?;
     let action_set = action_sets::parse_digest(&request.action_set)?;
-    let secrets = super::runs::attachments(&request.secrets)?;
+    let secrets = super::runs::server_secrets(&request.secrets)?;
     let schemas = WorkflowSchemas {
         input: request.input,
         output: request.output,
@@ -118,7 +118,7 @@ pub(super) async fn create(
                 schemas,
                 labels: caller.labels.clone(),
                 secrets,
-                attach: super::runs::attach_rights(&caller),
+                secret_rights: super::runs::secret_rights(&caller),
                 declarations: WorkflowDeclarations {
                     signals: generated.signals,
                     entry: generated.entry,

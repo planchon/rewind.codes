@@ -1,5 +1,5 @@
 //! The checks of the run plane that read the control plane: the bounds of a namespace, the
-//! signals a run of a workflow takes, the secrets a workflow version attaches
+//! signals a run of a workflow takes, the secrets a workflow version uses
 //! (`archi/03-execution.md`, "Starting a run", "Workflows across runs"; `archi/04-tools.md`,
 //! "Secrets"; `archi/06-storage-and-scale.md`, "Quotas"). The edge and the call executor share
 //! them.
@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use rewind_core::{JsonValue, Workflow, is_reserved_signal};
 
-use crate::attachments::{self, AttachRights, AttachmentCheck, RefusedAttachments};
 use crate::plane::NodeConfig;
 use crate::ports::{
     CatalogStore, NamespaceName, RunHead, SecretError, SecretStore, Tenant, TenantId,
     limits as namespace_limits,
 };
 use crate::schema::Validator;
+use crate::secrets::{self, RefusedSecrets, SecretCheck, SecretRights};
 use crate::start::NamespaceBounds;
 use crate::workflows::{SignalRefused, refused_message};
 
@@ -148,24 +148,24 @@ fn declared(
 }
 
 /// Refuses a run of a version whose `ns/` secrets do not exist in the run's namespace. The
-/// version's attachments are not checked against anyone's rights: they were when it was saved.
-pub(crate) async fn version_attachments<S: SecretStore>(
+/// version's secrets are not checked against anyone's rights: they were when it was saved.
+pub(crate) async fn version_secrets<S: SecretStore>(
     secrets: &S,
     now: rewind_core::Timestamp,
     tenant: &TenantId,
     namespace: &NamespaceName,
     workflow: &Workflow,
-) -> Result<Result<(), RefusedAttachments>, SecretError> {
+) -> Result<Result<(), RefusedSecrets>, SecretError> {
     if workflow.secrets().is_empty() {
         return Ok(Ok(()));
     }
-    let check = AttachmentCheck {
+    let check = SecretCheck {
         tenant,
         namespace: Some(namespace),
         action_set: &rewind_core::ActionSet::empty(),
         imports: None,
-        attachments: workflow.secrets(),
-        rights: &AttachRights::Version,
+        secrets: workflow.secrets(),
+        rights: &SecretRights::Version,
     };
-    attachments::check(secrets, now, check).await
+    secrets::check(secrets, now, check).await
 }

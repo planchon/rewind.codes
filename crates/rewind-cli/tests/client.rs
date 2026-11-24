@@ -595,7 +595,7 @@ async fn run_starts_a_run_and_waits_for_it() {
     assert_eq!(
         start.body["secrets"],
         json!({ "github": "ns/github", "zendesk": "org/zendesk" }),
-        "--secret attaches by server, names only"
+        "--secret names a secret by server, names only"
     );
     // The start answers at once; the wait is one request, which the server holds.
     assert_eq!(start.body.get("wait"), None);

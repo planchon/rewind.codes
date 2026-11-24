@@ -380,7 +380,7 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
                 schemas,
                 labels: world.labels.clone(),
                 secrets: Default::default(),
-                attach: rewind_engine::attachments::AttachRights::Organization {
+                secret_rights: rewind_engine::secrets::SecretRights::Organization {
                     labels: Default::default(),
                 },
                 declarations: WorkflowDeclarations {

@@ -224,7 +224,7 @@ fn bearer_server(url: &str) -> McpServer {
     server
 }
 
-/// The secret a run attached for a `bearer_server`.
+/// The secret a run uses for a `bearer_server`.
 fn bearer(token: &str) -> CallAuth {
     CallAuth::Secret {
         value: Secret::new(token),
@@ -510,7 +510,7 @@ async fn headers_reach_the_server_and_a_401_parks(challenge: bool) {
     }
 }
 
-/// The attached secret goes into the header of the server's `auth`, with its format and
+/// The secret used goes into the header of the server's `auth`, with its format and
 /// encoding, on every request of the session.
 async fn a_secret_goes_into_its_header() {
     let auth = Auth::default();
@@ -687,7 +687,7 @@ async fn signed_sessions_sign_every_request() {
     assert_eq!(parked.kind, ParkKind::CredentialsRefused);
 }
 
-/// A stdio server gets the attached secret in the variable its `auth` names, and nothing of the
+/// A stdio server gets the secret used in the variable its `auth` names, and nothing of the
 /// dispatcher's own environment.
 async fn a_stdio_server_gets_its_secret_in_its_variable() {
     let dispatcher = McpDispatcher::default();

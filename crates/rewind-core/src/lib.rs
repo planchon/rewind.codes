@@ -7,7 +7,7 @@
 //! - [`Code`] and [`ActionSet`]: the immutable, content-addressed inputs of a run. The action set
 //!   is pinned: its servers and APIs with how each authenticates ([`ActionAuth`]), and for each
 //!   action its route, schemas and policy.
-//! - [`SecretRef`] and [`Attachments`]: the secrets a run or a workflow version attaches, by
+//! - [`SecretRef`] and [`ServerSecrets`]: the secrets a run or a workflow version uses, by
 //!   name, never by value (`archi/04-tools.md`, "Secrets").
 //! - [`RunExport`]: a run's history with its code and action set, replayable on its own.
 //! - [`Cassette`]: the handlers recorded from a run, derived from its history.
@@ -70,9 +70,9 @@ pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
 pub use run_export::{RunExport, RunExportError};
 pub use secret::{
-    ActionAuth, Attachments, InvalidSecretName, InvalidSecretRef, MAX_SECRET_VALUE_BYTES,
-    RESERVED_HEADERS, SECRET_PLACEHOLDER, SecretEncoding, SecretName, SecretPlacement, SecretRef,
-    SecretScope,
+    ActionAuth, InvalidSecretName, InvalidSecretRef, MAX_SECRET_VALUE_BYTES, RESERVED_HEADERS,
+    SECRET_PLACEHOLDER, SecretEncoding, SecretName, SecretPlacement, SecretRef, SecretScope,
+    ServerSecrets,
 };
 pub use shape::{Field, Shape};
 pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};

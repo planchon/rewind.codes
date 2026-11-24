@@ -9,11 +9,10 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionSet, Attachments, Code, Command, Completion, Digest, Event, HistoryEvent, JsonValue,
-    Lifecycle, RunMode, RunStatus, Seq, WorkflowSchemas, end_signal_name, ended_run,
+    ActionSet, Code, Command, Completion, Digest, Event, HistoryEvent, JsonValue, Lifecycle,
+    RunMode, RunStatus, Seq, ServerSecrets, WorkflowSchemas, end_signal_name, ended_run,
 };
 use rewind_engine::adapters::StaticTypeChecker;
-use rewind_engine::attachments::AttachRights;
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
@@ -21,6 +20,7 @@ use rewind_engine::ports::{
     NamespaceName, RunMetadata, RunRef, Severity, StartedBy, StoredWorkflow, TenantId,
     WorkflowDeclarations,
 };
+use rewind_engine::secrets::SecretRights;
 use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{
     ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun, StartWorkflow,
@@ -221,8 +221,8 @@ fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
         action_set: child_action_set().digest(),
         schemas,
         labels: BTreeMap::new(),
-        secrets: Attachments::new(),
-        attach: AttachRights::NamespaceOnly,
+        secrets: ServerSecrets::new(),
+        secret_rights: SecretRights::NamespaceOnly,
         declarations: WorkflowDeclarations::default(),
         suite: SuiteChanges::default(),
     }
@@ -624,7 +624,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
         "{failed:?}"
     );
 
-    // A version saved without the scope's labels is not started from a scoped run: it may attach
+    // A version saved without the scope's labels is not started from a scoped run: it may use
     // the organization's secrets of other labels.
     let mut scoped = StartRun::new(Code::new("starter"), action_set.clone(), json!({}));
     scoped.metadata.scope = scope.clone();

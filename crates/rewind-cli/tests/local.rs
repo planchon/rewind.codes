@@ -597,7 +597,7 @@ async fn the_corpus_runs_through_rewind_test() {
             "red/namespace_secret_never_falls_back",
             "red/secret_for_a_server_taking_none",
             "red/secret_missing_at_start",
-            "red/secret_not_yours_to_attach",
+            "red/secret_not_yours_to_use",
             "red/signal_url_without_the_built_in",
             "red/too_many_commands",
             "red/ttl_too_long",

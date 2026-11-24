@@ -52,7 +52,7 @@ pub struct Call {
 pub enum CallAuth {
     /// The server's `auth` is none, or the call has no server (built-ins, handlers).
     None,
-    /// The secret the run attached for the server, read for this delivery, and where it goes.
+    /// The secret the run uses for the server, read for this delivery, and where it goes.
     Secret {
         value: Secret,
         placement: SecretPlacement,
@@ -135,8 +135,8 @@ pub enum Dispatched {
 /// their tasks are handed to the SDK workers' streams.
 ///
 /// `dispatch(call, auth)`: `auth` is what the engine resolved from the server's `auth`: nothing,
-/// the attached secret's value, or the tenant's signing key. The engine parks a call itself
-/// (`secret_missing`) when the secret the run attached no longer exists, before anything is
+/// the secret's value, or the tenant's signing key. The engine parks a call itself
+/// (`secret_missing`) when the secret the run uses no longer exists, before anything is
 /// sent. The dispatcher never writes to the history, and `auth` goes into the transport and
 /// nowhere else.
 pub trait ActionDispatcher: Send + Sync {

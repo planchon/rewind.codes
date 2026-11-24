@@ -1,5 +1,5 @@
 //! Runs: start, list, state, transcript, events, signals, cancellation, forks, export, quarantine,
-//! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
+//! the secrets they use and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 //! Each goes through the edge to the owner of the run's partition.
 
 use std::sync::Arc;
@@ -16,10 +16,10 @@ use rewind_api::runs::{
     CancelRun, ExportAs, ExportQuery, ForkRun, GetRunQuery, Run, RunFilter, RunPage,
     SignalAccepted, StartRun, Transcript,
 };
-use rewind_core::{Attachments, Code, Matching, RunHandle, RunMode, SecretRef, canonical_json};
-use rewind_engine::attachments::AttachRights;
+use rewind_core::{Code, Matching, RunHandle, RunMode, SecretRef, ServerSecrets, canonical_json};
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{Enqueued, Page, RunMetadata, SCAN_BUDGET, TraceContext};
+use rewind_engine::secrets::SecretRights;
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -43,7 +43,7 @@ pub(super) async fn start(
     let labels = caller.within(request.labels.0)?;
     let trace_context = trace_context(request.traceparent, request.tracestate)?;
     let input = request.input;
-    let secrets = attachments(&request.secrets)?;
+    let secrets = server_secrets(&request.secrets)?;
     let metadata = RunMetadata {
         labels,
         trace_context,
@@ -57,7 +57,7 @@ pub(super) async fn start(
         Some(reference) => {
             if !request.secrets.is_empty() {
                 return Err(ApiError::invalid(
-                    "secrets: a run of a workflow reads the secrets its version attaches; give \
+                    "secrets: a run of a workflow reads the secrets its version uses; give \
                      none",
                 ));
             }
@@ -100,7 +100,7 @@ pub(super) async fn start(
                 ttl: request.ttl.map(|ttl| ttl.get()),
                 metadata,
                 idempotency_key: key,
-                attach: attach_rights(&caller),
+                secret_rights: secret_rights(&caller),
             };
             if request.check == Some(false) {
                 app.edge.start_run(&mut gateway, start).await?
@@ -415,8 +415,8 @@ pub(super) async fn fork(
         labels,
         trace_context: trace_context(request.traceparent, request.tracestate)?,
         idempotency_key: key,
-        secrets: request.secrets.as_ref().map(attachments).transpose()?,
-        attach: attach_rights(&caller),
+        secrets: request.secrets.as_ref().map(server_secrets).transpose()?,
+        secret_rights: secret_rights(&caller),
     };
     let mut gateway = app.gateway();
     let created = if request.check == Some(false) {
@@ -519,10 +519,10 @@ fn not_quarantined(id: &str) -> ApiError {
     )
 }
 
-/// The attachments of a request (`org/<name>`, `ns/<name>`, by server or API), read.
-pub(crate) fn attachments(
-    secrets: &rewind_api::secrets::Attachments,
-) -> Result<Attachments, ApiError> {
+/// The secrets of a request (`org/<name>`, `ns/<name>`, by server or API), read.
+pub(crate) fn server_secrets(
+    secrets: &rewind_api::secrets::ServerSecrets,
+) -> Result<ServerSecrets, ApiError> {
     secrets
         .iter()
         .map(|(server, secret)| {
@@ -533,15 +533,15 @@ pub(crate) fn attachments(
         .collect()
 }
 
-/// What the caller may attach (`archi/06-storage-and-scale.md`, "What the caller may do"): its
+/// What the caller may use (`archi/06-storage-and-scale.md`, "What the caller may do"): its
 /// namespace's secrets always; the organization's carrying its labels with `secrets:use`.
-pub(crate) fn attach_rights(caller: &Caller) -> AttachRights {
+pub(crate) fn secret_rights(caller: &Caller) -> SecretRights {
     if caller.require(Permission::SecretsUse).is_ok() {
-        AttachRights::Organization {
+        SecretRights::Organization {
             labels: caller.labels.clone(),
         }
     } else {
-        AttachRights::NamespaceOnly
+        SecretRights::NamespaceOnly
     }
 }
 

@@ -99,7 +99,7 @@ fn trace_context() -> TraceContext {
 }
 
 fn metadata() -> RunMetadata {
-    let mut secrets = rewind_core::Attachments::new();
+    let mut secrets = rewind_core::ServerSecrets::new();
     secrets.insert("github", SecretRef::parse("ns/github").unwrap());
     RunMetadata {
         labels: labels(),

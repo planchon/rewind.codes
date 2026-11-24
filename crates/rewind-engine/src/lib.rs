@@ -22,7 +22,7 @@
 //! - [`projector`]: what committed events project (a run's summary, its webhooks);
 //!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
 //!   signatures and fingerprints that group failed, cancelled and aborted runs.
-//! - [`attachments`]: the secrets a run attaches, and who may attach them.
+//! - [`secrets`]: the secrets a run uses, and who may use them.
 //! - [`quotas`]: the alerts of the quotas the tenant actors keep.
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
 //! - [`test`]: test runs: the dispatcher that answers from a test's rules, handlers,
@@ -50,7 +50,6 @@
 #![forbid(unsafe_code)]
 
 pub mod adapters;
-pub mod attachments;
 mod batch;
 mod cache;
 mod checks;
@@ -73,6 +72,7 @@ pub mod quotas;
 pub mod replay;
 pub mod router;
 pub mod schema;
+pub mod secrets;
 mod start;
 pub mod suites;
 mod tasks;

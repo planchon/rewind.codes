@@ -4,7 +4,7 @@
 //!
 //! 1. The request is built from the args ([`crate::request`]), with `traceparent` and
 //!    `tracestate`, `Idempotency-Key: {run_id}/{seq}` when the operation declares it, and the
-//!    authentication the engine resolved: the attached secret in its header, or a JWT signed
+//!    authentication the engine resolved: the secret used in its header, or a JWT signed
 //!    with the tenant's key for this request (`archi/04-tools.md`, "Signed calls").
 //! 2. It goes through the egress checks of `rewind-outbound`: where [`ApiConfig::egress`] lets
 //!    it go, a redirect followed only within the API's origin with a 307 or a 308, up to 5

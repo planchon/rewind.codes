@@ -80,7 +80,7 @@ impl RulesDispatcher {
     }
 }
 
-/// The calls no source answered, shared between a [`MockDispatcher`] and whoever reads them
+/// The calls no source answered, shared between a [`WorldDispatcher`] and whoever reads them
 /// once the run is over: each once, in the order they came, as `action({…})`.
 #[derive(Debug, Clone, Default)]
 pub struct UnansweredCalls(Arc<Mutex<Vec<UnansweredCall>>>);

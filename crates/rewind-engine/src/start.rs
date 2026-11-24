@@ -3,17 +3,17 @@
 //!
 //! The edge checks a start before it asks the owner of the run's partition
 //! ([`Edge::start_run`](crate::edge::Edge::start_run)): the namespace, the code, the TTL, the
-//! input, the attachments, the type-check; the owner applies the start key and the admission.
+//! input, the secrets, the type-check; the owner applies the start key and the admission.
 
 use std::time::Duration;
 
 use rewind_core::{ActionSet, Code, JsonValue, RunMode};
 
-use crate::attachments::{AttachRights, RefusedAttachments};
 use crate::ports::{
     ActionDeclarations, CheckerError, Diagnostic, InvalidCode, NamespaceName, QuotaExceeded,
     RunMetadata, SecretError, Severity, StoreError, TenantId, TypeChecker,
 };
+use crate::secrets::{RefusedSecrets, SecretRights};
 use crate::text::{self, NulCharacter};
 
 /// A request to start a run.
@@ -30,18 +30,18 @@ pub struct StartRun {
     pub mode: RunMode,
     /// The run's TTL; the node's default TTL when `None`, bounded by its namespace's.
     pub ttl: Option<Duration>,
-    /// Its `secrets` are the request's attachments (`archi/04-tools.md`, "Secrets"), checked
-    /// against the action set, the secrets that exist and `attach`.
+    /// Its `secrets` are the request's secrets (`archi/04-tools.md`, "Secrets"), checked
+    /// against the action set, the secrets that exist and `use`.
     pub metadata: RunMetadata,
     /// A retried request with the same key returns the same run instead of starting another.
     pub idempotency_key: Option<String>,
-    /// What the caller may attach.
-    pub attach: AttachRights,
+    /// What the caller may use.
+    pub secret_rights: SecretRights,
 }
 
 impl StartRun {
     /// A live run of the tenant `local`, in its namespace `local`, with no declarations, TTL,
-    /// metadata, idempotency key nor attachment.
+    /// metadata, idempotency key nor secret.
     pub fn new(code: Code, action_set: ActionSet, input: JsonValue) -> Self {
         Self {
             tenant: TenantId::local(),
@@ -55,7 +55,7 @@ impl StartRun {
             ttl: None,
             metadata: RunMetadata::default(),
             idempotency_key: None,
-            attach: AttachRights::NamespaceOnly,
+            secret_rights: SecretRights::NamespaceOnly,
         }
     }
 }
@@ -96,11 +96,11 @@ pub enum StartError {
     /// No such workflow version in the tenant.
     #[error("workflow version {0} not found")]
     WorkflowNotFound(String),
-    /// An attachment is missing, takes no secret, names a secret that does not exist or one the
-    /// caller may not attach (`archi/04-tools.md`, "Secrets"): 422 `secret-required`, whose
-    /// message lists the secrets the caller may attach instead.
+    /// A secret is missing, takes no secret, names a secret that does not exist or one the
+    /// caller may not use (`archi/04-tools.md`, "Secrets"): 422 `secret-required`, whose
+    /// message lists the secrets the caller may use instead.
     #[error("{0}")]
-    SecretRequired(RefusedAttachments),
+    SecretRequired(RefusedSecrets),
     /// The input does not match the workflow's input schema.
     #[error("{0}")]
     InvalidInput(String),

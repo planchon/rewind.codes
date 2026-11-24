@@ -1178,7 +1178,7 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
         "a run given is checked for every key"
     );
 
-    // Who writes and attaches which secrets is the engine-server workstream's
+    // Who writes and uses which secrets is the engine-server workstream's
     // (`archi/09-roadmap.md`): its tests come with it.
     let _ = (&harness, &theirs);
     server.stop().await;

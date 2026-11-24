@@ -1,4 +1,4 @@
-//! Runs: start with the secrets they attach, state, list, transcript, signals, cancellation, forks,
+//! Runs: start with the secrets they use, state, list, transcript, signals, cancellation, forks,
 //! run export, quarantine, deletion (`archi/01-product.md`, `archi/03-execution.md`).
 //!
 //! The events and the event stream of a run are in [`crate::events`].
@@ -17,7 +17,7 @@ use crate::common::{
 };
 use crate::namespaces::NamespaceName;
 pub use crate::query::WaitKind;
-use crate::secrets::Attachments;
+use crate::secrets::ServerSecrets;
 use crate::workflows::{RunWorkflow, StartedBy};
 
 /// `POST /v1/runs`: starts a run. The code is compiled, checked and type-checked first; a
@@ -80,8 +80,8 @@ pub struct StartRun {
     /// Required for each server the code imports whose `auth` takes a secret; checked against
     /// the caller's rights (`secret-required`). A run of a `workflow` gives none: its version's
     /// are read.
-    #[serde(default, skip_serializing_if = "Attachments::is_empty")]
-    pub secrets: Attachments,
+    #[serde(default, skip_serializing_if = "ServerSecrets::is_empty")]
+    pub secrets: ServerSecrets,
 }
 
 impl StartRun {
@@ -97,7 +97,7 @@ impl StartRun {
             tracestate: None,
             ttl: None,
             check: None,
-            secrets: Attachments::new(),
+            secrets: ServerSecrets::new(),
         }
     }
 }
@@ -136,10 +136,10 @@ pub struct Run {
     pub epoch: u32,
     pub mode: RunMode,
     pub labels: Labels,
-    /// The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):
+    /// The secrets it uses, named at start, by MCP server or API (`org/<name>`, `ns/<name>`):
     /// names, never values.
-    #[serde(default, skip_serializing_if = "Attachments::is_empty")]
-    pub secrets: Attachments,
+    #[serde(default, skip_serializing_if = "ServerSecrets::is_empty")]
+    pub secrets: ServerSecrets,
     /// The OpenTelemetry trace the run belongs to: the caller's if it gave a `traceparent`,
     /// else derived from the run id. 32 hex digits.
     pub trace_id: String,
@@ -781,10 +781,10 @@ pub struct ForkRun {
     /// Type-check the corrected code first. `true` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<bool>,
-    /// The fork's attachments, as `POST /v1/runs` takes them. The source's when absent. Either
+    /// The fork's secrets, as `POST /v1/runs` takes them. The source's when absent. Either
     /// way they are checked against the caller: the code is new code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secrets: Option<Attachments>,
+    pub secrets: Option<ServerSecrets>,
 }
 
 impl ForkRun {

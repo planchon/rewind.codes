@@ -680,7 +680,7 @@ impl Api for World {
             ));
         }
         if !start.secrets.is_empty() {
-            return Err(invalid("the evals' world attaches no secrets"));
+            return Err(invalid("the evals' world uses no secrets"));
         }
         let labels = self.within(start.labels.0.clone())?;
         let stored = self.stored_action_set(start.action_set.as_deref()).await?;
@@ -1154,7 +1154,7 @@ impl Api for World {
                     schemas,
                     labels: self.labels.clone(),
                     secrets: Default::default(),
-                    attach: rewind_engine::attachments::AttachRights::Organization {
+                    secret_rights: rewind_engine::secrets::SecretRights::Organization {
                         labels: Default::default(),
                     },
                     declarations: WorkflowDeclarations {

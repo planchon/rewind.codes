@@ -98,11 +98,11 @@ pub enum ParkKind {
     /// The action's current schema no longer matches the call (`action.schema_changed`). Approved,
     /// the call is sent against the new schema: the task's `schema_change_approved` is set.
     SchemaChanged,
-    /// The server answered 401 to the attached secret or to the signature
+    /// The server answered 401 to the secret used or to the signature
     /// (`secret.expired`, reason `refused`). The secret put again, or the harness's
     /// approval, makes the task ready again.
     CredentialsRefused,
-    /// The secret the run attached for the server no longer exists: parked by the engine before
+    /// The secret the run uses for the server no longer exists: parked by the engine before
     /// anything was sent (`secret.expired`, reason `missing`). The secret put again makes
     /// the task ready again.
     SecretMissing,

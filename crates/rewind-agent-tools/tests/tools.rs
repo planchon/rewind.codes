@@ -670,7 +670,7 @@ async fn a_retry_carries_the_agent_s_labels_and_the_default_wait() {
 }
 
 #[tokio::test]
-async fn list_secrets_lists_what_the_agent_may_attach_never_a_value() {
+async fn list_secrets_lists_what_the_agent_may_use_never_a_value() {
     let (tools, fake) = tools(None);
     let listed = tools
         .handle("list_secrets", &json!({}), &call("c"))
@@ -679,7 +679,7 @@ async fn list_secrets_lists_what_the_agent_may_attach_never_a_value() {
     assert!(!listed.is_error);
     assert_eq!(
         listed.content,
-        "The secrets you may attach, never a value:\n- org/zendesk, the organization's (labels env=prod)\n- org/linear, the organization's\n- ns/github, the end user's in the namespace alice\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {\"github\": \"ns/github\"}."
+        "The secrets you may use, never a value:\n- org/zendesk, the organization's (labels env=prod)\n- org/linear, the organization's\n- ns/github, the end user's in the namespace alice\nName one in `secrets`, by the MCP server or API whose calls need it, such as {\"github\": \"ns/github\"}."
     );
     assert_eq!(
         fake.seen()
@@ -693,11 +693,11 @@ async fn list_secrets_lists_what_the_agent_may_attach_never_a_value() {
 #[tokio::test]
 async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
     let (tools, fake) = tools(Some("ts1"));
-    let attached = json!({ "github": "ns/github", "zendesk": "org/zendesk" });
+    let named = json!({ "github": "ns/github", "zendesk": "org/zendesk" });
     tools
         .handle(
             "run_workflow",
-            &json!({ "code": CODE, "secrets": attached }),
+            &json!({ "code": CODE, "secrets": named }),
             &call("c1"),
         )
         .await
@@ -728,7 +728,7 @@ async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
             .unwrap()
             .body
     };
-    assert_eq!(body("start_run")["secrets"], attached);
+    assert_eq!(body("start_run")["secrets"], named);
     assert_eq!(
         body("fork_run")["secrets"],
         json!({ "github": "org/github" })

@@ -1,5 +1,5 @@
 {
-  "description": "The start attaches the organization's secret, and its caller may attach its namespace's secrets only (no secrets:use): it is refused before any run exists.",
+  "description": "The start names the organization's secret, and its caller may use its namespace's secrets only (no secrets:use): it is refused before any run exists.",
   "live": true,
   "input": {
     "customer": "c-7"
@@ -35,6 +35,6 @@
     }
   },
   "expect": {
-    "start_error": "the secret org/crm attached for crm is not yours to attach"
+    "start_error": "the secret org/crm named for crm is not yours to use"
   }
 }

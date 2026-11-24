@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 use crate::api::{Api, ApiError};
 use crate::definitions::{AGENT_TOOLS, NEEDS_ACTION_SET, ToolDefinition, definition};
 use crate::input::{
-    InputError, Values, optional_attachments, optional_index, optional_replacements,
-    optional_retirements, optional_string, optional_strings, optional_tests, require_object,
+    InputError, Values, optional_index, optional_replacements, optional_retirements,
+    optional_secrets, optional_string, optional_strings, optional_tests, require_object,
     require_string,
 };
 use crate::keys::{idempotency_key, run_key, sha256_hex};
@@ -220,7 +220,7 @@ impl<A: Api> Session<'_, A> {
     pub(crate) async fn run_workflow(&self, input: &Values) -> Handled {
         let code = require_string(input, "code")?;
         let wait = self.wait_of(input.get("wait"))?;
-        let secrets = optional_attachments(input)?;
+        let secrets = optional_secrets(input)?;
         let key = run_key(self.labels, self.call.tool_call_id.as_deref());
         let mut start = StartRun::new(code.clone());
         start.secrets = secrets.unwrap_or_default();
@@ -438,7 +438,7 @@ impl<A: Api> Session<'_, A> {
     pub(crate) async fn retry_run(&self, input: &Values) -> Handled {
         let run_id = require_string(input, "run_id")?;
         let code = require_string(input, "code")?;
-        let secrets = optional_attachments(input)?;
+        let secrets = optional_secrets(input)?;
         let parent = self.scoped_run(&run_id).await?;
         let key = run_key(self.labels, self.call.tool_call_id.as_deref());
         let mut fork = ForkRun::new(code.clone());
@@ -476,7 +476,7 @@ impl<A: Api> Session<'_, A> {
     }
 
     /// `list_secrets`: the organization's secrets the caller sees, and those of `namespace`. A
-    /// list the caller may not read (403) is left out: its key may attach none of them.
+    /// list the caller may not read (403) is left out: its key may use none of them.
     pub(crate) async fn list_secrets(&self, namespace: Option<&str>) -> Handled {
         let readable = |listed: Result<rewind_api::secrets::SecretList, ApiError>| match listed {
             Ok(list) => Ok(list.secrets),
@@ -541,7 +541,7 @@ impl<A: Api> Session<'_, A> {
         let replace = optional_replacements(input)?;
         let retire = optional_retirements(input)?;
         let base = optional_string(input, "base")?;
-        let secrets = optional_attachments(input)?;
+        let secrets = optional_secrets(input)?;
         let action_set = self.needs_action_set("save_workflow")?;
         // The body, as the API reads it.
         let request = CreateWorkflow {

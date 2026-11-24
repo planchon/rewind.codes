@@ -1066,7 +1066,7 @@ impl<P: Plane> Owner<P> {
     // Secrets put again
 
     /// A secret changed: once it is put again, the calls parked by a refusal or a missing
-    /// secret in the runs that attach it are ready again (`archi/04-tools.md`, "Secrets"). A
+    /// secret in the runs that use it are ready again (`archi/04-tools.md`, "Secrets"). A
     /// secret deleted resumes nothing: its calls would park again.
     pub(crate) fn secret_put(&mut self, tenant: TenantId, secret: SecretId) {
         let Some(log) = self.log.clone() else {
@@ -1153,7 +1153,7 @@ impl<P: Plane> Owner<P> {
         }));
     }
 
-    /// Resumes a parked task if its run attaches the secret for the task's server.
+    /// Resumes a parked task if its run uses the secret for the task's server.
     pub(crate) fn resume(&mut self, task: &TaskRef, secret: &SecretId) {
         let Some(slot) = self.slot(task.run.id) else {
             return;
@@ -1168,13 +1168,13 @@ impl<P: Plane> Owner<P> {
             .server()
             .map(str::to_owned)
             .unwrap_or_else(|| record.task.action.clone());
-        let attaches = slot
+        let uses = slot
             .head
             .metadata
             .secrets
             .get(&server)
             .is_some_and(|attached| SecretId::resolve(attached, &slot.head.namespace) == *secret);
-        if !resumable || !attaches {
+        if !resumable || !uses {
             return;
         }
         record.task.state = TaskState::Ready {

@@ -1,7 +1,7 @@
 //! Connections to MCP servers, kept open between calls.
 //!
 //! A connection belongs to one tenant, one server (as pinned: its transport) and one identity
-//! ([`Credentials`]): the secret a run attached is injected into the transport (an HTTP header,
+//! ([`Credentials`]): the secret a run uses is injected into the transport (an HTTP header,
 //! or the environment of a stdio process), and a signed session signs as one tenant's key for
 //! one end user, so another secret, key or end user needs another connection. The pool tells
 //! them apart by an HMAC of the transport and the credentials under a key drawn when the pool is
@@ -62,7 +62,7 @@ pub(crate) const MAX_TOOLS: usize = 10_000;
 pub(crate) enum Credentials {
     /// Nothing: a public server.
     None,
-    /// The attached secret, put where the server's `auth` says.
+    /// The secret used, put where the server's `auth` says.
     Secret {
         placement: SecretPlacement,
         value: Secret,

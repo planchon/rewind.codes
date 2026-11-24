@@ -4,14 +4,14 @@
 //!
 //! The rows are read as they were written: events and inbox items in the stored format v1
 //! (`rewind-format`), payload values in their canonical JSON, digests as their 32 bytes, labels,
-//! scopes and attachments as JSON objects, times in milliseconds. A page of runs is one query for
+//! scopes and secrets as JSON objects, times in milliseconds. A page of runs is one query for
 //! the runs and one per table they hold rows in.
 
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Attachments, Digest, Epoch, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunId,
-    SecretRef, Seq,
+    Digest, Epoch, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunId, SecretRef, Seq,
+    ServerSecrets,
 };
 use rewind_engine::ports::legacy::{
     LegacyError, LegacyHistory, LegacyRun, LegacyRuns, LegacySignalUrl, LegacyTask,
@@ -86,12 +86,12 @@ fn trigger(json: &str) -> Result<Trigger, Error> {
     }
 }
 
-fn attachments(json: &str) -> Result<Attachments, Error> {
+fn server_secrets(json: &str) -> Result<ServerSecrets, Error> {
     decode_labels(json)?
         .into_iter()
         .map(|(server, secret)| {
             let secret = SecretRef::parse(&secret)
-                .map_err(|err| corrupt(format!("attachment of {server:?}: {err}")))?;
+                .map_err(|err| corrupt(format!("secret of {server:?}: {err}")))?;
             Ok((server, secret))
         })
         .collect()
@@ -108,7 +108,7 @@ fn quarantine_kind(name: &str) -> Result<QuarantineKind, Error> {
 fn park_kind(name: &str) -> Result<ParkKind, Error> {
     match name {
         "schema_changed" => Ok(ParkKind::SchemaChanged),
-        // What a 401 parked a task as before runs attached their secrets: the same refusal.
+        // What a 401 parked a task as before runs named the secrets they use: the same refusal.
         "credentials_refused" | "credentials_expired" => Ok(ParkKind::CredentialsRefused),
         "secret_missing" => Ok(ParkKind::SecretMissing),
         other => Err(corrupt(format!("unknown park kind {other:?}"))),
@@ -186,7 +186,7 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
             workflow,
             started_by,
             scope: decode_labels(&row.text(29)?)?,
-            secrets: attachments(&row.text(30)?)?,
+            secrets: server_secrets(&row.text(30)?)?,
         },
         idempotency_key: row.opt_text(19)?,
         created_at: row.ts(20)?,

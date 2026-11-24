@@ -63,7 +63,7 @@ pub(super) async fn secrets(
                 console.print_json(&json!({ "secret": name, "deleted": true }))?;
             } else {
                 console.line(format!(
-                    "secret {name} deleted: the next call of a run that attaches it is parked \
+                    "secret {name} deleted: the next call of a run that uses it is parked \
                      until it is put again"
                 ));
             }
@@ -212,7 +212,7 @@ fn listed(list: &SecretList, namespace: Option<&NamespaceName>) -> String {
 fn used(usage: &SecretUsage) -> String {
     let mut lines = vec![described(&usage.secret)];
     lines.push(format!(
-        "active runs attaching it: {}{}",
+        "active runs using it: {}{}",
         usage.active_total,
         listed_runs(&usage.active_runs)
     ));
@@ -222,9 +222,9 @@ fn used(usage: &SecretUsage) -> String {
         listed_runs(&usage.waiting_runs)
     ));
     if usage.workflows.is_empty() {
-        lines.push("no workflow's latest version attaches it".to_owned());
+        lines.push("no workflow's latest version uses it".to_owned());
     } else {
-        lines.push("workflows whose latest version attaches it:".to_owned());
+        lines.push("workflows whose latest version uses it:".to_owned());
         for workflow in &usage.workflows {
             lines.push(format!(
                 "  {}@{} for {}",

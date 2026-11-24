@@ -147,10 +147,10 @@ pub(crate) enum SecretsCommand {
         #[arg(long = "label", value_name = "KEY=VALUE")]
         labels: Vec<String>,
     },
-    /// Deletes a secret: the next call of a run that attaches it is parked.
+    /// Deletes a secret: the next call of a run that uses it is parked.
     Delete { name: String },
-    /// What reads a secret: the active runs that attach it, those waiting on a call it serves,
-    /// the workflows whose latest version attaches it.
+    /// What reads a secret: the active runs that use it, those waiting on a call it serves,
+    /// the workflows whose latest version uses it.
     Usage { name: String },
 }
 

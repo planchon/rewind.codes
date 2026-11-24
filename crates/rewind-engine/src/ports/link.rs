@@ -286,7 +286,7 @@ pub struct RunView {
     pub started_by: Option<RunHandle>,
 }
 
-/// A start the edge checked (code, TTL, input, attachments, namespace): the owner answers a
+/// A start the edge checked (code, TTL, input, secrets, namespace): the owner answers a
 /// known start key with its run, asks the tenant actor to admit it, then creates it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartAtOwner {

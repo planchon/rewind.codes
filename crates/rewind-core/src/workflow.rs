@@ -8,7 +8,7 @@
 //! ├── schemas                    { input, output, signals: { <name>: schema } }
 //! ├── suite                      base?, tests, retired, replaced: the tests it passed
 //! ├── labels                     the scope it was saved under; {} for a tenant-wide save
-//! └── secrets                    its attachments: { <server>: org/<name> | ns/<name> }
+//! └── secrets                    its secrets: { <server>: org/<name> | ns/<name> }
 //!
 //! PinnedWorkflow (what an action set pins: the interface, without the code)
 //! └── name, version (the Workflow's digest), description?, schemas
@@ -32,7 +32,7 @@ use crate::event::{
 };
 use crate::ids::RunId;
 use crate::payload::Payload;
-use crate::secret::Attachments;
+use crate::secret::ServerSecrets;
 use crate::state::RunOutcome;
 
 /// Signal names starting with this prefix are Rewind's: no one else sends them, and no
@@ -87,10 +87,10 @@ impl WorkflowSchemas {
 /// which the other scopes do not see (`archi/06-storage-and-scale.md`, "Tenancy"). A version
 /// without labels has the document, and so the digest, it had before labels were part of it.
 ///
-/// A version also carries the secrets its runs attach (`archi/04-tools.md`, "Secrets"): saved
+/// A version also carries the secrets its runs use (`archi/04-tools.md`, "Secrets"): saved
 /// with it and checked against the saver's rights, they are part of its document, and a run of
-/// it reads them without the caller's rights being checked again. A version without attachments
-/// has the document it had before attachments were part of it.
+/// it reads them without the caller's rights being checked again. A version without secrets
+/// has the document it had before secrets were part of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workflow {
     name: String,
@@ -100,7 +100,7 @@ pub struct Workflow {
     schemas: WorkflowSchemas,
     suite: Suite,
     labels: BTreeMap<String, String>,
-    secrets: Attachments,
+    secrets: ServerSecrets,
 }
 
 /// The tests a version passed when it was saved, and how they derive from its base's
@@ -274,7 +274,7 @@ impl Workflow {
             schemas,
             suite: Suite::default(),
             labels: BTreeMap::new(),
-            secrets: Attachments::new(),
+            secrets: ServerSecrets::new(),
         })
     }
 
@@ -296,10 +296,10 @@ impl Workflow {
         self
     }
 
-    /// The same version attaching `secrets` to its runs. Another version unless `secrets` is
+    /// The same version giving `secrets` to its runs. Another version unless `secrets` is
     /// empty.
     #[must_use]
-    pub fn with_secrets(mut self, secrets: Attachments) -> Self {
+    pub fn with_secrets(mut self, secrets: ServerSecrets) -> Self {
         self.secrets = secrets;
         self
     }
@@ -312,8 +312,8 @@ impl Workflow {
         self.description.as_deref()
     }
 
-    /// The secrets its runs attach, by server or API name.
-    pub fn secrets(&self) -> &Attachments {
+    /// The secrets its runs use, by server or API name.
+    pub fn secrets(&self) -> &ServerSecrets {
         &self.secrets
     }
 
@@ -569,8 +569,8 @@ impl RunEnd {
         }
     }
 
-    /// What a cassette records for the start of a run that ended so, and what test runs makes
-    /// of it again ([`from_mock`](Self::from_mock)): its output, or a failure that says how it
+    /// What a cassette records for the start of a run that ended so, and what a test run makes
+    /// of it again ([`from_test`](Self::from_test)): its output, or a failure that says how it
     /// ended.
     pub fn to_test(&self) -> ActionOutcome {
         let failure = |message: String| {
@@ -694,9 +694,9 @@ mod tests {
     fn secrets_are_part_of_the_version_only_when_there_are_some() {
         let base = triage();
         assert_eq!(
-            base.clone().with_secrets(Attachments::new()).version(),
+            base.clone().with_secrets(ServerSecrets::new()).version(),
             base.version(),
-            "no attachments: the digest of the document without them"
+            "no secrets: the digest of the document without them"
         );
         let attach = |secret: &str| {
             let secret = crate::SecretRef::parse(secret).unwrap();

@@ -155,7 +155,7 @@ impl Event {
         }
     }
 
-    /// The HTTP view of a history event; see [`Entry::from_core`].
+    /// The HTTP view of a history event; see [`HistoryEvent::from_core`].
     pub fn from_core(
         event: &rewind_core::Event,
         mut payload: impl FnMut(&rewind_core::Payload) -> Payload,

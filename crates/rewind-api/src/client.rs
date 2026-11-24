@@ -1160,7 +1160,7 @@ fn untyped_problem(status: StatusCode, body: &str) -> Problem {
         diagnostics: Vec::new(),
         query: None,
         tests: Vec::new(),
-        attachments: Vec::new(),
+        secrets: Vec::new(),
         quota: None,
     }
 }

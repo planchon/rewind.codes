@@ -38,7 +38,7 @@ pub(super) async fn run(
         start.input = input::json_value("--input", text)?;
     }
     start.labels = input::labels(&args.start.labels)?;
-    start.secrets = input::attachments(&args.start.secrets)?;
+    start.secrets = input::secrets(&args.start.secrets)?;
     start.ttl = args.start.ttl;
     if args.start.no_check {
         start.check = Some(false);
@@ -86,7 +86,7 @@ pub(super) async fn fork(
         fork.labels = Some(input::labels(&args.start.labels)?);
     }
     if !args.start.secrets.is_empty() {
-        fork.secrets = Some(input::attachments(&args.start.secrets)?);
+        fork.secrets = Some(input::secrets(&args.start.secrets)?);
     }
     fork.ttl = args.start.ttl;
     if args.start.no_check {

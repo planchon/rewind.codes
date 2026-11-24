@@ -194,7 +194,7 @@ use crate::webhooks::{WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, Webhook,
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
         (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, and their tokens."),
-        (name = "secrets", description = "Named secrets of the organization and of each namespace, written and never read back, which runs attach when they start; the organization's signing keys and their public JWKS."),
+        (name = "secrets", description = "Named secrets of the organization and of each namespace, written and never read back, which runs use when they start; the organization's signing keys and their public JWKS."),
         (name = "connections", description = "People's connections: the MCP clients, Claude above all, that act for a person in the organizations they opened; and the consent that makes one."),
         (name = "server", description = "The server itself."),
         (name = "auth", description = "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist."),
@@ -576,7 +576,7 @@ mod operations {
     /// (one action per operation), pins their schemas, policies and `auth`, and returns the
     /// action set with its declarations, for the model's prompt, and the API operations it left
     /// out. Content-addressed: registering the same action set again returns it (200). `secrets`
-    /// attaches organization's secrets to list the actions of an MCP server that needs one
+    /// names the organization's secrets used to list the actions of an MCP server that needs one
     /// (`secrets:use`). Requires `actions:write`.
     #[utoipa::path(
         post, path = "/v1/action-sets", tag = "action-sets", operation_id = "createActionSet",
@@ -584,7 +584,7 @@ mod operations {
         responses(
             (status = 201, description = "Registered.", body = ActionSet),
             (status = 200, description = "Already registered.", body = ActionSet),
-            (status = 422, description = "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret used for a listing that does not exist or is not the caller's (`secret-required`).", body = Problem, content_type = "application/problem+json"),
             (status = 502, description = "An MCP server or an OpenAPI document's URL cannot be reached (`action-set-unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -1716,7 +1716,7 @@ mod operations {
     /// Put an organization's secret
     ///
     /// Creates or replaces it, with its labels (a grant limited to labels gives it its own).
-    /// The calls parked by a refusal or a missing secret in the runs that attach it are ready
+    /// The calls parked by a refusal or a missing secret in the runs that use it are ready
     /// again, sent with the same idempotency key. Refused to an end user's token. Requires
     /// `secrets:write`.
     #[utoipa::path(
@@ -1734,7 +1734,7 @@ mod operations {
 
     /// Delete an organization's secret
     ///
-    /// The next call of a run that attaches it is parked (`secret.expired`, reason
+    /// The next call of a run that uses it is parked (`secret.expired`, reason
     /// `missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires
     /// `secrets:write`.
     #[utoipa::path(
@@ -1749,8 +1749,8 @@ mod operations {
 
     /// What reads an organization's secret
     ///
-    /// The active runs that attach it, those of them waiting on a call it serves, the
-    /// workflows whose latest version attaches it, its reads per day and its last read.
+    /// The active runs that use it, those of them waiting on a call it serves, the
+    /// workflows whose latest version uses it, its reads per day and its last read.
     /// Requires `secrets:read`.
     #[utoipa::path(
         get, path = "/v1/secrets/{name}/usage", tag = "secrets", operation_id = "getSecretUsage",
@@ -1775,9 +1775,9 @@ mod operations {
 
     /// Put an end user's secret
     ///
-    /// Creates or replaces the secret `secret` of the namespace, read by its runs that attach
+    /// Creates or replaces the secret `secret` of the namespace, read by its runs that use
     /// `ns/<secret>`; a token puts its own namespace's. It takes no labels. The calls parked by a
-    /// refusal or a missing secret in the namespace's runs that attach it are ready again.
+    /// refusal or a missing secret in the namespace's runs that use it are ready again.
     /// Refused to a grant or a token limited to labels. Requires `secrets:write`.
     #[utoipa::path(
         put, path = "/v1/namespaces/{name}/secrets/{secret}", tag = "secrets", operation_id = "putNamespaceSecret",
@@ -1815,7 +1815,7 @@ mod operations {
     /// What reads an end user's secret
     ///
     /// As `GET /v1/secrets/{name}/usage`, for the namespace's secret: its runs, and the
-    /// workflows whose latest version attaches `ns/<secret>`. Requires `secrets:read`.
+    /// workflows whose latest version uses `ns/<secret>`. Requires `secrets:read`.
     #[utoipa::path(
         get, path = "/v1/namespaces/{name}/secrets/{secret}/usage", tag = "secrets", operation_id = "getNamespaceSecretUsage",
         params(

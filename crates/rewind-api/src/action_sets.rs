@@ -13,7 +13,7 @@ use crate::common::Duration;
 /// `POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy
 /// per action. Registering connects to the MCP servers and lists their actions, reads the APIs'
 /// OpenAPI documents, and pins their schemas. The action set is content-addressed: registering the
-/// same action set twice gives the same id. It holds no secret: a run attaches its secrets when it
+/// same action set twice gives the same id. It holds no secret: a run uses its secrets when it
 /// starts.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -54,7 +54,7 @@ pub struct CreateActionSet {
     /// by server: `{ "github": "org/github" }`. Only `org/` secrets; no run keeps them, and they
     /// are not part of the action set's id. Requires `secrets:use`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub secrets: crate::secrets::Attachments,
+    pub secrets: crate::secrets::ServerSecrets,
     /// The workflows its workflows may start, from `rewind:workflows`: `triage` pins the latest
     /// version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
     /// action set's workflows are checked against them, and start them, for their whole life.
@@ -155,7 +155,7 @@ pub enum Auth {
     /// servers check it (`verifyRewindCall`) and learn the end user from `sub`. HTTP servers
     /// and APIs.
     Rewind {},
-    /// The secret the run attached for the server: in `header` (with `format`, `{secret}`
+    /// The secret the run uses for the server: in `header` (with `format`, `{secret}`
     /// replaced by its value, and `encoding`), or in the variable `env` of a stdio server.
     /// Exactly one of `header` and `env`.
     Secret {

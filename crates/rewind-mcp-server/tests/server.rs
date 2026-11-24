@@ -472,14 +472,14 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
 }
 
 #[tokio::test]
-async fn list_secrets_names_what_a_run_may_attach_in_the_namespace_given() {
+async fn list_secrets_names_what_a_run_may_use_in_the_namespace_given() {
     let (connector, log) = FakeConnector::new(vec![organization("org_1", Some("Acme"), &RUN)]);
     let client = client(connector).await;
     let listed = call(&client, "list_secrets", json!({ "namespace": "alice" })).await;
     assert_eq!(listed.is_error, Some(false));
     assert_eq!(
         text(&listed),
-        "The secrets you may attach, never a value:\n- org/zendesk, the organization's\n- ns/github, the end user's in the namespace alice\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {\"github\": \"ns/github\"}."
+        "The secrets you may use, never a value:\n- org/zendesk, the organization's\n- ns/github, the end user's in the namespace alice\nName one in `secrets`, by the MCP server or API whose calls need it, such as {\"github\": \"ns/github\"}."
     );
     let seen = log.lock().unwrap().clone();
     assert_eq!(

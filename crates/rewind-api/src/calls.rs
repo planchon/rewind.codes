@@ -201,7 +201,7 @@ pub enum CallState {
     /// A harness action's handler will answer later.
     Deferred,
     /// Waits for the harness: the action's schema changed, its server refused the call, or the
-    /// secret the run attached no longer exists.
+    /// secret the run uses no longer exists.
     Parked,
     /// Its outcome is in the run's inbox.
     Done,
@@ -218,7 +218,7 @@ pub enum ParkedReason {
     /// `secret.expired`, reason `refused`): put the secret again, or approve once the
     /// server accepts the key.
     CredentialsRefused,
-    /// The secret the run attached no longer exists (webhook `secret.expired`, reason
+    /// The secret the run uses no longer exists (webhook `secret.expired`, reason
     /// `missing`): put it again.
     SecretMissing,
 }

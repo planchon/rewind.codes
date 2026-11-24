@@ -3,7 +3,7 @@
 //!
 //! A secret is a named value of the organization (`org/<name>`) or of a namespace (`ns/<name>`),
 //! written and never read back: every answer gives its metadata only. A run reads the secrets
-//! it attached when it started, by server or API (`secrets` of `POST /v1/runs`, of a fork, of a
+//! it named when it started, by server or API (`secrets` of `POST /v1/runs`, of a fork, of a
 //! workflow version). The organization's signing key signs the calls of the servers whose `auth`
 //! is `rewind`; its public keys are served at `/organizations/{organization}/jwks.json`.
 
@@ -16,22 +16,22 @@ use utoipa::ToSchema;
 use crate::common::{Labels, Timestamp};
 use crate::namespaces::NamespaceName;
 
-/// A run's, a fork's or a workflow version's attachments: for each MCP server or API whose
+/// A run's, a fork's or a workflow version's secrets: for each MCP server or API whose
 /// `auth` takes a secret, the secret it reads, `org/<name>` (the organization's) or `ns/<name>`
 /// (the run's own namespace's): `{ "github": "ns/github", "zendesk": "org/zendesk" }`. Names
 /// only, never a value.
-pub type Attachments = BTreeMap<String, String>;
+pub type ServerSecrets = BTreeMap<String, String>;
 
 /// `PUT /v1/secrets/{name}` and `PUT /v1/namespaces/{name}/secrets/{secret}`: creates or
 /// replaces a secret. Replacing it makes ready the calls a refusal or a missing secret parked in
-/// the runs that attach it, sent again with the same idempotency key.
+/// the runs that use it, sent again with the same idempotency key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({ "value": "ghp_…", "labels": { "env": "prod" } }))]
 pub struct PutSecret {
     /// The value: a string of at most 16 KiB. Written, never read back.
     pub value: String,
-    /// An organization's secret's labels: a grant limited to labels sees, writes and attaches
+    /// An organization's secret's labels: a grant limited to labels sees, writes and uses
     /// only the secrets carrying them, and the secrets it writes take them. A namespace's secret
     /// takes none (`invalid-request`).
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
@@ -52,9 +52,9 @@ impl fmt::Debug for PutSecret {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretScope {
-    /// The organization's, shared by every end user: attached as `org/<name>`.
+    /// The organization's, shared by every end user: named as `org/<name>`.
     Org,
-    /// A namespace's, the end user's: attached as `ns/<name>` by the runs of that namespace.
+    /// A namespace's, the end user's: named as `ns/<name>` by the runs of that namespace.
     Ns,
 }
 
@@ -68,7 +68,7 @@ pub struct Secret {
     /// A namespace's secret's namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<NamespaceName>,
-    /// How an attachment names it: `org/zendesk`, `ns/github`.
+    /// How a reference names it: `org/zendesk`, `ns/github`.
     pub reference: String,
     /// An organization's secret's labels; none for a namespace's.
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
@@ -97,7 +97,7 @@ pub struct DailyReads {
 }
 
 /// The last read of a secret: by which run, of which namespace, when. An action set's registration
-/// reads an organization's secret to list the actions of the MCP server it is attached for, before
+/// reads an organization's secret to list the actions of the MCP server it is used for, before
 /// any run exists: such a read names neither run nor namespace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -127,27 +127,27 @@ pub struct SecretList {
 pub struct SecretUsage {
     /// The secret, with its reads and its last read.
     pub secret: Secret,
-    /// The active runs that attach it, oldest first, at most 100.
+    /// The active runs that use it, oldest first, at most 100.
     pub active_runs: Vec<String>,
-    /// How many active runs attach it.
+    /// How many active runs use it.
     pub active_total: u64,
     /// Those of them with a call to a server it serves that is parked or not yet sent, at most
     /// 100.
     pub waiting_runs: Vec<String>,
     pub waiting_total: u64,
-    /// The workflows whose latest version attaches it. A version attaching `ns/<name>` counts
+    /// The workflows whose latest version uses it. A version using `ns/<name>` counts
     /// for the secret `<name>` of every namespace.
-    pub workflows: Vec<WorkflowAttaching>,
+    pub workflows: Vec<WorkflowSecrets>,
 }
 
-/// The latest version of a workflow, which attaches a secret.
+/// The latest version of a workflow, which uses a secret.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkflowAttaching {
+pub struct WorkflowSecrets {
     pub name: String,
     /// The version's digest (SHA-256, lowercase hex).
     pub digest: String,
-    /// The servers and APIs it attaches the secret for.
+    /// The servers and APIs it uses the secret for.
     pub servers: Vec<String>,
 }
 
@@ -215,34 +215,34 @@ impl Jwk {
     }
 }
 
-/// Why an attachment refused a start, a fork or a save (`secret-required`).
+/// Why the secrets of a start, a fork or a save refused it (`secret-required`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum AttachmentProblemKind {
-    /// The code imports the server, whose `auth` takes a secret, and nothing is attached.
+pub enum SecretProblemKind {
+    /// The code imports the server, whose `auth` takes a secret, and none is named.
     Missing,
     /// The server or API takes no secret, or the action set has none of that name.
     TakesNone,
     /// The secret does not exist (an `ns/` secret in the run's namespace).
     Unknown,
-    /// The caller may not attach it.
+    /// The caller may not use it.
     Forbidden,
 }
 
-/// One attachment that refused a start, a fork or a save, with what the caller may attach for
+/// One server whose secret refused a start, a fork or a save, with what the caller may use for
 /// that server instead.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct AttachmentProblem {
+pub struct SecretProblem {
     /// The MCP server or API.
     pub server: String,
-    pub problem: AttachmentProblemKind,
-    /// The secret attached, as the request named it.
+    pub problem: SecretProblemKind,
+    /// The secret used, as the request named it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
-    /// The secrets the caller may attach for that server, `org/<name>` and `ns/<name>`.
+    /// The secrets the caller may use for that server, `org/<name>` and `ns/<name>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachable: Vec<String>,
+    pub usable: Vec<String>,
 }
 
 #[cfg(test)]

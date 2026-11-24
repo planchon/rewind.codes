@@ -38,16 +38,16 @@
 //! "action_set":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
 //! `labels`, the scope of a grant limited to labels it was saved under, is omitted when empty:
 //! a version saved tenant-wide keeps the document it had before versions carried labels. So is
-//! `secrets`, its attachments (`{"github":"ns/github","zendesk":"org/zendesk"}`): a version
-//! that attaches none keeps the document it had before versions carried them.
+//! `secrets`, its secrets (`{"github":"ns/github","zendesk":"org/zendesk"}`): a version
+//! that uses none keeps the document it had before versions carried them.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
     Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, ApiOperation, ApiParameter,
-    Attachments, Builtin, Digest, HttpMethod, McpServer, McpTransport, ParameterLocation,
-    PinnedWorkflow, ReplacedTest, RetiredTest, SecretEncoding, SecretPlacement, SecretRef, Suite,
+    Builtin, Digest, HttpMethod, McpServer, McpTransport, ParameterLocation, PinnedWorkflow,
+    ReplacedTest, RetiredTest, SecretEncoding, SecretPlacement, SecretRef, ServerSecrets, Suite,
     SuiteTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
@@ -418,10 +418,10 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
         .into_iter()
         .map(|(server, secret)| {
             let secret = SecretRef::parse(&secret)
-                .map_err(|err| format!("the secret attached for {server:?}: {err}"))?;
+                .map_err(|err| format!("the secret used for {server:?}: {err}"))?;
             Ok((server, secret))
         })
-        .collect::<Result<Attachments, String>>()?;
+        .collect::<Result<ServerSecrets, String>>()?;
     let suite = Suite {
         base: dto
             .base

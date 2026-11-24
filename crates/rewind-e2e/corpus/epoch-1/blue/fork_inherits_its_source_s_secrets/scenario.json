@@ -1,5 +1,5 @@
 {
-  "description": "A fork attaches its source's secrets when its request gives none: the corrected code's new call reads the namespace's crm, as the source's did.",
+  "description": "A fork uses its source's secrets when its request names none: the corrected code's new call reads the namespace's crm, as the source's did.",
   "live": true,
   "input": {
     "customer": "c-7"

@@ -1,10 +1,10 @@
-//! The secrets a run attaches, and who may attach them (`archi/04-tools.md`, "Secrets":
-//! attaching).
+//! The secrets a run uses, and who may use them (`archi/04-tools.md`, "Secrets":
+//! using).
 //!
 //! ```text
-//! POST /v1/runs (code)        the request's    checked against the caller   AttachRights::Caller
+//! POST /v1/runs (code)        the request's    checked against the caller   SecretRights::Caller
 //! POST /v1/runs/{id}/fork       the source's, or the request's: against the caller
-//! POST /v1/runs (workflow),     the version's    only that its ns/ secrets     AttachRights::Version
+//! POST /v1/runs (workflow),     the version's    only that its ns/ secrets     SecretRights::Version
 //! workflows.<name>.start                         exist in the run's namespace
 //! POST /v1/workflows            the request's    against the saver; ns/ by name only
 //! ```
@@ -15,102 +15,99 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use rewind_core::{ActionAuth, ActionSet, Attachments, SecretRef, SecretScope, Timestamp};
+use rewind_core::{ActionAuth, ActionSet, SecretRef, SecretScope, ServerSecrets, Timestamp};
 
 use crate::ports::{
     Day, NamespaceName, SecretError, SecretId, SecretNamespace, SecretStore, TenantId,
 };
 
-/// The most secrets a refusal lists as attachable.
-pub const MAX_ATTACHABLE: usize = 100;
+/// The most secrets a refusal lists as usable.
+pub const MAX_USABLE: usize = 100;
 
-/// What the caller may attach (`archi/06-storage-and-scale.md`, "What the caller may do").
+/// What the caller may use (`archi/06-storage-and-scale.md`, "What the caller may do").
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum AttachRights {
-    /// A namespace's secrets only, which whoever starts a run in that namespace attaches: a
+pub enum SecretRights {
+    /// A namespace's secrets only, which whoever starts a run in that namespace uses: a
     /// caller without `secrets:use`.
     #[default]
     NamespaceOnly,
     /// Also the organization's secrets carrying all of these labels (none: every one): a caller
     /// with `secrets:use`, within its grant's or its token's labels.
     Organization { labels: BTreeMap<String, String> },
-    /// The attachments of a saved workflow version: its saver's rights were checked when it was
+    /// The secrets of a saved workflow version: its saver's rights were checked when it was
     /// saved, and only the existence of its `ns/` secrets in the run's namespace is checked.
     Version,
 }
 
-/// Why an attachment refuses a start, a fork or a save.
+/// Why the secrets of a start, a fork or a save refuse it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachmentProblem {
+pub enum SecretProblem {
     /// The code imports this MCP server or API, whose `auth` takes a secret, and nothing is
-    /// attached for it.
+    /// used for it.
     Missing { server: String },
-    /// An attachment names a server or an API the action set does not have, or one whose `auth`
+    /// A secret names a server or an API the action set does not have, or one whose `auth`
     /// takes no secret.
     TakesNone { server: String },
     /// The secret does not exist: an `ns/` secret in the run's namespace, an `org/` secret in
     /// the organization.
     Unknown { server: String, secret: SecretRef },
-    /// The caller may not attach this secret: an organization's secret without `secrets:use`,
+    /// The caller may not use this secret: an organization's secret without `secrets:use`,
     /// or outside the caller's labels.
     Forbidden { server: String, secret: SecretRef },
 }
 
-impl fmt::Display for AttachmentProblem {
+impl fmt::Display for SecretProblem {
     /// Written for the model that writes the request.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AttachmentProblem::Missing { server } => write!(
+            SecretProblem::Missing { server } => write!(
                 f,
-                "the code imports {server}, which needs a secret: attach one in \"secrets\" \
+                "the code imports {server}, which needs a secret: name one in \"secrets\" \
                  (\"{server}\": \"org/<name>\" or \"ns/<name>\")"
             ),
-            AttachmentProblem::TakesNone { server } => write!(
+            SecretProblem::TakesNone { server } => write!(
                 f,
                 "{server} takes no secret: it is no server or API of the action set whose calls \
                  carry one"
             ),
-            AttachmentProblem::Unknown { server, secret } => {
-                write!(
-                    f,
-                    "the secret {secret} attached for {server} does not exist"
-                )
+            SecretProblem::Unknown { server, secret } => {
+                write!(f, "the secret {secret} named for {server} does not exist")
             }
-            AttachmentProblem::Forbidden { server, secret } => {
+            SecretProblem::Forbidden { server, secret } => {
                 write!(
                     f,
-                    "the secret {secret} attached for {server} is not yours to attach"
+                    "the secret {secret} named for {server} is not yours to use"
                 )
             }
         }
     }
 }
 
-/// A start, a fork or a save refused by its attachments: each one at fault, by server, and what
-/// the caller may attach instead (422 `secret-required`).
+/// A start, a fork or a save refused by its secrets: each one at fault, by server, and what
+/// the caller may use instead (422 `secret-required`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefusedAttachments {
+pub struct RefusedSecrets {
     /// Sorted by server.
-    pub problems: Vec<AttachmentProblem>,
-    /// The secrets the caller may attach, sorted, at most [`MAX_ATTACHABLE`]: the organization's
-    /// it may attach, and those of the run's namespace. What each problem but
-    /// [`TakesNone`](AttachmentProblem::TakesNone) may attach instead.
-    pub attachable: Vec<SecretRef>,
+    pub problems: Vec<SecretProblem>,
+    /// The secrets the caller may use, sorted, at most [`MAX_USABLE`]: the organization's
+    /// it may use, and those of the run's namespace. What each problem but
+    /// [`TakesNone`](SecretProblem::TakesNone) may use instead.
+    pub usable: Vec<SecretRef>,
 }
 
-impl RefusedAttachments {
-    /// Whether a problem asks for a secret: anything but an attachment for a server that takes
+impl RefusedSecrets {
+    /// Whether a problem asks for a secret: anything but a secret for a server that takes
     /// none.
     pub fn asks_for_a_secret(&self) -> bool {
         self.problems
             .iter()
-            .any(|problem| !matches!(problem, AttachmentProblem::TakesNone { .. }))
+            .any(|problem| !matches!(problem, SecretProblem::TakesNone { .. }))
     }
 }
 
-impl fmt::Display for RefusedAttachments {
+impl fmt::Display for RefusedSecrets {
     /// Written for the model that writes the request: each problem, then the secrets it may
-    /// attach.
+    /// use.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (index, problem) in self.problems.iter().enumerate() {
             if index > 0 {
@@ -121,14 +118,14 @@ impl fmt::Display for RefusedAttachments {
         if !self.asks_for_a_secret() {
             return Ok(());
         }
-        if self.attachable.is_empty() {
+        if self.usable.is_empty() {
             return f.write_str(
-                ". No secret exists that you may attach: a person puts one first, the end \
+                ". No secret exists that you may use: a person puts one first, the end \
                  user's in their namespace or the organization's",
             );
         }
-        f.write_str(". The secrets you may attach: ")?;
-        for (index, secret) in self.attachable.iter().enumerate() {
+        f.write_str(". The secrets you may use: ")?;
+        for (index, secret) in self.usable.iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
             }
@@ -138,9 +135,9 @@ impl fmt::Display for RefusedAttachments {
     }
 }
 
-/// What the attachments of a start, a fork or a save are checked against.
+/// What the secrets of a start, a fork or a save are checked against.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AttachmentCheck<'a> {
+pub(crate) struct SecretCheck<'a> {
     pub(crate) tenant: &'a TenantId,
     /// The run's namespace, where its `ns/` secrets are read; `None` for a version saved, which
     /// has none yet: its `ns/` secrets are checked by name only.
@@ -148,31 +145,31 @@ pub(crate) struct AttachmentCheck<'a> {
     pub(crate) action_set: &'a ActionSet,
     /// What the code imports from `rewind:actions`; `None`: every name.
     pub(crate) imports: Option<&'a BTreeSet<String>>,
-    pub(crate) attachments: &'a Attachments,
-    pub(crate) rights: &'a AttachRights,
+    pub(crate) secrets: &'a ServerSecrets,
+    pub(crate) rights: &'a SecretRights,
 }
 
-/// Checks attachments (`archi/04-tools.md`, "Secrets": attaching): each names a server or an API
+/// Checks secrets (`archi/04-tools.md`, "Secrets": using): each names a server or an API
 /// of the action set whose `auth` takes a secret, and a secret that exists and the caller may
-/// attach; each server or API the code imports whose `auth` takes a secret has one. A
-/// version's attachments ([`AttachRights::Version`]) were checked when it was saved: only its
+/// use; each server or API the code imports whose `auth` takes a secret has one. A
+/// version's secrets ([`SecretRights::Version`]) were checked when it was saved: only its
 /// `ns/` secrets' existence in the run's namespace is. `Ok(Err(..))` lists every problem and
-/// what the caller may attach instead.
+/// what the caller may use instead.
 pub(crate) async fn check<S: SecretStore>(
     secrets: &S,
     now: Timestamp,
-    check: AttachmentCheck<'_>,
-) -> Result<Result<(), RefusedAttachments>, SecretError> {
+    check: SecretCheck<'_>,
+) -> Result<Result<(), RefusedSecrets>, SecretError> {
     let today = Day::of(now);
     let mut problems = Vec::new();
-    let version = *check.rights == AttachRights::Version;
-    for (server, secret) in check.attachments.iter() {
+    let version = *check.rights == SecretRights::Version;
+    for (server, secret) in check.secrets.iter() {
         let takes_secret = check
             .action_set
             .auth(server)
             .is_some_and(ActionAuth::takes_secret);
         if !takes_secret && !version {
-            problems.push(AttachmentProblem::TakesNone {
+            problems.push(SecretProblem::TakesNone {
                 server: server.to_owned(),
             });
             continue;
@@ -180,9 +177,9 @@ pub(crate) async fn check<S: SecretStore>(
         let problem = |forbidden: bool| {
             let (server, secret) = (server.to_owned(), secret.clone());
             if forbidden {
-                AttachmentProblem::Forbidden { server, secret }
+                SecretProblem::Forbidden { server, secret }
             } else {
-                AttachmentProblem::Unknown { server, secret }
+                SecretProblem::Unknown { server, secret }
             }
         };
         match secret.scope {
@@ -197,9 +194,9 @@ pub(crate) async fn check<S: SecretStore>(
                 }
             }
             SecretScope::Organization => match check.rights {
-                AttachRights::Version => {}
-                AttachRights::NamespaceOnly => problems.push(problem(true)),
-                AttachRights::Organization { labels } => {
+                SecretRights::Version => {}
+                SecretRights::NamespaceOnly => problems.push(problem(true)),
+                SecretRights::Organization { labels } => {
                     let id = SecretId::organization(secret.name.clone());
                     let meta = secrets.meta(check.tenant, &id, today).await?;
                     // A secret outside the caller's labels is one it does not see.
@@ -213,8 +210,8 @@ pub(crate) async fn check<S: SecretStore>(
     if !version {
         for server in check.action_set.taking_secrets() {
             let imported = check.imports.is_none_or(|imports| imports.contains(server));
-            if imported && check.attachments.get(server).is_none() {
-                problems.push(AttachmentProblem::Missing {
+            if imported && check.secrets.get(server).is_none() {
+                problems.push(SecretProblem::Missing {
                     server: server.to_owned(),
                 });
             }
@@ -224,25 +221,25 @@ pub(crate) async fn check<S: SecretStore>(
         return Ok(Ok(()));
     }
     problems.sort_by(|a, b| a.server().cmp(b.server()));
-    let mut refused = RefusedAttachments {
+    let mut refused = RefusedSecrets {
         problems,
-        attachable: Vec::new(),
+        usable: Vec::new(),
     };
     if refused.asks_for_a_secret() {
-        refused.attachable = attachable(secrets, check, today).await?;
+        refused.usable = usable(secrets, check, today).await?;
     }
     Ok(Err(refused))
 }
 
-/// The secrets the caller may attach: the organization's carrying its labels with
+/// The secrets the caller may use: the organization's carrying its labels with
 /// `secrets:use`, and those of the run's namespace.
-async fn attachable<S: SecretStore>(
+async fn usable<S: SecretStore>(
     secrets: &S,
-    check: AttachmentCheck<'_>,
+    check: SecretCheck<'_>,
     today: Day,
 ) -> Result<Vec<SecretRef>, SecretError> {
     let mut found = Vec::new();
-    if let AttachRights::Organization { labels } = check.rights {
+    if let SecretRights::Organization { labels } = check.rights {
         let listed = secrets
             .list(check.tenant, &SecretNamespace::Organization, labels, today)
             .await?;
@@ -260,7 +257,7 @@ async fn attachable<S: SecretStore>(
         found.extend(listed.iter().map(|meta| meta.id.to_ref()));
     }
     found.sort();
-    found.truncate(MAX_ATTACHABLE);
+    found.truncate(MAX_USABLE);
     Ok(found)
 }
 
@@ -271,23 +268,24 @@ fn carries(labels: &BTreeMap<String, String>, wanted: &BTreeMap<String, String>)
         .all(|(key, value)| labels.get(key) == Some(value))
 }
 
-impl AttachmentProblem {
+impl SecretProblem {
     /// The server or API at fault.
     pub fn server(&self) -> &str {
         match self {
-            AttachmentProblem::Missing { server }
-            | AttachmentProblem::TakesNone { server }
-            | AttachmentProblem::Unknown { server, .. }
-            | AttachmentProblem::Forbidden { server, .. } => server,
+            SecretProblem::Missing { server }
+            | SecretProblem::TakesNone { server }
+            | SecretProblem::Unknown { server, .. }
+            | SecretProblem::Forbidden { server, .. } => server,
         }
     }
 
-    /// The secret attached, if the problem is about one.
+    /// The secret used, if the problem is about one.
     pub fn secret(&self) -> Option<&SecretRef> {
         match self {
-            AttachmentProblem::Missing { .. } | AttachmentProblem::TakesNone { .. } => None,
-            AttachmentProblem::Unknown { secret, .. }
-            | AttachmentProblem::Forbidden { secret, .. } => Some(secret),
+            SecretProblem::Missing { .. } | SecretProblem::TakesNone { .. } => None,
+            SecretProblem::Unknown { secret, .. } | SecretProblem::Forbidden { secret, .. } => {
+                Some(secret)
+            }
         }
     }
 }

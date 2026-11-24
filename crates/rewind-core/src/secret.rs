@@ -1,16 +1,16 @@
 //! Secrets and how calls prove who calls (`archi/04-tools.md`, "Authenticating calls").
 //!
 //! ```text
-//! SecretRef     org/<name> | ns/<name>      what an attachment names: an organization's secret,
+//! SecretRef     org/<name> | ns/<name>      what a reference names: an organization's secret,
 //!                                           or the secret <name> of the run's own namespace
-//! Attachments   { <server or API>: SecretRef }   a run's, a fork's, a workflow version's
+//! ServerSecrets { <server or API>: SecretRef }   a run's, a fork's, a workflow version's
 //! ActionAuth      none | rewind | secret(SecretPlacement)   how a server's or an API's calls
 //!                                                         authenticate, pinned in the action set
 //! SecretPlacement  header(name, format?, encoding) | env(variable)
 //! ```
 //!
 //! The core knows names, scopes and places, never a value: values live in the `SecretStore` and
-//! only the dispatcher reads them, for the runs that attached them.
+//! only the dispatcher reads them, for the runs that use them.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -69,18 +69,18 @@ impl FromStr for SecretName {
 )]
 pub struct InvalidSecretName(pub String);
 
-/// Whose secret an attachment names.
+/// Whose secret a reference names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretScope {
     /// The tenant's, shared by every end user: `org/<name>`.
     Organization,
     /// The run's own namespace's, the end user's: `ns/<name>`. Read in the namespace of the run
-    /// that attaches it, never in another.
+    /// that uses it, never in another.
     Namespace,
 }
 
 impl SecretScope {
-    /// `org` or `ns`, as an attachment writes the scope.
+    /// `org` or `ns`, as a reference writes the scope.
     pub fn as_str(self) -> &'static str {
         match self {
             SecretScope::Organization => "org",
@@ -89,7 +89,7 @@ impl SecretScope {
     }
 }
 
-/// What an attachment names: `org/<name>` or `ns/<name>` (`archi/04-tools.md`, "Secrets"). An
+/// What a reference names: `org/<name>` or `ns/<name>` (`archi/04-tools.md`, "Secrets"). An
 /// `ns/` reference is relative: the secret `<name>` of the namespace of the run that reads it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SecretRef {
@@ -157,19 +157,19 @@ pub struct InvalidSecretRef(pub String);
 /// secret, and whether every such server the code imports has one, is checked when a run
 /// starts or a version is saved.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Attachments(BTreeMap<String, SecretRef>);
+pub struct ServerSecrets(BTreeMap<String, SecretRef>);
 
-impl Attachments {
+impl ServerSecrets {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The secret attached for this server or API.
+    /// The secret used for this server or API.
     pub fn get(&self, server: &str) -> Option<&SecretRef> {
         self.0.get(server)
     }
 
-    /// Attaches `secret` for `server`, replacing what was attached for it.
+    /// Names `secret` for `server`, replacing what was named for it.
     pub fn insert(&mut self, server: impl Into<String>, secret: SecretRef) -> Option<SecretRef> {
         self.0.insert(server.into(), secret)
     }
@@ -197,13 +197,13 @@ impl Attachments {
     }
 }
 
-impl FromIterator<(String, SecretRef)> for Attachments {
+impl FromIterator<(String, SecretRef)> for ServerSecrets {
     fn from_iter<I: IntoIterator<Item = (String, SecretRef)>>(iter: I) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
-impl From<BTreeMap<String, SecretRef>> for Attachments {
+impl From<BTreeMap<String, SecretRef>> for ServerSecrets {
     fn from(map: BTreeMap<String, SecretRef>) -> Self {
         Self(map)
     }
@@ -219,18 +219,18 @@ pub enum ActionAuth {
     /// A JWT signed with the tenant's Ed25519 key, in `Authorization: Bearer`
     /// (`archi/04-tools.md`, "Signed calls"). HTTP servers and APIs only.
     Rewind,
-    /// The secret the run attached for the server, put where `SecretPlacement` says.
+    /// The secret the run uses for the server, put where `SecretPlacement` says.
     Secret(SecretPlacement),
 }
 
 impl ActionAuth {
-    /// Whether a run that imports the server must attach a secret for it.
+    /// Whether a run that imports the server must use a secret for it.
     pub fn takes_secret(&self) -> bool {
         matches!(self, ActionAuth::Secret(_))
     }
 }
 
-/// Where the attached secret goes in a request. A secret never goes in a URL.
+/// Where the secret used goes in a request. A secret never goes in a URL.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SecretPlacement {
     /// In this HTTP header: `format` with [`{secret}`](SECRET_PLACEHOLDER) replaced by the value
@@ -391,9 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn attachments_say_which_servers_read_a_secret() {
+    fn server_secrets_say_which_servers_read_a_secret() {
         let github = SecretRef::parse("ns/github").unwrap();
-        let attachments: Attachments = [
+        let secrets: ServerSecrets = [
             ("github".to_owned(), github.clone()),
             ("issues".to_owned(), github.clone()),
             (
@@ -403,14 +403,14 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        assert_eq!(attachments.get("github"), Some(&github));
-        assert_eq!(attachments.get("slack"), None);
+        assert_eq!(secrets.get("github"), Some(&github));
+        assert_eq!(secrets.get("slack"), None);
         assert_eq!(
-            attachments.servers_reading(&github).collect::<Vec<_>>(),
+            secrets.servers_reading(&github).collect::<Vec<_>>(),
             ["github", "issues"]
         );
-        assert!(!attachments.is_empty());
-        assert!(Attachments::new().is_empty());
+        assert!(!secrets.is_empty());
+        assert!(ServerSecrets::new().is_empty());
     }
 
     #[test]

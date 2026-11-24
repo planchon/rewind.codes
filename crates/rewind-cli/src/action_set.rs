@@ -41,7 +41,7 @@ pub(crate) async fn pin(create: &CreateActionSet) -> Result<ActionSet, String> {
     }
     let (apis, mut actions) = read_apis(create).await?;
     if !create.mcp.is_empty() {
-        // A secret attached for a listing is refused above: only the server reads secrets.
+        // A secret used for a listing is refused above: only the server reads secrets.
         let listing = BTreeMap::new();
         // As the embedded server: the developer's own servers, at any address.
         let discovery = McpDispatcher::new(McpConfig {
@@ -195,7 +195,7 @@ async fn discover(
     Ok(())
 }
 
-/// Why this process pins no action set file that attaches secrets to list its servers' actions: a
+/// Why this process pins no action set file that uses secrets to list its servers' actions: a
 /// secret is written and never read back, and only the server's dispatcher reads it
 /// (`archi/04-tools.md`, "Secrets").
 const LISTING_SECRETS: &str = "secrets: this process cannot read a secret, which only the \

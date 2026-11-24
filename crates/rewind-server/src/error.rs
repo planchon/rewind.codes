@@ -99,34 +99,34 @@ impl ApiError {
         ))
     }
 
-    /// `secret-required`: each attachment at fault, with the secrets the caller may attach for
+    /// `secret-required`: each secret at fault, with the secrets the caller may use for
     /// it instead (none for a server that takes no secret).
     pub(crate) fn secret_required(
         detail: impl Into<String>,
-        refused: &rewind_engine::attachments::RefusedAttachments,
+        refused: &rewind_engine::secrets::RefusedSecrets,
     ) -> Self {
-        use rewind_api::secrets::{AttachmentProblem, AttachmentProblemKind};
-        use rewind_engine::attachments::AttachmentProblem as Problem_;
-        let attachable: Vec<String> = refused.attachable.iter().map(ToString::to_string).collect();
+        use rewind_api::secrets::{SecretProblem, SecretProblemKind};
+        use rewind_engine::secrets::SecretProblem as Problem_;
+        let usable: Vec<String> = refused.usable.iter().map(ToString::to_string).collect();
         let mut problem = Problem::new(ProblemType::SecretRequired, detail);
-        problem.attachments = refused
+        problem.secrets = refused
             .problems
             .iter()
             .map(|problem| {
                 let kind = match problem {
-                    Problem_::Missing { .. } => AttachmentProblemKind::Missing,
-                    Problem_::TakesNone { .. } => AttachmentProblemKind::TakesNone,
-                    Problem_::Unknown { .. } => AttachmentProblemKind::Unknown,
-                    Problem_::Forbidden { .. } => AttachmentProblemKind::Forbidden,
+                    Problem_::Missing { .. } => SecretProblemKind::Missing,
+                    Problem_::TakesNone { .. } => SecretProblemKind::TakesNone,
+                    Problem_::Unknown { .. } => SecretProblemKind::Unknown,
+                    Problem_::Forbidden { .. } => SecretProblemKind::Forbidden,
                 };
-                AttachmentProblem {
+                SecretProblem {
                     server: problem.server().to_owned(),
                     problem: kind,
                     secret: problem.secret().map(ToString::to_string),
-                    attachable: if kind == AttachmentProblemKind::TakesNone {
+                    usable: if kind == SecretProblemKind::TakesNone {
                         Vec::new()
                     } else {
-                        attachable.clone()
+                        usable.clone()
                     },
                 }
             })

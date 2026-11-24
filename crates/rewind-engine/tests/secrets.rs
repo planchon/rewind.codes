@@ -1,4 +1,4 @@
-//! Secrets attached to runs, in the driver (`archi/04-tools.md`, "Secrets" and "Signed calls"):
+//! The secrets runs use, in the driver (`archi/04-tools.md`, "Secrets" and "Signed calls"):
 //! the checks at start, at a fork and at a workflow's save; the secret a call reads in its
 //! run's namespace, never another; a deleted secret parks the call until it is put again;
 //! signed calls.
@@ -10,13 +10,12 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Action, ActionAuth, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Attachments,
-    Code, Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus, SecretName,
-    SecretPlacement, SecretRef, Seq, WorkflowSchemas,
+    Action, ActionAuth, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Code, Command,
+    Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus, SecretName, SecretPlacement,
+    SecretRef, Seq, ServerSecrets, WorkflowSchemas,
 };
 use rewind_engine::StartWorkflow;
 use rewind_engine::adapters::StaticTypeChecker;
-use rewind_engine::attachments::{AttachRights, AttachmentProblem, RefusedAttachments};
 use rewind_engine::plane::NodeConfig;
 use rewind_engine::ports::{
     ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, Day, Delivery, Dispatched,
@@ -24,6 +23,7 @@ use rewind_engine::ports::{
     SecretExpiredReason, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription,
     TaskState, TenantId, WebhookKind, WorkflowDeclarations,
 };
+use rewind_engine::secrets::{RefusedSecrets, SecretProblem, SecretRights};
 use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{ForkError, ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun};
 use serde_json::json;
@@ -121,7 +121,7 @@ fn secret_ref(text: &str) -> SecretRef {
     SecretRef::parse(text).unwrap()
 }
 
-fn attaching(pairs: &[(&str, &str)]) -> Attachments {
+fn server_secrets(pairs: &[(&str, &str)]) -> ServerSecrets {
     pairs
         .iter()
         .map(|(server, secret)| ((*server).to_owned(), secret_ref(secret)))
@@ -136,17 +136,17 @@ fn of(namespace: &NamespaceName, name: &str) -> SecretId {
     SecretId::of_namespace(namespace.clone(), SecretName::new(name).unwrap())
 }
 
-/// What the caller of a test may attach.
+/// What the caller of a test may use.
 enum RightsTo {
     Namespace,
     Organization(BTreeMap<String, String>),
 }
 
 impl RightsTo {
-    fn rights(&self) -> AttachRights {
+    fn rights(&self) -> SecretRights {
         match self {
-            RightsTo::Namespace => AttachRights::NamespaceOnly,
-            RightsTo::Organization(labels) => AttachRights::Organization {
+            RightsTo::Namespace => SecretRights::NamespaceOnly,
+            RightsTo::Organization(labels) => SecretRights::Organization {
                 labels: labels.clone(),
             },
         }
@@ -157,7 +157,7 @@ fn with_secrets() -> RightsTo {
     RightsTo::Organization(BTreeMap::new())
 }
 
-/// A live run of `program` in `namespace`, calling `action`, attaching `secrets`.
+/// A live run of `program` in `namespace`, calling `action`, using `secrets`.
 fn start(
     program: &str,
     action: &str,
@@ -171,8 +171,8 @@ fn start(
         json!({ "action": action }),
     );
     request.namespace = namespace.clone();
-    request.metadata.secrets = attaching(secrets);
-    request.attach = rights.rights();
+    request.metadata.secrets = server_secrets(secrets);
+    request.secret_rights = rights.rights();
     request
 }
 
@@ -198,7 +198,7 @@ async fn put(world: &World, id: SecretId, value: &str, labels: &[(&str, &str)]) 
         .unwrap()
 }
 
-fn refused(error: StartError) -> RefusedAttachments {
+fn refused(error: StartError) -> RefusedSecrets {
     match error {
         StartError::SecretRequired(refused) => refused,
         other => panic!("expected secret-required, got {other:?}"),
@@ -263,18 +263,18 @@ async fn a_start_without_the_secret_an_imported_server_needs_is_refused() {
     let message = error.to_string();
     assert_eq!(
         refused(error),
-        RefusedAttachments {
-            problems: vec![AttachmentProblem::Missing {
+        RefusedSecrets {
+            problems: vec![SecretProblem::Missing {
                 server: "github".into()
             }],
-            attachable: vec![secret_ref("org/zendesk"), secret_ref("ns/github")],
+            usable: vec![secret_ref("org/zendesk"), secret_ref("ns/github")],
         },
         "github, which the code imports; not linear, which it does not; the organization's \
          secrets and alice's, not bob's"
     );
     assert!(
         message.contains("the code imports github, which needs a secret")
-            && message.ends_with("The secrets you may attach: org/zendesk, ns/github"),
+            && message.ends_with("The secrets you may use: org/zendesk, ns/github"),
         "{message}"
     );
     assert_eq!(runs(&mut world).await, 0, "no run exists");
@@ -290,7 +290,7 @@ async fn a_start_without_the_secret_an_imported_server_needs_is_refused() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(refused(error).attachable, [secret_ref("ns/linear")]);
+    assert_eq!(refused(error).usable, [secret_ref("ns/linear")]);
 
     // A code that imports none of them needs nothing.
     world
@@ -300,7 +300,7 @@ async fn a_start_without_the_secret_an_imported_server_needs_is_refused() {
 }
 
 #[tokio::test]
-async fn an_attachment_names_a_server_taking_a_secret_and_a_secret_that_exists() {
+async fn a_run_s_secret_names_a_server_taking_one_and_a_secret_that_exists() {
     let mut world = world().await;
     // The organization's github exists, alice's does not: ns/github never falls back on it.
     put(&world, organization("github"), "ghp_org", &[]).await;
@@ -323,23 +323,23 @@ async fn an_attachment_names_a_server_taking_a_secret_and_a_secret_that_exists()
     assert_eq!(
         refused.problems,
         [
-            AttachmentProblem::TakesNone {
+            SecretProblem::TakesNone {
                 server: "ask_user".into()
             },
-            AttachmentProblem::TakesNone {
+            SecretProblem::TakesNone {
                 server: "dax".into()
             },
-            AttachmentProblem::Unknown {
+            SecretProblem::Unknown {
                 server: "github".into(),
                 secret: secret_ref("ns/github"),
             },
-            AttachmentProblem::TakesNone {
+            SecretProblem::TakesNone {
                 server: "nowhere".into()
             },
         ],
         "a harness action, a signed server and an unknown name take no secret"
     );
-    assert_eq!(refused.attachable, [secret_ref("org/github")]);
+    assert_eq!(refused.usable, [secret_ref("org/github")]);
     assert_eq!(runs(&mut world).await, 0, "no run exists");
 
     put(&world, of(&alice(), "github"), "ghp_alice", &[]).await;
@@ -377,7 +377,7 @@ async fn the_organization_s_secrets_need_secrets_use_within_the_caller_s_labels(
         .unwrap_err();
     assert_eq!(
         refused(error).problems,
-        [AttachmentProblem::Forbidden {
+        [SecretProblem::Forbidden {
             server: "github".into(),
             secret: secret_ref("org/prod"),
         }],
@@ -390,13 +390,13 @@ async fn the_organization_s_secrets_need_secrets_use_within_the_caller_s_labels(
     let refused = refused(error);
     assert_eq!(
         refused.problems,
-        [AttachmentProblem::Unknown {
+        [SecretProblem::Unknown {
             server: "github".into(),
             secret: secret_ref("org/dev"),
         }],
         "a secret outside the caller's labels is one it does not see"
     );
-    assert_eq!(refused.attachable, [secret_ref("org/prod")]);
+    assert_eq!(refused.usable, [secret_ref("org/prod")]);
     world
         .start(attach("org/prod", RightsTo::Organization(prod())))
         .await
@@ -408,7 +408,7 @@ async fn the_organization_s_secrets_need_secrets_use_within_the_caller_s_labels(
 }
 
 #[tokio::test]
-async fn a_test_run_checks_no_attachment_and_reads_no_secret() {
+async fn a_test_run_checks_no_secret_and_reads_none() {
     let mut world = world().await;
     let mut request = start(
         "caller",
@@ -427,7 +427,7 @@ async fn a_test_run_checks_no_attachment_and_reads_no_secret() {
 // Reading at dispatch
 
 #[tokio::test]
-async fn a_call_reads_the_secret_its_run_attached_in_its_own_namespace() {
+async fn a_call_reads_the_secret_its_run_uses_in_its_own_namespace() {
     let mut world = world().await;
     put(&world, of(&alice(), "github"), "ghp_alice", &[]).await;
     put(&world, of(&bob(), "github"), "ghp_bob", &[]).await;
@@ -577,7 +577,7 @@ async fn a_secret_deleted_mid_run_parks_the_call_until_it_is_put_again() {
     assert!(
         reason
             .message
-            .contains("the secret ns/github the run attached for github no longer exists"),
+            .contains("the secret ns/github the run uses for github no longer exists"),
         "{}",
         reason.message
     );
@@ -694,7 +694,7 @@ async fn without_a_public_url_a_signed_call_fails_unsent() {
 // Forks
 
 #[tokio::test]
-async fn a_fork_inherits_its_source_s_attachments_checked_against_its_caller() {
+async fn a_fork_inherits_its_source_s_secrets_checked_against_its_caller() {
     let mut world = world().await;
     put(&world, organization("github"), "ghp_org", &[]).await;
     put(&world, of(&alice(), "github"), "ghp_alice", &[]).await;
@@ -709,8 +709,8 @@ async fn a_fork_inherits_its_source_s_attachments_checked_against_its_caller() {
         .await;
     let request = |secrets: Option<&[(&str, &str)]>, rights: RightsTo| {
         let mut request = ForkRun::new(parent.clone(), Code::new("caller"));
-        request.secrets = secrets.map(attaching);
-        request.attach = rights.rights();
+        request.secrets = secrets.map(server_secrets);
+        request.secret_rights = rights.rights();
         request
     };
 
@@ -723,7 +723,7 @@ async fn a_fork_inherits_its_source_s_attachments_checked_against_its_caller() {
     };
     assert_eq!(
         refused(error).problems,
-        [AttachmentProblem::Forbidden {
+        [SecretProblem::Forbidden {
             server: "github".into(),
             secret: secret_ref("org/github"),
         }]
@@ -736,7 +736,7 @@ async fn a_fork_inherits_its_source_s_attachments_checked_against_its_caller() {
     let head = world.view(&inherited).await.head;
     assert_eq!(
         head.metadata.secrets,
-        attaching(&[("github", "org/github")])
+        server_secrets(&[("github", "org/github")])
     );
     assert_eq!(head.namespace, alice(), "a fork never leaves its namespace");
 
@@ -749,7 +749,7 @@ async fn a_fork_inherits_its_source_s_attachments_checked_against_its_caller() {
     .run;
     assert_eq!(
         world.view(&own).await.head.metadata.secrets,
-        attaching(&[("github", "ns/github")])
+        server_secrets(&[("github", "ns/github")])
     );
 }
 
@@ -769,8 +769,8 @@ fn save(secrets: &[(&str, &str)], rights: &RightsTo) -> RegisterWorkflow {
             signals: BTreeMap::new(),
         },
         labels: BTreeMap::new(),
-        secrets: attaching(secrets),
-        attach: rights.rights(),
+        secrets: server_secrets(secrets),
+        secret_rights: rights.rights(),
         declarations: WorkflowDeclarations::default(),
         suite: SuiteChanges::default(),
     }
@@ -799,7 +799,7 @@ async fn register(
 }
 
 #[tokio::test]
-async fn a_version_is_saved_with_attachments_its_saver_may_attach() {
+async fn a_version_is_saved_with_secrets_its_saver_may_use() {
     let world = saving().await;
     put(&world, organization("github"), "ghp_org", &[]).await;
 
@@ -813,7 +813,7 @@ async fn a_version_is_saved_with_attachments_its_saver_may_attach() {
                 .await
                 .unwrap_err()
         ),
-        [AttachmentProblem::Missing {
+        [SecretProblem::Missing {
             server: "github".into()
         }],
         "its code imports github: every run of it would need one"
@@ -827,7 +827,7 @@ async fn a_version_is_saved_with_attachments_its_saver_may_attach() {
             .await
             .unwrap_err()
         ),
-        [AttachmentProblem::Forbidden {
+        [SecretProblem::Forbidden {
             server: "github".into(),
             secret: secret_ref("org/github"),
         }]
@@ -838,7 +838,7 @@ async fn a_version_is_saved_with_attachments_its_saver_may_attach() {
                 .await
                 .unwrap_err()
         ),
-        [AttachmentProblem::Unknown {
+        [SecretProblem::Unknown {
             server: "github".into(),
             secret: secret_ref("org/gone"),
         }]
@@ -848,7 +848,7 @@ async fn a_version_is_saved_with_attachments_its_saver_may_attach() {
         .unwrap();
     assert_eq!(
         org.workflow.secrets(),
-        &attaching(&[("github", "org/github")])
+        &server_secrets(&[("github", "org/github")])
     );
     // An ns/ secret has no namespace yet: only its name is checked.
     let per_user = register(
@@ -885,7 +885,7 @@ async fn a_run_of_a_version_checks_only_that_its_namespace_s_secrets_exist() {
         .unwrap_err();
     assert_eq!(
         refused(error).problems,
-        [AttachmentProblem::Unknown {
+        [SecretProblem::Unknown {
             server: "github".into(),
             secret: secret_ref("ns/github"),
         }]
@@ -897,7 +897,7 @@ async fn a_run_of_a_version_checks_only_that_its_namespace_s_secrets_exist() {
         .run;
     assert_eq!(
         world.view(&run).await.head.metadata.secrets,
-        attaching(&[("github", "ns/github")]),
-        "the version's attachments"
+        server_secrets(&[("github", "ns/github")]),
+        "the version's secrets"
     );
 }

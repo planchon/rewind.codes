@@ -83,7 +83,7 @@ impl ActionSetRef {
 
 /// `--secret server=scope/name`, repeated: the secrets a run reads, by server. The server checks
 /// the references.
-pub(crate) fn attachments(pairs: &[String]) -> Result<rewind_api::secrets::Attachments, CliError> {
+pub(crate) fn secrets(pairs: &[String]) -> Result<rewind_api::secrets::ServerSecrets, CliError> {
     pairs
         .iter()
         .map(|pair| match pair.split_once('=') {

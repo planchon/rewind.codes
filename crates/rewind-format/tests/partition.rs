@@ -12,8 +12,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionPolicy, ActionRoute, Attachments, Builtin, Completion, Digest, Epoch, Event, Lifecycle,
-    Payload, RunId, RunMode, RunStarted, SecretRef, Seed, Shape as CoreShape, Timestamp,
+    ActionPolicy, ActionRoute, Builtin, Completion, Digest, Epoch, Event, Lifecycle, Payload,
+    RunId, RunMode, RunStarted, SecretRef, Seed, ServerSecrets, Shape as CoreShape, Timestamp,
     WorkflowOp,
 };
 use rewind_format::FormatError;
@@ -78,7 +78,7 @@ fn sketch() -> Sketch {
 }
 
 fn run_head() -> RunHead {
-    let mut secrets = Attachments::new();
+    let mut secrets = ServerSecrets::new();
     secrets.insert("github", SecretRef::parse("ns/github").unwrap());
     RunHead {
         run: run(1),

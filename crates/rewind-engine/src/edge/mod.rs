@@ -3,7 +3,7 @@
 //! `archi/05-testing-and-observability.md`, "Read model", "Statistics").
 //!
 //! Every process is an edge. A use case checks what it can without the run's partition (the
-//! code, the TTL, the input, the attachments, the namespace, read from the control plane), then
+//! code, the TTL, the input, the secrets, the namespace, read from the control plane), then
 //! asks the owner of the run's partition through a [`Gateway`]: the router of a process
 //! ([`NodeHandle`](crate::node::runtime::NodeHandle)) or the [`Driver`](crate::driver::Driver)
 //! in tests. The owner keeps every rule that needs the partition: start keys, admission, signal
@@ -11,14 +11,14 @@
 //!
 //! | Use case | The edge checks | The owner |
 //! | --- | --- | --- |
-//! | [`Edge::start_run`], [`Edge::start_workflow`], [`Edge::fork`] | the namespace, the code, the TTL, the input, the attachments | the start key, the admission, `CreateRun` |
-//! | [`Edge::signal`], [`Edge::cancel`], [`Edge::webhook`] | NUL characters | the run, its workflow's signals, the signal key |
+//! | [`Edge::start_run`], [`Edge::start_workflow`], [`Edge::fork`] | the namespace, the code, the TTL, the input, the secrets | the start key, the admission, `CreateRun` |
+//! | [`Edge::signal`], [`Edge::cancel`], [`Edge::signal_by_url`] | NUL characters | the run, its workflow's signals, the signal key |
 //! | [`Edge::release`], [`Edge::give_up`], [`Edge::erase`] | | the quarantine, the archive, the records |
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
 //! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_run`], [`Edge::call_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its tenant actor |
-//! | [`Edge::trace`], [`Edge::transcript_event`] | | the run's head and history |
+//! | [`Edge::transcript`], [`Edge::transcript_event`] | | the run's head and history |
 //! | [`Edge::record_tests`] | the tests stored in the control plane | the runs searched, their history |
 //! | [`Edge::register_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
 
@@ -39,7 +39,6 @@ use rewind_core::{
     RunStarted, SCRIPT_ORIGIN, Shape, code_doc, origin_slug,
 };
 
-use crate::attachments::{self, AttachmentCheck};
 use crate::checks::{self, BoundsError};
 use crate::fork::{ForkError, ForkRun};
 use crate::plane::{NodeConfig, Plane};
@@ -53,6 +52,7 @@ use crate::ports::{
     RunRef, RunWorkflow, Scope, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken,
     TenantId, TypeChecker, Usage, Window, home_partition, namespace_partition,
 };
+use crate::secrets::{self, SecretCheck};
 use crate::start::{StartError, StartRun, refuse_nul_in_metadata, type_check};
 use crate::text::{self, NulCharacter};
 use crate::workflows::StartWorkflow;
@@ -208,13 +208,13 @@ impl<P: Plane> Edge<P> {
             .compile(&request.code, &request.action_set)
             .map_err(StartError::InvalidCode)?;
         if request.mode == RunMode::Live {
-            self.check_attachments(
+            self.check_secrets(
                 &request.tenant,
                 &request.namespace,
                 &request.code,
                 &request.action_set,
                 &request.metadata.secrets,
-                &request.attach,
+                &request.secret_rights,
             )
             .await?;
         }
@@ -267,7 +267,7 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Starts a run of a workflow version (`POST /v1/runs` with a workflow): its input checked
-    /// against the version's schema, its attachments the version's.
+    /// against the version's schema, its secrets the version's.
     pub async fn start_workflow<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -302,7 +302,7 @@ impl<P: Plane> Edge<P> {
             .map_err(start_unavailable)?
             .ok_or_else(|| start_unavailable(format!("the code of {workflow} is not stored")))?;
         bounds.check_lines(&code.code)?;
-        match checks::version_attachments(
+        match checks::version_secrets(
             self.plane.secrets(),
             self.now(),
             &request.tenant,
@@ -463,13 +463,13 @@ impl<P: Plane> Edge<P> {
             .compile(&request.code, &action_set)
             .map_err(|invalid| start_failed(StartError::InvalidCode(invalid)))?;
         if source_started.mode == RunMode::Live {
-            self.check_attachments(
+            self.check_secrets(
                 &source.tenant,
                 &head.namespace,
                 &request.code,
                 &action_set,
                 &metadata.secrets,
-                &request.attach,
+                &request.secret_rights,
             )
             .await
             .map_err(start_failed)?;
@@ -616,28 +616,28 @@ impl<P: Plane> Edge<P> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn check_attachments(
+    async fn check_secrets(
         &self,
         tenant: &TenantId,
         namespace: &NamespaceName,
         code: &Code,
         action_set: &rewind_core::ActionSet,
-        attachments: &rewind_core::Attachments,
-        rights: &attachments::AttachRights,
+        secrets: &rewind_core::ServerSecrets,
+        rights: &secrets::SecretRights,
     ) -> Result<(), StartError> {
-        if attachments.is_empty() && action_set.taking_secrets().next().is_none() {
+        if secrets.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
         let imports = self.plane.executor().action_imports(code);
-        let check = AttachmentCheck {
+        let check = SecretCheck {
             tenant,
             namespace: Some(namespace),
             action_set,
             imports: imports.as_ref(),
-            attachments,
+            secrets,
             rights,
         };
-        attachments::check(self.plane.secrets(), self.now(), check)
+        secrets::check(self.plane.secrets(), self.now(), check)
             .await?
             .map_err(StartError::SecretRequired)
     }

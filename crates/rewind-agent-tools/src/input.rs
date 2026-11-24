@@ -53,7 +53,7 @@ pub(crate) fn optional_string(values: &Values, key: &str) -> Result<Option<Strin
 
 /// `secrets`: the secrets a run reads, by MCP server or API, each `org/<name>` or `ns/<name>`.
 /// The API checks the references; this checks their shape.
-pub(crate) fn optional_attachments(
+pub(crate) fn optional_secrets(
     values: &Values,
 ) -> Result<Option<std::collections::BTreeMap<String, String>>, InputError> {
     let invalid = || {

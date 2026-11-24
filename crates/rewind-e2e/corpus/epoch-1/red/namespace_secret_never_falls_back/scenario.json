@@ -1,5 +1,5 @@
 {
-  "description": "The run attaches its namespace's crm, which does not exist, while the organization has a secret of that name: nothing falls back on it, and the start is refused.",
+  "description": "The run names its namespace's crm, which does not exist, while the organization has a secret of that name: nothing falls back on it, and the start is refused.",
   "live": true,
   "input": {
     "customer": "c-7"
@@ -29,13 +29,13 @@
   "secrets": {
     "crm": "ns/crm"
   },
-  "attach": "organization",
+  "secret_rights": "organization",
   "actions": {
     "crm.lookup": {
       "name": "Ada"
     }
   },
   "expect": {
-    "start_error": "the secret ns/crm attached for crm does not exist. The secrets you may attach: org/crm"
+    "start_error": "the secret ns/crm named for crm does not exist. The secrets you may use: org/crm"
   }
 }

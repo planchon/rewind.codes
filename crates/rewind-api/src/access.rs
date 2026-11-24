@@ -198,7 +198,7 @@ impl Permission {
                  usage, never a value; read the signing keys' ids."
             }
             Permission::SecretsWrite => "Put and delete secrets.",
-            Permission::SecretsUse => "Attach an organization's secret to a run or a workflow.",
+            Permission::SecretsUse => "Use an organization's secret in a run or a workflow.",
             Permission::CallsWork => {
                 "Hold a call stream of harness calls, and defer, complete or fail them."
             }

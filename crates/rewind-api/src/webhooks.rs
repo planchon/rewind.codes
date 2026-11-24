@@ -181,7 +181,7 @@ pub enum Webhook {
         data: ActionSchemaChanged,
     },
     /// A call was parked because the server refused the secret or the signature (401), or
-    /// because the secret the run attached no longer exists.
+    /// because the secret the run uses no longer exists.
     #[serde(rename = "secret.expired")]
     SecretExpired {
         timestamp: Timestamp,
@@ -260,7 +260,7 @@ pub struct ActionSchemaChanged {
 }
 
 /// A call parked because its server refused the secret or the signature (`refused`), or
-/// because the secret the run attached no longer exists (`missing`, nothing was sent). Put the
+/// because the secret the run uses no longer exists (`missing`, nothing was sent). Put the
 /// secret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,
 /// for a refused signature, approve the call once the server accepts the key: the call is then
 /// sent again with the same idempotency key.
@@ -278,7 +278,7 @@ pub struct SecretExpired {
     pub server: Option<String>,
     pub action_set: String,
     pub reason: SecretExpiredReason,
-    /// The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);
+    /// The secret the run uses for the server, as named (`org/<name>`, `ns/<name>`);
     /// absent for a signed call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
@@ -292,7 +292,7 @@ pub struct SecretExpired {
 pub enum SecretExpiredReason {
     /// The server answered 401 to the secret or to the signature.
     Refused,
-    /// The secret the run attached no longer exists: nothing was sent.
+    /// The secret the run uses no longer exists: nothing was sent.
     Missing,
 }
 

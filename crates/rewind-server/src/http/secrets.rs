@@ -12,7 +12,7 @@
 //! | `GET /organizations/{organization}/jwks.json` | none | `Cache-Control: max-age=300` |
 //!
 //! A value is written and never answered. Putting a secret again makes ready the calls parked by
-//! a refusal or a missing secret in the runs that attach it: the write's change of the control
+//! a refusal or a missing secret in the runs that use it: the write's change of the control
 //! plane reaches the owners, which resume them.
 
 use std::collections::BTreeMap;
@@ -28,7 +28,7 @@ use rewind_api::common::{Labels, timestamp};
 use rewind_api::problem::ProblemType;
 use rewind_api::secrets::{
     DailyReads, Jwk, Jwks, LastRead, PutSecret, Secret as SecretView, SecretList, SecretScope,
-    SecretUsage, SigningKey, SigningKeyList, WorkflowAttaching,
+    SecretUsage, SigningKey, SigningKeyList, WorkflowSecrets,
 };
 use rewind_core::RunStatus;
 use rewind_core::{MAX_SECRET_VALUE_BYTES, SecretName};
@@ -371,7 +371,7 @@ async fn write(
     Ok((status, Json(seen_by(app, caller, &meta).await?)).into_response())
 }
 
-/// Deletes a secret: 204, or 404 when it does not exist. The next call of a run that attaches
+/// Deletes a secret: 204, or 404 when it does not exist. The next call of a run that uses
 /// it is parked.
 async fn erase(app: &App, caller: &Caller, id: &SecretId) -> Result<Response, ApiError> {
     if !app.store.delete(&caller.tenant, id).await? {
@@ -381,15 +381,15 @@ async fn erase(app: &App, caller: &Caller, id: &SecretId) -> Result<Response, Ap
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// What reads a secret: the active runs that attach it and those of them waiting on a call it
-/// serves, which the caller sees, and the workflows whose latest version attaches it.
+/// What reads a secret: the active runs that use it and those of them waiting on a call it
+/// serves, which the caller sees, and the workflows whose latest version uses it.
 async fn usage_of(
     app: &App,
     caller: &Caller,
     id: &SecretId,
     meta: &SecretMeta,
 ) -> Result<SecretUsage, ApiError> {
-    let usage = attaching(app, caller, id).await?;
+    let usage = users(app, caller, id).await?;
     let shown = |runs: &[RunRef]| -> Vec<String> {
         runs.iter()
             .take(USAGE_RUNS)
@@ -419,7 +419,7 @@ async fn usage_of(
             .map(|(server, _)| server.to_owned())
             .collect();
         if !servers.is_empty() {
-            workflows.push(WorkflowAttaching {
+            workflows.push(WorkflowSecrets {
                 name: stored.workflow.name().to_owned(),
                 digest: stored.workflow.version().to_hex(),
                 servers,
@@ -436,15 +436,15 @@ async fn usage_of(
     })
 }
 
-/// The active runs the caller sees that attach a secret, and those of them parked on a call.
-struct Attaching {
+/// The active runs the caller sees that use a secret, and those of them parked on a call.
+struct SecretUsers {
     active: Vec<RunRef>,
     waiting: Vec<RunRef>,
 }
 
-/// The runs that attach a secret, among the active runs of its scope the caller sees: the
-/// newest [`SCAN_BUDGET`] of the index, each run's head read for what it attaches.
-async fn attaching(app: &App, caller: &Caller, id: &SecretId) -> Result<Attaching, ApiError> {
+/// The runs that use a secret, among the active runs of its scope the caller sees: the
+/// newest [`SCAN_BUDGET`] of the index, each run's head read for what it uses.
+async fn users(app: &App, caller: &Caller, id: &SecretId) -> Result<SecretUsers, ApiError> {
     let mut query = crate::http::search::run_query(caller, None, None, app.now())?;
     query.terms.push(Term {
         negated: false,
@@ -471,7 +471,7 @@ async fn attaching(app: &App, caller: &Caller, id: &SecretId) -> Result<Attachin
             },
         )
         .await?;
-    let mut attaching = Attaching {
+    let mut users = SecretUsers {
         active: Vec::new(),
         waiting: Vec::new(),
     };
@@ -479,13 +479,13 @@ async fn attaching(app: &App, caller: &Caller, id: &SecretId) -> Result<Attachin
         let Some(view) = app.read_run(&summary.run).await? else {
             continue;
         };
-        let attached = view
+        let used = view
             .head
             .metadata
             .secrets
             .iter()
             .any(|(_, secret)| SecretId::resolve(secret, &view.head.namespace) == *id);
-        if !attached {
+        if !used {
             continue;
         }
         let parked = summary
@@ -493,11 +493,11 @@ async fn attaching(app: &App, caller: &Caller, id: &SecretId) -> Result<Attachin
             .iter()
             .any(|wait| wait.waiting_for() == WaitingFor::Parked);
         if parked {
-            attaching.waiting.push(summary.run.clone());
+            users.waiting.push(summary.run.clone());
         }
-        attaching.active.push(summary.run);
+        users.active.push(summary.run);
     }
-    Ok(attaching)
+    Ok(users)
 }
 
 /// The first day of the reads a secret is listed with: 30 days, today included.

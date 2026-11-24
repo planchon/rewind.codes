@@ -82,7 +82,7 @@ fn save(code: &str, suite: SuiteChanges) -> RegisterWorkflow {
         schemas: schemas(),
         labels: BTreeMap::new(),
         secrets: Default::default(),
-        attach: Default::default(),
+        secret_rights: Default::default(),
         declarations: WorkflowDeclarations::default(),
         suite,
     }

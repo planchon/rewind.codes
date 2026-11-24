@@ -183,7 +183,7 @@ mod tests {
                 diagnostics: Vec::new(),
                 query: None,
                 tests: Vec::new(),
-                attachments: Vec::new(),
+                secrets: Vec::new(),
                 quota: None,
             }
             .into(),

@@ -25,12 +25,11 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Attachments, Code, Command, Completion, Event, HistoryEvent, JsonValue, Lifecycle,
-    Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunExport, RunId, RunStarted, RunStatus,
-    Seq,
+    ActionSet, Code, Command, Completion, Event, HistoryEvent, JsonValue, Lifecycle, Next,
+    NonDeterminism, Payload, ReplayCursor, Replayed, RunExport, RunId, RunStarted, RunStatus, Seq,
+    ServerSecrets,
 };
 
-use crate::attachments::AttachRights;
 use crate::batch::EngineError;
 use crate::batch::{Batch, CountCpu, Grace, abort_reason};
 use crate::payloads;
@@ -39,6 +38,7 @@ use crate::ports::{
     CodeExecutor, CodeInstance, CompiledCode, Emitted, ForkSource, RunRef, StartCode, StoreError,
     TraceContext,
 };
+use crate::secrets::SecretRights;
 use crate::start::StartError;
 
 /// A request to fork a run (`POST /v1/runs/{id}/fork`, `rewind fork`, `retry_run`).
@@ -60,11 +60,11 @@ pub struct ForkRun {
     pub trace_context: Option<TraceContext>,
     /// A retried request with the same key returns the same fork.
     pub idempotency_key: Option<String>,
-    /// The fork's attachments; the source's when `None`. Either way they are checked against
-    /// `attach`: the code is new code (`archi/04-tools.md`, "Secrets").
-    pub secrets: Option<Attachments>,
-    /// What the caller may attach.
-    pub attach: AttachRights,
+    /// The fork's secrets; the source's when `None`. Either way they are checked against
+    /// `secret_rights`: the code is new code (`archi/04-tools.md`, "Secrets").
+    pub secrets: Option<ServerSecrets>,
+    /// What the caller may use.
+    pub secret_rights: SecretRights,
 }
 
 impl ForkRun {
@@ -79,7 +79,7 @@ impl ForkRun {
             trace_context: None,
             idempotency_key: None,
             secrets: None,
-            attach: AttachRights::NamespaceOnly,
+            secret_rights: SecretRights::NamespaceOnly,
         }
     }
 }

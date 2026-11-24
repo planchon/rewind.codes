@@ -24,7 +24,7 @@
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"code":…,
 //!   "action_set":…,"v":1}`, with its suite (`base`, `tests`, `retired`, `replaced`) when it has
 //!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
-//!   when it attaches secrets, in its canonical form, so that its bytes hash to the version;
+//!   when it uses secrets, in its canonical form, so that its bytes hash to the version;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
 //!   its canonical form, so that its bytes hash to the test's digest;
 //! - the **partition records** ([`partition`]): one record per kind of thing a partition holds

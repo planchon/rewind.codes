@@ -76,9 +76,9 @@ pub enum ProblemType {
     /// description longer than 2,000.
     InvalidTitle,
     /// 422: a start, a fork or a workflow's save refused before anything exists: the code
-    /// imports a server that needs a secret and none is attached, an attachment names a server
-    /// that takes none or a secret that does not exist, or the caller may not attach it;
-    /// `attachments` says which, with the secrets the caller may attach instead.
+    /// imports a server that needs a secret and none is named, a reference names a server
+    /// that takes none or a secret that does not exist, or the caller may not use it;
+    /// `secrets` says which, with the secrets the caller may use instead.
     SecretRequired,
     /// 429: the namespace or the tenant reached its `active_runs`, `runs_per_month` or
     /// `scripts`; `quota` says which, at which scope, and when it frees.
@@ -216,7 +216,7 @@ impl ProblemType {
             ProblemType::InvalidInput => "The input does not match the workflow",
             ProblemType::InvalidSignal => "The run does not take this signal",
             ProblemType::InvalidTitle => "The code's title was refused",
-            ProblemType::SecretRequired => "A secret is missing or cannot be attached",
+            ProblemType::SecretRequired => "A secret is missing or cannot be used",
             ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",
             ProblemType::ActionSetUnavailable => "A server of the action set is unavailable",
@@ -267,9 +267,9 @@ pub struct Problem {
     /// and failures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<crate::testing::TestResult>,
-    /// With `secret-required`: each attachment at fault, with what the caller may attach.
+    /// With `secret-required`: each secret at fault, with what the caller may use.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<crate::secrets::AttachmentProblem>,
+    pub secrets: Vec<crate::secrets::SecretProblem>,
     /// With `quota-exceeded`: the quota reached.
     #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
     #[schema(schema_with = quota_reached_fields)]
@@ -338,7 +338,7 @@ impl Problem {
             diagnostics: Vec::new(),
             query: None,
             tests: Vec::new(),
-            attachments: Vec::new(),
+            secrets: Vec::new(),
             quota: None,
         }
     }

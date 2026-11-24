@@ -663,47 +663,6 @@
         ],
         "type": "object"
       },
-      "AttachmentProblem": {
-        "description": "One attachment that refused a start, a fork or a save, with what the caller may attach for\nthat server instead.",
-        "properties": {
-          "attachable": {
-            "description": "The secrets the caller may attach for that server, `org/<name>` and `ns/<name>`.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "problem": {
-            "$ref": "#/components/schemas/AttachmentProblemKind"
-          },
-          "secret": {
-            "description": "The secret attached, as the request named it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "server": {
-            "description": "The MCP server or API.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "server",
-          "problem"
-        ],
-        "type": "object"
-      },
-      "AttachmentProblemKind": {
-        "description": "Why an attachment refused a start, a fork or a save (`secret-required`).",
-        "enum": [
-          "missing",
-          "takes_none",
-          "unknown",
-          "forbidden"
-        ],
-        "type": "string"
-      },
       "Auth": {
         "description": "How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,\n\"Authenticating calls\"). Part of the pinned action set; never a value.",
         "oneOf": [
@@ -738,7 +697,7 @@
             "type": "object"
           },
           {
-            "description": "The secret the run attached for the server: in `header` (with `format`, `{secret}`\nreplaced by its value, and `encoding`), or in the variable `env` of a stdio server.\nExactly one of `header` and `env`.",
+            "description": "The secret the run uses for the server: in `header` (with `format`, `{secret}`\nreplaced by its value, and `encoding`), or in the variable `env` of a stdio server.\nExactly one of `header` and `env`.",
             "properties": {
               "encoding": {
                 "oneOf": [
@@ -1595,7 +1554,7 @@
       },
       "CreateActionSet": {
         "additionalProperties": false,
-        "description": "`POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy\nper action. Registering connects to the MCP servers and lists their actions, reads the APIs'\nOpenAPI documents, and pins their schemas. The action set is content-addressed: registering the\nsame action set twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
+        "description": "`POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy\nper action. Registering connects to the MCP servers and lists their actions, reads the APIs'\nOpenAPI documents, and pins their schemas. The action set is content-addressed: registering the\nsame action set twice gives the same id. It holds no secret: a run uses its secrets when it\nstarts.",
         "example": {
           "apis": [
             {
@@ -1936,7 +1895,7 @@
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
-            "description": "The secrets its runs attach, by MCP server or API (`org/<name>`, `ns/<name>`), part of\nthe version: checked against the saver's rights now (an `ns/` secret by its name only),\nand read by its runs without checking the caller's again (`secret-required`)."
+            "description": "The secrets its runs use, by MCP server or API (`org/<name>`, `ns/<name>`), part of\nthe version: checked against the saver's rights now (an `ns/` secret by its name only),\nand read by its runs without checking the caller's again (`secret-required`)."
           },
           "signals": {
             "description": "The signals its runs accept, by name, each with the JSON Schema of its payload. Names\nstarting with `rewind:` are reserved.",
@@ -3081,7 +3040,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BTreeMap",
-                "description": "The fork's attachments, as `POST /v1/runs` takes them. The source's when absent. Either\nway they are checked against the caller: the code is new code."
+                "description": "The fork's secrets, as `POST /v1/runs` takes them. The source's when absent. Either\nway they are checked against the caller: the code is new code."
               },
               {
                 "type": "null"
@@ -3600,7 +3559,7 @@
         "type": "object"
       },
       "LastRead": {
-        "description": "The last read of a secret: by which run, of which namespace, when. An action set's registration\nreads an organization's secret to list the actions of the MCP server it is attached for, before\nany run exists: such a read names neither run nor namespace.",
+        "description": "The last read of a secret: by which run, of which namespace, when. An action set's registration\nreads an organization's secret to list the actions of the MCP server it is used for, before\nany run exists: such a read names neither run nor namespace.",
         "properties": {
           "at": {
             "format": "date-time",
@@ -4570,13 +4529,6 @@
           },
           {
             "properties": {
-              "attachments": {
-                "description": "With `secret-required`: each attachment at fault, with what the caller may attach.",
-                "items": {
-                  "$ref": "#/components/schemas/AttachmentProblem"
-                },
-                "type": "array"
-              },
               "detail": {
                 "description": "What went wrong in this request, and what to do instead. Written for a model.",
                 "type": "string"
@@ -4605,6 +4557,13 @@
                     "type": "null"
                   }
                 ]
+              },
+              "secrets": {
+                "description": "With `secret-required`: each secret at fault, with what the caller may use.",
+                "items": {
+                  "$ref": "#/components/schemas/SecretProblem"
+                },
+                "type": "array"
               },
               "status": {
                 "description": "The HTTP status code.",
@@ -4741,7 +4700,7 @@
       },
       "PutSecret": {
         "additionalProperties": false,
-        "description": "`PUT /v1/secrets/{name}` and `PUT /v1/namespaces/{name}/secrets/{secret}`: creates or\nreplaces a secret. Replacing it makes ready the calls a refusal or a missing secret parked in\nthe runs that attach it, sent again with the same idempotency key.",
+        "description": "`PUT /v1/secrets/{name}` and `PUT /v1/namespaces/{name}/secrets/{secret}`: creates or\nreplaces a secret. Replacing it makes ready the calls a refusal or a missing secret parked in\nthe runs that use it, sent again with the same idempotency key.",
         "example": {
           "labels": {
             "env": "prod"
@@ -4751,7 +4710,7 @@
         "properties": {
           "labels": {
             "$ref": "#/components/schemas/Labels",
-            "description": "An organization's secret's labels: a grant limited to labels sees, writes and attaches\nonly the secrets carrying them, and the secrets it writes take them. A namespace's secret\ntakes none (`invalid-request`)."
+            "description": "An organization's secret's labels: a grant limited to labels sees, writes and uses\nonly the secrets carrying them, and the secrets it writes take them. A namespace's secret\ntakes none (`invalid-request`)."
           },
           "value": {
             "description": "The value: a string of at most 16 KiB. Written, never read back.",
@@ -5551,7 +5510,7 @@
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
-            "description": "The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):\nnames, never values."
+            "description": "The secrets it uses, named at start, by MCP server or API (`org/<name>`, `ns/<name>`):\nnames, never values."
           },
           "source": {
             "oneOf": [
@@ -6245,7 +6204,7 @@
             "type": "array"
           },
           "reference": {
-            "description": "How an attachment names it: `org/zendesk`, `ns/github`.",
+            "description": "How a secret names it: `org/zendesk`, `ns/github`.",
             "type": "string"
           },
           "scope": {
@@ -6304,7 +6263,7 @@
         "type": "string"
       },
       "SecretExpired": {
-        "description": "A call parked because its server refused the secret or the signature (`refused`), or\nbecause the secret the run attached no longer exists (`missing`, nothing was sent). Put the\nsecret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,\nfor a refused signature, approve the call once the server accepts the key: the call is then\nsent again with the same idempotency key.",
+        "description": "A call parked because its server refused the secret or the signature (`refused`), or\nbecause the secret the run uses no longer exists (`missing`, nothing was sent). Put the\nsecret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,\nfor a refused signature, approve the call once the server accepts the key: the call is then\nsent again with the same idempotency key.",
         "properties": {
           "action": {
             "type": "string"
@@ -6332,7 +6291,7 @@
             "type": "string"
           },
           "secret": {
-            "description": "The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);\nabsent for a signed call.",
+            "description": "The secret the run uses for the server, as named (`org/<name>`, `ns/<name>`);\nabsent for a signed call.",
             "type": [
               "string",
               "null"
@@ -6387,6 +6346,47 @@
         ],
         "type": "object"
       },
+      "SecretProblem": {
+        "description": "One secret that refused a start, a fork or a save, with what the caller may use for\nthat server instead.",
+        "properties": {
+          "problem": {
+            "$ref": "#/components/schemas/SecretProblemKind"
+          },
+          "secret": {
+            "description": "The secret used, as the request named it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server": {
+            "description": "The MCP server or API.",
+            "type": "string"
+          },
+          "usable": {
+            "description": "The secrets the caller may use for that server, `org/<name>` and `ns/<name>`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "server",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "SecretProblemKind": {
+        "description": "Why a secret refused a start, a fork or a save (`secret-required`).",
+        "enum": [
+          "missing",
+          "takes_none",
+          "unknown",
+          "forbidden"
+        ],
+        "type": "string"
+      },
       "SecretScope": {
         "description": "Whose secret.",
         "enum": [
@@ -6399,14 +6399,14 @@
         "description": "`GET /v1/secrets/{name}/usage`, `GET /v1/namespaces/{name}/secrets/{secret}/usage`: what\nreads a secret, what deleting it would stop.",
         "properties": {
           "activeRuns": {
-            "description": "The active runs that attach it, oldest first, at most 100.",
+            "description": "The active runs that use it, oldest first, at most 100.",
             "items": {
               "type": "string"
             },
             "type": "array"
           },
           "activeTotal": {
-            "description": "How many active runs attach it.",
+            "description": "How many active runs use it.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -6428,9 +6428,9 @@
             "type": "integer"
           },
           "workflows": {
-            "description": "The workflows whose latest version attaches it. A version attaching `ns/<name>` counts\nfor the secret `<name>` of every namespace.",
+            "description": "The workflows whose latest version uses it. A version using `ns/<name>` counts\nfor the secret `<name>` of every namespace.",
             "items": {
-              "$ref": "#/components/schemas/WorkflowAttaching"
+              "$ref": "#/components/schemas/WorkflowSecrets"
             },
             "type": "array"
           }
@@ -8161,7 +8161,7 @@
             "type": "object"
           },
           {
-            "description": "A call was parked because the server refused the secret or the signature (401), or\nbecause the secret the run attached no longer exists.",
+            "description": "A call was parked because the server refused the secret or the signature (401), or\nbecause the secret the run uses no longer exists.",
             "properties": {
               "data": {
                 "$ref": "#/components/schemas/SecretExpired"
@@ -8288,7 +8288,7 @@
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
-            "description": "The secrets its runs attach, part of the version."
+            "description": "The secrets its runs use, part of the version."
           },
           "signals": {
             "type": "object"
@@ -8320,31 +8320,6 @@
           "labels",
           "createdAt",
           "declarations"
-        ],
-        "type": "object"
-      },
-      "WorkflowAttaching": {
-        "description": "The latest version of a workflow, which attaches a secret.",
-        "properties": {
-          "digest": {
-            "description": "The version's digest (SHA-256, lowercase hex).",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "servers": {
-            "description": "The servers and APIs it attaches the secret for.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "name",
-          "digest",
-          "servers"
         ],
         "type": "object"
       },
@@ -8384,6 +8359,31 @@
         },
         "required": [
           "workflows"
+        ],
+        "type": "object"
+      },
+      "WorkflowSecrets": {
+        "description": "The latest version of a workflow, which uses a secret.",
+        "properties": {
+          "digest": {
+            "description": "The version's digest (SHA-256, lowercase hex).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "servers": {
+            "description": "The servers and APIs it uses the secret for.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "digest",
+          "servers"
         ],
         "type": "object"
       },
@@ -9979,7 +9979,7 @@
         ]
       },
       "post": {
-        "description": "Connects to the MCP servers and lists their actions, reads the APIs' OpenAPI documents\n(one action per operation), pins their schemas, policies and `auth`, and returns the\naction set with its declarations, for the model's prompt, and the API operations it left\nout. Content-addressed: registering the same action set again returns it (200). `secrets`\nattaches organization's secrets to list the actions of an MCP server that needs one\n(`secrets:use`). Requires `actions:write`.",
+        "description": "Connects to the MCP servers and lists their actions, reads the APIs' OpenAPI documents\n(one action per operation), pins their schemas, policies and `auth`, and returns the\naction set with its declarations, for the model's prompt, and the API operations it left\nout. Content-addressed: registering the same action set again returns it (200). `secrets`\nnames the organization's secrets used to list the actions of an MCP server that needs one\n(`secrets:use`). Requires `actions:write`.",
         "operationId": "createActionSet",
         "parameters": [
           {
@@ -10061,7 +10061,7 @@
                 }
               }
             },
-            "description": "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`)."
+            "description": "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret used for a listing that does not exist or is not the caller's (`secret-required`)."
           },
           "500": {
             "content": {
@@ -12964,7 +12964,7 @@
         ]
       },
       "put": {
-        "description": "Creates or replaces the secret `secret` of the namespace, read by its runs that attach\n`ns/<secret>`; a token puts its own namespace's. It takes no labels. The calls parked by a\nrefusal or a missing secret in the namespace's runs that attach it are ready again.\nRefused to a grant or a token limited to labels. Requires `secrets:write`.",
+        "description": "Creates or replaces the secret `secret` of the namespace, read by its runs that use\n`ns/<secret>`; a token puts its own namespace's. It takes no labels. The calls parked by a\nrefusal or a missing secret in the namespace's runs that use it are ready again.\nRefused to a grant or a token limited to labels. Requires `secrets:write`.",
         "operationId": "putNamespaceSecret",
         "parameters": [
           {
@@ -13095,7 +13095,7 @@
     },
     "/v1/namespaces/{name}/secrets/{secret}/usage": {
       "get": {
-        "description": "As `GET /v1/secrets/{name}/usage`, for the namespace's secret: its runs, and the\nworkflows whose latest version attaches `ns/<secret>`. Requires `secrets:read`.",
+        "description": "As `GET /v1/secrets/{name}/usage`, for the namespace's secret: its runs, and the\nworkflows whose latest version uses `ns/<secret>`. Requires `secrets:read`.",
         "operationId": "getNamespaceSecretUsage",
         "parameters": [
           {
@@ -18761,7 +18761,7 @@
     },
     "/v1/secrets/{name}": {
       "delete": {
-        "description": "The next call of a run that attaches it is parked (`secret.expired`, reason\n`missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires\n`secrets:write`.",
+        "description": "The next call of a run that uses it is parked (`secret.expired`, reason\n`missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires\n`secrets:write`.",
         "operationId": "deleteSecret",
         "parameters": [
           {
@@ -18854,7 +18854,7 @@
         ]
       },
       "put": {
-        "description": "Creates or replaces it, with its labels (a grant limited to labels gives it its own).\nThe calls parked by a refusal or a missing secret in the runs that attach it are ready\nagain, sent with the same idempotency key. Refused to an end user's token. Requires\n`secrets:write`.",
+        "description": "Creates or replaces it, with its labels (a grant limited to labels gives it its own).\nThe calls parked by a refusal or a missing secret in the runs that use it are ready\nagain, sent with the same idempotency key. Refused to an end user's token. Requires\n`secrets:write`.",
         "operationId": "putSecret",
         "parameters": [
           {
@@ -18966,7 +18966,7 @@
     },
     "/v1/secrets/{name}/usage": {
       "get": {
-        "description": "The active runs that attach it, those of them waiting on a call it serves, the\nworkflows whose latest version attaches it, its reads per day and its last read.\nRequires `secrets:read`.",
+        "description": "The active runs that use it, those of them waiting on a call it serves, the\nworkflows whose latest version uses it, its reads per day and its last read.\nRequires `secrets:read`.",
         "operationId": "getSecretUsage",
         "parameters": [
           {
@@ -20416,7 +20416,7 @@
       "name": "namespaces"
     },
     {
-      "description": "Named secrets of the organization and of each namespace, written and never read back, which runs attach when they start; the organization's signing keys and their public JWKS.",
+      "description": "Named secrets of the organization and of each namespace, written and never read back, which runs use when they start; the organization's signing keys and their public JWKS.",
       "name": "secrets"
     },
     {

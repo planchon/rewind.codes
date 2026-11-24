@@ -24,7 +24,7 @@
 //!   node's maximum of deliveries. When it is not, a transient failure is delivered, and an
 //!   interrupted call fails with `outcome_unknown`.
 //! - **Authentication** is resolved when an MCP or API call is sent, from its server's `auth`:
-//!   the secret the run attached, read from the `SecretStore` in the run's namespace, or the
+//!   the secret the run uses, read from the `SecretStore` in the run's namespace, or the
 //!   tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]), and its texts are
 //!   taken out of the answer ([`redacted`]): never in the history.
 //! - **Parked tasks.** A schema change, a 401 or a missing secret parks the task and sends
@@ -106,7 +106,7 @@ const MIN_REDACTED_SECRET: usize = 4;
 /// What replaces a secret's value in an answer.
 const REDACTED: &str = "[secret]";
 
-/// The texts of the attached secret an answer must not carry: its value, and its base64 form
+/// The texts of the secret used an answer must not carry: its value, and its base64 form
 /// when its header encodes it (HTTP basic).
 pub(crate) fn secret_texts(auth: &CallAuth) -> Vec<String> {
     let CallAuth::Secret { value, placement } = auth else {
@@ -128,7 +128,7 @@ pub(crate) fn secret_texts(auth: &CallAuth) -> Vec<String> {
     texts
 }
 
-/// `dispatched` without the attached secret's texts: a server that echoes its credential (an
+/// `dispatched` without the secret's texts: a server that echoes its credential (an
 /// error quoting the key, a debug endpoint) must not bring it into the history and the code
 /// (`archi/04-tools.md`, "Secrets": secrets never enter the history nor the isolate).
 pub(crate) fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {

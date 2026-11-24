@@ -23,7 +23,7 @@
 //! message, its `data`, and its `kind`: `error` (the default), `unavailable`, `timeout` or
 //! `outcome_unknown`. A handler cannot wait for anything (no timer, signal or action): a promise
 //! still pending once its microtasks are drained fails the call. An action without a handler fails
-//! with `unavailable`; [`TsMocks::handles`] lets test runs try another source first. `console`
+//! with `unavailable`; [`TsHandlers::handles`] lets test runs try another source first. `console`
 //! goes to `tracing`, at the debug level.
 
 use std::collections::BTreeSet;
@@ -99,7 +99,7 @@ pub struct TsHandlers {
 
 impl std::fmt::Debug for TsHandlers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TsMocks")
+        f.debug_struct("TsHandlers")
             .field("actions", &self.actions)
             .finish_non_exhaustive()
     }

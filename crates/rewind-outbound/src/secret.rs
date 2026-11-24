@@ -1,4 +1,4 @@
-//! Where an attached secret goes in a request (`archi/04-tools.md`, "Authenticating calls"): a
+//! Where a secret used goes in a request (`archi/04-tools.md`, "Authenticating calls"): a
 //! header, `format` with `{secret}` replaced by the value written as `encoding` says, or the
 //! value alone; or a variable of a stdio server's process. Never in a URL.
 

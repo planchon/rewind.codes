@@ -542,7 +542,7 @@ impl<'s> sqlx::migrate::MigrationSource<'s> for Released {
 }
 
 /// The credentials of version 9 cannot be named, and are dropped with their data keys; the runs
-/// attach nothing.
+/// use nothing.
 async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
     let database = postgres.create_database();
     let pool = sqlx::PgPool::connect(&postgres.url(&database))
@@ -592,7 +592,7 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
              WHERE id = '00000000-0000-0000-0000-000000000001'"
         ),
         "{}",
-        "the run is kept, set aside for migrate-runs, and attaches nothing"
+        "the run is kept, set aside for migrate-runs, and uses nothing"
     );
     let (tenant, secret) = secret_of("acme", "a-1");
     store.put(&tenant, &secret, T0).await.expect("put");

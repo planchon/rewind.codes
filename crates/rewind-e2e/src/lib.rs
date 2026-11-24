@@ -40,9 +40,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rewind_core::{
-    Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Code, Command, Event,
-    HistoryEvent, Lifecycle, McpServer, McpTransport, RunExport, RunId, RunOutcome, RunState,
-    SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
+    Action, ActionAuth, ActionRoute, ActionSet, Builtin, Code, Command, Event, HistoryEvent,
+    Lifecycle, McpServer, McpTransport, RunExport, RunId, RunOutcome, RunState, SecretPlacement,
+    SecretRef, ServerSecrets, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
 use rewind_engine::ports::{CodeExecutor, Entropy, RunRef, TenantId};
@@ -149,18 +149,18 @@ impl Case {
         scenario_action_set(&case.scenario)
             .map_err(|err| format!("{name}/scenario.json: {err}"))?;
         case.workflows()?;
-        attachments(&case.scenario.secrets)
+        server_secrets(&case.scenario.secrets)
             .map_err(|err| format!("{name}/scenario.json: secrets: {err}"))?;
         for reference in case.scenario.put_secrets.keys() {
             SecretRef::parse(reference)
                 .map_err(|err| format!("{name}/scenario.json: put_secrets: {err}"))?;
         }
         if !matches!(
-            case.scenario.attach.as_deref(),
+            case.scenario.secret_rights.as_deref(),
             None | Some("namespace" | "organization")
         ) {
             return Err(format!(
-                "{name}/scenario.json: attach is namespace or organization"
+                "{name}/scenario.json: secret_rights is namespace or organization"
             ));
         }
         Ok(case)
@@ -173,7 +173,7 @@ impl Case {
             .workflows
             .iter()
             .map(|(name, case)| {
-                let secrets = attachments(&case.secrets).map_err(|err| {
+                let secrets = server_secrets(&case.secrets).map_err(|err| {
                     format!("{}/scenario.json: workflow {name}: {err}", self.name)
                 })?;
                 Workflow::new(
@@ -431,8 +431,8 @@ fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))
 }
 
-/// The attachments of a scenario or of a workflow, read.
-fn attachments(secrets: &BTreeMap<String, String>) -> Result<Attachments, String> {
+/// The secrets of a scenario or of a workflow, read.
+fn server_secrets(secrets: &BTreeMap<String, String>) -> Result<ServerSecrets, String> {
     secrets
         .iter()
         .map(|(server, secret)| {

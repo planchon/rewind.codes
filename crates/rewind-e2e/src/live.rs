@@ -33,7 +33,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::actions::{Answer, ScenarioActions};
 use crate::scenario::Step;
-use crate::{Case, Live, Recorded, T0, attachments, executor, scenario_action_set};
+use crate::{Case, Live, Recorded, T0, executor, scenario_action_set, server_secrets};
 
 /// The ids and seeds of a scenario's entropy, drawn in order: a run of the one partition has
 /// the version 7 id the committed history holds.
@@ -289,9 +289,9 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         case.action_set(),
         case.scenario.input.clone(),
     );
-    request.metadata.secrets = attachments(&case.scenario.secrets)?;
-    if case.scenario.attach.as_deref() == Some("organization") {
-        request.attach = rewind_engine::attachments::AttachRights::Organization {
+    request.metadata.secrets = server_secrets(&case.scenario.secrets)?;
+    if case.scenario.secret_rights.as_deref() == Some("organization") {
+        request.secret_rights = rewind_engine::secrets::SecretRights::Organization {
             labels: BTreeMap::new(),
         };
     }
@@ -536,10 +536,11 @@ async fn apply_steps(world: &mut World, run: &RunRef, steps: &[Step]) -> Result<
             }
             Step::DeleteSecret(server) => {
                 let view = view_of(world, run).await?;
-                let attached = view.head.metadata.secrets.get(server).ok_or_else(|| {
-                    format!("delete_secret: the run attaches no secret for {server}")
-                })?;
-                let id = SecretId::resolve(attached, &view.head.namespace);
+                let used =
+                    view.head.metadata.secrets.get(server).ok_or_else(|| {
+                        format!("delete_secret: the run uses no secret for {server}")
+                    })?;
+                let id = SecretId::resolve(used, &view.head.namespace);
                 if !world
                     .plane
                     .secrets
@@ -598,8 +599,8 @@ async fn tasks_of(
 }
 
 /// The harness makes `server` accept the run's calls again: it puts the secret the run
-/// attached for it again, which resumes the calls parked by a refusal or a missing secret; for
-/// a server whose run attaches no secret, it approves the refused calls.
+/// used for it again, which resumes the calls parked by a refusal or a missing secret; for
+/// a server whose run uses no secret, it approves the refused calls.
 async fn accept_again(
     world: &mut World,
     run: &RunRef,
@@ -607,9 +608,9 @@ async fn accept_again(
     value: String,
 ) -> Result<(), String> {
     let view = view_of(world, run).await?;
-    if let Some(attached) = view.head.metadata.secrets.get(server) {
+    if let Some(used) = view.head.metadata.secrets.get(server) {
         let secret = NewSecret {
-            id: SecretId::resolve(attached, &view.head.namespace),
+            id: SecretId::resolve(used, &view.head.namespace),
             value: Secret::new(value),
             labels: BTreeMap::new(),
             by: "member:harness".into(),

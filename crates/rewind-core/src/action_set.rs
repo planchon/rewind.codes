@@ -223,7 +223,7 @@ pub enum McpTransport {
     /// Streamable HTTP.
     Http { url: String },
     /// A process started by the dispatcher, speaking MCP on its standard input and output.
-    /// `env` holds configuration, never secrets: an attached secret goes in the variable the
+    /// `env` holds configuration, never secrets: a secret used goes in the variable the
     /// server's `auth` names.
     Stdio {
         command: String,
@@ -620,7 +620,7 @@ impl ActionSet {
     }
 
     /// The MCP servers and APIs whose `auth` takes a secret, by name, sorted: those a run that
-    /// imports them must attach a secret for.
+    /// imports them must use a secret for.
     pub fn taking_secrets(&self) -> impl Iterator<Item = &str> {
         let servers = self
             .servers

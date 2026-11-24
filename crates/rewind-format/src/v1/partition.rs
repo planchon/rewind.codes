@@ -11,8 +11,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    ActionFailureKind, ActionPolicy, ActionRoute, Attachments, Digest, Event, JsonValue, Payload,
-    RunId, RunMode, RunStatus, Shape as CoreShape,
+    ActionFailureKind, ActionPolicy, ActionRoute, Digest, Event, JsonValue, Payload, RunId,
+    RunMode, RunStatus, ServerSecrets, Shape as CoreShape,
 };
 use rewind_core::{LogLevel, WorkflowOp};
 use serde::{Deserialize, Serialize};
@@ -80,10 +80,10 @@ pub struct Metadata {
     /// By server or API: `org/<name>` or `ns/<name>`.
     #[serde(
         default,
-        with = "with::attachments",
-        skip_serializing_if = "Attachments::is_empty"
+        with = "with::server_secrets",
+        skip_serializing_if = "ServerSecrets::is_empty"
     )]
-    pub secrets: Attachments,
+    pub secrets: ServerSecrets,
 }
 
 impl Metadata {
@@ -1267,16 +1267,16 @@ mod with {
         }
     }
 
-    pub(super) mod attachments {
+    pub(super) mod server_secrets {
         use super::*;
         use rewind_core::SecretRef;
 
         pub(crate) fn serialize<S: Serializer>(
-            attachments: &Attachments,
+            secrets: &ServerSecrets,
             s: S,
         ) -> Result<S::Ok, S::Error> {
             s.collect_map(
-                attachments
+                secrets
                     .iter()
                     .map(|(server, secret)| (server, secret.to_string())),
             )
@@ -1284,7 +1284,7 @@ mod with {
 
         pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
             d: D,
-        ) -> Result<Attachments, D::Error> {
+        ) -> Result<ServerSecrets, D::Error> {
             BTreeMap::<String, String>::deserialize(d)?
                 .into_iter()
                 .map(|(server, secret)| {

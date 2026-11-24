@@ -714,7 +714,7 @@ const V8: &str = r#"
 ALTER TABLE namespaces ADD COLUMN display_name TEXT;
 "#;
 
-/// Named secrets attached to runs, and each tenant's signing keys (`archi/04-tools.md`, "Secrets"
+/// Named secrets that runs use, and each tenant's signing keys (`archi/04-tools.md`, "Secrets"
 /// and "Signed calls"). The credentials per action set, per namespace and action set, and per run
 /// are dropped, with the data keys that encrypted them: nothing is encrypted under those any more,
 /// and a tenant's next secret or signing key makes a data key under the current master key, whose

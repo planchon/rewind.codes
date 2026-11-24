@@ -9,8 +9,8 @@
 //!         └─ data key, encrypted by a master key (id: the first 8 bytes of its SHA-256, hex)
 //! ```
 //!
-//! A run reads a secret only through the dispatcher, and only one it attached at start
-//! ([`Attachments`](rewind_core::Attachments)): the engine resolves the attachment
+//! A run reads a secret only through the dispatcher, and only one it named at start
+//! ([`ServerSecrets`](rewind_core::ServerSecrets)): the engine resolves the secret
 //! ([`SecretId::resolve`]) in the run's namespace and calls [`SecretStore::read`]. Values and
 //! private keys never enter the history, the isolate, a cassette, OpenTelemetry nor an answer of
 //! the API: their types redact `Debug` and implement no serialization.
@@ -51,9 +51,9 @@ impl fmt::Debug for Secret {
 /// Whose secrets: the organization's, kept under the namespace `*`, or one namespace's.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretNamespace {
-    /// The tenant's own: `org/<name>` in an attachment.
+    /// The tenant's own: `org/<name>` in a secret.
     Organization,
-    /// An end user's: `ns/<name>` in an attachment of a run of this namespace.
+    /// An end user's: `ns/<name>` in the secrets of a run of this namespace.
     Namespace(NamespaceName),
 }
 
@@ -70,7 +70,7 @@ impl SecretNamespace {
     }
 }
 
-/// A stored secret, in a tenant: its namespace and its name. What an attachment
+/// A stored secret, in a tenant: its namespace and its name. What a secret
 /// ([`SecretRef`]) names once resolved in the run's namespace.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SecretId {
@@ -93,7 +93,7 @@ impl SecretId {
         }
     }
 
-    /// The secret an attachment names for a run of `namespace`: `org/<name>` is the
+    /// The secret a reference names for a run of `namespace`: `org/<name>` is the
     /// organization's, `ns/<name>` the run's own namespace's, never another's.
     pub fn resolve(secret: &SecretRef, namespace: &NamespaceName) -> Self {
         Self {
@@ -105,7 +105,7 @@ impl SecretId {
         }
     }
 
-    /// How an attachment names it: `org/<name>` or `ns/<name>`.
+    /// How a reference names it: `org/<name>` or `ns/<name>`.
     pub fn to_ref(&self) -> SecretRef {
         match self.namespace {
             SecretNamespace::Organization => SecretRef::organization(self.name.clone()),
@@ -130,7 +130,7 @@ impl fmt::Display for SecretId {
 pub struct SecretMeta {
     pub id: SecretId,
     /// An organization's secret's own labels: a grant limited to labels sees, writes and
-    /// attaches only the secrets carrying all of its labels. Always empty for a namespace's.
+    /// uses only the secrets carrying all of its labels. Always empty for a namespace's.
     pub labels: BTreeMap<String, String>,
     /// Who wrote it first, and when.
     pub created_by: String,
@@ -190,7 +190,7 @@ pub enum SecretReader {
         run: RunId,
         namespace: NamespaceName,
     },
-    /// An action set's registration, listing the actions of an MCP server the secret is attached
+    /// An action set's registration, listing the actions of an MCP server the secret is used
     /// for (`POST /v1/action-sets`): no run exists yet.
     Registration,
 }
@@ -441,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn an_attachment_resolves_in_the_run_s_namespace() {
+    fn a_secret_reference_resolves_in_the_run_s_namespace() {
         let alice = NamespaceName::new("alice").unwrap();
         let github = SecretRef::parse("ns/github").unwrap();
         let id = SecretId::resolve(&github, &alice);

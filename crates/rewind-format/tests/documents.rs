@@ -488,7 +488,7 @@ fn the_action_set_with_apis_fixture_decodes_and_hashes_to_its_digest() {
     );
 }
 
-/// A version that attaches an end user's secret and an organization's.
+/// A version that uses an end user's secret and an organization's.
 fn workflow_with_secrets() -> Workflow {
     workflow().with_secrets(
         [
@@ -563,7 +563,7 @@ fn rejects_auth_and_apis_v1_does_not_define() {
     }
 }
 
-/// Prints the fixtures of APIs and attachments; used once to write them.
+/// Prints the fixtures of APIs and secrets; used once to write them.
 #[test]
 #[ignore = "writes nothing: prints the fixtures for a human to review"]
 fn print_secrets_fixtures() {

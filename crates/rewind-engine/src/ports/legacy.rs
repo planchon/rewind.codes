@@ -87,7 +87,7 @@ pub enum LegacyHistory {
     /// In the tables, in order.
     Events(Vec<HistoryEvent>),
     /// The retention archived it: the run export is a blob of the tenant, by its
-    /// digest ([`LegacyBlobs::history`]).
+    /// digest ([`LegacyBlobs::export`]).
     Archived(Digest),
 }
 

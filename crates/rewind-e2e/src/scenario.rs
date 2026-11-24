@@ -27,11 +27,11 @@ pub struct Scenario {
     /// The pinned output schema of some MCP actions, by name.
     #[serde(default)]
     pub output_schemas: BTreeMap<String, Value>,
-    /// How the calls of some MCP servers authenticate, by server: `secret` (the attached secret
+    /// How the calls of some MCP servers authenticate, by server: `secret` (the secret used
     /// as a bearer token) or `rewind` (signed with the tenant's key). None for the others.
     #[serde(default)]
     pub auth: BTreeMap<String, String>,
-    /// The secrets the run attaches, by server: `org/<name>` or `ns/<name>`
+    /// The secrets the run uses, by server: `org/<name>` or `ns/<name>`
     /// (`archi/04-tools.md`, "Secrets").
     #[serde(default)]
     pub secrets: BTreeMap<String, String>,
@@ -39,10 +39,10 @@ pub struct Scenario {
     /// namespace, `org/<name>`), with their values.
     #[serde(default)]
     pub put_secrets: BTreeMap<String, String>,
-    /// What the caller that starts the run may attach: `namespace` (the default: its
+    /// What the caller that starts the run may use: `namespace` (the default: its
     /// namespace's secrets only) or `organization` (`secrets:use`).
     #[serde(default)]
-    pub attach: Option<String>,
+    pub secret_rights: Option<String>,
     /// The policies that differ from the default, by action.
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
@@ -108,7 +108,7 @@ pub struct WorkflowCase {
     pub output: Value,
     #[serde(default)]
     pub signals: BTreeMap<String, Value>,
-    /// The secrets its runs attach, by server, saved with the version.
+    /// The secrets its runs use, by server, saved with the version.
     #[serde(default)]
     pub secrets: BTreeMap<String, String>,
 }
@@ -195,9 +195,9 @@ pub enum Step {
     },
     /// The harness makes these MCP servers accept the run's calls again, the value by server (a
     /// map of one header, as the corpus wrote it when runs had credentials): it puts the secret
-    /// the run attached for the server again, or approves the calls the server refused.
+    /// the run uses for the server again, or approves the calls the server refused.
     Credentials(BTreeMap<String, BTreeMap<String, String>>),
-    /// Deletes the secret the run attached for this server.
+    /// Deletes the secret the run uses for this server.
     DeleteSecret(String),
     /// The call of this action waits for the harness, parked for this reason
     /// (`credentials_refused`, `secret_missing`, `schema_changed`).

@@ -79,7 +79,7 @@ fn status() -> Value {
     })
 }
 
-/// What a run reads: the secrets it attaches, by MCP server or API.
+/// What a run reads: the secrets it uses, by MCP server or API.
 fn secrets(description: &str) -> Value {
     json!({
         "type": "object",
@@ -89,7 +89,7 @@ fn secrets(description: &str) -> Value {
 }
 
 /// The `secrets` of `run_workflow`.
-const RUN_SECRETS: &str = "The secrets the run reads, by the MCP server or API whose calls need one: {\"github\": \"ns/github\"} for the end user's own secret, read in the namespace the run acts for, or \"org/<name>\" for the organization's. Names only, never a value: list_secrets gives those you may attach. A code that imports a server needing a secret is refused without one.";
+const RUN_SECRETS: &str = "The secrets the run reads, by the MCP server or API whose calls need one: {\"github\": \"ns/github\"} for the end user's own secret, read in the namespace the run acts for, or \"org/<name>\" for the organization's. Names only, never a value: list_secrets gives those you may use. A code that imports a server needing a secret is refused without one.";
 
 fn with_description(mut schema: Value, description: &str) -> Value {
     schema["description"] = json!(description);
@@ -393,7 +393,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "list_secrets" => ToolDefinition {
             name: "list_secrets",
-            description: "List the secrets you may attach to a run, by name, never a value: the end user's own (ns/<name>, read in the namespace the run acts for) and the organization's (org/<name>). Give them in `secrets` of run_workflow, retry_run or save_workflow, by the MCP server or API whose calls need one, such as {\"github\": \"ns/github\"}.",
+            description: "List the secrets your runs may use, by name, never a value: the end user's own (ns/<name>, read in the namespace the run acts for) and the organization's (org/<name>). Give them in `secrets` of run_workflow, retry_run or save_workflow, by the MCP server or API whose calls need one, such as {\"github\": \"ns/github\"}.",
             input_schema: json!({
                 "type": "object",
                 "properties": {},

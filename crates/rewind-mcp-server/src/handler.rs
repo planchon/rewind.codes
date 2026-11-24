@@ -29,7 +29,7 @@ namespace you give as `namespace`; a new name creates one.\n\
 \"rewind:actions\". Give the action set's id as `action_set`.\n\
 4. search_actions: the TypeScript declarations of the actions you need, before you write the \
 code.\n\
-5. list_secrets: the secrets you may attach, by name, never a value: the end user's own \
+5. list_secrets: the secrets you may use, by name, never a value: the end user's own \
 (ns/<name>) and the organization's (org/<name>). A server whose calls need one takes it in \
 `secrets` of run_workflow and retry_run: {\"github\": \"ns/github\"}.\n\
 6. check_workflow, then test_workflow: type-check the code, then test it in virtual time against \

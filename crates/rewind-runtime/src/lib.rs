@@ -19,7 +19,7 @@
 //! from that epoch's V8 snapshot, with a CPU budget per call measured on the thread's CPU clock.
 //!
 //! [`sandbox_lib`] holds the declarations the type-checker gives workflows: exactly what the
-//! sandbox has. [`builtins`] holds what the glue sends to the built-in actions. [`TsMocks`] runs
+//! sandbox has. [`builtins`] holds what the glue sends to the built-in actions. [`TsHandlers`] runs
 //! TypeScript handlers in an isolate of their own, as the dispatcher of test runs.
 
 // Denied, not forbidden: `memory` alone allows it, for what V8 offers only through raw

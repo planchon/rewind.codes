@@ -346,7 +346,7 @@ fn describe_waiting(waiting: &Waiting) -> String {
                         )
                     } else if *parked == Some(ParkedReason::SecretMissing) {
                         format!(
-                            "{call}: parked, the secret the run attached no longer exists; the harness must put it again"
+                            "{call}: parked, the secret the run uses no longer exists; the harness must put it again"
                         )
                     } else {
                         format!(
@@ -1185,7 +1185,7 @@ pub fn describe_orgs(organizations: &[OrganizationView<'_>]) -> String {
     lines.join("\n")
 }
 
-/// `list_secrets`: the secrets the caller may attach, by name, never a value: the
+/// `list_secrets`: the secrets the caller may use, by name, never a value: the
 /// organization's with their labels, then the namespace's.
 pub fn describe_secrets(
     organization: &[rewind_api::secrets::Secret],
@@ -1218,10 +1218,10 @@ pub fn describe_secrets(
         }
     }
     if lines.is_empty() {
-        return "No secret you may attach exists yet: a person puts one first, the end user's in their namespace or the organization's.".into();
+        return "No secret you may use exists yet: a person puts one first, the end user's in their namespace or the organization's.".into();
     }
     format!(
-        "The secrets you may attach, never a value:\n{}\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {{\"github\": \"ns/github\"}}.",
+        "The secrets you may use, never a value:\n{}\nName one in `secrets`, by the MCP server or API whose calls need it, such as {{\"github\": \"ns/github\"}}.",
         lines.join("\n")
     )
 }

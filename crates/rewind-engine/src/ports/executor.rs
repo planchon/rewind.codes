@@ -104,7 +104,7 @@ pub trait CodeExecutor: Send + Sync {
 
     /// The names a code imports from `rewind:actions`: its MCP servers, APIs and groups of
     /// harness actions by their namespace, and its harness actions without a group by name. A start
-    /// checks that each server or API it imports whose `auth` takes a secret has one attached
+    /// checks that each server or API it imports whose `auth` takes a secret has one named
     /// (`archi/04-tools.md`, "Secrets"). `None` when the code may reach every one: it imports
     /// the whole module (`import * as actions`), or the executor cannot tell, which is the
     /// default. Called on a code [`compile`](Self::compile) accepted.

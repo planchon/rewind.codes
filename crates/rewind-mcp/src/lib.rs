@@ -3,7 +3,7 @@
 //!
 //! | Route | Dispatcher | What it does |
 //! | --- | --- | --- |
-//! | MCP actions | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the action set), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
+//! | MCP actions | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the action set), calls with the idempotency key and the trace context in `_meta`, the secret used or the signature in the transport, the execution timeout, the schema check before each call |
 //! | Built-ins | [`HttpAction`] | `http`, with the egress rules: allow-list, then `rewind-outbound`'s checks (one DNS resolution, private and metadata addresses refused, a connection to the checked address), redirects checked again, bounded responses. `webhook` is answered by the engine |
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
@@ -183,7 +183,7 @@ impl McpDispatcher {
     /// sets and code generation"), sorted by name. Each is named `{server}.{action}`, with its
     /// description (or its title), its input and output schemas, and the default policy of an
     /// MCP action; the harness's policies are applied by whoever builds the action set. `auth` is
-    /// how the listing proves who calls: the organization's secret the registration attaches, or a
+    /// how the listing proves who calls: the organization's secret the registration uses, or a
     /// listing signed with the reduced set of claims.
     pub async fn list_tools(
         &self,
@@ -342,10 +342,10 @@ impl ActionDispatcher for McpDispatcher {
 /// and "Signed calls"). Never printed: `Debug` redacts the secret and the key.
 #[derive(Debug, Clone, Default)]
 pub enum ListingAuth {
-    /// Nothing: a public server, or one whose secret the registration does not attach.
+    /// Nothing: a public server, or one whose secret the registration does not use.
     #[default]
     None,
-    /// The organization's secret the registration attaches for the server (`secrets`), put
+    /// The organization's secret the registration uses for the server (`secrets`), put
     /// where the server's `auth` says.
     Secret(Secret),
     /// Each request signed with the tenant's key, issued by `issuer`
@@ -380,7 +380,7 @@ impl ListingAuth {
 }
 
 /// What the call's authentication puts into the session (`archi/04-tools.md`, "Authenticating
-/// calls"): nothing; the attached secret where the server's `auth` says; or the tenant's key, on
+/// calls"): nothing; the secret used where the server's `auth` says; or the tenant's key, on
 /// a session of the run's end user, with the claims of the call for its own request.
 fn credentials_of(auth: CallAuth) -> (Credentials, Option<CallIdentity>) {
     match auth {

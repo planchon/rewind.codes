@@ -2,7 +2,7 @@
 //! `archi/05-testing-and-observability.md`, "Suites and the gate").
 //!
 //! ```text
-//! register_workflow ── checks (name, schemas, code, attachments, tsgo) ──┐
+//! register_workflow ── checks (name, schemas, code, secrets, tsgo) ──┐
 //!   lineage: the base named, or the latest version under the same labels │
 //!   the suite: the base's, retired, updated, added ─► run_tests ─► all pass?
 //!                                     reserve test rows, put their blobs ◄─┘
@@ -12,15 +12,15 @@
 //! Everything a save reads and writes is the control plane's: no partition takes part. The suite
 //! runs in the driver, on this process's executor ([`Edge::run_tests`]).
 
-use rewind_core::{ActionSet, Attachments, Code, Workflow};
+use rewind_core::{ActionSet, Code, ServerSecrets, Workflow};
 
 use super::Edge;
-use crate::attachments::{self, AttachRights, AttachmentCheck};
 use crate::plane::Plane;
 use crate::ports::{
     CatalogStore, Clock, CodeExecutor, Severity, StoreError, StoredWorkflow, TenantId, TypeChecker,
 };
 use crate::schema::Validator;
+use crate::secrets::{self, SecretCheck, SecretRights};
 use crate::suites::{SuiteChanges, SuiteError, Suites, TestFormat, TestKit};
 use crate::testing::{HandlerLoader, Subject};
 use crate::text;
@@ -37,7 +37,7 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Checks a workflow and stores it as a new version: its name and signals, its schemas, its
-    /// code against its action set (the checks at start), its attachments, then tsgo against
+    /// code against its action set (the checks at start), its secrets, then tsgo against
     /// the action set's and its own declarations; then the gate: its suite, composed from its
     /// base's, runs against it, and the version is stored only if every test passes. Saving
     /// a version again under the same labels changes nothing; under other labels, it is another
@@ -92,12 +92,12 @@ impl<P: Plane> Edge<P> {
             .executor()
             .compile(&request.code, &stored.action_set)
             .map_err(RegisterError::InvalidCode)?;
-        self.check_saved_attachments(
+        self.check_saved_secrets(
             &tenant,
             &request.code,
             &stored.action_set,
             workflow.secrets(),
-            &request.attach,
+            &request.secret_rights,
         )
         .await?;
         let diagnostics = checker
@@ -235,31 +235,31 @@ impl<P: Plane> Edge<P> {
             .is_ok_and(|made| made.version() == latest.version()))
     }
 
-    /// Refuses the attachments of a version to save that do not fit its action set and its code,
-    /// or that the saver may not attach: an organization's secret must exist and be theirs to
-    /// attach; an `ns/` secret is checked by its name only, since no namespace is known yet
+    /// Refuses the secrets of a version to save that do not fit its action set and its code,
+    /// or that the saver may not use: an organization's secret must exist and be theirs to
+    /// use; an `ns/` secret is checked by its name only, since no namespace is known yet
     /// (`archi/04-tools.md`, "Secrets": a workflow version is the permission).
-    async fn check_saved_attachments(
+    async fn check_saved_secrets(
         &self,
         tenant: &TenantId,
         code: &Code,
         action_set: &ActionSet,
-        secrets: &Attachments,
-        rights: &AttachRights,
+        secrets: &ServerSecrets,
+        rights: &SecretRights,
     ) -> Result<(), RegisterError> {
         if secrets.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
         let imports = self.plane.executor().action_imports(code);
-        let check = AttachmentCheck {
+        let check = SecretCheck {
             tenant,
             namespace: None,
             action_set,
             imports: imports.as_ref(),
-            attachments: secrets,
+            secrets,
             rights,
         };
-        attachments::check(self.plane.secrets(), self.plane.clock().now(), check)
+        secrets::check(self.plane.secrets(), self.plane.clock().now(), check)
             .await?
             .map_err(RegisterError::SecretRequired)
     }

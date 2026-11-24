@@ -14,7 +14,7 @@
 //! entropy giving the test's seed; harness actions are dispatched to the test's world as every
 //! other call. Its result is a function of the code, the action set, the test and the epoch. The
 //! code under test is a parameter ([`Subject`]).
-//! TypeScript handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
+//! TypeScript handlers come through a [`HandlerLoader`]: `rewind-runtime` runs them in an
 //! isolate of their own.
 
 use std::collections::BTreeMap;

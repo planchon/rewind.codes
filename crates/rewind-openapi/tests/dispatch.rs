@@ -1,5 +1,5 @@
 //! `ApiDispatcher` against a fake API on 127.0.0.1 (`archi/04-tools.md`, "API actions" and "Signed
-//! calls"): each answer of the table, the attached secret in its header, signed requests
+//! calls"): each answer of the table, the secret used in its header, signed requests
 //! checked as a customer's server checks them (the JWKS built from the public key, `aud`,
 //! `exp`, `htm`, `htu`, `body`, the labels), redirects within the origin signed again, the
 //! egress checks of a deployment, and OpenAPI documents read from their URL.

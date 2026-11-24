@@ -1,10 +1,10 @@
-//! Secrets attached to runs and signed calls, end to end over HTTP (`archi/04-tools.md`,
+//! The secrets runs use and signed calls, end to end over HTTP (`archi/04-tools.md`,
 //! "Authenticating calls", "Secrets" and "Signed calls"; `archi/06-storage-and-scale.md`, "What
 //! the caller may do"; `archi/07-code-architecture.md`, "HTTP API /v1"), on Turso and on Postgres:
 //!
 //! - an MCP server over streamable HTTP that requires a secret: its actions listed with an
 //!   organization's secret and refused without one; Alice's run calls it with Alice's value and
-//!   Bob's with Bob's; a start that attaches nothing is refused before any run exists, and nothing
+//!   Bob's with Bob's; a start that uses nothing is refused before any run exists, and nothing
 //!   falls back on the organization's secret;
 //! - signed calls: an MCP server and an API check every request with `rewind_outbound::verify`
 //!   against the keys the Rewind server publishes at `/organizations/{organization}/jwks.json`, and
@@ -12,7 +12,7 @@
 //!   parks the call until the harness approves it;
 //! - a secret deleted mid-run parks the call (`secret.expired`, `missing`), a 401 parks it
 //!   too (`refused`), and putting the secret again sends it with the same idempotency key;
-//! - a key limited to `env=dev` neither sees nor attaches the organization's `env=prod` secrets,
+//! - a key limited to `env=dev` neither sees nor uses the organization's `env=prod` secrets,
 //!   and never writes a namespace's;
 //! - a value is nowhere: not in a run, its history or cassette, its events, events or trace, a
 //!   list, a usage, a problem, a webhook, the OpenTelemetry the server exports, nor the process's
@@ -46,7 +46,7 @@ use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::runs::{Run, RunFilter, StartRun, Waiting};
-use rewind_api::secrets::{AttachmentProblemKind, PutSecret};
+use rewind_api::secrets::{PutSecret, SecretProblemKind};
 use rewind_api::webhooks::{
     CreateSubscription, SecretExpired, SecretExpiredReason, Webhook, WebhookType,
 };
@@ -668,7 +668,7 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn attachments(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+fn server_secrets(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(server, secret)| ((*server).to_owned(), (*secret).to_owned()))
@@ -676,7 +676,7 @@ fn attachments(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 /// The action set of an MCP server `github` that takes a secret in `Authorization`, listed with
-/// `listing` attached.
+/// `listing` named.
 fn github_action_set(url: &str, listing: Option<&str>) -> CreateActionSet {
     CreateActionSet {
         mcp: vec![McpServer {
@@ -691,7 +691,7 @@ fn github_action_set(url: &str, listing: Option<&str>) -> CreateActionSet {
             ..McpServer::default()
         }],
         secrets: listing
-            .map(|secret| attachments(&[("github", secret)]))
+            .map(|secret| server_secrets(&[("github", secret)]))
             .unwrap_or_default(),
         ..CreateActionSet::default()
     }
@@ -704,7 +704,7 @@ export default async function main() {
 }
 "#;
 
-/// Starts `code` in `namespace` with these attachments and labels, waiting up to 60 s.
+/// Starts `code` in `namespace` with these secrets and labels, waiting up to 60 s.
 async fn start(
     client: &Client,
     namespace: &str,
@@ -715,7 +715,7 @@ async fn start(
 ) -> Result<Run, rewind_api::Error> {
     let mut request = StartRun::new(code);
     request.action_set = Some(action_set.to_owned());
-    request.secrets = attachments(secrets);
+    request.secrets = server_secrets(secrets);
     request.labels = labels.iter().copied().collect();
     request.wait = wait("60s");
     client
@@ -895,7 +895,7 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
 // Scenarios
 
 /// Listed with an organization's secret, refused without; each end user's run calls with its
-/// own secret; nothing attached, or a secret the namespace lacks, is refused before any run
+/// own secret; nothing named, or a secret the namespace lacks, is refused before any run
 /// exists, and nothing falls back on the organization's secret.
 async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside: &Outside) {
     let listing = unique("gh-listing");
@@ -911,7 +911,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
     let customer = server.tenant_key("acme", "harness").await;
     let mut left = Left::default();
 
-    // Listed without a secret: the server refuses, and the refusal says to attach one.
+    // Listed without a secret: the server refuses, and the refusal says to use one.
     let refused = problem(
         customer
             .create_action_set(&github_action_set(&url, None))
@@ -922,7 +922,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
     assert!(
         refused
             .detail
-            .contains("attach an organization's secret for github in secrets"),
+            .contains("use an organization's secret for github in secrets"),
         "{}",
         refused.detail
     );
@@ -941,15 +941,11 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             .unwrap_err(),
     );
     assert_eq!(
-        (
-            unknown.status,
-            unknown.kind(),
-            unknown.attachments[0].problem
-        ),
+        (unknown.status, unknown.kind(), unknown.secrets[0].problem),
         (
             422,
             Some(ProblemType::SecretRequired),
-            AttachmentProblemKind::Unknown
+            SecretProblemKind::Unknown
         )
     );
     left.problems.push(unknown);
@@ -979,7 +975,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             received.rpc.as_deref() == Some("tools/list")
                 && received.authorization == Some(format!("Bearer {listing}"))
         }),
-        "the listing carried the organization's secret attached for it"
+        "the listing carried the organization's secret used for it"
     );
     let read = customer
         .secret_usage("github-listing")
@@ -1015,7 +1011,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         .await
         .unwrap();
         assert_eq!(output(&run), json!({ "user": user }));
-        assert_eq!(run.secrets, attachments(&[("github", "ns/github")]));
+        assert_eq!(run.secrets, server_secrets(&[("github", "ns/github")]));
         runs.insert(user, run);
     }
     // Each call carried its own end user's secret, once, with its idempotency key.
@@ -1043,7 +1039,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         assert!(usage.secret.reads.iter().map(|day| day.reads).sum::<u64>() >= 1);
     }
 
-    // Nothing attached: refused before any run exists, naming what may be attached.
+    // Nothing named: refused before any run exists, naming what may be used.
     let before = runs_in(&customer, "alice").await;
     let missing = problem(
         start(&customer, "alice", WHOAMI, &action_set.id, &[], &[])
@@ -1054,16 +1050,16 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         (missing.status, missing.kind()),
         (422, Some(ProblemType::SecretRequired))
     );
-    let attachment = &missing.attachments[0];
+    let at_fault = &missing.secrets[0];
     assert_eq!(
-        (attachment.server.as_str(), attachment.problem),
-        ("github", AttachmentProblemKind::Missing)
+        (at_fault.server.as_str(), at_fault.problem),
+        ("github", SecretProblemKind::Missing)
     );
-    for attachable in ["org/github", "org/github-listing", "ns/github"] {
+    for usable in ["org/github", "org/github-listing", "ns/github"] {
         assert!(
-            attachment.attachable.iter().any(|name| name == attachable),
+            at_fault.usable.iter().any(|name| name == usable),
             "{:?}",
-            attachment.attachable
+            at_fault.usable
         );
     }
     assert_eq!(runs_in(&customer, "alice").await, before);
@@ -1084,10 +1080,10 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         .unwrap_err(),
     );
     assert_eq!(
-        (carol.kind(), carol.attachments[0].problem),
+        (carol.kind(), carol.secrets[0].problem),
         (
             Some(ProblemType::SecretRequired),
-            AttachmentProblemKind::Unknown
+            SecretProblemKind::Unknown
         )
     );
     assert!(runs_in(&customer, "carol").await.is_empty());
@@ -1157,7 +1153,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
     let alice = customer.with_namespace(ns("alice"));
     let mut request = StartRun::new(THREE_CALLS);
     request.action_set = Some(action_set.id.clone());
-    request.secrets = attachments(&[("github", "ns/github")]);
+    request.secrets = server_secrets(&[("github", "ns/github")]);
     let run = alice.start_run(&request, None).await.unwrap();
     waits_for(&alice, &run.id, "go").await;
 
@@ -1627,9 +1623,9 @@ async fn a_signed_api_learns_the_end_user_from_the_signature() {
     running.stop().await;
 }
 
-/// A key limited to `env=dev` sees, lists for and attaches only the organization's secrets
+/// A key limited to `env=dev` sees, lists for and uses only the organization's secrets
 /// carrying `env=dev`, and never writes a namespace's.
-async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside) {
+async fn labels_bound_what_a_key_uses(server: &TestServer, outside: &Outside) {
     let prod = unique("gh-prod");
     let dev = unique("gh-dev");
     let github = Keyed::default();
@@ -1681,13 +1677,13 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
             .unwrap_err(),
     );
     assert_eq!(
-        (listing.kind(), listing.attachments[0].problem),
+        (listing.kind(), listing.secrets[0].problem),
         (
             Some(ProblemType::SecretRequired),
-            AttachmentProblemKind::Unknown
+            SecretProblemKind::Unknown
         )
     );
-    assert_eq!(listing.attachments[0].attachable, ["org/github-dev"]);
+    assert_eq!(listing.secrets[0].usable, ["org/github-dev"]);
     left.problems.push(listing);
     let action_set = limited
         .create_action_set(&github_action_set(&url, Some("org/github-dev")))
@@ -1708,24 +1704,20 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
         .unwrap_err(),
     );
     assert_eq!(
-        (
-            refused.status,
-            refused.kind(),
-            refused.attachments[0].problem
-        ),
+        (refused.status, refused.kind(), refused.secrets[0].problem),
         (
             422,
             Some(ProblemType::SecretRequired),
-            AttachmentProblemKind::Unknown
+            SecretProblemKind::Unknown
         )
     );
     assert!(
-        !refused.attachments[0]
-            .attachable
+        !refused.secrets[0]
+            .usable
             .iter()
             .any(|name| name == "org/github-prod"),
         "{:?}",
-        refused.attachments[0].attachable
+        refused.secrets[0].usable
     );
     assert!(runs_in(&limited, "alice").await.is_empty());
     left.problems.push(refused);
@@ -1818,10 +1810,10 @@ async fn a_signed_server_checks_every_request_on_turso() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn labels_bound_what_a_key_attaches_on_turso() {
+async fn labels_bound_what_a_key_uses_on_turso() {
     let outside = Outside::serve().await;
     let server = outside.on_turso().await;
-    labels_bound_what_a_key_attaches(&server, &outside).await;
+    labels_bound_what_a_key_uses(&server, &outside).await;
     server.stop().await;
 }
 
@@ -1863,12 +1855,12 @@ async fn a_signed_server_checks_every_request_on_postgres() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn labels_bound_what_a_key_attaches_on_postgres() {
+async fn labels_bound_what_a_key_uses_on_postgres() {
     let Some(postgres) = Postgres::start() else {
         return;
     };
     let outside = Outside::serve().await;
     let server = outside.on_postgres(&postgres).await;
-    labels_bound_what_a_key_attaches(&server, &outside).await;
+    labels_bound_what_a_key_uses(&server, &outside).await;
     server.stop().await;
 }

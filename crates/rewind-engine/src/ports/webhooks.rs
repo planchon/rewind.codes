@@ -53,7 +53,7 @@ pub enum WebhookType {
     RunQuarantined,
     ActionSchemaChanged,
     /// A call parked because its server refused the secret or the signature, or because the
-    /// secret the run attached no longer exists.
+    /// secret the run uses no longer exists.
     SecretExpired,
     /// A namespace, or the tenant, crossed 80 % or 100 % of a limit
     /// (`archi/06-storage-and-scale.md`, "Quotas").
@@ -137,7 +137,7 @@ pub enum WebhookKind {
         action: String,
         message: String,
         reason: SecretExpiredReason,
-        /// The secret the run attached for the action's server, as attached (`org/<name>` or
+        /// The secret the run uses for the action's server, as named (`org/<name>` or
         /// `ns/<name>`); `None` for a signed call.
         secret: Option<SecretRef>,
     },
@@ -150,7 +150,7 @@ pub enum WebhookKind {
 pub enum SecretExpiredReason {
     /// The server answered 401 to the secret or to the signature.
     Refused,
-    /// The secret the run attached no longer exists: nothing was sent.
+    /// The secret the run uses no longer exists: nothing was sent.
     Missing,
 }
 

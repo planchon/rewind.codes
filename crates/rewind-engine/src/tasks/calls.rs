@@ -452,7 +452,7 @@ pub(crate) async fn call_key<P: Plane>(
 }
 
 /// How a live call proves who calls (`archi/04-tools.md`, "Authenticating calls"): the secret
-/// the run attached for the server, read in the run's namespace and counted, or the tenant's
+/// the run uses for the server, read in the run's namespace and counted, or the tenant's
 /// signing key. A secret that no longer exists parks the call before anything is sent.
 async fn live_auth<P: Plane>(
     plane: &P,
@@ -467,13 +467,13 @@ async fn live_auth<P: Plane>(
     match auth {
         ActionAuth::None => Ok(Ok(CallAuth::None)),
         ActionAuth::Secret(placement) => {
-            let Some(attached) = head.metadata.secrets.get(server) else {
+            let Some(used) = head.metadata.secrets.get(server) else {
                 return Ok(Err(unavailable(format!(
-                    "{server} needs a secret, and the run attached none for it: fork the run \
+                    "{server} needs a secret, and the run names none for it: fork the run \
                      with \"secrets\": {{\"{server}\": \"org/<name>\" or \"ns/<name>\"}}"
                 ))));
             };
-            let id = SecretId::resolve(attached, &head.namespace);
+            let id = SecretId::resolve(used, &head.namespace);
             let reader = SecretReader::Run {
                 run: call.run.id,
                 namespace: head.namespace.clone(),
@@ -489,17 +489,17 @@ async fn live_auth<P: Plane>(
                     placement: placement.clone(),
                 }),
                 None => {
-                    let put = match attached.scope {
-                        SecretScope::Organization => format!("PUT /v1/secrets/{}", attached.name),
+                    let put = match used.scope {
+                        SecretScope::Organization => format!("PUT /v1/secrets/{}", used.name),
                         SecretScope::Namespace => format!(
                             "PUT /v1/namespaces/{}/secrets/{}",
-                            head.namespace, attached.name
+                            head.namespace, used.name
                         ),
                     };
                     Err(CallOutcome::Dispatched(Dispatched::Park(ParkReason {
                         kind: ParkKind::SecretMissing,
                         message: format!(
-                            "the secret {attached} the run attached for {server} no longer \
+                            "the secret {used} the run uses for {server} no longer \
                              exists: put it again ({put}), and the call is sent with the same \
                              idempotency key"
                         ),
@@ -671,9 +671,7 @@ async fn start_child<P: Plane>(
         return not_sent("this node supports no determinism epoch".into());
     };
     let now = plane.clock().now();
-    match checks::version_attachments(plane.secrets(), now, tenant, &head.namespace, &workflow)
-        .await
-    {
+    match checks::version_secrets(plane.secrets(), now, tenant, &head.namespace, &workflow).await {
         Ok(Ok(())) => {}
         Ok(Err(refused)) => {
             return unavailable(format!("no run of {workflow} was started: {refused}"));

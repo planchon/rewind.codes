@@ -226,7 +226,7 @@ async fn the_organization_s_secrets_are_listed_written_and_deleted() {
 
     let (exit, out, err) = server.rewind(&["secrets", "usage", "github"], "").await;
     assert_eq!(exit, Exit::Success, "{err}");
-    assert!(out.contains("active runs attaching it: 1 (run-1)"), "{out}");
+    assert!(out.contains("active runs using it: 1 (run-1)"), "{out}");
     assert!(out.contains("triage@4be1c07a9d3e for github"), "{out}");
 
     let (exit, out, err) = server.rewind(&["secrets", "delete", "github"], "").await;
