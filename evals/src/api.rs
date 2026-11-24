@@ -946,7 +946,7 @@ impl Api for World {
         let tenant = TenantId::local();
         let stored = self
             .catalog()
-            .get_script(&tenant, parsed)
+            .get_code(&tenant, parsed)
             .await
             .map_err(catalog_error)?
             .ok_or_else(missing)?;

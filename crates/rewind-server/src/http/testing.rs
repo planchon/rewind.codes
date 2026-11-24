@@ -209,7 +209,7 @@ pub(crate) async fn suite(
 async fn source(app: &App, tenant: &TenantId, digest: Digest) -> Result<Code, ApiError> {
     Ok(app
         .store
-        .get_script(tenant, digest)
+        .get_code(tenant, digest)
         .await?
         .ok_or_else(|| ApiError::internal(format!("code {digest} is missing")))?
         .code)

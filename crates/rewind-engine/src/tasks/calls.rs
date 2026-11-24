@@ -651,7 +651,7 @@ async fn start_child<P: Plane>(
             ));
         }
     };
-    let code = match plane.catalog().get_script(tenant, workflow.code()).await {
+    let code = match plane.catalog().get_code(tenant, workflow.code()).await {
         Ok(Some(stored)) => stored.code,
         Ok(None) => return not_sent(format!("the code of {workflow} is not stored")),
         Err(error) => return not_sent(format!("the workflow's code could not be read: {error}")),

@@ -80,7 +80,7 @@ impl CodeTexts {
         {
             return Some(text);
         }
-        let text = match catalog.get_script(tenant, digest).await {
+        let text = match catalog.get_code(tenant, digest).await {
             Ok(Some(stored)) => Arc::new(CodeText::of(stored.code.source())),
             Ok(None) => return None,
             Err(error) => {

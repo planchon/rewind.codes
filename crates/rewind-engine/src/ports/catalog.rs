@@ -126,7 +126,7 @@ pub trait CatalogStore: Send + Sync {
         compiled: &CompiledCode,
     ) -> impl Future<Output = Result<(), CatalogError>> + Send;
 
-    fn get_script(
+    fn get_code(
         &self,
         tenant: &TenantId,
         digest: Digest,

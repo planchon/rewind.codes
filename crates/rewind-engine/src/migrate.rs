@@ -254,7 +254,7 @@ where
         };
         let code = self
             .catalog
-            .get_script(tenant, legacy.code)
+            .get_code(tenant, legacy.code)
             .await?
             .ok_or_else(|| Refused::Run(format!("its code {} is missing", legacy.code)))?
             .code;

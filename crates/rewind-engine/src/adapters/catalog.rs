@@ -158,7 +158,7 @@ impl CatalogStore for MemoryCatalog {
         Ok(())
     }
 
-    async fn get_script(
+    async fn get_code(
         &self,
         tenant: &TenantId,
         digest: Digest,

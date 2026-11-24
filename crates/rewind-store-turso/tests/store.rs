@@ -136,9 +136,9 @@ async fn the_catalog_survives_a_restart() {
     );
     assert_eq!(
         catalog
-            .get_script(&tenant, code.digest())
+            .get_code(&tenant, code.digest())
             .await
-            .expect("get_script")
+            .expect("get_code")
             .map(|stored| stored.code),
         Some(code)
     );

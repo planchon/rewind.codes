@@ -318,7 +318,7 @@ pub(crate) async fn prepare<P: Plane>(
     let tenant = &run.tenant;
     let code = plane
         .catalog()
-        .get_script(tenant, head.code)
+        .get_code(tenant, head.code)
         .await
         .map_err(|error| failed("the code", error.to_string()))?
         .ok_or_else(|| format!("code {} not found", head.code))?;

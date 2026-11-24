@@ -743,7 +743,7 @@ impl CatalogStore for PostgresCatalog {
         Ok(())
     }
 
-    async fn get_script(
+    async fn get_code(
         &self,
         tenant_id: &TenantId,
         digest: Digest,

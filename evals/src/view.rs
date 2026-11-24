@@ -91,7 +91,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
         Some(RunOutcome::Failed { error: failure }) => {
             let source = world
                 .catalog()
-                .get_script(&run.tenant, record.code)
+                .get_code(&run.tenant, record.code)
                 .await
                 .map_err(|error| unavailable(error.to_string()))?
                 .map(|stored| stored.code.source().to_owned())
@@ -187,7 +187,7 @@ pub async fn script_title(
         return Ok(Some((given.title, given.description, TitleSource::Person)));
     }
     Ok(catalog
-        .get_script(tenant, code)
+        .get_code(tenant, code)
         .await
         .map_err(failed)?
         .and_then(|stored| rewind_core::code_doc(stored.code.source()))

@@ -355,7 +355,7 @@ impl Views<'_> {
             Some((line, column)) => self
                 .app
                 .catalog()
-                .get_script(&head.run.tenant, head.code)
+                .get_code(&head.run.tenant, head.code)
                 .await?
                 .and_then(|stored| code_frame(stored.code.source(), line, column)),
             None => None,

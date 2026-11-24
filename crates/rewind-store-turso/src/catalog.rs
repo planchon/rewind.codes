@@ -342,7 +342,7 @@ impl CatalogStore for TursoCatalog {
         Ok(())
     }
 
-    async fn get_script(
+    async fn get_code(
         &self,
         tenant_id: &TenantId,
         key: Digest,

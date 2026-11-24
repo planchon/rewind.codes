@@ -157,9 +157,9 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
     };
     assert_eq!(
         catalog
-            .get_script(&acme(), code.digest())
+            .get_code(&acme(), code.digest())
             .await
-            .expect("get_script"),
+            .expect("get_code"),
         None
     );
     catalog
@@ -175,9 +175,9 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
         .await
         .expect("put_code is idempotent");
     let stored = catalog
-        .get_script(&acme(), code.digest())
+        .get_code(&acme(), code.digest())
         .await
-        .expect("get_script")
+        .expect("get_code")
         .expect("stored");
     assert_eq!(
         (stored.code, stored.compiled),
@@ -186,9 +186,9 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
     );
     assert_eq!(
         catalog
-            .get_script(&other, code.digest())
+            .get_code(&other, code.digest())
             .await
-            .expect("get_script"),
+            .expect("get_code"),
         None,
         "another tenant does not see it"
     );

@@ -297,7 +297,7 @@ impl<P: Plane> Edge<P> {
                 max: bounds.max_ttl,
             })?;
         let code = catalog
-            .get_script(&request.tenant, workflow.code())
+            .get_code(&request.tenant, workflow.code())
             .await
             .map_err(start_unavailable)?
             .ok_or_else(|| start_unavailable(format!("the code of {workflow} is not stored")))?;
@@ -982,7 +982,7 @@ impl<P: Plane> Edge<P> {
             .map_err(unavailable)?;
         let catalog = self.plane.catalog();
         let code = catalog
-            .get_script(&run.tenant, view.head.code)
+            .get_code(&run.tenant, view.head.code)
             .await
             .map_err(unavailable)?
             .ok_or_else(|| unavailable(format!("code {} not found", view.head.code)))?;

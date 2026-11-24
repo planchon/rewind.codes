@@ -224,7 +224,7 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
         let code = source
             .plane
             .catalog
-            .get_script(&tenant, head.code)
+            .get_code(&tenant, head.code)
             .await
             .unwrap()
             .unwrap();

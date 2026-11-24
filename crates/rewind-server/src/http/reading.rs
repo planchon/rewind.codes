@@ -124,7 +124,7 @@ async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script,
     let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
     let stored = app
         .catalog()
-        .get_script(&caller.tenant, parsed)
+        .get_code(&caller.tenant, parsed)
         .await?
         .ok_or_else(missing)?;
     if caller.scoped() || caller.namespace.is_some() {

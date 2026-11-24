@@ -627,7 +627,7 @@ impl World {
                     base: workflow.suite().base,
                     action_set: workflow.action_set(),
                     code: catalog
-                        .get_script(&tenant, workflow.code())
+                        .get_code(&tenant, workflow.code())
                         .await?
                         .map(|stored| stored.code.source().to_owned())
                         .unwrap_or_default(),

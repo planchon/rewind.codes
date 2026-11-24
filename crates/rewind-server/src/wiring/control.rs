@@ -622,12 +622,12 @@ impl CatalogStore for Catalog {
         catalog!(self, catalog => catalog.put_code(tenant, code, compiled).await)
     }
 
-    async fn get_script(
+    async fn get_code(
         &self,
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<StoredCode>, CatalogError> {
-        catalog!(self, catalog => catalog.get_script(tenant, digest).await)
+        catalog!(self, catalog => catalog.get_code(tenant, digest).await)
     }
 
     async fn set_script_title(
@@ -898,12 +898,12 @@ impl CatalogStore for ControlPlane {
         self.catalog().put_code(tenant, code, compiled).await
     }
 
-    async fn get_script(
+    async fn get_code(
         &self,
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<StoredCode>, CatalogError> {
-        self.catalog().get_script(tenant, digest).await
+        self.catalog().get_code(tenant, digest).await
     }
 
     async fn set_script_title(

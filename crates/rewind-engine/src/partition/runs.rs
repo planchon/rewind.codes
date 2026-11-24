@@ -2002,7 +2002,7 @@ async fn seal_attempt<P: Plane>(
     }
     let code = plane
         .catalog()
-        .get_script(&run.tenant, head.code)
+        .get_code(&run.tenant, head.code)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("code {} not found", head.code))?;
