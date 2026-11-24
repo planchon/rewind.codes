@@ -1,7 +1,7 @@
 import { RewindError } from "../errors.js";
 import { checkNamespaceName, type Transport } from "../http.js";
 import type { Jwks, PutSecret, Secret, SecretUsage, SigningKey, SigningKeyList } from "../types.js";
-import type { RequestOptions } from "./toolsets.js";
+import type { RequestOptions } from "../params.js";
 
 /** A secret's name, as the server takes it: 1 to 64 lowercase letters, digits, `-` and `_`, starting with a letter. */
 export function isSecretName(name: string): boolean {
@@ -19,8 +19,8 @@ function checkSecretName(name: string): void {
 
 /**
  * The organization's secrets: named values, encrypted at rest, that only the dispatcher reads, for the runs that
- * attach them (`secrets: { zendesk: "org/zendesk" }` at start). Write-only: no answer ever holds a value. A key limited
- * to labels sees, writes and attaches only the secrets carrying them, and the secrets it writes take them.
+ * use them (`secrets: { zendesk: "org/zendesk" }` at start). Write-only: no answer ever holds a value. A key limited
+ * to labels sees, writes and uses only the secrets carrying them, and the secrets it writes take them.
  */
 export class Secrets {
   constructor(
@@ -42,7 +42,7 @@ export class Secrets {
   }
 
   /**
-   * The secrets of the namespace the client acts for (`rewind.namespace(name)`), attached as `ns/<name>`; `undefined`
+   * The secrets of the namespace the client acts for (`rewind.namespace(name)`), used as `ns/<name>`; `undefined`
    * when the client names no namespace. A client holding an end user's token lists them with
    * `namespaces.secrets.list(name)`.
    */
@@ -55,7 +55,7 @@ export class Secrets {
 
   /**
    * Creates or replaces an organization's secret: its `value` (a string of at most 16 KiB) and its `labels`, which
-   * replace those it had. The calls parked because the secret was missing or refused, in the runs that attach it, are
+   * replace those it had. The calls parked because the secret was missing or refused, in the runs that use it, are
    * sent again with the same idempotency key. Refused to an end user's token.
    */
   async put(name: string, secret: PutSecret, options: RequestOptions = {}): Promise<Secret> {
@@ -72,7 +72,7 @@ export class Secrets {
   }
 
   /**
-   * Deletes it: the next call of a run that attaches it is parked (`credentials.expired`, reason `missing`) until a
+   * Deletes it: the next call of a run that uses it is parked (`secret.expired`, reason `missing`) until a
    * secret of the same name is put again. `usage` says first what that would stop.
    */
   async delete(name: string, options: RequestOptions = {}): Promise<void> {
@@ -88,8 +88,8 @@ export class Secrets {
   }
 
   /**
-   * What reads it, and what deleting it would stop: the active runs that attach it, those of them waiting on a call it
-   * serves, the workflows whose latest version attaches it; with its reads per day and its last read.
+   * What reads it, and what deleting it would stop: the active runs that use it, those of them waiting on a call it
+   * serves, the workflows whose latest version uses it; with its reads per day and its last read.
    */
   async usage(name: string, options: RequestOptions = {}): Promise<SecretUsage> {
     checkSecretName(name);
@@ -105,7 +105,7 @@ export class Secrets {
 }
 
 /**
- * A namespace's secrets: one end user's own values, such as Alice's GitHub token, attached as `ns/<name>` by the runs
+ * A namespace's secrets: one end user's own values, such as Alice's GitHub token, used as `ns/<name>` by the runs
  * of that namespace only. A key writes those of any namespace; an end user's token those of its own (with
  * `secrets:write`). A key or a token limited to labels never writes one.
  */
@@ -128,7 +128,7 @@ export class NamespaceSecrets {
 
   /**
    * Creates or replaces the end user's secret `name` with `value` (a string of at most 16 KiB): the runs of that
-   * namespace attaching `ns/<name>` read it. The calls parked because it was missing or refused are sent again.
+   * namespace using `ns/<name>` read it. The calls parked because it was missing or refused are sent again.
    */
   async put(namespace: string, name: string, secret: { value: string }, options: RequestOptions = {}): Promise<Secret> {
     checkNamespaceName(namespace);
@@ -144,7 +144,7 @@ export class NamespaceSecrets {
     );
   }
 
-  /** Deletes it: the next call of a run of the namespace that attaches it is parked. */
+  /** Deletes it: the next call of a run of the namespace that uses it is parked. */
   async delete(namespace: string, name: string, options: RequestOptions = {}): Promise<void> {
     checkNamespaceName(namespace);
     checkSecretName(name);
@@ -159,8 +159,8 @@ export class NamespaceSecrets {
   }
 
   /**
-   * What reads it: the namespace's active runs that attach it, those waiting on a call it serves, and the workflows
-   * whose latest version attaches `ns/<name>`.
+   * What reads it: the namespace's active runs that use it, those waiting on a call it serves, and the workflows
+   * whose latest version uses `ns/<name>`.
    */
   async usage(namespace: string, name: string, options: RequestOptions = {}): Promise<SecretUsage> {
     checkNamespaceName(namespace);
@@ -206,12 +206,15 @@ export class SigningKeys {
     );
   }
 
-  /** The public keys of an organization (`GET /organizations/{tenant}/jwks.json`), which needs no authentication. */
-  jwks(tenant: string, options: RequestOptions = {}): Promise<Jwks> {
+  /**
+   * The public keys of an organization (`GET /organizations/{organization}/jwks.json`), which needs no
+   * authentication: its id, `organizationId`.
+   */
+  jwks(organizationId: string, options: RequestOptions = {}): Promise<Jwks> {
     return this.transport.send(
       () =>
-        this.transport.api.GET("/organizations/{tenant}/jwks.json", {
-          params: { path: { tenant } },
+        this.transport.api.GET("/organizations/{organization}/jwks.json", {
+          params: { path: { organization: organizationId } },
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },
@@ -220,11 +223,11 @@ export class SigningKeys {
 }
 
 /**
- * The issuer of an organization's signed calls, `{public-url}/organizations/{tenant}`: what `verifyRewindCall` takes
- * as `issuer`. `signingKeys.list()` answers it too.
+ * The issuer of an organization's signed calls, `{public-url}/organizations/{organizationId}`: what `verifyRewindCall`
+ * takes as `issuer`. `signingKeys.list()` answers it too.
  */
-export function rewindIssuer(publicUrl: string, tenant: string): string {
-  return `${publicUrl.replace(/\/+$/, "")}/organizations/${encodeURIComponent(tenant)}`;
+export function rewindIssuer(publicUrl: string, organizationId: string): string {
+  return `${publicUrl.replace(/\/+$/, "")}/organizations/${encodeURIComponent(organizationId)}`;
 }
 
 /** Where an issuer's public keys are: `{issuer}/jwks.json`, served without authentication. */

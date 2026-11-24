@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { Rewind } from "../src/index.js";
 
-const tools = new Rewind({ url: "http://127.0.0.1:1" }).agentTools({ toolset: "ts", labels: { conversation: "c" } });
+const tools = new Rewind({ url: "http://127.0.0.1:1" }).agentTools({ actionSet: "ts", labels: { conversation: "c" } });
 
 describe("the adapters", () => {
   it("fit the Anthropic Messages API", async () => {
@@ -16,7 +16,7 @@ describe("the adapters", () => {
     const toolUse: Anthropic.Messages.ToolUseBlock = {
       type: "tool_use",
       id: "toolu_1",
-      name: "run_script",
+      name: "run_workflow",
       input: {},
       caller: { type: "direct" },
     };
@@ -25,7 +25,7 @@ describe("the adapters", () => {
     expect(result).toEqual({
       type: "tool_result",
       tool_use_id: "toolu_1",
-      content: "run_script: `code` must be a non-empty string.",
+      content: "run_workflow: give the `code` to run, or a `workflow` by its id or its name.",
       is_error: true,
     });
   });

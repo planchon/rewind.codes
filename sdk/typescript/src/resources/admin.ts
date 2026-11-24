@@ -1,13 +1,15 @@
 import type { Transport } from "../http.js";
-import { timeParam } from "../params.js";
-import type { ApiKey, CreateApiKey, CreateSubscription, ServerInfo, Subscription, ToolStatsPage } from "../types.js";
-import type { RequestOptions } from "./toolsets.js";
+import { timeParam, type RequestOptions } from "../params.js";
+import type { ActionStatsPage, ApiKey, CreateApiKey, CreateSubscription, ServerInfo, Subscription } from "../types.js";
 
-/** Subscriptions to the signed lifecycle webhooks. */
+/** Subscriptions to the signed webhooks Rewind sends. */
 export class Subscriptions {
   constructor(private readonly transport: Transport) {}
 
-  /** Subscribes `url` to lifecycle events. The answer holds the signing secret `whsec_…`, once: keep it. */
+  /**
+   * Subscribes `url` to webhooks of the `types` it lists (every type when empty), about the runs carrying its `labels`.
+   * The answer holds the signing secret `whsec_…`, once: keep it.
+   */
   create(subscription: CreateSubscription, options: RequestOptions = {}): Promise<Subscription> {
     return this.transport.send(
       () => this.transport.api.POST("/v1/subscriptions", { body: subscription, signal: options.signal }),
@@ -15,7 +17,7 @@ export class Subscriptions {
     );
   }
 
-  /** Every subscription of the tenant, without secrets. */
+  /** Every subscription of the organization, without secrets. */
   async list(options: RequestOptions = {}): Promise<Subscription[]> {
     const list = await this.transport.send(
       () => this.transport.api.GET("/v1/subscriptions", { signal: options.signal }),
@@ -37,7 +39,7 @@ export class Subscriptions {
 }
 
 export interface PayloadOptions extends RequestOptions {
-  /** The run whose journal holds the payload: a payload belongs to its run, and is read through it. */
+  /** The run whose history holds the payload: a payload belongs to its run, and is read through it. */
   run: string;
 }
 
@@ -58,37 +60,40 @@ export class Payloads {
   }
 }
 
-export interface ToolStatsParams extends RequestOptions {
+export interface ActionStatsParams extends RequestOptions {
   /**
    * The scope, as `runs.stats` takes it: one term `namespace:<name>`, or nothing for every namespace the client
    * reaches. Any other term is refused with `invalid-query`.
    */
   q?: string | undefined;
-  /** Only the tools whose name starts with this (`github.`). */
-  prefix?: string | undefined;
-  /** Only this tool. */
-  tool?: string | undefined;
+  /** Only the actions of this group: an MCP server, an API or a set of harness actions (`github`). */
+  group?: string | undefined;
+  /** Only the calls of runs of this action set. */
+  actionSet?: string | undefined;
+  /** Only this action (`github.list_issues`). */
+  action?: string | undefined;
   /** Rounded down to the hour; 24 hours ago by default. */
   since?: Date | string | undefined;
   /** Rounded up to the hour; now by default. */
   until?: Date | string | undefined;
 }
 
-/** Statistics of tool calls. */
-export class Tools {
+/** Statistics of the calls of actions. */
+export class Actions {
   constructor(private readonly transport: Transport) {}
 
-  /** Latency, errors and retries per tool, over a window of whole hours, from hourly counters. */
-  stats(params: ToolStatsParams = {}): Promise<ToolStatsPage> {
+  /** Calls, latency, errors and redeliveries per action, over a window of whole hours, from hourly counters. */
+  stats(params: ActionStatsParams = {}): Promise<ActionStatsPage> {
     const { signal } = params;
     return this.transport.send(
       () =>
-        this.transport.api.GET("/v1/tools/stats", {
+        this.transport.api.GET("/v1/actions/stats", {
           params: {
             query: {
               q: params.q,
-              prefix: params.prefix,
-              tool: params.tool,
+              group: params.group,
+              actionSet: params.actionSet,
+              action: params.action,
               since: timeParam(params.since),
               until: timeParam(params.until),
             },
@@ -105,8 +110,8 @@ export class ApiKeys {
   constructor(private readonly transport: Transport) {}
 
   /**
-   * Creates a key `rewind_sk_…` with a name and a role; the operator may name another tenant. The answer holds the
-   * key, once.
+   * Creates a key `rewind_sk_…` with a name, a role and allowed labels; the operator may name another organization
+   * (`organizationId`). The answer holds the key, once.
    */
   create(key: CreateApiKey, options: RequestOptions = {}): Promise<ApiKey> {
     return this.transport.send(() => this.transport.api.POST("/v1/api-keys", { body: key, signal: options.signal }), {

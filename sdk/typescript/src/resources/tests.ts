@@ -1,6 +1,6 @@
 import type { Transport } from "../http.js";
 import type { Test } from "../types.js";
-import type { RequestOptions } from "./toolsets.js";
+import type { RequestOptions } from "../params.js";
 
 /** Stored tests: those of the workflows' suites, and those recorded from runs. */
 export class Tests {

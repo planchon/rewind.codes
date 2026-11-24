@@ -1,24 +1,29 @@
 /**
- * What the agent tools say to the model: plain text, short, bounded, and pointing at the next
- * useful call.
+ * What the agent tools say to the model: plain text, short, bounded, and pointing at the next useful call, as the Rust
+ * agent tools say it (`crates/rewind-agent-tools/src/render.rs`). A workflow is named by its name, else its id, and a
+ * version by its number: `triage@v12`.
  */
 import type {
+  ActionMatch,
   Callsite,
   CheckResult,
   Diagnostic,
-  Entry,
+  ErrorInfo,
   FailedCall,
+  HistoryEvent,
+  PatchWorkflow,
   Payload,
   RecordedTests,
   Run,
   RunStatus,
   RunSummary,
+  RunWorkflow,
   Test,
   TestProblem,
   TestResult,
-  ToolMatch,
   Waiting,
   Workflow,
+  WorkflowVersion,
 } from "../types.js";
 import { sliceUtf8, truncateEnd, truncateMiddle, utf8Length } from "./bound.js";
 
@@ -26,8 +31,8 @@ import { sliceUtf8, truncateEnd, truncateMiddle, utf8Length } from "./bound.js";
 export interface Limits {
   /** A run's output, and each page of `get_run`. */
   output: number;
-  /** A run's LLM trace. */
-  trace: number;
+  /** A run's transcript. */
+  transcript: number;
   /** A value shown in passing: a failed call's arguments, a test's output. */
   value: number;
   /** One log line, a stack. */
@@ -36,23 +41,27 @@ export interface Limits {
   total: number;
 }
 
+/** The SDK's bounds: a page of output of `output` bytes, and room around it for a transcript. */
 export function limitsFor(output: number): Limits {
-  const trace = Math.max(4096, Math.floor(output / 2));
+  const transcript = Math.max(4096, Math.floor(output / 2));
   return {
     output,
-    trace,
+    transcript,
     value: Math.max(1024, Math.floor(output / 64)),
     line: 2048,
-    total: output + trace + 64 * 1024,
+    total: output + transcript + 64 * 1024,
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Runs
 
 /** The parts of a run's report that take a request of their own. */
 export interface RunExtras {
   /** The output as compact JSON, when the run completed. */
   output?: string | undefined;
-  /** The LLM trace. */
-  trace?: string | undefined;
+  /** The transcript. */
+  transcript?: string | undefined;
 }
 
 /** A run's state for the model: its outcome, or what it waits for. */
@@ -77,16 +86,16 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
     case "pending":
       break;
   }
-  if (extras.trace !== undefined) {
-    lines.push(run.status === "failed" ? "Trace up to the failure:" : "Trace:");
-    lines.push(truncateMiddle(extras.trace.trimEnd(), limits.trace));
+  if (extras.transcript !== undefined) {
+    lines.push(run.status === "failed" ? "Transcript up to the failure:" : "Transcript:");
+    lines.push(truncateMiddle(extras.transcript.trimEnd(), limits.transcript));
   } else if (run.logs && run.logs.length > 0) {
     lines.push("Last log lines:");
     for (const log of run.logs) {
       lines.push(`  [${log.level}]${at(log.callsite)} ${truncateEnd(log.message, limits.line)}`);
     }
   }
-  if (run.status === "active" || run.status === "pending") {
+  if (!isEnded(run.status)) {
     lines.push(
       `Follow it with get_run(${args({ run_id: run.handle })}), send it a signal with signal_run, or cancel it with cancel_run.`,
     );
@@ -94,13 +103,18 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
   return lines.join("\n");
 }
 
+/** Whether a run has ended: completed, failed, cancelled or aborted. */
+function isEnded(status: RunStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "aborted";
+}
+
 function headline(run: Run, limits: Limits): string {
   const about = [
-    run.parent ? `a fork of run ${run.parent.handle}` : undefined,
-    run.workflow ? `a run of the workflow ${workflowRef(run.workflow)}` : undefined,
+    run.source ? `a fork of run ${run.source.handle}` : undefined,
+    run.workflow ? `a run of the workflow ${runWorkflowLabel(run.workflow)}` : undefined,
     run.startedBy ? `started by run ${run.startedBy.handle}${run.startedBy.detached ? ", detached" : ""}` : undefined,
   ].filter((part) => part !== undefined);
-  const name = `Run ${run.handle}${about.length === 0 ? "" : ` (${about.join(", ")})`}`;
+  const name = about.length === 0 ? `Run ${run.handle}` : `Run ${run.handle} (${about.join("; ")})`;
   switch (run.status) {
     case "completed":
       return `${name} completed.`;
@@ -116,16 +130,16 @@ function headline(run: Run, limits: Limits): string {
       return `${name} is pending: it has not started executing yet.`;
     case "active":
       if (run.quarantine) {
-        return `${name} is quarantined (${run.quarantine.cause}): ${truncateEnd(run.quarantine.reason, limits.value)}. It waits for the platform to be fixed; it is not a fault of the script.`;
+        return `${name} is quarantined (${run.quarantine.cause}): ${truncateEnd(run.quarantine.reason, limits.value)}. It waits for the platform to be fixed; it is not a fault of the code.`;
       }
       return isSuspended(run) ? `${name} is suspended, waiting for:` : `${name} is still running.`;
   }
 }
 
-/** Waiting for something other than tool calls in flight: a signal, a timer, the harness. */
+/** Waiting for something other than calls in flight: a signal, a timer, the harness. */
 export function isSuspended(run: Run): boolean {
   return (run.waitingFor ?? []).some(
-    (waiting) => waiting.kind !== "tool_call" || !["ready", "claimed", "done"].includes(waiting.state),
+    (waiting) => waiting.kind !== "call" || !["ready", "claimed", "done"].includes(waiting.state),
   );
 }
 
@@ -145,28 +159,30 @@ function describeWaiting(waiting: Waiting): string {
   switch (waiting.kind) {
     case "signal": {
       const timeout = waiting.timeoutAt ? `, until ${waiting.timeoutAt} (then it gets undefined)` : "";
-      return `the signal ${JSON.stringify(waiting.name)}${at(waiting.callsite)}${timeout}: send it with signal_run`;
+      return `the signal ${quoted(waiting.name)}${at(waiting.callsite)}${timeout}: send it with signal_run`;
     }
     case "timer":
       return `a timer${at(waiting.callsite)}, firing at ${waiting.fireAt}`;
-    case "tool_call": {
-      const call = `the call ${waiting.seq} to ${waiting.tool}${at(waiting.callsite)}`;
-      const attempt = waiting.attempt > 1 ? ` (attempt ${waiting.attempt})` : "";
+    case "call": {
+      const call = `the call ${waiting.seq} to ${waiting.action}${at(waiting.callsite)}`;
+      const delivery = waiting.delivery > 1 ? ` (delivery ${waiting.delivery})` : "";
       switch (waiting.state) {
         case "approval":
           return `${call}: it waits for the harness's approval`;
         case "parked":
-          if (waiting.parked === "credentials_refused")
+          if (waiting.parked === "credentials_refused") {
             return `${call}: parked, the server refused the credentials; the harness must renew them`;
-          if (waiting.parked === "secret_missing")
-            return `${call}: parked, the secret the run attached no longer exists; the harness must put it again`;
-          return `${call}: parked, the tool changed since the toolset was pinned; the harness decides whether it goes on`;
+          }
+          if (waiting.parked === "secret_missing") {
+            return `${call}: parked, the secret the run uses no longer exists; the harness must put it again`;
+          }
+          return `${call}: parked, the action changed since the action set was pinned; the harness decides whether it goes on`;
         case "deferred":
-          return `${call}: waiting for its answer${attempt}`;
+          return `${call}: waiting for its answer${delivery}`;
         case "claimed":
-          return `${call}: in progress${attempt}`;
+          return `${call}: in progress${delivery}`;
         case "ready":
-          return `${call}: queued${attempt}`;
+          return `${call}: queued${delivery}`;
         case "done":
           return `${call}: answered, about to be delivered`;
       }
@@ -185,7 +201,7 @@ function outputSection(runId: string, output: string, limit: number): string[] {
   ];
 }
 
-function errorSection(error: NonNullable<Run["error"]>, limits: Limits): string[] {
+function errorSection(error: ErrorInfo, limits: Limits): string[] {
   const lines = [
     `${truncateEnd(error.name, limits.line)}: ${truncateEnd(error.message, limits.value)}${at(error.location)}`,
   ];
@@ -202,13 +218,17 @@ function errorSection(error: NonNullable<Run["error"]>, limits: Limits): string[
 }
 
 function failedCallSection(call: FailedCall, limits: Limits): string[] {
+  const data =
+    call.error.data === undefined || call.error.data === null
+      ? ""
+      : ` ${truncateEnd(json(call.error.data), limits.value)}`;
   return [
-    `The call that failed: ${call.tool} (call ${call.seq}${at(call.callsite)}) with ${payloadText(call.args, limits.value)}`,
-    `  ${call.error.kind}: ${truncateEnd(call.error.message, limits.value)}${call.error.data === undefined ? "" : ` ${truncateEnd(json(call.error.data), limits.value)}`}`,
+    `The call that failed: ${call.action} (call ${call.seq}${at(call.callsite)}) with ${payloadText(call.args, limits.value)}`,
+    `  ${call.error.kind}: ${truncateEnd(call.error.message, limits.value)}${data}`,
   ];
 }
 
-/** A page of a long text: the run's output, or an entry. */
+/** A page of a long text: the run's output, or an event. */
 export function describePage(
   title: string,
   text: string,
@@ -227,35 +247,48 @@ export function describePage(
   return lines.join("\n");
 }
 
-/** One journal entry in full. */
-export function entryText(entry: Entry): string {
-  return json({ idx: entry.idx, recordedAt: entry.recordedAt, event: entry.event });
+/** One event in full. */
+export function eventText(event: HistoryEvent): string {
+  return json({ idx: event.idx, recordedAt: event.recordedAt, event: event.event });
 }
 
-/** The diagnostics of a check, for the model. */
+// ---------------------------------------------------------------------------------------------
+// Checks, tests, lists, searches
+
+/** The diagnostics of a check, for the model, and the workflow that already has the code. */
 export function describeCheck(result: CheckResult, limits: Limits): string {
   const errors = result.diagnostics.filter((d) => d.severity === "error").length;
   const warnings = result.diagnostics.length - errors;
   const counts = [plural(errors, "error"), plural(warnings, "warning")].filter((part) => !part.startsWith("0 "));
+  let text: string;
   if (result.ok) {
-    return warnings === 0
-      ? "The script type-checks."
-      : `The script type-checks, with ${counts.join(" and ")}:\n${diagnosticsText(result.diagnostics, limits)}`;
+    text =
+      warnings === 0
+        ? "The code type-checks."
+        : `The code type-checks, with ${counts.join(" and ")}:\n${diagnosticsText(result.diagnostics, limits)}`;
+  } else {
+    text = `The code does not type-check: ${counts.join(" and ")}.\n${diagnosticsText(result.diagnostics, limits)}`;
   }
-  return `The script does not type-check: ${counts.join(" and ")}.\n${diagnosticsText(result.diagnostics, limits)}`;
+  if (result.workflow) {
+    text += `\nThis code is already the version v${result.workflow.version} of the workflow ${workflowOfRunLabel(result.workflow)}: running it is a run of that workflow.`;
+  }
+  return text;
 }
 
-/** What `check_script` adds to its answer for a script without the comment its title is read from. */
-export const UNTITLED_NOTE =
-  "Note: the script does not start with a comment that gives its title. Start it with:\n/** <title>\n *\n * <description> */\nIts title names what the script does in a few words: its runs are named after it.";
+/**
+ * What `check_workflow` adds to its answer for a code without a comment at its top: the comment a workflow without a
+ * name shows as.
+ */
+export const COMMENT_NOTE =
+  "Note: the code does not start with a comment that says what it does, so its workflow shows as its short id until it has a name. Start it with:\n/** <what it does, in a few words>\n *\n * <more, if needed> */\nIts first line is how the workflow shows; the lines after it describe it.";
 
 /**
- * Whether a script starts with the comment its title is read from, before any code: a block comment (`/** … *\/`) or a
- * run of `//` lines, with a line of text that is not a tag (`@ts-check`). As the platform reads it
- * (`rewind_core::script_doc`).
+ * Whether a code starts with a comment that says what it does, before any code: a block comment (`/** … *\/`) or a run
+ * of `//` lines, with a line of text that is not a tag (`@ts-check`). As the platform reads it
+ * (`rewind_core::code_doc`).
  */
-export function hasTitle(source: string): boolean {
-  let rest = source.replace(/^\uFEFF/, "").trimStart();
+export function hasComment(source: string): boolean {
+  let rest = source.replace(/^﻿/, "").trimStart();
   // A shebang is not the comment.
   if (rest.startsWith("#!")) {
     const end = rest.indexOf("\n");
@@ -290,46 +323,17 @@ export function hasTitle(source: string): boolean {
   return lines.some((line) => line !== "" && !line.startsWith("@"));
 }
 
-/** A script refused before any run exists. */
+/** A code refused before any run exists. */
 export function describeRefusal(detail: string, diagnostics: Diagnostic[], limits: Limits): string {
-  const text = `The script was refused before anything ran: ${truncateEnd(detail, limits.value)}`;
-  return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics, limits)}`;
+  return describeRefused("The code was refused before anything ran", detail, diagnostics, limits);
 }
 
-/** A workflow saved: how the model's scripts use it, and its declaration. */
-export function describeWorkflow(workflow: Workflow, limits: Limits): string {
-  const lines = [
-    `Saved the workflow ${workflowRef(workflow)}. Your next scripts can import it:`,
-    `import { ${workflow.name} } from "rewind:workflows";`,
-  ];
-  const prompt = workflow.declarations.prompt.trim();
-  if (prompt !== "") {
-    lines.push(truncateEnd(prompt, limits.value));
-  }
-  const dts = workflow.declarations.dts.trim();
-  if (dts !== "") {
-    lines.push("Its declaration:", truncateEnd(dts, limits.trace));
-  }
-  return lines.join("\n");
-}
-
-/** A workflow refused: why, and the diagnostics of its script. */
-export function describeWorkflowRefusal(detail: string, diagnostics: Diagnostic[], limits: Limits): string {
-  const text = `The workflow was not saved: ${truncateEnd(detail, limits.value)}`;
-  return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics, limits)}`;
-}
-
-/** `triage@9f2c4e1a07b3`: a workflow's name and the first 12 digits of its version. */
-export function workflowRef(workflow: { name: string; version: string }): string {
-  return `${workflow.name}@${workflow.version.slice(0, 12)}`;
-}
-
-/** The diagnostics, in order, as many as the room of a trace holds. */
+/** The diagnostics, in order, as many as the room of a transcript holds. */
 export function diagnosticsText(diagnostics: Diagnostic[], limits: Limits): string {
   const shown: string[] = [];
   let bytes = 0;
   for (const d of diagnostics) {
-    const location = d.location ? `script.ts:${d.location.line}:${d.location.column} ` : "";
+    const location = d.location ? `workflow.ts:${d.location.line}:${d.location.column} ` : "";
     const lines = [`${location}${d.severity} ${d.code}: ${truncateEnd(d.message, limits.value)}`];
     if (d.frame) {
       lines.push(truncateEnd(d.frame.trimEnd(), limits.value));
@@ -339,7 +343,7 @@ export function diagnosticsText(diagnostics: Diagnostic[], limits: Limits): stri
     }
     const text = lines.join("\n");
     bytes += utf8Length(text) + 2;
-    if (bytes > limits.trace && shown.length > 0) {
+    if (bytes > limits.transcript && shown.length > 0) {
       shown.push(`… and ${plural(diagnostics.length - shown.length, "more diagnostic")}.`);
       break;
     }
@@ -350,7 +354,7 @@ export function diagnosticsText(diagnostics: Diagnostic[], limits: Limits): stri
 
 /**
  * The outcome of tests: a line per test that passed; for each one that did not, its problem, its failures, how its
- * run ended, its calls and its trace. The traces share the room of one trace.
+ * run ended, its calls and its transcript. The transcripts share the room of one transcript.
  */
 export function describeTestResults(results: TestResult[], limits: Limits): string {
   if (results.length === 0) {
@@ -364,10 +368,10 @@ export function describeTestResults(results: TestResult[], limits: Limits): stri
         : `All ${results.length} tests passed.`
       : `${failing.length} of ${plural(results.length, "test")} did not pass.`,
   ];
-  const traced = failing.filter((result) => (result.trace ?? "").trim() !== "").length;
-  const traceRoom = Math.max(limits.line, Math.floor(limits.trace / Math.max(1, traced)));
+  const transcribed = failing.filter((result) => (result.transcript ?? "").trim() !== "").length;
+  const transcriptRoom = Math.max(limits.line, Math.floor(limits.transcript / Math.max(1, transcribed)));
   for (const result of results) {
-    const name = JSON.stringify(truncateEnd(result.name, limits.line));
+    const name = quoted(truncateEnd(result.name, limits.line));
     if (result.passed) {
       lines.push(`PASS ${name}`);
       continue;
@@ -378,7 +382,7 @@ export function describeTestResults(results: TestResult[], limits: Limits): stri
       continue;
     }
     lines.push(`  The run ${statusPhrase(result.status)}.`);
-    if (result.output !== undefined && result.status === "completed") {
+    if (result.output !== undefined && result.output !== null && result.status === "completed") {
       lines.push(`  Output: ${truncateEnd(json(result.output), limits.value)}`);
     }
     if (result.error) {
@@ -392,12 +396,12 @@ export function describeTestResults(results: TestResult[], limits: Limits): stri
     const calls = Object.entries(result.calls ?? {});
     lines.push(
       calls.length === 0
-        ? "  No tool was called."
-        : `  Calls: ${calls.map(([tool, count]) => `${tool} ×${count}`).join(", ")}`,
+        ? "  No action was called."
+        : `  Calls: ${calls.map(([action, count]) => `${action} ×${count}`).join(", ")}`,
     );
-    const trace = (result.trace ?? "").trimEnd();
-    if (trace.trim() !== "") {
-      lines.push("  Trace:", truncateMiddle(trace, traceRoom));
+    const transcript = (result.transcript ?? "").trimEnd();
+    if (transcript.trim() !== "") {
+      lines.push("  Transcript:", truncateMiddle(transcript, transcriptRoom));
     }
   }
   return lines.join("\n");
@@ -406,7 +410,7 @@ export function describeTestResults(results: TestResult[], limits: Limits): stri
 function problemPhrase(problem: TestProblem): string {
   switch (problem) {
     case "stale":
-      return "it names tools, answers or args the toolset no longer has; it was not run.";
+      return "it names actions, answers or args the action set no longer has; it was not run.";
     case "incompatible":
       return "the workflow's input or signal schemas refuse its input or its signals; it was not run.";
     case "failed":
@@ -414,117 +418,293 @@ function problemPhrase(problem: TestProblem): string {
   }
 }
 
-/** Tests that refused a save of a workflow: the outcome of each, and what the model may do. */
-export function describeSaveRefused(detail: string, results: TestResult[], workflow: string, limits: Limits): string {
+/**
+ * What `update_workflow`'s gate refused: the outcome of each test, and what the model may do. `version` is a version's
+ * refusal; otherwise a change of tests', whose tests ran against `latest`, the workflow's latest version.
+ */
+export function describeGateRefused(
+  detail: string,
+  results: TestResult[],
+  workflow: string,
+  version: boolean,
+  latest: number,
+  limits: Limits,
+): string {
+  const advice = version
+    ? `Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow(${args({ code: "…", workflow })}) before you call update_workflow again. If a test pins a behavior you change on purpose, retire it in \`retire\` (the behavior is deprecated) or replace it in \`replace\` (its state or its expected result is out of date), with a reason.`
+    : `A test joins the suite only once it passes against the latest version, v${latest}. If the test is wrong, fix it. If the workflow must change to pass it, give its new \`code\` with the test: the version is made with it once the whole suite passes.`;
   return [
-    `The workflow was not saved: ${truncateEnd(detail, limits.value)}`,
+    `${version ? "No version was made" : "The suite was not changed"}: ${truncateEnd(detail, limits.value)}`,
     describeTestResults(results, limits),
-    `Every test must pass: there is no way around it. If the script is wrong, fix it, and check it with test_script(${args({ code: "…", workflow })}) before you save it again. If a test pins a behavior you change on purpose, retire it in \`retire\` (the behavior is deprecated) or update it in \`update\` (its state or its expected result is out of date), with a reason.`,
+    advice,
   ].join("\n");
 }
 
-/** Tests that refused the fork of a run of a workflow: the outcome of each, and what the model may do. */
+/**
+ * Tests that refused the fork of a run of a workflow: the outcome of each, and what the model may do. `updates` when
+ * `update_workflow` is one of the tools.
+ */
 export function describeRetryRefused(
   runId: string,
   detail: string,
   results: TestResult[],
   workflow: string | undefined,
+  updates: boolean,
   limits: Limits,
 ): string {
   const suite = workflow === undefined ? "the suite of its workflow" : `the suite of ${workflow}`;
-  const check = workflow === undefined ? "test_script" : `test_script(${args({ code: "…", workflow })})`;
+  const check = workflow === undefined ? "test_workflow" : `test_workflow(${args({ code: "…", workflow })})`;
+  const onPurpose = updates
+    ? "If a behavior must change on purpose, make the workflow's next version with update_workflow, retiring or replacing its tests with a reason, and run it."
+    : "If a behavior must change on purpose, the workflow needs a next version that retires or replaces those tests, which these tools do not make: tell the person.";
   return [
     `Run ${runId} was not retried: ${truncateEnd(detail, limits.value)}`,
     describeTestResults(results, limits),
-    `A fix must keep every behavior ${suite} pins: there is no way around it. Fix the script, and check it with ${check} before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.`,
+    `A fix must keep every behavior ${suite} pins: there is no way around it. Fix the code, and check it with ${check} before you try again. ${onPurpose}`,
   ].join("\n");
 }
 
-/** What `get_workflow` reads: the latest version, its suite with each test, and the lineage. */
-export interface WorkflowDetails {
-  /** Every version, newest first. */
-  versions: Workflow[];
-  /** The source of the latest version. */
-  source: string;
-  /** The tests of the latest version's suite, in its order: the test, or why it cannot be read. */
-  tests: Array<{ name: string; digest: string; test?: Test | undefined; unreadable?: string | undefined }>;
+/** A refusal: what was not done (`what`), why, and the diagnostics of the code. */
+export function describeRefused(what: string, detail: string, diagnostics: Diagnostic[], limits: Limits): string {
+  const text = `${what}: ${truncateEnd(detail, limits.value)}`;
+  return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics, limits)}`;
 }
 
-/** A workflow, for the model to repair or extend it: its source, schemas, suite and lineage. */
+/** How a run's workflow reads in a run's report: `triage@v3, id wf_7k2m9q4x8d1c`, or `wf_7k2m9q4x8d1c@v1` without a name. */
+export function runWorkflowLabel(workflow: RunWorkflow): string {
+  return workflow.name
+    ? `${workflow.name}@v${workflow.version}, id ${workflow.id}`
+    : `${workflow.id}@v${workflow.version}`;
+}
+
+/** A run's workflow without its version: `triage (id wf_7k2m9q4x8d1c)`, or `wf_7k2m9q4x8d1c`. */
+function workflowOfRunLabel(workflow: RunWorkflow): string {
+  return workflow.name ? `${workflow.name} (id ${workflow.id})` : workflow.id;
+}
+
+/** What names a run's version in a call: `triage@v3`, or `wf_7k2m9q4x8d1c@v3` without a name. */
+export function runWorkflowReference(workflow: RunWorkflow): string {
+  return `${workflow.name ?? workflow.id}@v${workflow.version}`;
+}
+
+/** What names a workflow in a call: its name, else its id. */
+export function workflowReference(workflow: Workflow): string {
+  return workflow.name ?? workflow.id;
+}
+
+/**
+ * A workflow as the model reads it: `triage (id wf_7k2m9q4x8d1c)`; without a name, its id and how it shows: the first
+ * line of its latest version's comment, else its short id.
+ */
+export function workflowLabel(workflow: Workflow): string {
+  if (workflow.name) {
+    return `${workflow.name} (id ${workflow.id})`;
+  }
+  const comment = latestVersion(workflow).comment;
+  const shown = comment ? quoted(comment.title) : workflow.shortId;
+  return `${workflow.id} (no name; it shows as ${shown})`;
+}
+
+/** Its latest version the caller sees. */
+function latestVersion(workflow: Workflow): WorkflowVersion {
+  return workflow.versions[0] ?? workflow.version;
+}
+
+/** What `update_workflow` did. */
+export type Updated =
+  /** Its name or its description only. */
+  | { kind: "patched" }
+  /** A version was asked for: made, or the latest already had that content. */
+  | { kind: "version"; made: boolean }
+  /** Its suite changed, without a version. */
+  | { kind: "tests" };
+
+/** What a merge patch changed: `named it triage and removed its description`. */
+export function describePatch(patch: PatchWorkflow): string | undefined {
+  const parts: string[] = [];
+  if (patch.name !== undefined) {
+    parts.push(patch.name === null ? "removed its name" : `named it ${patch.name}`);
+  }
+  if (patch.description !== undefined) {
+    parts.push(patch.description === null ? "removed its description" : "gave it a new description");
+  }
+  return parts.length === 0 ? undefined : parts.join(" and ");
+}
+
+/** `update_workflow`'s result: the workflow's id, its name, and its version, new or unchanged. */
+export function describeUpdate(workflow: Workflow, patch: PatchWorkflow, updated: Updated, limits: Limits): string {
+  const label = workflowLabel(workflow);
+  const version = workflow.version;
+  const lines: string[] = [];
+  const patched = describePatch(patch);
+  if (patched !== undefined) {
+    lines.push(`Updated the workflow ${label}: ${patched}.`);
+  }
+  switch (updated.kind) {
+    case "patched":
+      lines.push(`Its version stays v${latestVersion(workflow).version}.`);
+      break;
+    case "version":
+      lines.push(
+        updated.made
+          ? `Made the version v${version.version} (digest ${shortDigest(version.digest)}) of the workflow ${label}: its suite, ${plural((version.tests ?? []).length, "test")}, passed against it.`
+          : `The workflow ${label} already has this content as its version v${version.version}: no version was made.`,
+      );
+      break;
+    case "tests":
+      lines.push(
+        `Changed the suite of the workflow ${label}: it holds ${plural(workflow.suite.filter((entry) => !entry.retiredAt).length, "test")}, each passing against its version v${latestVersion(workflow).version}, which stays its latest. Its next version keeps them.`,
+      );
+      break;
+  }
+  const prompt = version.declarations?.prompt.trim() ?? "";
+  if (prompt !== "") {
+    lines.push(
+      `Code starts it from "rewind:workflows" once an action set pins it: ${truncateEnd(prompt, limits.value)}`,
+    );
+  }
+  lines.push(`Run it with run_workflow(${args({ workflow: workflowReference(workflow) })}).`);
+  return lines.join("\n");
+}
+
+/** The first 12 digits of a digest. */
+function shortDigest(digest: string): string {
+  return digest.slice(0, 12);
+}
+
+/** A test of a suite as `get_workflow` reads it: the test, or why it cannot be read. */
+export interface ReadTest {
+  name: string;
+  digest: string;
+  test?: Test | undefined;
+  unreadable?: string | undefined;
+}
+
+/** What `get_workflow` reads: the workflow, and each test of its suite. */
+export interface WorkflowDetails {
+  workflow: Workflow;
+  /** The tests of its suite, in its order. */
+  tests: ReadTest[];
+  /** `update_workflow` is one of the tools. */
+  updates: boolean;
+}
+
+/** The most versions `get_workflow` lists. */
+const LISTED_VERSIONS = 20;
+
+/**
+ * A workflow, for the model to repair or extend it: who it is, its version's code and interface, its suite, the tests
+ * that left it, and its versions.
+ */
 export function describeWorkflowDetails(details: WorkflowDetails, limits: Limits): string {
-  const [latest] = details.versions;
-  if (latest === undefined) {
-    return "The workflow has no version.";
+  const { workflow } = details;
+  const { version, versions } = workflow;
+  const scope = workflow.namespace
+    ? `the namespace ${workflow.namespace}`
+    : workflow.promotedAt
+      ? `the organization (promoted ${workflow.promotedAt})`
+      : "the organization";
+  const lines = [`The workflow ${workflowLabel(workflow)}, of ${scope}.`];
+  if (workflow.source) {
+    lines.push(
+      `It is a fork of the organization's workflow ${workflow.source.workflow}, whose version v${workflow.source.version} it last took.`,
+    );
   }
-  const lines = [
-    `The workflow ${workflowRef(latest)}, saved ${latest.createdAt}: its latest version, of ${plural(details.versions.length, "version")}.`,
-  ];
-  if (latest.parent) {
-    lines.push(`It derives from the version ${versionRef(latest.parent, details.versions)}.`);
+  const description = workflow.description ?? latestVersion(workflow).comment?.description ?? undefined;
+  if (description) {
+    lines.push(`Description: ${truncateEnd(description, limits.value)}`);
   }
-  if (latest.description) {
-    lines.push(`Description: ${truncateEnd(latest.description, limits.value)}`);
-  }
-  lines.push(`Input schema: ${truncateEnd(json(latest.input), limits.value)}`);
-  lines.push(`Output schema: ${truncateEnd(json(latest.output), limits.value)}`);
-  const signals = Object.entries(latest.signals);
-  if (signals.length === 0) {
-    lines.push("Signals: none.");
+  const from = version.base ? `, from ${versionRef(version.base, versions)}` : "";
+  lines.push(
+    `Its version v${version.version} of ${plural(Math.max(1, versions.length), "version")} (digest ${shortDigest(version.digest)}), made ${version.createdAt}${from}.`,
+  );
+  lines.push(`Action set: ${version.actionSet}`);
+  const absent = (schema: unknown) => schema === undefined || schema === null;
+  if (absent(version.input) && absent(version.output) && absent(version.signals)) {
+    lines.push("Interface: none. It takes any input, returns any output and accepts any signal name.");
   } else {
-    lines.push("Signals:");
-    for (const [name, schema] of signals) {
-      lines.push(`- ${JSON.stringify(name)}: ${truncateEnd(json(schema), limits.value)}`);
+    const schema = (value: unknown) => truncateEnd(json(absent(value) ? true : value), limits.value);
+    lines.push(`Input schema: ${schema(version.input)}`);
+    lines.push(`Output schema: ${schema(version.output)}`);
+    const signals = Object.entries(version.signals ?? {});
+    if (signals.length === 0) {
+      lines.push("Signals: none.");
+    } else {
+      lines.push("Signals:");
+      for (const [name, signal] of signals) {
+        lines.push(`- ${quoted(name)}: ${truncateEnd(json(signal), limits.value)}`);
+      }
     }
   }
-  lines.push("Source:", truncateMiddle(details.source.trimEnd(), limits.trace));
+  if (Object.keys(version.secrets ?? {}).length > 0) {
+    lines.push(`Secrets its runs use: ${json(version.secrets)}`);
+  }
+  const prompt = version.declarations?.prompt.trim() ?? "";
+  if (prompt !== "") {
+    lines.push(
+      `Code starts it from "rewind:workflows" once an action set pins it: ${truncateEnd(prompt, limits.value)}`,
+    );
+  }
+  lines.push("Code:", truncateMiddle(workflow.code.trimEnd(), limits.transcript));
 
   if (details.tests.length === 0) {
     lines.push("Its suite is empty: it has no test.");
   } else {
-    lines.push(
-      `Its suite, ${plural(details.tests.length, "test")}, which every version derived from it must pass (give a digest in save_workflow's \`tests\` or \`update\` to reuse a test):`,
-    );
+    const reuse = details.updates
+      ? "give a digest in update_workflow's `tests` or `replace` to reuse a test"
+      : "give a digest in test_workflow's `tests` to run a test against a code";
+    lines.push(`Its suite, ${plural(details.tests.length, "test")}, which its next version must pass (${reuse}):`);
     const room = Math.max(limits.value, Math.floor(limits.output / details.tests.length));
     for (const entry of details.tests) {
-      const head = `Test ${JSON.stringify(truncateEnd(entry.name, limits.line))} (${entry.digest})`;
+      const head = `Test ${quoted(truncateEnd(entry.name, limits.line))} (${entry.digest})`;
       if (entry.test === undefined) {
         lines.push(`${head}: it cannot be read: ${truncateEnd(entry.unreadable ?? "", limits.value)}`);
         continue;
       }
-      const origin = entry.test.origin
-        ? `, recorded from run ${entry.test.origin.run} of ${versionRef(entry.test.origin.version, details.versions)}`
+      const origin = entry.test.from
+        ? `, recorded from run ${entry.test.from.run} of ${versionRef(entry.test.from.version, versions)}`
         : "";
       lines.push(`${head}${origin}:`, truncateEnd(json(readableTest(entry.test)), room));
     }
   }
 
-  lines.push("Lineage, newest first:");
-  for (const version of details.versions) {
-    const parts = [`- ${workflowRef(version)}, saved ${version.createdAt}`];
-    parts.push(version.parent ? `, from ${versionRef(version.parent, details.versions)}` : ", the first version");
-    parts.push(`: ${plural((version.tests ?? []).length, "test")}`);
-    lines.push(`${parts.join("")}.`);
-    for (const updated of version.updated ?? []) {
+  const left = workflow.suite.filter((entry) => entry.retiredAt);
+  if (left.length > 0) {
+    lines.push("Tests that left its suite, and why:");
+    for (const entry of left) {
       lines.push(
-        `  updated ${JSON.stringify(truncateEnd(updated.name, limits.line))}: ${truncateEnd(updated.reason, limits.value)}`,
+        `- ${quoted(truncateEnd(entry.name, limits.line))} (${shortDigest(entry.digest)}), left ${entry.retiredAt}: ${truncateEnd(entry.reason ?? "no reason given", limits.value)}`,
       );
     }
-    for (const retired of version.retired ?? []) {
-      lines.push(
-        `  retired ${JSON.stringify(truncateEnd(retired.name, limits.line))}: ${truncateEnd(retired.reason, limits.value)}`,
-      );
-    }
+  }
+
+  lines.push("Its versions, newest first:");
+  for (const listed of versions.slice(0, LISTED_VERSIONS)) {
+    const from = listed.base ? `, from ${versionRef(listed.base, versions)}` : ", the first version";
+    const changes = [
+      ...(listed.replaced ?? []).map((replaced) => `replaced ${quoted(truncateEnd(replaced.name, limits.line))}`),
+      ...(listed.retired ?? []).map((retired) => `retired ${quoted(truncateEnd(retired.name, limits.line))}`),
+    ];
+    lines.push(
+      `- v${listed.version}, made ${listed.createdAt}${from}: ${plural((listed.tests ?? []).length, "test")}${changes.length === 0 ? "" : `; ${changes.join(", ")}`}.`,
+    );
+  }
+  if (versions.length > LISTED_VERSIONS) {
+    lines.push(`… and ${plural(versions.length - LISTED_VERSIONS, "version")} older.`);
   }
   return lines.join("\n");
 }
 
-/** `triage@4be1c07a9d3e` when the version is one of `versions`, otherwise its first 12 digits. */
-function versionRef(version: string, versions: Workflow[]): string {
-  const known = versions.find((candidate) => candidate.version === version);
-  return known ? workflowRef(known) : version.slice(0, 12);
+/** `v3` when the digest is one of `versions`, otherwise its first 12 digits. */
+function versionRef(digest: string, versions: WorkflowVersion[]): string {
+  const known = versions.find((candidate) => candidate.digest === digest);
+  return known ? `v${known.version}` : shortDigest(digest);
 }
 
-/** A test as the model reads it: its cassette summarized, since a recorded run's calls are long and rarely useful. */
+/**
+ * A test as the model reads it, its fields in the order the server writes them: its cassette summarized, since a
+ * recorded run's calls are long and rarely useful.
+ */
 function readableTest(test: Test): Test {
   const cassette = test.world?.cassette;
   if (cassette === undefined || cassette === null) {
@@ -533,26 +713,27 @@ function readableTest(test: Test): Test {
   return { ...test, world: { ...test.world, cassette: { summary: cassetteSummary(cassette) } } };
 }
 
-/** `12 calls matched by_args (github.list_issues ×3, github.close_issue ×9), 1 signal (approval)`. */
+/** `12 recorded calls matched by_args (github.list_issues ×3, github.close_issue ×9), 1 signal (approval)`. */
 export function cassetteSummary(cassette: Record<string, unknown>): string {
   const calls = Array.isArray(cassette["calls"]) ? (cassette["calls"] as unknown[]) : [];
   const signals = Array.isArray(cassette["signals"]) ? (cassette["signals"] as unknown[]) : [];
   const matching = typeof cassette["matching"] === "string" ? ` matched ${cassette["matching"]}` : "";
-  const byTool = new Map<string, number>();
+  // In the order each action is first called.
+  const byAction = new Map<string, number>();
   for (const call of calls) {
-    const tool = isRecord(call) && typeof call["tool"] === "string" ? call["tool"] : "?";
-    byTool.set(tool, (byTool.get(tool) ?? 0) + 1);
+    const action = isRecord(call) && typeof call["action"] === "string" ? call["action"] : "?";
+    byAction.set(action, (byAction.get(action) ?? 0) + 1);
   }
-  const tools = [...byTool].map(([tool, count]) => `${tool} ×${count}`).join(", ");
+  const actions = [...byAction].map(([action, count]) => `${action} ×${count}`).join(", ");
   const names = [...new Set(signals.map((s) => (isRecord(s) && typeof s["name"] === "string" ? s["name"] : "?")))];
   return [
-    `${plural(calls.length, "recorded call")}${matching}${tools === "" ? "" : ` (${tools})`}`,
+    `${plural(calls.length, "recorded call")}${matching}${actions === "" ? "" : ` (${actions})`}`,
     `${plural(signals.length, "signal")}${names.length === 0 ? "" : ` (${names.join(", ")})`}`,
   ].join(", ");
 }
 
-/** The tests a recording stored, and the runs it left out. */
-export function describeRecorded(workflow: string, recorded: RecordedTests, limits: Limits): string {
+/** The tests a recording stored, and the runs it left out. `updates` when `update_workflow` is one of the tools. */
+export function describeRecorded(workflow: string, recorded: RecordedTests, updates: boolean, limits: Limits): string {
   const lines: string[] = [];
   if (recorded.tests.length === 0) {
     lines.push(`No test was recorded: no completed or failed run of ${workflow} was selected.`);
@@ -560,7 +741,7 @@ export function describeRecorded(workflow: string, recorded: RecordedTests, limi
     lines.push(`Recorded ${plural(recorded.tests.length, "test")} from the runs of ${workflow}, one per path:`);
     for (const test of recorded.tests) {
       lines.push(
-        `- ${test.digest} ${JSON.stringify(test.name)}, from run ${test.run} (${test.status}): ${truncateEnd(test.path, limits.value)}`,
+        `- ${test.digest} ${quoted(test.name)}, from run ${test.run} (${test.status}): ${truncateEnd(test.path, limits.value)}`,
       );
     }
   }
@@ -572,7 +753,9 @@ export function describeRecorded(workflow: string, recorded: RecordedTests, limi
   }
   if (recorded.tests.length > 0) {
     lines.push(
-      `They join no suite yet: pass their digests in save_workflow's \`tests\` to add them to the suite of ${workflow}'s next version, or { "from": "<digest>", "expect": {…} } to give a failed run the expectation it should have met.`,
+      updates
+        ? `They join no suite yet: pass their digests in update_workflow's \`tests\` to add them to the suite of ${workflow}, or { "test": "<digest>", "expect": {…} } to give a failed run the expectation it should have met.`
+        : 'They join no suite: pass their digests in test_workflow\'s `tests` to run them against a code, or { "test": "<digest>", "expect": {…} } to give a failed run the expectation it should have met.',
     );
   }
   return lines.join("\n");
@@ -591,15 +774,15 @@ export function describeRuns(runs: RunSummary[], more: boolean, status: RunStatu
       parts.push("quarantined");
     }
     parts.push(`started ${run.startedAt}`);
-    parts.push(plural(run.toolCalls, "tool call"));
+    parts.push(plural(run.calls, "call"));
     if (run.errors > 0) {
       parts.push(`${run.errors} failed`);
     }
-    if (run.parent) {
-      parts.push(`a fork of ${run.parent}`);
+    if (run.source) {
+      parts.push(`a fork of ${run.source}`);
     }
     if (run.workflow) {
-      parts.push(`a run of the workflow ${run.workflow}`);
+      parts.push(`a run of the workflow ${runWorkflowReference(run.workflow)}`);
     }
     if (run.startedBy) {
       parts.push(`started by ${run.startedBy}`);
@@ -612,10 +795,20 @@ export function describeRuns(runs: RunSummary[], more: boolean, status: RunStatu
   return lines.join("\n");
 }
 
-/** The tools matching a search. */
+/** The actions matching a search. */
+export function describeMatches(query: string, matches: ActionMatch[]): string {
+  if (matches.length === 0) {
+    return `No action matches ${quoted(query)}.`;
+  }
+  return [
+    `${plural(matches.length, "action")} ${matches.length === 1 ? "matches" : "match"} ${quoted(query)}:`,
+    ...matches.map((m) => m.dts.trimEnd()),
+  ].join("\n\n");
+}
+
 /**
- * `list_secrets`: the secrets the caller may attach, by name, never a value: the organization's with their labels,
- * then the namespace's.
+ * `list_secrets`: the secrets the caller may use, by name, never a value: the organization's with their labels, then
+ * the namespace's.
  */
 export function describeSecrets(
   organization: readonly ListedSecretView[],
@@ -634,9 +827,9 @@ export function describeSecrets(
     lines.push(`- ${secret.reference}, the end user's in the namespace ${secret.namespace ?? ""}`);
   }
   if (lines.length === 0) {
-    return "No secret you may attach exists yet: a person puts one first, the end user's in their namespace or the organization's.";
+    return "No secret you may use exists yet: a person puts one first, the end user's in their namespace or the organization's.";
   }
-  return `The secrets you may attach, never a value:\n${lines.join("\n")}\nAttach one in \`secrets\`, by the MCP server or API whose calls need it, such as {"github": "ns/github"}.`;
+  return `The secrets you may use, never a value:\n${lines.join("\n")}\nName one in \`secrets\`, by the MCP server or API whose calls need it, such as {"github": "ns/github"}.`;
 }
 
 /** What `describeSecrets` reads of a secret. */
@@ -644,16 +837,6 @@ export interface ListedSecretView {
   reference: string;
   namespace?: string | null | undefined;
   labels?: Record<string, string> | undefined;
-}
-
-export function describeMatches(query: string, matches: ToolMatch[]): string {
-  if (matches.length === 0) {
-    return `No tool matches ${JSON.stringify(query)}.`;
-  }
-  return [
-    `${plural(matches.length, "tool")} ${matches.length === 1 ? "matches" : "match"} ${JSON.stringify(query)}:`,
-    ...matches.map((m) => m.dts.trimEnd()),
-  ].join("\n\n");
 }
 
 function statusPhrase(status: RunStatus): string {
@@ -678,19 +861,25 @@ function payloadText(payload: Payload, limit: number): string {
 }
 
 function at(callsite: Callsite | null | undefined): string {
-  return callsite ? ` at script.ts:${callsite.line}:${callsite.column}` : "";
+  return callsite ? ` at workflow.ts:${callsite.line}:${callsite.column}` : "";
 }
 
-/** A tool call as the model would write it. */
+/** A tool call as the model would write it: `JSON.stringify` of an object literal, its keys in order. */
 export function args(values: Record<string, unknown>): string {
   return JSON.stringify(values);
 }
 
+/** `JSON.stringify(value)`: compact. */
 export function json(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value) ?? "null";
 }
 
-function plural(count: number, noun: string): string {
+/** `JSON.stringify` of a string. */
+export function quoted(text: string): string {
+  return JSON.stringify(text);
+}
+
+export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 

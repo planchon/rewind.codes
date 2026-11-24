@@ -8,18 +8,20 @@ const key = randomBytes(32);
 const secret = `whsec_${key.toString("base64")}`;
 
 const body = JSON.stringify({
-  type: "credentials.expired",
+  type: "secret.expired",
   timestamp: "2026-11-09T10:02:11Z",
   data: {
     runId: "r1",
+    namespace: "alice",
     labels: {},
-    taskId: "t1",
+    callId: "c1",
     seq: 2,
-    tool: "github.list_issues",
+    action: "github.list_issues",
+    actionSet: "ab",
     server: "github",
-    toolset: "ab",
-    owner: "toolset",
-    parked: "credentials_refused",
+    secret: "ns/github",
+    reason: "refused",
+    message: "401 Unauthorized",
   },
 });
 
@@ -46,9 +48,9 @@ describe("webhook verification", () => {
       1614265330,
       "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=",
     );
-    // The signature holds; the body is just not a lifecycle event.
+    // The signature holds; the body is just not a webhook of a known type.
     expect(() => verifyWebhook(vector, signed, "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")).toThrow(
-      /not a lifecycle event/,
+      /not a webhook of a known type/,
     );
     const tampered = { ...signed, "webhook-signature": "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" };
     expect(() => verifyWebhook(vector, tampered, "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")).toThrow(
@@ -56,10 +58,23 @@ describe("webhook verification", () => {
     );
   });
 
-  it("returns the event of a delivery signed with the secret", () => {
+  it("returns the webhook of a delivery signed with the secret", () => {
     const at = now();
-    const event = verifyWebhook(body, headers("msg_1", at, sign("msg_1", at, body)), secret);
-    expect(event.type).toBe("credentials.expired");
+    const webhook = verifyWebhook(body, headers("msg_1", at, sign("msg_1", at, body)), secret);
+    expect(webhook.type).toBe("secret.expired");
+    if (webhook.type === "secret.expired") {
+      expect(webhook.data.action).toBe("github.list_issues");
+    }
+  });
+
+  it("refuses a webhook of a type it does not know, the old names included", () => {
+    const at = now();
+    for (const type of ["run.suspended", "tool.schema_changed", "credentials.expired"]) {
+      const old = JSON.stringify({ type, timestamp: "2026-11-09T10:02:11Z", data: {} });
+      expect(() => verifyWebhook(old, headers("msg_1", at, sign("msg_1", at, old)), secret)).toThrow(
+        /not a webhook of a known type/,
+      );
+    }
   });
 
   it("takes the body as bytes, headers as Headers or as Node's header map, and rotated signatures", () => {
@@ -67,9 +82,9 @@ describe("webhook verification", () => {
     const signature = `v1,b2xkIHNpZ25hdHVyZQ== ${sign("msg_1", at, body)}`;
     expect(
       verifyWebhook(new TextEncoder().encode(body), new Headers(headers("msg_1", at, signature)), secret).type,
-    ).toBe("credentials.expired");
+    ).toBe("secret.expired");
     const nodeHeaders = { "Webhook-Id": "msg_1", "webhook-timestamp": String(at), "webhook-signature": [signature] };
-    expect(verifyWebhook(Buffer.from(body), nodeHeaders, secret).type).toBe("credentials.expired");
+    expect(verifyWebhook(Buffer.from(body), nodeHeaders, secret).type).toBe("secret.expired");
   });
 
   it("refuses another secret, another id, a changed body and an old delivery", () => {
@@ -84,7 +99,7 @@ describe("webhook verification", () => {
     expect(() => verifyWebhook(body, { "webhook-id": "msg_1" }, secret)).toThrow(/Missing required headers/);
   });
 
-  it("returns a quota alert, about a namespace or about the tenant's ceiling", () => {
+  it("returns a quota alert, about a namespace or about the organization's ceiling", () => {
     const at = now();
     for (const namespace of ["alice", null]) {
       const alert = JSON.stringify({
@@ -101,11 +116,11 @@ describe("webhook verification", () => {
         },
       });
       const id = "quota.alert:alice:runs_per_month:2026-11:80";
-      const event = verifyWebhook(alert, headers(id, at, sign(id, at, alert)), secret);
-      expect(event.type).toBe("quota.alert");
-      if (event.type === "quota.alert") {
-        expect(event.data.namespace).toBe(namespace);
-        expect(event.data.threshold).toBe(80);
+      const webhook = verifyWebhook(alert, headers(id, at, sign(id, at, alert)), secret);
+      expect(webhook.type).toBe("quota.alert");
+      if (webhook.type === "quota.alert") {
+        expect(webhook.data.namespace).toBe(namespace);
+        expect(webhook.data.threshold).toBe(80);
       }
     }
   });

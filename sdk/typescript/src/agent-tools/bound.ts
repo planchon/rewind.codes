@@ -1,4 +1,4 @@
-/** What `run_script` returns of a run's output at most: 256 KiB, the bound of the API's inline values. */
+/** What `run_workflow` returns of a run's output at most: 256 KiB, the bound of the API's inline values. */
 export const OUTPUT_LIMIT = 256 * 1024;
 
 const encoder = new TextEncoder();
@@ -37,7 +37,7 @@ export function sliceUtf8(text: string, start: number, limit: number): Slice {
 
 /**
  * A text cut to at most `limit` bytes by leaving out its middle: a quarter of the room for its
- * start, the rest for its end, where the most recent lines of a trace are.
+ * start, the rest for its end, where the most recent lines of a transcript are.
  */
 export function truncateMiddle(text: string, limit: number): string {
   const total = utf8Length(text);

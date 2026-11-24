@@ -15,7 +15,7 @@ import {
 } from "../src/index.js";
 import { MockServer, json } from "./mock-server.js";
 
-const TENANT = "org_01ACME";
+const ORGANIZATION_ID = "org_01ACME";
 const AUDIENCE = "https://api.example.com";
 const URL_CALLED = "https://api.example.com/v1/measures?model=sales";
 const BODY = JSON.stringify({ name: "Revenue", expression: "SUM(Sales[Amount])" });
@@ -44,10 +44,10 @@ let published: SigningKey[];
 beforeEach(async () => {
   server = await MockServer.start();
   // A new port, so a new issuer, for each test: the keys cached by another test are not this one's.
-  issuer = `${server.url}/organizations/${TENANT}`;
+  issuer = `${server.url}/organizations/${ORGANIZATION_ID}`;
   current = signingKey();
   published = [current];
-  server.on("GET", `/organizations/${TENANT}/jwks.json`, () => ({
+  server.on("GET", `/organizations/${ORGANIZATION_ID}/jwks.json`, () => ({
     status: 200,
     body: { keys: published.map((k) => k.jwk) },
     headers: { "Cache-Control": "max-age=300" },
@@ -72,6 +72,7 @@ function callClaims(overrides: Record<string, unknown> = {}): Record<string, unk
     sub: "user:42",
     labels: { env: "prod", goal: "q3-report" },
     run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10",
+    action: "dax.createMeasure",
     tool: "dax.createMeasure",
     idempotency_key: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10/7",
     jti: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10/7/1",
@@ -124,7 +125,7 @@ describe("verifyRewindCall", () => {
       namespace: "user:42",
       labels: { env: "prod", goal: "q3-report" },
       run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10",
-      tool: "dax.createMeasure",
+      action: "dax.createMeasure",
       idempotencyKey: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10/7",
     });
   });
@@ -151,14 +152,14 @@ describe("verifyRewindCall", () => {
       },
       options(),
     );
-    expect(call.tool).toBe("dax.createMeasure");
+    expect(call.action).toBe("dax.createMeasure");
   });
 
   it("fetches the keys once and keeps them", async () => {
     for (let i = 0; i < 3; i++) {
       await verifyRewindCall(received(await sign(callClaims())), options());
     }
-    expect(server.calls("GET", `/organizations/${TENANT}/jwks.json`)).toHaveLength(1);
+    expect(server.calls("GET", `/organizations/${ORGANIZATION_ID}/jwks.json`)).toHaveLength(1);
   });
 
   describe("refuses, naming the check that failed", () => {
@@ -278,6 +279,7 @@ describe("verifyRewindCall", () => {
         sub: undefined,
         labels: undefined,
         run: undefined,
+        action: undefined,
         tool: undefined,
         idempotency_key: undefined,
       });
@@ -287,6 +289,11 @@ describe("verifyRewindCall", () => {
         await verifyRewindCall(received(token), { ...options(), session: true, labels: { env: "prod" } }),
       ).toBeNull();
     });
+
+    it("call: a call that names its action only under the claim's old name, tool", async () => {
+      const token = await sign(callClaims({ action: undefined }));
+      expect(await refusedCheck(verifyRewindCall(received(token), options()))).toBe("call");
+    });
   });
 
   it("follows a rotation: an unknown kid is fetched again, at most every 10 seconds", async () => {
@@ -294,7 +301,7 @@ describe("verifyRewindCall", () => {
     const start = Date.parse("2026-11-20T09:00:00Z");
     vi.setSystemTime(start);
     await verifyRewindCall(received(await sign(callClaims())), options());
-    const jwks = () => server.calls("GET", `/organizations/${TENANT}/jwks.json`).length;
+    const jwks = () => server.calls("GET", `/organizations/${ORGANIZATION_ID}/jwks.json`).length;
     expect(jwks()).toBe(1);
 
     // The organization replaces its key: the old one stays published 24 hours.
@@ -316,7 +323,7 @@ describe("verifyRewindCall", () => {
   });
 
   it("says when the keys cannot be fetched, apart from a refusal", async () => {
-    server.on("GET", `/organizations/${TENANT}/jwks.json`, { status: 500, body: { error: "down" } });
+    server.on("GET", `/organizations/${ORGANIZATION_ID}/jwks.json`, { status: 500, body: { error: "down" } });
     const error = await verifyRewindCall(received(await sign(callClaims())), options()).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RewindConnectionError);
     expect(error).not.toBeInstanceOf(RewindSignatureError);
@@ -378,7 +385,7 @@ describe("verifyRewindCall on calls signed by Rewind", () => {
     namespace: "user:42",
     labels: { env: "prod", goal: "q3-report" },
     run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10",
-    tool: "dax.createMeasure",
+    action: "dax.createMeasure",
   };
 
   it("accepts a POST with its body and query, the fragment left out", async () => {

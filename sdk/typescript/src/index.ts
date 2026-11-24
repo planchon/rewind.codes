@@ -11,32 +11,36 @@ export {
 export { formatDuration, toMillis } from "./duration.js";
 export { isNamespaceName, type TransportOptions } from "./http.js";
 
-export type { RequestOptions } from "./resources/toolsets.js";
-export { Toolsets } from "./resources/toolsets.js";
-export { Workflows, type ListWorkflowsParams, type RecordTestsParams } from "./resources/workflows.js";
+export type { RequestOptions } from "./params.js";
+export { ActionSets } from "./resources/action-sets.js";
+export {
+  Workflows,
+  type CheckParams,
+  type ListWorkflowsParams,
+  type RecordTestsParams,
+} from "./resources/workflows.js";
 export { Tests } from "./resources/tests.js";
-export { Scripts, type CheckParams, type ListScriptsParams, type ScriptTitleParams } from "./resources/scripts.js";
 export {
   Runs,
+  type CodeTarget,
   type EventsParams,
   type FailuresParams,
   type ForkRunParams,
   type ListRunsParams,
   type RunStatsParams,
-  type ScriptTarget,
   type StartRunOptions,
   type StartRunParams,
   type WorkflowTarget,
 } from "./resources/runs.js";
-export { Tasks, type TaskFailure, type TaskStreamParams } from "./resources/tasks.js";
+export { Calls, type CallFailure, type CallStreamParams } from "./resources/calls.js";
 export {
+  Actions,
+  type ActionStatsParams,
   ApiKeys,
   type PayloadOptions,
   Payloads,
   Server,
   Subscriptions,
-  Tools,
-  type ToolStatsParams,
 } from "./resources/admin.js";
 export {
   NamespaceSecrets,
@@ -58,11 +62,11 @@ export {
 } from "./resources/namespaces.js";
 
 export {
-  HostToolError,
-  HostToolWorker,
-  type DeferredTask,
-  type HostToolContext,
-  type HostToolHandler,
+  HarnessActionError,
+  Worker,
+  type DeferredCall,
+  type HarnessActionContext,
+  type HarnessActionHandler,
   type WorkerErrorInfo,
   type WorkerOptions,
   type WorkerTimings,
@@ -86,6 +90,7 @@ export {
   type AgentSecrets,
   type AgentToolsClient,
   type AgentToolsOptions,
+  type CodeVerdict,
   type ListedSecret,
   type HandleOptions,
 } from "./agent-tools/agent-tools.js";

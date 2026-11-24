@@ -29,7 +29,7 @@ const FETCH_TIMEOUT_MS = 5_000;
  * - `exp`, `iat`: expired, or issued in the future, beyond 5 s of leeway;
  * - `htm`, `htu`, `body`: signed for another method, URL or body: a JWT replayed on another request;
  * - `labels`: the run does not carry the labels this server expects (`env=prod`);
- * - `call`: the JWT names no call (`sub`, `run`, `tool`, `idempotency_key`): a request of an MCP session outside a call,
+ * - `call`: the JWT names no call (`sub`, `run`, `action`, `idempotency_key`): a request of an MCP session outside a call,
  *   which only `session: true` accepts.
  */
 export type SignatureCheck =
@@ -54,11 +54,11 @@ export interface RewindCall {
   labels: Labels;
   /** The run's id. */
   run: string;
-  /** The tool called, as the toolset names it: `dax.createMeasure`. */
-  tool: string;
+  /** The action called, as the action set names it: `dax.createMeasure`. */
+  action: string;
   /**
-   * `{run_id}/{seq}`: the same for every attempt of the call. A server that acts once per key never repeats an effect,
-   * whatever the retries.
+   * `{run_id}/{seq}`: the same for every delivery of the call. A server that acts once per key never repeats an effect,
+   * whatever the redeliveries.
    */
   idempotencyKey: string;
 }
@@ -83,11 +83,11 @@ export interface ReceivedRequest {
 
 export interface VerifyRewindCallOptions {
   /**
-   * The issuer the server expects, `{public-url}/organizations/{tenant}` (the dashboard's Organization › Signing keys,
-   * or `signingKeys.list()`): its keys are read from `{issuer}/jwks.json`, never from the JWT.
+   * The issuer the server expects, `{public-url}/organizations/{organizationId}` (the dashboard's Organization › Signing
+   * keys, `signingKeys.list()`, or `rewindIssuer`): its keys are read from `{issuer}/jwks.json`, never from the JWT.
    */
   issuer: string;
-  /** The server's own audience: the API's `baseUrl` in the toolset, or the MCP server's URL. */
+  /** The server's own audience: the API's `baseUrl` in the action set, or the MCP server's URL. */
   audience: string;
   /**
    * The labels the run must carry, such as `{ env: "prod" }`. One key signs every run of the organization: an
@@ -97,7 +97,7 @@ export interface VerifyRewindCallOptions {
   labels?: Labels | undefined;
   /**
    * An MCP server: the requests of the session outside a call (`initialize`, the listing of the tools) are signed too,
-   * without `sub`, `labels`, `run`, `tool` nor `idempotency_key`. They are answered `null` rather than refused.
+   * without `sub`, `labels`, `run`, `action` nor `idempotency_key`. They are answered `null` rather than refused.
    */
   session?: boolean | undefined;
 }
@@ -185,7 +185,7 @@ export async function verifyRewindCall(
     }
     throw new RewindSignatureError(
       "call",
-      "the JWT names no call (sub, run, tool, idempotency_key): a request of an MCP session, which only `session: true` accepts",
+      "the JWT names no call (sub, run, action, idempotency_key): a request of an MCP session, which only `session: true` accepts",
     );
   }
   for (const [key, value] of Object.entries(options.labels ?? {})) {
@@ -309,20 +309,20 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 }
 
 function callOf(payload: JWTPayload): RewindCall | null {
-  const { sub, run, tool } = payload as { sub?: unknown; run?: unknown; tool?: unknown };
+  const { sub, run, action } = payload as { sub?: unknown; run?: unknown; action?: unknown };
   const idempotencyKey = payload["idempotency_key"];
-  if (sub === undefined && run === undefined && tool === undefined && idempotencyKey === undefined) {
+  if (sub === undefined && run === undefined && action === undefined && idempotencyKey === undefined) {
     return null;
   }
   if (
     typeof sub !== "string" ||
     typeof run !== "string" ||
-    typeof tool !== "string" ||
+    typeof action !== "string" ||
     typeof idempotencyKey !== "string"
   ) {
-    throw new RewindSignatureError("call", "the JWT names a call without all of sub, run, tool and idempotency_key");
+    throw new RewindSignatureError("call", "the JWT names a call without all of sub, run, action and idempotency_key");
   }
-  return { namespace: sub, labels: labelsOf(payload["labels"]), run, tool, idempotencyKey };
+  return { namespace: sub, labels: labelsOf(payload["labels"]), run, action, idempotencyKey };
 }
 
 function labelsOf(value: unknown): Labels {

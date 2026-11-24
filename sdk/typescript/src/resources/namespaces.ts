@@ -16,7 +16,7 @@ import type {
   TokenKey,
 } from "../types.js";
 import { NamespaceSecrets } from "./secrets.js";
-import type { RequestOptions } from "./toolsets.js";
+import type { RequestOptions } from "../params.js";
 
 export interface ListNamespacesParams extends RequestOptions {
   /** Only the names starting with this. */
@@ -26,7 +26,7 @@ export interface ListNamespacesParams extends RequestOptions {
    * 80 % or more of a quota.
    */
   above?: number | undefined;
-  /** `cpu` (the default), `runs` or `scripts`: the largest use of the month first; or `name`. */
+  /** `cpu` (the default), `runs` or `workflows`: the largest use of the month first; or `name`. */
   order?: NamespaceOrder | undefined;
   /** The calendar month whose use is listed, `2026-11`. The current one by default. */
   month?: string | undefined;
@@ -39,7 +39,7 @@ export interface ListNamespacesParams extends RequestOptions {
 export interface QuotaAlertsParams extends RequestOptions {
   /** The calendar month, `2026-11`. The current one by default. */
   month?: string | undefined;
-  /** Only this namespace's alerts. Without it, every alert of the tenant, its ceiling's included. */
+  /** Only this namespace's alerts. Without it, every alert of the organization, its ceiling's included. */
   namespace?: string | undefined;
 }
 
@@ -56,16 +56,16 @@ export type CreatedToken = Token & {
 };
 
 /**
- * Namespaces: the end users of the customer. Each has its runs, the scripts they ran, its secrets, its use and its
+ * Namespaces: the end users of the customer. Each has its runs, its workflows, its secrets, its use and its
  * limits; nothing of one end user is visible to another. A namespace is created at its first use (a run, a token), with
- * the tenant's default limits.
+ * the organization's default limits.
  */
 export class Namespaces {
   /** End users' opaque tokens: minted for one namespace, revoked one by one or all at once. */
   readonly tokens: Tokens;
-  /** The default limits of every namespace, and the tenant's ceiling. */
+  /** The default limits of every namespace, and the organization's ceiling. */
   readonly defaults: DefaultLimits;
-  /** Each end user's own secrets (Alice's GitHub token), attached as `ns/<name>` by the runs of its namespace. */
+  /** Each end user's own secrets (Alice's GitHub token), used as `ns/<name>` by the runs of its namespace. */
   readonly secrets: NamespaceSecrets;
 
   constructor(private readonly transport: Transport) {
@@ -160,7 +160,7 @@ export class Namespaces {
   /**
    * Erases the end user, in the background: the namespace takes no run and no token from now on
    * (`namespace-deleting`), its tokens are revoked and its active runs cancelled, then its runs, secrets, use and
-   * alerts are erased. The tenant's own use keeps what the namespace consumed.
+   * alerts are erased. The organization's own use keeps what the namespace consumed.
    */
   async delete(name: string, options: RequestOptions = {}): Promise<void> {
     checkNamespaceName(name);
@@ -176,7 +176,7 @@ export class Namespaces {
 
   /**
    * The quota alerts of a month, newest first: a limit crossed at 80 % or 100 % (for `active_runs`, the first refusal
-   * of the month). An alert of the tenant's ceiling has no `namespace`. Each is also sent as the webhook `quota.alert`.
+   * of the month). An alert of the organization's ceiling has no `namespace`. Each is also sent as the webhook `quota.alert`.
    */
   async alerts(params: QuotaAlertsParams = {}): Promise<QuotaAlertList> {
     const { signal } = params;
@@ -194,11 +194,11 @@ export class Namespaces {
   }
 }
 
-/** The limits of every namespace without an exception, set by the customer, under the tenant's ceiling. */
+/** The limits of every namespace without an exception, set by the customer, under the organization's ceiling. */
 export class DefaultLimits {
   constructor(private readonly transport: Transport) {}
 
-  /** The default limits, the tenant's ceiling (set by the operator: the customer's offer) and the tenant's use. */
+  /** The default limits, the organization's ceiling (set by the operator: the customer's offer) and the organization's use. */
   get(options: RequestOptions & { month?: string | undefined } = {}): Promise<NamespaceDefaults> {
     return this.transport.send(
       () =>
@@ -225,14 +225,14 @@ export class DefaultLimits {
 
 /**
  * End users' opaque tokens, `rewind_nt_…`. The agent acting for an end user holds one: with it, the agent and every
- * script its model writes reach that end user's namespace only.
+ * workflow its model writes reach that end user's namespace only.
  */
 export class Tokens {
   constructor(private readonly transport: Transport) {}
 
   /**
    * Mints a token of the namespace, creating the namespace if needed. It lives `ttl` (1 hour by default, 30 days at
-   * most), holds `permissions` (by default `runs:read`, `runs:start`, `runs:control` and `toolsets:read`; each must be
+   * most), holds `permissions` (by default `runs:read`, `runs:start`, `runs:control` and `actions:read`; each must be
    * one the caller holds) and reaches only the runs carrying all its `labels`. The secret is only in this answer.
    */
   async create(namespace: string, token: CreateToken = {}, options: RequestOptions = {}): Promise<CreatedToken> {
@@ -299,7 +299,7 @@ export class TokenKeys {
     );
   }
 
-  /** Every key the tenant signs its tokens with. */
+  /** Every key the organization signs its tokens with. */
   async list(options: RequestOptions = {}): Promise<TokenKey[]> {
     const list = await this.transport.send(
       () => this.transport.api.GET("/v1/organization/token-keys", { signal: options.signal }),

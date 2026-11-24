@@ -1,23 +1,22 @@
 import { durationParam, toMillis } from "../duration.js";
 import { RewindApiError, RewindConnectionError, RewindError } from "../errors.js";
 import { backoff, checkIdempotencyKey, messageOf, sleep, throwIfAborted, type Transport } from "../http.js";
-import { labelParams, timeParam } from "../params.js";
+import { labelParams, timeParam, type RequestOptions } from "../params.js";
 import { sseMessages } from "../sse.js";
-import {
-  type Duration,
-  type Entry,
-  type FailureGroupPage,
-  type Labels,
-  type Run,
-  type RunPage,
-  type RunStats,
-  type RunStatus,
-  type RunSummary,
-  type SignalAccepted,
-  type StreamEvent,
-  type Trace,
+import type {
+  Duration,
+  FingerprintPage,
+  HistoryEvent,
+  Labels,
+  Run,
+  RunPage,
+  RunStats,
+  RunStatus,
+  RunSummary,
+  SignalAccepted,
+  StreamMessage,
+  Transcript,
 } from "../types.js";
-import type { RequestOptions } from "./toolsets.js";
 
 /** How long after a wait's deadline the client gives up a request the server has not answered. */
 const ANSWER_GRACE_MS = 10_000;
@@ -28,29 +27,33 @@ const CUT_AFTER_MS = 1_000;
 /** The longest delay of a timer; a deadline further away is the server's alone. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
-/** What a run executes: a script and its toolset. */
-export interface ScriptTarget {
+/**
+ * What a run executes: code and its action set. The run is a run of the workflow that already has this code in the
+ * namespace, or among the organization's workflows; else the start creates a workflow of the namespace, with this code
+ * as its version 1.
+ */
+export interface CodeTarget {
   /** The TypeScript source: a single ES module whose default export is the entry point. */
-  script: string;
-  /** The toolset the script imports from `rewind:tools`. */
-  toolset?: string | undefined;
+  code: string;
+  /** The action set the code imports from `rewind:actions`. Without one, `rewind:actions` is empty. */
+  actionSet?: string | undefined;
   workflow?: undefined;
 }
 
-/** What a run executes: a version of a workflow, with its script and its toolset. */
+/** What a run executes: a version of a workflow, with its code, its action set and its secrets. */
 export interface WorkflowTarget {
   /**
-   * The workflow: `triage` for its latest version, `triage@<version>` (12 hex digits at least)
-   * or `triage@v12` (its number) for one version. The input is checked against its input schema
-   * (`invalid-input`).
+   * The workflow, by its id or its name (the namespace's first, then the organization's): its latest version, or
+   * `triage@v12` (its number) or `triage@<digest>` (12 hex digits at least) for one version. The input is checked
+   * against its input schema (`invalid-input`).
    */
   workflow: string;
-  script?: undefined;
-  toolset?: undefined;
+  code?: undefined;
+  actionSet?: undefined;
 }
 
-/** `runs.start`: a script and its toolset, or a workflow; and how the run starts. */
-export type StartRunParams = (ScriptTarget | WorkflowTarget) & StartRunOptions;
+/** `runs.start`: code and its action set, or a workflow; and how the run starts. */
+export type StartRunParams = (CodeTarget | WorkflowTarget) & StartRunOptions;
 
 export interface StartRunOptions extends RequestOptions {
   /** The input of `main`. `{}` when absent. */
@@ -72,24 +75,24 @@ export interface StartRunOptions extends RequestOptions {
   tracestate?: string | undefined;
   /** The run's time to live: it is cancelled after it. 30 days by default. */
   ttl?: Duration | undefined;
-  /** Type-check the script before starting it. `true` by default. A workflow's is not checked again. */
+  /** Type-check the code before starting it. `true` by default. A workflow's version is not checked again. */
   check?: boolean | undefined;
   /**
    * The secrets the run reads, by MCP server or API: `{ github: "ns/github", zendesk: "org/zendesk" }`
    * (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's). Names, never values. Required for each
-   * server the script imports whose `auth` takes a secret; a run of a workflow gives none, its version's are read. An
-   * attachment missing, unknown or not the caller's to attach refuses the start before any run exists:
-   * `secret-required`, whose `attachments` say which and what may be attached instead.
+   * server the code imports whose `auth` takes a secret; a run of a workflow gives none, its version's are read. A
+   * secret missing, unknown or not the caller's to use refuses the start before any run exists: `secret-required`,
+   * whose `secrets` say which and what the caller may use instead (`usable`).
    */
   secrets?: Record<string, string> | undefined;
 }
 
 export interface ForkRunParams extends RequestOptions {
   /** The corrected TypeScript source. */
-  script: string;
-  /** Go live from this journal entry, even if the commands still match. */
+  code: string;
+  /** Go live from this event, even if the commands still match. */
   at?: number | undefined;
-  /** The fork's input. The parent's when absent. */
+  /** The fork's input. The source's when absent. */
   input?: unknown;
   labels?: Labels | undefined;
   wait?: Duration | undefined;
@@ -98,11 +101,11 @@ export interface ForkRunParams extends RequestOptions {
   tracestate?: string | undefined;
   ttl?: Duration | undefined;
   /**
-   * The fork's secrets, by MCP server or API, as `runs.start` takes them. The parent's when absent; either way they
-   * are checked against the caller, since the script is new code.
+   * The fork's secrets, by MCP server or API, as `runs.start` takes them. The source's when absent; either way they
+   * are checked against the caller, since the code is new code.
    */
   secrets?: Record<string, string> | undefined;
-  /** Type-check the corrected script first. `true` by default. */
+  /** Type-check the corrected code first. `true` by default. */
   check?: boolean | undefined;
 }
 
@@ -118,24 +121,27 @@ export interface ListRunsParams extends RequestOptions {
    * `started` (the default: the most recently started first), `oldest` (the first started
    * first), `activity` (the most recent activity first), `wakes` (the soonest to wake by itself
    * first), `duration` (the longest first, the runs that have not ended last), or `calls` (the
-   * most tool calls first).
+   * most calls first).
    */
   sort?: "started" | "oldest" | "activity" | "wakes" | "duration" | "calls" | undefined;
+  /**
+   * Only runs of this status. The runs that have not ended, and what a waiting run waits for, are terms of `q`:
+   * `status:active`, `waiting:approval`.
+   */
   status?: RunStatus | undefined;
+  /** Only quarantined runs (`waiting:quarantined`), or only runs that are not. */
+  quarantined?: boolean | undefined;
   /** Only runs carrying all these labels. */
   labels?: Labels | undefined;
-  /** Only runs that called this tool. */
-  tool?: string | undefined;
-  /** Only runs of this script (digest). */
-  script?: string | undefined;
+  /** Only runs that called this action. */
+  action?: string | undefined;
   /** Only runs whose calls failed with this kind, or that failed with this error name. */
   error?: string | undefined;
-  quarantined?: boolean | undefined;
   /** Only forks of this run: its handle or its id. */
-  parent?: string | undefined;
-  /** Only runs of this workflow, by name. */
+  source?: string | undefined;
+  /** Only runs of this workflow: its id or its name. */
   workflow?: string | undefined;
-  /** Only runs this run started (`triage.start(…)` in its script): its handle or its id. */
+  /** Only runs this run started (`triage.start(…)` in its code): its handle or its id. */
   startedBy?: string | undefined;
   startedAfter?: Date | string | undefined;
   startedBefore?: Date | string | undefined;
@@ -159,10 +165,10 @@ export interface RunStatsParams extends RequestOptions {
   /** Runs started before this time, rounded up to the hour. Now by default. */
   until?: Date | string | undefined;
   /**
-   * The width of the series' buckets, from `since`, which it requires: whole hours, a shorter width is rounded up. No
+   * The width of the series' intervals, from `since`, which it requires: whole hours, a shorter width is rounded up. No
    * series without it.
    */
-  bucket?: Duration | undefined;
+  interval?: Duration | undefined;
   /** Values per facet (10 by default, 50 at most). */
   top?: number | undefined;
 }
@@ -174,16 +180,16 @@ export interface FailuresParams extends RequestOptions {
   since?: Date | string | undefined;
   /** Runs ended before this time, rounded up to the hour. Now by default. */
   until?: Date | string | undefined;
-  /** The width of each group's series' buckets, from `since`, which it requires: whole hours. */
-  bucket?: Duration | undefined;
-  /** Groups at most (50 by default, 500 at most). */
+  /** The width of each fingerprint's series' intervals, from `since`, which it requires: whole hours. */
+  interval?: Duration | undefined;
+  /** Fingerprints at most (50 by default, 500 at most). */
   limit?: number | undefined;
 }
 
 export interface EventsParams extends RequestOptions {
-  /** Keep the stream open and send entries as they are committed, until the run ends. */
+  /** Keep the stream open and send events as they are committed, until the run ends. */
   follow?: boolean | undefined;
-  /** The first entry to send. 0 by default. */
+  /** The first event to send, by its position. 0 by default. */
   from?: number | undefined;
   /** With `follow`: how many times to reconnect after the connection drops. 5 by default. */
   maxReconnects?: number | undefined;
@@ -191,7 +197,7 @@ export interface EventsParams extends RequestOptions {
 
 /**
  * Runs: start, follow, steer and read them. A client bound to a namespace, or holding an end user's token, reaches
- * that namespace's runs only; a key's client without one reads every namespace of the tenant.
+ * that namespace's runs only; a key's client without one reads every namespace of the organization.
  *
  * Every method that takes a run's `id` takes its handle too (`Run.handle`, `dana/triage/06bqx3k9f2mt`), which is
  * percent-encoded in the path.
@@ -200,12 +206,13 @@ export class Runs {
   constructor(private readonly transport: Transport) {}
 
   /**
-   * Starts a run of a script, or of a workflow, in the client's namespace: the end user it acts for
+   * Starts a run of code, or of a workflow, in the client's namespace: the end user it acts for
    * (`rewind.namespace(name)`, or an end user's token). A key's client without a namespace is refused
-   * (`NamespaceRequiredError`). A script is compiled, checked and type-checked first: a script that cannot run
-   * is refused with `invalid-script` (a `RewindApiError` with `diagnostics`) before any run exists. A workflow's
-   * input that does not match its schema is refused with `invalid-input`. With `wait`, the server holds the one
-   * request until the run ends or is quarantined, or until `wait` passes, whichever comes first.
+   * (`NamespaceRequiredError`). Code is compiled, checked and type-checked first: code that cannot run is refused with
+   * `invalid-code` (a `RewindApiError` with `diagnostics`) before any run exists. A workflow's input that does not match
+   * its schema is refused with `invalid-input`. With `wait`, the server holds the one request until the run ends or is
+   * quarantined, or until `wait` passes, whichever comes first. The run's `workflow` names the workflow it is a run
+   * of, and its version.
    */
   async start(params: StartRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;
@@ -252,11 +259,10 @@ export class Runs {
               sort: params.sort,
               status: params.status,
               label: labelParams(params.labels),
-              tool: params.tool,
-              script: params.script,
+              action: params.action,
               error: params.error,
               quarantined: params.quarantined,
-              parent: params.parent,
+              source: params.source,
               workflow: params.workflow,
               startedBy: params.startedBy,
               startedAfter: timeParam(params.startedAfter),
@@ -286,7 +292,7 @@ export class Runs {
               q: params.q,
               since: timeParam(params.since),
               until: timeParam(params.until),
-              bucket: params.bucket === undefined ? undefined : durationParam(params.bucket),
+              interval: params.interval === undefined ? undefined : durationParam(params.interval),
               top: params.top,
             },
           },
@@ -297,7 +303,7 @@ export class Runs {
   }
 
   /** The failed, cancelled and aborted runs a query matches, grouped by fingerprint. */
-  failures(params: FailuresParams = {}): Promise<FailureGroupPage> {
+  failures(params: FailuresParams = {}): Promise<FingerprintPage> {
     const { signal } = params;
     return this.transport.send(
       () =>
@@ -307,7 +313,7 @@ export class Runs {
               q: params.q,
               since: timeParam(params.since),
               until: timeParam(params.until),
-              bucket: params.bucket === undefined ? undefined : durationParam(params.bucket),
+              interval: params.interval === undefined ? undefined : durationParam(params.interval),
               limit: params.limit,
             },
           },
@@ -328,7 +334,7 @@ export class Runs {
   }
 
   /**
-   * Sends a signal: it resolves the script's `signal(name)`, now or the next time the script
+   * Sends a signal: it resolves the code's `signal(name)`, now or the next time the code
    * waits for that name. With an idempotency key, the same key sent twice delivers one signal.
    * A run that has ended refuses it (`run-ended`). A name starting with `rewind:` is refused with
    * `invalid-signal`, and so are, for a run of a workflow, a signal it does not declare and a
@@ -354,8 +360,8 @@ export class Runs {
   }
 
   /**
-   * Cancels a run: every pending await of the script rejects with `CancelledError`, and the
-   * script gets one activation to clean up. With `wait`, returns the run's state after it, waiting
+   * Cancels a run: every pending await of the code rejects with `CancelledError`, and the
+   * code gets one grace step to clean up. With `wait`, returns the run's state after it, waiting
    * as `start` does.
    */
   async cancel(
@@ -383,11 +389,12 @@ export class Runs {
   }
 
   /**
-   * Forks a run with a corrected script (`retry_run`): a new run, in its parent's namespace, that reuses the parent's
+   * Forks a run with corrected code (`retry_run`): a new run, in its source's namespace, that reuses the source's
    * recorded results while its commands match, and continues live at the first difference, at `at`, or at the end of
-   * the parent's history. For a run of a workflow, the suite of the run's version runs against the corrected script
-   * first: if a test does not pass, no fork is created, and the refusal is `tests-failed`, whose `tests` holds each
-   * test's outcome.
+   * the source's history. Its `source` names the run. For a run of a workflow, the suite of the run's version runs
+   * against the corrected code first: if a test does not pass, no fork is created, and the refusal is `tests-failed`,
+   * whose `tests` holds each test's outcome. The corrected code does not become a version of the workflow
+   * (`workflows.createVersion` makes one).
    */
   async fork(id: string, params: ForkRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;
@@ -410,23 +417,23 @@ export class Runs {
     return this.held(wait, signal, fork, fork);
   }
 
-  /** The run's trace, written for a model (`format=llm`). */
-  trace(id: string, options: RequestOptions = {}): Promise<Trace> {
+  /** The run's transcript: the run as text for a model, a header then one line per event. */
+  transcript(id: string, options: RequestOptions = {}): Promise<Transcript> {
     return this.transport.send(
       () =>
-        this.transport.api.GET("/v1/runs/{id}/trace", {
-          params: { path: { id }, query: { format: "llm" } },
+        this.transport.api.GET("/v1/runs/{id}/transcript", {
+          params: { path: { id } },
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },
     );
   }
 
-  /** One journal entry in full: every payload of the entry has its value, whatever its size. */
-  entry(id: string, idx: number, options: RequestOptions = {}): Promise<Entry> {
+  /** One event of the run's history in full, by its position: every payload of the event has its value, whatever its size. */
+  event(id: string, idx: number, options: RequestOptions = {}): Promise<HistoryEvent> {
     return this.transport.send(
       () =>
-        this.transport.api.GET("/v1/runs/{id}/entries/{idx}", {
+        this.transport.api.GET("/v1/runs/{id}/events/{idx}", {
           params: { path: { id, idx } },
           signal: options.signal,
         }),
@@ -435,11 +442,11 @@ export class Runs {
   }
 
   /**
-   * The run's journal as a stream: the committed entries from `from`, then, with `follow`, each
-   * new entry as it is committed, and `end` when the run has ended. Payload values above 256 KiB
-   * are left out. With `follow`, a dropped connection is resumed after the last entry received.
+   * The run's history as a stream: the committed events from `from`, then, with `follow`, each
+   * new event as it is committed, and `end` when the run has ended. Payload values above 256 KiB
+   * are left out. With `follow`, a dropped connection is resumed after the last event received.
    */
-  async *events(id: string, params: EventsParams = {}): AsyncGenerator<StreamEvent> {
+  async *events(id: string, params: EventsParams = {}): AsyncGenerator<StreamMessage> {
     const { signal, follow = false } = params;
     const maxReconnects = params.maxReconnects ?? 5;
     let next = params.from ?? 0;
@@ -463,8 +470,8 @@ export class Runs {
           throw new RewindConnectionError(`the event stream of run ${id} has no body`);
         }
         for await (const message of sseMessages(body, signal)) {
-          const event = JSON.parse(message.data) as StreamEvent;
-          if (event.type === "entry") {
+          const event = JSON.parse(message.data) as StreamMessage;
+          if (event.type === "event") {
             next = event.idx + 1;
           }
           failures = 0;
@@ -492,14 +499,17 @@ export class Runs {
     }
   }
 
-  /** Exports the journal document, or a cassette, of the stored format v1. */
-  journal(
+  /**
+   * Exports the run, as a document of the stored format v1: `run` (the default), the run export, its code, action set
+   * and history, which replays on its own; or `cassette`, its calls and signals, for tests.
+   */
+  export(
     id: string,
-    options: RequestOptions & { as?: "journal" | "cassette" | undefined } = {},
+    options: RequestOptions & { as?: "run" | "cassette" | undefined } = {},
   ): Promise<Record<string, unknown>> {
     return this.transport.send(
       () =>
-        this.transport.api.GET("/v1/runs/{id}/journal", {
+        this.transport.api.GET("/v1/runs/{id}/export", {
           params: { path: { id }, query: { as: options.as } },
           signal: options.signal,
         }),
@@ -519,7 +529,7 @@ export class Runs {
     );
   }
 
-  /** Gives up a quarantined run: the host ends it (`run_aborted`). */
+  /** Gives up a quarantined run: Rewind ends it (`run_aborted`). */
   giveUp(id: string, options: RequestOptions = {}): Promise<Run> {
     return this.transport.send(
       () =>
@@ -531,7 +541,7 @@ export class Runs {
     );
   }
 
-  /** Erases a run: its journal, archive, read model rows and payload references. */
+  /** Erases a run: its history, its archive, its summary and its payloads. */
   async delete(id: string, options: RequestOptions = {}): Promise<void> {
     await this.transport.send(
       () => this.transport.api.DELETE("/v1/runs/{id}", { params: { path: { id } }, signal: options.signal }),

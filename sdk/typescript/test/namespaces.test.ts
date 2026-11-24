@@ -14,7 +14,7 @@ import {
   type NamespaceDetail,
   type Quotas,
 } from "../src/index.js";
-import { NAMESPACE, RUN_ID, TOOLSET, run } from "./fixtures.js";
+import { ACTION_SET, NAMESPACE, RUN_ID, run } from "./fixtures.js";
 import { MockServer, json, noContent, problem, type MockRequest } from "./mock-server.js";
 
 let server: MockServer;
@@ -29,7 +29,7 @@ afterEach(async () => {
   await server.close();
 });
 
-const SCRIPT = "export default async function main() { return 1; }";
+const CODE = "export default async function main() { return 1; }";
 
 /** `POST /v1/runs` as the server answers it: a key's request must name the namespace. */
 function serveStart(): void {
@@ -52,7 +52,7 @@ function namespace(name: string, overrides: Partial<Namespace> = {}): Namespace 
     name,
     limits: { activeRuns: 5, runsPerMonth: 1_000 },
     exceptions: {},
-    usage: { cpu: "12m", activeRuns: 1, runsStarted: 812, scripts: 4 },
+    usage: { cpu: "12m", activeRuns: 1, runsStarted: 812, workflows: 4 },
     createdAt: "2026-11-01T09:00:00Z",
     lastActiveAt: "2026-11-14T10:00:00Z",
     ...overrides,
@@ -84,7 +84,7 @@ describe("a client bound to a namespace", () => {
     serveStart();
     server
       .on("POST", "/v1/check", json({ ok: true, diagnostics: [] }))
-      .on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }))
+      .on("POST", "/v1/test", json({ passed: true, tests: [] }))
       .on("GET", "/v1/runs", json({ runs: [] }))
       .on("GET", "/v1/runs/{id}", json(run()));
     const alice = new Rewind({
@@ -92,9 +92,9 @@ describe("a client bound to a namespace", () => {
       apiKey: "rewind_sk_backend",
       headers: { "X-Tenant-App": "crm" },
     }).namespace("alice");
-    const started = await alice.runs.start({ toolset: TOOLSET, script: SCRIPT });
-    await alice.scripts.check({ script: SCRIPT });
-    await alice.scripts.test({ script: SCRIPT });
+    const started = await alice.runs.start({ actionSet: ACTION_SET, code: CODE });
+    await alice.workflows.check({ code: CODE });
+    await alice.workflows.test({ code: CODE });
     await alice.runs.list();
     await alice.runs.get(RUN_ID);
 
@@ -137,7 +137,7 @@ describe("a client bound to a namespace", () => {
 describe("a key's client without a namespace", () => {
   it("is refused by the server when it starts a run, with an error that says what to do", async () => {
     serveStart();
-    const error = await rewind.runs.start({ toolset: TOOLSET, script: SCRIPT }).catch((e: unknown) => e);
+    const error = await rewind.runs.start({ actionSet: ACTION_SET, code: CODE }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(NamespaceRequiredError);
     expect(error).toBeInstanceOf(RewindApiError);
     expect(isProblem(error, "invalid-request")).toBe(true);
@@ -152,22 +152,26 @@ describe("a key's client without a namespace", () => {
     expect(server.calls("POST", "/v1/runs")).toHaveLength(1);
   });
 
-  it("is refused alike when it checks or tests a script", async () => {
+  it("is refused alike when it checks or tests code, or forks a workflow", async () => {
     const refusal = problem(400, "invalid-request", "the header Rewind-Namespace is required: it names the end user");
-    server.on("POST", "/v1/check", refusal).on("POST", "/v1/test", refusal);
-    await expect(rewind.scripts.check({ script: SCRIPT })).rejects.toBeInstanceOf(NamespaceRequiredError);
-    await expect(rewind.scripts.test({ script: SCRIPT })).rejects.toBeInstanceOf(NamespaceRequiredError);
+    server
+      .on("POST", "/v1/check", refusal)
+      .on("POST", "/v1/test", refusal)
+      .on("POST", "/v1/workflows/{id}/fork", refusal);
+    await expect(rewind.workflows.check({ code: CODE })).rejects.toBeInstanceOf(NamespaceRequiredError);
+    await expect(rewind.workflows.test({ code: CODE })).rejects.toBeInstanceOf(NamespaceRequiredError);
+    await expect(rewind.workflows.fork("triage")).rejects.toBeInstanceOf(NamespaceRequiredError);
   });
 
   it("gets other refusals as they are", async () => {
     server.on("POST", "/v1/runs", problem(400, "invalid-request", "ttl: expected a duration"));
-    const error = await rewind.runs.start({ script: SCRIPT }).catch((e: unknown) => e);
+    const error = await rewind.runs.start({ code: CODE }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RewindApiError);
     expect(error).not.toBeInstanceOf(NamespaceRequiredError);
     expect((error as RewindApiError).message).toBe("ttl: expected a duration");
   });
 
-  it("reads every namespace of the tenant", async () => {
+  it("reads every namespace of the organization", async () => {
     server.on("GET", "/v1/runs", json({ runs: [] }));
     await rewind.runs.list();
     expect(namespaceOf(server.requests[0])).toBeUndefined();
@@ -180,7 +184,7 @@ describe("a client holding an end user's token", () => {
     process.env["REWIND_API_KEY"] = "rewind_sk_env";
     try {
       const asUser = new Rewind({ url: server.url, token: "rewind_nt_alice" });
-      await asUser.runs.start({ toolset: TOOLSET, script: SCRIPT });
+      await asUser.runs.start({ actionSet: ACTION_SET, code: CODE });
     } finally {
       delete process.env["REWIND_API_KEY"];
     }
@@ -300,7 +304,7 @@ describe("rewind.namespaces", () => {
       defaults: { activeRuns: 5, maxTtl: "7d" },
       ceiling: { activeRuns: 500 },
       month: "2026-11",
-      usage: { cpu: "3h", activeRuns: 40, runsStarted: 9_000, scripts: 120 },
+      usage: { cpu: "3h", activeRuns: 40, runsStarted: 9_000, workflows: 120 },
     };
     server
       .on("GET", "/v1/organization/namespace-defaults", json(defaults))
@@ -449,7 +453,7 @@ describe("a quota reached", () => {
     });
     const error = await rewind
       .namespace("alice")
-      .runs.start({ script: SCRIPT, idempotencyKey: "k1" })
+      .runs.start({ code: CODE, idempotencyKey: "k1" })
       .catch((e: unknown) => e);
     expect(isProblem(error, "quota-exceeded")).toBe(true);
     const reached = error as RewindApiError;

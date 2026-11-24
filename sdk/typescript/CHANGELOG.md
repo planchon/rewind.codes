@@ -2,6 +2,109 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
+## 0.6.0 (unreleased)
+
+The release that renames Rewind in the words of its glossary, and makes a workflow one entity. Everything Rewind runs
+is a workflow, and its TypeScript text is its code; what a workflow calls is an action, in an action set; a call of a
+harness action is a call; a run's record is its history, made of events. Every renamed method, type, option and value
+breaks: the API keeps no old path, so 0.6.0 speaks only to a server of the same release.
+
+### The workflow model
+
+A workflow has an id (`wf_…`), a name unique in its scope if it has one, a description, versions numbered from 1 (each
+a code, its interface, its action set and its secrets, with `version` its number and `digest` its hash) and a suite. It
+belongs to the namespace whose run created it, or to the organization. Code a namespace runs for the first time becomes
+a workflow of that namespace; the same code run again is a run of the same workflow.
+
+- `rewind.workflows` holds the calls of a workflow: `check({ code, actionSet })` and `test(request)` (were
+  `scripts.check` and `scripts.test`; a check creates nothing, and answers the workflow that already has the code, with
+  its version, as `workflow`), `create`, `list` and `listAll` (`scope`, `code`, `q`, `since`, `until`; each workflow
+  with its latest version and the counts of its runs), `get(workflow)` (by id or name, `@v12` or `@<digest>` for one
+  version), `update(workflow, { name, description })`, `createVersion(workflow, version)` and
+  `addTests(workflow, { tests, replace, retire })` through the gate, `promote`, `fork`, `pull`, and `record`. Every
+  method that names a workflow takes its id or its name.
+- New: `update`, `createVersion`, `addTests`, `promote`, `fork` (from a client bound to the namespace it forks into:
+  `NamespaceRequiredError` otherwise) and `pull`; the problem slugs `name-taken`, `not-forkable` and `not-a-fork`.
+- `workflows.create` makes a workflow and its version 1, the client's namespace's or, without one, the organization's;
+  it no longer makes versions (`createVersion` does): `parent` goes. `workflows.versions(name)` goes: `get` answers the
+  versions, newest first.
+- `rewind.scripts` goes: `list` and `get` are `workflows.list` and `workflows.get`; `setTitle`, `ScriptTitleParams`,
+  `ListScriptsParams`, titles, `headline`, `scriptTitle`, `titleSource`, the permission `scripts:write` and the slug
+  `invalid-title` go: a workflow's only label is its name, else the first line of the comment at the top of its code
+  (`WorkflowVersion.comment`).
+- `Workflow` is the workflow (`id`, `shortId`, `name`, `description`, `namespace`, `source`, `promotedAt`, `suite`,
+  `versions`, `code`) and the version shown (`version`, a `WorkflowVersion`: `version`, `digest`, `codeDigest`,
+  `actionSet`, `input`, `output`, `signals`, `secrets`, `base`, `tests`, `retired`, `replaced`, `comment`,
+  `declarations`). `WorkflowSummary` (an item of `list`), `WorkflowSource`, `SuiteEntry`, `CreateVersion`,
+  `ChangeTests`, `PatchWorkflow` and `CodeComment` are new; `Script`, `ScriptSummary`, `ScriptPage`, `ScriptChanged`
+  and `WorkflowVersions` go.
+- `Run.workflow` is `{ id, name, version, digest }` (`version` the number, was `number`; `digest` the hash, was
+  `version`), and so is `PinnedWorkflow` with its `id`; a run's handle takes its workflow's name, else its short id.
+
+### Renamed
+
+- **Resources.** `rewind.toolsets` → `rewind.actionSets` (`Toolsets` → `ActionSets`); `rewind.tools` →
+  `rewind.actions` (`Tools` → `Actions`, `ToolStatsParams` → `ActionStatsParams`: `prefix` → `group`, a group's name,
+  `tool` → `action`, and `actionSet`); `rewind.tasks` → `rewind.calls` (`Tasks` → `Calls`, `TaskFailure` →
+  `CallFailure`, `TaskStreamParams` → `CallStreamParams`: `toolset` → `actionSet`, `tools` → `actions`).
+- **Runs.** `runs.start({ script, toolset })` → `runs.start({ code, actionSet })` (`ScriptTarget` → `CodeTarget`);
+  `runs.fork(id, { script })` → `{ code }`; `runs.trace(id)` → `runs.transcript(id)` (`Trace` → `Transcript`, no
+  format); `runs.entry(id, idx)` → `runs.event(id, idx)` (`Entry` → `HistoryEvent`); `runs.journal(id, { as:
+"journal" })` → `runs.export(id, { as: "run" })`; `runs.events` yields `StreamMessage` (was `StreamEvent`), whose
+  `event` messages were `entry`. `runs.list`: `tool` → `action`, `parent` → `source`, `script` goes (`workflow` takes
+  a workflow's id or name); `runs.stats` and `runs.failures`: `bucket` → `interval`; `runs.failures` answers a
+  `FingerprintPage` (`fingerprints`, `totalFingerprints`; were `FailureGroupPage`, `groups`, `totalGroups`).
+- **Statuses.** `queued`, `running` and `waiting` (were `pending` and `active`), then `completed`, `failed`,
+  `cancelled`, `aborted`; `waitingFor` lists `signal`, `timer`, `call` (with its `state`) and `quarantined`.
+  `TERMINAL_STATUSES` → `ENDED_STATUSES`, `isTerminal` → `isEnded`. A test expects `status: "waiting"` (was
+  `"active"`) and sends its signals `when: "waiting"` by default (was `"blocked"`).
+- **The worker.** `HostToolWorker` → `Worker`, `HostToolError` → `HarnessActionError`, `HostToolContext` →
+  `HarnessActionContext`, `HostToolHandler` → `HarnessActionHandler`, `DeferredTask` → `DeferredCall` (`taskId` →
+  `callId`). `rewind.worker({ toolset, tools })` → `rewind.worker({ actionSet, actions })`. The context's `task` →
+  `call`, `attempt` → `delivery`, and `callId` is new; `WorkerErrorInfo.task` → `call`. The worker holds the call
+  stream (`GET /v1/calls/stream`, messages `call` and `gone`; `calls.stream` yields `{ type: "call", call }`, was
+  `{ type: "task", task }`), and a call that no longer waits aborts `ctx.signal` with `call-gone` (was `task-gone`).
+- **Approvals.** `PendingApproval.taskId` → `callId`, `tool` → `action`, `attempt` → `delivery`; a run that waits for
+  one is `waiting`, and the webhook is `run.waiting`.
+- **Webhooks.** `verifyWebhook` and `rewind.webhooks.verify` answer a `Webhook` (was `WebhookEvent`) of a `WebhookType`
+  (was `WebhookEventType`): `run.suspended` → `run.waiting`, `tool.schema_changed` → `action.schema_changed`,
+  `credentials.expired` → `secret.expired`; `RunEvent` → `RunWebhook`. A subscription lists its `types` (was `events`).
+- **Signed calls.** `verifyRewindCall` reads the claim `action` and answers `action` (was `tool`); a JWT that names
+  its action only as `tool` is refused (`call`). `rewindIssuer(url, organizationId)` and
+  `signingKeys.jwks(organizationId)` (were `tenant`).
+- **Errors.** The slugs `invalid-script` → `invalid-code`, `invalid-toolset` → `invalid-action-set`,
+  `toolset-unavailable` → `action-set-unavailable`, `task-gone` → `call-gone`, `task-not-waiting` →
+  `call-not-waiting`. `RewindApiError.attachments` → `secrets` (`SecretProblem`, whose `attachable` → `usable`): a run
+  uses secrets, it does not attach them.
+- **Agent tools.** `run_script`, `check_script`, `test_script` → `run_workflow`, `check_workflow`, `test_workflow`;
+  `search_tools` → `search_actions`; `save_workflow` → `update_workflow`, which names, describes and versions a
+  workflow by its id or its name, or adds tests to its suite (`replace` was `update`). `AgentToolsOptions.toolset` →
+  `actionSet`; the agent tools no longer derive an action set: `agentTools.toolset` and `AgentToolResult.toolset` go.
+  `run_workflow` takes `code` or `workflow` and names the workflow by its id and version in its result;
+  `check_workflow` answers the workflow that already has the code; `get_workflow` and `record_tests` take a workflow's
+  id or name; `get_run` takes `event` (was `entry`) and returns the run's transcript. `AgentToolResult.code`
+  (`CodeVerdict`: `passed` or `refused`) is new: whether the checks passed the code a call handed in.
+- **Types**, as the API's: `Toolset`, `ToolsetSummary`, `CreateToolset` → `ActionSet…`, `CreateActionSet`; `Tool…`
+  → `Action…` (`ActionFailure`, `ActionMatch`, `ActionPolicy`, `ActionRule(s)`, `ActionSchemaChanged`,
+  `ActionSearchResults`, `ActionStats(Page)`, whose `retries` → `redeliveries`); `HostTool` → `HarnessAction`,
+  `CreateActionSet.harness` (was `host`), `Route` `harness` (was `host`); `HttpTool` → `HttpAction`; `ToolPolicy`'s
+  `onInterruption: "retry" | "at_most_once"` → `ActionPolicy.idempotent: true | false`, `heartbeatTimeout` →
+  `reconnectTimeout`, `OnInterruption` goes; `HandedTask`, `TaskGone`, `TaskState` → `HandedCall`, `CallGone`,
+  `CallState`; `Run.attempts` → `deliveries` (`Deliveries`), `HandedCall.delivery` and a waiting call's `delivery` (were
+  `attempt`); `Run.script` → `codeDigest`, `Run.toolset` → `actionSet`, `Run.parent` → `source` (`ForkParent` →
+  `ForkSource`); a waiting call's `kind` is `call` (was `tool_call`), with `action` and `callId` (were `tool`,
+  `taskId`); `RunMode` `test` (was `mock`); `World.tools` → `actions`, `World.mocks` → `handlers`; `ExpectedCall.tool`
+  → `action`; `TestFrom { from, expect }` → `{ test, expect }`; `Test.origin` → `from` (`TestOrigin` → `TestFromRun`);
+  `TestRun` → `TestReport`; `TestResult.trace` → `transcript`; `TestUpdate` → `TestReplacement` (with `new`),
+  `UpdatedTest` → `ReplacedTest` (`old`, `new`), a version's `updated` → `replaced`; `RunError` and `ScriptError` →
+  `ErrorInfo`; `AbortKind` `invalid_code` (was `invalid_script`); `ChangeEvent` → `Change`; `FailureGroup` →
+  `Fingerprint`; `SeriesBucket` → `SeriesInterval`; `AttachmentProblem(Kind)` → `SecretProblem(Kind)`;
+  `CredentialsExpired(Reason)` → `SecretExpired(Reason)`; `WorkflowAttaching` → `WorkflowSecrets`; `Quotas.scripts` →
+  `workflows`, `maxScriptLines` → `maxCodeLines`, and the namespaces' order `scripts` → `workflows`; `Identity.tenant`
+  and `ApiKey.tenant` → `organizationId`; `RunSummary.toolCalls` → `calls`. The permissions `toolsets:read` and
+  `toolsets:write` → `actions:read` and `actions:write`, `tasks:work` and `tasks:approve` → `calls:work` and
+  `calls:approve`, and `workflows:write` names, versions, promotes, forks and pulls workflows.
+
 ## 0.5.0 (2026-11-23)
 
 For the run plane on object storage, where nothing polls: host tools are handed on a task stream, a wait is one

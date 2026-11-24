@@ -21,7 +21,7 @@ export interface TransportOptions {
   token?: string | undefined;
   /**
    * The namespace (the end user) every request acts for, sent as `Rewind-Namespace`: required with a key to start a
-   * run, check or test a script; on a read, it narrows the answer to that namespace. `rewind.namespace(name)` sets it.
+   * run, check or test code, or fork a workflow; on a read, it narrows the answer to that namespace. `rewind.namespace(name)` sets it.
    */
   namespace?: string | undefined;
   /** A `fetch` to send requests with, for a proxy, a unix socket or tests. */
@@ -46,7 +46,7 @@ export interface SendOptions {
   /** Send the request again after a network error or a 503. */
   retry: boolean;
   /**
-   * The request creates in a namespace (a run, a check, a test): a key's request without one is refused, and the
+   * The request creates in a namespace (a run, a check, a test, a fork of a workflow): a key's request without one is refused, and the
    * refusal is thrown as a `NamespaceRequiredError`.
    */
   createsInNamespace?: boolean | undefined;

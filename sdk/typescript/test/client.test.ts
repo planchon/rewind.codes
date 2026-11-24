@@ -1,7 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Rewind, RewindApiError, RewindConnectionError, RewindError, isProblem } from "../src/index.js";
-import { HANDLE, RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
+import {
+  ACTION_SET,
+  DIGEST,
+  HANDLE,
+  RUN_ID,
+  WORKFLOW_ID,
+  actionSet,
+  payload,
+  run,
+  version,
+  workflow,
+} from "./fixtures.js";
 import { MockServer, json, noContent, problem } from "./mock-server.js";
 
 let server: MockServer;
@@ -77,39 +88,35 @@ describe("the client", () => {
     expect(server.requests[1]?.headers["authorization"]).toBeUndefined();
   });
 
-  it("registers a toolset", async () => {
-    const toolset = {
-      id: TOOLSET,
-      declarations: { dts: "declare module 'rewind:tools' {}", prompt: "github.list_issues({ repo }) → Issue[]" },
-      servers: [{ name: "github", tools: 1, transport: "http" as const }],
-      tools: [],
-    };
-    server.on("POST", "/v1/toolsets", json(toolset, 201));
-    const created = await rewind.toolsets.create({
+  it("registers an action set", async () => {
+    server.on("POST", "/v1/action-sets", json(actionSet(ACTION_SET), 201));
+    const created = await rewind.actionSets.create({
       mcp: [{ name: "github", url: "https://mcp.example.com/github" }],
-      host: [
+      harness: [
         {
           name: "ask_user",
           description: "Ask the end user a question.",
           inputSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
-          policy: { onInterruption: "at_most_once", heartbeatTimeout: "2m" },
+          policy: { idempotent: false, reconnectTimeout: "2m" },
         },
       ],
     });
-    expect(created.id).toBe(TOOLSET);
+    expect(created.id).toBe(ACTION_SET);
     expect(server.requests[0]?.body).toMatchObject({
-      host: [{ name: "ask_user", policy: { onInterruption: "at_most_once", heartbeatTimeout: "2m" } }],
+      harness: [{ name: "ask_user", policy: { idempotent: false, reconnectTimeout: "2m" } }],
     });
     expect(server.requests[0]?.headers["content-type"]).toBe("application/json");
   });
 
-  it("reads declarations and searches tools", async () => {
+  it("reads declarations and searches actions", async () => {
     server
-      .on("GET", "/v1/toolsets/{id}/declarations", (r) => json({ format: r.query.get("format") ?? "dts", text: "x" }))
-      .on("GET", "/v1/toolsets/{id}/search", json({ tools: [] }));
-    expect((await rewind.toolsets.declarations(TOOLSET, { format: "prompt" })).format).toBe("prompt");
-    await rewind.toolsets.search(TOOLSET, "close issue", { limit: 3 });
-    const search = server.calls("GET", `/v1/toolsets/${TOOLSET}/search`)[0];
+      .on("GET", "/v1/action-sets/{id}/declarations", (r) =>
+        json({ format: r.query.get("format") ?? "dts", text: "x" }),
+      )
+      .on("GET", "/v1/action-sets/{id}/search", json({ actions: [] }));
+    expect((await rewind.actionSets.declarations(ACTION_SET, { format: "prompt" })).format).toBe("prompt");
+    await rewind.actionSets.search(ACTION_SET, "close issue", { limit: 3 });
+    const search = server.calls("GET", `/v1/action-sets/${ACTION_SET}/search`)[0];
     expect(search?.query.get("query")).toBe("close issue");
     expect(search?.query.get("limit")).toBe("3");
   });
@@ -117,8 +124,8 @@ describe("the client", () => {
   it("starts a run with its idempotency key, labels, trace context and ttl", async () => {
     server.on("POST", "/v1/runs", json(run({ output: payload({ closed: 3 }) }), 201));
     const started = await rewind.runs.start({
-      toolset: TOOLSET,
-      script: "export default async function main() { return { closed: 3 }; }",
+      actionSet: ACTION_SET,
+      code: "export default async function main() { return { closed: 3 }; }",
       input: { repo: "acme/api" },
       wait: "30s",
       idempotencyKey: "toolu_01A09q90qw90lq917835lq9",
@@ -130,8 +137,8 @@ describe("the client", () => {
     const request = server.requests[0];
     expect(request?.headers["idempotency-key"]).toBe("toolu_01A09q90qw90lq917835lq9");
     expect(request?.body).toEqual({
-      toolset: TOOLSET,
-      script: "export default async function main() { return { closed: 3 }; }",
+      actionSet: ACTION_SET,
+      code: "export default async function main() { return { closed: 3 }; }",
       input: { repo: "acme/api" },
       wait: "30s",
       labels: { agent: "triage", conversation: "c-42" },
@@ -140,9 +147,9 @@ describe("the client", () => {
     });
   });
 
-  it("starts a run of a workflow, without a script or a toolset", async () => {
+  it("starts a run of a workflow, without code or an action set", async () => {
     const started = run({
-      workflow: { name: "triage", version: VERSION, number: 3 },
+      workflow: { id: WORKFLOW_ID, name: "triage", version: 3, digest: DIGEST },
       startedBy: {
         run: "0193a5c4-0000-7000-8000-000000000001",
         handle: "user_2fQ81/digest/06bqx3k9f2ms",
@@ -152,12 +159,12 @@ describe("the client", () => {
     });
     server.on("POST", "/v1/runs", json(started, 201));
     const answered = await rewind.runs.start({
-      workflow: "triage@4be1c07a9d3e",
+      workflow: "triage@v3",
       input: { repo: "acme/api" },
       idempotencyKey: "start-1",
       labels: { agent: "triage" },
     });
-    expect(answered.workflow).toEqual({ name: "triage", version: VERSION, number: 3 });
+    expect(answered.workflow).toEqual({ id: WORKFLOW_ID, name: "triage", version: 3, digest: DIGEST });
     expect(answered.startedBy).toEqual({
       run: "0193a5c4-0000-7000-8000-000000000001",
       handle: "user_2fQ81/digest/06bqx3k9f2ms",
@@ -165,7 +172,7 @@ describe("the client", () => {
       detached: true,
     });
     expect(server.requests[0]?.body).toEqual({
-      workflow: "triage@4be1c07a9d3e",
+      workflow: "triage@v3",
       input: { repo: "acme/api" },
       labels: { agent: "triage" },
     });
@@ -176,25 +183,31 @@ describe("the client", () => {
     expect((error as RewindApiError).detail).toBe("the input of triage: repo is required");
   });
 
-  it("derives a toolset that pins workflows", async () => {
-    const derived = toolset("ab".repeat(32), [workflow()]);
-    server.on("POST", "/v1/toolsets", json(derived, 201));
-    const created = await rewind.toolsets.create({ base: TOOLSET, workflows: ["triage"] });
+  it("derives an action set that pins workflows", async () => {
+    const derived = actionSet("ab".repeat(32), [workflow()]);
+    server.on("POST", "/v1/action-sets", json(derived, 201));
+    const created = await rewind.actionSets.create({ base: ACTION_SET, workflows: ["triage"] });
     expect(created.workflows).toEqual([
-      { name: "triage", version: VERSION, description: "Triage the stale issues of a repository, after approval." },
+      {
+        name: "triage",
+        id: WORKFLOW_ID,
+        version: 3,
+        digest: DIGEST,
+        description: "Triage the stale issues of a repository, after approval.",
+      },
     ]);
-    expect(server.requests[0]?.body).toEqual({ base: TOOLSET, workflows: ["triage"] });
+    expect(server.requests[0]?.body).toEqual({ base: ACTION_SET, workflows: ["triage"] });
   });
 
   it("refuses an idempotency key the server would refuse", async () => {
-    await expect(rewind.runs.start({ script: "x", idempotencyKey: "café" })).rejects.toThrow(/idempotency key/);
-    await expect(rewind.runs.start({ script: "x", idempotencyKey: "x".repeat(256) })).rejects.toThrow(RewindError);
+    await expect(rewind.runs.start({ code: "x", idempotencyKey: "café" })).rejects.toThrow(/idempotency key/);
+    await expect(rewind.runs.start({ code: "x", idempotencyKey: "x".repeat(256) })).rejects.toThrow(RewindError);
     expect(server.requests).toHaveLength(0);
   });
 
   it("waits with one request the server holds until the run ends, however long the wait", async () => {
     server.on("POST", "/v1/runs", json(run({ status: "completed", output: payload(1) }), 201));
-    const ended = await rewind.runs.start({ script: "x", wait: "2h" });
+    const ended = await rewind.runs.start({ code: "x", wait: "2h" });
     expect(ended.status).toBe("completed");
     expect(server.requests).toHaveLength(1);
     expect(server.requests[0]?.body).toMatchObject({ wait: "2h" });
@@ -208,11 +221,11 @@ describe("the client", () => {
     expect(server.calls("GET", `/v1/runs/${RUN_ID}`)).toHaveLength(0);
   });
 
-  it("returns the run as the server answered it, still active when the wait passed, without asking again", async () => {
+  it("returns the run as the server answered it, still waiting when the wait passed, without asking again", async () => {
     server
       .on("POST", "/v1/runs", json(run({ status: "active" }), 201))
       .on("GET", "/v1/runs/{id}", json(run({ status: "active" })));
-    const started = await rewind.runs.start({ script: "x", wait: 30 });
+    const started = await rewind.runs.start({ code: "x", wait: 30 });
     expect(started.status).toBe("active");
     const read = await rewind.runs.get(RUN_ID, { wait: "1h" });
     expect(read.status).toBe("active");
@@ -259,7 +272,7 @@ describe("the client", () => {
         ? (response) => new Promise<void>((resolve) => setTimeout(() => (response.destroy(), resolve()), 1_100))
         : json(run({ status: "completed" }));
     });
-    expect((await rewind.runs.start({ script: "x", wait: "1m", idempotencyKey: "k-1" })).status).toBe("completed");
+    expect((await rewind.runs.start({ code: "x", wait: "1m", idempotencyKey: "k-1" })).status).toBe("completed");
     expect(server.calls("POST", "/v1/runs").map((r) => r.headers["idempotency-key"])).toEqual(["k-1", "k-1"]);
 
     server
@@ -274,7 +287,7 @@ describe("the client", () => {
     expect(server.calls("GET", `/v1/runs/${RUN_ID}`)[0]?.query.get("wait")).toMatch(/^58s\d+ms$/);
   });
 
-  it("turns problems into RewindApiError, with the diagnostics of a refused script", async () => {
+  it("turns problems into RewindApiError, with the diagnostics of refused code", async () => {
     const diagnostics = [
       {
         code: "TS2322",
@@ -283,15 +296,15 @@ describe("the client", () => {
         location: { line: 3, column: 28 },
       },
     ];
-    server.on("POST", "/v1/runs", problem(422, "invalid-script", "the script does not type-check", { diagnostics }));
-    const error = await rewind.runs.start({ script: "x" }).catch((e: unknown) => e);
+    server.on("POST", "/v1/runs", problem(422, "invalid-code", "the code does not type-check", { diagnostics }));
+    const error = await rewind.runs.start({ code: "x" }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RewindApiError);
     const apiError = error as RewindApiError;
     expect(apiError.status).toBe(422);
-    expect(apiError.slug).toBe("invalid-script");
+    expect(apiError.slug).toBe("invalid-code");
     expect(apiError.diagnostics).toEqual(diagnostics);
-    expect(apiError.message).toBe("the script does not type-check");
-    expect(isProblem(apiError, "invalid-script")).toBe(true);
+    expect(apiError.message).toBe("the code does not type-check");
+    expect(isProblem(apiError, "invalid-code")).toBe(true);
   });
 
   it("reads an error body that is not a problem as about:blank", async () => {
@@ -318,9 +331,9 @@ describe("the client", () => {
     expect(attempts).toBe(2);
 
     server.on("POST", "/v1/runs", problem(503, "unavailable", "stopping"));
-    await expect(rewind.runs.start({ script: "x" })).rejects.toMatchObject({ status: 503 });
+    await expect(rewind.runs.start({ code: "x" })).rejects.toMatchObject({ status: 503 });
     expect(server.calls("POST", "/v1/runs")).toHaveLength(1);
-    await expect(rewind.runs.start({ script: "x", idempotencyKey: "k" })).rejects.toMatchObject({ status: 503 });
+    await expect(rewind.runs.start({ code: "x", idempotencyKey: "k" })).rejects.toMatchObject({ status: 503 });
     expect(server.calls("POST", "/v1/runs")).toHaveLength(4);
   });
 
@@ -340,16 +353,19 @@ describe("the client", () => {
     await expect(pending).rejects.toThrow("enough");
   });
 
-  it("lists the runs of a workflow, and the runs a run started", async () => {
+  it("lists the runs of a workflow, the runs a run started, and the forks of a run", async () => {
+    const child = { id: WORKFLOW_ID, name: "triage", version: 3, digest: DIGEST };
     server.on(
       "GET",
       "/v1/runs",
-      json({ runs: [{ ...summary("child-1"), workflow: "triage", startedBy: RUN_ID }], nextCursor: null }),
+      json({ runs: [{ ...summary("child-1"), workflow: child, startedBy: RUN_ID }], nextCursor: null }),
     );
-    const page = await rewind.runs.list({ workflow: "triage", startedBy: RUN_ID });
-    expect(page.runs[0]).toMatchObject({ workflow: "triage", startedBy: RUN_ID });
+    const page = await rewind.runs.list({ workflow: "triage", startedBy: RUN_ID, source: HANDLE, action: "github.x" });
+    expect(page.runs[0]).toMatchObject({ workflow: child, startedBy: RUN_ID });
     expect(server.requests[0]?.query.get("workflow")).toBe("triage");
     expect(server.requests[0]?.query.get("startedBy")).toBe(RUN_ID);
+    expect(server.requests[0]?.query.get("source")).toBe(HANDLE);
+    expect(server.requests[0]?.query.get("action")).toBe("github.x");
   });
 
   it("lists runs with repeated labels, and pages through them", async () => {
@@ -378,11 +394,15 @@ describe("the client", () => {
     expect(server.requests[1]?.query.get("cursor")).toBe("c2");
   });
 
-  it("searches runs with a query, and reads their statistics and failure groups", async () => {
+  it("searches runs with a query, and reads their statistics and fingerprints", async () => {
     server
       .on("GET", "/v1/runs", json({ runs: [summary("r1")] }))
       .on("GET", "/v1/runs/stats", json({ until: "2026-11-12T00:00:00Z", runs: 3 }))
-      .on("GET", "/v1/runs/failures", json({ until: "2026-11-12T00:00:00Z", runs: 2, totalGroups: 1, groups: [] }));
+      .on(
+        "GET",
+        "/v1/runs/failures",
+        json({ until: "2026-11-12T00:00:00Z", runs: 2, totalFingerprints: 1, fingerprints: [] }),
+      );
     const page = await rewind.runs.list({ q: '@agent:triage -status:completed "rate limit"', sort: "wakes" });
     expect(page.runs.map((run) => run.id)).toEqual(["r1"]);
     expect(server.requests[0]?.query.get("q")).toBe('@agent:triage -status:completed "rate limit"');
@@ -390,18 +410,18 @@ describe("the client", () => {
     const stats = await rewind.runs.stats({
       q: "namespace:alice",
       since: new Date("2026-11-11T00:00:00Z"),
-      bucket: "1h",
+      interval: "1h",
       top: 5,
     });
     expect(stats.runs).toBe(3);
     const statsQuery = server.requests[1]?.query;
     expect(statsQuery?.get("since")).toBe("2026-11-11T00:00:00.000Z");
-    expect(statsQuery?.get("bucket")).toBe("1h");
+    expect(statsQuery?.get("interval")).toBe("1h");
     expect(statsQuery?.get("top")).toBe("5");
     expect(statsQuery?.get("until")).toBeNull();
-    const failures = await rewind.runs.failures({ q: "namespace:alice", bucket: 3_600_000, limit: 10 });
-    expect(failures.totalGroups).toBe(1);
-    expect(server.requests[2]?.query.get("bucket")).toBe("1h");
+    const failures = await rewind.runs.failures({ q: "namespace:alice", interval: 3_600_000, limit: 10 });
+    expect(failures.totalFingerprints).toBe(1);
+    expect(server.requests[2]?.query.get("interval")).toBe("1h");
     expect(server.requests[2]?.query.get("limit")).toBe("10");
   });
 
@@ -438,7 +458,7 @@ describe("the client", () => {
       .on(
         "POST",
         "/v1/runs/{id}/fork",
-        json(run({ id: "fork-1", parent: { run: RUN_ID, handle: HANDLE, at: 5 } }), 201),
+        json(run({ id: "fork-1", source: { run: RUN_ID, handle: HANDLE, at: 5 } }), 201),
       )
       .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
@@ -447,13 +467,13 @@ describe("the client", () => {
     expect(server.requests[0]?.body).toEqual({ reason: "not needed", wait: "5s" });
 
     const fork = await rewind.runs.fork(RUN_ID, {
-      script: "fixed",
+      code: "fixed",
       at: 5,
       idempotencyKey: "fork-key",
       labels: { a: "b" },
     });
-    expect(fork.parent).toEqual({ run: RUN_ID, handle: HANDLE, at: 5 });
-    expect(server.requests[1]?.body).toEqual({ script: "fixed", at: 5, labels: { a: "b" } });
+    expect(fork.source).toEqual({ run: RUN_ID, handle: HANDLE, at: 5 });
+    expect(server.requests[1]?.body).toEqual({ code: "fixed", at: 5, labels: { a: "b" } });
     expect(server.requests[1]?.headers["idempotency-key"]).toBe("fork-key");
 
     await rewind.runs.release(RUN_ID);
@@ -473,24 +493,24 @@ describe("the client", () => {
       .on("GET", "/v1/runs/{id}", (r) => json(run({ id: RUN_ID, handle: r.params["id"]! })))
       .on("POST", "/v1/runs/{id}/signals/{name}", json({ runId: RUN_ID, name: "approval", duplicate: false }, 202))
       .on("POST", "/v1/runs/{id}/cancel", json(run({ status: "cancelled" }), 202))
-      .on("POST", "/v1/runs/{id}/fork", json(run({ id: "fork-1", parent: { run: RUN_ID, handle: HANDLE } }), 201))
-      .on("GET", "/v1/runs/{id}/trace", json({ format: "llm", runId: RUN_ID, text: "trace" }))
+      .on("POST", "/v1/runs/{id}/fork", json(run({ id: "fork-1", source: { run: RUN_ID, handle: HANDLE } }), 201))
+      .on("GET", "/v1/runs/{id}/transcript", json({ runId: RUN_ID, text: "transcript" }))
       .on(
         "GET",
-        "/v1/runs/{id}/entries/{idx}",
+        "/v1/runs/{id}/events/{idx}",
         json({ idx: 1, recordedAt: "t", event: { type: "timer_fired", seq: 1 } }),
       )
-      .on("GET", "/v1/runs/{id}/journal", json({ version: 1 }))
+      .on("GET", "/v1/runs/{id}/export", json({ v: 1 }))
       .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
       .on("DELETE", "/v1/runs/{id}", noContent);
     expect((await rewind.runs.get(HANDLE)).handle).toBe(HANDLE);
     await rewind.runs.signal(HANDLE, "approval");
     await rewind.runs.cancel(HANDLE);
-    await rewind.runs.fork(HANDLE, { script: "fixed" });
-    await rewind.runs.trace(HANDLE);
-    await rewind.runs.entry(HANDLE, 1);
-    await rewind.runs.journal(HANDLE);
+    await rewind.runs.fork(HANDLE, { code: "fixed" });
+    await rewind.runs.transcript(HANDLE);
+    await rewind.runs.event(HANDLE, 1);
+    await rewind.runs.export(HANDLE);
     await rewind.runs.release(HANDLE);
     await rewind.runs.giveUp(HANDLE);
     await rewind.runs.delete(HANDLE);
@@ -501,150 +521,97 @@ describe("the client", () => {
       `POST /v1/runs/${encoded}/signals/approval`,
       `POST /v1/runs/${encoded}/cancel`,
       `POST /v1/runs/${encoded}/fork`,
-      `GET /v1/runs/${encoded}/trace`,
-      `GET /v1/runs/${encoded}/entries/1`,
-      `GET /v1/runs/${encoded}/journal`,
+      `GET /v1/runs/${encoded}/transcript`,
+      `GET /v1/runs/${encoded}/events/1`,
+      `GET /v1/runs/${encoded}/export`,
       `POST /v1/runs/${encoded}/release`,
       `POST /v1/runs/${encoded}/give-up`,
       `DELETE /v1/runs/${encoded}`,
     ]);
   });
 
-  it("reads the trace, an entry, the journal and a payload", async () => {
+  it("reads the transcript, an event, the export and a payload", async () => {
     server
-      .on("GET", "/v1/runs/{id}/trace", (r) => json({ format: r.query.get("format"), runId: RUN_ID, text: "trace" }))
-      .on("GET", "/v1/runs/{id}/entries/{idx}", (r) =>
+      .on("GET", "/v1/runs/{id}/transcript", (r) => json({ runId: RUN_ID, text: `transcript ${r.query.size}` }))
+      .on("GET", "/v1/runs/{id}/events/{idx}", (r) =>
         json({
           idx: Number(r.params["idx"]),
           recordedAt: "2026-11-12T10:00:00Z",
           event: { type: "timer_fired", seq: 1 },
         }),
       )
-      .on("GET", "/v1/runs/{id}/journal", (r) => json({ version: 1, kind: r.query.get("as") }))
+      .on("GET", "/v1/runs/{id}/export", (r) => json({ v: 1, kind: r.query.get("as") }))
       .on("GET", "/v1/payloads/{digest}", json({ big: true }));
-    expect((await rewind.runs.trace(RUN_ID)).format).toBe("llm");
-    expect((await rewind.runs.entry(RUN_ID, 7)).idx).toBe(7);
-    expect(await rewind.runs.journal(RUN_ID, { as: "cassette" })).toEqual({ version: 1, kind: "cassette" });
+    expect(await rewind.runs.transcript(RUN_ID)).toEqual({ runId: RUN_ID, text: "transcript 0" });
+    expect((await rewind.runs.event(RUN_ID, 7)).idx).toBe(7);
+    expect(await rewind.runs.export(RUN_ID, { as: "cassette" })).toEqual({ v: 1, kind: "cassette" });
+    expect(await rewind.runs.export(RUN_ID)).toEqual({ v: 1, kind: null });
     // A payload is read through the run that holds it.
     expect(await rewind.payloads.get("ab", { run: RUN_ID })).toEqual({ big: true });
     const reads = server.calls("GET", "/v1/payloads/ab");
     expect(reads.map((read) => read.query.get("run"))).toEqual([RUN_ID]);
   });
 
-  it("checks and tests scripts, and reads the scripts executed", async () => {
-    server
-      .on("POST", "/v1/check", json({ ok: true, diagnostics: [] }))
-      .on(
-        "POST",
-        "/v1/test",
-        json({
-          passed: true,
-          tests: [{ name: "waits", passed: true, status: "active", calls: {}, failures: [], trace: "" }],
-        }),
-      )
-      .on("GET", "/v1/scripts", json({ scripts: [] }))
-      .on("GET", "/v1/scripts/{digest}", (r) => json({ digest: r.params["digest"], source: "src" }));
-    expect((await rewind.scripts.check({ script: "x", toolset: TOOLSET })).ok).toBe(true);
-    expect(server.requests[0]?.body).toEqual({ script: "x", toolset: TOOLSET });
+  it("checks and tests code, without creating anything", async () => {
+    const found = { id: WORKFLOW_ID, name: "triage", version: 3, digest: DIGEST };
+    server.on("POST", "/v1/check", json({ ok: true, diagnostics: [], workflow: found })).on(
+      "POST",
+      "/v1/test",
+      json({
+        passed: true,
+        tests: [{ name: "waits", passed: true, status: "active", calls: {}, failures: [], transcript: "" }],
+      }),
+    );
+    const checked = await rewind.workflows.check({ code: "x", actionSet: ACTION_SET });
+    expect(checked.ok).toBe(true);
+    expect(checked.workflow).toEqual(found);
+    expect(server.requests[0]?.body).toEqual({ code: "x", actionSet: ACTION_SET });
     const tests = [
       { name: "waits", signals: [{ name: "approval", when: "2h" }], expect: { status: "active" as const } },
       "9f".repeat(32),
+      { test: "9f".repeat(32), expect: { status: "completed" as const } },
     ];
-    const tested = await rewind.scripts.test({ script: "x", tests, workflow: "triage" });
+    const tested = await rewind.workflows.test({ code: "x", tests, workflow: "triage@v3" });
     expect(tested.passed).toBe(true);
     expect(tested.tests.map((t) => t.name)).toEqual(["waits"]);
-    expect(server.requests[1]?.body).toEqual({ script: "x", tests, workflow: "triage" });
-    const listed = await rewind.scripts.list({ q: "namespace:alice", since: "2026-11-11T00:00:00Z", tool: "github.x" });
-    expect(listed.scripts).toEqual([]);
-    expect(server.requests[2]?.query.get("q")).toBe("namespace:alice");
-    expect(server.requests[2]?.query.get("since")).toBe("2026-11-11T00:00:00Z");
-    expect(server.requests[2]?.query.get("tool")).toBe("github.x");
-    expect(server.requests[2]?.query.has("label")).toBe(false);
-    expect((await rewind.scripts.get("dd")).source).toBe("src");
+    expect(server.requests[1]?.body).toEqual({ code: "x", tests, workflow: "triage@v3" });
   });
 
-  it("gives a script a title, and takes it away", async () => {
-    server.on("PATCH", "/v1/scripts/{digest}", (r) =>
-      json({
-        digest: r.params["digest"],
-        source: "src",
-        headline: "src",
-        runs: { pending: 0, active: 0, completed: 1, failed: 0, cancelled: 0, aborted: 0 },
-        tools: [],
-        title: "Triage new issues",
-        titleSource: "person",
-      }),
-    );
-    const titled = await rewind.scripts.setTitle("dd", { title: "Triage new issues", description: "Labels them." });
-    expect([titled.title, titled.titleSource]).toEqual(["Triage new issues", "person"]);
-    await rewind.scripts.setTitle("dd", { title: null });
-    const patches = server.calls("PATCH", "/v1/scripts/dd");
-    expect(patches.map((patch) => patch.body)).toEqual([
-      { title: "Triage new issues", description: "Labels them." },
-      { title: null },
-    ]);
-  });
-
-  it("saves workflows, lists them and reads their versions", async () => {
-    const saved = workflow();
+  it("creates a workflow, in a namespace or the organization's, and refuses a name taken", async () => {
+    const created = workflow();
     const definition = {
       name: "triage",
       description: "Triage the stale issues of a repository, after approval.",
-      toolset: TOOLSET,
-      script: "export default async function main(input: { repo: string }) { return { closed: 0 }; }",
-      input: saved.input,
-      output: saved.output,
-      signals: saved.signals,
+      actionSet: ACTION_SET,
+      code: "export default async function main(input: { repo: string }) { return { closed: 0 }; }",
+      input: created.version.input,
+      output: created.version.output,
+      signals: created.version.signals,
     };
-    server.on("POST", "/v1/workflows", json(saved, 201));
-    expect(await rewind.workflows.create(definition)).toEqual(saved);
-    expect(server.calls("POST", "/v1/workflows")[0]?.body).toEqual(definition);
+    server.on("POST", "/v1/workflows", json(created, 201));
+    expect(await rewind.workflows.create(definition)).toEqual(created);
+    await rewind.namespace("alice").workflows.create(definition);
+    const posts = server.calls("POST", "/v1/workflows");
+    expect(posts.map((r) => r.body)).toEqual([definition, definition]);
+    expect(posts.map((r) => r.headers["rewind-namespace"])).toEqual([undefined, "alice"]);
 
-    const older = workflow({ version: "77".repeat(32), createdAt: "2026-11-11T10:00:00Z" });
-    server.on("GET", "/v1/workflows/{name}", (request) =>
-      request.params["name"] === "triage"
-        ? json({ name: "triage", versions: [saved, older] })
-        : problem(404, "not-found", `no workflow ${request.params["name"]} for this API key`),
-    );
-    expect((await rewind.workflows.versions("triage")).map((w) => w.version)).toEqual([VERSION, older.version]);
-    const missing = await rewind.workflows.versions("nope").catch((e: unknown) => e);
-    expect(isProblem(missing, "not-found")).toBe(true);
-
-    server.on("GET", "/v1/workflows", (request) =>
-      request.query.get("after") === null
-        ? json({ workflows: [saved], next: "triage" })
-        : json({ workflows: [workflow({ name: "digest" })] }),
-    );
-    const page = await rewind.workflows.list({ limit: 1 });
-    expect(page.next).toBe("triage");
-    const names: string[] = [];
-    for await (const w of rewind.workflows.listAll({ limit: 1 })) {
-      names.push(w.name);
-    }
-    expect(names).toEqual(["triage", "digest"]);
-    const lists = server.calls("GET", "/v1/workflows");
-    expect(lists.map((r) => [r.query.get("after"), r.query.get("limit")])).toEqual([
-      [null, "1"],
-      [null, "1"],
-      ["triage", "1"],
-    ]);
-
-    // The versions whose script it is: the script's digest goes in the query.
-    await rewind.workflows.list({ script: saved.script });
-    expect(server.calls("GET", "/v1/workflows").at(-1)?.query.get("script")).toBe(saved.script);
+    server.on("POST", "/v1/workflows", problem(409, "name-taken", "the organization already has a workflow triage"));
+    const taken = await rewind.workflows.create(definition).catch((e: unknown) => e);
+    expect(isProblem(taken, "name-taken")).toBe(true);
+    expect((taken as RewindApiError).status).toBe(409);
   });
 
-  it("refuses a workflow whose script or schemas cannot be used", async () => {
-    const definition = { name: "triage", toolset: TOOLSET, script: "x", input: {}, output: {} };
+  it("refuses a workflow whose code or schemas cannot be used", async () => {
+    const definition = { name: "triage", actionSet: ACTION_SET, code: "x", input: {}, output: {} };
     server.on(
       "POST",
       "/v1/workflows",
-      problem(422, "invalid-script", "the script does not type-check", {
+      problem(422, "invalid-code", "the code does not type-check", {
         diagnostics: [{ code: "TS2322", message: "Type 'string' is not assignable", severity: "error" }],
       }),
     );
     const refused = await rewind.workflows.create(definition).catch((e: unknown) => e);
-    expect(isProblem(refused, "invalid-script")).toBe(true);
+    expect(isProblem(refused, "invalid-code")).toBe(true);
     expect((refused as RewindApiError).diagnostics).toHaveLength(1);
 
     server.on("POST", "/v1/workflows", problem(422, "invalid-workflow", '"class" is a reserved word'));
@@ -654,21 +621,83 @@ describe("the client", () => {
     expect((invalid as RewindApiError).tests).toEqual([]);
   });
 
-  it("saves a workflow through the gate of its suite, with the tests it retires and updates", async () => {
+  it("reads a workflow by its id, its name or one version, and lists them", async () => {
+    const latest = workflow();
+    const older = version({ version: 2, digest: "77".repeat(32), createdAt: "2026-11-11T10:00:00Z" });
+    server.on("GET", "/v1/workflows/{id}", (request) =>
+      request.params["id"] === "nope"
+        ? problem(404, "not-found", "no workflow nope in this namespace or the organization")
+        : json({ ...latest, versions: [latest.version, older] }),
+    );
+    const read = await rewind.workflows.get("triage");
+    expect(read.versions.map((v) => v.version)).toEqual([3, 2]);
+    await rewind.workflows.get(WORKFLOW_ID);
+    await rewind.workflows.get("triage@v2");
+    expect(server.requests.map((r) => r.path)).toEqual([
+      "/v1/workflows/triage",
+      `/v1/workflows/${WORKFLOW_ID}`,
+      "/v1/workflows/triage%40v2",
+    ]);
+    const missing = await rewind.workflows.get("nope").catch((e: unknown) => e);
+    expect(isProblem(missing, "not-found")).toBe(true);
+
+    const listed = (id: string, name: string | null) => ({
+      id,
+      shortId: `wf-${id.slice(3, 9)}`,
+      name,
+      createdAt: "2026-11-12T10:00:00Z",
+      latest: version(),
+      runs: { pending: 0, active: 1, completed: 4, failed: 0, cancelled: 0, aborted: 0 },
+      actions: ["github.list_issues"],
+    });
+    server.on("GET", "/v1/workflows", (request) =>
+      request.query.get("after") === null
+        ? json({ workflows: [listed(WORKFLOW_ID, "triage")], next: WORKFLOW_ID })
+        : json({ workflows: [listed("wf_000000000001", null)] }),
+    );
+    const page = await rewind.workflows.list({ limit: 1, scope: "organization" });
+    expect(page.next).toBe(WORKFLOW_ID);
+    const ids: string[] = [];
+    for await (const w of rewind.workflows.listAll({ limit: 1, code: "cd".repeat(32), q: "namespace:alice" })) {
+      ids.push(w.id);
+    }
+    expect(ids).toEqual([WORKFLOW_ID, "wf_000000000001"]);
+    const lists = server.calls("GET", "/v1/workflows");
+    expect(lists.map((r) => [r.query.get("after"), r.query.get("limit"), r.query.get("scope")])).toEqual([
+      [null, "1", "organization"],
+      [null, "1", null],
+      [WORKFLOW_ID, "1", null],
+    ]);
+    expect(lists[1]?.query.get("code")).toBe("cd".repeat(32));
+    expect(lists[1]?.query.get("q")).toBe("namespace:alice");
+  });
+
+  it("names and describes a workflow, which keeps its id and versions", async () => {
+    server.on("PATCH", "/v1/workflows/{id}", (request) => json(workflow(request.body as object)));
+    const named = await rewind.workflows.update(WORKFLOW_ID, { name: "repo_triage", description: null });
+    expect(named.name).toBe("repo_triage");
+    expect(named.id).toBe(WORKFLOW_ID);
+    expect(server.requests[0]?.method).toBe("PATCH");
+    expect(server.requests[0]?.body).toEqual({ name: "repo_triage", description: null });
+  });
+
+  it("makes a version through the gate of its suite, with the tests it retires and replaces", async () => {
     const recorded = "9f".repeat(32);
-    const definition = {
-      name: "triage",
-      toolset: TOOLSET,
-      script: "x",
-      input: {},
-      output: {},
-      parent: `triage@${VERSION}`,
-      tests: [recorded, { from: recorded, expect: { status: "completed" as const, output: { closed: 0 } } }],
-      update: [{ name: "closes once approved", reason: "the message names the repository", expect: { output: {} } }],
+    const next = {
+      code: "x",
+      tests: [recorded, { test: recorded, expect: { status: "completed" as const, output: { closed: 0 } } }],
+      replace: [{ name: "closes once approved", reason: "the message names the repository", expect: { output: {} } }],
       retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
     };
     const outcomes = [
-      { name: "closes once approved", passed: true, status: "completed" as const, calls: {}, failures: [], trace: "" },
+      {
+        name: "closes once approved",
+        passed: true,
+        status: "completed" as const,
+        calls: {},
+        failures: [],
+        transcript: "",
+      },
       {
         name: "closes nothing without approval",
         passed: false,
@@ -677,23 +706,60 @@ describe("the client", () => {
         output: { closed: 1 },
         calls: { "github.close_issue": 1 },
         failures: ["github.close_issue was called 1 time, expected 0"],
-        trace: "#0 run_started",
+        transcript: "#0 run_started",
       },
     ];
-    server.on("POST", "/v1/workflows", problem(422, "tests-failed", "1 test of 2 did not pass", { tests: outcomes }));
-    const refused = await rewind.workflows.create(definition).catch((e: unknown) => e);
+    server.on(
+      "POST",
+      "/v1/workflows/{id}/versions",
+      problem(422, "tests-failed", "1 test of 2 did not pass", { tests: outcomes }),
+    );
+    const refused = await rewind.workflows.createVersion("triage", next).catch((e: unknown) => e);
     expect(isProblem(refused, "tests-failed")).toBe(true);
     expect((refused as RewindApiError).tests).toEqual(outcomes);
-    expect(server.calls("POST", "/v1/workflows")[0]?.body).toEqual(definition);
+    expect(server.calls("POST", "/v1/workflows/triage/versions")[0]?.body).toEqual(next);
 
-    const saved = workflow({
-      parent: VERSION,
-      tests: [{ name: "closes once approved", digest: "ab".repeat(32) }],
-      retired: [{ name: "asks before closing", digest: "cd".repeat(32), reason: "deprecated" }],
-      updated: [{ name: "closes once approved", from: "ef".repeat(32), to: "ab".repeat(32), reason: "out of date" }],
+    const made = workflow({
+      version: version({
+        version: 4,
+        base: DIGEST,
+        tests: [{ name: "closes once approved", digest: "ab".repeat(32) }],
+        retired: [{ name: "asks before closing", digest: "cd".repeat(32), reason: "deprecated" }],
+        replaced: [{ name: "closes once approved", old: "ef".repeat(32), new: "ab".repeat(32), reason: "out of date" }],
+      }),
     });
-    server.on("POST", "/v1/workflows", json(saved, 201));
-    expect(await rewind.workflows.create(definition)).toEqual(saved);
+    server.on("POST", "/v1/workflows/{id}/versions", json(made, 201));
+    expect((await rewind.workflows.createVersion("triage", next)).version.version).toBe(4);
+  });
+
+  it("adds tests to a suite without a version", async () => {
+    server.on("POST", "/v1/workflows/{id}/tests", json(workflow()));
+    const tests = { tests: ["9f".repeat(32)], retire: [{ names: ["old"], reason: "deprecated" }] };
+    await rewind.workflows.addTests(WORKFLOW_ID, tests);
+    expect(server.calls("POST", `/v1/workflows/${WORKFLOW_ID}/tests`)[0]?.body).toEqual(tests);
+  });
+
+  it("promotes a workflow, forks it into a namespace and pulls its source", async () => {
+    const fork = workflow({ id: "wf_000000000002", namespace: "alice", source: { workflow: WORKFLOW_ID, version: 3 } });
+    server
+      .on("POST", "/v1/workflows/{id}/promote", json(workflow()))
+      .on("POST", "/v1/workflows/{id}/fork", json(fork, 201))
+      .on("POST", "/v1/workflows/{id}/pull", json(fork));
+    expect((await rewind.workflows.promote(WORKFLOW_ID)).namespace).toBeUndefined();
+    const alice = rewind.namespace("alice");
+    expect((await alice.workflows.fork("triage@v3")).source).toEqual({ workflow: WORKFLOW_ID, version: 3 });
+    await alice.workflows.pull(fork.id);
+    expect(server.requests.map((r) => [`${r.method} ${r.path}`, r.headers["rewind-namespace"]])).toEqual([
+      [`POST /v1/workflows/${WORKFLOW_ID}/promote`, undefined],
+      ["POST /v1/workflows/triage%40v3/fork", "alice"],
+      [`POST /v1/workflows/${fork.id}/pull`, "alice"],
+    ]);
+
+    server
+      .on("POST", "/v1/workflows/{id}/fork", problem(409, "not-forkable", "a namespace's workflow is not forkable"))
+      .on("POST", "/v1/workflows/{id}/pull", problem(409, "not-a-fork", "triage is not a fork"));
+    expect(isProblem(await alice.workflows.fork("mine").catch((e: unknown) => e), "not-forkable")).toBe(true);
+    expect(isProblem(await alice.workflows.pull("triage").catch((e: unknown) => e), "not-a-fork")).toBe(true);
   });
 
   it("records tests from the runs of a workflow, and reads a stored test", async () => {
@@ -709,22 +775,22 @@ describe("the client", () => {
       ],
       skipped: [{ run: "r-big", reason: "its test would be larger than 4 MiB" }],
     };
-    server.on("POST", "/v1/workflows/{name}/record", json(recorded));
+    server.on("POST", "/v1/workflows/{id}/record", json(recorded));
     expect(await rewind.workflows.record("triage", { query: "status:completed", limit: 20 })).toEqual(recorded);
-    await rewind.workflows.record("triage", { runs: [RUN_ID] });
+    await rewind.workflows.record(WORKFLOW_ID, { runs: [RUN_ID] });
     await rewind.workflows.record("triage");
     expect(server.calls("POST", "/v1/workflows/triage/record").map((r) => r.body)).toEqual([
       { query: "status:completed", limit: 20 },
-      { runs: [RUN_ID] },
       {},
     ]);
+    expect(server.calls("POST", `/v1/workflows/${WORKFLOW_ID}/record`)[0]?.body).toEqual({ runs: [RUN_ID] });
 
     const test = {
       name: `recorded ${RUN_ID}`,
       input: { repo: "acme/api" },
       world: { cassette: { v: 1, matching: "by_args", calls: [], signals: [] } },
       expect: { status: "completed" },
-      origin: { run: RUN_ID, version: VERSION, namespace: "alice" },
+      from: { run: RUN_ID, version: DIGEST, namespace: "alice" },
     };
     server.on("GET", "/v1/tests/{digest}", (request) =>
       request.params["digest"] === "9f".repeat(32)
@@ -741,36 +807,53 @@ describe("the client", () => {
       .on(
         "POST",
         "/v1/subscriptions",
-        json({ id: "s1", url: "https://h", events: [], labels: {}, createdAt: "t", secret: "whsec_x" }, 201),
+        json({ id: "s1", url: "https://h", types: [], labels: {}, createdAt: "t", secret: "whsec_x" }, 201),
       )
       .on(
         "GET",
         "/v1/subscriptions",
-        json({ subscriptions: [{ id: "s1", url: "https://h", events: [], labels: {}, createdAt: "t" }] }),
+        json({ subscriptions: [{ id: "s1", url: "https://h", types: [], labels: {}, createdAt: "t" }] }),
       )
       .on("DELETE", "/v1/subscriptions/{id}", noContent)
       .on(
         "POST",
         "/v1/api-keys",
         json(
-          { id: "k1", key: "rewind_sk_new", name: "w", role: "worker", tenant: "t", allowedLabels: {}, createdAt: "t" },
+          {
+            id: "k1",
+            key: "rewind_sk_new",
+            name: "w",
+            role: "worker",
+            organizationId: "org_1",
+            allowedLabels: {},
+            createdAt: "t",
+          },
           201,
         ),
       )
       .on("DELETE", "/v1/api-keys/{id}", noContent)
-      .on("GET", "/v1/tools/stats", json({ since: "a", until: "b", tools: [] }))
+      .on("GET", "/v1/actions/stats", json({ since: "a", until: "b", actions: [] }))
       .on("POST", "/v1/server/stop", { status: 202 });
-    expect((await rewind.subscriptions.create({ url: "https://h", events: ["run.completed"] })).secret).toBe("whsec_x");
+    expect(
+      (await rewind.subscriptions.create({ url: "https://h", types: ["run.completed", "run.waiting"] })).secret,
+    ).toBe("whsec_x");
+    expect(server.calls("POST", "/v1/subscriptions")[0]?.body).toEqual({
+      url: "https://h",
+      types: ["run.completed", "run.waiting"],
+    });
     expect(await rewind.subscriptions.list()).toHaveLength(1);
     await rewind.subscriptions.delete("s1");
-    expect((await rewind.apiKeys.create({ name: "w", role: "worker", tenant: "t" })).key).toBe("rewind_sk_new");
+    expect((await rewind.apiKeys.create({ name: "w", role: "worker", organizationId: "org_1" })).key).toBe(
+      "rewind_sk_new",
+    );
     await rewind.apiKeys.revoke("k1");
-    await rewind.tools.stats({ q: "namespace:alice", prefix: "github.", since: "2026-11-11T00:00:00Z" });
-    const toolStats = server.calls("GET", "/v1/tools/stats")[0]?.query;
-    expect(toolStats?.get("prefix")).toBe("github.");
-    expect(toolStats?.get("q")).toBe("namespace:alice");
-    await rewind.tools.stats({ tool: "github.close_issue" });
-    expect(server.calls("GET", "/v1/tools/stats")[1]?.query.get("tool")).toBe("github.close_issue");
+    await rewind.actions.stats({ q: "namespace:alice", group: "github", since: "2026-11-11T00:00:00Z" });
+    const actionStats = server.calls("GET", "/v1/actions/stats")[0]?.query;
+    expect(actionStats?.get("group")).toBe("github");
+    expect(actionStats?.get("q")).toBe("namespace:alice");
+    await rewind.actions.stats({ action: "github.close_issue", actionSet: ACTION_SET });
+    expect(server.calls("GET", "/v1/actions/stats")[1]?.query.get("action")).toBe("github.close_issue");
+    expect(server.calls("GET", "/v1/actions/stats")[1]?.query.get("actionSet")).toBe(ACTION_SET);
     await rewind.server.stop();
   });
 });
@@ -778,15 +861,17 @@ describe("the client", () => {
 function summary(id: string) {
   return {
     id,
+    handle: `user_2fQ81/triage/${id}`,
+    namespace: "user_2fQ81",
     status: "failed" as const,
+    calls: 1,
     errors: 0,
     historyLen: 3,
     labels: {},
     lastActivityAt: "2026-11-12T10:00:00Z",
     quarantined: false,
-    script: "s",
+    codeDigest: "ab".repeat(32),
     startedAt: "2026-11-12T10:00:00Z",
-    toolCalls: 1,
-    toolset: TOOLSET,
+    actionSet: ACTION_SET,
   };
 }

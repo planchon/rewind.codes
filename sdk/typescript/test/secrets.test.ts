@@ -83,7 +83,9 @@ describe("the organization's secrets", () => {
       activeTotal: 2,
       waitingRuns: ["run-2"],
       waitingTotal: 1,
-      workflows: [{ name: "support", version: "9f2c4e1a07b3", servers: ["zendesk"] }],
+      workflows: [
+        { workflow: "wf_7k2m9q4x8d1c", name: "support", version: 3, digest: "9f2c4e1a07b3", servers: ["zendesk"] },
+      ],
     };
     server.on("GET", "/v1/secrets/{name}/usage", json(usage));
     server.on("DELETE", "/v1/secrets/{name}", noContent);
@@ -158,13 +160,13 @@ describe("a namespace's secrets", () => {
   });
 });
 
-describe("attachments", () => {
-  it("sends the attachments of a start and of a fork, names and never values", async () => {
+describe("the secrets runs use", () => {
+  it("sends the secrets of a start and of a fork, names and never values", async () => {
     server.on("POST", "/v1/runs", json(run({ secrets: { github: "ns/github" } }), 201));
     server.on("POST", "/v1/runs/{id}/fork", json(run({ id: "run-2" }), 201));
     const started = await rewind.namespace(NAMESPACE).runs.start({
-      toolset: "ts",
-      script: "export default async () => 1",
+      actionSet: "as",
+      code: "export default async () => 1",
       secrets: { github: "ns/github", zendesk: "org/zendesk" },
     });
     expect(started.secrets).toEqual({ github: "ns/github" });
@@ -172,16 +174,16 @@ describe("attachments", () => {
       secrets: { github: "ns/github", zendesk: "org/zendesk" },
     });
 
-    await rewind.runs.fork("run-1", { script: "export default async () => 2", secrets: { github: "org/github" } });
+    await rewind.runs.fork("run-1", { code: "export default async () => 2", secrets: { github: "org/github" } });
     expect(server.calls("POST", "/v1/runs/run-1/fork")[0]?.body).toMatchObject({ secrets: { github: "org/github" } });
   });
 
-  it("saves a workflow with the secrets its runs attach", async () => {
-    server.on("POST", "/v1/workflows", (request) => json({ ...(request.body as object), version: "abc" }, 201));
+  it("creates a workflow with the secrets its runs use", async () => {
+    server.on("POST", "/v1/workflows", (request) => json({ ...(request.body as object), id: "wf_7k2m9q4x8d1c" }, 201));
     await rewind.workflows.create({
       name: "triage",
-      script: "export default async () => 1",
-      toolset: "ts",
+      code: "export default async () => 1",
+      actionSet: "as",
       input: { type: "object" },
       output: { type: "object" },
       secrets: { github: "ns/github" },
@@ -189,24 +191,24 @@ describe("attachments", () => {
     expect(server.calls("POST", "/v1/workflows")[0]?.body).toMatchObject({ secrets: { github: "ns/github" } });
   });
 
-  it("surfaces secret-required with each attachment at fault and what may be attached", async () => {
-    const attachments = [
-      { server: "github", problem: "missing", secret: null, attachable: ["ns/github", "org/github"] },
-      { server: "zendesk", problem: "forbidden", secret: "org/zendesk", attachable: [] },
+  it("surfaces secret-required with each secret at fault and what the caller may use", async () => {
+    const secrets = [
+      { server: "github", problem: "missing", secret: null, usable: ["ns/github", "org/github"] },
+      { server: "zendesk", problem: "forbidden", secret: "org/zendesk", usable: [] },
     ];
     server.on(
       "POST",
       "/v1/runs",
-      problem(422, "secret-required", "github needs a secret: attach ns/github or org/github", { attachments }),
+      problem(422, "secret-required", "github needs a secret: use ns/github or org/github", { secrets }),
     );
     const error = await rewind
       .namespace(NAMESPACE)
-      .runs.start({ toolset: "ts", script: "export default async () => 1" })
+      .runs.start({ actionSet: "as", code: "export default async () => 1" })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RewindApiError);
     expect(isProblem(error, "secret-required")).toBe(true);
-    expect((error as RewindApiError).attachments).toEqual(attachments);
-    expect((error as RewindApiError).message).toContain("attach ns/github");
+    expect((error as RewindApiError).secrets).toEqual(secrets);
+    expect((error as RewindApiError).message).toContain("use ns/github");
   });
 });
 
@@ -235,7 +237,7 @@ describe("signing keys", () => {
 
   it("reads an organization's public keys", async () => {
     const jwks = { keys: [{ kty: "OKP", crv: "Ed25519", x: "abc", kid: "3f9a", alg: "EdDSA", use: "sig" }] };
-    server.on("GET", "/organizations/{tenant}/jwks.json", json(jwks));
+    server.on("GET", "/organizations/{organization}/jwks.json", json(jwks));
     expect(await rewind.signingKeys.jwks("org_01ACME")).toEqual(jwks);
   });
 

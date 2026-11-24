@@ -1,7 +1,7 @@
 {
   "name": "@rewind.codes/sdk",
-  "version": "0.5.0",
-  "description": "TypeScript SDK of Rewind: the API client, the host-tool worker and the agent tools.",
+  "version": "0.6.0",
+  "description": "TypeScript SDK of Rewind: the API client, the worker of harness actions and the agent tools.",
   "keywords": [
     "rewind",
     "agents",

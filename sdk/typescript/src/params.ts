@@ -1,5 +1,10 @@
 import type { Labels } from "./types.js";
 
+/** What every call takes: an `AbortSignal` that cancels it. */
+export interface RequestOptions {
+  signal?: AbortSignal | undefined;
+}
+
 /** Labels as the API's query strings take them: one `key:value` per label. */
 export function labelParams(labels: Labels | undefined): string[] | undefined {
   if (labels === undefined) {

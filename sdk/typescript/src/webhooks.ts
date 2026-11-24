@@ -1,7 +1,7 @@
-import { Webhook, WebhookVerificationError } from "standardwebhooks";
+import { Webhook as StandardWebhook, WebhookVerificationError } from "standardwebhooks";
 
 import { RewindError } from "./errors.js";
-import type { WebhookEvent, WebhookEventType } from "./types.js";
+import type { Webhook, WebhookType } from "./types.js";
 
 /** The headers of a delivery: a fetch `Headers`, or a plain map such as Node's `req.headers`. */
 export type WebhookHeaders = Headers | Readonly<Record<string, string | readonly string[] | undefined>>;
@@ -11,23 +11,23 @@ export class WebhookVerificationFailed extends RewindError {
   override readonly name = "WebhookVerificationFailed";
 }
 
-/** Every kind of event: a kind the API adds and this list misses fails to compile. */
-const EVENT_TYPES: ReadonlySet<string> = new Set(
+/** Every type of webhook: a type the API adds and this list misses fails to compile. */
+const WEBHOOK_TYPES: ReadonlySet<string> = new Set(
   Object.keys({
     "run.completed": true,
     "run.failed": true,
     "run.cancelled": true,
     "run.aborted": true,
-    "run.suspended": true,
+    "run.waiting": true,
     "run.quarantined": true,
-    "tool.schema_changed": true,
-    "credentials.expired": true,
+    "action.schema_changed": true,
+    "secret.expired": true,
     "quota.alert": true,
-  } satisfies Record<WebhookEventType, true>),
+  } satisfies Record<WebhookType, true>),
 );
 
 /**
- * Verifies a lifecycle webhook and returns its event. Deliveries are signed following Standard
+ * Verifies a webhook Rewind sent and returns it: `{ type, timestamp, data }`. Deliveries are signed following Standard
  * Webhooks: `webhook-signature` must hold an HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{body}`
  * made with the subscription's secret (`whsec_…`), and `webhook-timestamp` must be within 5 minutes
  * of now, so an old delivery cannot be replayed.
@@ -35,19 +35,19 @@ const EVENT_TYPES: ReadonlySet<string> = new Set(
  * Pass the body exactly as received, before any JSON parsing. A retried delivery keeps its
  * `webhook-id`: deduplicate on it.
  *
- * @throws {WebhookVerificationFailed} when the delivery is not authentic or not an event.
+ * @throws {WebhookVerificationFailed} when the delivery is not authentic or not a webhook of a known type.
  */
-export function verifyWebhook(payload: string | Uint8Array, headers: WebhookHeaders, secret: string): WebhookEvent {
-  let webhook: Webhook;
+export function verifyWebhook(payload: string | Uint8Array, headers: WebhookHeaders, secret: string): Webhook {
+  let verifier: StandardWebhook;
   try {
-    webhook = new Webhook(secret);
+    verifier = new StandardWebhook(secret);
   } catch (error) {
     throw new RewindError(`invalid webhook secret: ${error instanceof Error ? error.message : String(error)}`);
   }
   const body = typeof payload === "string" ? payload : new TextDecoder().decode(payload);
-  let event: unknown;
+  let webhook: unknown;
   try {
-    event = webhook.verify(body, signatureHeaders(headers));
+    webhook = verifier.verify(body, signatureHeaders(headers));
   } catch (error) {
     if (error instanceof WebhookVerificationError) {
       throw new WebhookVerificationFailed(`webhook refused: ${error.message}`);
@@ -56,10 +56,10 @@ export function verifyWebhook(payload: string | Uint8Array, headers: WebhookHead
       `webhook refused: the body is not JSON (${error instanceof Error ? error.message : String(error)})`,
     );
   }
-  if (!isEvent(event)) {
-    throw new WebhookVerificationFailed("webhook refused: the body is not a lifecycle event");
+  if (!isWebhook(webhook)) {
+    throw new WebhookVerificationFailed("webhook refused: the body is not a webhook of a known type");
   }
-  return event;
+  return webhook;
 }
 
 function signatureHeaders(headers: WebhookHeaders): Record<string, string> {
@@ -84,16 +84,16 @@ function signatureHeaders(headers: WebhookHeaders): Record<string, string> {
   return result;
 }
 
-function isEvent(value: unknown): value is WebhookEvent {
+function isWebhook(value: unknown): value is Webhook {
   if (typeof value !== "object" || value === null) {
     return false;
   }
-  const event = value as Record<string, unknown>;
+  const webhook = value as Record<string, unknown>;
   return (
-    typeof event["type"] === "string" &&
-    EVENT_TYPES.has(event["type"]) &&
-    typeof event["timestamp"] === "string" &&
-    typeof event["data"] === "object" &&
-    event["data"] !== null
+    typeof webhook["type"] === "string" &&
+    WEBHOOK_TYPES.has(webhook["type"]) &&
+    typeof webhook["timestamp"] === "string" &&
+    typeof webhook["data"] === "object" &&
+    webhook["data"] !== null
   );
 }

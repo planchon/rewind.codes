@@ -1,4 +1,4 @@
-import type { AttachmentProblem, Diagnostic, Problem, QuerySpan, QuotaReached, TestResult } from "./types.js";
+import type { Diagnostic, Problem, QuerySpan, QuotaReached, SecretProblem, TestResult } from "./types.js";
 
 /** The kinds of problem the API answers with: the slug of `urn:rewind:problem:<slug>`. */
 export type ProblemSlug =
@@ -9,25 +9,27 @@ export type ProblemSlug =
   | "not-found"
   | "run-ended"
   | "not-quarantined"
-  | "task-not-waiting"
+  | "call-not-waiting"
   | "role-in-use"
-  | "namespace-deleting"
   | "last-owner"
-  | "task-gone"
+  | "namespace-deleting"
+  | "name-taken"
+  | "not-forkable"
+  | "not-a-fork"
+  | "call-gone"
   | "payload-too-large"
   | "unsupported-media-type"
-  | "invalid-script"
-  | "invalid-toolset"
+  | "invalid-code"
+  | "invalid-action-set"
   | "invalid-workflow"
   | "invalid-test"
   | "tests-failed"
   | "invalid-input"
   | "invalid-signal"
-  | "invalid-title"
   | "secret-required"
   | "quota-exceeded"
   | "internal"
-  | "toolset-unavailable"
+  | "action-set-unavailable"
   | "identity-unavailable"
   | "unavailable";
 
@@ -62,28 +64,28 @@ export class RewindApiError extends RewindError {
     return this.problem.detail;
   }
 
-  /** With `invalid-script`: why the script was refused. Empty otherwise. */
+  /** With `invalid-code`: why the code was refused, with locations in `workflow.ts`. Empty otherwise. */
   get diagnostics(): Diagnostic[] {
     return this.problem.diagnostics ?? [];
   }
 
   /**
-   * With `tests-failed`: the outcome of every test that ran (a workflow's save or a fork of a run of a workflow was
-   * refused). Those that did not pass have their `problem` (`stale`, `incompatible` or `failed`) and their `failures`.
-   * Empty otherwise.
+   * With `tests-failed`: the outcome of every test that ran (a workflow's version, its tests, a pull or a fork of a run
+   * of a workflow was refused). Those that did not pass have their `problem` (`stale`, `incompatible` or `failed`) and
+   * their `failures`. Empty otherwise.
    */
   get tests(): TestResult[] {
     return this.problem.tests ?? [];
   }
 
   /**
-   * With `secret-required`: each attachment that refused the start, the fork or the save, by MCP server or API, with
-   * why (`missing`: nothing attached for a server whose `auth` takes a secret; `takes_none`: the server takes none;
-   * `unknown`: no such secret; `forbidden`: the caller may not attach it) and the secrets the caller may attach for
-   * that server instead (`attachable`). Empty otherwise.
+   * With `secret-required`: each secret that refused the start, the fork or the version, by MCP server or API, with
+   * why (`missing`: none given for a server whose `auth` takes a secret; `takes_none`: the server takes none;
+   * `unknown`: no such secret; `forbidden`: the caller may not use it) and the secrets the caller may use for that
+   * server instead (`usable`). Empty otherwise.
    */
-  get attachments(): AttachmentProblem[] {
-    return this.problem.attachments ?? [];
+  get secrets(): SecretProblem[] {
+    return this.problem.secrets ?? [];
   }
 
   /** With `invalid-query`: where the term at fault is in the query, in characters. */
@@ -105,7 +107,7 @@ export class RewindApiError extends RewindError {
 }
 
 /**
- * A key's request that creates in a namespace (a run, a check, a test) named none: the server's 400
+ * A key's request that creates in a namespace (a run, a check, a test, a workflow's fork) named none: the server's 400
  * (`invalid-request`). Every run belongs to an end user: send it from a client bound to the end user's namespace,
  * `rewind.namespace(name)`, or from a client holding the end user's token, `new Rewind({ token })`.
  */
@@ -116,7 +118,7 @@ export class NamespaceRequiredError extends RewindApiError {
     super(problem);
     this.message =
       `${problem.detail.replace(/[.\s]+$/, "")}. This client names no namespace: ` +
-      "start runs, checks and tests with rewind.namespace(endUserId), or with the end user's token (new Rewind({ token }))";
+      "start runs, checks, tests and forks with rewind.namespace(endUserId), or with the end user's token (new Rewind({ token }))";
   }
 }
 
