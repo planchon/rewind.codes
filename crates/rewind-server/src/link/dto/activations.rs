@@ -28,7 +28,7 @@ where
 
 /// An activation an owner sends: `{"partition":3,"head":<run head record>,"summary":<summary
 /// record>,"inbox":[<inbox item record>,…],"history":[<event record>,…],
-/// "payloads":[<payload record>,…],"parent":{…},"code":{…},"action_set":{…},
+/// "payloads":[<payload record>,…],"source":{…},"code":{…},"action_set":{…},
 /// "purpose":"runnable","tasks":[<call task record>,…]}`; `history` left out when the owner
 /// expects the executor's instance cache to hold the run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,7 +45,7 @@ pub struct ActivationRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub payloads: Vec<record::PayloadValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<ParentHistory>,
+    pub source: Option<SourceHistory>,
     pub code: StoredCode,
     pub action_set: StoredActionSet,
     pub purpose: Purpose,
@@ -56,7 +56,7 @@ pub struct ActivationRequest {
 /// The history a fork follows: `{"run":"0196…","events":[…],"payloads":[…],"sealed":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ParentHistory {
+pub struct SourceHistory {
     pub run: Id,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<record::HistoryEvent>,
@@ -285,7 +285,7 @@ impl From<&link::ActivationRequest> for ActivationRequest {
                 .as_ref()
                 .map(|history| history.iter().map(codec::event_record).collect()),
             payloads: request.payloads.iter().map(codec::payload_record).collect(),
-            parent: request.parent.as_ref().map(|parent| ParentHistory {
+            source: request.source.as_ref().map(|parent| SourceHistory {
                 run: Id(parent.run),
                 events: parent.events.iter().map(codec::event_record).collect(),
                 payloads: parent.payloads.iter().map(codec::payload_record).collect(),
@@ -334,10 +334,10 @@ impl TryFrom<ActivationRequest> for link::ActivationRequest {
                 .into_iter()
                 .map(codec::payload_of)
                 .collect(),
-            parent: request
-                .parent
+            source: request
+                .source
                 .map(|parent| {
-                    Ok::<_, Invalid>(link::ParentHistory {
+                    Ok::<_, Invalid>(link::SourceHistory {
                         run: parent.run.0,
                         events: parent.events.into_iter().map(codec::event_of).collect(),
                         payloads: parent.payloads.into_iter().map(codec::payload_of).collect(),

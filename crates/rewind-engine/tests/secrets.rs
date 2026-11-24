@@ -694,7 +694,7 @@ async fn without_a_public_url_a_signed_call_fails_unsent() {
 // Forks
 
 #[tokio::test]
-async fn a_fork_inherits_its_parent_s_attachments_checked_against_its_caller() {
+async fn a_fork_inherits_its_source_s_attachments_checked_against_its_caller() {
     let mut world = world().await;
     put(&world, organization("github"), "ghp_org", &[]).await;
     put(&world, of(&alice(), "github"), "ghp_alice", &[]).await;
@@ -714,7 +714,7 @@ async fn a_fork_inherits_its_parent_s_attachments_checked_against_its_caller() {
         request
     };
 
-    // The code is new code: the parent's org/github is checked against the caller.
+    // The code is new code: the source's org/github is checked against the caller.
     let error = fork(&mut world, request(None, RightsTo::Namespace))
         .await
         .unwrap_err();

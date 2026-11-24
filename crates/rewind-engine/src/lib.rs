@@ -17,7 +17,7 @@
 //!
 //! What the actors share:
 //!
-//! - [`fork`]: following a parent's history with a corrected code, and whether a code is
+//! - [`fork`]: following a source's history with a corrected code, and whether a code is
 //!   compatible with a history; [`replay`]: rebuilding a code from its history.
 //! - [`projector`]: what committed events project (a run's summary, its lifecycle events);
 //!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
@@ -27,7 +27,7 @@
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
 //! - [`test`]: test runs: the dispatcher that answers from a test's rules, handlers,
 //!   cassette and static responses.
-//! - [`suites`]: the suites of workflow versions, composed from their parent's and stored as
+//! - [`suites`]: the suites of workflow versions, composed from their base's and stored as
 //!   blobs in the control plane; tests recorded from runs.
 //! - [`testing`]: tests run in virtual time against a code, several at once, each on a run
 //!   plane of its own in the driver; the checks of a test against its action set and its

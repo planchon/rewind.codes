@@ -304,7 +304,7 @@ fn new_version<'o>(
     // The lineage, from the latest version back.
     let mut seen = BTreeSet::new();
     let mut current = *latest;
-    while let Some(parent) = current.parent {
+    while let Some(parent) = current.base {
         if parent == first.version {
             return Ok((first, latest));
         }
@@ -361,7 +361,7 @@ fn check_regression(outcome: &Outcome) -> Result<(), String> {
     let fork = outcome
         .runs
         .iter()
-        .find(|run| run.parent == Some(failed) && run.status == RunStatus::Completed);
+        .find(|run| run.source == Some(failed) && run.status == RunStatus::Completed);
     ensure(fork.is_some(), || {
         format!("the failed run {failed} was not finished: no fork of it completed")
     })?;

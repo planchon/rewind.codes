@@ -89,7 +89,7 @@ pub(crate) fn value_size(payload: &Payload) -> Option<usize> {
 /// their digests (`archi/06-storage-and-scale.md`, "Payloads"): those up to the table tier go to
 /// the run's payload records, committed with the batch; the larger ones to blobs under the run
 /// (`BlobOwner::Run`), put before the batch. A blob listed in `copied` (a fork's, from its
-/// parent) is copied from its owner instead of written again. Returns the records, one per
+/// source) is copied from its owner instead of written again. Returns the records, one per
 /// digest.
 pub(crate) async fn offload_into_run<B: BlobStore>(
     blobs: &B,

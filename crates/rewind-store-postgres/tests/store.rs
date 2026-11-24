@@ -810,7 +810,7 @@ fn version_with_tests(tests: &[TestRecord]) -> Workflow {
     )
     .expect("a valid workflow")
     .with_suite(Suite {
-        parent: None,
+        base: None,
         tests: tests
             .iter()
             .enumerate()

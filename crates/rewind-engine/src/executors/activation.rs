@@ -32,7 +32,7 @@ use crate::batch::EngineError;
 use crate::batch::{Batch, CountCpu, Grace, abort_reason};
 use crate::cache::Cached;
 use crate::executors::derive;
-use crate::fork::{FollowWith, ForkSource, follow_parent};
+use crate::fork::{FollowWith, ForkStart, follow_source};
 use crate::payloads::{self, PayloadSource};
 use crate::plane::{InstanceOf, NodeConfig, Plane};
 use crate::ports::link::{ActivationRequest, ActivationResult, Committed, Purpose};
@@ -116,7 +116,7 @@ impl Tally {
 }
 
 /// Where an activation loads its payloads from: the records it was sent, then the blobs of the
-/// run (and of a fork's parent).
+/// run (and of a fork's source).
 pub(crate) struct Carried<'a, B> {
     pub(crate) records: BTreeMap<Digest, PayloadRecord>,
     pub(crate) blobs: &'a B,
@@ -186,7 +186,7 @@ async fn work<P: Plane>(
         inbox,
         history,
         payloads,
-        parent,
+        source: fork_source,
         code,
         action_set,
         purpose,
@@ -213,11 +213,11 @@ async fn work<P: Plane>(
         .map(|record| (record.digest, record))
         .collect();
     let mut owners = vec![BlobOwner::Run(run.clone())];
-    // A fork copies the blobs of its parent it references.
+    // A fork copies the blobs of its source it references.
     let mut copied = BTreeMap::new();
-    if let Some(parent) = &parent {
-        let from = BlobOwner::Run(RunRef::new(run.tenant.clone(), parent.run));
-        for record in &parent.payloads {
+    if let Some(fork_source) = &fork_source {
+        let from = BlobOwner::Run(RunRef::new(run.tenant.clone(), fork_source.run));
+        for record in &fork_source.payloads {
             if record.value.is_none() {
                 copied.insert(record.digest, from.clone());
             }
@@ -225,7 +225,7 @@ async fn work<P: Plane>(
                 .entry(record.digest)
                 .or_insert_with(|| record.clone());
         }
-        if let Some(sealed) = &parent.sealed {
+        if let Some(sealed) = &fork_source.sealed {
             for entry in &sealed.events {
                 if let Some(rewind_core::Payload::Digest(digest)) =
                     payloads::payload_of(&entry.event)
@@ -372,30 +372,30 @@ async fn work<P: Plane>(
                         message: "run_started for a run that has already started".into(),
                     });
                 }
-                if let Some(link) = head.metadata.parent {
-                    let Some(parent) = &parent else {
+                if let Some(link) = head.metadata.source {
+                    let Some(fork_source) = &fork_source else {
                         return Err(EngineError::CorruptInbox {
                             run_id,
-                            message: "the history of the fork's parent was not sent".into(),
+                            message: "the history of the fork's source was not sent".into(),
                         });
                     };
-                    let parent_history = parent
+                    let source_history = fork_source
                         .sealed
                         .as_ref()
-                        .map_or(&parent.events, |sealed| &sealed.events);
+                        .map_or(&fork_source.events, |sealed| &sealed.events);
                     let with = FollowWith {
                         executor: plane.executor(),
                         payloads: &source,
                         cpu: &tally,
                     };
-                    let source_of_fork = ForkSource {
+                    let source_of_fork = ForkStart {
                         run: &run,
-                        parent: link,
+                        source: link,
                         started,
                         compiled: &code.compiled,
                         action_set: &action_set.action_set,
                     };
-                    instance = start_fork(&with, clock, &mut batch, source_of_fork, parent_history)
+                    instance = start_fork(&with, clock, &mut batch, source_of_fork, source_history)
                         .await?;
                     first_of_fork = true;
                     continue;
@@ -461,7 +461,7 @@ async fn work<P: Plane>(
     history.extend(events);
     let end = end_of(&source, &run.tenant, &state).await?;
     // The summary the owner holds describes the history before the new events, unless the
-    // activation copied a fork's parent: then the summary is derived from every event.
+    // activation copied a fork's source: then the summary is derived from every event.
     let previous =
         previous.filter(|previous| !first_of_fork && previous.summary.history_len == from as u64);
     let committed = commit(
@@ -663,14 +663,14 @@ async fn deliver<I: CodeInstance, S: PayloadSource, C: CountCpu>(
     .map_err(|error| EngineError::CorruptHistory { run_id, error })
 }
 
-/// The first activation of a fork: follows the parent's history, then delivers the outcomes of
+/// The first activation of a fork: follows the source's history, then delivers the outcomes of
 /// the inherited calls (`archi/03-execution.md`, "Forks").
 async fn start_fork<X, S, C, K>(
     with: &FollowWith<'_, X, S, C>,
     clock: &K,
     batch: &mut Batch<'_>,
-    source: ForkSource<'_>,
-    parent: &[HistoryEvent],
+    start: ForkStart<'_>,
+    history: &[HistoryEvent],
 ) -> Result<Option<X::Instance>, EngineError>
 where
     X: CodeExecutor,
@@ -678,9 +678,9 @@ where
     C: CountCpu,
     K: Clock,
 {
-    let parent_id = source.parent.run;
-    let followed = follow_parent(with, batch, source, parent).await?;
-    tracing::info!(parent = %parent_id, point = %followed.point, "the fork goes live");
+    let source_id = start.source.run;
+    let followed = follow_source(with, batch, start, history).await?;
+    tracing::info!(source = %source_id, point = %followed.point, "the fork goes live");
     let Some(mut instance) = followed.instance else {
         return Ok(None);
     };
@@ -688,7 +688,7 @@ where
         let error = ActionFailure {
             kind: ActionFailureKind::OutcomeUnknown,
             message: format!(
-                "the parent run {parent_id} left this call without an outcome, and the action is \
+                "the source run {source_id} left this call without an outcome, and the action is \
                  not idempotent: it may or may not have taken effect"
             ),
             data: None,
@@ -735,7 +735,7 @@ async fn end_of<S: PayloadSource>(
 
 /// Ends a quarantined run: `run_aborted { non_determinism }` after a replay mismatch,
 /// `run_aborted { internal }` after repeated failures. A run quarantined before its first
-/// commit (a fork whose parent is gone) commits `run_started` with it.
+/// commit (a fork whose source is gone) commits `run_started` with it.
 #[allow(clippy::too_many_arguments)]
 async fn give_up<P: Plane, B: BlobStore>(
     plane: &P,

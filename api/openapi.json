@@ -1889,6 +1889,13 @@
             "description": "The id of the action set its runs call, already registered.",
             "type": "string"
           },
+          "base": {
+            "description": "The version it derives from, `name@<version>`, `name@v<number>` or a version: the latest\nversion of the same name saved under the caller's labels when absent. Its suite is\ninherited.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "code": {
             "description": "The TypeScript source: a single ES module whose default export is the entry point.",
             "type": "string"
@@ -1911,13 +1918,6 @@
           "output": {
             "description": "JSON Schema of what `main` returns.",
             "type": "object"
-          },
-          "parent": {
-            "description": "The version it derives from, `name@<version>`, `name@v<number>` or a version: the latest\nversion of the same name saved under the caller's labels when absent. Its suite is\ninherited.",
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "retire": {
             "description": "Inherited tests dropped, with a reason: they are deprecated.",
@@ -3053,36 +3053,9 @@
         ],
         "type": "object"
       },
-      "ForkParent": {
-        "description": "The run a fork was started from.",
-        "properties": {
-          "at": {
-            "description": "The event from which the fork was forced live, if the request gave one.",
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "handle": {
-            "description": "The parent's handle; its id once it is erased.",
-            "type": "string"
-          },
-          "run": {
-            "description": "The parent's id.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "run",
-          "handle"
-        ],
-        "type": "object"
-      },
       "ForkRun": {
         "additionalProperties": false,
-        "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its\ncommands match the parent's, the parent's recorded results are reused and no action is called\nagain; it continues live at the first difference, at `at`, or at the end of the parent's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
+        "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its\ncommands match the source's, the source's recorded results are reused and no action is called\nagain; it continues live at the first difference, at `at`, or at the end of the source's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
         "properties": {
           "at": {
             "description": "Go live from this event even if the commands still match.",
@@ -3105,13 +3078,13 @@
             "type": "string"
           },
           "input": {
-            "description": "The fork's input. The parent's when absent."
+            "description": "The fork's input. The source's when absent."
           },
           "labels": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Labels",
-                "description": "The fork's labels. Absent, the fork keeps its parent's labels, so that whoever sees the\nparent (the agent tools of a conversation, a key limited to labels) sees the fork."
+                "description": "The fork's labels. Absent, the fork keeps its source's labels, so that whoever sees the\nsource (the agent tools of a conversation, a key limited to labels) sees the fork."
               },
               {
                 "type": "null"
@@ -3122,7 +3095,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BTreeMap",
-                "description": "The fork's attachments, as `POST /v1/runs` takes them. The parent's when absent. Either\nway they are checked against the caller: the code is new code."
+                "description": "The fork's attachments, as `POST /v1/runs` takes them. The source's when absent. Either\nway they are checked against the caller: the code is new code."
               },
               {
                 "type": "null"
@@ -3166,6 +3139,33 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "ForkSource": {
+        "description": "The run a fork was started from.",
+        "properties": {
+          "at": {
+            "description": "The event from which the fork was forced live, if the request gave one.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "handle": {
+            "description": "The source's handle; its id once it is erased.",
+            "type": "string"
+          },
+          "run": {
+            "description": "The source's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "handle"
         ],
         "type": "object"
       },
@@ -3221,7 +3221,7 @@
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "`{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every\ndelivery: the handler uses it to recognize a call it already made.",
+            "description": "`{run_id}/{seq}` (a fork's call made again keeps its source's), the same on every\ndelivery: the handler uses it to recognize a call it already made.",
             "type": "string"
           },
           "labels": {
@@ -5205,7 +5205,7 @@
         "type": "object"
       },
       "RetiredTest": {
-        "description": "A test of the parent a version does not keep.",
+        "description": "A test of the base a version does not keep.",
         "properties": {
           "digest": {
             "type": "string"
@@ -5473,24 +5473,13 @@
           },
           "namespace": {
             "$ref": "#/components/schemas/NamespaceName",
-            "description": "The end user the run belongs to. A fork has its parent's."
+            "description": "The end user the run belongs to. A fork has its source's."
           },
           "output": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Payload",
                 "description": "With `completed`: what `main` returned."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "parent": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ForkParent",
-                "description": "For a fork, the run it was forked from."
               },
               {
                 "type": "null"
@@ -5518,6 +5507,17 @@
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
             "description": "The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):\nnames, never values."
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ForkSource",
+                "description": "For a fork, the run it was forked from."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "startedBy": {
             "oneOf": [
@@ -5884,17 +5884,17 @@
           "namespace": {
             "$ref": "#/components/schemas/NamespaceName"
           },
-          "parent": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "quarantined": {
             "type": "boolean"
           },
           "scriptTitle": {
             "description": "The code's title, as `Run.scriptTitle`. Absent when it has none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
             "type": [
               "string",
               "null"
@@ -7730,7 +7730,7 @@
         "type": "object"
       },
       "UpdatedTest": {
-        "description": "A test of the parent a version replaced.",
+        "description": "A test of the base a version replaced.",
         "properties": {
           "from": {
             "type": "string"
@@ -8251,6 +8251,13 @@
             "description": "The id of the action set its runs call.",
             "type": "string"
           },
+          "base": {
+            "description": "The version it derives from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "codeDigest": {
             "description": "Digest of its code (`GET /v1/scripts/{digest}`).",
             "type": "string"
@@ -8288,13 +8295,6 @@
           },
           "output": {
             "type": "object"
-          },
-          "parent": {
-            "description": "The version it derives from.",
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "retired": {
             "items": {
@@ -16256,7 +16256,7 @@
           {
             "description": "Only forks of this run: its id or its handle.",
             "in": "query",
-            "name": "parent",
+            "name": "source",
             "required": false,
             "schema": {
               "type": "string"
@@ -17618,7 +17618,7 @@
         "operationId": "forkRun",
         "parameters": [
           {
-            "description": "The parent run's id, or its handle percent-encoded.",
+            "description": "The source run's id, or its handle percent-encoded.",
             "in": "path",
             "name": "id",
             "required": true,
@@ -20047,7 +20047,7 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's code against its action set and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the code's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
+        "description": "Checks the workflow's code against its action set and its own schemas, then runs its\nsuite: its base's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the code's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
         "operationId": "createWorkflow",
         "parameters": [
           {
@@ -20129,7 +20129,7 @@
                 }
               }
             },
-            "description": "No such action set, or parent."
+            "description": "No such action set, or base version."
           },
           "422": {
             "content": {

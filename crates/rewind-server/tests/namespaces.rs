@@ -453,7 +453,7 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
 // The customer names the namespace
 
 /// A key names the namespace to create in, and narrows its reads with it; a fork stays in its
-/// parent's namespace.
+/// source's namespace.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_customer_names_the_namespace_of_its_requests() {
     let server = TestServer::in_memory(&[]).await;
@@ -497,7 +497,7 @@ async fn the_customer_names_the_namespace_of_its_requests() {
         ),
         (404, Some(ProblemType::NotFound))
     );
-    let parent = alice.start_run(&waiting("parent"), None).await.unwrap();
+    let parent = alice.start_run(&waiting("source"), None).await.unwrap();
     customer
         .get_namespace(&ns("alice"), &NamespaceQuery::default())
         .await
@@ -529,7 +529,7 @@ async fn the_customer_names_the_namespace_of_its_requests() {
         (404, Some(ProblemType::NotFound))
     );
 
-    // A fork takes its parent's namespace, with or without the header.
+    // A fork takes its source's namespace, with or without the header.
     let fork = customer
         .fork_run(&parent.id, &ForkRun::new(SIGNAL), None)
         .await

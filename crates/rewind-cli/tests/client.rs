@@ -18,7 +18,7 @@ use rewind_api::admin::ServerInfo;
 use rewind_api::common::{Callsite, Labels, Payload, RunMode, RunStatus, Timestamp};
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{
-    CancelRun, ForkParent, ForkRun, Run, RunError, RunPage, RunSummary, SignalAccepted, StartRun,
+    CancelRun, ForkRun, ForkSource, Run, RunError, RunPage, RunSummary, SignalAccepted, StartRun,
     Transcript, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
@@ -71,7 +71,7 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         labels: Labels::new(),
         secrets: Default::default(),
         trace_id: "0".repeat(32),
-        parent: None,
+        source: None,
         workflow: None,
         started_by: None,
         input: Some(Payload::of(json!({}), 1024)),
@@ -341,7 +341,7 @@ async fn fork(
         base_run(&fork_id, RunStatus::Active),
         json!({"fixed": true}),
     );
-    run.parent = Some(ForkParent {
+    run.source = Some(ForkSource {
         handle: format!("local/script/{id}"),
         run: id,
         at: request.at,
@@ -383,7 +383,7 @@ async fn list(
             fingerprint: None,
             waiting_for: Vec::new(),
             wakes_at: None,
-            parent: None,
+            source: None,
             workflow: None,
             started_by: None,
         })
@@ -860,7 +860,7 @@ async fn status_runs_transcript_fork_and_release() {
     assert_eq!(
         fork.body.get("secrets"),
         None,
-        "the parent's when none is given"
+        "the source's when none is given"
     );
     let (exit, _, err) = server
         .rewind(&[

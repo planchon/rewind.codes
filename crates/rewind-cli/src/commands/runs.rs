@@ -243,7 +243,7 @@ pub(super) async fn list(
         script: args.script,
         error: args.error,
         quarantined: args.quarantined.then_some(true),
-        parent: args.parent,
+        source: args.source,
         workflow: None,
         started_by: None,
         started_after: None,

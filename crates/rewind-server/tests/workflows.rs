@@ -65,7 +65,7 @@ fn triage(action_set: &str, code: &str) -> CreateWorkflow {
                 "required": ["close"],
             }),
         )]),
-        parent: None,
+        base: None,
         tests: Vec::new(),
         update: Vec::new(),
         retire: Vec::new(),

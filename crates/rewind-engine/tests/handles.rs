@@ -72,7 +72,7 @@ async fn a_run_is_named_by_its_namespace_its_origin_and_its_suffix() {
     let longer: RunHandle = format!("{handle}0").parse().unwrap();
     assert!(find(&mut world, &longer).await.is_none());
 
-    // A fork is the run of what its parent ran, and names its parent by its handle.
+    // A fork is the run of what its source ran, and names its source by its handle.
     let mut gateway = world.driver.gateway(&world.at.clone());
     let fork = world
         .edge
@@ -83,8 +83,8 @@ async fn a_run_is_named_by_its_namespace_its_origin_and_its_suffix() {
     world.idle().await;
     let forked = world.view(&fork).await;
     assert_eq!(forked.head.origin, "triage-new-issues");
-    assert_eq!(forked.parent, Some(handle));
-    assert_eq!(view.parent, None);
+    assert_eq!(forked.source, Some(handle));
+    assert_eq!(view.source, None);
 }
 
 #[tokio::test]

@@ -302,7 +302,7 @@ impl Runs {
                     status: RunStatus::Pending,
                     mode: Some(RunMode::Live),
                     labels: BTreeMap::from([("agent".into(), "triage".into())]),
-                    parent: None,
+                    source: None,
                     workflow: Some("triage".into()),
                     started_by: None,
                     started_at: None,

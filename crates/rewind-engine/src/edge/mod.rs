@@ -360,7 +360,7 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Forks a run with a corrected code (`POST /v1/runs/{id}/fork`). The fork lives in its
-    /// parent's namespace, and so in its partition.
+    /// source's namespace, and so in its partition.
     pub async fn fork<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -374,7 +374,7 @@ impl<P: Plane> Edge<P> {
         .await
     }
 
-    /// [`fork`](Self::fork), type-checked first against the parent's action set.
+    /// [`fork`](Self::fork), type-checked first against the source's action set.
     pub async fn fork_checked<G: Gateway, K: TypeChecker>(
         &self,
         gateway: &mut G,
@@ -390,33 +390,33 @@ impl<P: Plane> Edge<P> {
         request: ForkRun,
         checker: Option<&K>,
     ) -> Result<Created, ForkError> {
-        let parent = request.parent.clone();
+        let source = request.source.clone();
         let start_failed = |error: StartError| ForkError::Start(error);
         let edge_failed = |error: EdgeError| ForkError::Start(start_unavailable(error));
         let partition = self
-            .partition_of(parent.id)
+            .partition_of(source.id)
             .await
-            .map_err(|_| ForkError::ParentNotFound(parent.id))?;
+            .map_err(|_| ForkError::SourceNotFound(source.id))?;
         let view = self
-            .get_run(gateway, &parent)
+            .get_run(gateway, &source)
             .await
             .map_err(edge_failed)?
-            .ok_or(ForkError::ParentNotFound(parent.id))?;
+            .ok_or(ForkError::SourceNotFound(source.id))?;
         let history = self
-            .history(gateway, &parent, 0, true)
+            .history(gateway, &source, 0, true)
             .await
             .map_err(edge_failed)?
             .unwrap_or_default();
         let Some(HistoryEvent {
-            event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(parent_started)),
+            event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(source_started)),
             ..
         }) = history.first()
         else {
-            return Err(ForkError::ParentNotStarted(parent.id));
+            return Err(ForkError::SourceNotStarted(source.id));
         };
         let head = view.head;
         let bounds = self
-            .bounds(&parent.tenant, &head.namespace)
+            .bounds(&source.tenant, &head.namespace)
             .await
             .map_err(start_failed)?;
         let ttl = checks::ttl(request.ttl, &bounds).map_err(|requested| {
@@ -431,8 +431,8 @@ impl<P: Plane> Edge<P> {
         let metadata = crate::ports::RunMetadata {
             labels: request.labels.unwrap_or(head.metadata.labels.clone()),
             trace_context: request.trace_context,
-            parent: Some(crate::ports::ForkParent {
-                run: parent.id,
+            source: Some(crate::ports::ForkSource {
+                run: source.id,
                 at: request.at,
             }),
             workflow: None,
@@ -447,7 +447,7 @@ impl<P: Plane> Edge<P> {
         let stored = self
             .plane
             .catalog()
-            .get_action_set(&parent.tenant, head.action_set)
+            .get_action_set(&source.tenant, head.action_set)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?
             .ok_or_else(|| {
@@ -462,9 +462,9 @@ impl<P: Plane> Edge<P> {
             .executor()
             .compile(&request.code, &action_set)
             .map_err(|invalid| start_failed(StartError::InvalidCode(invalid)))?;
-        if parent_started.mode == RunMode::Live {
+        if source_started.mode == RunMode::Live {
             self.check_attachments(
-                &parent.tenant,
+                &source.tenant,
                 &head.namespace,
                 &request.code,
                 &action_set,
@@ -482,12 +482,12 @@ impl<P: Plane> Edge<P> {
         let input = match request.input {
             Some(input) => input,
             None => {
-                let source = crate::executors::activation::Carried {
+                let carried = crate::executors::activation::Carried {
                     records: Default::default(),
                     blobs: self.plane.blobs(),
-                    owners: vec![BlobOwner::Run(parent.clone())],
+                    owners: vec![BlobOwner::Run(source.clone())],
                 };
-                payloads::load(&source, &parent.tenant, &parent_started.input)
+                payloads::load(&carried, &source.tenant, &source_started.input)
                     .await
                     .map_err(|error| ForkError::Engine(error.into()))?
             }
@@ -495,27 +495,27 @@ impl<P: Plane> Edge<P> {
         let input = self.bounded_input(input).map_err(start_failed)?;
         self.plane
             .catalog()
-            .put_code(&parent.tenant, &request.code, &compiled)
+            .put_code(&source.tenant, &request.code, &compiled)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?;
         let run = RunRef::new(
-            parent.tenant.clone(),
+            source.tenant.clone(),
             self.plane.entropy().run_id_in(partition),
         );
         let now = self.now();
         let start = StartAtOwner {
             run,
             namespace: head.namespace.clone(),
-            // A fork is the run of what its parent ran.
+            // A fork is the run of what its source ran.
             origin: head.origin.clone(),
             started: RunStarted {
                 code: request.code.digest(),
                 action_set: head.action_set,
                 input,
-                seed: parent_started.seed,
-                epoch: parent_started.epoch,
+                seed: source_started.seed,
+                epoch: source_started.epoch,
                 expires_at: now.saturating_add(ttl),
-                mode: parent_started.mode,
+                mode: source_started.mode,
             },
             metadata,
             start_key: request.idempotency_key,

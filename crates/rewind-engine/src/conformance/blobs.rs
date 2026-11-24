@@ -124,7 +124,7 @@ pub async fn copy_puts_a_blob_under_another_owner<S: BlobStore>(store: &S) {
     assert_eq!(
         store.get(&fork, digest).await.expect("get"),
         Some(bytes.clone()),
-        "the fork's copy outlives its parent's blob"
+        "the fork's copy outlives its source's blob"
     );
     let tests = tests_of("acme");
     store.copy(&fork, &tests, digest).await.expect("copy");

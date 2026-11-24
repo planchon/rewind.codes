@@ -15,7 +15,7 @@ use std::time::Duration;
 use rewind_core::{Event, Lifecycle, Seq, Timestamp};
 use rewind_engine::ports::{
     ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, CredentialsExpiredReason,
-    DueTimer, Ending, FailureCounts, ForkParent, Gauges, InboxItem, IndexedSummary, LatestRun,
+    DueTimer, Ending, FailureCounts, ForkSource, Gauges, InboxItem, IndexedSummary, LatestRun,
     LogRecord, Month, NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind,
     ParkReason, PartitionError, PayloadRecord, Projection, Quarantine, QuarantineKind,
     QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef,
@@ -114,7 +114,7 @@ pub fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
                 traceparent: context.traceparent.clone(),
                 tracestate: context.tracestate.clone(),
             }),
-        parent: metadata.parent.map(|parent| record::ForkParent {
+        source: metadata.source.map(|parent| record::ForkSource {
             run: parent.run,
             at: parent.at,
         }),
@@ -142,7 +142,7 @@ pub fn metadata_of(record: record::Metadata) -> RunMetadata {
             traceparent: context.traceparent,
             tracestate: context.tracestate,
         }),
-        parent: record.parent.map(|parent| ForkParent {
+        source: record.source.map(|parent| ForkSource {
             run: parent.run,
             at: parent.at,
         }),
@@ -511,7 +511,7 @@ pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
         status: summary.status.into(),
         mode: summary.mode.map(Into::into),
         labels: summary.labels.clone(),
-        parent: summary.parent,
+        source: summary.source,
         workflow: summary.workflow.clone(),
         started_by: summary.started_by,
         started_at: summary.started_at.map(|at| at.0),
@@ -559,7 +559,7 @@ pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionEr
             status: record.status.into(),
             mode: record.mode.map(Into::into),
             labels: record.labels,
-            parent: record.parent,
+            source: record.source,
             workflow: record.workflow,
             started_by: record.started_by,
             started_at: record.started_at.map(Timestamp),

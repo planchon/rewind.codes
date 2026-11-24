@@ -538,7 +538,7 @@ impl<A: Api> Session<'_, A> {
         let tests = optional_tests(input, "tests")?;
         let update = optional_updates(input)?;
         let retire = optional_retirements(input)?;
-        let parent = optional_string(input, "parent")?;
+        let base = optional_string(input, "base")?;
         let secrets = optional_attachments(input)?;
         let action_set = self.needs_action_set("save_workflow")?;
         // The body, as the API reads it.
@@ -550,7 +550,7 @@ impl<A: Api> Session<'_, A> {
             input: schema_input,
             output: schema_output,
             signals,
-            parent,
+            base,
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
             update: from_values::<TestUpdate>(update.unwrap_or_default())?,
             retire: from_values::<TestRetirement>(retire.unwrap_or_default())?,

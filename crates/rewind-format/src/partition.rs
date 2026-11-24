@@ -22,7 +22,7 @@ use crate::{FormatError, VERSION};
 
 pub use crate::v1::partition::{
     ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending,
-    FailureCounts, FailureKind, ForkParent, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
+    FailureCounts, FailureKind, ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
     Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
     QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, RunCounts, RunHead, RunWorkflow,
     ScriptCounts, Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy,

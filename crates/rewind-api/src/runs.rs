@@ -117,7 +117,7 @@ pub struct Run {
     /// percent-encoded in a path (`dana%2Ftriage%2F06bqx3k9f2mt`).
     #[schema(example = "dana/triage/06bqx3k9f2mt")]
     pub handle: String,
-    /// The end user the run belongs to. A fork has its parent's.
+    /// The end user the run belongs to. A fork has its source's.
     pub namespace: NamespaceName,
     pub status: RunStatus,
     /// Set while the run is quarantined: its activations are stopped until it is released or
@@ -145,7 +145,7 @@ pub struct Run {
     pub trace_id: String,
     /// For a fork, the run it was forked from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<ForkParent>,
+    pub source: Option<ForkSource>,
     /// For a run of a workflow, the workflow and its version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RunWorkflow>,
@@ -207,10 +207,10 @@ pub enum QuarantineCause {
 /// The run a fork was started from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ForkParent {
-    /// The parent's id.
+pub struct ForkSource {
+    /// The source's id.
     pub run: String,
-    /// The parent's handle; its id once it is erased.
+    /// The source's handle; its id once it is erased.
     pub handle: String,
     /// The event from which the fork was forced live, if the request gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -374,7 +374,7 @@ pub struct RunFilter {
     pub quarantined: Option<bool>,
     /// Only forks of this run: its id or its handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub source: Option<String>,
     /// Only runs of this workflow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
@@ -491,7 +491,7 @@ pub struct RunSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wakes_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub source: Option<String>,
     /// For a run of a workflow, the workflow's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
@@ -777,8 +777,8 @@ pub struct CancelRun {
 }
 
 /// `POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its
-/// commands match the parent's, the parent's recorded results are reused and no action is called
-/// again; it continues live at the first difference, at `at`, or at the end of the parent's
+/// commands match the source's, the source's recorded results are reused and no action is called
+/// again; it continues live at the first difference, at `at`, or at the end of the source's
 /// history (`archi/03-execution.md`, "Forks"). Takes `Idempotency-Key` as `POST /v1/runs`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -788,7 +788,7 @@ pub struct ForkRun {
     /// Go live from this event even if the commands still match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<u64>,
-    /// The fork's input. The parent's when absent.
+    /// The fork's input. The source's when absent.
     #[serde(
         default,
         deserialize_with = "crate::common::present",
@@ -799,8 +799,8 @@ pub struct ForkRun {
     /// `POST /v1/runs` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Duration>,
-    /// The fork's labels. Absent, the fork keeps its parent's labels, so that whoever sees the
-    /// parent (the agent tools of a conversation, a key limited to labels) sees the fork.
+    /// The fork's labels. Absent, the fork keeps its source's labels, so that whoever sees the
+    /// source (the agent tools of a conversation, a key limited to labels) sees the fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Labels>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -813,7 +813,7 @@ pub struct ForkRun {
     /// Type-check the corrected code first. `true` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<bool>,
-    /// The fork's attachments, as `POST /v1/runs` takes them. The parent's when absent. Either
+    /// The fork's attachments, as `POST /v1/runs` takes them. The source's when absent. Either
     /// way they are checked against the caller: the code is new code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Attachments>,

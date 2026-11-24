@@ -238,9 +238,9 @@ pub(crate) async fn compatibility(
         ForkPoint::Stopped => {
             "the code could not go on while it followed the history: a fork is aborted".to_owned()
         }
-        point @ (ForkPoint::EndOfParent
-        | ForkPoint::ParentCancelled(_)
-        | ForkPoint::ParentAborted(_)) => format!(
+        point @ (ForkPoint::EndOfSource
+        | ForkPoint::SourceCancelled(_)
+        | ForkPoint::SourceAborted(_)) => format!(
             "the code is compatible with the history of run {} ({events} events): {point}",
             export.run
         ),
@@ -276,10 +276,10 @@ pub(crate) async fn compatibility(
 /// The event where a fork stops following the run.
 fn live_from(point: &ForkPoint, events: u64) -> u64 {
     match point {
-        ForkPoint::EndOfParent => events,
+        ForkPoint::EndOfSource => events,
         ForkPoint::At(index)
-        | ForkPoint::ParentCancelled(index)
-        | ForkPoint::ParentAborted(index) => *index,
+        | ForkPoint::SourceCancelled(index)
+        | ForkPoint::SourceAborted(index) => *index,
         ForkPoint::Diverged(
             NonDeterminism::CommandMismatch { index, .. }
             | NonDeterminism::MissingCommand { index, .. },

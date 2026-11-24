@@ -26,7 +26,7 @@ use crate::cache::InstanceCache;
 use crate::node::message::{Effect, JobClass, Message, ReplyTo, job_of};
 use crate::partition::OwnerMsg;
 use crate::plane::{InstanceOf, LogOf, NodeConfig, Plane};
-use crate::ports::link::{ActivationRequest, ActivationResult, ParentHistory, Purpose};
+use crate::ports::link::{ActivationRequest, ActivationResult, Purpose, SourceHistory};
 use crate::ports::{
     CatalogStore, IndexedSummary, PartitionLog, PayloadRecord, RunHead, RunRef, Trigger,
 };
@@ -274,7 +274,7 @@ impl<P: Plane> Executors<P> {
 
 /// Reads what an activation of a run needs from its partition: its inbox, its tasks, its
 /// history unless the instance cache holds the run (`with_history`), the payload records the
-/// history and the inbox hold by digest, a fork's parent at its first activation, its code
+/// history and the inbox hold by digest, a fork's source at its first activation, its code
 /// and its action set.
 pub(crate) async fn prepare<P: Plane>(
     plane: &P,
@@ -311,8 +311,8 @@ pub(crate) async fn prepare<P: Plane>(
         }
     }
     let payloads = records(log, &run, digests).await?;
-    let parent = match head.metadata.parent {
-        Some(link) if head.history_len == 0 => parent_history(plane, log, &run, link.run).await?,
+    let source = match head.metadata.source {
+        Some(link) if head.history_len == 0 => source_history(plane, log, &run, link.run).await?,
         _ => None,
     };
     let tenant = &run.tenant;
@@ -335,7 +335,7 @@ pub(crate) async fn prepare<P: Plane>(
         inbox,
         history,
         payloads,
-        parent,
+        source,
         code,
         action_set,
         purpose,
@@ -376,35 +376,35 @@ async fn records<L: PartitionLog>(
     Ok(records)
 }
 
-/// The history a fork follows: its parent's attempt from the partition, or its sealed attempt
-/// from the archive. `None` when the parent is gone.
-async fn parent_history<P: Plane>(
+/// The history a fork follows: its source's attempt from the partition, or its sealed attempt
+/// from the archive. `None` when the source is gone.
+async fn source_history<P: Plane>(
     plane: &P,
     log: &LogOf<P>,
     run: &RunRef,
-    parent: rewind_core::RunId,
-) -> Result<Option<ParentHistory>, String> {
-    let parent_ref = RunRef::new(run.tenant.clone(), parent);
+    source: rewind_core::RunId,
+) -> Result<Option<SourceHistory>, String> {
+    let source_ref = RunRef::new(run.tenant.clone(), source);
     let failed = |error: String| {
         format!(
-            "the parent {parent} of run {} could not be read: {error}",
+            "the source {source} of run {} could not be read: {error}",
             run.id
         )
     };
-    let read = crate::partition::read_attempt(plane, log, &parent_ref, 0, true)
+    let read = crate::partition::read_attempt(plane, log, &source_ref, 0, true)
         .await
         .map_err(|error| failed(error.to_string()))?;
     Ok(read.map(|read| match read {
         crate::partition::AttemptRead::Live {
             events, payloads, ..
-        } => ParentHistory {
-            run: parent,
+        } => SourceHistory {
+            run: source,
             events,
             payloads,
             sealed: None,
         },
-        crate::partition::AttemptRead::Sealed { sealed, .. } => ParentHistory {
-            run: parent,
+        crate::partition::AttemptRead::Sealed { sealed, .. } => SourceHistory {
+            run: source,
             events: Vec::new(),
             payloads: Vec::new(),
             sealed: Some(sealed),

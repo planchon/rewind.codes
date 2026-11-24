@@ -70,7 +70,7 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<TraceContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<ForkParent>,
+    pub source: Option<ForkSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RunWorkflow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,7 +102,7 @@ pub struct TraceContext {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ForkParent {
+pub struct ForkSource {
     #[serde(with = "with::run_id")]
     pub run: RunId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -401,7 +401,7 @@ pub struct Summary {
         with = "with::run_id_opt",
         skip_serializing_if = "Option::is_none"
     )]
-    pub parent: Option<RunId>,
+    pub source: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     #[serde(

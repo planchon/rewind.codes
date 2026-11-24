@@ -92,7 +92,7 @@ struct WorkflowV1 {
     action_set: String,
     schemas: WorkflowSchemasV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    parent: Option<String>,
+    base: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tests: Vec<SuiteTestV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -368,7 +368,7 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
         code: workflow.code().to_hex(),
         action_set: workflow.action_set().to_hex(),
         schemas: schemas_dto(workflow.schemas()),
-        parent: suite.parent.map(|parent| parent.to_hex()),
+        base: suite.base.map(|parent| parent.to_hex()),
         tests: suite
             .tests
             .iter()
@@ -423,9 +423,9 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
         })
         .collect::<Result<Attachments, String>>()?;
     let suite = Suite {
-        parent: dto
-            .parent
-            .map(|parent| digest(&parent, "\"parent\""))
+        base: dto
+            .base
+            .map(|parent| digest(&parent, "\"base\""))
             .transpose()?,
         tests: dto
             .tests

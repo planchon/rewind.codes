@@ -8,7 +8,7 @@ use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{AbortReason, Callsite, Labels, Payload, RunMode, timestamp};
 use rewind_api::events::HistoryEvent as EventView;
 use rewind_api::runs::{
-    Deliveries, FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError,
+    Deliveries, FailedCall, ForkSource, LogLine, Quarantine, QuarantineCause, Run, RunError,
     Waiting,
 };
 use rewind_core::{
@@ -309,9 +309,9 @@ impl Views<'_> {
                 .map(|(server, secret)| (server.to_owned(), secret.to_string()))
                 .collect(),
             trace_id: trace_id(head),
-            parent: head.metadata.parent.map(|parent| ForkParent {
+            source: head.metadata.source.map(|parent| ForkSource {
                 run: parent.run.to_string(),
-                handle: named(view.parent.as_ref(), parent.run),
+                handle: named(view.source.as_ref(), parent.run),
                 at: parent.at,
             }),
             workflow,

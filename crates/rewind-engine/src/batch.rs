@@ -102,7 +102,7 @@ pub(crate) struct Batch<'l> {
     events: Vec<HistoryEvent>,
     pub(crate) consumed: Vec<u64>,
     commands: usize,
-    /// The commands of events copied from a fork's parent do not count against the limit per
+    /// The commands of events copied from a fork's source do not count against the limit per
     /// activation: they are bounded by the history's.
     pub(crate) copying: bool,
     limits: &'l Limits,

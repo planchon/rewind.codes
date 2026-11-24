@@ -122,7 +122,7 @@ fn test_record(name: &str, namespace: Option<&str>) -> TestRecord {
 fn with_tests(workflow: Workflow, tests: &[&TestRecord]) -> Workflow {
     workflow
         .with_suite(Suite {
-            parent: None,
+            base: None,
             tests: tests
                 .iter()
                 .enumerate()

@@ -757,7 +757,7 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
                     "save_workflow",
                     with("update", json!([{ "name": "a", "expect": {} }])),
                 ),
-                ("save_workflow", with("parent", json!(4))),
+                ("save_workflow", with("base", json!(4))),
                 (
                     "save_workflow",
                     with(
@@ -800,8 +800,8 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
         "save_workflow: `signals` must be an object of JSON Schemas by signal name.",
         "save_workflow: `retire` must be an array of { names, reason }: the names of inherited tests, and why they no longer hold.",
         "save_workflow: `update` must be an array of { name, reason, test?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
-        "save_workflow: `parent` must be a non-empty string.",
-        "The workflow was not saved: retire names \"asks first\", which the parent's suite does not have (it has \"buys no label without orders\", \"fails when the carrier refuses a label\", \"ships every order with its tracking number\")",
+        "save_workflow: `base` must be a non-empty string.",
+        "The workflow was not saved: retire names \"asks first\", which the base's suite does not have (it has \"buys no label without orders\", \"fails when the carrier refuses a label\", \"ships every order with its tracking number\")",
         "get_workflow failed: no workflow nope for this API key: save it with POST /v1/workflows, or list them with GET /v1/workflows",
         "get_workflow: `name` must be a non-empty string.",
         "record_tests: `limit` must be an integer, 1 or more.",

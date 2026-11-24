@@ -101,7 +101,7 @@ impl IndexedSummary {
                 .is_some_and(|duration| range.contains(&duration)),
             Predicate::Calls(range) => range.contains(&summary.calls),
             Predicate::Errors(range) => range.contains(&summary.errors),
-            Predicate::Parent(parent) => summary.parent == Some(*parent),
+            Predicate::Source(parent) => summary.source == Some(*parent),
             Predicate::Workflow(matchers) => summary
                 .workflow
                 .as_deref()

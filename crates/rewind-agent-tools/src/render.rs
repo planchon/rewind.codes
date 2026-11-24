@@ -208,7 +208,7 @@ fn log_level(level: rewind_api::common::LogLevel) -> &'static str {
 
 fn headline(run: &Run, limits: &Limits) -> String {
     let about: Vec<String> = [
-        run.parent
+        run.source
             .as_ref()
             .map(|parent| format!("a fork of run {}", parent.handle)),
         run.workflow.as_ref().map(|workflow| {
@@ -792,7 +792,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
         latest.created_at,
         plural(details.versions.len(), "version")
     )];
-    if let Some(parent) = &latest.parent {
+    if let Some(parent) = &latest.base {
         lines.push(format!(
             "It derives from the version {}.",
             version_ref(parent, &details.versions)
@@ -872,7 +872,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
 
     lines.push("Lineage, newest first:".to_owned());
     for version in &details.versions {
-        let from = version.parent.as_ref().map_or_else(
+        let from = version.base.as_ref().map_or_else(
             || ", the first version".to_owned(),
             |parent| format!(", from {}", version_ref(parent, &details.versions)),
         );
@@ -1041,7 +1041,7 @@ pub fn describe_runs(runs: &[RunSummary], more: bool, status: Option<RunStatus>)
         if run.errors > 0 {
             parts.push(format!("{} failed", run.errors));
         }
-        if let Some(parent) = &run.parent {
+        if let Some(parent) = &run.source {
             parts.push(format!("a fork of {parent}"));
         }
         if let Some(workflow) = &run.workflow {
@@ -1752,7 +1752,7 @@ mod tests {
         let recorded_digest = format!("ca978112ca1b{}", "0".repeat(52));
         let foreign = "b2".repeat(32);
         let latest = workflow(json!({
-            "parent": parent_version,
+            "base": parent_version,
             "tests": [
                 { "name": "closes nothing without approval", "digest": inline_digest },
                 { "name": format!("recorded {RUN_ID}"), "digest": recorded_digest },
@@ -1770,7 +1770,7 @@ mod tests {
         let parent = workflow(json!({
             "version": parent_version,
             "createdAt": "2026-11-11T10:00:00Z",
-            "parent": first_version,
+            "base": first_version,
             "tests": [{ "name": "asks before closing", "digest": "2e".repeat(32) }]
         }));
         let first = workflow(json!({
@@ -1918,7 +1918,7 @@ mod tests {
             "expiresAt": "2026-12-12T10:00:00Z",
             "workflow": { "name": "triage", "version": VERSION, "number": 3 },
             "startedBy": {
-                "run": "parent-1", "handle": "user_2fQ81/digest/06bqx3k9f2ms", "seq": 2,
+                "run": "source-1", "handle": "user_2fQ81/digest/06bqx3k9f2ms", "seq": 2,
                 "detached": true
             }
         }))

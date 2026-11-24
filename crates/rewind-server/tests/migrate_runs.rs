@@ -168,7 +168,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
     );
     let fork = client.get_run(FORK, None).await.unwrap();
     assert_eq!(output(&fork), json!({ "fixed": true }));
-    assert_eq!(fork.parent.map(|parent| parent.run), Some(FAILED.into()));
+    assert_eq!(fork.source.map(|parent| parent.run), Some(FAILED.into()));
 
     // A timer that came due while nothing ran fires; a signal in the inbox is delivered.
     assert_eq!(

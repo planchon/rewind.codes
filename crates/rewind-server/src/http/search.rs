@@ -89,11 +89,11 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
         refuse_nul_in_filter("error", error)?;
         with(error_predicate(std::slice::from_ref(error)));
     }
-    if let Some(parent) = &filter.parent {
+    if let Some(parent) = &filter.source {
         let parent = parent.parse::<RunId>().map_err(|_| {
-            ApiError::invalid(format!("parent {parent:?}: expected a run's id or handle"))
+            ApiError::invalid(format!("source {parent:?}: expected a run's id or handle"))
         })?;
-        with(Predicate::Parent(parent));
+        with(Predicate::Source(parent));
     }
     if let Some(workflow) = &filter.workflow {
         refuse_nul_in_filter("workflow", workflow)?;
@@ -159,8 +159,8 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
         Filter::ActionSet(prefixes) => Predicate::ActionSet(prefixes),
         Filter::Id(prefixes) => Predicate::Id(prefixes),
         // The parser checked the form of the id.
-        Filter::Parent(parent) => match parent.parse::<RunId>() {
-            Ok(parent) => Predicate::Parent(parent),
+        Filter::Source(parent) => match parent.parse::<RunId>() {
+            Ok(parent) => Predicate::Source(parent),
             Err(_) => Predicate::Id(vec![parent]),
         },
         Filter::Workflow(names) => Predicate::Workflow(patterns(names)),
@@ -379,7 +379,7 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
             })
             .collect(),
         wakes_at: run.wakes_at.map(timestamp),
-        parent: run.parent.map(|parent| parent.to_string()),
+        source: run.source.map(|parent| parent.to_string()),
         workflow: run.workflow.clone(),
         started_by: run.started_by.map(|run| run.to_string()),
     }

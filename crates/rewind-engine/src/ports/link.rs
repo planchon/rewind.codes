@@ -277,12 +277,12 @@ pub enum PartitionReply {
 }
 
 /// A run as its owner knows it: its head and its summary, and the handles of the runs its
-/// metadata names (its parent, the run that started it) while they are kept.
+/// metadata names (its source, the run that started it) while they are kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunView {
     pub head: RunHead,
     pub summary: Option<RunSummary>,
-    pub parent: Option<RunHandle>,
+    pub source: Option<RunHandle>,
     pub started_by: Option<RunHandle>,
 }
 
@@ -579,8 +579,8 @@ pub struct ActivationRequest {
     pub history: Option<Vec<HistoryEvent>>,
     /// The payload records of the history and the inbox held by their digest.
     pub payloads: Vec<PayloadRecord>,
-    /// For a fork's first activation: its parent's history and payloads.
-    pub parent: Option<ParentHistory>,
+    /// For a fork's first activation: its source's history and payloads.
+    pub source: Option<SourceHistory>,
     pub code: StoredCode,
     pub action_set: StoredActionSet,
     pub purpose: Purpose,
@@ -590,11 +590,11 @@ pub struct ActivationRequest {
 
 /// The history a fork follows.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ParentHistory {
+pub struct SourceHistory {
     pub run: RunId,
     pub events: Vec<HistoryEvent>,
     pub payloads: Vec<PayloadRecord>,
-    /// The parent's sealed attempt, when it was read from the archive.
+    /// The source's sealed attempt, when it was read from the archive.
     pub sealed: Option<Box<SealedAttempt>>,
 }
 
@@ -642,7 +642,7 @@ pub struct Committed {
     /// history does not hold, by call: attached ones are cancelled when the run ends; a fork's
     /// first activation watches those it copied.
     pub children: Vec<(Seq, RunId, bool)>,
-    /// A fork's first activation copied its parent's history.
+    /// A fork's first activation copied its source's history.
     pub copied: bool,
     /// The CPU time of the calls into the code that executed, toward the namespace's
     /// `cpuPerMonth`.

@@ -344,7 +344,7 @@ pub(crate) fn summary_of(record: record::Summary) -> Result<engine::RunSummary, 
 }
 
 /// A run as its owner knows it: `{"head":<run head record>,"summary":<summary record>,
-/// "parent":"dana/triage/06bqx3k9f2mt","started_by":…}`, the handles of the runs it names as
+/// "source":"dana/triage/06bqx3k9f2mt","started_by":…}`, the handles of the runs it names as
 /// their text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -353,7 +353,7 @@ pub struct RunView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<record::Summary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<String>,
 }
@@ -363,7 +363,7 @@ impl From<&engine::link::RunView> for RunView {
         Self {
             head: codec::head_record(&view.head),
             summary: view.summary.as_ref().map(summary_record),
-            parent: view.parent.as_ref().map(ToString::to_string),
+            source: view.source.as_ref().map(ToString::to_string),
             started_by: view.started_by.as_ref().map(ToString::to_string),
         }
     }
@@ -376,8 +376,8 @@ impl TryFrom<RunView> for engine::link::RunView {
         Ok(engine::link::RunView {
             head: codec::head_of(view.head)?,
             summary: view.summary.map(summary_of).transpose()?,
-            parent: view
-                .parent
+            source: view
+                .source
                 .map(|handle| handle.parse().map_err(Invalid::new))
                 .transpose()?,
             started_by: view
@@ -567,7 +567,7 @@ pub enum Predicate {
     Duration(Range<u64>),
     Calls(Range<u64>),
     Errors(Range<u64>),
-    Parent(Id),
+    Source(Id),
     Workflow(Vec<TextMatch>),
     StartedBy(Id),
     Fingerprint(Vec<String>),
@@ -710,7 +710,7 @@ impl From<&engine::Predicate> for Predicate {
             P::Duration(range) => Predicate::Duration(counts(range)),
             P::Calls(range) => Predicate::Calls(counts(range)),
             P::Errors(range) => Predicate::Errors(counts(range)),
-            P::Parent(run) => Predicate::Parent(Id(*run)),
+            P::Source(run) => Predicate::Source(Id(*run)),
             P::Workflow(names) => Predicate::Workflow(matchers(names)),
             P::StartedBy(run) => Predicate::StartedBy(Id(*run)),
             P::Fingerprint(fingerprints) => Predicate::Fingerprint(fingerprints.clone()),
@@ -755,7 +755,7 @@ impl TryFrom<Predicate> for engine::Predicate {
             Predicate::Duration(range) => P::Duration(counts_of(range)),
             Predicate::Calls(range) => P::Calls(counts_of(range)),
             Predicate::Errors(range) => P::Errors(counts_of(range)),
-            Predicate::Parent(run) => P::Parent(run.0),
+            Predicate::Source(run) => P::Source(run.0),
             Predicate::Workflow(names) => P::Workflow(matchers_of(names)),
             Predicate::StartedBy(run) => P::StartedBy(run.0),
             Predicate::Fingerprint(fingerprints) => P::Fingerprint(fingerprints),

@@ -627,7 +627,7 @@ const TEST: &str = include_str!("fixtures/test.v1.json");
 fn workflow_with_suite() -> Workflow {
     workflow()
         .with_suite(Suite {
-            parent: Some(digest_of("parent")),
+            base: Some(digest_of("parent")),
             tests: vec![
                 SuiteTest {
                     name: "closes once approved".into(),
@@ -856,7 +856,7 @@ fn rejects_suites_v1_does_not_define() {
         document(&format!(
             r#""retired":[{{"name":"a","test":"{digest}","reason":" "}}]"#
         )),
-        document(r#""parent":"abc""#),
+        document(r#""base":"abc""#),
         document(&format!(
             r#""tests":[{{"name":"a","test":"{digest}","x":1}}]"#
         )),

@@ -215,7 +215,7 @@ impl Case {
     }
 
     /// The id of the run the case records: the first id of the scenario's entropy, or the
-    /// fork's, drawn after the parent's id and seed.
+    /// fork's, drawn after the source's id and seed.
     pub fn run_id(&self) -> RunId {
         let entropy = SeededEntropy::new(self.scenario.seed);
         let parent = entropy.run_id();

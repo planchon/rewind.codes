@@ -927,7 +927,7 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
     );
     reader.get_run(&mine.id, None).await.unwrap();
 
-    // A fork without labels keeps its parent's: the scoped key sees it.
+    // A fork without labels keeps its source's: the scoped key sees it.
     harness
         .signal_run(&mine.id, "approval", &json!({ "ok": true }), None)
         .await
@@ -937,7 +937,7 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
     fork.at = Some(1);
     let forked = scoped.fork_run(&mine.id, &fork, None).await.unwrap();
     assert_eq!(forked.labels, Labels::from_iter([("conversation", "c-1")]));
-    assert_eq!(forked.parent.unwrap().run, mine.id);
+    assert_eq!(forked.source.unwrap().run, mine.id);
 
     // A revoked key is refused.
     let made = server

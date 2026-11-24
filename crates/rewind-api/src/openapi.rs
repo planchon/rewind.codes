@@ -631,7 +631,7 @@ mod operations {
     /// Save a workflow (`save_workflow`)
     ///
     /// Checks the workflow's code against its action set and its own schemas, then runs its
-    /// suite: its parent's tests, minus those it retires and with those it updates, each with a
+    /// suite: its base's tests, minus those it retires and with those it updates, each with a
     /// reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
     /// every test passes. Saving the same workflow again returns the version saved first (200).
     /// A key limited to labels saves a version of its own, carrying its labels, even when the
@@ -643,7 +643,7 @@ mod operations {
         responses(
             (status = 201, description = "Saved as a new version.", body = Workflow),
             (status = 200, description = "Saved earlier.", body = Workflow),
-            (status = 404, description = "No such action set, or parent.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set, or base version.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
             (status = 503, description = "A server without the worker role, with tests to run (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
@@ -997,7 +997,7 @@ mod operations {
     #[utoipa::path(
         post, path = "/v1/runs/{id}/fork", tag = "runs", operation_id = "forkRun",
         params(
-            ("id" = String, Path, description = "The parent run's id, or its handle percent-encoded."),
+            ("id" = String, Path, description = "The source run's id, or its handle percent-encoded."),
             ("Idempotency-Key" = Option<String>, Header, description = "A request repeated with the same key returns the fork the first one started (200)."),
         ),
         request_body = ForkRun,

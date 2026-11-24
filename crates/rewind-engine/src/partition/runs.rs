@@ -442,7 +442,7 @@ impl<P: Plane> Owner<P> {
             );
             return;
         }
-        if let Some(parent) = start.metadata.parent
+        if let Some(parent) = start.metadata.source
             && !self.runs.contains_key(&parent.run)
             && self.log.is_none()
         {

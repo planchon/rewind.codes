@@ -70,7 +70,7 @@ fn triage(action_set: &str, code: &str) -> CreateWorkflow {
                 "required": ["close"],
             }),
         )]),
-        parent: None,
+        base: None,
         tests: Vec::new(),
         update: Vec::new(),
         retire: Vec::new(),
@@ -101,7 +101,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     let mut first = triage(&action_set.id, TRIAGE);
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     let v1 = harness.create_workflow(&first).await.unwrap();
-    assert_eq!(v1.parent, None);
+    assert_eq!(v1.base, None);
     assert_eq!(v1.tests.len(), 1);
     assert_eq!(v1.tests[0].name, "closes three once approved");
     let stored = harness.get_test(&v1.tests[0].digest).await.unwrap();
@@ -132,7 +132,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
         refused.detail
     );
 
-    // Updating the expectation with a reason saves it, its parent the first version.
+    // Updating the expectation with a reason saves it, its base the first version.
     let mut second = triage(&action_set.id, TWO);
     second.update = vec![TestUpdate {
         name: "closes three once approved".into(),
@@ -144,7 +144,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
         ),
     }];
     let v2 = harness.create_workflow(&second).await.unwrap();
-    assert_eq!(v2.parent.as_deref(), Some(v1.version.as_str()));
+    assert_eq!(v2.base.as_deref(), Some(v1.version.as_str()));
     assert_eq!(v2.updated.len(), 1);
     assert_eq!(v2.updated[0].from, v1.tests[0].digest);
     assert_eq!(v2.updated[0].to, v2.tests[0].digest);
@@ -207,15 +207,15 @@ async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     let v1 = tenant_wide.create_workflow(&first).await.unwrap();
 
-    // The first version under env=dev starts its own lineage: no parent, no test to pass.
+    // The first version under env=dev starts its own lineage: no base, no test to pass.
     let ours = dev
         .create_workflow(&triage(&action_set.id, TWO))
         .await
         .unwrap();
-    assert_eq!((ours.parent.as_deref(), ours.tests.len()), (None, 0));
-    // It cannot name a parent it does not see.
+    assert_eq!((ours.base.as_deref(), ours.tests.len()), (None, 0));
+    // It cannot name a base it does not see.
     let mut named = triage(&action_set.id, TRIAGE);
-    named.parent = Some(v1.version.clone());
+    named.base = Some(v1.version.clone());
     assert_eq!(
         problem(dev.create_workflow(&named).await.unwrap_err()).status,
         404

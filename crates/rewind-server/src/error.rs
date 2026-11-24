@@ -376,8 +376,8 @@ impl From<StartError> for ApiError {
 impl From<ForkError> for ApiError {
     fn from(error: ForkError) -> Self {
         match error {
-            ForkError::ParentNotFound(run) => Self::run_not_found(&run.to_string()),
-            ForkError::ParentNotStarted(_) => Self::invalid(error.to_string()),
+            ForkError::SourceNotFound(run) => Self::run_not_found(&run.to_string()),
+            ForkError::SourceNotStarted(_) => Self::invalid(error.to_string()),
             ForkError::Start(error) => error.into(),
             ForkError::Engine(error) => error.into(),
         }

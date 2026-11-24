@@ -81,12 +81,12 @@ pub(crate) async fn find<L: PartitionLog>(
 }
 
 /// A run as an edge reads it: its head, its summary, and the handles of the runs its metadata
-/// names while the partition keeps them (a fork's parent, the run that started it: both of its
+/// names while the partition keeps them (a fork's source, the run that started it: both of its
 /// namespace).
 async fn view_of<L: PartitionLog>(log: &L, head: RunHead) -> Result<RunView, PartitionError> {
     let summary = log.summary(&head.run).await?;
     let tenant = &head.run.tenant;
-    let parent = handle_of(log, tenant, head.metadata.parent.map(|parent| parent.run)).await?;
+    let source = handle_of(log, tenant, head.metadata.source.map(|source| source.run)).await?;
     let started_by = handle_of(
         log,
         tenant,
@@ -96,7 +96,7 @@ async fn view_of<L: PartitionLog>(log: &L, head: RunHead) -> Result<RunView, Par
     Ok(RunView {
         head,
         summary: summary.map(|indexed| indexed.summary),
-        parent,
+        source,
         started_by,
     })
 }

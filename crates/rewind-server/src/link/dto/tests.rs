@@ -17,15 +17,15 @@ use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
     ActivationRequest, ActivationResult, Admit, Changed, Committed, CountsReport, Decision,
     EdgeNotice, HarnessFailure, HarnessTask, HarnessTaskOffer, NodeReply, NodeRequest, OrgReply,
-    OrgRequest, OwnerNotice, ParentHistory, PartitionReply, PartitionRequest, Purpose, Refusal,
-    RunView, SignalAtOwner, SlotRequest, StartAtOwner, StreamAttach, StreamId, SubscriptionKey,
-    TaskAnswer,
+    OrgRequest, OwnerNotice, PartitionReply, PartitionRequest, Purpose, Refusal, RunView,
+    SignalAtOwner, SlotRequest, SourceHistory, StartAtOwner, StreamAttach, StreamId,
+    SubscriptionKey, TaskAnswer,
 };
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
     ActionCounts, ActionDeclarations, Attempt, AttributeValue, CallTask, CompiledCode,
     CounterDelta, Counters, Created, CredentialsExpiredReason, Day, DayUsage, DueTimer, Ending,
-    Enqueued, FailureCounts, ForkParent, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun,
+    Enqueued, FailureCounts, ForkSource, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun,
     LogRecord, Month, NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason,
     PartitionEpoch, PayloadRecord, Predicate, Projection, Quarantine, QuarantineKind,
     QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range,
@@ -104,7 +104,7 @@ fn metadata() -> RunMetadata {
     RunMetadata {
         labels: labels(),
         trace_context: Some(trace_context()),
-        parent: Some(ForkParent {
+        source: Some(ForkSource {
             run: run_id(9),
             at: Some(4),
         }),
@@ -222,7 +222,7 @@ fn summary(n: u128) -> RunSummary {
         status: RunStatus::Failed,
         mode: Some(RunMode::Live),
         labels: labels(),
-        parent: Some(run_id(9)),
+        source: Some(run_id(9)),
         workflow: Some("triage".into()),
         started_by: Some(run_id(8)),
         started_at: Some(T),
@@ -694,7 +694,7 @@ fn every_predicate() -> Vec<Predicate> {
         Predicate::Duration(counts),
         Predicate::Calls(counts),
         Predicate::Errors(counts),
-        Predicate::Parent(run_id(9)),
+        Predicate::Source(run_id(9)),
         Predicate::Workflow(vec![TextMatch::Any]),
         Predicate::StartedBy(run_id(8)),
         Predicate::Fingerprint(vec!["0123456789abcdef".into()]),
@@ -883,13 +883,13 @@ fn every_reply_of_an_owner_round_trips_with_every_refusal() {
         PartitionReply::Run(Ok(Some(RunView {
             head: head(1),
             summary: Some(summary(1)),
-            parent: Some("user-1/triage/06bqx3k9f2mt".parse().unwrap()),
+            source: Some("user-1/triage/06bqx3k9f2mt".parse().unwrap()),
             started_by: None,
         }))),
         PartitionReply::Run(Ok(Some(RunView {
             head: head(2),
             summary: None,
-            parent: None,
+            source: None,
             started_by: Some("user-1/digest/06bqx3k9f2mtq".parse().unwrap()),
         }))),
         PartitionReply::Run(Ok(None)),
@@ -1108,7 +1108,7 @@ fn activation_request(purpose: Purpose) -> ActivationRequest {
         inbox: inbox(),
         history: Some(history()),
         payloads: payloads(),
-        parent: Some(ParentHistory {
+        source: Some(SourceHistory {
             run: run_id(9),
             events: history(),
             payloads: payloads(),
@@ -1146,7 +1146,7 @@ fn activations_round_trip() {
     }
     let mut cached = activation_request(Purpose::Runnable);
     cached.history = None;
-    cached.parent = None;
+    cached.source = None;
     cached.summary = None;
     round_trip::<_, super::ActivationRequest>(&cached);
 

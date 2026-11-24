@@ -216,7 +216,7 @@ impl Api for Fake {
             &sha256(&fork.code),
             "completed",
         );
-        forked.parent = Some(rewind_api::runs::ForkParent {
+        forked.source = Some(rewind_api::runs::ForkSource {
             run: run.into(),
             handle: format!("alice/script/{run}"),
             at: None,

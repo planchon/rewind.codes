@@ -14,7 +14,7 @@ pub(crate) fn run(run: &Run) -> String {
         let _ = writeln!(text, "[{level}] {}", log.message);
     }
     let _ = write!(text, "run {} {}", run.handle, run.status);
-    if let Some(parent) = &run.parent {
+    if let Some(parent) = &run.source {
         let _ = write!(text, " (fork of {}", parent.handle);
         if let Some(at) = parent.at {
             let _ = write!(text, " at event {at}");
@@ -321,7 +321,7 @@ mod tests {
             labels: Labels::new(),
             secrets: Default::default(),
             trace_id: "0".repeat(32),
-            parent: None,
+            source: None,
             workflow: None,
             started_by: None,
             input: Some(Payload::of(json!({}), 1024)),

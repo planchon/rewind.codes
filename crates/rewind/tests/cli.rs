@@ -832,7 +832,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     ]);
     assert_eq!(code, 0, "the fork completed: {fork}");
     assert_eq!(fork["output"]["value"], 1);
-    assert_eq!(fork["parent"]["run"], id.as_str());
+    assert_eq!(fork["source"]["run"], id.as_str());
 }
 
 /// The call stream of an action set over the embedded server's socket, as an SDK worker holds it:

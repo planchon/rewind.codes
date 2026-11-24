@@ -174,7 +174,7 @@ pub(crate) struct StartOptions {
     pub(crate) no_check: bool,
     /// A secret the run reads, for an MCP server or an API whose calls need one:
     /// `github=ns/github` (the end user's), `zendesk=org/zendesk` (the organization's). Repeat
-    /// for several. A fork reads its parent's without it.
+    /// for several. A fork reads its source's without it.
     #[arg(long = "secret", value_name = "SERVER=SCOPE/NAME")]
     pub(crate) secrets: Vec<String>,
 }
@@ -282,7 +282,7 @@ pub(crate) struct ForkArgs {
     /// Go live from this event even if the commands still match.
     #[arg(long, value_name = "INDEX")]
     pub(crate) at: Option<u64>,
-    /// The fork's input: JSON, or @file.json. The parent's by default.
+    /// The fork's input: JSON, or @file.json. The source's by default.
     #[arg(long, value_name = "JSON")]
     pub(crate) input: Option<String>,
     #[command(flatten)]
@@ -329,7 +329,7 @@ pub(crate) struct RunsArgs {
     pub(crate) quarantined: bool,
     /// Only forks of this run: its handle or its id.
     #[arg(long)]
-    pub(crate) parent: Option<String>,
+    pub(crate) source: Option<String>,
     /// At most this many runs.
     #[arg(long)]
     pub(crate) limit: Option<u32>,

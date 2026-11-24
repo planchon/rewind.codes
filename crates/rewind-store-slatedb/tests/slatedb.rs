@@ -70,7 +70,7 @@ fn create(run: &RunRef) -> Change {
         status: RunStatus::Pending,
         mode: Some(RunMode::Test),
         labels: BTreeMap::new(),
-        parent: None,
+        source: None,
         workflow: None,
         started_by: None,
         started_at: None,

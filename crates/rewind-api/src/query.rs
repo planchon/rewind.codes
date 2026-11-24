@@ -36,7 +36,7 @@ pub const FIELDS: [&str; 21] = [
     "script",
     "action_set",
     "id",
-    "parent",
+    "source",
     "workflow",
     "started_by",
     "fingerprint",
@@ -101,7 +101,7 @@ pub enum Filter {
     /// Lowercase prefixes of the run's id, hyphenated as a UUID is.
     Id(Vec<String>),
     /// Forks of this run (a full run id, lowercase).
-    Parent(String),
+    Source(String),
     /// Runs of a workflow one of these matches.
     Workflow(Vec<Pattern>),
     /// Runs this run started (a full run id, lowercase).
@@ -393,10 +393,10 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
             }
         }
         "id" => Filter::Id(hex_prefixes(name, operand, true)?),
-        "parent" => Filter::Parent(run_id(operand)?),
+        "source" => Filter::Source(run_id(operand)?),
         "workflow" => Filter::Workflow(patterns(operand)?),
         "started_by" => Filter::StartedBy(
-            run_id(operand).map_err(|error| error.replacen("parent:", "started_by:", 1))?,
+            run_id(operand).map_err(|error| error.replacen("source:", "started_by:", 1))?,
         ),
         "fingerprint" => {
             let values = exact(name, operand)?;
@@ -563,7 +563,7 @@ fn run_id(operand: &str) -> Result<String, String> {
     if digits.len() == 32 && digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         Ok(hyphenate(&digits))
     } else {
-        Err(format!("parent: {operand:?} is not a run id"))
+        Err(format!("source: {operand:?} is not a run id"))
     }
 }
 
@@ -944,14 +944,14 @@ mod tests {
     fn digests_and_ids_are_prefixes_of_eight_digits_at_least() {
         assert_eq!(
             filters(
-                "script:9F2C4E1A id:0193a5c4b2 parent:0193A5C4-B2E1-7C3D-8E4F-0A1B2C3D4E5F fingerprint:00112233445566aa"
+                "script:9F2C4E1A id:0193a5c4b2 source:0193A5C4-B2E1-7C3D-8E4F-0A1B2C3D4E5F fingerprint:00112233445566aa"
             ),
             vec![
                 (false, Filter::Script(vec!["9f2c4e1a".into()])),
                 (false, Filter::Id(vec!["0193a5c4-b2".into()])),
                 (
                     false,
-                    Filter::Parent("0193a5c4-b2e1-7c3d-8e4f-0a1b2c3d4e5f".into())
+                    Filter::Source("0193a5c4-b2e1-7c3d-8e4f-0a1b2c3d4e5f".into())
                 ),
                 (false, Filter::Fingerprint(vec!["00112233445566aa".into()])),
             ]
@@ -961,7 +961,7 @@ mod tests {
                 .message
                 .contains("8 hexadecimal digits")
         );
-        assert!(error("parent:abc").message.contains("not a run id"));
+        assert!(error("source:abc").message.contains("not a run id"));
     }
 
     #[test]

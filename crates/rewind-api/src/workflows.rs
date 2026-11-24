@@ -53,7 +53,7 @@ pub struct CreateWorkflow {
     /// version of the same name saved under the caller's labels when absent. Its suite is
     /// inherited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub base: Option<String>,
     /// New tests: inline, by the digest of a recorded test, or a recorded test with a new
     /// expectation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -103,7 +103,7 @@ pub struct SuiteTest {
     pub digest: String,
 }
 
-/// A test of the parent a version does not keep.
+/// A test of the base a version does not keep.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RetiredTest {
@@ -112,7 +112,7 @@ pub struct RetiredTest {
     pub reason: String,
 }
 
-/// A test of the parent a version replaced.
+/// A test of the base a version replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdatedTest {
@@ -206,7 +206,7 @@ pub struct Workflow {
     pub declarations: Declarations,
     /// The version it derives from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub base: Option<String>,
     /// Its suite: the tests it passed when it was saved, by name.
     #[serde(default)]
     pub tests: Vec<SuiteTest>,

@@ -22,7 +22,7 @@
 //!   secret or a signature, and `"workflows":[…]` when it pins workflows, in its canonical form,
 //!   so that its bytes hash to the action set's digest;
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"code":…,
-//!   "action_set":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
+//!   "action_set":…,"v":1}`, with its suite (`base`, `tests`, `retired`, `updated`) when it has
 //!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
 //!   when it attaches secrets, in its canonical form, so that its bytes hash to the version;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in

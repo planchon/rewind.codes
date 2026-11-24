@@ -1,5 +1,5 @@
 //! Starts and forks at the edge, in the driver (`archi/03-execution.md`, "Starting a run",
-//! "Forks"): what is refused before a run exists, a fork that reuses its parent's recorded
+//! "Forks"): what is refused before a run exists, a fork that reuses its source's recorded
 //! calls and goes live where it differs, and whether a corrected code is compatible with a
 //! history.
 
@@ -15,7 +15,7 @@ use rewind_core::{
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::ports::{
-    Delivery, Diagnostic, DiagnosticSource, ForkParent, Page, RunOrder, RunQuery, RunRef, Scope,
+    Delivery, Diagnostic, DiagnosticSource, ForkSource, Page, RunOrder, RunQuery, RunRef, Scope,
     Severity, TenantId, TraceContext,
 };
 use rewind_engine::{ForkError, ForkPoint, ForkRun, Limits, ReplayVerdict, StartError};
@@ -224,7 +224,7 @@ async fn a_fork_reuses_the_recorded_calls_and_goes_live_where_it_differs() {
             "complete_run"
         ]
     );
-    // The parent's start and its result are copied with their time; what is live is later.
+    // The source's start and its result are copied with their time; what is live is later.
     assert_eq!(history[0].recorded_at, parent_history[0].recorded_at);
     assert_eq!(history[2].event, parent_history[2].event);
     assert_eq!(history[2].recorded_at, parent_history[2].recorded_at);
@@ -241,20 +241,20 @@ async fn a_fork_reuses_the_recorded_calls_and_goes_live_where_it_differs() {
     assert_eq!(started.code, Code::new("fixed").digest());
     assert!(started.expires_at > parent_started.expires_at, "a new TTL");
 
-    // `a` was called once, by the parent; `b` twice, the fork's call with the fork's key.
+    // `a` was called once, by the source; `b` twice, the fork's call with the fork's key.
     let calls = world.plane.dispatcher.calls();
     let actions: Vec<&str> = calls.iter().map(|call| call.action.name.as_str()).collect();
     assert_eq!(actions, ["a", "b", "b"]);
     assert_eq!(calls[2].idempotency_key, format!("{}/2", fork.id));
     assert_eq!(calls[2].args, json!("good"));
     assert_eq!(
-        world.view(&fork).await.head.metadata.parent,
-        Some(ForkParent {
+        world.view(&fork).await.head.metadata.source,
+        Some(ForkSource {
             run: parent.id,
             at: None
         })
     );
-    // Self-contained: it replays without its parent.
+    // Self-contained: it replays without its source.
     let mut gateway = world.driver.gateway(&world.at.clone());
     assert!(matches!(
         world.edge.replay(&mut gateway, &fork, None).await.unwrap(),
@@ -269,7 +269,7 @@ async fn a_fork_is_refused_like_a_run_that_cannot_start() {
     let unknown = RunRef::new(parent.tenant.clone(), rewind_core::RunId::from_u128(7));
     assert!(matches!(
         fork(&mut world, ForkRun::new(unknown.clone(), Code::new("fixed"))).await,
-        Err(ForkError::ParentNotFound(run)) if run == unknown.id
+        Err(ForkError::SourceNotFound(run)) if run == unknown.id
     ));
     assert!(matches!(
         fork(
@@ -305,7 +305,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
 
     let same = check("buggy", None).await.unwrap();
     assert!(same.is_compatible(), "{same:?}");
-    assert_eq!(same.point, ForkPoint::EndOfParent);
+    assert_eq!(same.point, ForkPoint::EndOfSource);
     assert_eq!(same.status, RunStatus::Failed);
 
     let fixed = check("fixed", None).await.unwrap();

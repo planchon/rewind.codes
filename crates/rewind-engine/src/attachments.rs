@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! POST /v1/runs (code)        the request's    checked against the caller   AttachRights::Caller
-//! POST /v1/runs/{id}/fork       the parent's, or the request's: against the caller
+//! POST /v1/runs/{id}/fork       the source's, or the request's: against the caller
 //! POST /v1/runs (workflow),     the version's    only that its ns/ secrets     AttachRights::Version
 //! workflows.<name>.start                         exist in the run's namespace
 //! POST /v1/workflows            the request's    against the saver; ns/ by name only

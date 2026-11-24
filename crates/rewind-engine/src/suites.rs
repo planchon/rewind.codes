@@ -1,9 +1,9 @@
-//! Suites: the tests a workflow version carries, inherited from its parent, and tests recorded
+//! Suites: the tests a workflow version carries, inherited from its base, and tests recorded
 //! from runs (`archi/05-testing-and-observability.md`, "Suites and the gate", "Tests recorded
 //! from runs", "Where tests are stored").
 //!
 //! ```text
-//! parent's suite ── load (blobs) ── erased? → retired ─┐
+//! base's suite ── load (blobs) ── erased? → retired ─┐
 //!                                  retire (reason) ────┤
 //!                                  update (reason) ────┼─► suite ─► run_tests ─► all pass?
 //!                                  tests (inline,      │                          │
@@ -105,7 +105,7 @@ pub struct TestRetirement {
 pub struct SuiteChanges {
     /// The version it derives from: the latest version of the same name saved under the
     /// caller's labels when `None`.
-    pub parent: Option<Digest>,
+    pub base: Option<Digest>,
     pub tests: Vec<TestInput>,
     pub update: Vec<TestUpdate>,
     pub retire: Vec<TestRetirement>,
@@ -113,7 +113,7 @@ pub struct SuiteChanges {
 
 impl SuiteChanges {
     pub fn is_empty(&self) -> bool {
-        self.parent.is_none()
+        self.base.is_none()
             && self.tests.is_empty()
             && self.update.is_empty()
             && self.retire.is_empty()
@@ -123,9 +123,9 @@ impl SuiteChanges {
 /// A suite that cannot be composed. The messages are written for a model.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SuiteError {
-    #[error("the parent version {0} does not exist, or the caller does not see it")]
-    ParentNotFound(Digest),
-    #[error("{verb} {name:?}, which the parent's suite does not have{known}")]
+    #[error("the base version {0} does not exist, or the caller does not see it")]
+    BaseNotFound(Digest),
+    #[error("{verb} {name:?}, which the base's suite does not have{known}")]
     NotInherited {
         verb: &'static str,
         name: String,
@@ -266,7 +266,7 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
         Ok(test)
     }
 
-    /// Composes the suite of a new version: the parent's tests, those of an erased namespace
+    /// Composes the suite of a new version: the base's tests, those of an erased namespace
     /// left out, minus `retire`, with `update` applied, plus `tests`.
     pub async fn compose_suite(
         &self,
@@ -388,7 +388,7 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
         Ok(ComposedSuite {
             tests,
             suite: Suite {
-                parent: parent.map(Workflow::version),
+                base: parent.map(Workflow::version),
                 tests: entries,
                 retired,
                 updated,

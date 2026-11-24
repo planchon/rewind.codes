@@ -6,7 +6,7 @@
 //! ├── name, description?
 //! ├── code, action set            digests: what its runs execute
 //! ├── schemas                    { input, output, signals: { <name>: schema } }
-//! ├── suite                      parent?, tests, retired, updated: the tests it passed
+//! ├── suite                      base?, tests, retired, updated: the tests it passed
 //! ├── labels                     the scope it was saved under; {} for a tenant-wide save
 //! └── secrets                    its attachments: { <server>: org/<name> | ns/<name> }
 //!
@@ -103,24 +103,24 @@ pub struct Workflow {
     secrets: Attachments,
 }
 
-/// The tests a version passed when it was saved, and how they derive from its parent's
+/// The tests a version passed when it was saved, and how they derive from its base's
 /// (`archi/05-testing-and-observability.md`, "Suites and the gate"). Tests are referenced by
 /// the digest of their document.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Suite {
     /// The version it derives from.
-    pub parent: Option<Digest>,
+    pub base: Option<Digest>,
     /// Every test of the suite, by name.
     pub tests: Vec<SuiteTest>,
-    /// The parent's tests it does not keep.
+    /// The base's tests it does not keep.
     pub retired: Vec<RetiredTest>,
-    /// The parent's tests it replaced.
+    /// The base's tests it replaced.
     pub updated: Vec<UpdatedTest>,
 }
 
 impl Suite {
     pub fn is_empty(&self) -> bool {
-        self.parent.is_none()
+        self.base.is_none()
             && self.tests.is_empty()
             && self.retired.is_empty()
             && self.updated.is_empty()
@@ -163,8 +163,8 @@ impl Suite {
     }
 
     fn insert_into(&self, object: &mut Map<String, Value>) {
-        if let Some(parent) = &self.parent {
-            object.insert("parent".into(), json!(parent.to_hex()));
+        if let Some(base) = &self.base {
+            object.insert("base".into(), json!(base.to_hex()));
         }
         if !self.tests.is_empty() {
             let tests: Vec<Value> = self
@@ -213,7 +213,7 @@ pub struct SuiteTest {
     pub test: Digest,
 }
 
-/// A test of the parent a version does not keep, and why.
+/// A test of the base a version does not keep, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetiredTest {
     pub name: String,
@@ -221,7 +221,7 @@ pub struct RetiredTest {
     pub reason: String,
 }
 
-/// A test of the parent a version replaced, and why.
+/// A test of the base a version replaced, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdatedTest {
     pub name: String,
@@ -230,7 +230,7 @@ pub struct UpdatedTest {
     pub reason: String,
 }
 
-/// Why a test of the parent is left out without being retired by the version: its namespace
+/// Why a test of the base is left out without being retired by the version: its namespace
 /// was erased with the end user's data.
 pub const ERASED_TEST_REASON: &str = "recorded from an erased namespace";
 

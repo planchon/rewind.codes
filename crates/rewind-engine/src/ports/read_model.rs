@@ -180,7 +180,7 @@ pub struct RunSummary {
     pub status: RunStatus,
     pub mode: Option<RunMode>,
     pub labels: BTreeMap<String, String>,
-    pub parent: Option<RunId>,
+    pub source: Option<RunId>,
     /// For a run of a workflow, the workflow's name.
     pub workflow: Option<String>,
     /// For a run a code started, that run.
@@ -326,7 +326,7 @@ pub enum Predicate {
     /// Calls failed.
     Errors(Range<u64>),
     /// Forks of this run.
-    Parent(RunId),
+    Source(RunId),
     /// Runs of a workflow whose name one of these matches.
     Workflow(Vec<TextMatch>),
     /// Runs this run started.

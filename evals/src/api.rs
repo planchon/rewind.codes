@@ -184,8 +184,8 @@ fn start_error(error: StartError) -> ApiError {
 
 fn fork_error(error: ForkError) -> ApiError {
     match error {
-        ForkError::ParentNotFound(run) => run_not_found(&run.to_string()),
-        ForkError::ParentNotStarted(_) => invalid(error.to_string()),
+        ForkError::SourceNotFound(run) => run_not_found(&run.to_string()),
+        ForkError::SourceNotStarted(_) => invalid(error.to_string()),
         ForkError::Start(error) => start_error(error),
         other => fault(WorldError::Engine(other.to_string())),
     }
@@ -194,8 +194,8 @@ fn fork_error(error: ForkError) -> ApiError {
 /// A suite that cannot be loaded or composed, as the server answers it.
 fn suite_error(error: SuiteLoadError) -> ApiError {
     match error {
-        SuiteLoadError::Suite(SuiteError::ParentNotFound(version)) => not_found(format!(
-            "no workflow version {version} that this caller sees: name the parent as \
+        SuiteLoadError::Suite(SuiteError::BaseNotFound(version)) => not_found(format!(
+            "no workflow version {version} that this caller sees: name the base as \
              name@<version>, or leave it out to derive from the latest version"
         )),
         SuiteLoadError::Suite(error) => problem(ProblemType::InvalidTest, error.to_string()),
@@ -717,7 +717,7 @@ impl Api for World {
             || filter.script.is_some()
             || filter.error.is_some()
             || filter.quarantined.is_some()
-            || filter.parent.is_some()
+            || filter.source.is_some()
             || filter.workflow.is_some()
             || filter.started_by.is_some()
             || filter.started_after.is_some()
@@ -1090,7 +1090,7 @@ impl Api for World {
                 workflow.action_set
             ))
         })?;
-        let parent = match &workflow.parent {
+        let parent = match &workflow.base {
             Some(reference) => {
                 let reference = if reference.contains('@') {
                     reference.clone()
@@ -1161,7 +1161,7 @@ impl Api for World {
                         entry: generated.entry,
                     },
                     suite: SuiteChanges {
-                        parent,
+                        base: parent,
                         tests,
                         update,
                         retire,

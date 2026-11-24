@@ -119,10 +119,10 @@ pub struct WorkflowCase {
 pub struct Fork {
     /// The corrected code, next to `scenario.json`.
     pub code: String,
-    /// Go live from this event of the parent's history.
+    /// Go live from this event of the source's history.
     #[serde(default)]
     pub at: Option<u64>,
-    /// The fork's input; the parent's when absent.
+    /// The fork's input; the source's when absent.
     #[serde(default)]
     pub input: Option<Value>,
     /// What happens after the fork starts, as the case's steps.
@@ -225,7 +225,7 @@ pub struct Expect {
     /// The signals the run is waiting for at the end.
     pub awaiting: Option<Vec<String>>,
     /// How many times each action really answered, across the case: a fork that reuses its
-    /// parent's results calls the actions fewer times than its history schedules calls.
+    /// source's results calls the actions fewer times than its history schedules calls.
     pub dispatched: Option<BTreeMap<String, usize>>,
     /// The statuses of the runs of workflows the run started, in the order of its calls.
     pub children: Option<Vec<String>>,

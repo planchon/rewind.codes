@@ -828,7 +828,7 @@ impl<P: Plane> Owner<P> {
         self.push(unit);
     }
 
-    /// The call's key already started a run: a fork's call its parent left without an outcome.
+    /// The call's key already started a run: a fork's call its source left without an outcome.
     /// The fork watches it, never attached.
     fn child_found(&mut self, task: &TaskRef, record: TaskRecord, child: rewind_core::RunId) {
         let mut unit = Unit::new();

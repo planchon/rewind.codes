@@ -116,7 +116,7 @@ pub(crate) fn summary_of(
             },
             mode: state.mode(),
             labels: metadata.labels.clone(),
-            parent: metadata.parent.map(|parent| parent.run),
+            source: metadata.source.map(|parent| parent.run),
             workflow: metadata.workflow.as_ref().map(|of| of.name.clone()),
             started_by: metadata.started_by.as_ref().map(|by| by.run),
             started_at,

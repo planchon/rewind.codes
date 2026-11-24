@@ -101,8 +101,8 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
         );
     }
 
-    // A fork, by its parent's handle: of the parent's namespace and origin, naming its parent
-    // by its handle; the runs of a parent are listed by its handle.
+    // A fork, by its source's handle: of the source's namespace and origin, naming its source
+    // by its handle; the runs of a source are listed by its handle.
     let fork = harness
         .fork_run(
             &run.handle,
@@ -113,7 +113,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
         .unwrap();
     assert!(fork.handle.starts_with(&prefix), "{}", fork.handle);
     assert_ne!(fork.handle, run.handle);
-    let parent = fork.parent.unwrap();
+    let parent = fork.source.unwrap();
     assert_eq!(
         (parent.run, parent.handle),
         (run.id.clone(), run.handle.clone())
@@ -121,7 +121,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     let forks = eventually(|| async {
         let page = harness
             .list_runs(&RunFilter {
-                parent: Some(run.handle.clone()),
+                source: Some(run.handle.clone()),
                 ..RunFilter::default()
             })
             .await
@@ -137,7 +137,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     // A handle naming no run lists none; what is neither an id nor a handle is refused.
     let none = harness
         .list_runs(&RunFilter {
-            parent: Some(format!("{prefix}zzzzzzzzzzzz")),
+            source: Some(format!("{prefix}zzzzzzzzzzzz")),
             ..RunFilter::default()
         })
         .await
@@ -146,7 +146,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     let refused = problem(
         harness
             .list_runs(&RunFilter {
-                parent: Some("not a run".into()),
+                source: Some("not a run".into()),
                 ..RunFilter::default()
             })
             .await
@@ -378,7 +378,7 @@ fn triage(action_set: &str, code: &str) -> CreateWorkflow {
                 "required": ["close"],
             }),
         )]),
-        parent: None,
+        base: None,
         tests: Vec::new(),
         update: Vec::new(),
         retire: Vec::new(),

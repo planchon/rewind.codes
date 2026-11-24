@@ -19,7 +19,7 @@ pub struct RunMetadata {
     pub trace_context: Option<TraceContext>,
     /// For a fork, the run it was forked from, in the same tenant, and where it was forced live
     /// (`archi/03-execution.md`, "Forks").
-    pub parent: Option<ForkParent>,
+    pub source: Option<ForkSource>,
     /// For a run of a workflow, the workflow and the version it executes.
     pub workflow: Option<RunWorkflow>,
     /// For a run a code started, that run and the call (`archi/03-execution.md`, "Workflows
@@ -29,18 +29,18 @@ pub struct RunMetadata {
     /// that started the first run of its tree, inherited by every run it starts. Empty: any run
     /// of the tenant.
     pub scope: BTreeMap<String, String>,
-    /// The secrets the run attached at start, by server or API: the request's, a fork's parent's
+    /// The secrets the run attached at start, by server or API: the request's, a fork's source's
     /// unless the fork gave its own, a workflow version's (`archi/04-tools.md`, "Secrets"). Its
     /// calls read these and no other. Names, never values: the `runs.secrets` column.
     pub secrets: Attachments,
 }
 
-/// The run a fork was started from. The fork's first activation copies the parent's history
+/// The run a fork was started from. The fork's first activation copies the source's history
 /// while the fork's commands match it, up to the event `at` when the request gave one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ForkParent {
+pub struct ForkSource {
     pub run: RunId,
-    /// Go live from this event of the parent's history, even if the commands still match.
+    /// Go live from this event of the source's history, even if the commands still match.
     pub at: Option<u64>,
 }
 

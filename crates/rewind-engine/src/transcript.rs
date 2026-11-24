@@ -21,7 +21,7 @@ use rewind_core::{
     RunId, RunState, RunStatus, Seq, Timestamp, canonical_json,
 };
 
-use crate::ports::{ForkParent, PayloadRecord, Quarantine, RunHead};
+use crate::ports::{ForkSource, PayloadRecord, Quarantine, RunHead};
 
 /// Characters of a payload in a transcript line.
 const PREVIEW_CHARS: usize = 60;
@@ -56,7 +56,7 @@ pub fn render_transcript(input: TranscriptInput<'_>) -> String {
         action_set: head.action_set,
         status: head.status,
         quarantine: head.quarantine.as_ref(),
-        parent: head.metadata.parent.as_ref(),
+        parent: head.metadata.source.as_ref(),
     };
     render(&shown, history, payloads, now)
 }
@@ -68,7 +68,7 @@ struct Shown<'a> {
     action_set: Digest,
     status: RunStatus,
     quarantine: Option<&'a Quarantine>,
-    parent: Option<&'a ForkParent>,
+    parent: Option<&'a ForkSource>,
 }
 
 fn render(

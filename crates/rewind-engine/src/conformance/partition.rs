@@ -261,7 +261,7 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         },
         mode: Some(RunMode::Test),
         labels: BTreeMap::new(),
-        parent: None,
+        source: None,
         workflow: None,
         started_by: None,
         started_at: Some(T0),

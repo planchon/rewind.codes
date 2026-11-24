@@ -16,7 +16,7 @@ use rewind_api::common::{
     RunStatus, timestamp,
 };
 use rewind_api::runs::{
-    FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
+    FailedCall, ForkSource, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
     RunWait, WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity, TitleSource};
@@ -138,9 +138,9 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
         trace_id: rewind_engine::telemetry::trace_of(run.id, &record.metadata)
             .0
             .to_string(),
-        parent: record.metadata.parent.map(|parent| ForkParent {
+        source: record.metadata.source.map(|parent| ForkSource {
             run: parent.run.to_string(),
-            handle: named(view.parent.as_ref(), parent.run),
+            handle: named(view.source.as_ref(), parent.run),
             at: parent.at,
         }),
         workflow,
@@ -354,7 +354,7 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
             })
             .collect(),
         wakes_at: run.wakes_at.map(timestamp),
-        parent: run.parent.map(|parent| parent.to_string()),
+        source: run.source.map(|parent| parent.to_string()),
         workflow: run.workflow.clone(),
         started_by: run.started_by.map(|run| run.to_string()),
     })
@@ -556,7 +556,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
                 .map(|declaration| declaration.prompt.clone())
                 .unwrap_or_default(),
         },
-        parent: workflow.suite().parent.map(|parent| parent.to_hex()),
+        base: workflow.suite().base.map(|parent| parent.to_hex()),
         tests: workflow
             .suite()
             .tests

@@ -77,7 +77,7 @@ pub struct HandedCall {
     pub action: String,
     /// The arguments, validated against the action's input schema.
     pub args: Value,
-    /// `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
+    /// `{run_id}/{seq}` (a fork's call made again keeps its source's), the same on every
     /// delivery: the handler uses it to recognize a call it already made.
     pub idempotency_key: String,
     /// From 1. Above 1, an earlier delivery was interrupted: the stream it was handed on closed

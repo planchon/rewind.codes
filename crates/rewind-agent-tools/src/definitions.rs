@@ -402,7 +402,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "save_workflow" => ToolDefinition {
             name: "save_workflow",
-            description: "Save a code as a workflow: a named code with JSON Schemas for its input, its output and the signals it accepts. The code is type-checked against your actions and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`parent`, by default the latest version of this name), minus those you `retire`, with those you `update` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or update it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_workflow({ code, workflow }) first. Once saved, your later workflows can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another code, other schemas or other tests saves a new version, which your later workflows use.",
+            description: "Save a code as a workflow: a named code with JSON Schemas for its input, its output and the signals it accepts. The code is type-checked against your actions and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`base`, by default the latest version of this name), minus those you `retire`, with those you `update` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or update it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_workflow({ code, workflow }) first. Once saved, your later workflows can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another code, other schemas or other tests saves a new version, which your later workflows use.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -454,7 +454,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                             "additionalProperties": false
                         }
                     },
-                    "parent": {
+                    "base": {
                         "type": "string",
                         "description": "The version it derives from, whose suite it inherits: name@version, or a version. The latest version of this name when absent."
                     },
@@ -1021,7 +1021,7 @@ mod tests {
                 "tests",
                 "update",
                 "retire",
-                "parent",
+                "base",
                 "secrets",
             ])
         );

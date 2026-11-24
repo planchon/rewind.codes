@@ -148,8 +148,8 @@ pub(crate) fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
 
 pub(crate) fn suite_error(error: SuiteLoadError) -> ApiError {
     match error {
-        SuiteLoadError::Suite(SuiteError::ParentNotFound(version)) => ApiError::not_found(format!(
-            "no workflow version {version} that this caller sees: name the parent as \
+        SuiteLoadError::Suite(SuiteError::BaseNotFound(version)) => ApiError::not_found(format!(
+            "no workflow version {version} that this caller sees: name the base as \
              name@<version>, or leave it out to derive from the latest version"
         )),
         SuiteLoadError::Suite(error) => ApiError::new(ProblemType::InvalidTest, error.to_string()),

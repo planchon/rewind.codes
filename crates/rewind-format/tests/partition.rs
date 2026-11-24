@@ -19,7 +19,7 @@ use rewind_core::{
 use rewind_format::FormatError;
 use rewind_format::partition::{
     ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending,
-    FailureCounts, FailureKind, ForkParent, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
+    FailureCounts, FailureKind, ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
     Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
     QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow,
     ScriptCounts, Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy,
@@ -109,7 +109,7 @@ fn run_head() -> RunHead {
                 traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".into(),
                 tracestate: None,
             }),
-            parent: Some(ForkParent {
+            source: Some(ForkSource {
                 run: run(9),
                 at: Some(3),
             }),
@@ -222,7 +222,7 @@ fn summary() -> Summary {
         status: Status::Failed,
         mode: Some(Mode::Test),
         labels: BTreeMap::from([("agent".into(), "triage".into())]),
-        parent: Some(run(9)),
+        source: Some(run(9)),
         workflow: Some("triage".into()),
         started_by: Some(run(8)),
         started_at: Some(T0),

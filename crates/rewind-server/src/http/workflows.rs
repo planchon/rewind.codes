@@ -59,8 +59,8 @@ pub(super) async fn create(
     };
     let generated = rewind_codegen::workflow_declarations(&request.name, &schemas);
     let code = Code::new(request.code);
-    let parent = match &request.parent {
-        Some(reference) => Some(parent_of(&app, &caller, &request.name, reference).await?),
+    let base = match &request.base {
+        Some(reference) => Some(base_of(&app, &caller, &request.name, reference).await?),
         None => None,
     };
     let mut tests = Vec::with_capacity(request.tests.len());
@@ -89,7 +89,7 @@ pub(super) async fn create(
         });
     }
     let suite = SuiteChanges {
-        parent,
+        base,
         tests,
         update,
         retire: request
@@ -146,8 +146,8 @@ pub(super) async fn create(
     Ok((status, Json(view(&registered))).into_response())
 }
 
-/// The parent a save names: `name@<version>`, or a version of the same workflow.
-async fn parent_of(
+/// The base a save names: `name@<version>`, or a version of the same workflow.
+async fn base_of(
     app: &App,
     caller: &Caller,
     name: &str,
@@ -342,7 +342,7 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
                 .map(|declaration| declaration.prompt.clone())
                 .unwrap_or_default(),
         },
-        parent: workflow.suite().parent.map(|parent| parent.to_hex()),
+        base: workflow.suite().base.map(|parent| parent.to_hex()),
         tests: workflow
             .suite()
             .tests

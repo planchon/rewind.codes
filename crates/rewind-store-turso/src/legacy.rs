@@ -14,7 +14,7 @@ use rewind_engine::ports::legacy::{
     LegacyError, LegacyHistory, LegacyRun, LegacyRuns, LegacyTask, LegacyWebhook,
 };
 use rewind_engine::ports::{
-    ForkParent, InboxItem, NamespaceName, ParkKind, ParkReason, PayloadRecord, Quarantine,
+    ForkSource, InboxItem, NamespaceName, ParkKind, ParkReason, PayloadRecord, Quarantine,
     QuarantineKind, RunMetadata, RunRef, RunWorkflow, StartedBy, TaskState, TraceContext, Trigger,
     Watcher,
 };
@@ -155,7 +155,7 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
     };
     let parent = match row.opt_run_id(17)? {
         None => None,
-        Some(run) => Some(ForkParent {
+        Some(run) => Some(ForkSource {
             run,
             at: row.opt_u64(18)?,
         }),
@@ -192,7 +192,7 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
         metadata: RunMetadata {
             labels: decode_labels(&row.text(14)?)?,
             trace_context,
-            parent,
+            source: parent,
             workflow,
             started_by,
             scope: decode_labels(&row.text(29)?)?,

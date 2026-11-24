@@ -624,7 +624,7 @@ impl World {
                 reports.push(WorkflowReport {
                     name: workflow.name().to_owned(),
                     version: workflow.version(),
-                    parent: workflow.suite().parent,
+                    base: workflow.suite().base,
                     action_set: workflow.action_set(),
                     code: catalog
                         .get_script(&tenant, workflow.code())
@@ -894,9 +894,9 @@ impl World {
             reports.push(RunReport {
                 id: run.id,
                 status: head.as_ref().map_or(RunStatus::Pending, |head| head.status),
-                parent: head
+                source: head
                     .as_ref()
-                    .and_then(|head| head.metadata.parent.as_ref())
+                    .and_then(|head| head.metadata.source.as_ref())
                     .map(|parent| parent.run),
                 workflow: head
                     .as_ref()
@@ -948,7 +948,7 @@ pub struct RunReport {
     pub id: RunId,
     pub status: RunStatus,
     /// For a fork, the run it corrects.
-    pub parent: Option<RunId>,
+    pub source: Option<RunId>,
     /// For a run of a workflow, its name and version.
     pub workflow: Option<RunWorkflow>,
     pub labels: BTreeMap<String, String>,
@@ -966,7 +966,7 @@ pub struct WorkflowReport {
     pub name: String,
     pub version: Digest,
     /// The version it derives from.
-    pub parent: Option<Digest>,
+    pub base: Option<Digest>,
     /// The action set its runs call.
     pub action_set: Digest,
     /// Its code's source.

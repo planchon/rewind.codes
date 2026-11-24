@@ -116,7 +116,7 @@ pub(crate) enum ChildStart {
         start: Box<StartAtOwner>,
         neighbours: Vec<RunId>,
     },
-    /// The call's key already started this run: a fork's call its parent left without an
+    /// The call's key already started this run: a fork's call its source left without an
     /// outcome. The caller watches it.
     Found(RunId),
 }
@@ -405,7 +405,7 @@ async fn args_of<L: PartitionLog, B: crate::ports::BlobStore>(
 }
 
 /// The idempotency key of the call `seq` of a run: `{run_id}/{seq}`, except for a call a fork
-/// inherited from its parent without an outcome, which carries its parent's key
+/// inherited from its source without an outcome, which carries its source's key
 /// (`archi/03-execution.md`, "Forks").
 pub(crate) async fn call_key<P: Plane>(
     plane: &P,
@@ -416,21 +416,21 @@ pub(crate) async fn call_key<P: Plane>(
     args: &Payload,
 ) -> Result<String, String> {
     let mut owner = head.run.id;
-    let mut parent = head.metadata.parent;
-    while let Some(link) = parent {
-        let parent_ref = RunRef::new(head.run.tenant.clone(), link.run);
-        let read = |error: String| format!("the parent {} could not be read: {error}", link.run);
-        let Some(parent_head) = log
-            .run(&parent_ref)
+    let mut fork_source = head.metadata.source;
+    while let Some(link) = fork_source {
+        let source_ref = RunRef::new(head.run.tenant.clone(), link.run);
+        let read = |error: String| format!("the source {} could not be read: {error}", link.run);
+        let Some(source_head) = log
+            .run(&source_ref)
             .await
             .map_err(|error| read(error.to_string()))?
         else {
             break;
         };
-        let history = if parent_head.sealed == Some(parent_head.attempt) {
+        let history = if source_head.sealed == Some(source_head.attempt) {
             match plane
                 .archive()
-                .get(&parent_ref, parent_head.attempt)
+                .get(&source_ref, source_head.attempt)
                 .await
                 .map_err(|error| read(error.to_string()))?
             {
@@ -438,7 +438,7 @@ pub(crate) async fn call_key<P: Plane>(
                 None => break,
             }
         } else {
-            log.history(&parent_ref, parent_head.attempt, 0)
+            log.history(&source_ref, source_head.attempt, 0)
                 .await
                 .map_err(|error| read(error.to_string()))?
         };
@@ -446,7 +446,7 @@ pub(crate) async fn call_key<P: Plane>(
             break;
         }
         owner = link.run;
-        parent = parent_head.metadata.parent;
+        fork_source = source_head.metadata.source;
     }
     Ok(idempotency_key(owner, seq))
 }
@@ -685,7 +685,7 @@ async fn start_child<P: Plane>(
     let metadata = RunMetadata {
         labels,
         trace_context: call.trace_context.clone(),
-        parent: None,
+        source: None,
         workflow: Some(RunWorkflow {
             name: workflow.name().to_owned(),
             version: workflow.version(),

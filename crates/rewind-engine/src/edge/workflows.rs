@@ -3,8 +3,8 @@
 //!
 //! ```text
 //! register_workflow ── checks (name, schemas, code, attachments, tsgo) ──┐
-//!   lineage: the parent named, or the latest version under the same labels │
-//!   the suite: the parent's, retired, updated, added ─► run_tests ─► all pass?
+//!   lineage: the base named, or the latest version under the same labels │
+//!   the suite: the base's, retired, updated, added ─► run_tests ─► all pass?
 //!                                     reserve test rows, put their blobs ◄─┘
 //!                                     put_code, put_workflow (the catalog)
 //! ```
@@ -39,7 +39,7 @@ impl<P: Plane> Edge<P> {
     /// Checks a workflow and stores it as a new version: its name and signals, its schemas, its
     /// code against its action set (the checks at start), its attachments, then tsgo against
     /// the action set's and its own declarations; then the gate: its suite, composed from its
-    /// parent's, runs against it, and the version is stored only if every test passes. Saving
+    /// base's, runs against it, and the version is stored only if every test passes. Saving
     /// a version again under the same labels changes nothing; under other labels, it is another
     /// version, carrying them.
     pub async fn register_workflow<K: TypeChecker, L: HandlerLoader>(
@@ -136,19 +136,19 @@ impl<P: Plane> Edge<P> {
         }
 
         // The gate.
-        let parent = match request.suite.parent {
+        let parent = match request.suite.base {
             Some(version) => {
                 let parent = catalog
                     .get_workflow(&tenant, version)
                     .await
                     .map_err(StoreError::from)?
                     .filter(|stored| stored.carries(workflow.labels()))
-                    .ok_or(SuiteError::ParentNotFound(version))?;
+                    .ok_or(SuiteError::BaseNotFound(version))?;
                 Some(parent.workflow)
             }
             None => latest.map(|stored| stored.workflow),
         };
-        // The same workflow saved again on a parent named, its suite unchanged: that version.
+        // The same workflow saved again on a base named, its suite unchanged: that version.
         if let Some(parent) = &parent
             && same_content(parent, &workflow)
             && request.suite.tests.is_empty()
@@ -196,7 +196,7 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Whether `latest` is the version this save makes: the same content, and the suite the
-    /// changes compose on `latest`'s own parent. So a save sent again (a retry whose answer was
+    /// changes compose on `latest`'s own base. So a save sent again (a retry whose answer was
     /// lost, a seed run twice) answers the version it made, instead of applying its changes a
     /// second time on top of it.
     async fn saved_by(
@@ -207,9 +207,8 @@ impl<P: Plane> Edge<P> {
         workflow: &Workflow,
         changes: &SuiteChanges,
     ) -> Result<bool, RegisterError> {
-        let base = latest.suite().parent;
-        if !same_content(latest, workflow)
-            || changes.parent.is_some_and(|named| Some(named) != base)
+        let base = latest.suite().base;
+        if !same_content(latest, workflow) || changes.base.is_some_and(|named| Some(named) != base)
         {
             return Ok(false);
         }
@@ -226,7 +225,7 @@ impl<P: Plane> Edge<P> {
             },
             None => None,
         };
-        // A change that does not apply to the parent is reported by the save itself.
+        // A change that does not apply to the base is reported by the save itself.
         let Ok(composed) = suites.compose_suite(tenant, base.as_ref(), changes).await else {
             return Ok(false);
         };

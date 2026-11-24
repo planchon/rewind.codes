@@ -36,7 +36,7 @@ fn version_with_test(n: usize, test: Digest) -> Workflow {
     )
     .expect("a valid workflow")
     .with_suite(Suite {
-        parent: None,
+        base: None,
         tests: vec![SuiteTest {
             name: "the test".to_owned(),
             test,

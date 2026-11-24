@@ -76,7 +76,7 @@ fn run(id: &str) -> Run {
         labels: Labels::from_iter([("agent", "triage")]),
         secrets: Default::default(),
         trace_id: "0".repeat(32),
-        parent: None,
+        source: None,
         workflow: None,
         started_by: None,
         input: Some(Payload::of(json!({}), 1024)),

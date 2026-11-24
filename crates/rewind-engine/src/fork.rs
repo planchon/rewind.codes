@@ -3,22 +3,22 @@
 //!
 //! A fork is a new run started from an existing one with a corrected code, so that an agent
 //! can fix step 7 without redoing the side effects of steps 1 to 6. It has its own id, the
-//! parent's seed, input (unless overridden) and action set, and a new TTL.
+//! source's seed, input (unless overridden) and action set, and a new TTL.
 //!
-//! Starting a fork only creates the run, with its parent and `at` as run metadata. Its first
-//! activation replays the new code against the parent's history, in the same transaction as
+//! Starting a fork only creates the run, with its source and `at` as run metadata. Its first
+//! activation replays the new code against the source's history, in the same transaction as
 //! everything else it commits:
 //!
-//! - While the code's commands match the parent's, the parent's triggers are copied into the
+//! - While the code's commands match the source's, the source's triggers are copied into the
 //!   fork's history, with their recorded results and `recorded_at`: no action is called again.
-//! - At the first command that differs, at the event `at`, at the parent's cancellation or
-//!   abort, or at the end of the parent's history, the fork goes live.
+//! - At the first command that differs, at the event `at`, at the source's cancellation or
+//!   abort, or at the end of the source's history, the fork goes live.
 //! - The calls the fork inherited (their commands matched before it went live) and that are
-//!   still pending: the parent's outcome, if it recorded one, is delivered; otherwise the call is
-//!   dispatched again with the parent's idempotency key when its action is idempotent, and fails
+//!   still pending: the source's outcome, if it recorded one, is delivered; otherwise the call is
+//!   dispatched again with the source's idempotency key when its action is idempotent, and fails
 //!   with `outcome_unknown` when it is not.
 //!
-//! The fork's history is self-contained: it replays without the parent.
+//! The fork's history is self-contained: it replays without the source.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -36,7 +36,7 @@ use crate::batch::{Batch, CountCpu, Grace, abort_reason};
 use crate::payloads;
 use crate::plane::Limits;
 use crate::ports::{
-    CodeExecutor, CodeInstance, CompiledCode, Emitted, ForkParent, RunRef, StartCode, StoreError,
+    CodeExecutor, CodeInstance, CompiledCode, Emitted, ForkSource, RunRef, StartCode, StoreError,
     TraceContext,
 };
 use crate::start::StartError;
@@ -44,23 +44,23 @@ use crate::start::StartError;
 /// A request to fork a run (`POST /v1/runs/{id}/fork`, `rewind fork`, `retry_run`).
 #[derive(Debug, Clone)]
 pub struct ForkRun {
-    pub parent: RunRef,
+    pub source: RunRef,
     /// The corrected code.
     pub code: Code,
-    /// Go live from this event of the parent's history, even if the commands still match.
+    /// Go live from this event of the source's history, even if the commands still match.
     pub at: Option<u64>,
-    /// The fork's input; the parent's when `None`.
+    /// The fork's input; the source's when `None`.
     pub input: Option<JsonValue>,
     /// The fork's TTL, from now; the namespace's default
     /// ([`NodeConfig::default_ttl`](crate::plane::NodeConfig::default_ttl) within its bounds) when
     /// `None`.
     pub ttl: Option<Duration>,
-    /// The fork's labels; the parent's when `None`.
+    /// The fork's labels; the source's when `None`.
     pub labels: Option<BTreeMap<String, String>>,
     pub trace_context: Option<TraceContext>,
     /// A retried request with the same key returns the same fork.
     pub idempotency_key: Option<String>,
-    /// The fork's attachments; the parent's when `None`. Either way they are checked against
+    /// The fork's attachments; the source's when `None`. Either way they are checked against
     /// `attach`: the code is new code (`archi/04-tools.md`, "Secrets").
     pub secrets: Option<Attachments>,
     /// What the caller may attach.
@@ -68,9 +68,9 @@ pub struct ForkRun {
 }
 
 impl ForkRun {
-    pub fn new(parent: RunRef, code: Code) -> Self {
+    pub fn new(source: RunRef, code: Code) -> Self {
         Self {
-            parent,
+            source,
             code,
             at: None,
             input: None,
@@ -87,9 +87,9 @@ impl ForkRun {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ForkError {
     #[error("run {0} not found")]
-    ParentNotFound(RunId),
+    SourceNotFound(RunId),
     #[error("run {0} has not started yet: there is nothing to fork")]
-    ParentNotStarted(RunId),
+    SourceNotStarted(RunId),
     /// The fork cannot start, for the reasons a run cannot: an invalid code, TTL or input, the
     /// tenant's quota.
     #[error(transparent)]
@@ -104,21 +104,21 @@ impl From<StoreError> for ForkError {
     }
 }
 
-/// Where a fork stops following its parent and goes live.
+/// Where a fork stops following its source and goes live.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForkPoint {
-    /// The code emitted a command the parent did not: the fork goes live there.
+    /// The code emitted a command the source did not: the fork goes live there.
     Diverged(NonDeterminism),
     /// The event `at` of the request: the commands still matched.
     At(u64),
-    /// The parent was cancelled at this event: its history ends there for the fork.
-    ParentCancelled(u64),
-    /// The parent was aborted at this event.
-    ParentAborted(u64),
-    /// The code followed the whole history of the parent, its end included when the parent
+    /// The source was cancelled at this event: its history ends there for the fork.
+    SourceCancelled(u64),
+    /// The source was aborted at this event.
+    SourceAborted(u64),
+    /// The code followed the whole history of the source, its end included when the source
     /// ended by itself.
-    EndOfParent,
-    /// The fork's code could not go on while it followed its parent: it could not load, or
+    EndOfSource,
+    /// The fork's code could not go on while it followed its source: it could not load, or
     /// hit a limit. The fork is aborted.
     Stopped,
 }
@@ -128,11 +128,11 @@ impl fmt::Display for ForkPoint {
         match self {
             ForkPoint::Diverged(mismatch) => write!(f, "it diverges: {mismatch}"),
             ForkPoint::At(index) => write!(f, "it is forced live at event {index}"),
-            ForkPoint::ParentCancelled(index) => {
-                write!(f, "the parent was cancelled at event {index}")
+            ForkPoint::SourceCancelled(index) => {
+                write!(f, "the source was cancelled at event {index}")
             }
-            ForkPoint::ParentAborted(index) => write!(f, "the parent was aborted at event {index}"),
-            ForkPoint::EndOfParent => f.write_str("it follows the parent's whole history"),
+            ForkPoint::SourceAborted(index) => write!(f, "the source was aborted at event {index}"),
+            ForkPoint::EndOfSource => f.write_str("it follows the source's whole history"),
             ForkPoint::Stopped => f.write_str("the code could not go on"),
         }
     }
@@ -162,21 +162,21 @@ impl Compatibility {
     pub fn is_compatible(&self) -> bool {
         matches!(
             self.point,
-            ForkPoint::EndOfParent | ForkPoint::ParentCancelled(_) | ForkPoint::ParentAborted(_)
+            ForkPoint::EndOfSource | ForkPoint::SourceCancelled(_) | ForkPoint::SourceAborted(_)
         )
     }
 }
 
 /// A fork's first activation, as the activation hands it over.
-pub(crate) struct ForkSource<'a> {
+pub(crate) struct ForkStart<'a> {
     pub(crate) run: &'a RunRef,
-    pub(crate) parent: ForkParent,
+    pub(crate) source: ForkSource,
     pub(crate) started: RunStarted,
     pub(crate) compiled: &'a CompiledCode,
     pub(crate) action_set: &'a ActionSet,
 }
 
-/// What following a parent's history gave.
+/// What following a source's history gave.
 pub(crate) struct Followed<I> {
     pub(crate) instance: Option<I>,
     pub(crate) point: ForkPoint,
@@ -185,7 +185,7 @@ pub(crate) struct Followed<I> {
     pub(crate) unknown: Vec<Seq>,
 }
 
-/// What following a parent's history runs on: the executor, where the payloads are loaded
+/// What following a source's history runs on: the executor, where the payloads are loaded
 /// from, and what counts the CPU time of the calls into the code.
 pub(crate) struct FollowWith<'a, X, S, C> {
     pub(crate) executor: &'a X,
@@ -196,7 +196,7 @@ pub(crate) struct FollowWith<'a, X, S, C> {
 /// Whether `code` is compatible with a run's history, and if not, where it diverges; and what
 /// a fork of the run with it would reuse (`rewind replay <run> --code fixed.ts`,
 /// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The code is
-/// followed against the history on `executor` as a fork's first activation follows its parent,
+/// followed against the history on `executor` as a fork's first activation follows its source,
 /// as the run itself (it reads the run's id); every payload of the history is held as a value.
 /// Nothing is written and no action is called.
 pub async fn compatibility<X: CodeExecutor>(
@@ -211,7 +211,7 @@ pub async fn compatibility<X: CodeExecutor>(
         ..
     }) = export.events.first()
     else {
-        return Err(ForkError::ParentNotStarted(export.run));
+        return Err(ForkError::SourceNotStarted(export.run));
     };
     let compiled = executor
         .compile(code, &export.action_set)
@@ -227,12 +227,12 @@ pub async fn compatibility<X: CodeExecutor>(
         payloads: &crate::replay::InExport,
         cpu: &Uncounted,
     };
-    let followed = follow_parent(
+    let followed = follow_source(
         &with,
         &mut batch,
-        ForkSource {
+        ForkStart {
             run: &run,
-            parent: ForkParent {
+            source: ForkSource {
                 run: export.run,
                 at,
             },
@@ -267,12 +267,12 @@ impl CountCpu for Uncounted {
     }
 }
 
-/// Runs the fork's code against the parent's history, copying the parent's triggers into
-/// `batch` while the code's commands match the parent's.
-pub(crate) async fn follow_parent<X, S, C>(
+/// Runs the fork's code against the source's history, copying the source's triggers into
+/// `batch` while the code's commands match the source's.
+pub(crate) async fn follow_source<X, S, C>(
     with: &FollowWith<'_, X, S, C>,
     batch: &mut Batch<'_>,
-    source: ForkSource<'_>,
+    start: ForkStart<'_>,
     history: &[HistoryEvent],
 ) -> Result<Followed<X::Instance>, EngineError>
 where
@@ -281,9 +281,9 @@ where
     C: CountCpu,
 {
     {
-        let parent_id = source.parent.run;
-        let tenant = &source.run.tenant;
-        // A parent's cancellation is where its history ends for the fork.
+        let source_id = start.source.run;
+        let tenant = &start.run.tenant;
+        // A source's cancellation is where its history ends for the fork.
         let followed_len = history
             .iter()
             .position(|entry| {
@@ -293,38 +293,38 @@ where
                 )
             })
             .unwrap_or(history.len());
-        let parent = &history[..followed_len];
+        let followed = &history[..followed_len];
         let mut cursor =
-            ReplayCursor::new(parent).map_err(|error| EngineError::CorruptHistory {
-                run_id: parent_id,
+            ReplayCursor::new(followed).map_err(|error| EngineError::CorruptHistory {
+                run_id: source_id,
                 error,
             })?;
-        let at = source.parent.at.unwrap_or(u64::MAX);
+        let at = start.source.at.unwrap_or(u64::MAX);
         let corrupt = |error| EngineError::CorruptHistory {
-            run_id: source.run.id,
+            run_id: start.run.id,
             error,
         };
 
         batch.copying = true;
-        // The fork starts when its parent started: its logical time is the parent's while it
+        // The fork starts when its source started: its logical time is the source's while it
         // follows it.
         let recorded_at = batch.recorded_at(cursor.started_at());
-        let input = payloads::load(with.payloads, tenant, &source.started.input).await?;
-        let start = StartCode {
-            run_id: source.run.id,
-            compiled: source.compiled.clone(),
-            action_set: source.action_set.clone(),
+        let input = payloads::load(with.payloads, tenant, &start.started.input).await?;
+        let code_start = StartCode {
+            run_id: start.run.id,
+            compiled: start.compiled.clone(),
+            action_set: start.action_set.clone(),
             input,
-            seed: source.started.seed,
-            epoch: source.started.epoch,
+            seed: start.started.seed,
+            epoch: start.started.epoch,
             started_at: recorded_at,
         };
-        let trigger = Event::Lifecycle(Lifecycle::RunStarted(source.started));
+        let trigger = Event::Lifecycle(Lifecycle::RunStarted(start.started));
         let mut inherited = BTreeSet::new();
-        let (mut instance, mut point) = match with.executor.start(start).await {
+        let (mut instance, mut point) = match with.executor.start(code_start).await {
             Ok((instance, emitted)) => {
                 // The fork's code runs for the first time: its calls execute, though they
-                // follow the parent's history.
+                // follow the source's history.
                 batch.count_cpu(with.cpu, instance.cpu_time());
                 let followed = follow(&mut cursor, &emitted, at, &mut inherited);
                 batch
@@ -348,7 +348,7 @@ where
         };
 
         while point.is_none() {
-            // The code ended as the parent did, its last command matching the parent's; or
+            // The code ended as the followed did, its last command matching the source's; or
             // the host aborted it.
             if batch.state.is_terminal() {
                 let aborted = batch.events().last().is_some_and(|entry| {
@@ -357,7 +357,7 @@ where
                 point = Some(if aborted {
                     ForkPoint::Stopped
                 } else {
-                    ForkPoint::EndOfParent
+                    ForkPoint::EndOfSource
                 });
                 break;
             }
@@ -370,15 +370,15 @@ where
             };
             let (index, completion) = match next {
                 Next::End if followed_len < history.len() => {
-                    point = Some(ForkPoint::ParentCancelled(followed_len as u64));
+                    point = Some(ForkPoint::SourceCancelled(followed_len as u64));
                     break;
                 }
                 Next::End => {
-                    point = Some(ForkPoint::EndOfParent);
+                    point = Some(ForkPoint::EndOfSource);
                     break;
                 }
                 Next::Aborted { index, .. } => {
-                    point = Some(ForkPoint::ParentAborted(index));
+                    point = Some(ForkPoint::SourceAborted(index));
                     break;
                 }
                 Next::Deliver { index, .. } if index >= at => {
@@ -387,7 +387,7 @@ where
                 }
                 Next::Deliver { index, completion } => (index, completion),
             };
-            // The parent's trigger is copied with its value, so that the fork references its
+            // The source's trigger is copied with its value, so that the fork references its
             // payloads itself, and with its `recorded_at`.
             let completion = with_values(with.payloads, tenant, completion).await?;
             let recorded_at = batch.recorded_at(cursor.logical_now());
@@ -410,11 +410,11 @@ where
                     point = Some(ForkPoint::Stopped);
                 }
             }
-            tracing::trace!(index, "parent event followed");
+            tracing::trace!(index, "followed event followed");
         }
         batch.copying = false;
 
-        // The inherited calls still pending: the parent's outcome is reused if it recorded one.
+        // The inherited calls still pending: the source's outcome is reused if it recorded one.
         let mut reused = Vec::new();
         let mut redispatched = Vec::new();
         let mut unknown = Vec::new();
@@ -422,7 +422,7 @@ where
             let pending = batch.state.pending_calls().clone();
             let mut outcomes: BTreeMap<Seq, Completion> = BTreeMap::new();
             let mut order = Vec::new();
-            for entry in parent {
+            for entry in followed {
                 if let Event::Completion(completion) = &entry.event
                     && let Some(seq) = completion_seq(completion)
                     && inherited.contains(&seq)
@@ -444,7 +444,7 @@ where
                 {
                     continue;
                 }
-                let idempotent = source
+                let idempotent = start
                     .action_set
                     .action(action)
                     .map(|action| action.policy.idempotent);
@@ -519,7 +519,7 @@ pub(crate) fn completion_seq(completion: &Completion) -> Option<Seq> {
     }
 }
 
-/// Matches the commands the fork's code emitted against its parent's. Returns where the fork
+/// Matches the commands the fork's code emitted against its source's. Returns where the fork
 /// stops following, if it does; the calls matched before `at` are inherited.
 fn follow(
     cursor: &mut ReplayCursor<'_>,
@@ -538,7 +538,7 @@ fn follow(
                 }
             }
             Ok(Replayed::Matched { index }) => return Err(ForkPoint::At(index)),
-            Ok(Replayed::Aborted { index, .. }) => return Err(ForkPoint::ParentAborted(index)),
+            Ok(Replayed::Aborted { index, .. }) => return Err(ForkPoint::SourceAborted(index)),
             Err(mismatch) => return Err(ForkPoint::Diverged(mismatch)),
         }
     }

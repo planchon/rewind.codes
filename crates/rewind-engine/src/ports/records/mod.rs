@@ -14,7 +14,7 @@ use rewind_core::{ActionSet, Code, RunId, Timestamp};
 
 pub use activation::{InboxItem, PayloadRecord, Trigger};
 pub use runs::{
-    Created, Enqueued, ForkParent, QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind,
+    Created, Enqueued, ForkSource, QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind,
     RunMetadata, TraceContext,
 };
 pub use tasks::{

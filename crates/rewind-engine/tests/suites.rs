@@ -1,4 +1,4 @@
-//! The gate: a version is saved only if its suite, inherited from its parent, passes; tests are
+//! The gate: a version is saved only if its suite, inherited from its base, passes; tests are
 //! retired and updated with a reason; tests recorded from runs, one per path
 //! (`archi/05-testing-and-observability.md`, "Suites and the gate", "Tests recorded from runs").
 
@@ -125,7 +125,7 @@ async fn setup() -> World {
 }
 
 #[tokio::test]
-async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
+async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
     let world = setup().await;
     let checker = StaticTypeChecker::default();
     let v1 = world
@@ -144,7 +144,7 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
         .await
         .unwrap();
     let suite = v1.workflow.suite();
-    assert_eq!(suite.parent, None);
+    assert_eq!(suite.base, None);
     assert_eq!(suite.tests.len(), 1);
     assert_eq!(suite.tests[0].name, "closes one");
     // The test is stored, under the digest the version holds.
@@ -216,7 +216,7 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
         .await
         .unwrap();
     let suite = v2.workflow.suite();
-    assert_eq!(suite.parent, Some(v1.workflow.version()));
+    assert_eq!(suite.base, Some(v1.workflow.version()));
     assert_eq!(suite.updated.len(), 1);
     assert_eq!(suite.updated[0].from, digest);
     assert_eq!(suite.updated[0].to, suite.tests[0].test);
@@ -269,7 +269,7 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
                 retire: vec![retire(&["closes two"], "gone")],
                 ..SuiteChanges::default()
             },
-            "retire names \"closes two\", which the parent's suite does not have (it has \
+            "retire names \"closes two\", which the base's suite does not have (it has \
              \"closes one\")",
         ),
         (
@@ -397,16 +397,16 @@ async fn a_save_sent_again_returns_the_version_it_made() {
         .register_workflow(second(), &checker, &kit())
         .await
         .unwrap();
-    assert_eq!(v2.workflow.suite().parent, Some(v1.workflow.version()));
+    assert_eq!(v2.workflow.suite().base, Some(v1.workflow.version()));
     let again = world
         .edge
         .register_workflow(second(), &checker, &kit())
         .await;
     assert_eq!(again.unwrap(), v2);
 
-    // Named as the parent, the version itself gets the changes, which do not apply to it.
+    // Named as the base, the version itself gets the changes, which do not apply to it.
     let mut onto = second();
-    onto.suite.parent = Some(v2.workflow.version());
+    onto.suite.base = Some(v2.workflow.version());
     match world.edge.register_workflow(onto, &checker, &kit()).await {
         Err(RegisterError::Suite(error)) => assert!(
             error.to_string().starts_with("retire names \"closes one\""),
