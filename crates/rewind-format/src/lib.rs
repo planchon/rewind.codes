@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 pub mod partition;
+pub mod rename;
 mod v1;
 
 use rewind_core::{
