@@ -463,7 +463,7 @@ impl From<&rewind_core::ActionFailure> for ActionFailure {
 pub enum ActionFailureKind {
     /// The action ran and reported an error.
     Error,
-    /// The action could not be reached, after retries.
+    /// The action could not be reached, after redeliveries.
     Unavailable,
     /// The action did not answer in time.
     Timeout,

@@ -474,7 +474,7 @@ pub(super) async fn actions(
                     .iter()
                     .map(|(kind, count)| (kind.as_str().to_owned(), *count))
                     .collect(),
-                retries: calls.retries,
+                redeliveries: calls.redeliveries,
                 latency_ms: Latency {
                     p50: latency.map_or(0, |latency| latency.p50_ms),
                     p95: latency.map_or(0, |latency| latency.p95_ms),

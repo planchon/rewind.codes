@@ -365,7 +365,7 @@ fn task(run: &RunRef, seq: u32, state: TaskState) -> TaskRecord {
             route,
             args: json!({ "seq": seq }).into(),
             state,
-            attempt: 0,
+            delivery: 0,
             schema_change_approved: false,
             created_at: T0,
         },
@@ -375,7 +375,7 @@ fn task(run: &RunRef, seq: u32, state: TaskState) -> TaskRecord {
 
 fn ready(at: Timestamp) -> TaskState {
     TaskState::Ready {
-        next_attempt_at: at,
+        next_delivery_at: at,
     }
 }
 
@@ -2396,7 +2396,7 @@ pub async fn counters_sum_whole_hours_of_the_scope<S: PartitionStore>(store: &S)
             completed: 1,
             failed: 1,
             errors: BTreeMap::from([(ActionFailureKind::Timeout, 1)]),
-            retries: 1,
+            redeliveries: 1,
             latency: crate::ports::Sketch::of([120]),
         },
     )]);

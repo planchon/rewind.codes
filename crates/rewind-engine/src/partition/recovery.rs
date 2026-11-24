@@ -8,7 +8,7 @@
 //!   activation may have been running when the previous owner died;
 //! - the timers due before the horizon, to the wheel;
 //! - the calls in flight: every `ready` task that is due is interrupted, sent again with
-//!   attempt + 1 under `retry`, failed `outcome_unknown` under `at_most_once`, in the recovery
+//!   delivery + 1 under `retry`, failed `outcome_unknown` under `at_most_once`, in the recovery
 //!   batch;
 //! - the outbox, to the projections; the ended attempts not sealed, to the sealer;
 //! - the counters, reported to their organization actors; the organizations homed here;
@@ -153,25 +153,25 @@ impl<P: Plane> Owner<P> {
         // The calls that may have been in flight, as their policy says.
         let mut interrupted = Vec::new();
         for record in tasks {
-            if let TaskState::Ready { next_attempt_at } = record.task.state
-                && next_attempt_at <= now
+            if let TaskState::Ready { next_delivery_at } = record.task.state
+                && next_delivery_at <= now
             {
                 interrupted.push(record);
             }
         }
         for record in interrupted {
             let task = record.task.task.clone();
-            let next = record.task.attempt.saturating_add(1);
+            let next = record.task.delivery.saturating_add(1);
             match crate::tasks::calls::interrupted(
                 &record.task.action,
                 record.task.policy.on_interruption,
                 next,
-                self.config.max_tool_attempts,
+                self.config.max_deliveries,
             ) {
                 Some(failure) => self.finish_in(&mut unit, &task, &record, Err(failure)),
                 None => {
                     let mut record = record;
-                    record.task.attempt = next;
+                    record.task.delivery = next;
                     unit.change(Change::Task {
                         run: task.run.clone(),
                         seq: task.seq,

@@ -293,8 +293,8 @@ pub struct ActionCounts {
     pub completed: u64,
     pub failed: u64,
     pub errors: BTreeMap<ActionFailureKind, u64>,
-    /// Attempts beyond the first.
-    pub retries: u64,
+    /// Deliveries beyond the first.
+    pub redeliveries: u64,
     /// From the call to its outcome, in logical time.
     pub latency: Sketch,
 }
@@ -305,7 +305,7 @@ impl ActionCounts {
         self.completed += other.completed;
         self.failed += other.failed;
         add_counts(&mut self.errors, &other.errors);
-        self.retries += other.retries;
+        self.redeliveries += other.redeliveries;
         self.latency.add(&other.latency);
     }
 }

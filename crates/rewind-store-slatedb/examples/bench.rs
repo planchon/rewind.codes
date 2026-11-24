@@ -450,9 +450,9 @@ impl Runs {
                 route,
                 args: json!({ "repo": "acme/app", "issue": seq }).into(),
                 state: TaskState::Ready {
-                    next_attempt_at: at,
+                    next_delivery_at: at,
                 },
-                attempt: 0,
+                delivery: 0,
                 schema_change_approved: false,
                 created_at: at,
             },

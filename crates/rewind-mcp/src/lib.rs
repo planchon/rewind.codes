@@ -12,7 +12,7 @@
 //! journal; a secret or a key goes only into the transport, never into a result, a failure or a
 //! log.
 //!
-//! How an attempt proves who calls (`archi/04-tools.md`, "Authenticating calls"), from the
+//! How a delivery proves who calls (`archi/04-tools.md`, "Authenticating calls"), from the
 //! [`CallAuth`] the engine resolved:
 //!
 //! | `CallAuth` | The session |
@@ -330,7 +330,7 @@ impl ActionDispatcher for McpDispatcher {
             run = %call.run,
             seq = call.seq.0,
             action = %call.action.name,
-            attempt = call.attempt,
+            delivery = call.delivery,
             outcome = outcome_name(&dispatched),
             "MCP call"
         );

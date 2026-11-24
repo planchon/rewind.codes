@@ -4,7 +4,7 @@
 //! a run from its head and its history, a run of a list from its summary.
 //!
 //! The evals cannot depend on `rewind-server`, a composition root: what follows repeats its
-//! rules. Two differences: `attempts` stays empty (the SDK's texts do not show it), and the call
+//! rules. Two differences: `deliveries` stays empty (the SDK's texts do not show it), and the call
 //! whose `ActionError` failed the run is found by the message the runtime writes, `{action} failed:
 //! {message}`.
 
@@ -159,7 +159,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
         abort,
         waiting_for,
         logs: logs(&history),
-        attempts: Vec::new(),
+        deliveries: Vec::new(),
         history_len: (history.len() as u64).max(record.history_len),
         created_at: timestamp(record.created_at),
         updated_at: timestamp(record.updated_at),
@@ -252,7 +252,7 @@ async fn waiting(
             call_id: format!("{}/{}", run.id, seq.0),
             state: task_state,
             parked,
-            attempt: task.map_or(1, |task| task.attempt.max(1)),
+            delivery: task.map_or(1, |task| task.delivery.max(1)),
             callsite,
         });
     }

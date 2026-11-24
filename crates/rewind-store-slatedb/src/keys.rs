@@ -241,7 +241,7 @@ fn rank(kind: &TimerKind) -> u8 {
         TimerKind::Script { .. } => 0,
         TimerKind::CallTimeout { .. } => 1,
         TimerKind::DeferredDeadline { .. } => 2,
-        TimerKind::RetryBackoff { .. } => 3,
+        TimerKind::RedeliveryBackoff { .. } => 3,
         TimerKind::RunDeadline { .. } => 4,
         TimerKind::ActivationRetry { .. } => 5,
         TimerKind::RetentionEnd { .. } => 6,

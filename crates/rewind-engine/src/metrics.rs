@@ -19,8 +19,8 @@
 //! | `rewind.instance_cache.lookups` | counter | `rewind.result`: `hit`, `miss` | activations of a started run, by whether its instance was kept (sticky execution) |
 //! | `rewind.instance_cache.evictions` | counter | | instances dropped to keep the cache within its bounds |
 //! | `rewind.runs.quarantined` | counter | `rewind.reason`: `non_determinism`, `failures` | runs quarantined |
-//! | `rewind.tool_attempt.duration` | histogram, s (span `tool_attempt`) | `rewind.action`, `rewind.outcome`: `result`, `failed`, `transient`, `deferred`, `parked` | one dispatch of a call, to its answer |
-//! | `rewind.tool_attempt.retries` | counter | `rewind.action` | transient failures dispatched again after a backoff |
+//! | `rewind.delivery.duration` | histogram, s (span `delivery`) | `rewind.action`, `rewind.outcome`: `result`, `failed`, `transient`, `deferred`, `parked` | one dispatch of a call, to its answer |
+//! | `rewind.delivery.redeliveries` | counter | `rewind.action` | transient failures delivered again after a backoff |
 //!
 //! Run metrics, derived from an activation's new entries and recorded by the run's owner once
 //! the batch that commits them is durable, for every run (sampling is for traces), mock runs
@@ -44,8 +44,8 @@ pub const REPLAY_DURATION: &str = "rewind.replay.duration";
 pub const INSTANCE_CACHE_LOOKUPS: &str = "rewind.instance_cache.lookups";
 pub const INSTANCE_CACHE_EVICTIONS: &str = "rewind.instance_cache.evictions";
 pub const RUNS_QUARANTINED: &str = "rewind.runs.quarantined";
-pub const TOOL_ATTEMPT_DURATION: &str = "rewind.tool_attempt.duration";
-pub const TOOL_ATTEMPT_RETRIES: &str = "rewind.tool_attempt.retries";
+pub const DELIVERY_DURATION: &str = "rewind.delivery.duration";
+pub const REDELIVERIES: &str = "rewind.delivery.redeliveries";
 pub const RUNS_STARTED: &str = "rewind.runs.started";
 pub const RUNS_ENDED: &str = "rewind.runs.ended";
 pub const CALL_DURATION: &str = "rewind.call.duration";
@@ -111,10 +111,10 @@ pub(crate) fn quarantined(kind: QuarantineKind) {
     );
 }
 
-/// A transient failure of `action` is dispatched again after a backoff.
-pub(crate) fn tool_retry(action: &str) {
+/// A transient failure of `action` is delivered again after a backoff.
+pub(crate) fn redelivery(action: &str) {
     tracing::info!(
-        monotonic_counter.rewind.tool_attempt.retries = 1_u64,
+        monotonic_counter.rewind.delivery.redeliveries = 1_u64,
         rewind.action = action
     );
 }

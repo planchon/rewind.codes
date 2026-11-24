@@ -6,7 +6,7 @@
 //! ready ─ per-run limit ─┬─ MCP, API: a slot of the organization ─ SlotGranted ─► call executor
 //!                        ├─ built-ins, mock mode ───────────────────────────────► call executor
 //!                        └─ harness action: prepared, then offered to the organization ─► an SDK stream
-//! outcome ─► done (a completion in the inbox), ready after a backoff (attempt + 1), deferred
+//! outcome ─► done (a completion in the inbox), ready after a backoff (delivery + 1), deferred
 //!            with a deadline, parked; then the slot is freed
 //! ```
 //!
@@ -67,10 +67,10 @@ impl<P: Plane> Owner<P> {
         {
             return;
         }
-        let TaskState::Ready { next_attempt_at } = record.task.state else {
+        let TaskState::Ready { next_delivery_at } = record.task.state else {
             return;
         };
-        if next_attempt_at > now {
+        if next_delivery_at > now {
             // Its backoff timer sends it.
             return;
         }
@@ -308,7 +308,7 @@ impl<P: Plane> Owner<P> {
     pub(crate) fn call_done(&mut self, done: CallDone) {
         let CallDone {
             task,
-            attempt,
+            delivery,
             action,
             outcome,
         } = done;
@@ -316,7 +316,7 @@ impl<P: Plane> Owner<P> {
             .slot(task.run.id)
             .filter(|slot| !slot.head.is_ended())
             .and_then(|slot| slot.tasks.get(&task.seq).cloned())
-            .filter(|record| record.task.attempt == attempt);
+            .filter(|record| record.task.delivery == delivery);
         let Some(record) = record else {
             // The task is done, its run ended or erased, or it was sent again since: the outcome
             // is dropped, and the slot it held goes back.
@@ -358,7 +358,7 @@ impl<P: Plane> Owner<P> {
                         request,
                         Ask::Child {
                             task,
-                            attempt,
+                            delivery,
                             start,
                             neighbours,
                         },
@@ -500,10 +500,10 @@ impl<P: Plane> Owner<P> {
             )));
         }
         if let Some(slot) = self.slot(task.run.id)
-            && let Some(delta) = derive::retries_counters(
+            && let Some(delta) = derive::redeliveries_counters(
                 &slot.head,
                 &record.task.action,
-                record.task.attempt,
+                record.task.delivery,
                 self.now(),
             )
         {
@@ -515,23 +515,23 @@ impl<P: Plane> Owner<P> {
         self.drop_flight(unit, task);
     }
 
-    /// A transient failure: under `retry`, the task is ready again after a backoff, attempt + 1;
+    /// A transient failure: under `retry`, the task is ready again after a backoff, delivery + 1;
     /// otherwise the failure is its outcome.
     fn transient(&mut self, task: &TaskRef, record: TaskRecord, failure: ActionFailure) {
         let retry = record.task.policy.on_interruption == Interruption::Retry
-            && record.task.attempt < self.config.max_tool_attempts;
+            && record.task.delivery < self.config.max_deliveries;
         if !retry {
             let mut unit = Unit::new();
             self.finish_in(&mut unit, task, &record, Err(failure));
             self.push(unit);
             return;
         }
-        crate::metrics::tool_retry(&record.task.action);
+        crate::metrics::redelivery(&record.task.action);
         let asked = asked_wait(&failure);
         self.backoff(task, record, asked, true);
     }
 
-    /// The task is ready again after the backoff of its attempt (at least `at_least`): attempt
+    /// The task is ready again after the backoff of its delivery (at least `at_least`): delivery
     /// + 1 when it was sent.
     fn backoff(
         &mut self,
@@ -544,20 +544,20 @@ impl<P: Plane> Owner<P> {
         let delay = self
             .config
             .backoff
-            .delay(&key, record.task.attempt.max(1))
+            .delay(&key, record.task.delivery.max(1))
             .max(at_least);
         let next = self.now().saturating_add(delay);
         record.task.state = TaskState::Ready {
-            next_attempt_at: next,
+            next_delivery_at: next,
         };
         if sent {
-            record.task.attempt = record.task.attempt.saturating_add(1);
+            record.task.delivery = record.task.delivery.saturating_add(1);
         }
         let mut unit = Unit::new();
         self.put_task(&mut unit, record);
         unit.change(Change::Timer(TimerChange::Set(DueTimer {
             at: next,
-            kind: TimerKind::RetryBackoff {
+            kind: TimerKind::RedeliveryBackoff {
                 run: task.run.clone(),
                 seq: task.seq,
             },
@@ -724,7 +724,7 @@ impl<P: Plane> Owner<P> {
             ParkKind::SecretMissing => credentials_expired(CredentialsExpiredReason::Missing),
         };
         Some(WebhookEvent {
-            id: format!("{}/{}/{}", task.run.id, seq.0, record.task.attempt),
+            id: format!("{}/{}/{}", task.run.id, seq.0, record.task.delivery),
             tenant: task.run.tenant.clone(),
             namespace: Some(slot.head.namespace.clone()),
             run: Some(task.run.id),
@@ -754,7 +754,7 @@ impl<P: Plane> Owner<P> {
     pub(crate) fn child_admitted(
         &mut self,
         task: &TaskRef,
-        attempt: u32,
+        delivery: u32,
         start: Box<crate::ports::link::StartAtOwner>,
         admission: Result<(), Refusal>,
         neighbours: &[rewind_core::RunId],
@@ -763,7 +763,7 @@ impl<P: Plane> Owner<P> {
             .slot(task.run.id)
             .filter(|slot| !slot.head.is_ended())
             .and_then(|slot| slot.tasks.get(&task.seq).cloned())
-            .filter(|record| record.task.attempt == attempt);
+            .filter(|record| record.task.delivery == delivery);
         let Some(record) = record else {
             // The caller ended meanwhile: the admission is released.
             if admission.is_ok() {
@@ -930,7 +930,7 @@ impl<P: Plane> Owner<P> {
                 self.answered(&task);
                 if retryable
                     && record.task.policy.on_interruption == Interruption::Retry
-                    && record.task.attempt < self.config.max_tool_attempts
+                    && record.task.delivery < self.config.max_deliveries
                 {
                     self.reply(reply, PartitionReply::Answered(Ok(())));
                     self.backoff(&task, record, asked_wait(&failure), true);
@@ -981,7 +981,7 @@ impl<P: Plane> Owner<P> {
                     record.task.schema_change_approved = true;
                 }
                 record.task.state = TaskState::Ready {
-                    next_attempt_at: self.now(),
+                    next_delivery_at: self.now(),
                 };
                 self.put_task(&mut unit, record);
                 unit.then(After::Dispatch(task.clone()));
@@ -1008,8 +1008,8 @@ impl<P: Plane> Owner<P> {
     }
 
     /// A harness task handed on a stream that closed and did not come back within its grace: sent
-    /// again with attempt + 1 under `retry`, failed `outcome_unknown` under `at_most_once` or
-    /// past the maximum of attempts.
+    /// again with delivery + 1 under `retry`, failed `outcome_unknown` under `at_most_once` or
+    /// past the maximum of deliveries.
     pub(crate) fn lost(&mut self, task: &TaskRef, token: &TaskToken) {
         let hash = tokens::hash(&token.0);
         if self.flights.get(task) != Some(&Flight::Handed { token: hash }) {
@@ -1027,19 +1027,19 @@ impl<P: Plane> Owner<P> {
 
     /// An interrupted call, as its policy says.
     pub(crate) fn interrupt(&mut self, task: &TaskRef, mut record: TaskRecord) {
-        let next = record.task.attempt.saturating_add(1);
+        let next = record.task.delivery.saturating_add(1);
         let mut unit = Unit::new();
         match interrupted(
             &record.task.action,
             record.task.policy.on_interruption,
             next,
-            self.config.max_tool_attempts,
+            self.config.max_deliveries,
         ) {
             Some(failure) => self.finish_in(&mut unit, task, &record, Err(failure)),
             None => {
-                record.task.attempt = next;
+                record.task.delivery = next;
                 record.task.state = TaskState::Ready {
-                    next_attempt_at: self.now(),
+                    next_delivery_at: self.now(),
                 };
                 self.put_task(&mut unit, record);
                 self.drop_flight(&mut unit, task);
@@ -1179,7 +1179,7 @@ impl<P: Plane> Owner<P> {
             return;
         }
         record.task.state = TaskState::Ready {
-            next_attempt_at: self.now(),
+            next_delivery_at: self.now(),
         };
         let mut unit = Unit::new();
         self.put_task(&mut unit, record);

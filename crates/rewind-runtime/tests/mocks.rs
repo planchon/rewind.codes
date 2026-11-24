@@ -22,7 +22,7 @@ mod support;
 use support::{T0, World};
 
 const MOCKS: &str = r#"
-type Call = { action: string; runId: string; seq: number; attempt: number; idempotencyKey: string };
+type Call = { action: string; runId: string; seq: number; delivery: number; idempotencyKey: string };
 
 let closed = 0;
 
@@ -31,8 +31,13 @@ export default {
   github: {
     close_issue: async ({ number }: { number: number }, call: Call) => {
       closed += 1;
-      return { number, closed, key: call.idempotencyKey, seq: call.seq, attempt: call.attempt };
+      return { number, closed, key: call.idempotencyKey, seq: call.seq, delivery: call.delivery };
     },
+    // A handler written before calls had actions and deliveries reads `tool` and `attempt`.
+    reopen_issue: (_: unknown, call: { tool: string; attempt: number }) => ({
+      tool: call.tool,
+      attempt: call.attempt,
+    }),
   },
   clock: () => ({ now: Date.now(), random: Math.random(), uuid: crypto.randomUUID() }),
   fails: () => {
@@ -81,7 +86,7 @@ fn call(action: &str, args: Value) -> Call {
         api: None,
         args,
         idempotency_key: format!("{run}/3"),
-        attempt: 2,
+        delivery: 2,
         schema_change_approved: false,
         token: TaskToken("token".into()),
         trace_context: None,
@@ -100,7 +105,7 @@ fn failure(dispatched: Dispatched) -> ActionFailure {
 }
 
 #[tokio::test]
-async fn handlers_answer_by_action_name_or_namespace() {
+async fn handlers_answer_by_action_name_or_group() {
     let mocks = mocks(MOCKS).await.unwrap();
     let actions: Vec<&str> = mocks.actions().iter().map(String::as_str).collect();
     assert_eq!(
@@ -110,6 +115,7 @@ async fn handlers_answer_by_action_name_or_namespace() {
             "fails",
             "github.close_issue",
             "github.get_issue",
+            "github.reopen_issue",
             "logs",
             "rejects",
             "spins",
@@ -132,10 +138,14 @@ async fn handlers_answer_by_action_name_or_namespace() {
                 "closed": closed,
                 "key": format!("{}/3", RunId::from_u128(7)),
                 "seq": 3,
-                "attempt": 2,
+                "delivery": 2,
             }))
         );
     }
+    assert_eq!(
+        dispatch(&mocks, "github.reopen_issue", json!({})).await,
+        Dispatched::Result(json!({ "tool": "github.reopen_issue", "attempt": 2 }))
+    );
     assert_eq!(
         dispatch(&mocks, "logs", json!({ "a": 1 })).await,
         Dispatched::Result(Value::Null)

@@ -95,7 +95,7 @@ async fn output(world: &mut World, run: &RunRef) -> JsonValue {
 #[tokio::test]
 async fn a_transient_failure_is_retried_no_sooner_than_its_retry_after() {
     let dispatcher = RecordingDispatcher::dispatching(|call, _| {
-        if call.attempt < 2 {
+        if call.delivery < 2 {
             Dispatched::Transient(ActionFailure {
                 kind: ActionFailureKind::Unavailable,
                 message: "rate limited".into(),

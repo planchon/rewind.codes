@@ -450,10 +450,10 @@ pub struct HarnessTask {
     pub namespace: NamespaceName,
     pub action: String,
     pub args: JsonValue,
-    /// The same on every attempt: the handler recognizes a call it already made.
+    /// The same on every delivery: the handler recognizes a call it already made.
     pub idempotency_key: String,
-    /// From 1. Above 1, an earlier attempt failed or was interrupted.
-    pub attempt: u32,
+    /// From 1. Above 1, an earlier delivery failed or was interrupted.
+    pub delivery: u32,
     /// The action's execution timeout, if it has one.
     pub execution_timeout: Option<Duration>,
     /// The run's labels.
@@ -491,7 +491,7 @@ pub enum OwnerNotice {
     /// The call may be sent.
     SlotGranted { task: TaskRef },
     /// These harness tasks were handed on a stream that closed and did not come back within its
-    /// grace: each is interrupted (attempt + 1, or `outcome_unknown` under `at_most_once`).
+    /// grace: each is interrupted (delivery + 1, or `outcome_unknown` under `at_most_once`).
     StreamLost { tasks: Vec<(TaskRef, TaskToken)> },
     /// A new organization actor asks for the counts of the tenant's namespaces.
     CountsWanted { tenant: TenantId },

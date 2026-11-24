@@ -91,13 +91,13 @@ fn waiting(waiting: &Waiting) -> String {
             args,
             state,
             parked,
-            attempt,
+            delivery,
             callsite,
             call_id,
         } => {
             let state = snake_case(&format!("{state:?}"));
             let mut text = format!(
-                "call #{seq} {action}({}): {state}, attempt {attempt}",
+                "call #{seq} {action}({}): {state}, delivery {delivery}",
                 payload(args)
             );
             if let Some(parked) = parked {
@@ -334,7 +334,7 @@ mod tests {
                 callsite: Some(Callsite { line: 4, column: 9 }),
             }],
             logs: Vec::new(),
-            attempts: Vec::new(),
+            deliveries: Vec::new(),
             history_len: 3,
             created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
             updated_at: "2026-01-01T00:00:00Z".parse().unwrap(),

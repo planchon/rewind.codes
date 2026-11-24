@@ -297,7 +297,7 @@ impl ActionDispatcher for ApiDispatcher {
             run = %call.run,
             seq = call.seq.0,
             action = %call.action.name,
-            attempt = call.attempt,
+            attempt = call.delivery,
             outcome = match &dispatched {
                 Dispatched::Result(_) => "result",
                 Dispatched::Failed(_) => "failed",

@@ -231,7 +231,7 @@ pub struct Task {
     #[serde(with = "with::policy")]
     pub policy: ActionPolicy,
     pub state: TaskState,
-    pub attempt: u32,
+    pub delivery: u32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub schema_change_approved: bool,
     pub created_at: u64,
@@ -266,14 +266,14 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// `{"type":"approval"}`, `{"type":"ready","next_attempt_at":…}`,
+/// `{"type":"approval"}`, `{"type":"ready","next_delivery_at":…}`,
 /// `{"type":"claimed","owner":…,"until":…}`, `{"type":"deferred","until":…}` or
 /// `{"type":"parked","kind":…,"message":…}`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskState {
     Approval {},
-    Ready { next_attempt_at: u64 },
+    Ready { next_delivery_at: u64 },
     Claimed { owner: String, until: u64 },
     Deferred { until: u64 },
     Parked { kind: ParkKind, message: String },
@@ -314,7 +314,7 @@ pub enum TimerKind {
         run: RunId,
         seq: u32,
     },
-    RetryBackoff {
+    RedeliveryBackoff {
         #[serde(with = "with::run_id")]
         run: RunId,
         seq: u32,
@@ -559,7 +559,7 @@ pub struct ActionCounts {
     pub failed: u64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub errors: BTreeMap<FailureKind, u64>,
-    pub retries: u64,
+    pub redeliveries: u64,
     #[serde(default, skip_serializing_if = "Sketch::is_empty")]
     pub latency: Sketch,
 }

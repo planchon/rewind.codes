@@ -192,8 +192,8 @@ pub struct NodeConfig {
     pub limits: Limits,
     pub payloads: PayloadTiers,
     pub backoff: Backoff,
-    /// Attempts at a call (`archi/04-tools.md`, "Policies").
-    pub max_tool_attempts: u32,
+    /// Deliveries of a call (`archi/04-tools.md`, "Policies").
+    pub max_deliveries: u32,
     /// The server's public URL, for `webhook(name)` and the issuer of signed calls.
     pub public_url: Option<String>,
     pub telemetry: TelemetryConfig,
@@ -235,7 +235,7 @@ impl NodeConfig {
             limits: Limits::default(),
             payloads: PayloadTiers::default(),
             backoff: Backoff::default(),
-            max_tool_attempts: 5,
+            max_deliveries: 5,
             public_url: None,
             telemetry: TelemetryConfig::default(),
             default_ttl: Duration::from_secs(30 * DAY),

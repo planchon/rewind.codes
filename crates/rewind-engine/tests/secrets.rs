@@ -494,7 +494,7 @@ async fn a_secret_a_server_echoes_never_reaches_the_history_nor_the_script() {
             panic!("the call carries its secret");
         };
         let value = value.expose();
-        if call.attempt == 1 {
+        if call.delivery == 1 {
             // An error that quotes the key, retried.
             return Dispatched::Transient(ActionFailure {
                 kind: ActionFailureKind::Unavailable,
@@ -660,7 +660,7 @@ async fn a_signed_call_carries_the_tenant_s_key_and_the_claims_of_the_call() {
             action: "dax.ask".into(),
             idempotency_key: format!("{}/1", run.id),
             seq: Seq(1),
-            attempt: 1,
+            delivery: 1,
         }
     );
     assert_eq!(claims.jti(), format!("{}/1/1", run.id));

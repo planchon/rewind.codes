@@ -41,7 +41,7 @@ pub struct RulesDispatcher {
 struct RulesState {
     /// Calls answered by each rule, by action and position.
     used: BTreeMap<(String, usize), u32>,
-    /// A call answered once gets the same answer again (an attempt after an interrupted one).
+    /// A call answered once gets the same answer again (a delivery after an interrupted one).
     answered: BTreeMap<(RunId, Seq), ActionOutcome>,
 }
 
@@ -130,7 +130,7 @@ struct CassetteState {
     used: BTreeSet<usize>,
     /// `sequential`: the next recorded call.
     next: usize,
-    /// A call answered once gets the same answer again (an attempt after an interrupted one).
+    /// A call answered once gets the same answer again (a delivery after an interrupted one).
     answered: BTreeMap<(RunId, Seq), usize>,
 }
 
@@ -367,7 +367,7 @@ mod tests {
             api: None,
             args,
             idempotency_key: format!("r/{seq}"),
-            attempt: 1,
+            delivery: 1,
             schema_change_approved: false,
             token: TaskToken("t".into()),
             trace_context: None,
@@ -498,7 +498,7 @@ mod tests {
             answer(call(1, "a", json!({ "n": 1, "m": 2 }))).await,
             Dispatched::Result(json!("rule, once"))
         );
-        // The same call again (an interrupted attempt) gets the same answer.
+        // The same call again (an interrupted delivery) gets the same answer.
         assert_eq!(
             answer(call(1, "a", json!({ "n": 1, "m": 2 }))).await,
             Dispatched::Result(json!("rule, once"))

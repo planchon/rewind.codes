@@ -266,7 +266,7 @@ fn call(api: &Api, action: &Action, args: Value) -> Call {
         server: None,
         api: Some(api.clone()),
         args,
-        attempt: 1,
+        delivery: 1,
         schema_change_approved: false,
         token: TaskToken("token".into()),
         trace_context: Some(TraceContext {
@@ -287,7 +287,7 @@ fn signed(key: &SigningKey, call: &Call) -> CallAuth {
             action: call.action.name.clone(),
             idempotency_key: call.idempotency_key.clone(),
             seq: call.seq,
-            attempt: call.attempt,
+            delivery: call.delivery,
         },
     }
 }

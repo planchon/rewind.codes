@@ -22,8 +22,8 @@ pub enum TimerKind {
     CallTimeout { run: RunRef, seq: Seq },
     /// The deadline of a deferred task: it ends with its timeout failure.
     DeferredDeadline { run: RunRef, seq: Seq },
-    /// A task's next attempt after a backoff (`next_attempt_at`): it is sent again.
-    RetryBackoff { run: RunRef, seq: Seq },
+    /// A task's next delivery after a backoff (`next_delivery_at`): it is sent again.
+    RedeliveryBackoff { run: RunRef, seq: Seq },
     /// The run's deadline (`expires_at`): `cancel_requested { ttl }`, once.
     RunDeadline { run: RunRef },
     /// A failed activation is tried again (`archi/03-execution.md`, "Activations").
@@ -42,7 +42,7 @@ impl TimerKind {
             TimerKind::Script { run, .. }
             | TimerKind::CallTimeout { run, .. }
             | TimerKind::DeferredDeadline { run, .. }
-            | TimerKind::RetryBackoff { run, .. }
+            | TimerKind::RedeliveryBackoff { run, .. }
             | TimerKind::RunDeadline { run }
             | TimerKind::ActivationRetry { run }
             | TimerKind::RetentionEnd { run } => Some(run),
@@ -55,7 +55,7 @@ impl TimerKind {
             TimerKind::Script { run, .. }
             | TimerKind::CallTimeout { run, .. }
             | TimerKind::DeferredDeadline { run, .. }
-            | TimerKind::RetryBackoff { run, .. }
+            | TimerKind::RedeliveryBackoff { run, .. }
             | TimerKind::RunDeadline { run }
             | TimerKind::ActivationRetry { run }
             | TimerKind::RetentionEnd { run } => &run.tenant,
@@ -69,7 +69,7 @@ impl TimerKind {
             TimerKind::Script { seq, .. }
             | TimerKind::CallTimeout { seq, .. }
             | TimerKind::DeferredDeadline { seq, .. }
-            | TimerKind::RetryBackoff { seq, .. } => Some(*seq),
+            | TimerKind::RedeliveryBackoff { seq, .. } => Some(*seq),
             _ => None,
         }
     }
@@ -88,7 +88,7 @@ impl TimerKind {
             TimerKind::Script { .. } => 0,
             TimerKind::CallTimeout { .. } => 1,
             TimerKind::DeferredDeadline { .. } => 2,
-            TimerKind::RetryBackoff { .. } => 3,
+            TimerKind::RedeliveryBackoff { .. } => 3,
             TimerKind::RunDeadline { .. } => 4,
             TimerKind::ActivationRetry { .. } => 5,
             TimerKind::RetentionEnd { .. } => 6,

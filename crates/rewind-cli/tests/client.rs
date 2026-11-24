@@ -80,7 +80,7 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         abort: None,
         waiting_for: Vec::new(),
         logs: Vec::new(),
-        attempts: Vec::new(),
+        deliveries: Vec::new(),
         history_len: 2,
         created_at: at(),
         updated_at: at(),

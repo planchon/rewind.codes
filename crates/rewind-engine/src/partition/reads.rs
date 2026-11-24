@@ -200,12 +200,12 @@ impl<P: Plane> Owner<P> {
                         }
                         let mut tasks = log.tasks(&run).await.map_err(unavailable)?;
                         for record in &mut tasks {
-                            if let TaskState::Ready { next_attempt_at } = record.task.state
+                            if let TaskState::Ready { next_delivery_at } = record.task.state
                                 && in_flight.contains(&record.task.task.seq)
                             {
                                 record.task.state = TaskState::Claimed {
                                     owner: node.clone(),
-                                    until: next_attempt_at,
+                                    until: next_delivery_at,
                                 };
                             }
                         }

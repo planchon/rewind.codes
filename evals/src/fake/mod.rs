@@ -39,7 +39,7 @@ pub mod tracker;
 pub struct CallContext {
     /// The episode's virtual time.
     pub now: Timestamp,
-    /// `_meta["codes.rewind/idempotency-key"]`: the same for every attempt of one call.
+    /// `_meta["codes.rewind/idempotency-key"]`: the same for every delivery of one call.
     pub idempotency_key: Option<String>,
 }
 

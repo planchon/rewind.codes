@@ -626,7 +626,7 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
     let calls = world.plane.dispatcher.calls();
     assert_eq!(
-        calls.iter().map(|call| call.attempt).collect::<Vec<_>>(),
+        calls.iter().map(|call| call.delivery).collect::<Vec<_>>(),
         [1, 2, 3],
         "each try is an attempt more"
     );
@@ -787,7 +787,7 @@ async fn harness_tasks_are_handed_to_sdk_streams_and_answered_through_their_toke
     assert_eq!(handed.len(), 1);
     let task = &handed[0];
     assert_eq!(task.action, "a");
-    assert_eq!(task.attempt, 1);
+    assert_eq!(task.delivery, 1);
     assert_eq!(task.idempotency_key, format!("{}/1", run.id));
     assert!(
         world.plane.dispatcher.calls().is_empty(),
@@ -817,7 +817,7 @@ async fn harness_tasks_are_handed_to_sdk_streams_and_answered_through_their_toke
     world.idle().await;
     let second = support::plane::handed(&mut stream);
     assert_eq!(second.len(), 1);
-    assert_eq!(second[0].attempt, 2);
+    assert_eq!(second[0].delivery, 2);
     assert_ne!(second[0].token, first[0].token);
     world.complete(&second[0].token, json!({})).await.unwrap();
     world.idle().await;

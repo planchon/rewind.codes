@@ -160,7 +160,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "The grace after a stream closes: how long a harness call handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
+                "description": "The grace after a stream closes: how long a harness call handed on a stream that closed\nwaits for its worker to come back before it is handed again, as delivery + 1. 60 seconds\nby default."
               },
               {
                 "type": "null"
@@ -182,7 +182,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "How long one attempt may take. 5 minutes by default for MCP actions."
+                "description": "How long one delivery may take. 5 minutes by default for MCP actions."
               },
               {
                 "type": "null"
@@ -452,8 +452,8 @@
             "$ref": "#/components/schemas/Latency",
             "description": "From `schedule_call` to the completion, in milliseconds, over the calls that have an\noutcome; zeros when none has."
           },
-          "retries": {
-            "description": "Attempts beyond the first, over every call.",
+          "redeliveries": {
+            "description": "Deliveries beyond the first, over every call.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -464,7 +464,7 @@
           "calls",
           "errors",
           "errorKinds",
-          "retries",
+          "redeliveries",
           "latencyMs"
         ],
         "type": "object"
@@ -997,27 +997,6 @@
         "propertyNames": {
           "type": "string"
         },
-        "type": "object"
-      },
-      "CallAttempts": {
-        "description": "How many times a call was sent.",
-        "properties": {
-          "attempts": {
-            "description": "From 1.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "seq": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "seq",
-          "attempts"
-        ],
         "type": "object"
       },
       "CallGone": {
@@ -2154,6 +2133,27 @@
         },
         "type": "object"
       },
+      "Deliveries": {
+        "description": "How many times a call was sent.",
+        "properties": {
+          "deliveries": {
+            "description": "From 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seq": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "deliveries"
+        ],
+        "type": "object"
+      },
       "Diagnostic": {
         "description": "One finding of the checks: tsgo's type errors, the checks at start, and the checker's own\nrules. Written for a model.",
         "example": {
@@ -3239,8 +3239,8 @@
           "args": {
             "description": "The arguments, validated against the action's input schema."
           },
-          "attempt": {
-            "description": "From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed\nand did not come back within its grace.",
+          "delivery": {
+            "description": "From 1. Above 1, an earlier delivery was interrupted: the stream it was handed on closed\nand did not come back within its grace.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -3250,7 +3250,7 @@
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "`{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every\nattempt: the handler uses it to recognize a call it already made.",
+            "description": "`{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every\ndelivery: the handler uses it to recognize a call it already made.",
             "type": "string"
           },
           "labels": {
@@ -3305,7 +3305,7 @@
           "action",
           "args",
           "idempotencyKey",
-          "attempt",
+          "delivery",
           "labels"
         ],
         "type": "object"
@@ -5400,16 +5400,16 @@
             "description": "Digest of the pinned action set.",
             "type": "string"
           },
-          "attempts": {
-            "description": "How many times each call was sent, by seq, for the calls sent more than once: a\ncall retried after a transient failure, or sent again after its worker or dispatcher\ndied. Attempts live in the call tasks, not in the journal: the read model keeps them.",
-            "items": {
-              "$ref": "#/components/schemas/CallAttempts"
-            },
-            "type": "array"
-          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "deliveries": {
+            "description": "How many times each call was delivered, by seq, for the calls delivered more than once: a\ncall delivered again after a transient failure, or after its worker or dispatcher died.\nDeliveries live in the calls' tasks, not in the history: the read model keeps them.",
+            "items": {
+              "$ref": "#/components/schemas/Deliveries"
+            },
+            "type": "array"
           },
           "endedAt": {
             "format": "date-time",
@@ -7883,12 +7883,6 @@
                 "$ref": "#/components/schemas/Payload",
                 "description": "The call's arguments: what the harness approves or rejects."
               },
-              "attempt": {
-                "description": "The attempt in progress, from 1.",
-                "format": "int32",
-                "minimum": 0,
-                "type": "integer"
-              },
               "callId": {
                 "description": "For `POST /v1/calls/{id}/approve` and `/reject`.",
                 "type": "string"
@@ -7902,6 +7896,12 @@
                     "type": "null"
                   }
                 ]
+              },
+              "delivery": {
+                "description": "The delivery in progress, from 1.",
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
               },
               "kind": {
                 "enum": [
@@ -7935,7 +7935,7 @@
               "args",
               "callId",
               "state",
-              "attempt",
+              "delivery",
               "kind"
             ],
             "type": "object"
@@ -10517,7 +10517,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Latency, errors and retries per action",
+        "summary": "Latency, errors and redeliveries per action",
         "tags": [
           "reading"
         ]
@@ -10794,7 +10794,7 @@
     },
     "/v1/calls/stream": {
       "get": {
-        "description": "The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every call\nhanded on it: no heartbeat. When it closes, its calls wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "description": "The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every call\nhanded on it: no heartbeat. When it closes, its calls wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its delivery + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
         "operationId": "streamCalls",
         "parameters": [
           {
@@ -11477,7 +11477,7 @@
         },
         "responses": {
           "204": {
-            "description": "Recorded: delivered as an `ActionError`, or retried."
+            "description": "Recorded: delivered as an `ActionError`, or delivered again."
           },
           "400": {
             "content": {

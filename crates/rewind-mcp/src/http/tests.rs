@@ -126,7 +126,7 @@ fn call(hosts: &[&str], args: Value) -> Call {
         server: None,
         api: None,
         args,
-        attempt: 1,
+        delivery: 1,
         schema_change_approved: false,
         token: TaskToken("t".into()),
         trace_context: None,

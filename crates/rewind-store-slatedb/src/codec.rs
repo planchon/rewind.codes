@@ -307,8 +307,8 @@ pub fn task_record(task: &TaskRecord) -> record::Task {
         policy: action.policy,
         state: match &action.state {
             TaskState::Approval => record::TaskState::Approval {},
-            TaskState::Ready { next_attempt_at } => record::TaskState::Ready {
-                next_attempt_at: next_attempt_at.0,
+            TaskState::Ready { next_delivery_at } => record::TaskState::Ready {
+                next_delivery_at: next_delivery_at.0,
             },
             TaskState::Claimed { owner, until } => record::TaskState::Claimed {
                 owner: owner.clone(),
@@ -324,7 +324,7 @@ pub fn task_record(task: &TaskRecord) -> record::Task {
                 message: reason.message.clone(),
             },
         },
-        attempt: action.attempt,
+        delivery: action.delivery,
         schema_change_approved: action.schema_change_approved,
         created_at: action.created_at.0,
         token_hash: task.token_hash,
@@ -345,8 +345,8 @@ pub fn task_of(record: record::Task) -> Result<TaskRecord, PartitionError> {
             policy: record.policy,
             state: match record.state {
                 record::TaskState::Approval {} => TaskState::Approval,
-                record::TaskState::Ready { next_attempt_at } => TaskState::Ready {
-                    next_attempt_at: Timestamp(next_attempt_at),
+                record::TaskState::Ready { next_delivery_at } => TaskState::Ready {
+                    next_delivery_at: Timestamp(next_delivery_at),
                 },
                 record::TaskState::Claimed { owner, until } => TaskState::Claimed {
                     owner,
@@ -364,7 +364,7 @@ pub fn task_of(record: record::Task) -> Result<TaskRecord, PartitionError> {
                     message,
                 }),
             },
-            attempt: record.attempt,
+            delivery: record.delivery,
             schema_change_approved: record.schema_change_approved,
             created_at: Timestamp(record.created_at),
         },
@@ -395,7 +395,7 @@ pub fn timer_kind_record(kind: &TimerKind) -> record::TimerKind {
             run: run.id,
             seq: seq.0,
         },
-        TimerKind::RetryBackoff { run, seq } => record::TimerKind::RetryBackoff {
+        TimerKind::RedeliveryBackoff { run, seq } => record::TimerKind::RedeliveryBackoff {
             run: run.id,
             seq: seq.0,
         },
@@ -429,7 +429,7 @@ pub fn timer_kind_of(tenant: TenantId, kind: record::TimerKind) -> TimerKind {
             run: run(id),
             seq: Seq(seq),
         },
-        record::TimerKind::RetryBackoff { run: id, seq } => TimerKind::RetryBackoff {
+        record::TimerKind::RedeliveryBackoff { run: id, seq } => TimerKind::RedeliveryBackoff {
             run: run(id),
             seq: Seq(seq),
         },
@@ -681,7 +681,7 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
                         .iter()
                         .map(|(&kind, &count)| (kind.into(), count))
                         .collect(),
-                    retries: calls.retries,
+                    redeliveries: calls.redeliveries,
                     latency: sketch_record(&calls.latency),
                 };
                 (action.clone(), calls)
@@ -752,7 +752,7 @@ pub fn counters_of(record: record::Counters) -> Counters {
                         .into_iter()
                         .map(|(kind, count)| (kind.into(), count))
                         .collect(),
-                    retries: calls.retries,
+                    redeliveries: calls.redeliveries,
                     latency: sketch_of(calls.latency),
                 };
                 (action, calls)

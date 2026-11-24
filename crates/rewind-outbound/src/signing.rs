@@ -6,7 +6,7 @@
 //! | `iss` | `{public-url}/organizations/{tenant}` | The engine |
 //! | `aud` | The API's `baseUrl`, or the MCP server's URL | The dispatcher |
 //! | `sub`, `labels`, `run`, `action`, `idempotency_key` | The run's namespace and labels, the run, the action, `{run_id}/{seq}` | The engine, for the request of a call only |
-//! | `jti` | `{run_id}/{seq}/{attempt}` for the request of a call; a random id for the other requests of an MCP session | The engine; the signer |
+//! | `jti` | `{run_id}/{seq}/{delivery}` for the request of a call; a random id for the other requests of an MCP session | The engine; the signer |
 //! | `htm`, `htu`, `body` | The method, the URL (without a fragment), the SHA-256 of the body in base64url (absent without a body) | The request |
 //! | `iat`, `exp` | Now, and [`TOKEN_LIFETIME`] later, in seconds, by the wall clock | The signer |
 //!
@@ -47,7 +47,7 @@ pub struct CallIdentity {
     pub action: String,
     /// `idempotency_key`: `{run_id}/{seq}`.
     pub idempotency_key: String,
-    /// `jti`: `{run_id}/{seq}/{attempt}`.
+    /// `jti`: `{run_id}/{seq}/{delivery}`.
     pub jti: String,
 }
 

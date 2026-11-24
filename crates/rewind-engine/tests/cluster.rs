@@ -252,13 +252,13 @@ async fn a_lost_message_is_rebuilt_from_the_records_when_the_partition_moves() {
     assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
 
     // Nothing asks again: the call goes once the partition's next owner rebuilds it from the
-    // records, as an interrupted call, attempt + 1.
+    // records, as an interrupted call, delivery + 1.
     world.driver.kill(&other);
     world.settle().await;
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
     let calls = world.plane.dispatcher.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].attempt, 2);
+    assert_eq!(calls[0].delivery, 2);
 }
 
 /// A call that asked its organization actor for a slot, when the actor moves: the actor that
@@ -307,7 +307,7 @@ async fn a_call_waiting_for_its_slot_asks_again_when_the_organization_moves() {
     assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
     let calls = world.plane.dispatcher.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].attempt, 1, "the call was never interrupted");
+    assert_eq!(calls[0].delivery, 1, "the call was never interrupted");
 }
 
 #[tokio::test]
@@ -536,11 +536,11 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
     world.advance(61_000);
     world.settle().await;
 
-    // Under retry: handed again, attempt + 1, with a new token; the old one is gone.
+    // Under retry: handed again, delivery + 1, with a new token; the old one is gone.
     let again = drain(&mut second);
     assert_eq!(again.len(), 1, "{again:?}");
     assert_eq!(again[0].task.run, retried);
-    assert_eq!(again[0].attempt, 2);
+    assert_eq!(again[0].delivery, 2);
     let old = handed.iter().find(|task| task.task.run == retried).unwrap();
     assert_ne!(again[0].token, old.token);
     assert!(matches!(

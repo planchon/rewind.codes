@@ -2,7 +2,7 @@
 //! "When an action set changes during a run").
 //!
 //! Each `schedule_call` an activation commits becomes a call's task in the run's partition.
-//! Its attempts, backoff, approval, deferral and park live in the task; the journal only gets
+//! Its deliveries, backoff, approval, deferral and park live in the task; the journal only gets
 //! the final outcome, as a completion in the run's inbox. The owner of the partition keeps the
 //! lifecycle (`partition::tasks`), the call executor of the node sends the calls ([`calls`]).
 //!
@@ -11,7 +11,7 @@
 //!   approval ──────────────► ready ───────────────────► in flight ──────────────────────────► done
 //!      │ reject_task          ▲ ▲ ▲                      │ │ │ │
 //!      ▼                      │ │ │  transient failure   │ │ │ │ interrupted (a node died, a
-//!    done                     │ │ └── (retry, backoff) ──┘ │ │ │ stream gone): attempt + 1 up to
+//!    done                     │ │ └── (retry, backoff) ──┘ │ │ │ stream gone): delivery + 1 up to
 //!                             │ │                          │ │ │ 5 (retry), else outcome_unknown
 //!          approve_task,      │ └──── parked ◄─────────────┘ │ └──► deferred ── complete, fail,
 //!          a secret put again │         │ schema changed, 401│        (token)    late ──► done
@@ -21,7 +21,7 @@
 //!
 //! - **Policies.** Under `retry`, a transient failure goes back to `ready` after a
 //!   [`Backoff`], and an interrupted call is sent again with the same idempotency key, up to the
-//!   node's maximum of attempts. Under `at_most_once`, a transient failure is delivered, and an
+//!   node's maximum of deliveries. Under `at_most_once`, a transient failure is delivered, and an
 //!   interrupted call fails with `outcome_unknown`.
 //! - **Authentication** is resolved when an MCP or API call is sent, from its server's `auth`:
 //!   the secret the run attached, read from the `SecretStore` in the run's namespace, or the
@@ -42,17 +42,17 @@ use rewind_core::{ActionFailure, Digest, JsonValue, RunId, SecretEncoding, Secre
 
 use crate::ports::{CallAuth, Dispatched};
 
-/// `"{run_id}/{seq}"`, the key every attempt of a call carries.
+/// `"{run_id}/{seq}"`, the key every delivery of a call carries.
 pub fn idempotency_key(run_id: RunId, seq: Seq) -> String {
     format!("{run_id}/{}", seq.0)
 }
 
 /// The delay before a call that failed transiently is attempted again: `initial ×
-/// factor^(n − 1)` after the n-th attempt, at most `max`, of which the upper half is jitter.
+/// factor^(n − 1)` after the n-th delivery, at most `max`, of which the upper half is jitter.
 ///
-/// The jitter is drawn from the call (`{run_id}/{seq}`) and its attempt, not from a random
+/// The jitter is drawn from the call (`{run_id}/{seq}`) and its delivery, not from a random
 /// generator: the engine stays deterministic given its ports, and calls that failed together
-/// (a server outage) still come back apart. With the defaults, the second attempt comes 0.5 to
+/// (a server outage) still come back apart. With the defaults, the second delivery comes 0.5 to
 /// 1 s after the first, then 2 to 4 s, 8 to 16 s and 32 to 64 s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Backoff {
@@ -72,18 +72,18 @@ impl Default for Backoff {
 }
 
 impl Backoff {
-    /// The delay after the attempt `attempt` (from 1) of the call `key` (`{run_id}/{seq}`)
+    /// The delay after the delivery `delivery` (from 1) of the call `key` (`{run_id}/{seq}`)
     /// failed.
-    pub fn delay(&self, key: &str, attempt: u32) -> Duration {
+    pub fn delay(&self, key: &str, delivery: u32) -> Duration {
         let max = millis(self.max);
         let mut base = millis(self.initial).min(max);
-        for _ in 1..attempt {
+        for _ in 1..delivery {
             if base >= max {
                 break;
             }
             base = base.saturating_mul(u64::from(self.factor)).min(max);
         }
-        let digest = Digest::of(format!("{key}#{attempt}").as_bytes());
+        let digest = Digest::of(format!("{key}#{delivery}").as_bytes());
         let mut draw = [0u8; 8];
         draw.copy_from_slice(&digest.as_bytes()[..8]);
         let draw = u128::from(u64::from_be_bytes(draw));
@@ -196,12 +196,12 @@ mod tests {
             (8_000, 16_000),
             (32_000, 64_000),
         ];
-        for (attempt, (low, high)) in (1..).zip(ranges) {
+        for (delivery, (low, high)) in (1..).zip(ranges) {
             for key in ["run/1", "run/2", "other/7"] {
-                let delay = millis(backoff.delay(key, attempt));
+                let delay = millis(backoff.delay(key, delivery));
                 assert!(
                     (low..high).contains(&delay),
-                    "attempt {attempt} of {key}: {delay} ms"
+                    "delivery {delivery} of {key}: {delay} ms"
                 );
             }
         }

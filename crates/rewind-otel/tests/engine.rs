@@ -52,7 +52,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
 
     // A run whose call fails once, transiently: two attempts, a sticky second activation.
     let flaky = Dispatcher::new(|call| {
-        if call.attempt == 1 {
+        if call.delivery == 1 {
             Dispatched::Transient(ActionFailure {
                 kind: ActionFailureKind::Unavailable,
                 message: "try again".into(),
@@ -111,7 +111,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
     expected.sort();
     assert_eq!(ids, expected);
     // Each attempt is a child of the call span.
-    let attempts = backend.spans("tool_attempt");
+    let attempts = backend.spans("delivery");
     assert_eq!(attempts.len(), 2);
     for attempt in &attempts {
         assert_eq!(attempt.span_context.trace_id(), trace);
@@ -133,7 +133,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         vec![(vec![label("rewind.result", "hit")], 1)]
     );
     assert_eq!(
-        backend.series(metrics::TOOL_ATTEMPT_DURATION),
+        backend.series(metrics::DELIVERY_DURATION),
         vec![
             (
                 vec![
@@ -152,7 +152,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         ]
     );
     assert_eq!(
-        backend.series(metrics::TOOL_ATTEMPT_RETRIES),
+        backend.series(metrics::REDELIVERIES),
         vec![(vec![label("rewind.action", ISSUE)], 1)]
     );
     // Run metrics, from the outbox's projections of the committed entries.

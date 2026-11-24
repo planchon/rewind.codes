@@ -319,7 +319,7 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
         Some(ProblemType::CallGone)
     );
 
-    // A retryable failure is retried: the next hand-out is attempt 2.
+    // A retryable failure is delivered again: the next hand-out is delivery 2.
     let run = harness.start_run(&request, None).await.unwrap();
     let first = stream.task().await;
     worker
@@ -335,11 +335,11 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
         .unwrap();
     let second = stream.task().await;
     assert_eq!(
-        (second.run_id.as_str(), second.attempt),
+        (second.run_id.as_str(), second.delivery),
         (run.id.as_str(), 2)
     );
-    let attempts = harness.get_run(&run.id, None).await.unwrap().attempts;
-    assert_eq!((attempts[0].seq, attempts[0].attempts), (1, 2));
+    let attempts = harness.get_run(&run.id, None).await.unwrap().deliveries;
+    assert_eq!((attempts[0].seq, attempts[0].deliveries), (1, 2));
     worker
         .complete_call(
             &second.token,

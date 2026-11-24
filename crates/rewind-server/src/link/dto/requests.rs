@@ -880,7 +880,7 @@ pub struct HarnessTaskOffer {
 }
 
 /// A harness call as an SDK worker receives it: `{"token":"rewind_tk_…","task":{…},
-/// "namespace":"user-1","action":"…","args":…,"idempotency_key":"…","attempt":1,
+/// "namespace":"user-1","action":"…","args":…,"idempotency_key":"…","delivery":1,
 /// "execution_timeout":{…},"labels":{…},"trace_context":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -891,7 +891,7 @@ pub struct HarnessTask {
     pub action: String,
     pub args: JsonValue,
     pub idempotency_key: String,
-    pub attempt: u32,
+    pub delivery: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeout: Option<Duration>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -953,7 +953,7 @@ impl From<&link::HarnessTask> for HarnessTask {
             action: task.action.clone(),
             args: task.args.clone(),
             idempotency_key: task.idempotency_key.clone(),
-            attempt: task.attempt,
+            delivery: task.delivery,
             execution_timeout: task.execution_timeout,
             labels: task.labels.clone(),
             trace_context: task
@@ -978,7 +978,7 @@ impl TryFrom<HarnessTask> for link::HarnessTask {
             action: task.action,
             args: task.args,
             idempotency_key: task.idempotency_key,
-            attempt: task.attempt,
+            delivery: task.delivery,
             execution_timeout: task.execution_timeout,
             labels: task.labels,
             trace_context: task.trace_context.map(|context| engine::TraceContext {

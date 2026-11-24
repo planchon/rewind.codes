@@ -1067,7 +1067,7 @@ mod operations {
     /// stream that no longer waits for its answer. The open stream is the liveness of every call
     /// handed on it: no heartbeat. When it closes, its calls wait for the grace of their action
     /// (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
-    /// each is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`
+    /// each is handed to another worker with its delivery + 1, or fails with `outcomeUnknown`
     /// under `at_most_once`. A worker opens the stream again after it drops, with a backoff. The
     /// server writes a comment line at least every 15 seconds while it sends nothing else.
     #[utoipa::path(
@@ -1114,7 +1114,7 @@ mod operations {
         params(("token" = String, Path, description = "The claim's token.")),
         request_body = FailCall,
         responses(
-            (status = 204, description = "Recorded: delivered as an `ActionError`, or retried."),
+            (status = 204, description = "Recorded: delivered as an `ActionError`, or delivered again."),
             (status = 410, description = "The call no longer exists (`call-gone`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -1204,7 +1204,7 @@ mod operations {
     // ---------------------------------------------------------------------------------------
     // Reading
 
-    /// Latency, errors and retries per action
+    /// Latency, errors and redeliveries per action
     ///
     /// From the hourly counters, over a window of whole hours: per action, the calls of the runs of
     /// a namespace or the tenant, filtered by the start of an action's name. The scope as

@@ -176,7 +176,7 @@ fn handed(task: HarnessTask) -> HandedCall {
         action: task.action,
         args: task.args,
         idempotency_key: task.idempotency_key,
-        attempt: task.attempt,
+        delivery: task.delivery,
         timeout_ms: task
             .execution_timeout
             .map(|timeout| u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),

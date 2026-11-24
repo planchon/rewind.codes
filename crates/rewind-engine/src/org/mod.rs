@@ -282,7 +282,7 @@ impl<P: Plane> OrgActor<P> {
             OrgRequest::HarnessTask(offer) => {
                 done(out, reply);
                 let task = offer.task.task.clone();
-                // An owner that sends a task again (a new owner, a new attempt) replaces it: the
+                // An owner that sends a task again (a new owner, a new delivery) replaces it: the
                 // token it was handed with no longer answers it.
                 self.offers.retain(|queued| queued.task.task != task);
                 self.release(&task, true, out);

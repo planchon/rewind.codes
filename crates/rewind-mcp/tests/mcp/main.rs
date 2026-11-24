@@ -210,7 +210,7 @@ fn call(server: &McpServer, action: &Action, args: Value) -> Call {
         server: Some(server.clone()),
         api: None,
         args,
-        attempt: 1,
+        delivery: 1,
         schema_change_approved: false,
         token: TaskToken("token".into()),
         trace_context: None,
@@ -252,7 +252,7 @@ fn claims(call: &Call) -> CallClaims {
         action: call.action.name.clone(),
         idempotency_key: call.idempotency_key.clone(),
         seq: call.seq,
-        attempt: call.attempt,
+        delivery: call.delivery,
     }
 }
 
@@ -401,7 +401,7 @@ async fn idempotency_key_and_trace_context_in_meta() {
     let mcp = http_server(&server.url);
     let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
     let mut meta_call = call(&mcp, &actions["meta"], json!({}));
-    meta_call.attempt = 2;
+    meta_call.delivery = 2;
     meta_call.trace_context = Some(TraceContext {
         traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
         tracestate: Some("vendor=1".into()),
@@ -625,7 +625,7 @@ async fn signed_sessions_sign_every_request() {
     // A call: its `tools/call` carries the call's claims.
     let mut lookup = call(&mcp, &actions["lookup"], json!({ "id": "c-3" }));
     lookup.labels = BTreeMap::from([("env".into(), "prod".into())]);
-    lookup.attempt = 2;
+    lookup.delivery = 2;
     let auth = CallAuth::Signed {
         key: key.clone(),
         claims: claims(&lookup),

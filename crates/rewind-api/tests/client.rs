@@ -85,7 +85,7 @@ fn run(id: &str) -> Run {
         abort: None,
         waiting_for: Vec::new(),
         logs: Vec::new(),
-        attempts: Vec::new(),
+        deliveries: Vec::new(),
         history_len: 4,
         created_at: at,
         updated_at: at,
@@ -188,7 +188,7 @@ fn app(log: Log) -> Router {
                 let task = json!({
                     "token": "tk_1", "id": "task_1", "runId": "r1", "namespace": "alice",
                     "seq": 3, "action": "ask_user", "args": { "question": "ok?" },
-                    "idempotencyKey": "r1/3", "attempt": 1, "labels": {}
+                    "idempotencyKey": "r1/3", "delivery": 1, "labels": {}
                 });
                 let body = format!(
                     ":\n\nevent: call\ndata: {task}\n\nevent: later\ndata: {{}}\n\n:\n\n\

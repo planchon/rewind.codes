@@ -148,7 +148,7 @@ pub(crate) struct CallGuard {
 impl Drop for CallGuard {
     fn drop(&mut self) {
         let mut calls = self.signer.lock();
-        // Another attempt of the same call may have registered since: only this one goes.
+        // Another delivery of the same call may have registered since: only this one goes.
         if calls
             .get(&self.key)
             .is_some_and(|identity| identity.jti == self.jti)

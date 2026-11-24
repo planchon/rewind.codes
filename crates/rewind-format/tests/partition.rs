@@ -182,7 +182,7 @@ fn task() -> Task {
             kind: ParkKind::CredentialsRefused,
             message: "401 from github".into(),
         },
-        attempt: 1,
+        delivery: 1,
         schema_change_approved: true,
         created_at: T0 + 5,
         token_hash: Some(digest("token")),
@@ -284,7 +284,7 @@ fn counters() -> Counters {
                 completed: 1,
                 failed: 1,
                 errors: BTreeMap::from([(FailureKind::Timeout, 1)]),
-                retries: 1,
+                redeliveries: 1,
                 latency: sketch(),
             },
         )]),
@@ -460,7 +460,7 @@ fn every_variant_round_trips() {
     let states = [
         TaskState::Approval {},
         TaskState::Ready {
-            next_attempt_at: T0,
+            next_delivery_at: T0,
         },
         TaskState::Claimed {
             owner: "node-1".into(),
@@ -521,7 +521,7 @@ fn every_variant_round_trips() {
             run: run(1),
             seq: 1,
         },
-        TimerKind::RetryBackoff {
+        TimerKind::RedeliveryBackoff {
             run: run(1),
             seq: 1,
         },

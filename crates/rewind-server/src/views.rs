@@ -8,7 +8,7 @@ use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{AbortReason, Callsite, Labels, Payload, RunMode, timestamp};
 use rewind_api::events::Entry;
 use rewind_api::runs::{
-    CallAttempts, FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError,
+    Deliveries, FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError,
     Waiting,
 };
 use rewind_core::{
@@ -250,12 +250,12 @@ impl Views<'_> {
         } else {
             waiting(&head.run, history, &state, tasks, &payload)
         };
-        let attempts = tasks
+        let deliveries = tasks
             .iter()
-            .filter(|record| record.task.attempt > 1)
-            .map(|record| CallAttempts {
+            .filter(|record| record.task.delivery > 1)
+            .map(|record| Deliveries {
                 seq: record.task.task.seq.0,
-                attempts: record.task.attempt,
+                deliveries: record.task.delivery,
             })
             .collect();
         let tenant = &head.run.tenant;
@@ -330,7 +330,7 @@ impl Views<'_> {
             abort,
             waiting_for,
             logs: logs(history),
-            attempts,
+            deliveries,
             history_len: (history.len() as u64).max(head.history_len),
             created_at: timestamp(head.created_at),
             updated_at: timestamp(head.updated_at),
@@ -452,7 +452,7 @@ fn waiting(
             }),
             state: task_state,
             parked,
-            attempt: task.map_or(1, |task| task.attempt.max(1)),
+            delivery: task.map_or(1, |task| task.delivery.max(1)),
             callsite,
         });
     }

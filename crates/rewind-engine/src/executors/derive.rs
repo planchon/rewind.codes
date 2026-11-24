@@ -272,10 +272,10 @@ pub(crate) fn effects_of(
                             TaskState::Approval
                         } else {
                             TaskState::Ready {
-                                next_attempt_at: now,
+                                next_delivery_at: now,
                             }
                         },
-                        attempt: 1,
+                        delivery: 1,
                         schema_change_approved: false,
                         created_at: now,
                     },
@@ -471,15 +471,15 @@ pub(crate) fn created_counters(head: &RunHead) -> CounterDelta {
     }
 }
 
-/// The retries of a call that ended after its first attempt.
-pub(crate) fn retries_counters(
+/// The redeliveries of a call that ended after its first delivery.
+pub(crate) fn redeliveries_counters(
     head: &RunHead,
     action: &str,
-    attempt: u32,
+    delivery: u32,
     now: Timestamp,
 ) -> Option<CounterDelta> {
-    let retries = u64::from(attempt.checked_sub(1)?);
-    if retries == 0 {
+    let redeliveries = u64::from(delivery.checked_sub(1)?);
+    if redeliveries == 0 {
         return None;
     }
     Some(CounterDelta::Hour {
@@ -490,7 +490,7 @@ pub(crate) fn retries_counters(
             actions: BTreeMap::from([(
                 action.to_owned(),
                 ActionCounts {
-                    retries,
+                    redeliveries,
                     ..ActionCounts::default()
                 },
             )]),

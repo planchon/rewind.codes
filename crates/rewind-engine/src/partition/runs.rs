@@ -273,10 +273,10 @@ impl<P: Plane> Owner<P> {
             } => self.admitted(start, reply, admission, &neighbours),
             Ask::Child {
                 task,
-                attempt,
+                delivery,
                 start,
                 neighbours,
-            } => self.child_admitted(&task, attempt, start, admission, &neighbours),
+            } => self.child_admitted(&task, delivery, start, admission, &neighbours),
         }
     }
 
@@ -1711,7 +1711,7 @@ impl<P: Plane> Owner<P> {
                 self.deferred_deadline(&task);
                 return;
             }
-            TimerKind::RetryBackoff { seq, .. } if !ended => {
+            TimerKind::RedeliveryBackoff { seq, .. } if !ended => {
                 unit.then(After::Dispatch(crate::ports::TaskRef {
                     run: run.clone(),
                     seq: *seq,

@@ -24,7 +24,7 @@
 //! its script, its failure group, the shapes of its results) are written with it, so statistics
 //! and quotas count it; the CPU time it used is not known per run and is not counted. A task in
 //! flight (claimed, or deferred with a token the run plane cannot route) is written `ready`:
-//! recovery sends it again with attempt + 1, or fails it under `at_most_once`. A run that cannot
+//! recovery sends it again with delivery + 1, or fails it under `at_most_once`. A run that cannot
 //! be moved (its script, its action set, a blob or its journal missing, its history corrupt) is
 //! reported and left in the tables, which are then not dropped; the command can run again: what
 //! moved is skipped.
@@ -439,12 +439,12 @@ fn live(batch: &mut Batch, legacy: &LegacyRun, tasks: Vec<TaskRecord>, now: Time
     }
     for task in tasks {
         let seq = task.task.task.seq;
-        if let TaskState::Ready { next_attempt_at } = task.task.state
-            && next_attempt_at > now
+        if let TaskState::Ready { next_delivery_at } = task.task.state
+            && next_delivery_at > now
         {
             batch.push(Change::Timer(TimerChange::Set(DueTimer {
-                at: next_attempt_at,
-                kind: TimerKind::RetryBackoff {
+                at: next_delivery_at,
+                kind: TimerKind::RedeliveryBackoff {
                     run: run.clone(),
                     seq,
                 },
@@ -502,7 +502,7 @@ fn tasks_of(
             })?;
             let state = match &task.state {
                 TaskState::Claimed { .. } | TaskState::Deferred { .. } => TaskState::Ready {
-                    next_attempt_at: now,
+                    next_delivery_at: now,
                 },
                 other => other.clone(),
             };
@@ -518,8 +518,8 @@ fn tasks_of(
                     args: task.args.clone(),
                     policy: pinned.policy,
                     state,
-                    // The run plane counts the first attempt from the task's creation.
-                    attempt: task.attempt.max(1),
+                    // The run plane counts the first delivery from the task's creation.
+                    delivery: task.attempt.max(1),
                     schema_change_approved: task.schema_change_approved,
                     created_at: task.created_at,
                 },

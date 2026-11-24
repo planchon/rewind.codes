@@ -326,13 +326,13 @@ fn describe_waiting(waiting: &Waiting) -> String {
             action,
             state,
             parked,
-            attempt,
+            delivery,
             callsite,
             ..
         } => {
             let call = format!("the call {seq} to {action}{}", at(callsite.as_ref()));
-            let attempt = if *attempt > 1 {
-                format!(" (attempt {attempt})")
+            let delivery = if *delivery > 1 {
+                format!(" (delivery {delivery})")
             } else {
                 String::new()
             };
@@ -353,9 +353,9 @@ fn describe_waiting(waiting: &Waiting) -> String {
                         )
                     }
                 }
-                CallState::Deferred => format!("{call}: waiting for its answer{attempt}"),
-                CallState::Claimed => format!("{call}: in progress{attempt}"),
-                CallState::Ready => format!("{call}: queued{attempt}"),
+                CallState::Deferred => format!("{call}: waiting for its answer{delivery}"),
+                CallState::Claimed => format!("{call}: in progress{delivery}"),
+                CallState::Ready => format!("{call}: queued{delivery}"),
                 CallState::Done => format!("{call}: answered, about to be delivered"),
             }
         }

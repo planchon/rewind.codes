@@ -23,7 +23,7 @@ use crate::namespaces::NamespaceName;
 /// The open stream is the liveness of every call handed on it: nothing is written or asked
 /// while a call is in flight. When the stream closes, its calls wait for the worker to open a
 /// stream again with the same `worker`, for the action's grace (60 s by default); after it, each is
-/// handed to another worker with its attempt + 1, or fails with `outcomeUnknown` under
+/// handed to another worker with its delivery + 1, or fails with `outcomeUnknown` under
 /// `at_most_once` (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -77,11 +77,11 @@ pub struct HandedCall {
     /// The arguments, validated against the action's input schema.
     pub args: Value,
     /// `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
-    /// attempt: the handler uses it to recognize a call it already made.
+    /// delivery: the handler uses it to recognize a call it already made.
     pub idempotency_key: String,
-    /// From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed
+    /// From 1. Above 1, an earlier delivery was interrupted: the stream it was handed on closed
     /// and did not come back within its grace.
-    pub attempt: u32,
+    pub delivery: u32,
     /// The action's execution timeout, in milliseconds: past it, the call is not waited for any
     /// more. Absent when the action has none, the default of harness actions: the run's TTL bounds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,9 +192,9 @@ pub struct RejectCall {
 pub enum CallState {
     /// Waits for the harness's approval (`approval` policy).
     Approval,
-    /// Waits to be sent: its next attempt, or a concurrency slot.
+    /// Waits to be sent: its next delivery, or a concurrency slot.
     Ready,
-    /// An attempt is in flight.
+    /// A delivery is in flight.
     Claimed,
     /// A harness action's handler will answer later.
     Deferred,
@@ -238,7 +238,7 @@ mod tests {
             "action": "ask_user",
             "args": { "question": "ok?" },
             "idempotencyKey": "0193a5c4-0000-8000-8000-000000000001/3",
-            "attempt": 1,
+            "delivery": 1,
             "labels": { "agent": "triage" }
         });
         let event = CallStreamMessage::from_sse("call", &data.to_string())

@@ -246,7 +246,7 @@ pub(crate) async fn run(
                 action: action.action,
                 calls: action.calls,
                 errors: action.errors,
-                retries: action.retries,
+                retries: action.redeliveries,
                 p50_ms: action.latency_ms.p50,
                 p99_ms: action.latency_ms.p99,
             })
@@ -599,7 +599,7 @@ fn status_name(status: RunStatus) -> &'static str {
 /// - every run completed, with its expected output;
 /// - each call reached its action as many times as its failures call for, never more: `echo`
 ///   and the harness call once, `flaky` twice (its transient failure, then the retry). A run's
-///   attempts live in its call tasks, which its end clears (`archi/04-tools.md`): the load
+///   deliveries live in its call tasks, which its end clears (`archi/04-tools.md`): the load
 ///   knows them from its actions;
 /// - every call belongs to a run of this load and carries an idempotency key.
 fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &HarnessRecord) {

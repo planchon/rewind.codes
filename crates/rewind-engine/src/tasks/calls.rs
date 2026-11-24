@@ -63,7 +63,7 @@ impl<P: Plane> fmt::Debug for CallMsg<P> {
 }
 
 /// A call an owner hands over: the task as its records say, its run, and the token of this
-/// attempt.
+/// delivery.
 pub(crate) struct CallWork<P: Plane> {
     pub(crate) partition: rewind_core::PartitionId,
     pub(crate) log: Arc<LogOf<P>>,
@@ -75,16 +75,16 @@ pub(crate) struct CallWork<P: Plane> {
     pub(crate) hand_out: bool,
 }
 
-/// What became of one attempt of a call.
+/// What became of one delivery of a call.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CallDone {
     pub(crate) task: TaskRef,
-    pub(crate) attempt: u32,
+    pub(crate) delivery: u32,
     pub(crate) action: String,
     pub(crate) outcome: CallOutcome,
 }
 
-/// The outcome of an attempt, for the owner to commit.
+/// The outcome of a delivery, for the owner to commit.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CallOutcome {
     /// The dispatcher's answer.
@@ -188,17 +188,17 @@ impl<P: Plane> Calls<P> {
     }
 }
 
-/// Prepares and sends one attempt.
+/// Prepares and sends one delivery.
 async fn call<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>) -> CallDone {
     let task = work.task.task.task.clone();
-    let attempt = work.task.task.attempt;
+    let delivery = work.task.task.delivery;
     let action = work.task.task.action.clone();
     let span = tracing::info_span!(
-        "tool_attempt",
+        "delivery",
         task = %task,
-        attempt,
+        delivery,
         traceparent = tracing::field::Empty,
-        histogram.rewind.tool_attempt.duration = tracing::field::Empty,
+        histogram.rewind.delivery.duration = tracing::field::Empty,
         rewind.action = action.as_str(),
         rewind.outcome = tracing::field::Empty,
     );
@@ -214,7 +214,7 @@ async fn call<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>) -> Ca
     }
     CallDone {
         task,
-        attempt,
+        delivery,
         action,
         outcome,
     }
@@ -288,7 +288,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
             action: record.action.clone(),
             args,
             idempotency_key: key,
-            attempt: record.attempt,
+            delivery: record.delivery,
             execution_timeout: record.policy.execution_timeout,
             labels: head.metadata.labels.clone(),
             trace_context,
@@ -315,7 +315,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         api,
         args,
         idempotency_key: key,
-        attempt: record.attempt,
+        delivery: record.delivery,
         schema_change_approved: record.schema_change_approved,
         token,
         trace_context,
@@ -528,7 +528,7 @@ async fn live_auth<P: Plane>(
                 action: call.action.name.clone(),
                 idempotency_key: call.idempotency_key.clone(),
                 seq: call.seq,
-                attempt: call.attempt,
+                delivery: call.delivery,
             };
             Ok(Ok(CallAuth::Signed { key, claims }))
         }
@@ -797,22 +797,22 @@ async fn signal_child<P: Plane>(
 }
 
 /// The failure of a task that must not be called again after an interruption: always under
-/// `at_most_once`, past the maximum of attempts under `retry`.
+/// `at_most_once`, past the maximum of deliveries under `retry`.
 pub(crate) fn interrupted(
     action: &str,
     policy: Interruption,
-    attempt: u32,
-    max_attempts: u32,
+    delivery: u32,
+    max_deliveries: u32,
 ) -> Option<ActionFailure> {
     let message = match policy {
         Interruption::AtMostOnce => format!(
             "the call to {action} was interrupted and may or may not have taken effect; the action \
              is at_most_once, so it is not called again"
         ),
-        Interruption::Retry if attempt > max_attempts => format!(
-            "the call to {action} was interrupted after {} attempts and may or may not have taken \
+        Interruption::Retry if delivery > max_deliveries => format!(
+            "the call to {action} was interrupted after {} deliveries and may or may not have taken \
              effect",
-            attempt - 1
+            delivery - 1
         ),
         Interruption::Retry => return None,
     };

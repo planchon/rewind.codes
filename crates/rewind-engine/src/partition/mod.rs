@@ -89,7 +89,7 @@ pub(crate) enum OwnerMsg<P: Plane> {
         run: RunId,
         result: Box<ActivationResult>,
     },
-    /// What became of an attempt of a call.
+    /// What became of a delivery of a call.
     CallDone(Box<CallDone>),
     /// A timer of the wheel is due.
     TimerDue(DueTimer),
@@ -327,7 +327,7 @@ pub(crate) enum Ask {
     /// A workflow run a call starts waits for its admission.
     Child {
         task: TaskRef,
-        attempt: u32,
+        delivery: u32,
         start: Box<StartAtOwner>,
         neighbours: Vec<RunId>,
     },
@@ -467,7 +467,7 @@ impl<P: Plane> Owner<P> {
         let alone = matches!(
             next.kind,
             TimerKind::Script { .. }
-                | TimerKind::RetryBackoff { .. }
+                | TimerKind::RedeliveryBackoff { .. }
                 | TimerKind::ActivationRetry { .. }
                 | TimerKind::WebhookRetry { .. }
         );
@@ -481,7 +481,7 @@ impl<P: Plane> Owner<P> {
             matches!(
                 kind,
                 TimerKind::Script { .. }
-                    | TimerKind::RetryBackoff { .. }
+                    | TimerKind::RedeliveryBackoff { .. }
                     | TimerKind::ActivationRetry { .. }
                     | TimerKind::WebhookRetry { .. }
             )

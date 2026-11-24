@@ -292,11 +292,11 @@ pub struct ActionPolicy {
     /// sent. Off by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<bool>,
-    /// How long one attempt may take. 5 minutes by default for MCP actions.
+    /// How long one delivery may take. 5 minutes by default for MCP actions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Duration>,
     /// The grace after a stream closes: how long a harness call handed on a stream that closed
-    /// waits for its worker to come back before it is handed again, as attempt + 1. 60 seconds
+    /// waits for its worker to come back before it is handed again, as delivery + 1. 60 seconds
     /// by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_timeout: Option<Duration>,
@@ -310,7 +310,7 @@ pub struct ActionPolicy {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OnInterruption {
-    /// Call again with the same idempotency key, up to 5 attempts, then fail with
+    /// Call again with the same idempotency key, up to 5 deliveries, then fail with
     /// `outcomeUnknown`.
     #[default]
     Retry,

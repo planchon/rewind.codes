@@ -9,7 +9,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Timestamp;
 
-/// `GET /v1/actions/stats`: latency, errors and retries per action, over the calls of a scope
+/// `GET /v1/actions/stats`: latency, errors and redeliveries per action, over the calls of a scope
 /// scheduled in a window, from the hourly counters. A scope and a window, as `GET /v1/runs/stats`
 /// takes them (`crate::runs::RunStatsQuery`), and the start of an action's name.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
@@ -58,8 +58,8 @@ pub struct ActionStats {
     pub errors: u64,
     /// Failed calls by kind: `error`, `unavailable`, `timeout`, `outcome_unknown`.
     pub error_kinds: BTreeMap<String, u64>,
-    /// Attempts beyond the first, over every call.
-    pub retries: u64,
+    /// Deliveries beyond the first, over every call.
+    pub redeliveries: u64,
     /// From `schedule_call` to the completion, in milliseconds, over the calls that have an
     /// outcome; zeros when none has.
     pub latency_ms: Latency,

@@ -3,10 +3,10 @@
 //! ```text
 //!               approve            sent or handed out          answer, failure
 //!   approval ───────────► ready ─────────────────────► claimed ─────────────────────► done
-//!      │ reject ▲  ▲  ▲     ▲   next_attempt_at,          │ │ │ interrupted: the node   ▲
+//!      │ reject ▲  ▲  ▲     ▲   next_delivery_at,          │ │ │ interrupted: the node   ▲
 //!      ▼        │  │  │     │   a concurrency slot        │ │ │ died, the stream did    │
 //!    done       │  │  │     └──── retry (backoff) ────────┘ │ │ not come back:          │
-//!               │  │  │           attempt + 1               │ │ attempt + 1             │
+//!               │  │  │           delivery + 1              │ │ delivery + 1            │
 //!               │  │  └── approve, the secret ────┐         │ │                         │
 //!               │  │      put again               │         │ └─► deferred ── complete, ┤
 //!               │  │                           parked ◄─────┘     (a token)   fail,     │
@@ -15,7 +15,7 @@
 //! ```
 //!
 //! `done` is not a state the partition keeps: a task that is done is deleted, and its outcome
-//! is in the run's inbox. Attempts, backoff, approvals and tokens live in the task, never in
+//! is in the run's inbox. Deliveries, backoff, approvals and tokens live in the task, never in
 //! the journal. Sending a call or handing out a task writes nothing: the records say `ready`
 //! while the run's owner holds the task in flight, and a read shows it `claimed`.
 
@@ -41,7 +41,7 @@ impl fmt::Display for TaskRef {
     }
 }
 
-/// An unguessable token for one attempt of a task, drawn from a CSPRNG (at least 128 bits)
+/// An unguessable token for one delivery of a task, drawn from a CSPRNG (at least 128 bits)
 /// when the call is sent or the task handed out; it names the run, so an answer reaches the
 /// run's owner from whichever process receives it. The handler completes, fails or defers the
 /// task with it. Once the task is in flight again, the previous token is no longer accepted; a
@@ -60,13 +60,13 @@ impl fmt::Debug for TaskToken {
 pub enum TaskState {
     /// Waits for the harness's approval (the `approval` policy).
     Approval,
-    /// Sent or handed out once `next_attempt_at` has passed and a concurrency slot is free.
-    Ready { next_attempt_at: Timestamp },
-    /// Attempt n is in flight: sent by the node of the run's owner, `owner`, or handed to an SDK
-    /// worker's stream. `until`: when the attempt was made ready. Only a read shows it: the
+    /// Sent or handed out once `next_delivery_at` has passed and a concurrency slot is free.
+    Ready { next_delivery_at: Timestamp },
+    /// Delivery n is in flight: sent by the node of the run's owner, `owner`, or handed to an SDK
+    /// worker's stream. `until`: when the delivery was made ready. Only a read shows it: the
     /// records say `ready`.
     Claimed { owner: String, until: Timestamp },
-    /// The handler answers later, with the token of its attempt, before `until`.
+    /// The handler answers later, with the token of its delivery, before `until`.
     Deferred { until: Timestamp },
     /// Waits for the harness after a schema change, a refused call or a missing secret.
     Parked(ParkReason),
@@ -135,9 +135,9 @@ pub struct CallTask {
     pub args: Payload,
     pub policy: ActionPolicy,
     pub state: TaskState,
-    /// The attempt the task is at, from 1: one more after each transient failure or
-    /// interruption retried.
-    pub attempt: u32,
+    /// The delivery the task is at, from 1: one more after each transient failure or
+    /// interruption delivered again.
+    pub delivery: u32,
     /// The harness approved the task while it was parked by
     /// [`SchemaChanged`](ParkKind::SchemaChanged): the call goes on against the action's current
     /// schema, and the dispatcher no longer checks it. It stays set for the task's life.

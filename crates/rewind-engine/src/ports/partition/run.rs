@@ -123,7 +123,7 @@ pub struct Watcher {
 /// and the token handed out with it while it is deferred.
 ///
 /// Sending a call or handing a task out writes nothing: a task in flight reads `ready`. What
-/// is written is what happened to it: its creation, a backoff, an interruption (attempt + 1),
+/// is written is what happened to it: its creation, a backoff, an interruption (delivery + 1),
 /// a deferral, a park, its end.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskRecord {
@@ -145,7 +145,7 @@ impl TaskRecord {
 /// A change to one call task of a run.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskChange {
-    /// Writes the task as it is now: its state, its attempt, its token. Its
+    /// Writes the task as it is now: its state, its delivery, its token. Its
     /// [`TaskRef`](crate::ports::TaskRef) is the change's run and seq.
     Put(Box<TaskRecord>),
     /// The task is done: its outcome is in the run's inbox.

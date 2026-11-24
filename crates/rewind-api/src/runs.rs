@@ -170,11 +170,11 @@ pub struct Run {
     /// The last log lines of the script (`console.*`), oldest first, at most 20.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub logs: Vec<LogLine>,
-    /// How many times each call was sent, by seq, for the calls sent more than once: a
-    /// call retried after a transient failure, or sent again after its worker or dispatcher
-    /// died. Attempts live in the call tasks, not in the journal: the read model keeps them.
+    /// How many times each call was delivered, by seq, for the calls delivered more than once: a
+    /// call delivered again after a transient failure, or after its worker or dispatcher died.
+    /// Deliveries live in the calls' tasks, not in the history: the read model keeps them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attempts: Vec<CallAttempts>,
+    pub deliveries: Vec<Deliveries>,
     /// Number of journal entries.
     pub history_len: u64,
     pub created_at: Timestamp,
@@ -251,10 +251,10 @@ pub struct FailedCall {
 /// How many times a call was sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CallAttempts {
+pub struct Deliveries {
     pub seq: u32,
     /// From 1.
-    pub attempts: u32,
+    pub deliveries: u32,
 }
 
 /// Something an active run waits for.
@@ -274,8 +274,8 @@ pub enum Waiting {
         /// With `parked`: why.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parked: Option<ParkedReason>,
-        /// The attempt in progress, from 1.
-        attempt: u32,
+        /// The delivery in progress, from 1.
+        delivery: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         callsite: Option<Callsite>,
     },
@@ -971,7 +971,7 @@ mod tests {
             call_id: "t-1".into(),
             state: CallState::Approval,
             parked: None,
-            attempt: 1,
+            delivery: 1,
             callsite: None,
         };
         let written = serde_json::to_value(&call).unwrap();

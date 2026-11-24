@@ -348,7 +348,7 @@ fn tasks() -> Vec<TaskRecord> {
     let states = [
         TaskState::Approval,
         TaskState::Ready {
-            next_attempt_at: at(10),
+            next_delivery_at: at(10),
         },
         TaskState::Claimed {
             owner: "node-a".into(),
@@ -390,7 +390,7 @@ fn tasks() -> Vec<TaskRecord> {
                     route,
                     args: Payload::Value(json!({ "seq": seq })),
                     state,
-                    attempt: 2,
+                    delivery: 2,
                     schema_change_approved: seq == 4,
                     created_at: at(seq as u64),
                 },
@@ -415,7 +415,7 @@ fn timers() -> Vec<TimerChange> {
             run: run(1),
             seq: Seq(3),
         },
-        TimerKind::RetryBackoff {
+        TimerKind::RedeliveryBackoff {
             run: run(1),
             seq: Seq(4),
         },
@@ -483,7 +483,7 @@ fn counters() -> Counters {
                 completed: 1,
                 failed: 2,
                 errors: BTreeMap::from([(ActionFailureKind::Timeout, 2)]),
-                retries: 1,
+                redeliveries: 1,
                 latency: sketch(),
             },
         )]),
@@ -624,7 +624,7 @@ fn harness_task() -> HarnessTask {
         action: "ask".into(),
         args: json!({ "question": "?" }),
         idempotency_key: "key-1".into(),
-        attempt: 2,
+        delivery: 2,
         execution_timeout: Some(Duration::from_millis(1_500)),
         labels: labels(),
         trace_context: Some(trace_context()),

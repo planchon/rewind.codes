@@ -8,7 +8,7 @@ use crate::ports::namespaces::NamespaceName;
 use crate::ports::secrets::{Secret, SigningKey};
 use crate::ports::tenancy::{RunRef, TenantId};
 
-/// One attempt at a call, as handed to a [`ActionDispatcher`].
+/// One delivery of a call, as handed to an [`ActionDispatcher`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub run: RunRef,
@@ -26,18 +26,18 @@ pub struct Call {
     /// For an API action, its API as pinned: where its calls go and how they authenticate.
     pub api: Option<Api>,
     pub args: JsonValue,
-    /// `"{run_id}/{seq}"`: the same for every attempt of the call, so that the action can
+    /// `"{run_id}/{seq}"`: the same for every delivery of the call, so that the action can
     /// deduplicate (`archi/04-tools.md`, "Routes"), passed in MCP `_meta` as
     /// `codes.rewind/idempotency-key`, and to an API in the `Idempotency-Key` header when its
     /// operation declares one. A fork's calls carry other keys (`archi/03-execution.md`,
     /// "Forks").
     pub idempotency_key: String,
-    /// 1 for the first attempt.
-    pub attempt: u32,
+    /// 1 for the first delivery.
+    pub delivery: u32,
     /// The harness approved the call after a schema change (`action.schema_changed`): send it
     /// against the action's current schema, without checking it against the pinned one again.
     pub schema_change_approved: bool,
-    /// The token of this attempt. A handler that answers later keeps it and answers through it
+    /// The token of this delivery. A handler that answers later keeps it and answers through it
     /// ([`Dispatched::Deferred`]).
     pub token: TaskToken,
     /// The W3C trace context to forward, with the call span as parent, so the server's own
@@ -52,7 +52,7 @@ pub struct Call {
 pub enum CallAuth {
     /// The server's `auth` is none, or the call has no server (built-ins, mocks).
     None,
-    /// The secret the run attached for the server, read for this attempt, and where it goes.
+    /// The secret the run attached for the server, read for this delivery, and where it goes.
     Secret {
         value: Secret,
         placement: SecretPlacement,
@@ -64,7 +64,7 @@ pub enum CallAuth {
 
 /// The claims of a signed call that the engine knows (`archi/04-tools.md`, "Signed calls"). The
 /// dispatcher adds those of each request: `aud` (the API's `baseUrl` or the MCP server's URL),
-/// `htm`, `htu`, `body`, `iat`, `exp` (60 s later) and `jti`, `{run}/{seq}/{attempt}` for the
+/// `htm`, `htu`, `body`, `iat`, `exp` (60 s later) and `jti`, `{run}/{seq}/{delivery}` for the
 /// request of the call itself. An MCP session's other requests (`initialize`…) carry only
 /// `iss`, `aud`, `jti`, `htm`, `htu`, `body`, `iat` and `exp`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +83,7 @@ pub struct CallClaims {
     pub idempotency_key: String,
     pub seq: Seq,
     /// With the run and the `seq`, gives the call's `jti`.
-    pub attempt: u32,
+    pub delivery: u32,
 }
 
 impl CallClaims {
@@ -97,9 +97,9 @@ impl CallClaims {
         )
     }
 
-    /// `jti` of the request of the call itself: `{run_id}/{seq}/{attempt}`, one per attempt.
+    /// `jti` of the request of the call itself: `{run_id}/{seq}/{delivery}`, one per delivery.
     pub fn jti(&self) -> String {
-        format!("{}/{}/{}", self.run, self.seq.0, self.attempt)
+        format!("{}/{}/{}", self.run, self.seq.0, self.delivery)
     }
 }
 
@@ -109,7 +109,7 @@ impl CallClaims {
 /// actions": "never before its `Retry-After`").
 pub const RETRY_AFTER_DATA: &str = "retryAfter";
 
-/// What became of one attempt (`archi/04-tools.md`, "Call lifecycle").
+/// What became of one delivery (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dispatched {
     /// The action answered: the script receives this result.

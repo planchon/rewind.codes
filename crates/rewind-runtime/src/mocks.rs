@@ -18,7 +18,7 @@
 //! };
 //! ```
 //!
-//! A handler receives the call's arguments and `{ action, runId, seq, attempt, idempotencyKey }`,
+//! A handler receives the call's arguments and `{ action, runId, seq, delivery, idempotencyKey }`,
 //! and returns the result, or a promise of it. What it throws fails the call, with the error's
 //! message, its `data`, and its `kind`: `error` (the default), `unavailable`, `timeout` or
 //! `outcome_unknown`. A handler cannot wait for anything (no timer, signal or action): a promise
@@ -167,7 +167,9 @@ impl ActionDispatcher for TsMocks {
             "tool": action,
             "runId": call.run.id.to_string(),
             "seq": call.seq.0,
-            "attempt": call.attempt,
+            "delivery": call.delivery,
+            // The name `delivery` had, for handlers already written.
+            "attempt": call.delivery,
             "idempotencyKey": call.idempotency_key,
         });
         let (reply, answer) = oneshot::channel();
