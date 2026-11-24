@@ -28,7 +28,7 @@ pub struct RunHead {
     pub run: RunId,
     pub tenant: String,
     pub namespace: String,
-    /// What ran, the middle of the run's handle; `code` when left out.
+    /// What ran, the middle of the run's handle; `script` when left out.
     #[serde(default = "script_origin", skip_serializing_if = "is_script_origin")]
     pub origin: String,
     /// The characters of its handle's suffix; 12 when left out.

@@ -316,7 +316,7 @@ impl StreamEvent {
 /// One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
 /// whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
 /// summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
-/// durable; for `code`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
+/// durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
 /// control plane, by its name or id (the client reads again the views that show it); for
 /// `resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:
 /// the stream is not resumed, the client reads again what it shows. While it sends nothing else,
@@ -326,7 +326,7 @@ impl StreamEvent {
 pub enum ChangeEvent {
     /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
     Run(Box<RunSummary>),
-    /// `code`: the organization's runs ran a code for the first time, or a person gave it a
+    /// `script`: the organization's runs ran a code for the first time, or a person gave it a
     /// title or removed it.
     Script(ScriptChanged),
     /// `workflow`: a workflow has a new version.
@@ -343,7 +343,7 @@ pub enum ChangeEvent {
     Resync(Resync),
 }
 
-/// The data of a `code` event: a code the organization's runs ran for the first time, which
+/// The data of a `script` event: a code the organization's runs ran for the first time, which
 /// `GET /v1/scripts` now lists, or whose title a person gave or removed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -396,7 +396,7 @@ pub struct ConnectionChanged {
 pub struct Resync {}
 
 impl ChangeEvent {
-    /// The SSE `event` field: `run`, `code`, `workflow`, `secret`, `namespace`, `connection`
+    /// The SSE `event` field: `run`, `script`, `workflow`, `secret`, `namespace`, `connection`
     /// or `resync`.
     pub fn sse_event(&self) -> &'static str {
         match self {

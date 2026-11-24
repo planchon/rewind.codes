@@ -619,7 +619,7 @@ fn workflow(name: &str, code: &str) -> Workflow {
 /// the store is upgraded (migration 13, as released), and the runs keep them set aside in
 /// `legacy` for `migrate-runs`. Runs of a tenant whose ids share their first 64 bits take the
 /// full suffix; the others keep the short one, as do the runs of another tenant. A run's origin
-/// is its workflow, or `code`. Versions are numbered by workflow and tenant, by their creation,
+/// is its workflow, or `script`. Versions are numbered by workflow and tenant, by their creation,
 /// then in the order they were stored, and a new one takes the next number.
 async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Postgres) {
     use rewind_core::{MAX_SUFFIX_LEN, SUFFIX_LEN, run_suffix};

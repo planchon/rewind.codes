@@ -778,7 +778,7 @@ CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 /// Run handles, code titles and the numbers of workflow versions
 /// (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Script titles"). A run
 /// keeps its origin, the middle of its handle, and the characters of its handle's suffix. A run
-/// stored before handles takes its workflow's name, or `code`, and the short suffix, unless
+/// stored before handles takes its workflow's name, or `script`, and the short suffix, unless
 /// another run of its tenant shares the first 64 bits of its id (the first 18 characters of its
 /// text, `xxxxxxxx-xxxx-xxxx`): every run of such a group then takes the full suffix, which tells
 /// distinct ids apart. A summary takes its run's; a summary whose run the history no longer holds
@@ -1274,7 +1274,7 @@ mod tests {
     /// The runs and workflow versions of a database of version 10 get handles and numbers
     /// (version 11, as released), and the runs keep them set aside for `migrate-runs`. Runs of a
     /// tenant whose ids share their first 64 bits take the full suffix; a run's origin is its
-    /// workflow, or `code`. Versions are numbered by creation, ties in the order they were
+    /// workflow, or `script`. Versions are numbered by creation, ties in the order they were
     /// stored, and a new one takes the next number.
     #[tokio::test]
     async fn runs_and_versions_of_version_10_get_handles_and_numbers() {

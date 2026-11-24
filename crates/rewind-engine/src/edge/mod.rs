@@ -529,7 +529,7 @@ impl<P: Plane> Edge<P> {
 
     /// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
     /// "Run handles"): its workflow's name; else its code's title as a slug, the title a
-    /// person gave the code or else the one of the comment at its top; else `code`.
+    /// person gave the code or else the one of the comment at its top; else `script`.
     async fn origin_of(
         &self,
         tenant: &TenantId,

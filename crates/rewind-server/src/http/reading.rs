@@ -40,7 +40,7 @@ pub(super) async fn code(
 }
 
 /// `PATCH /v1/scripts/{digest}`: the title and description a person gives the code, for the
-/// organization, or their removal. The catalog sends the `code` change: every process, and
+/// organization, or their removal. The catalog sends the `script` change: every process, and
 /// every dashboard following the organization, reads the title again.
 pub(super) async fn set_title(
     State(app): State<Arc<App>>,

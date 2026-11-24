@@ -45,7 +45,7 @@ pub struct RunHead {
     /// The end user the run belongs to.
     pub namespace: NamespaceName,
     /// What ran, the middle of the run's handle: its workflow's name, or its code's title as
-    /// a slug, or `code`; a fork's is its parent's (`archi/06-storage-and-scale.md`, "Run
+    /// a slug, or `script`; a fork's is its parent's (`archi/06-storage-and-scale.md`, "Run
     /// handles"). Frozen when the run is created.
     pub origin: String,
     /// The characters of the suffix of the run's handle: [`SUFFIX_LEN`](rewind_core::SUFFIX_LEN),

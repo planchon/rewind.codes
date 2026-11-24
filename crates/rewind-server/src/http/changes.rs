@@ -93,7 +93,7 @@ struct Follow {
     control: broadcast::Receiver<Control>,
     pending: VecDeque<Event>,
     /// The titles of the workflows the stream's runs ran, read once and forgotten when the
-    /// code's `code` change comes (a title given or removed).
+    /// code's `script` change comes (a title given or removed).
     titles: HashMap<Digest, Option<String>>,
     /// A subscription was lost: the stream ends once `pending` is sent.
     closing: bool,

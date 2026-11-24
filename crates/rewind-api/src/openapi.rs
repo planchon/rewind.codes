@@ -652,7 +652,7 @@ mod operations {
 
     /// List the workflows
     ///
-    /// The latest version of each workflow the caller sees, by name; with `code`, every version
+    /// The latest version of each workflow the caller sees, by name; with `script`, every version
     /// whose code it is, newest first.
     #[utoipa::path(
         get, path = "/v1/workflows", tag = "workflows", operation_id = "listWorkflows",
@@ -939,7 +939,7 @@ mod operations {
     /// all. A run the caller cannot open never shows, not even its id. Each event's `event` field
     /// names it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the
     /// same object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's
-    /// owner once its batch is durable (a deleted run is not announced); `code`, `workflow`,
+    /// owner once its batch is durable (a deleted run is not announced); `script`, `workflow`,
     /// `secret`, `namespace` and `connection`, naming what changed in the control plane, whose
     /// views are read again; `resync`, with `{}`, when more changed at once than the server reads
     /// in one pass: read again what is shown. Nothing is read on a timer: after a drop, read again
@@ -952,7 +952,7 @@ mod operations {
     #[utoipa::path(
         get, path = "/v1/changes", tag = "runs", operation_id = "streamChanges",
         responses(
-            (status = 200, description = "A stream of server-sent events `run`, `code`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
+            (status = 200, description = "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
             (status = 401, description = "No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it.", body = Problem, content_type = "application/problem+json"),
         )
     )]

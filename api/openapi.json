@@ -1094,7 +1094,7 @@
         "type": "object"
       },
       "ChangeEvent": {
-        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `code`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
+        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/RunSummary",
@@ -1102,7 +1102,7 @@
           },
           {
             "$ref": "#/components/schemas/ScriptChanged",
-            "description": "`code`: the organization's runs ran a code for the first time, or a person gave it a\ntitle or removed it."
+            "description": "`script`: the organization's runs ran a code for the first time, or a person gave it a\ntitle or removed it."
           },
           {
             "$ref": "#/components/schemas/WorkflowChanged",
@@ -6105,7 +6105,7 @@
         "type": "object"
       },
       "ScriptChanged": {
-        "description": "The data of a `code` event: a code the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists, or whose title a person gave or removed.",
+        "description": "The data of a `script` event: a code the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists, or whose title a person gave or removed.",
         "properties": {
           "digest": {
             "description": "SHA-256 of the TypeScript source, lowercase hex.",
@@ -11537,7 +11537,7 @@
     },
     "/v1/changes": {
       "get": {
-        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `code`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
+        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `script`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
         "operationId": "streamChanges",
         "parameters": [
           {
@@ -11568,7 +11568,7 @@
                 }
               }
             },
-            "description": "A stream of server-sent events `run`, `code`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`."
+            "description": "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`."
           },
           "400": {
             "content": {
@@ -19958,7 +19958,7 @@
     },
     "/v1/workflows": {
       "get": {
-        "description": "The latest version of each workflow the caller sees, by name; with `code`, every version\nwhose code it is, newest first.",
+        "description": "The latest version of each workflow the caller sees, by name; with `script`, every version\nwhose code it is, newest first.",
         "operationId": "listWorkflows",
         "parameters": [
           {
