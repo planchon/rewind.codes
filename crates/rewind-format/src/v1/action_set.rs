@@ -6,7 +6,7 @@
 //!  "actions":[{"name":"github.list_issues","route":{"type":"mcp","server":"github"},
 //!            "description":"List the issues","schemas":{"input":{…},"output":{…}},
 //!            "policy":{"approval":false,"concurrency":16,"execution_timeout_ms":300000,
-//!                      "heartbeat_timeout_ms":60000,"on_interruption":"retry"}}],
+//!                      "idempotent":true,"reconnect_timeout_ms":60000}}],
 //!  "v":1}
 //! ```
 //!
@@ -46,9 +46,9 @@ use std::time::Duration;
 
 use rewind_core::{
     Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, ApiOperation, ApiParameter,
-    Attachments, Builtin, Digest, HttpMethod, Interruption, McpServer, McpTransport,
-    ParameterLocation, PinnedWorkflow, RetiredTest, SecretEncoding, SecretPlacement, SecretRef,
-    Suite, SuiteTest, UpdatedTest, Workflow, WorkflowSchemas,
+    Attachments, Builtin, Digest, HttpMethod, McpServer, McpTransport, ParameterLocation,
+    PinnedWorkflow, RetiredTest, SecretEncoding, SecretPlacement, SecretRef, Suite, SuiteTest,
+    UpdatedTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -279,19 +279,12 @@ struct SchemasV1 {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PolicyV1 {
-    on_interruption: InterruptionV1,
+    idempotent: bool,
     approval: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution_timeout_ms: Option<u64>,
-    heartbeat_timeout_ms: u64,
+    reconnect_timeout_ms: u64,
     concurrency: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-enum InterruptionV1 {
-    Retry,
-    AtMostOnce,
 }
 
 /// The document as a JSON value, `"v"` included. The caller writes it in canonical form.
@@ -693,26 +686,20 @@ fn action_dto(action: &Action) -> ActionV1 {
 /// An action's policy as the action set document and a call's task write it.
 pub(crate) fn policy_dto(policy: &ActionPolicy) -> PolicyV1 {
     PolicyV1 {
-        on_interruption: match policy.on_interruption {
-            Interruption::Retry => InterruptionV1::Retry,
-            Interruption::AtMostOnce => InterruptionV1::AtMostOnce,
-        },
+        idempotent: policy.idempotent,
         approval: policy.approval,
         execution_timeout_ms: policy.execution_timeout.map(millis),
-        heartbeat_timeout_ms: millis(policy.heartbeat_timeout),
+        reconnect_timeout_ms: millis(policy.reconnect_timeout),
         concurrency: policy.concurrency,
     }
 }
 
 pub(crate) fn policy_from_dto(policy: PolicyV1) -> ActionPolicy {
     ActionPolicy {
-        on_interruption: match policy.on_interruption {
-            InterruptionV1::Retry => Interruption::Retry,
-            InterruptionV1::AtMostOnce => Interruption::AtMostOnce,
-        },
+        idempotent: policy.idempotent,
         approval: policy.approval,
         execution_timeout: policy.execution_timeout_ms.map(Duration::from_millis),
-        heartbeat_timeout: Duration::from_millis(policy.heartbeat_timeout_ms),
+        reconnect_timeout: Duration::from_millis(policy.reconnect_timeout_ms),
         concurrency: policy.concurrency,
     }
 }

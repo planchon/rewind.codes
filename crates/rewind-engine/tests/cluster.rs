@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    Action, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Epoch, Interruption,
-    McpServer, McpTransport, PartitionId, RunStatus,
+    Action, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Epoch, McpServer,
+    McpTransport, PartitionId, RunStatus,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HarnessActions;
@@ -419,14 +419,14 @@ async fn a_node_that_does_not_run_the_run_s_epoch_sends_its_activations_to_one_t
     );
 }
 
-fn harness_call(policy: Interruption) -> rewind_engine::StartRun {
+fn harness_call(idempotent: bool) -> rewind_engine::StartRun {
     let mut request = request("host", json!({}));
     let mut actions: Vec<Action> = request.action_set.actions().to_vec();
     for action in &mut actions {
         if action.name == "a" {
             let mut with = ActionPolicy::default_for(&action.route);
-            with.on_interruption = policy;
-            with.heartbeat_timeout = Duration::from_secs(60);
+            with.idempotent = idempotent;
+            with.reconnect_timeout = Duration::from_secs(60);
             action.policy = with;
         }
     }
@@ -481,7 +481,7 @@ async fn a_stream_that_comes_back_within_its_grace_keeps_its_tasks() {
         .attach_stream(&edge, TenantId::local(), attach("s1", "worker-1", &edge))
         .unwrap();
     world.settle().await;
-    let run = world.run(harness_call(Interruption::Retry)).await;
+    let run = world.run(harness_call(true)).await;
     let handed = drain(&mut first);
     assert_eq!(handed.len(), 1);
 
@@ -517,8 +517,8 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
         .attach_stream(&edge, TenantId::local(), attach("s1", "worker-1", &edge))
         .unwrap();
     world.settle().await;
-    let retried = world.run(harness_call(Interruption::Retry)).await;
-    let at_most_once = world.run(harness_call(Interruption::AtMostOnce)).await;
+    let retried = world.run(harness_call(true)).await;
+    let not_idempotent = world.run(harness_call(false)).await;
     let handed = drain(&mut first);
     assert_eq!(handed.len(), 2);
 
@@ -554,10 +554,10 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
     world.settle().await;
     assert_eq!(world.view(&retried).await.head.status, RunStatus::Completed);
 
-    // Under at_most_once: the call may have taken effect, so it is not handed again.
-    let view = world.view(&at_most_once).await;
+    // Not idempotent: the call may have taken effect, so it is not handed again.
+    let view = world.view(&not_idempotent).await;
     assert_eq!(view.head.status, RunStatus::Completed);
-    let history = world.history(&at_most_once).await;
+    let history = world.history(&not_idempotent).await;
     let rewind_core::Event::Command(rewind_core::Command::CompleteRun { output }) =
         &history.last().unwrap().event
     else {
@@ -585,7 +585,7 @@ async fn a_stream_at_a_node_that_dies_has_its_tasks_handed_again_after_the_grace
         .attach_stream(&dying, TenantId::local(), attach("s1", "worker-1", &dying))
         .unwrap();
     world.settle().await;
-    let run = world.run(harness_call(Interruption::Retry)).await;
+    let run = world.run(harness_call(true)).await;
     let handed = drain(&mut first);
     assert_eq!(handed.len(), 1);
 

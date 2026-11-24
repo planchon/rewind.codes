@@ -24,7 +24,7 @@ use crate::namespaces::NamespaceName;
 /// while a call is in flight. When the stream closes, its calls wait for the worker to open a
 /// stream again with the same `worker`, for the action's grace (60 s by default); after it, each is
 /// handed to another worker with its delivery + 1, or fails with `outcomeUnknown` under
-/// `at_most_once` (`archi/04-tools.md`, "Call lifecycle").
+/// `idempotent: false` (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
@@ -162,7 +162,7 @@ pub struct CompleteCall {
 }
 
 /// `POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the
-/// failure is retryable and the action's policy is `retry`: the call is then made again, with
+/// failure is retryable and the action is idempotent: the call is then delivered again, with
 /// backoff.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

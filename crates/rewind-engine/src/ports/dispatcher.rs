@@ -116,8 +116,8 @@ pub enum Dispatched {
     Result(JsonValue),
     /// The action failed for good: the script receives this failure as an `ActionError`.
     Failed(ActionFailure),
-    /// A failure worth retrying (unreachable, overloaded, timed out): under `retry`, the engine
-    /// puts the task back to `ready` with backoff; under `at_most_once`, it fails the call with
+    /// A failure worth delivering again (unreachable, overloaded, timed out): when the action is
+    /// idempotent, the engine puts the task back to `ready` with backoff; otherwise it fails the call with
     /// this failure.
     Transient(ActionFailure),
     /// The handler took the call's token and answers through it later, maybe days later: the

@@ -145,9 +145,9 @@ pub struct Policy {
     /// The call waits for the harness's approval (an `approve` or `reject` step).
     #[serde(default)]
     pub approval: bool,
-    /// `retry` (the default) or `at_most_once`.
+    /// Whether an interrupted call may be delivered again; `true` by default.
     #[serde(default)]
-    pub on_interruption: Option<String>,
+    pub idempotent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

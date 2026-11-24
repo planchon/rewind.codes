@@ -18,8 +18,8 @@
 //! │                              | builtin(http(allowed_hosts) | webhook)
 //! │                     operation (API actions only) = { method, path, parameters, body,
 //! │                                                    idempotency_key }
-//! │                     policy = { on_interruption: retry | at_most_once, approval,
-//! │                                execution_timeout?, heartbeat_timeout, concurrency }
+//! │                     policy = { idempotent, approval, execution_timeout?,
+//! │                                reconnect_timeout, concurrency }
 //! └── workflows: PinnedWorkflow { name, version, description?, schemas }
 //!                  each gives two built-ins, not in the document:
 //!                  workflows.<name>.start and workflows.<name>.signal (builtin(workflow))
@@ -365,39 +365,24 @@ impl Builtin {
     }
 }
 
-/// What happens to a call whose outcome is unknown (`archi/04-tools.md`, "Policies").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Interruption {
-    /// Call again with the same idempotency key: transient failures are retried with backoff,
-    /// and an expired claim is claimed again, up to 5 attempts. The default.
-    Retry,
-    /// Never call twice: a transient failure fails the call, and an expired claim fails it with
-    /// `outcome_unknown`. For actions that ignore the idempotency key.
-    AtMostOnce,
-}
-
-impl Interruption {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Interruption::Retry => "retry",
-            Interruption::AtMostOnce => "at_most_once",
-        }
-    }
-}
-
 /// The policy of one action, pinned in the action set and set per action by the harness when it
 /// registers the action set (`archi/04-tools.md`, "Policies").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ActionPolicy {
-    pub on_interruption: Interruption,
+    /// What happens to a call whose outcome is unknown (`archi/04-tools.md`, "Policies"). `true`,
+    /// the default: it is delivered again with the same idempotency key, transient failures with
+    /// backoff and an expired claim claimed again, up to 5 deliveries. `false`: it is delivered
+    /// once at most, a transient failure fails the call and an expired claim fails it with
+    /// `outcome_unknown`; for actions that ignore the idempotency key.
+    pub idempotent: bool,
     /// The task waits for the harness's approval before it is sent.
     pub approval: bool,
-    /// How long one attempt may take. `None`: no limit but the run's TTL, the default of host
-    /// actions, which may last days.
+    /// How long one delivery may take. `None`: no limit but the run's TTL, the default of
+    /// harness actions, which may last days.
     pub execution_timeout: Option<Duration>,
-    /// How long a claim lives without a heartbeat. The dispatcher and the harness's workers
-    /// renew their claims before it passes.
-    pub heartbeat_timeout: Duration,
+    /// How long a harness call handed on a stream that closed waits for its worker to come back
+    /// before it is handed again.
+    pub reconnect_timeout: Duration,
     /// Calls of this action in flight at once in one run. The claim of call tasks enforces it.
     pub concurrency: u32,
 }
@@ -408,13 +393,13 @@ impl ActionPolicy {
     /// The execution timeout of the actions Rewind calls itself (MCP actions, API actions and
     /// built-ins).
     pub const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-    pub const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
+    pub const DEFAULT_RECONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
-    /// The default policy of a route: `retry`, no approval, 16 calls in flight per run, a
-    /// heartbeat timeout of 60 s, and an execution timeout of 5 min except for harness actions.
+    /// The default policy of a route: idempotent, no approval, 16 calls in flight per run, a
+    /// reconnect timeout of 60 s, and an execution timeout of 5 min except for harness actions.
     pub fn default_for(route: &ActionRoute) -> Self {
         Self {
-            on_interruption: Interruption::Retry,
+            idempotent: true,
             approval: false,
             execution_timeout: match route {
                 ActionRoute::Harness { .. } => None,
@@ -422,18 +407,18 @@ impl ActionPolicy {
                     Some(Self::DEFAULT_EXECUTION_TIMEOUT)
                 }
             },
-            heartbeat_timeout: Self::DEFAULT_HEARTBEAT_TIMEOUT,
+            reconnect_timeout: Self::DEFAULT_RECONNECT_TIMEOUT,
             concurrency: Self::DEFAULT_CONCURRENCY,
         }
     }
 
-    /// The default policy of an API's operation: as an MCP action's, but `at_most_once` for a
+    /// The default policy of an API's operation: as an MCP action's, but not idempotent for a
     /// `POST` or a `PATCH` that declares no `Idempotency-Key`, which HTTP does not let a client
     /// send twice (`archi/04-tools.md`, "API actions").
     pub fn default_for_operation(operation: &ApiOperation) -> Self {
         let mut policy = Self::default_for(&ActionRoute::Api { api: String::new() });
         if !operation.method.is_idempotent() && !operation.idempotency_key {
-            policy.on_interruption = Interruption::AtMostOnce;
+            policy.idempotent = false;
         }
         policy
     }
@@ -969,7 +954,7 @@ fn check_action(
     let whole_millis = |duration: Duration| {
         !duration.is_zero() && duration.subsec_nanos().is_multiple_of(1_000_000)
     };
-    if !whole_millis(policy.heartbeat_timeout)
+    if !whole_millis(policy.reconnect_timeout)
         || policy
             .execution_timeout
             .is_some_and(|timeout| !whole_millis(timeout))
@@ -1203,14 +1188,14 @@ fn action_json(action: &Action) -> Value {
     }
     let mut policy = Map::new();
     let p = &action.policy;
-    policy.insert("on_interruption".into(), json!(p.on_interruption.as_str()));
+    policy.insert("idempotent".into(), json!(p.idempotent));
     policy.insert("approval".into(), json!(p.approval));
     if let Some(timeout) = p.execution_timeout {
         policy.insert("execution_timeout_ms".into(), json!(millis(timeout)));
     }
     policy.insert(
-        "heartbeat_timeout_ms".into(),
-        json!(millis(p.heartbeat_timeout)),
+        "reconnect_timeout_ms".into(),
+        json!(millis(p.reconnect_timeout)),
     );
     policy.insert("concurrency".into(), json!(p.concurrency));
 
@@ -1297,7 +1282,7 @@ mod tests {
             Digest::of(
                 concat!(
                     r#"{"actions":[{"name":"ask_user","policy":{"approval":false,"concurrency":16,"#,
-                    r#""heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"type":"harness"},"#,
+                    r#""idempotent":true,"reconnect_timeout_ms":60000},"route":{"type":"harness"},"#,
                     r#""schemas":{"input":{}}}],"servers":[],"v":1}"#
                 )
                 .as_bytes()
@@ -1318,10 +1303,10 @@ mod tests {
             with(&|action| action.description = Some("Lists".into())),
             with(&|action| action.input_schema = json!({ "type": "string" })),
             with(&|action| action.output_schema = Some(json!({}))),
-            with(&|action| action.policy.on_interruption = Interruption::AtMostOnce),
+            with(&|action| action.policy.idempotent = false),
             with(&|action| action.policy.approval = true),
             with(&|action| action.policy.execution_timeout = None),
-            with(&|action| action.policy.heartbeat_timeout = Duration::from_secs(5)),
+            with(&|action| action.policy.reconnect_timeout = Duration::from_secs(5)),
             with(&|action| action.policy.concurrency = 1),
             {
                 let mut server = github();
@@ -1341,9 +1326,9 @@ mod tests {
             server: "github".into(),
         });
         assert_eq!(mcp.execution_timeout, Some(Duration::from_secs(300)));
-        assert_eq!(mcp.heartbeat_timeout, Duration::from_secs(60));
+        assert_eq!(mcp.reconnect_timeout, Duration::from_secs(60));
         assert_eq!(mcp.concurrency, 16);
-        assert_eq!(mcp.on_interruption, Interruption::Retry);
+        assert!(mcp.idempotent);
         assert!(!mcp.approval);
         let host = ActionPolicy::default_for(&ActionRoute::Harness { group: None });
         assert_eq!(host.execution_timeout, None);
@@ -1458,7 +1443,7 @@ mod tests {
             ActionSetError::InvalidAction { .. }
         ));
         let mut fractional = mcp_action("github.a");
-        fractional.policy.heartbeat_timeout = Duration::from_micros(1500);
+        fractional.policy.reconnect_timeout = Duration::from_micros(1500);
         assert!(matches!(
             err(vec![github()], vec![fractional]),
             ActionSetError::InvalidAction { .. }
@@ -1739,7 +1724,7 @@ mod tests {
         assert_eq!(action.local_name(), "createMeasure");
         assert_eq!(action.route.server(), Some("dax"));
         assert!(action.route.is_dispatched());
-        assert_eq!(action.policy.on_interruption, Interruption::AtMostOnce);
+        assert!(!action.policy.idempotent);
         assert_eq!(
             action.policy.execution_timeout,
             Some(ActionPolicy::DEFAULT_EXECUTION_TIMEOUT)
@@ -1757,18 +1742,12 @@ mod tests {
             idempotency_key: true,
             ..create_measure()
         };
-        assert_eq!(
-            ActionPolicy::default_for_operation(&keyed).on_interruption,
-            Interruption::Retry
-        );
+        assert!(ActionPolicy::default_for_operation(&keyed).idempotent);
         let get = ApiOperation {
             method: HttpMethod::Get,
             ..create_measure()
         };
-        assert_eq!(
-            ActionPolicy::default_for_operation(&get).on_interruption,
-            Interruption::Retry
-        );
+        assert!(ActionPolicy::default_for_operation(&get).idempotent);
         assert_eq!(action_set.api("dax"), Some(&dax()));
         assert_eq!(action_set.auth("dax"), Some(&ActionAuth::None));
         assert_eq!(action_set.auth("github"), Some(&ActionAuth::None));
@@ -1955,8 +1934,8 @@ mod tests {
                 r#""operation":{"body":true,"idempotency_key":false,"method":"post","parameters":"#,
                 r#"[{"in":"query","name":"dryRun"},{"in":"path","name":"project"}],"#,
                 r#""path":"/measures/{project}"},"policy":{"approval":false,"concurrency":16,"#,
-                r#""execution_timeout_ms":300000,"heartbeat_timeout_ms":60000,"#,
-                r#""on_interruption":"at_most_once"},"route":{"api":"dax","type":"api"},"#,
+                r#""execution_timeout_ms":300000,"idempotent":false,"reconnect_timeout_ms":60000},"#,
+                r#""route":{"api":"dax","type":"api"},"#,
                 r#""schemas":{"input":{"type":"object"}}}],"#,
                 r#""apis":[{"base_url":"https://api.example.com/v1","concurrency":8,"name":"dax"}],"#,
                 r#""servers":[{"concurrency":8,"name":"github","transport":{"type":"http","#,

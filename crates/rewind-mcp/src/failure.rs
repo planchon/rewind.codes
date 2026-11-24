@@ -1,6 +1,7 @@
 //! What went wrong talking to an MCP server, sorted the way the engine needs it
 //! (`archi/04-tools.md`, "Call lifecycle"): a refused secret or signature parks the call,
-//! transient failures are retried under `retry`, the others fail the call for good.
+//! transient failures are delivered again when the action is idempotent, the others fail the
+//! call for good.
 //!
 //! | What happened | Outcome |
 //! | --- | --- |

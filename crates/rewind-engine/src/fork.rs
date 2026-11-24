@@ -15,8 +15,8 @@
 //!   abort, or at the end of the parent's history, the fork goes live.
 //! - The calls the fork inherited (their commands matched before it went live) and that are
 //!   still pending: the parent's outcome, if it recorded one, is delivered; otherwise the call is
-//!   dispatched again with the parent's idempotency key under `retry`, and fails with
-//!   `outcome_unknown` under `at_most_once`.
+//!   dispatched again with the parent's idempotency key when its action is idempotent, and fails
+//!   with `outcome_unknown` when it is not.
 //!
 //! The fork's history is self-contained: it replays without the parent.
 
@@ -25,9 +25,9 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Attachments, Command, Completion, Event, HistoryEntry, Interruption,
-    JournalDocument, JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed,
-    RunId, RunStarted, RunStatus, Script, Seq,
+    ActionSet, Attachments, Command, Completion, Event, HistoryEntry, JournalDocument, JsonValue,
+    Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted, RunStatus,
+    Script, Seq,
 };
 
 use crate::attachments::AttachRights;
@@ -145,10 +145,10 @@ pub struct Compatibility {
     pub point: ForkPoint,
     /// The calls whose recorded outcome a fork reuses: they are not called again.
     pub reused: Vec<Seq>,
-    /// Calls the run left without an outcome, under `retry`: a fork calls them again with the
+    /// Calls the run left without an outcome, of idempotent actions: a fork calls them again with the
     /// run's idempotency key.
     pub redispatched: Vec<Seq>,
-    /// Calls the run left without an outcome, under `at_most_once`: they fail in the fork with
+    /// Calls the run left without an outcome, of actions that are not idempotent: they fail in the fork with
     /// `outcome_unknown`.
     pub unknown: Vec<Seq>,
     /// The fork's status once it has followed the run: `completed` or `failed` when it ended as
@@ -444,12 +444,12 @@ where
                 {
                     continue;
                 }
-                let policy = source
+                let idempotent = source
                     .action_set
                     .action(action)
-                    .map(|action| action.policy.on_interruption);
-                match policy {
-                    Some(Interruption::AtMostOnce) => unknown.push(*seq),
+                    .map(|action| action.policy.idempotent);
+                match idempotent {
+                    Some(false) => unknown.push(*seq),
                     _ => redispatched.push(*seq),
                 }
             }

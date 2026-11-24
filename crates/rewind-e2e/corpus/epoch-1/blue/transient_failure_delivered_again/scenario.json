@@ -1,5 +1,5 @@
 {
-  "description": "Transient failures are retried after a backoff, with the same idempotency key: the script sees one call and its answer, later in logical time.",
+  "description": "Transient failures are delivered again after a backoff, with the same idempotency key: the script sees one call and its answer, later in logical time.",
   "input": { "city": "Lyon" },
   "actions": {
     "weather.forecast": {

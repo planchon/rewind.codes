@@ -69,7 +69,7 @@ fn decodes_to_the_expected_domain_values() {
         history[0].event,
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
             script: digest("88b30ba7a18c0a5dcd87a939c120336570ea6c747836b1a6b59ce93108d57c31"),
-            action_set: digest("b9737e13b81b6324fb5dc879bd997eed198cb1fdfabf8a1cd9cd099a030147a6"),
+            action_set: digest("2ff7b72e331ef568c6041bd5c9509e3fb44ed29516f6b47bc815ea2a4dd537e3"),
             input: json!({ "repo": "acme/api" }).into(),
             seed: Seed::from_bytes(
                 *digest("19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b")

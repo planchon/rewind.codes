@@ -11,12 +11,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use rewind_api::action_sets::{
-    ActionPolicy as ApiPolicy, CreateActionSet, OnInterruption, OpenApiDocument,
-};
+use rewind_api::action_sets::{ActionPolicy as ApiPolicy, CreateActionSet, OpenApiDocument};
 use rewind_core::{
-    Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, Builtin, Interruption,
-    McpServer, McpTransport,
+    Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, Builtin, McpServer, McpTransport,
 };
 use rewind_engine::ports::{Secret, TenantId};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
@@ -216,11 +213,8 @@ fn apply(policy: &mut ActionPolicy, given: Option<&ApiPolicy>) {
     let Some(given) = given else {
         return;
     };
-    if let Some(on_interruption) = given.on_interruption {
-        policy.on_interruption = match on_interruption {
-            OnInterruption::Retry => Interruption::Retry,
-            OnInterruption::AtMostOnce => Interruption::AtMostOnce,
-        };
+    if let Some(idempotent) = given.idempotent {
+        policy.idempotent = idempotent;
     }
     if let Some(approval) = given.approval {
         policy.approval = approval;
@@ -228,8 +222,8 @@ fn apply(policy: &mut ActionPolicy, given: Option<&ApiPolicy>) {
     if let Some(timeout) = given.timeout {
         policy.execution_timeout = Some(timeout.get());
     }
-    if let Some(heartbeat) = given.heartbeat_timeout {
-        policy.heartbeat_timeout = heartbeat.get();
+    if let Some(reconnect) = given.reconnect_timeout {
+        policy.reconnect_timeout = reconnect.get();
     }
     if let Some(concurrency) = given.concurrency {
         policy.concurrency = concurrency;
@@ -311,10 +305,7 @@ mod tests {
         assert_eq!(action_set.apis()[0].base_url, "http://127.0.0.1:8080/v1");
         let create_measure = action_set.action("dax.createMeasure").unwrap();
         // A POST without Idempotency-Key is called at most once.
-        assert_eq!(
-            create_measure.policy.on_interruption,
-            Interruption::AtMostOnce
-        );
+        assert!(!create_measure.policy.idempotent);
         assert!(
             action_set
                 .action("dax.listMeasures")
@@ -338,7 +329,7 @@ mod tests {
                 input_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
                 output_schema: Some(json!({"type": "string"})),
                 policy: Some(ApiPolicy {
-                    on_interruption: Some(OnInterruption::AtMostOnce),
+                    idempotent: Some(false),
                     approval: Some(true),
                     concurrency: Some(1),
                     ..ApiPolicy::default()
@@ -363,7 +354,7 @@ mod tests {
                 group: Some("crm".into())
             }
         );
-        assert_eq!(ask.policy.on_interruption, Interruption::AtMostOnce);
+        assert!(!ask.policy.idempotent);
         assert!(ask.policy.approval);
         assert_eq!(ask.policy.concurrency, 1);
         assert_eq!(ask.output_schema, Some(json!({"type": "string"})));

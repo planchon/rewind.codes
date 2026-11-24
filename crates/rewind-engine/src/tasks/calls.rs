@@ -23,9 +23,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionRoute, Builtin,
-    Interruption, JsonValue, Payload, RunEnd, RunId, RunMode, RunStarted, SecretScope, Seq,
-    WorkflowOp,
+    ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionRoute, Builtin, JsonValue,
+    Payload, RunEnd, RunId, RunMode, RunStarted, SecretScope, Seq, WorkflowOp,
 };
 use serde_json::json;
 
@@ -796,25 +795,27 @@ async fn signal_child<P: Plane>(
     }))
 }
 
-/// The failure of a task that must not be called again after an interruption: always under
-/// `at_most_once`, past the maximum of deliveries under `retry`.
+/// The failure of a task that must not be called again after an interruption: always when its
+/// action is not idempotent, past the maximum of deliveries when it is.
 pub(crate) fn interrupted(
     action: &str,
-    policy: Interruption,
+    idempotent: bool,
     delivery: u32,
     max_deliveries: u32,
 ) -> Option<ActionFailure> {
-    let message = match policy {
-        Interruption::AtMostOnce => format!(
+    let message = if !idempotent {
+        format!(
             "the call to {action} was interrupted and may or may not have taken effect; the action \
-             is at_most_once, so it is not called again"
-        ),
-        Interruption::Retry if delivery > max_deliveries => format!(
+             is not idempotent, so it is not called again"
+        )
+    } else if delivery > max_deliveries {
+        format!(
             "the call to {action} was interrupted after {} deliveries and may or may not have taken \
              effect",
             delivery - 1
-        ),
-        Interruption::Retry => return None,
+        )
+    } else {
+        return None;
     };
     Some(ActionFailure {
         kind: ActionFailureKind::OutcomeUnknown,

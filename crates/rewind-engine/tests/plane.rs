@@ -15,7 +15,7 @@ use std::time::Duration;
 use rewind_core::PartitionId;
 use rewind_core::{
     AbortKind, ActionFailure, ActionFailureKind, ActionPolicy, ActionSet, CancelReason, Completion,
-    Event, Interruption, Lifecycle, RunStatus, Seq, Timestamp,
+    Event, Lifecycle, RunStatus, Seq, Timestamp,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HarnessActions;
@@ -638,7 +638,7 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
     // The backoff of the first two attempts passed, in virtual time.
     assert!(world.now() > Timestamp(support::T0.0 + 2_000));
 
-    // Under at_most_once, a transient failure is the outcome.
+    // Not idempotent: a transient failure is the outcome.
     let attempts = Arc::new(AtomicU32::new(0));
     let counted = Arc::clone(&attempts);
     let dispatcher = RecordingDispatcher::dispatching(move |_, _| {
@@ -651,7 +651,7 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
     });
     let mut world = World::new(one_call(), dispatcher).await;
     let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Harness { group: None });
-    policy.on_interruption = Interruption::AtMostOnce;
+    policy.idempotent = false;
     let run = world
         .run(with_policy(request("one_call", json!({})), policy))
         .await;

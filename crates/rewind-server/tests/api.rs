@@ -224,7 +224,7 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
     let worker = server.key(BuiltInRole::Worker, &[]).await;
     let action_set = harness
         .create_action_set(&ask_action_set(ActionPolicy {
-            heartbeat_timeout: Some("5s".parse().unwrap()),
+            reconnect_timeout: Some("5s".parse().unwrap()),
             ..ActionPolicy::default()
         }))
         .await

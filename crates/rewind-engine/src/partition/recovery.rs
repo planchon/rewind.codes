@@ -8,7 +8,7 @@
 //!   activation may have been running when the previous owner died;
 //! - the timers due before the horizon, to the wheel;
 //! - the calls in flight: every `ready` task that is due is interrupted, sent again with
-//!   delivery + 1 under `retry`, failed `outcome_unknown` under `at_most_once`, in the recovery
+//!   delivery + 1 when its action is idempotent, failed `outcome_unknown` when it is not, in the recovery
 //!   batch;
 //! - the outbox, to the projections; the ended attempts not sealed, to the sealer;
 //! - the counters, reported to their organization actors; the organizations homed here;
@@ -164,7 +164,7 @@ impl<P: Plane> Owner<P> {
             let next = record.task.delivery.saturating_add(1);
             match crate::tasks::calls::interrupted(
                 &record.task.action,
-                record.task.policy.on_interruption,
+                record.task.policy.idempotent,
                 next,
                 self.config.max_deliveries,
             ) {

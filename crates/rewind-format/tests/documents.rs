@@ -10,10 +10,10 @@ use std::time::Duration;
 use rewind_core::{
     Action, ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionPolicy, ActionRoute,
     ActionRule, ActionSet, Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest,
-    Expectations, ExpectedCall, ExpectedError, HttpMethod, Interruption, Matching, McpServer,
-    McpTransport, ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus,
-    SecretPlacement, SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal,
-    Timestamp, UpdatedTest, Workflow, WorkflowSchemas, World,
+    Expectations, ExpectedCall, ExpectedError, HttpMethod, Matching, McpServer, McpTransport,
+    ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus, SecretPlacement,
+    SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp,
+    UpdatedTest, Workflow, WorkflowSchemas, World,
 };
 use rewind_format::{
     FormatError, decode_action_set, decode_cassette, decode_test, decode_workflow,
@@ -62,10 +62,10 @@ fn action_set() -> ActionSet {
         json!({ "type": "object" }),
     );
     close_issue.policy = ActionPolicy {
-        on_interruption: Interruption::AtMostOnce,
+        idempotent: false,
         approval: true,
         execution_timeout: Some(Duration::from_secs(30)),
-        heartbeat_timeout: Duration::from_secs(20),
+        reconnect_timeout: Duration::from_secs(20),
         concurrency: 2,
     };
     let read_file = Action::new("files.read", mcp("files"), json!({ "type": "object" }));
@@ -168,8 +168,8 @@ fn an_action_set_document_hashes_to_the_action_set_digest() {
 #[test]
 fn an_action_set_document_may_list_actions_in_any_order() {
     let reordered = r#"{"v":1,"actions":[
-        {"name":"b","route":{"type":"harness"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}},
-        {"name":"a","route":{"type":"harness"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}
+        {"name":"b","route":{"type":"harness"},"schemas":{"input":{}},"policy":{"idempotent":true,"approval":false,"reconnect_timeout_ms":60000,"concurrency":16}},
+        {"name":"a","route":{"type":"harness"},"schemas":{"input":{}},"policy":{"idempotent":true,"approval":false,"reconnect_timeout_ms":60000,"concurrency":16}}
     ],"servers":[]}"#;
     assert_eq!(
         decode_action_set(reordered).unwrap(),
@@ -216,7 +216,7 @@ fn a_hand_written_cassette_decodes() {
 
 #[test]
 fn rejects_what_v1_does_not_define() {
-    let policy = r#""policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}"#;
+    let policy = r#""policy":{"idempotent":true,"approval":false,"reconnect_timeout_ms":60000,"concurrency":16}"#;
     let action = |route: &str, extra: &str| {
         format!(
             r#"{{"v":1,"servers":[],"actions":[{{"name":"webhook","route":{route},"schemas":{{"input":{{}}}},{policy}{extra}}}]}}"#
@@ -545,7 +545,7 @@ fn rejects_auth_and_apis_v1_does_not_define() {
         api(r#""baseUrl":"https://x""#),
         api(r#""base_url":"https://x","extra":1"#),
         api(r#""base_url":"x""#),
-        r#"{"v":1,"servers":[],"actions":[{"name":"a.b","route":{"type":"api","api":"a"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}]}"#.to_owned(),
+        r#"{"v":1,"servers":[],"actions":[{"name":"a.b","route":{"type":"api","api":"a"},"schemas":{"input":{}},"policy":{"idempotent":true,"approval":false,"reconnect_timeout_ms":60000,"concurrency":16}}]}"#.to_owned(),
     ];
     for json in &invalid {
         assert!(

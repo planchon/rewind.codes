@@ -14,7 +14,7 @@ use serde_json::Value;
 /// | any value | that value |
 /// | `{"$echo": true}` | the call's arguments |
 /// | `{"$error": "message", "$kind": "timeout", "$data": …}` | a failure (`$kind` defaults to `error`) |
-/// | `{"$transient": "message", "$kind": …}` | a transient failure: retried with backoff under `retry` |
+/// | `{"$transient": "message", "$kind": …}` | a transient failure: delivered again with backoff when the action is idempotent |
 /// | `{"$unauthorized": "message"}` | the server answers 401: the call is parked (`credentials_refused`) until the secret is put again or the harness approves it |
 /// | `{"$crash": true}` | the worker dies with the call (with `harness_worker` only): its stream closes, and another worker opens one |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |

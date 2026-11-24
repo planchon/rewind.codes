@@ -12,16 +12,16 @@
 //!      │ reject_task          ▲ ▲ ▲                      │ │ │ │
 //!      ▼                      │ │ │  transient failure   │ │ │ │ interrupted (a node died, a
 //!    done                     │ │ └── (retry, backoff) ──┘ │ │ │ stream gone): delivery + 1 up to
-//!                             │ │                          │ │ │ 5 (retry), else outcome_unknown
+//!                             │ │                          │ │ │ 5 (idempotent), else outcome_unknown
 //!          approve_task,      │ └──── parked ◄─────────────┘ │ └──► deferred ── complete, fail,
 //!          a secret put again │         │ schema changed, 401│        (token)    late ──► done
 //!                             │         │ secret missing     │
 //!                             │         └── reject_task ──► done
 //! ```
 //!
-//! - **Policies.** Under `retry`, a transient failure goes back to `ready` after a
+//! - **Policies.** When the action is idempotent, a transient failure goes back to `ready` after a
 //!   [`Backoff`], and an interrupted call is sent again with the same idempotency key, up to the
-//!   node's maximum of deliveries. Under `at_most_once`, a transient failure is delivered, and an
+//!   node's maximum of deliveries. When it is not, a transient failure is delivered, and an
 //!   interrupted call fails with `outcome_unknown`.
 //! - **Authentication** is resolved when an MCP or API call is sent, from its server's `auth`:
 //!   the secret the run attached, read from the `SecretStore` in the run's namespace, or the

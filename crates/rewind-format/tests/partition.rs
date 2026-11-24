@@ -12,9 +12,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionPolicy, ActionRoute, Attachments, Builtin, Completion, Digest, Epoch, Event,
-    Interruption, Lifecycle, Payload, RunId, RunMode, RunStarted, SecretRef, Seed,
-    Shape as CoreShape, Timestamp, WorkflowOp,
+    ActionPolicy, ActionRoute, Attachments, Builtin, Completion, Digest, Epoch, Event, Lifecycle,
+    Payload, RunId, RunMode, RunStarted, SecretRef, Seed, Shape as CoreShape, Timestamp,
+    WorkflowOp,
 };
 use rewind_format::FormatError;
 use rewind_format::partition::{
@@ -172,10 +172,10 @@ fn task() -> Task {
         }),
         args: json!({ "input": { "issue": 7 } }).into(),
         policy: ActionPolicy {
-            on_interruption: Interruption::AtMostOnce,
+            idempotent: false,
             approval: true,
             execution_timeout: Some(Duration::from_secs(30)),
-            heartbeat_timeout: Duration::from_secs(60),
+            reconnect_timeout: Duration::from_secs(60),
             concurrency: 4,
         },
         state: TaskState::Parked {

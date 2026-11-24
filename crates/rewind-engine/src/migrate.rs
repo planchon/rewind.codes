@@ -24,7 +24,7 @@
 //! its script, its failure group, the shapes of its results) are written with it, so statistics
 //! and quotas count it; the CPU time it used is not known per run and is not counted. A task in
 //! flight (claimed, or deferred with a token the run plane cannot route) is written `ready`:
-//! recovery sends it again with delivery + 1, or fails it under `at_most_once`. A run that cannot
+//! recovery sends it again with delivery + 1, or fails it when its action is not idempotent. A run that cannot
 //! be moved (its script, its action set, a blob or its journal missing, its history corrupt) is
 //! reported and left in the tables, which are then not dropped; the command can run again: what
 //! moved is skipped.

@@ -21,12 +21,12 @@ use rewind_api::action_sets::{
     Action as ApiAction, ActionMatch, ActionPolicy as ApiPolicy, ActionSearchResults,
     ActionSet as ApiActionSet, ActionSetList, ActionSetSummary, Api as ApiDeclared, ApiSummary,
     Auth, CreateActionSet, DeclarationFormat, Declarations, DeclarationsQuery, DeclarationsText,
-    McpTransport as ApiTransport, OnInterruption, OpenApiDocument, Route, SearchQuery,
-    ServerSummary, SkippedOperation,
+    McpTransport as ApiTransport, OpenApiDocument, Route, SearchQuery, ServerSummary,
+    SkippedOperation,
 };
 use rewind_core::{
-    Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, Digest, Interruption, McpServer,
-    McpTransport, SecretRef, SecretScope,
+    Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, Digest, McpServer, McpTransport,
+    SecretRef, SecretScope,
 };
 use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
@@ -690,11 +690,8 @@ fn policy_over(
     policy: ApiPolicy,
     action: &str,
 ) -> Result<ActionPolicy, ApiError> {
-    if let Some(on) = policy.on_interruption {
-        pinned.on_interruption = match on {
-            OnInterruption::Retry => Interruption::Retry,
-            OnInterruption::AtMostOnce => Interruption::AtMostOnce,
-        };
+    if let Some(idempotent) = policy.idempotent {
+        pinned.idempotent = idempotent;
     }
     if let Some(approval) = policy.approval {
         pinned.approval = approval;
@@ -707,13 +704,13 @@ fn policy_over(
         }
         pinned.execution_timeout = Some(timeout.get());
     }
-    if let Some(heartbeat) = policy.heartbeat_timeout {
-        if heartbeat.get() < Duration::from_secs(1) {
+    if let Some(reconnect) = policy.reconnect_timeout {
+        if reconnect.get() < Duration::from_secs(1) {
             return Err(invalid_action_set(format!(
-                "{action}: heartbeatTimeout must be at least 1s"
+                "{action}: reconnectTimeout must be at least 1s"
             )));
         }
-        pinned.heartbeat_timeout = heartbeat.get();
+        pinned.reconnect_timeout = reconnect.get();
     }
     if let Some(concurrency) = policy.concurrency {
         if concurrency == 0 {
@@ -801,13 +798,10 @@ pub(crate) fn view(stored: &StoredActionSet) -> ApiActionSet {
                 input_schema: action.input_schema.clone(),
                 output_schema: action.output_schema.clone(),
                 policy: ApiPolicy {
-                    on_interruption: Some(match action.policy.on_interruption {
-                        Interruption::Retry => OnInterruption::Retry,
-                        Interruption::AtMostOnce => OnInterruption::AtMostOnce,
-                    }),
+                    idempotent: Some(action.policy.idempotent),
                     approval: Some(action.policy.approval),
                     timeout: action.policy.execution_timeout.map(Into::into),
-                    heartbeat_timeout: Some(action.policy.heartbeat_timeout.into()),
+                    reconnect_timeout: Some(action.policy.reconnect_timeout.into()),
                     concurrency: Some(action.policy.concurrency),
                 },
             })

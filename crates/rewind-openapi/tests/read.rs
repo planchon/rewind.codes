@@ -4,8 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rewind_core::{
-    Action, ActionAuth, ActionSet, ApiParameter, HttpMethod, Interruption, ParameterLocation,
-    SecretPlacement,
+    Action, ActionAuth, ActionSet, ApiParameter, HttpMethod, ParameterLocation, SecretPlacement,
 };
 use rewind_engine::schema::Validator;
 use rewind_openapi::{ReadApi, ReadOptions, read};
@@ -88,7 +87,7 @@ fn an_openapi_3_0_document_is_read_into_actions() {
     assert_eq!(operation.method, HttpMethod::Post);
     assert!(operation.body && operation.idempotency_key);
     assert!(operation.parameters.is_empty(), "Idempotency-Key is no arg");
-    assert_eq!(create.policy.on_interruption, Interruption::Retry);
+    assert!(create.policy.idempotent);
     assert_eq!(
         create.description.as_deref(),
         Some("Create a measure.\n\nCreates it once per idempotency key.")
@@ -141,12 +140,9 @@ fn an_openapi_3_0_document_is_read_into_actions() {
         &json!({ "id": "m", "other": 1 })
     ));
     let rename = action(&read, "dax.renameMeasure");
-    assert_eq!(rename.policy.on_interruption, Interruption::AtMostOnce);
+    assert!(!rename.policy.idempotent);
     assert!(rename.output_schema.is_none());
-    assert_eq!(
-        action(&read, "dax.deleteMeasure").policy.on_interruption,
-        Interruption::Retry
-    );
+    assert!(action(&read, "dax.deleteMeasure").policy.idempotent);
 
     // Accept is not an arg: Rewind sets it.
     let list = action(&read, "dax.listMeasures");

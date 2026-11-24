@@ -333,7 +333,7 @@ pub struct HarnessFailure {
     /// The message of the `ActionError`, written for the model.
     pub message: String,
     pub data: Option<JsonValue>,
-    /// A transient failure: under `retry`, the call is made again after a backoff, up to the
+    /// A transient failure: when the action is idempotent, the call is delivered again after a backoff, up to the
     /// maximum of attempts. Delivered, it has the kind `unavailable`; otherwise `error`.
     pub retryable: bool,
 }
@@ -491,7 +491,7 @@ pub enum OwnerNotice {
     /// The call may be sent.
     SlotGranted { task: TaskRef },
     /// These harness tasks were handed on a stream that closed and did not come back within its
-    /// grace: each is interrupted (delivery + 1, or `outcome_unknown` under `at_most_once`).
+    /// grace: each is interrupted (delivery + 1, or `outcome_unknown` when its action is not idempotent).
     StreamLost { tasks: Vec<(TaskRef, TaskToken)> },
     /// A new organization actor asks for the counts of the tenant's namespaces.
     CountsWanted { tenant: TenantId },

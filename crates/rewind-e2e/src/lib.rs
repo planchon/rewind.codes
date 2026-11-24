@@ -41,8 +41,8 @@ use std::time::Duration;
 
 use rewind_core::{
     Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Command, Event, HistoryEntry,
-    Interruption, JournalDocument, Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState,
-    Script, SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
+    JournalDocument, Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState, Script,
+    SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
 use rewind_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId};
@@ -378,15 +378,7 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
             .find(|action| action.name == *name)
             .ok_or_else(|| format!("policies: {name} is not one of the actions"))?;
         action.policy.approval = policy.approval;
-        action.policy.on_interruption = match policy.on_interruption.as_deref() {
-            None | Some("retry") => Interruption::Retry,
-            Some("at_most_once") => Interruption::AtMostOnce,
-            Some(other) => {
-                return Err(format!(
-                    "policies: {name}: on_interruption is retry or at_most_once, not {other:?}"
-                ));
-            }
-        };
+        action.policy.idempotent = policy.idempotent.unwrap_or(true);
     }
     ActionSet::new(servers, actions).map_err(|err| format!("actions: {err}"))
 }

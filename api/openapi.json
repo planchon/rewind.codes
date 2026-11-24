@@ -156,22 +156,18 @@
               "null"
             ]
           },
-          "heartbeatTimeout": {
+          "idempotent": {
+            "description": "Whether a call interrupted mid-flight (the dispatcher or the worker died) may be delivered\nagain. `true`: it is delivered again with the same idempotency key, up to 5 deliveries,\nthen fails with `outcomeUnknown`. `false`: it fails with `outcomeUnknown` at once, for\nactions that ignore idempotency keys. `true` by default, but for an API's `POST` or `PATCH`\nwithout an `Idempotency-Key` header.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reconnectTimeout": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
                 "description": "The grace after a stream closes: how long a harness call handed on a stream that closed\nwaits for its worker to come back before it is handed again, as delivery + 1. 60 seconds\nby default."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "onInterruption": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OnInterruption",
-                "description": "What happens to a call interrupted mid-flight. `retry` by default."
               },
               {
                 "type": "null"
@@ -547,7 +543,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ActionPolicy"
             },
-            "description": "Policies of its actions, by operation name. An operation not listed gets the default of\nits method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`\nfor `POST` and `PATCH` unless it declares an `Idempotency-Key` header.",
+            "description": "Policies of its actions, by operation name. An operation not listed gets the default of\nits method: idempotent for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; not idempotent\nfor `POST` and `PATCH` unless it declares an `Idempotency-Key` header.",
             "propertyNames": {
               "type": "string"
             },
@@ -1625,7 +1621,7 @@
               },
               "name": "ask_user",
               "policy": {
-                "onInterruption": "at_most_once"
+                "idempotent": false
               }
             }
           ],
@@ -2880,7 +2876,7 @@
       },
       "FailCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the\nfailure is retryable and the action's policy is `retry`: the call is then made again, with\nbackoff.",
+        "description": "`POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the\nfailure is retryable and the action is idempotent: the call is then delivered again, with\nbackoff.",
         "properties": {
           "data": {
             "description": "`ActionError.data`."
@@ -4183,14 +4179,6 @@
           "error"
         ],
         "type": "object"
-      },
-      "OnInterruption": {
-        "description": "After an interruption (the dispatcher or the worker died mid-call).",
-        "enum": [
-          "retry",
-          "at_most_once"
-        ],
-        "type": "string"
       },
       "OpenApiDocument": {
         "description": "An OpenAPI document, or where to read it.",
@@ -10794,7 +10782,7 @@
     },
     "/v1/calls/stream": {
       "get": {
-        "description": "The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every call\nhanded on it: no heartbeat. When it closes, its calls wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its delivery + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "description": "The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every call\nhanded on it: no heartbeat. When it closes, its calls wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its delivery + 1, or fails with `outcomeUnknown`\nwhen its action is not idempotent. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
         "operationId": "streamCalls",
         "parameters": [
           {

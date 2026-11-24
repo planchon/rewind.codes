@@ -16,8 +16,7 @@
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionFailure, ActionFailureKind, ActionRoute, Completion, Interruption, Payload, Seq,
-    Timestamp,
+    ActionFailure, ActionFailureKind, ActionRoute, Completion, Payload, Seq, Timestamp,
 };
 use serde_json::json;
 
@@ -416,7 +415,7 @@ impl<P: Plane> Owner<P> {
                             epoch: self.epoch,
                             task: *host,
                             action_set: record.task.action_set,
-                            grace: record.task.policy.heartbeat_timeout,
+                            grace: record.task.policy.reconnect_timeout,
                         }))),
                     },
                 );
@@ -515,12 +514,12 @@ impl<P: Plane> Owner<P> {
         self.drop_flight(unit, task);
     }
 
-    /// A transient failure: under `retry`, the task is ready again after a backoff, delivery + 1;
-    /// otherwise the failure is its outcome.
+    /// A transient failure: when its action is idempotent, the task is ready again after a
+    /// backoff, delivery + 1; otherwise the failure is its outcome.
     fn transient(&mut self, task: &TaskRef, record: TaskRecord, failure: ActionFailure) {
-        let retry = record.task.policy.on_interruption == Interruption::Retry
-            && record.task.delivery < self.config.max_deliveries;
-        if !retry {
+        let redeliver =
+            record.task.policy.idempotent && record.task.delivery < self.config.max_deliveries;
+        if !redeliver {
             let mut unit = Unit::new();
             self.finish_in(&mut unit, task, &record, Err(failure));
             self.push(unit);
@@ -929,7 +928,7 @@ impl<P: Plane> Owner<P> {
                 };
                 self.answered(&task);
                 if retryable
-                    && record.task.policy.on_interruption == Interruption::Retry
+                    && record.task.policy.idempotent
                     && record.task.delivery < self.config.max_deliveries
                 {
                     self.reply(reply, PartitionReply::Answered(Ok(())));
@@ -1008,7 +1007,7 @@ impl<P: Plane> Owner<P> {
     }
 
     /// A harness task handed on a stream that closed and did not come back within its grace: sent
-    /// again with delivery + 1 under `retry`, failed `outcome_unknown` under `at_most_once` or
+    /// again with delivery + 1 when its action is idempotent, failed `outcome_unknown` when it is not or
     /// past the maximum of deliveries.
     pub(crate) fn lost(&mut self, task: &TaskRef, token: &TaskToken) {
         let hash = tokens::hash(&token.0);
@@ -1031,7 +1030,7 @@ impl<P: Plane> Owner<P> {
         let mut unit = Unit::new();
         match interrupted(
             &record.task.action,
-            record.task.policy.on_interruption,
+            record.task.policy.idempotent,
             next,
             self.config.max_deliveries,
         ) {

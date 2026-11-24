@@ -48,7 +48,7 @@ mod workflow;
 
 pub use action_set::{
     Action, ActionPolicy, ActionRoute, ActionSet, ActionSetError, Api, ApiOperation, ApiParameter,
-    Builtin, HttpMethod, Interruption, McpServer, McpTransport, ParameterLocation, RESERVED_WORDS,
+    Builtin, HttpMethod, McpServer, McpTransport, ParameterLocation, RESERVED_WORDS,
 };
 pub use artifacts::Script;
 pub use canonical::{canonical_json, canonicalize};

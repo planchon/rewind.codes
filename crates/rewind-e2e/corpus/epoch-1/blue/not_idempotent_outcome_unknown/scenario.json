@@ -1,0 +1,22 @@
+{
+  "description": "The harness's worker dies while it charges: an action that is not idempotent is not called again, and the script gets an ActionError whose outcome is unknown, which it checks with another call.",
+  "input": { "amount": 100 },
+  "harness_worker": true,
+  "actions": {
+    "payments.charge": { "$crash": true },
+    "payments.status": { "charged": true }
+  },
+  "policies": {
+    "payments.charge": { "idempotent": false }
+  },
+  "steps": [{ "advance": "2m" }],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "charged": true,
+      "outcomeUnknown": true,
+      "message": "payments.charge failed: the call to payments.charge was interrupted and may or may not have taken effect; the action is not idempotent, so it is not called again"
+    },
+    "calls": { "payments.charge": 1, "payments.status": 1 }
+  }
+}

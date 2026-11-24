@@ -18,7 +18,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Parser;
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::{
-    ActionPolicy, Api, Auth, CreateActionSet, McpServer, OnInterruption, OpenApiDocument,
+    ActionPolicy, Api, Auth, CreateActionSet, McpServer, OpenApiDocument,
 };
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
@@ -204,7 +204,7 @@ async fn the_embedded_server_reads_an_api_and_calls_it() {
         .find(|action| action.name == "dax.createMeasure")
         .unwrap();
     // A POST that declares Idempotency-Key may be sent again.
-    assert_eq!(create.policy.on_interruption, Some(OnInterruption::Retry));
+    assert_eq!(create.policy.idempotent, Some(true));
     assert!(
         registered.declarations.dts.contains("getMeasure"),
         "{}",

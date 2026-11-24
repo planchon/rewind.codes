@@ -49,9 +49,9 @@ pub(crate) struct ReplayReport {
 pub(crate) struct ForkReport {
     /// The calls whose recorded outcome the fork reuses: they are not called again.
     pub(crate) reused: Vec<CallRef>,
-    /// Calls the run left without an outcome, under `retry`: called again with the run's key.
+    /// Calls the run left without an outcome, of idempotent actions: called again with the run's key.
     pub(crate) called_again: Vec<CallRef>,
-    /// Calls the run left without an outcome, under `at_most_once`: they fail with
+    /// Calls the run left without an outcome, of actions that are not idempotent: they fail with
     /// `outcome_unknown`.
     pub(crate) outcome_unknown: Vec<CallRef>,
     /// The fork's status once it has followed the run.
@@ -125,7 +125,7 @@ pub(super) async fn replay(
             }
             if !fork.outcome_unknown.is_empty() {
                 console.line(format!(
-                    "in a fork, these fail with outcome_unknown (at_most_once): {}",
+                    "in a fork, these fail with outcome_unknown (not idempotent): {}",
                     calls(&fork.outcome_unknown)
                 ));
             }

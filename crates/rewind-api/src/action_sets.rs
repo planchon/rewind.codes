@@ -32,7 +32,7 @@ use crate::common::Duration;
             "properties": { "question": { "type": "string" } },
             "required": ["question"]
         },
-        "policy": { "onInterruption": "at_most_once" }
+        "policy": { "idempotent": false }
     }]
 }))]
 pub struct CreateActionSet {
@@ -126,7 +126,7 @@ pub struct Api {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<u32>,
     /// Policies of its actions, by operation name. An operation not listed gets the default of
-    /// its method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`
+    /// its method: idempotent for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; not idempotent
     /// for `POST` and `PATCH` unless it declares an `Idempotency-Key` header.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub policies: BTreeMap<String, ActionPolicy>,
@@ -285,9 +285,13 @@ pub struct HttpAction {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActionPolicy {
-    /// What happens to a call interrupted mid-flight. `retry` by default.
+    /// Whether a call interrupted mid-flight (the dispatcher or the worker died) may be delivered
+    /// again. `true`: it is delivered again with the same idempotency key, up to 5 deliveries,
+    /// then fails with `outcomeUnknown`. `false`: it fails with `outcomeUnknown` at once, for
+    /// actions that ignore idempotency keys. `true` by default, but for an API's `POST` or `PATCH`
+    /// without an `Idempotency-Key` header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_interruption: Option<OnInterruption>,
+    pub idempotent: Option<bool>,
     /// The call waits for the harness's approval (`POST /v1/calls/{id}/approve`) before it is
     /// sent. Off by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,23 +303,11 @@ pub struct ActionPolicy {
     /// waits for its worker to come back before it is handed again, as delivery + 1. 60 seconds
     /// by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub heartbeat_timeout: Option<Duration>,
+    pub reconnect_timeout: Option<Duration>,
     /// At most this many calls of the action in flight per run. The run's own limit (16) still
     /// applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<u32>,
-}
-
-/// After an interruption (the dispatcher or the worker died mid-call).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OnInterruption {
-    /// Call again with the same idempotency key, up to 5 deliveries, then fail with
-    /// `outcomeUnknown`.
-    #[default]
-    Retry,
-    /// Fail with `outcomeUnknown` at once. For actions that ignore idempotency keys.
-    AtMostOnce,
 }
 
 /// A registered action set, as pinned.
@@ -537,14 +529,14 @@ mod tests {
                 "name": "ask_user",
                 "description": "Ask the end user a question and return their answer.",
                 "inputSchema": { "type": "object" },
-                "policy": { "onInterruption": "at_most_once", "heartbeatTimeout": "2m" }
+                "policy": { "idempotent": false, "reconnectTimeout": "2m" }
             }],
             "http": { "allow": ["api.example.com"] }
         }))
         .unwrap();
         let policy = action_set.harness[0].policy.unwrap();
-        assert_eq!(policy.on_interruption, Some(OnInterruption::AtMostOnce));
-        assert_eq!(policy.heartbeat_timeout.unwrap().as_millis(), 120_000);
+        assert_eq!(policy.idempotent, Some(false));
+        assert_eq!(policy.reconnect_timeout.unwrap().as_millis(), 120_000);
         assert!(
             serde_json::from_value::<CreateActionSet>(json!({ "mcp": [], "tool": [] })).is_err(),
             "unknown fields are refused"

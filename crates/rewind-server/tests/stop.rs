@@ -1,5 +1,5 @@
 //! Stopping a server: its node hands its partitions over at once, and the next owner rebuilds
-//! the calls in flight from the records, as after a crash: a call under `retry` is sent
+//! the calls in flight from the records, as after a crash: a call of an idempotent action is sent
 //! again with its idempotency key, so the handler recognizes it, and the run goes on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_api::access::BuiltInRole;
-use rewind_api::action_sets::{ActionPolicy, CreateActionSet, McpServer, OnInterruption};
+use rewind_api::action_sets::{ActionPolicy, CreateActionSet, McpServer};
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
 use rmcp::ServerHandler;
@@ -119,7 +119,7 @@ async fn a_call_in_flight_at_a_stop_is_sent_again_by_the_next_owner() {
             let harness = server.key(BuiltInRole::Harness, &[]).await;
             // Retried: a call interrupted by the stop is sent again by the next owner.
             let policy = ActionPolicy {
-                on_interruption: Some(OnInterruption::Retry),
+                idempotent: Some(true),
                 ..ActionPolicy::default()
             };
             let action_set = harness

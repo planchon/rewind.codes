@@ -631,8 +631,8 @@ fn servers(action_set: &rewind_core::ActionSet) -> Vec<rewind_api::action_sets::
 pub fn action_set(
     stored: &rewind_engine::ports::StoredActionSet,
 ) -> rewind_api::action_sets::ActionSet {
-    use rewind_api::action_sets::{Action, ActionPolicy, OnInterruption, Route};
-    use rewind_core::{ActionRoute, Interruption};
+    use rewind_api::action_sets::{Action, ActionPolicy, Route};
+    use rewind_core::ActionRoute;
     let action_set = &stored.action_set;
     rewind_api::action_sets::ActionSet {
         id: action_set.digest().to_hex(),
@@ -662,13 +662,10 @@ pub fn action_set(
                 input_schema: action.input_schema.clone(),
                 output_schema: action.output_schema.clone(),
                 policy: ActionPolicy {
-                    on_interruption: Some(match action.policy.on_interruption {
-                        Interruption::Retry => OnInterruption::Retry,
-                        Interruption::AtMostOnce => OnInterruption::AtMostOnce,
-                    }),
+                    idempotent: Some(action.policy.idempotent),
                     approval: Some(action.policy.approval),
                     timeout: action.policy.execution_timeout.map(Into::into),
-                    heartbeat_timeout: Some(action.policy.heartbeat_timeout.into()),
+                    reconnect_timeout: Some(action.policy.reconnect_timeout.into()),
                     concurrency: Some(action.policy.concurrency),
                 },
             })

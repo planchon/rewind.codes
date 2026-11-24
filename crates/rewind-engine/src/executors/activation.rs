@@ -689,8 +689,8 @@ where
         let error = ActionFailure {
             kind: ActionFailureKind::OutcomeUnknown,
             message: format!(
-                "the parent run {parent_id} left this call without an outcome, and the action's \
-                 policy is at_most_once: it may or may not have taken effect"
+                "the parent run {parent_id} left this call without an outcome, and the action is \
+                 not idempotent: it may or may not have taken effect"
             ),
             data: None,
         };
