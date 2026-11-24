@@ -1,18 +1,18 @@
 // The steps of a run, for the time cursor of the Run page (archi/05-testing-and-observability.md,
 // "Dashboard"). The commit invariant makes a history a sequence of steps: a trigger (the start, a
-// tool's result or failure, a timer, a signal, a cancellation) and the entries committed with it,
-// until the script pauses again. What the run knew after a step is the journal up to its last
-// entry, so the state at the cursor is `buildRunModel(entries up to it)`.
+// call's result or failure, a timer, a signal, a cancellation) and the events committed with it,
+// until the code pauses again. What the run knew after a step is the history up to its last
+// event, so the state at the cursor is `buildRunModel(events up to it)`.
 
 import { CANCELLED_ERROR } from "./ending";
 import type { Activity, RunModel } from "./run";
-import type { Entry } from "./types";
+import type { HistoryEvent } from "./types";
 
-/** The events that wake the script up: each starts a step. */
-export const TRIGGERS: ReadonlySet<Entry["event"]["type"]> = new Set([
+/** The events that wake the code up: each starts a step. */
+export const TRIGGERS: ReadonlySet<HistoryEvent["event"]["type"]> = new Set([
   "run_started",
-  "tool_call_completed",
-  "tool_call_failed",
+  "call_completed",
+  "call_failed",
   "timer_fired",
   "signal_received",
   "cancel_requested",
@@ -23,22 +23,22 @@ export interface Step {
   n: number;
   /** The index of its trigger: what `?step=` names. */
   first: number;
-  /** The index of its last entry. */
+  /** The position of its last event. */
   last: number;
-  trigger: Entry;
-  /** The entries committed with the trigger, in order. */
-  committed: Entry[];
+  trigger: HistoryEvent;
+  /** The events committed with the trigger, in order. */
+  committed: HistoryEvent[];
   /** When the trigger was recorded, in milliseconds since the epoch. */
   at: number;
   /**
    * It ends the run: it holds `complete_run`, `fail_run` or `run_aborted`. A `fail_run` whose
-   * error is `CancelledError` ends it `cancelled` (archi/02-journal.md, "Run state").
+   * error is `CancelledError` ends it `cancelled` (archi/02-history.md, "Run state").
    */
   ends: "completed" | "failed" | "cancelled" | "aborted" | null;
 }
 
 /** The steps of a history, in order. `run_aborted` ends the step it follows. */
-export function buildSteps(entries: readonly Entry[]): Step[] {
+export function buildSteps(entries: readonly HistoryEvent[]): Step[] {
   const steps: Step[] = [];
   for (const entry of entries) {
     const current = steps[steps.length - 1];
@@ -163,7 +163,7 @@ export function gutterMarks(
     const resumed = on.find((a) => a.kind !== "log" && a.end?.idx === step.first);
     const now = on.find((a) => issued.includes(a));
     if (resumed) {
-      marks.set(line, { kind: "resumed", threw: trigger === "tool_call_failed" });
+      marks.set(line, { kind: "resumed", threw: trigger === "call_failed" });
     } else if (now) {
       marks.set(line, { kind: "issued", rank: issued.indexOf(now) + 1 });
     } else if (on.some((a) => stateAt(a, step.last) === "open")) {

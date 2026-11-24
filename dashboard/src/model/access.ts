@@ -2,7 +2,7 @@
 // follow before the server enforces them (archi/06, "What the caller may do").
 
 import { labelPair, splitLabel } from "./format";
-import type { Identity, Labels, Permission, Role, User } from "./types";
+import type { Identity, Labels, Permission, Person, Role } from "./types";
 
 /** The catalog, in its order (`GET /v1/permissions` answers the same, with descriptions). */
 export const PERMISSIONS: readonly Permission[] = [
@@ -11,14 +11,14 @@ export const PERMISSIONS: readonly Permission[] = [
   "runs:control",
   "runs:quarantine",
   "runs:delete",
-  "toolsets:read",
-  "toolsets:write",
-  "scripts:write",
+  "actions:read",
+  "actions:write",
+  "workflows:write",
   "secrets:read",
   "secrets:write",
   "secrets:use",
-  "tasks:work",
-  "tasks:approve",
+  "calls:work",
+  "calls:approve",
   "subscriptions:read",
   "subscriptions:write",
   "members:read",
@@ -127,20 +127,20 @@ export function parseLabels(text: string): { labels: Labels } | { error: string 
 }
 
 /** A person's name, or their email when the identity provider has none. */
-export function displayName(user: User): string {
-  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
-  return name || user.email;
+export function displayName(person: Person): string {
+  const name = [person.firstName, person.lastName].filter(Boolean).join(" ").trim();
+  return name || person.email;
 }
 
 /** One or two letters for an avatar. */
-export function initials(user: User): string {
-  const first = user.firstName?.trim()[0];
-  const last = user.lastName?.trim()[0];
+export function initials(person: Person): string {
+  const first = person.firstName?.trim()[0];
+  const last = person.lastName?.trim()[0];
   if (first) return `${first}${last ?? ""}`.toUpperCase();
-  return (user.email[0] ?? "?").toUpperCase();
+  return (person.email[0] ?? "?").toUpperCase();
 }
 
-/** Splits a principal's text (`user:<id>`, `key:<id>`, `invitation:<id>`). */
+/** Splits a principal's text (`member:<id>`, `key:<id>`, `invitation:<id>`). */
 export function splitPrincipal(text: string): { kind: string; id: string } {
   const at = text.indexOf(":");
   return at < 0 ? { kind: "", id: text } : { kind: text.slice(0, at), id: text.slice(at + 1) };

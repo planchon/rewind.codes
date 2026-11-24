@@ -1,16 +1,16 @@
-// One-line descriptions of journal entries and activities, for the journal, the timeline and
+// One-line descriptions of the events of a history and of activities, for the history, the timeline and
 // the notes beside the source.
 
 import type { Outcome } from "../../components/Status";
 import { formatBytes, formatDuration, shortRunId } from "../../model/format";
 import type { Activity } from "../../model/run";
-import type { Entry } from "../../model/types";
+import type { HistoryEvent } from "../../model/types";
 import { callName, endedRunOf, readRunEnd, workflowCallOf } from "../../model/workflows";
 
 export function activityTitle(a: Activity): string {
   switch (a.kind) {
-    case "tool_call":
-      return `#${a.seq} ${callName(a.tool, a.args)}`;
+    case "call":
+      return `#${a.seq} ${callName(a.action, a.args)}`;
     case "timer":
       return `#${a.seq} ${a.timeoutOf !== null ? "timeout" : "sleep"} ${formatDuration(a.durationMs)}`;
     case "signal": {
@@ -25,7 +25,7 @@ export function activityTitle(a: Activity): string {
 
 /**
  * What became of an activity. One still open when the run ended (`runEnded`) was cancelled: a
- * terminal status clears everything pending (archi/02-journal.md, "Run state").
+ * terminal status clears everything pending (archi/02-history.md, "Run state").
  */
 export function activityOutcome(a: Activity, runEnded = false): Outcome {
   if (a.kind === "log") return "ok";
@@ -49,21 +49,21 @@ function args(preview: string): string {
   return preview.length > 72 ? `${preview.slice(0, 72)}…` : preview;
 }
 
-/** The journal line of an entry. */
-export function entrySummary(entry: Entry): string {
+/** The line of the history that says an event. */
+export function eventSummary(entry: HistoryEvent): string {
   const e = entry.event;
   switch (e.type) {
     case "run_started":
       return `${e.mode} run, epoch ${e.epoch}, input ${args(e.input.preview)}`;
     case "run_aborted":
       return `${e.reason.kind}: ${e.reason.message}`;
-    case "schedule_tool_call":
-      return workflowCallOf(e.tool)
-        ? `#${e.seq} ${callName(e.tool, e.args)} ${args(e.args.preview)}`
-        : `#${e.seq} ${e.tool}(${args(e.args.preview)})`;
-    case "tool_call_completed":
+    case "schedule_call":
+      return workflowCallOf(e.action)
+        ? `#${e.seq} ${callName(e.action, e.args)} ${args(e.args.preview)}`
+        : `#${e.seq} ${e.action}(${args(e.args.preview)})`;
+    case "call_completed":
       return `#${e.seq} → ${args(e.result.preview)} (${formatBytes(e.result.bytes)})`;
-    case "tool_call_failed":
+    case "call_failed":
       return `#${e.seq} ✕ ${e.error.kind}: ${e.error.message}`;
     case "start_timer":
       return `#${e.seq} ${formatDuration(e.durationMs)}, fires ${e.fireAt}`;
@@ -93,13 +93,15 @@ export function entrySummary(entry: Entry): string {
   }
 }
 
-/** The family of an entry's event (archi/02-journal.md). */
-export function entryFamily(entry: Entry): "lifecycle" | "command" | "completion" | "annotation" {
+/** The family of an event (archi/02-history.md). */
+export function eventFamily(
+  entry: HistoryEvent,
+): "lifecycle" | "command" | "completion" | "annotation" {
   switch (entry.event.type) {
     case "run_started":
     case "run_aborted":
       return "lifecycle";
-    case "schedule_tool_call":
+    case "schedule_call":
     case "start_timer":
     case "cancel_timer":
     case "complete_run":
@@ -113,8 +115,8 @@ export function entryFamily(entry: Entry): "lifecycle" | "command" | "completion
   }
 }
 
-/** The script line of an entry, when it has one. */
-export function entryLine(entry: Entry): number | null {
+/** The line of the code an event comes from, when it has one. */
+export function eventLine(entry: HistoryEvent): number | null {
   const e = entry.event;
   return "callsite" in e && e.callsite ? e.callsite.line : null;
 }

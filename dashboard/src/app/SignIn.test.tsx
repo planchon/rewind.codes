@@ -49,7 +49,7 @@ describe("sign-in", () => {
     expect(within(orgs).getByText("Globex")).toBeInTheDocument();
     await user.click(within(orgs).getByText("Acme"));
 
-    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All" })).toBeInTheDocument();
     const [chosen] = callsTo("/auth/organization", "POST");
     expect(JSON.parse((await chosen?.body) ?? "")).toEqual({ organizationId: "org_01ACME" });
     // `/v1` gets the access token; `/auth` never does.
@@ -76,7 +76,7 @@ describe("sign-in", () => {
     await user.clear(screen.getByLabelText("Code"));
     await user.type(screen.getByLabelText("Code"), codeFor(world, "grace@example.net"));
     // Grace has one organization: no choice to make.
-    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All" })).toBeInTheDocument();
   });
 
   it("verifies the email when WorkOS asks for it", async () => {
@@ -88,19 +88,20 @@ describe("sign-in", () => {
     expect(await screen.findByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Verification code"), codeFor(world, "alan@example.net"));
-    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All" })).toBeInTheDocument();
     expect(callsTo("/auth/email-verification", "POST")).toHaveLength(1);
     // Alan's grant is limited to labels: the statistics, from counters that know no labels, are
     // not for him, and none is asked for.
-    expect(screen.queryByRole("link", { name: "Tools" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Scripts" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Actions" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Overview" })).toBeNull();
+    // The workflows are his to see, without their counts.
+    expect(screen.getByRole("link", { name: "Workflows" })).toBeInTheDocument();
     // Alan's calls: those of the previous test may still be in flight.
     const alan = callsTo("/v1/whoami").at(-1)?.headers.get("Authorization");
     expect(alan).toBeTruthy();
     // The runs view mounted its reads: the list of runs, and anything it reads beside it.
     await waitFor(() => expect(callsTo("/v1/runs").length).toBeGreaterThan(0));
-    const counted = ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"];
+    const counted = ["/v1/runs/stats", "/v1/runs/failures", "/v1/actions/stats"];
     expect(
       counted
         .flatMap((path) => callsTo(path))
@@ -179,7 +180,7 @@ describe("sign-in", () => {
       invitationToken: invitation?.token,
     });
     expect(window.location.search).toBe("");
-    expect(world.access.grants.get("org_01ACME")?.get("user:user_01KATHERINE")?.role).toBe(
+    expect(world.access.grants.get("org_01ACME")?.get("member:user_01KATHERINE")?.role).toBe(
       "reader",
     );
   });

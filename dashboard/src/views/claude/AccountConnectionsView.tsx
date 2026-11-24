@@ -198,7 +198,7 @@ function EditConnection({ connection, onDone }: { connection: Connection; onDone
   const givable = (id: string, a: ConnectionAccess): boolean => {
     if (id !== currentId) return true;
     if (a === "read")
-      return (["runs:read", "toolsets:read", "namespaces:read"] as const).every((p) =>
+      return (["runs:read", "actions:read", "namespaces:read"] as const).every((p) =>
         access.can(p),
       );
     return givable(id, "read") && access.can("runs:start") && access.can("runs:control");

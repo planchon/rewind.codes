@@ -1,14 +1,14 @@
-// The journal itself and the script's logs: each a section of the run's page.
+// The history itself and the logs its code wrote: each a section of the run's page.
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef } from "react";
 import { Empty } from "../../components/bits";
 import { formatOffset } from "../../model/format";
 import type { RunModel } from "../../model/run";
-import { entryFamily, entryLine, entrySummary } from "./describe";
+import { eventFamily, eventLine, eventSummary } from "./describe";
 
 const ROW = 24;
 
-export function JournalList({
+export function HistoryList({
   model,
   selected,
   onSelect,
@@ -31,30 +31,30 @@ export function JournalList({
       virtual.scrollToIndex(selected, { align: "auto" });
   }, [selected, entries.length, virtual]);
 
-  if (entries.length === 0) return <Empty>No entry yet.</Empty>;
+  if (entries.length === 0) return <Empty>No event yet.</Empty>;
   const t0 = model.firstAt ?? 0;
   return (
-    <div className="journal">
-      <div className="journal-row journal-head" aria-hidden="true">
+    <div className="history">
+      <div className="history-row history-head" aria-hidden="true">
         <span>#</span>
         <span>at</span>
         <span>event</span>
         <span>detail</span>
         <span>line</span>
       </div>
-      <div className="journal-scroll" ref={scroller} title="Journal entries">
+      <div className="history-scroll" ref={scroller} title="The events of the history">
         <div style={{ height: virtual.getTotalSize(), position: "relative" }}>
           {virtual.getVirtualItems().map((item) => {
             const entry = entries[item.index];
             if (!entry) return null;
-            const line = entryLine(entry);
-            const summary = entrySummary(entry);
+            const line = eventLine(entry);
+            const summary = eventSummary(entry);
             return (
               <button
                 type="button"
                 key={entry.idx}
                 aria-pressed={selected === entry.idx}
-                className={`journal-row family-${entryFamily(entry)}${selected === entry.idx ? " selected" : ""}`}
+                className={`history-row family-${eventFamily(entry)}${selected === entry.idx ? " selected" : ""}`}
                 style={{ position: "absolute", top: item.start, left: 0, right: 0, height: ROW }}
                 onClick={() => onSelect(entry.idx)}
               >
@@ -83,7 +83,7 @@ export function Logs({
   onSelect: (idx: number) => void;
   onSelectLine: (line: number) => void;
 }) {
-  if (model.logs.length === 0) return <Empty>The script logged nothing.</Empty>;
+  if (model.logs.length === 0) return <Empty>Its code logged nothing.</Empty>;
   const t0 = model.firstAt ?? 0;
   return (
     <ol className="logs">

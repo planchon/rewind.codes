@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createWorld, SCRIPTS } from "../mocks/fixtures";
+import { CODES, createWorld } from "../mocks/fixtures";
 import { cancelCause, causeText, endKindOf, endTitle, pendingBefore } from "./ending";
 import { buildRunModel } from "./run";
 import { buildSteps } from "./steps";
@@ -7,15 +7,15 @@ import { buildSteps } from "./steps";
 const NOW = Date.parse("2026-11-18T12:00:00Z");
 const world = createWorld({ now: NOW });
 
-function journalOf(script: typeof SCRIPTS.DEV_NOTIFICATIONS) {
-  const run = world.runs.find((r) => r.script === script);
+function journalOf(script: typeof CODES.DEV_NOTIFICATIONS) {
+  const run = world.runs.find((r) => r.code === script);
   if (!run) throw new Error("no such fixture");
-  return run.journal.entries;
+  return run.history.events;
 }
 
 describe("how a run ended", () => {
   it("tells a cancellation at the deadline from the journal, with what the run awaited", () => {
-    const entries = journalOf(SCRIPTS.DEV_NOTIFICATIONS);
+    const entries = journalOf(CODES.DEV_NOTIFICATIONS);
     const model = buildRunModel(entries);
     const steps = buildSteps(entries);
     // cancel_requested { ttl } then fail_run(CancelledError): the step ends the run cancelled.
@@ -24,7 +24,7 @@ describe("how a run ended", () => {
     const start = model.start?.event.expiresAt as string;
     const cause = cancelCause({
       cancel: model.cancel,
-      journalRead: true,
+      historyRead: true,
       createdAt: entries[0]?.recordedAt ?? null,
       expiresAt: start,
     });
@@ -51,29 +51,29 @@ describe("how a run ended", () => {
     expect(causeText(early)).toBeNull();
   });
 
-  it("names a request, and a CancelledError the script threw itself", () => {
+  it("names a request, and a CancelledError its code threw itself", () => {
     const requested = cancelCause({
       cancel: { reason: "requested", message: "The conversation was closed." },
-      journalRead: true,
+      historyRead: true,
     });
     expect(endTitle("cancelled", requested)).toBe("Cancelled on request");
     expect(causeText(requested)).toBe(
       "Cancellation was requested: “The conversation was closed.”.",
     );
-    const script = cancelCause({ cancel: null, journalRead: true });
-    expect(endTitle("cancelled", script)).toBe("Cancelled by its script");
+    const code = cancelCause({ cancel: null, historyRead: true });
+    expect(endTitle("cancelled", code)).toBe("Cancelled by its code");
   });
 
   it("keeps failures and the other statuses as they are", () => {
     expect(endKindOf("failed")).toBe("failed");
-    expect(endKindOf("active")).toBeNull();
+    expect(endKindOf("running")).toBeNull();
     expect(endTitle("failed")).toBe("Failed");
-    expect(endTitle("aborted")).toBe("Aborted by the host");
+    expect(endTitle("aborted")).toBe("Aborted by the engine");
     // The triage run a failed call ended: its last step ends failed, not cancelled.
     const failed = world.runs.find(
-      (r) => r.script === SCRIPTS.TRIAGE && r.labels.conversation === "c-39",
+      (r) => r.code === CODES.TRIAGE && r.labels.conversation === "c-39",
     );
-    const steps = buildSteps(failed?.journal.entries ?? []);
+    const steps = buildSteps(failed?.history.events ?? []);
     expect(steps[steps.length - 1]?.ends).toBe("failed");
   });
 });

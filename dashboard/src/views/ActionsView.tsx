@@ -1,8 +1,8 @@
-// Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
-// host-tool group), over a window, for the organization or one end user. Searched with the query
-// bar of the runs, which reads `namespace:` and one `tool:` pattern (sent to the server), `tool:`
-// and a tool's name here; its figures are the Overview's tiles, and each group of tools folds under
-// its row.
+// Actions: latency, error rate and redeliveries per action, by group (an MCP server, an API, a
+// group of harness actions), over a window, for the organization or one end user. Searched with
+// the query bar of the runs, which reads `namespace:` and one `action:github.*` (sent to the server
+// as the group), `action:` and an action's name here; its figures are the Overview's tiles, and
+// each group of actions folds under its row.
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -13,47 +13,48 @@ import { QueryBar } from "../components/QueryBar";
 import { TableScroll } from "../components/TableScroll";
 import { useTooltip } from "../components/Tooltip";
 import {
-  legacyToolsQuery,
+  ACTIONS_LANGUAGE,
+  actionsSearch,
+  legacyActionsQuery,
   type RangeKey,
-  TOOLS_LANGUAGE,
-  toolsSearch,
-  toToolStatsQuery,
+  toActionStatsQuery,
 } from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
 import { type FieldValues, fieldTerm, queryLink, TEXT_VALUES } from "../model/query";
-import type { ToolStats } from "../model/types";
-import { useToolStats } from "../state/aggregates";
+import type { ActionStats } from "../model/types";
+import { useActionStats } from "../state/aggregates";
 import { Seg } from "./FilterBits";
 import { useListQuery, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
 
 const LEGACY_NAMES = ["toolset"] as const;
 
-export function namespaceOf(tool: string): string {
-  const at = tool.indexOf(".");
-  return at > 0 ? tool.slice(0, at) : "host & built-in";
+/** An action's group, the start of its name; harness actions and built-ins without one share one. */
+export function groupOf(action: string): string {
+  const at = action.indexOf(".");
+  return at > 0 ? action.slice(0, at) : "harness & built-in";
 }
 
 interface Group {
   name: string;
-  tools: ToolStats[];
+  actions: ActionStats[];
   calls: number;
   errors: number;
-  retries: number;
+  redeliveries: number;
 }
 
-export function groupTools(tools: ToolStats[]): Group[] {
+export function groupActions(actions: ActionStats[]): Group[] {
   const groups = new Map<string, Group>();
-  for (const t of tools) {
-    const name = namespaceOf(t.tool);
+  for (const a of actions) {
+    const name = groupOf(a.action);
     let g = groups.get(name);
     if (!g) {
-      g = { name, tools: [], calls: 0, errors: 0, retries: 0 };
+      g = { name, actions: [], calls: 0, errors: 0, redeliveries: 0 };
       groups.set(name, g);
     }
-    g.tools.push(t);
-    g.calls += t.calls;
-    g.errors += t.errors;
-    g.retries += t.retries;
+    g.actions.push(a);
+    g.calls += a.calls;
+    g.errors += a.errors;
+    g.redeliveries += a.redeliveries;
   }
   return [...groups.values()].sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
 }
@@ -76,15 +77,15 @@ const STEPS: { ms: number; major: boolean }[] = [
 ];
 
 /**
- * A log scale over the latencies of every tool, so their strips compare: from the major step
+ * A log scale over the latencies of every action, so their strips compare: from the major step
  * under the fastest median to the step over the slowest call, so that both ends are ticks.
  */
-export function logScale(tools: ToolStats[]) {
-  // Calls answered at once (mock mode, virtual time) would stretch the axis to 1 ms.
-  const positive = tools.map((t) => t.latencyMs.p50).filter((v) => v > 0);
+export function logScale(actions: ActionStats[]) {
+  // Calls answered at once (a test run, in virtual time) would stretch the axis to 1 ms.
+  const positive = actions.map((t) => t.latencyMs.p50).filter((v) => v > 0);
   const fastest = Math.min(...positive, 1_000);
   const lo = STEPS.filter((s) => s.major && s.ms <= fastest).at(-1)?.ms ?? 1;
-  const slowest = Math.max(...tools.map((t) => t.latencyMs.max), 10 * lo);
+  const slowest = Math.max(...actions.map((t) => t.latencyMs.max), 10 * lo);
   const hi = STEPS.find((s) => s.ms >= slowest)?.ms ?? slowest;
   const span = Math.log10(hi / lo);
   return {
@@ -139,7 +140,7 @@ function LatencyAxis({ scale }: { scale: ReturnType<typeof logScale> }) {
 }
 
 /**
- * One tool's latency on the shared scale: a dot at the median, a bar to p95, a line on to the
+ * One action's latency on the shared scale: a dot at the median, a bar to p95, a line on to the
  * slowest call, a tick at p99; the gridlines of the axis behind.
  */
 function LatencyStrip({
@@ -148,7 +149,7 @@ function LatencyStrip({
   onHover,
   onLeave,
 }: {
-  stats: ToolStats;
+  stats: ActionStats;
   scale: ReturnType<typeof logScale>;
   onHover: (e: React.MouseEvent) => void;
   onLeave: () => void;
@@ -179,21 +180,22 @@ function LatencyStrip({
   );
 }
 
-/** What the bar suggests: the tools of the window, and the namespaces they belong to. */
-function toolValues(tools: ToolStats[]): FieldValues {
-  const names = tools.map((t) => ({ value: t.tool, count: t.calls, detail: "calls" }));
-  const namespaces = [
-    ...new Set(tools.filter((t) => t.tool.includes(".")).map((t) => namespaceOf(t.tool))),
-  ].map((ns) => ({ value: `${ns}.*`, detail: "every tool of the namespace" }));
-  return { tool: [...names, ...namespaces], [TEXT_VALUES]: names };
+/** What the bar suggests: the actions of the window, and the groups they belong to. */
+function actionValues(actions: ActionStats[]): FieldValues {
+  const names = actions.map((t) => ({ value: t.action, count: t.calls, detail: "calls" }));
+  const groups = [
+    ...new Set(actions.filter((t) => t.action.includes(".")).map((t) => groupOf(t.action))),
+  ].map((g) => ({ value: `${g}.*`, detail: "every action of the group" }));
+  return { action: [...names, ...groups], [TEXT_VALUES]: names };
 }
 
-export function ToolsView() {
-  const { q, setQ } = useListQuery(legacyToolsQuery, LEGACY_NAMES);
+export function ActionsView() {
+  const { q, setQ } = useListQuery(legacyActionsQuery, LEGACY_NAMES);
   const [win, setWin] = useWindow();
-  const search = toolsSearch(q);
-  const stats = useToolStats(`tools:${win}:${search.namespace ?? ""}:${search.prefix ?? ""}`, () =>
-    toToolStatsQuery(win, search, Date.now()),
+  const search = actionsSearch(q);
+  const stats = useActionStats(
+    `actions:${win}:${search.namespace ?? ""}:${search.group ?? ""}`,
+    () => toActionStatsQuery(win, search, Date.now()),
   );
   const tip = useTooltip();
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
@@ -205,24 +207,24 @@ export function ToolsView() {
       return next;
     });
 
-  const all = stats.data?.tools ?? [];
-  const values = useMemo(() => toolValues(stats.data?.tools ?? []), [stats.data]);
-  const tools = all.filter((t) => search.keeps(t.tool));
-  const groups = groupTools(tools);
-  const scale = logScale(tools);
-  const calls = tools.reduce((s, t) => s + t.calls, 0);
-  const errors = tools.reduce((s, t) => s + t.errors, 0);
-  const retries = tools.reduce((s, t) => s + t.retries, 0);
-  const slowest = [...tools].sort((a, b) => b.latencyMs.p95 - a.latencyMs.p95)[0];
+  const all = stats.data?.actions ?? [];
+  const values = useMemo(() => actionValues(stats.data?.actions ?? []), [stats.data]);
+  const actions = all.filter((t) => search.keeps(t.action));
+  const groups = groupActions(actions);
+  const scale = logScale(actions);
+  const calls = actions.reduce((s, t) => s + t.calls, 0);
+  const errors = actions.reduce((s, t) => s + t.errors, 0);
+  const redeliveries = actions.reduce((s, t) => s + t.redeliveries, 0);
+  const slowest = [...actions].sort((a, b) => b.latencyMs.p95 - a.latencyMs.p95)[0];
 
   return (
     <div className="page">
       <PageHeader
-        title="Tools"
+        title="Actions"
         info={
           stats.data && (
             <p>
-              Latency, error rate and retries of the calls completed from{" "}
+              Latency, error rate and redeliveries of the calls completed from{" "}
               <Time ms={Date.parse(stats.data.since)} /> to{" "}
               <Time ms={Date.parse(stats.data.until)} />.
             </p>
@@ -240,24 +242,24 @@ export function ToolsView() {
       <QueryBar
         value={q}
         onSubmit={setQ}
-        language={TOOLS_LANGUAGE}
+        language={ACTIONS_LANGUAGE}
         values={values}
         fault={search.fault}
-        placeholder="tool:github.* namespace:alice close_issue"
+        placeholder="action:github.* namespace:alice close_issue"
       />
 
       {search.fault ? (
-        <Empty>Fix the query to see the tools: the term at fault is underlined above.</Empty>
+        <Empty>Fix the query to see the actions: the term at fault is underlined above.</Empty>
       ) : stats.isPending ? (
-        <Loading>Loading tool statistics…</Loading>
+        <Loading>Loading action statistics…</Loading>
       ) : stats.isError ? (
-        <ProblemView error={stats.error} title="The tool statistics could not be read" />
-      ) : tools.length === 0 ? (
+        <ProblemView error={stats.error} title="The action statistics could not be read" />
+      ) : actions.length === 0 ? (
         <div className="table-wrap">
           <Empty>
             {all.length === 0
-              ? `No tool call completed in ${WINDOW_WORDS[win]}.`
-              : "No tool matches this search."}
+              ? `No call completed in ${WINDOW_WORDS[win]}.`
+              : "No action matches this search."}
           </Empty>
         </div>
       ) : (
@@ -266,7 +268,7 @@ export function ToolsView() {
             <Tile
               label="Calls"
               value={formatCount(calls)}
-              context={`${formatCount(tools.length)} tool${tools.length === 1 ? "" : "s"} in ${WINDOW_WORDS[win]}`}
+              context={`${formatCount(actions.length)} action${actions.length === 1 ? "" : "s"} in ${WINDOW_WORDS[win]}`}
             />
             <Tile
               label="Failed"
@@ -275,29 +277,29 @@ export function ToolsView() {
               tone={errors > 0 ? "critical" : undefined}
             />
             <Tile
-              label="Retries"
-              value={formatCount(retries)}
-              context={`${formatPercent(retries, calls)} of the calls`}
-              tone={retries > 0 ? "warning" : undefined}
+              label="Redeliveries"
+              value={formatCount(redeliveries)}
+              context={`${formatPercent(redeliveries, calls)} of the calls`}
+              tone={redeliveries > 0 ? "warning" : undefined}
             />
             {slowest && (
               <Tile
-                to={queryLink("/observability", fieldTerm("tool", slowest.tool))}
+                to={queryLink("/runs", fieldTerm("action", slowest.action))}
                 label="Slowest p95"
                 value={formatDuration(slowest.latencyMs.p95)}
-                context={slowest.tool}
+                context={slowest.action}
               />
             )}
           </section>
           <TableScroll>
-            <table className="grid tools-table">
+            <table className="grid actions-table">
               <thead>
                 <tr>
-                  <th>Tool</th>
+                  <th>Action</th>
                   <th className="right">Calls</th>
                   <th>Failed</th>
                   <th>By kind</th>
-                  <th className="right">Retries</th>
+                  <th className="right">Redeliveries</th>
                   <th className="right">p50</th>
                   <th className="right">p95</th>
                   <th className="right">p99</th>
@@ -325,7 +327,7 @@ export function ToolsView() {
                           >
                             {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             {g.name}
-                            <span className="count">{formatCount(g.tools.length)}</span>
+                            <span className="count">{formatCount(g.actions.length)}</span>
                           </button>
                         </td>
                         <td className="right num">{formatCount(g.calls)}</td>
@@ -334,18 +336,18 @@ export function ToolsView() {
                           <span className="dim">· {formatPercent(g.errors, g.calls)}</span>
                         </td>
                         <td />
-                        <td className="right num">{formatCount(g.retries)}</td>
+                        <td className="right num">{formatCount(g.redeliveries)}</td>
                         <td colSpan={5} />
                       </tr>
                       {open &&
-                        g.tools.map((t) => (
-                          <tr key={t.tool}>
-                            <td className="mono tool-name">
+                        g.actions.map((t) => (
+                          <tr key={t.action}>
+                            <td className="mono action-name">
                               <Link
-                                to={queryLink("/observability", fieldTerm("tool", t.tool))}
-                                title={`Runs that called ${t.tool}`}
+                                to={queryLink("/runs", fieldTerm("action", t.action))}
+                                title={`Runs that called ${t.action}`}
                               >
-                                {t.tool}
+                                {t.action}
                               </Link>
                             </td>
                             <td className="right num">{formatCount(t.calls)}</td>
@@ -376,10 +378,10 @@ export function ToolsView() {
                                       key={kind}
                                       className="label"
                                       to={queryLink(
-                                        "/observability",
-                                        `${fieldTerm("tool", t.tool)} ${fieldTerm("error", kind)}`,
+                                        "/runs",
+                                        `${fieldTerm("action", t.action)} ${fieldTerm("error", kind)}`,
                                       )}
-                                      title={`Runs where ${t.tool} failed with ${kind}`}
+                                      title={`Runs where ${t.action} failed with ${kind}`}
                                     >
                                       <span className="k">{kind}</span>&nbsp;{n}
                                     </Link>
@@ -388,9 +390,9 @@ export function ToolsView() {
                             </td>
                             <td
                               className="right num"
-                              title={`${formatPercent(t.retries, t.calls)} of calls`}
+                              title={`${formatPercent(t.redeliveries, t.calls)} of calls`}
                             >
-                              {formatCount(t.retries)}
+                              {formatCount(t.redeliveries)}
                             </td>
                             <td className="right num">{formatDuration(t.latencyMs.p50)}</td>
                             <td className="right num">{formatDuration(t.latencyMs.p95)}</td>
@@ -405,7 +407,7 @@ export function ToolsView() {
                                   tip.show(
                                     e,
                                     <>
-                                      <div className="tt-title">{t.tool}</div>
+                                      <div className="tt-title">{t.action}</div>
                                       <dl>
                                         <dt>p50</dt>
                                         <dd>{formatDuration(t.latencyMs.p50)}</dd>

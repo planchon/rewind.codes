@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { WORKFLOWS } from "../../mocks/fixtures";
 import type { Labels, Permission } from "../../model/types";
 import { confirmInDialog, renderApp, signedIn } from "../../test/app";
 
@@ -15,7 +16,7 @@ function graceWith(permissions: Permission[], labels: Labels = {}) {
   });
   world.access.grants
     .get("org_01ACME")
-    ?.set("user:user_01GRACE", { role: "custom", allowedLabels: labels });
+    ?.set("member:user_01GRACE", { role: "custom", allowedLabels: labels });
   return world;
 }
 
@@ -34,7 +35,7 @@ async function listed(reference: string) {
 }
 
 describe("the Secrets view", () => {
-  it("lists the organization's secrets: labels, who wrote them, reads, last read, what attaches them", async () => {
+  it("lists the organization's secrets: labels, who wrote them, reads, last read, what uses them", async () => {
     renderApp("/secrets", { world: signedIn("ada@example.net", "org_01ACME") });
     await listed("org/slack");
     expect(screen.getByRole("link", { name: "Secrets" })).toHaveAttribute("aria-current", "page");
@@ -46,12 +47,14 @@ describe("the Secrets view", () => {
     expect(within(crm).getByText("Grace Hopper")).toBeInTheDocument();
     expect(within(crm).getByRole("img", { name: /Reads of org\/crm per day/ })).toBeInTheDocument();
 
-    // The workflows whose latest version attaches it, and the active runs.
+    // The workflows whose latest version uses it, and the active runs.
     const slack = secretRow("org/slack");
-    expect(await within(slack).findByRole("link", { name: "triage" })).toHaveAttribute(
-      "href",
-      expect.stringMatching(/^\/testing\/triage\?version=/),
-    );
+    // The organization's triage, and dana's fork of it, which keeps its name: told apart by its
+    // namespace.
+    const triage = await within(slack).findByRole("link", { name: "triage" });
+    expect(triage).toHaveAttribute("href", `/workflows/${WORKFLOWS.triage}?version=3`);
+    const fork = await within(slack).findByRole("link", { name: "triage · dana" });
+    expect(fork).toHaveAttribute("href", `/workflows/${WORKFLOWS.triageFork}?version=1`);
     expect(within(slack).getByRole("link", { name: "digest" })).toBeInTheDocument();
     expect(within(slack).getByRole("button", { name: /active runs?/ })).toBeInTheDocument();
     // Its last read links to the run that read it.
@@ -60,12 +63,12 @@ describe("the Secrets view", () => {
       expect.stringMatching(/^\/runs\/[^/]+\/[^/]+\/[0-9a-z]{12,25}$/),
     );
 
-    // Read only by a toolset's registration, to list its server's tools: no run to link to.
+    // Read only by an action set's registration, to list its server's actions: no run to link to.
     const notion = secretRow("org/notion");
-    expect(within(notion).getByText("at a toolset's registration")).toBeInTheDocument();
+    expect(within(notion).getByText("at an action set's registration")).toBeInTheDocument();
     expect(within(notion).queryByTitle("The run that read it last")).toBeNull();
 
-    // Never read, attached by nothing.
+    // Never read, used by nothing.
     const zendesk = secretRow("org/zendesk");
     expect(within(zendesk).getByText("never")).toBeInTheDocument();
     expect(await within(zendesk).findByText("nothing active")).toBeInTheDocument();
@@ -149,9 +152,10 @@ describe("the Secrets view", () => {
     const impact = await within(dialog).findByTestId("impact");
     // The usage endpoint was read before anything was deleted.
     expect(callsTo("/v1/secrets/slack/usage", "GET").length).toBeGreaterThan(0);
-    expect(impact).toHaveTextContent(/active runs? attach it: their next call .* is parked/);
-    expect(impact).toHaveTextContent(/The latest version of 2 workflows attaches it/);
+    expect(impact).toHaveTextContent(/active runs? use it: their next call .* is parked/);
+    expect(impact).toHaveTextContent(/The latest version of 6 workflows uses it/);
     expect(within(impact).getByText("triage")).toBeInTheDocument();
+    expect(within(impact).getByText("triage · dana")).toBeInTheDocument();
     expect(within(impact).getByText("digest")).toBeInTheDocument();
     expect(within(impact).getAllByRole("link").length).toBeGreaterThan(0);
     expect(callsTo("/v1/secrets/slack", "DELETE")).toHaveLength(0);
@@ -172,7 +176,7 @@ describe("the Secrets view", () => {
       within(secretRow("org/zendesk")).getByRole("button", { name: "Delete org/zendesk" }),
     );
     const impact = await screen.findByTestId("impact");
-    expect(impact).toHaveTextContent("No active run and no workflow attaches it.");
+    expect(impact).toHaveTextContent("No active run and no workflow uses it.");
     expect(impact).toHaveTextContent("Read 0 times in 30 days");
   });
 
@@ -227,7 +231,7 @@ describe("a namespace's secrets", () => {
     await waitFor(() => expect(within(section).getByText("ns/github")).toBeInTheDocument());
     const github = secretRow("ns/github", section);
     expect(within(github).getByText(/the token of/)).toBeInTheDocument();
-    // The latest version of triage attaches ns/github, for every namespace.
+    // The latest version of triage uses ns/github, for every namespace.
     expect(await within(github).findByRole("link", { name: "triage" })).toBeInTheDocument();
     // An end user's secret has no labels.
     expect(within(section).queryByRole("columnheader", { name: "Labels" })).toBeNull();
@@ -313,10 +317,10 @@ describe("the signing keys", () => {
 });
 
 describe("a run's details", () => {
-  it("name the secrets it attached, never a value", async () => {
+  it("name the secrets it uses, never a value", async () => {
     const world = signedIn("ada@example.net", "org_01ACME");
     const run = world.runs.find((r) => r.secrets?.github === "ns/github");
-    if (!run) throw new Error("no run attaching ns/github");
+    if (!run) throw new Error("no run using ns/github");
     renderApp(`/runs/${run.id}`, { world });
     const term = await screen.findByText("Secrets", { selector: "dt" });
     const details = term.parentElement as HTMLElement;

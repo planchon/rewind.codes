@@ -1,9 +1,13 @@
 // The dashboard's client of the API: `/v1`, typed by the generated `paths` and authenticated
 // with a Bearer token (the operator's key, or a member's access token), and the sign-in routes
 // `/auth`, which read and write the session cookie and never see a token. It reads every namespace
-// of the organization, and names one (`Rewind-Namespace`) only for the scripts of one end user.
+// of the organization, and names one (`Rewind-Namespace`) only for the workflows of one end user
+// and the namespace a fork goes to.
 import createClient from "openapi-fetch";
 import type {
+  ActionSetSummary,
+  ActionStatsPage,
+  ActionStatsQuery,
   ApiKey,
   AuthConfig,
   AuthState,
@@ -13,15 +17,14 @@ import type {
   ConsentRequest,
   CreateApiKey,
   CreateInvitation,
-  Entry,
-  FailureGroupPage,
   FailuresQuery,
+  FingerprintPage,
   Grant,
+  HistoryEvent,
   Identity,
   Invitation,
   ListNamespacesQuery,
   ListRunsQuery,
-  ListScriptsQuery,
   ListWorkflowsQuery,
   Member,
   NamespaceDefaults,
@@ -31,6 +34,7 @@ import type {
   NamespacePatch,
   Organization,
   OrganizationSettings,
+  PatchWorkflow,
   PermissionInfo,
   Problem,
   PutNamespace,
@@ -46,20 +50,14 @@ import type {
   RunPage,
   RunStats,
   RunStatsQuery,
-  Script,
-  ScriptPage,
   Secret,
   SecretUsage,
   ServerInfo,
   SetGrant,
-  SetScriptTitle,
   SignalAccepted,
   SigningKey,
   SigningKeyList,
   Test,
-  ToolStatsPage,
-  ToolStatsQuery,
-  ToolsetSummary,
   UpdateConnection,
   UpdateOrganization,
   Workflow,
@@ -243,7 +241,8 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/runs/stats", { params: { query }, signal }));
   }
 
-  async failures(query: FailuresQuery, signal?: AbortSignal): Promise<FailureGroupPage> {
+  /** The failed, cancelled and aborted runs of a window, by fingerprint. */
+  async failures(query: FailuresQuery, signal?: AbortSignal): Promise<FingerprintPage> {
     return this.unwrap(await this.client.GET("/v1/runs/failures", { params: { query }, signal }));
   }
 
@@ -283,23 +282,28 @@ export class Api {
     );
   }
 
-  async entry(id: string, idx: number, signal?: AbortSignal): Promise<Entry> {
+  /** One event of a run's history, at its position `idx`. */
+  async event(id: string, idx: number, signal?: AbortSignal): Promise<HistoryEvent> {
     return this.unwrap(
-      await this.client.GET("/v1/runs/{id}/entries/{idx}", {
+      await this.client.GET("/v1/runs/{id}/events/{idx}", {
         params: { path: { id, idx } },
         signal,
       }),
     );
   }
 
-  /** The scripts the runs ran: of one end user's runs when `namespace` names one. */
-  async scripts(
-    query: ListScriptsQuery,
+  /**
+   * The workflows the caller sees, each with its latest version and its runs of the window: every
+   * namespace's and the organization's, or with `namespace` those of one end user and the
+   * organization's, counted over its runs (`Rewind-Namespace`).
+   */
+  async workflows(
+    query: ListWorkflowsQuery,
     signal?: AbortSignal,
     namespace: string | null = null,
-  ): Promise<ScriptPage> {
+  ): Promise<WorkflowPage> {
     return this.unwrap(
-      await this.client.GET("/v1/scripts", {
+      await this.client.GET("/v1/workflows", {
         params: { query },
         ...(namespace !== null ? { headers: { "Rewind-Namespace": namespace } } : {}),
         signal,
@@ -307,29 +311,44 @@ export class Api {
     );
   }
 
-  async script(digest: string, signal?: AbortSignal): Promise<Script> {
+  /**
+   * A workflow, by its id (`wf_…`) or its name, at its latest version or the one `@v12` names:
+   * its versions, its suite and the code of the version shown.
+   */
+  async workflow(ref: string, signal?: AbortSignal): Promise<Workflow> {
     return this.unwrap(
-      await this.client.GET("/v1/scripts/{digest}", { params: { path: { digest } }, signal }),
+      await this.client.GET("/v1/workflows/{id}", { params: { path: { id: ref } }, signal }),
     );
   }
 
-  /** Gives the script a title and a description for the organization; `title: null` removes them. */
-  async setScriptTitle(digest: string, body: SetScriptTitle): Promise<Script> {
+  /** Names or describes a workflow (a merge patch: `null` removes one); the same id. */
+  async patchWorkflow(id: string, body: PatchWorkflow): Promise<Workflow> {
     return this.unwrap(
-      await this.client.PATCH("/v1/scripts/{digest}", { params: { path: { digest } }, body }),
+      await this.client.PATCH("/v1/workflows/{id}", { params: { path: { id } }, body }),
     );
   }
 
-  /** The latest version of each workflow, by name; `next` reads the page after. */
-  async workflows(query: ListWorkflowsQuery, signal?: AbortSignal): Promise<WorkflowPage> {
-    return this.unwrap(await this.client.GET("/v1/workflows", { params: { query }, signal }));
+  /** Moves a namespace's workflow to the organization. */
+  async promoteWorkflow(id: string): Promise<Workflow> {
+    return this.unwrap(
+      await this.client.POST("/v1/workflows/{id}/promote", { params: { path: { id } } }),
+    );
   }
 
-  /** A workflow's versions, newest first. */
-  async workflowVersions(name: string, signal?: AbortSignal): Promise<Workflow[]> {
+  /** Forks an organization's workflow into a namespace: the fork, with the same name. */
+  async forkWorkflow(id: string, namespace: string): Promise<Workflow> {
     return this.unwrap(
-      await this.client.GET("/v1/workflows/{name}", { params: { path: { name } }, signal }),
-    ).versions;
+      await this.client.POST("/v1/workflows/{id}/fork", {
+        params: { path: { id }, header: { "Rewind-Namespace": namespace } },
+      }),
+    );
+  }
+
+  /** Takes a fork's source's latest version as its next one, once the fork's suite passes. */
+  async pullWorkflow(id: string): Promise<Workflow> {
+    return this.unwrap(
+      await this.client.POST("/v1/workflows/{id}/pull", { params: { path: { id } } }),
+    );
   }
 
   /**
@@ -342,16 +361,17 @@ export class Api {
     );
   }
 
-  /** The toolsets the organization registered, without their schemas. */
-  async toolsets(signal?: AbortSignal): Promise<ToolsetSummary[]> {
-    return this.unwrap(await this.client.GET("/v1/toolsets", { signal })).toolsets;
+  /** The action sets the organization registered, without their schemas. */
+  async actionSets(signal?: AbortSignal): Promise<ActionSetSummary[]> {
+    return this.unwrap(await this.client.GET("/v1/action-sets", { signal })).actionSets;
   }
 
-  async toolStats(query: ToolStatsQuery, signal?: AbortSignal): Promise<ToolStatsPage> {
-    return this.unwrap(await this.client.GET("/v1/tools/stats", { params: { query }, signal }));
+  /** Latency, errors and redeliveries per action. */
+  async actionStats(query: ActionStatsQuery, signal?: AbortSignal): Promise<ActionStatsPage> {
+    return this.unwrap(await this.client.GET("/v1/actions/stats", { params: { query }, signal }));
   }
 
-  /** A payload's value, read through the run whose journal holds it, as the server requires. */
+  /** A payload's value, read through the run whose history holds it, as the server requires. */
   async payload(digest: string, run: string, signal?: AbortSignal): Promise<unknown> {
     return this.unwrap(
       await this.client.GET("/v1/payloads/{digest}", {
@@ -361,9 +381,9 @@ export class Api {
     );
   }
 
-  /** The journal document, or the cassette, as a file to save. */
-  async journal(id: string, as: "journal" | "cassette"): Promise<Blob> {
-    const response = await this.raw(`/v1/runs/${encodeURIComponent(id)}/journal?as=${as}`, {
+  /** The run export, or the cassette of its calls and signals, as a file to save. */
+  async exportRun(id: string, as: "run" | "cassette"): Promise<Blob> {
+    const response = await this.raw(`/v1/runs/${encodeURIComponent(id)}/export?as=${as}`, {
       headers: { Accept: "application/json" },
     });
     return response.blob();
@@ -483,18 +503,20 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/organization/members", { signal })).members;
   }
 
-  async setGrant(user: string, body: SetGrant): Promise<Grant> {
+  async setGrant(member: string, body: SetGrant): Promise<Grant> {
     return this.unwrap(
-      await this.client.PUT("/v1/organization/members/{user}/grant", {
-        params: { path: { user } },
+      await this.client.PUT("/v1/organization/members/{member}/grant", {
+        params: { path: { member } },
         body,
       }),
     );
   }
 
-  async removeMember(user: string): Promise<void> {
+  async removeMember(member: string): Promise<void> {
     this.unwrap(
-      await this.client.DELETE("/v1/organization/members/{user}", { params: { path: { user } } }),
+      await this.client.DELETE("/v1/organization/members/{member}", {
+        params: { path: { member } },
+      }),
     );
   }
 

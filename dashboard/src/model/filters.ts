@@ -1,4 +1,4 @@
-// The searches of the lists that are not of runs (Scripts, Tools, Namespaces): one query bar, as
+// The searches of the lists that are not of runs (Workflows, Actions, Namespaces): one query bar, as
 // the runs have, reading the part of the query language the list's endpoint understands, which
 // is turned here into the endpoint's parameters. A term the list cannot read is a fault, which
 // the bar underlines, as the server's are. The query (`q`) and the window are kept in the URL, so
@@ -15,7 +15,7 @@ import {
   termFault,
 } from "./query";
 import { namespaceNameProblem } from "./quotas";
-import type { ListScriptsQuery, ToolStatsQuery } from "./types";
+import type { ActionStatsQuery, ListWorkflowsQuery } from "./types";
 
 export const RANGES = {
   "1h": 3_600_000,
@@ -48,122 +48,139 @@ function legacy(params: URLSearchParams, terms: (params: URLSearchParams) => str
   return joinQuery(params.get("q") ?? "", ...parts);
 }
 
-// Scripts: `GET /v1/scripts?tool=…` over a window, narrowed to one namespace by `Rewind-Namespace`
+/** A value of `action:`: a name, or the actions of a group (`github.*`). */
+function actionMatches(value: string, action: string): boolean {
+  return value.endsWith("*") ? action.startsWith(value.slice(0, -1)) : action === value;
+}
 
-export const SCRIPTS_LANGUAGE: QueryLanguage = {
+// Workflows: `GET /v1/workflows` over a window, narrowed to one namespace by `Rewind-Namespace`
+// and its counts by `q`; the actions a workflow called are filtered in the browser.
+
+export const WORKFLOWS_LANGUAGE: QueryLanguage = {
   fields: [
-    { name: "namespace", doc: "the scripts one end user's runs ran: namespace:alice" },
-    { name: "tool", doc: "scripts that called this tool: tool:github.close_issue" },
+    { name: "namespace", doc: "one end user's workflows and the organization's: namespace:alice" },
+    { name: "action", doc: "workflows that called an action: action:github.close_issue, github.*" },
   ],
   labels: false,
 };
 
-const SCRIPTS_TERMS =
-  "Scripts are searched by namespace (namespace:alice) and tool (tool:github.list_issues): the list comes from counters, which know no labels";
+const WORKFLOWS_TERMS =
+  "Workflows are searched by namespace (namespace:alice) and action (action:github.list_issues): their counts come from counters, which know no labels";
 
-export interface ScriptsSearch {
-  query: ListScriptsQuery;
+export interface WorkflowsSearch {
+  /** The scope of the counts (`q`) and the window are added by the list. */
+  query: Omit<ListWorkflowsQuery, "since" | "until" | "after">;
   /** The namespace the list is narrowed to, sent as `Rewind-Namespace`. */
   namespace: string | null;
+  /** Whether a workflow that called these actions in the window is kept. */
+  keeps: (actions: readonly string[]) => boolean;
+  /** The query holds a term the browser applies (`action:`). */
+  filtered: boolean;
   fault: QueryFault | null;
 }
 
 /**
- * The request of `GET /v1/scripts` a query means: one tool as a parameter, and one namespace as
- * the header that narrows the list to an end user's runs. The list comes from the hourly
- * counters (archi/05, "Statistics"), which know no labels.
+ * The request of `GET /v1/workflows` a query means: one namespace as the header that narrows the
+ * list to an end user's workflows and the organization's, and as the scope of the counts; the
+ * actions (`action:github.close_issue`, `action:github.*`, excluded with `-`) are kept in the
+ * browser, from the actions each workflow's runs called. The counts come from the hourly counters
+ * (archi/05, "Statistics"), which know no labels.
  */
-export function scriptsSearch(q: string, limit = 50): ScriptsSearch {
-  const query: ListScriptsQuery = { limit };
+export function workflowsSearch(q: string, limit = 50): WorkflowsSearch {
+  const query: WorkflowsSearch["query"] = { limit };
   let namespace: string | null = null;
+  const tests: ((actions: readonly string[]) => boolean)[] = [];
+  const done = (fault: QueryFault | null): WorkflowsSearch => ({
+    query: namespace ? { ...query, q: `namespace:${quoteValue(namespace)}` } : query,
+    namespace,
+    keeps: (actions) => tests.every((test) => test(actions)),
+    filtered: tests.length > 0,
+    fault,
+  });
   for (const term of splitTerms(q)) {
     const values = valuesOf(term);
-    const fault = (message: string) => ({ query, namespace, fault: termFault(q, term, message) });
-    if (term.negated) return fault("Scripts cannot be excluded: remove the -");
+    const fault = (message: string) => done(termFault(q, term, message));
     if (term.kind === "field" && term.field === "namespace") {
       const name = values.length === 1 ? (values[0] ?? "") : "";
+      if (term.negated) return fault("A namespace cannot be excluded: remove the -");
       if (values.length !== 1 || name.includes("*"))
         return fault("namespace: names one end user: namespace:alice");
       const problem = namespaceNameProblem(name);
       if (problem) return fault(problem);
       if (namespace !== null) return fault("One namespace at a time");
       namespace = name;
-    } else if (term.kind === "field" && term.field === "tool") {
-      if (values.length !== 1 || values[0]?.includes("*"))
-        return fault("tool: names one tool: tool:github.list_issues");
-      if (query.tool) return fault("One tool at a time");
-      query.tool = values[0];
+    } else if (term.kind === "field" && term.field === "action") {
+      if (values.length === 0) return fault("action: needs an action: action:github.close_issue");
+      const called = (actions: readonly string[]) =>
+        values.some((v) => actions.some((a) => actionMatches(v, a)));
+      tests.push(term.negated ? (actions) => !called(actions) : called);
     } else {
-      return fault(SCRIPTS_TERMS);
+      return fault(WORKFLOWS_TERMS);
     }
   }
-  return { query, namespace, fault: null };
+  return done(null);
 }
 
 /**
  * `?label=agent:triage&tool=x`, as the Scripts view's links wrote it: a label is read as its term,
- * which the bar then underlines, since the list cannot filter by label.
+ * which the bar then underlines, since the list cannot filter by label; a tool is an action.
  */
-export function legacyScriptsQuery(params: URLSearchParams): string | null {
+export function legacyWorkflowsQuery(params: URLSearchParams): string | null {
   return legacy(params, (p) => [
     ...p
       .getAll("label")
       .filter((l) => l.indexOf(":") > 0)
       .map((l) => `@${l.slice(0, l.indexOf(":"))}:${quoteValue(l.slice(l.indexOf(":") + 1))}`),
-    ...p.getAll("tool").map((t) => `tool:${quoteValue(t)}`),
+    ...p.getAll("tool").map((t) => `action:${quoteValue(t)}`),
   ]);
 }
 
-// Tools: `GET /v1/tools/stats?q=namespace:…&prefix=…`, the tools filtered in the browser
+// Actions: `GET /v1/actions/stats?q=namespace:…&group=…`, the actions filtered in the browser
 
-export const TOOLS_LANGUAGE: QueryLanguage = {
+export const ACTIONS_LANGUAGE: QueryLanguage = {
   fields: [
-    { name: "tool", doc: "these tools: tool:github.close_issue, tool:github.*" },
+    { name: "action", doc: "these actions: action:github.close_issue, action:github.*" },
     { name: "namespace", doc: "the calls of one end user's runs: namespace:alice" },
   ],
   labels: false,
 };
 
-const TOOLS_TERMS = "Tools are searched by tool (tool:github.*), namespace and name";
+const ACTIONS_TERMS = "Actions are searched by action (action:github.*), namespace and name";
 
-export interface ToolsSearch {
+export interface ActionsSearch {
   /** The one namespace whose calls are counted; the organization's when `null`. */
   namespace: string | null;
-  /** The start of the tools' names the server keeps: one `tool:github.*` asked for. */
-  prefix: string | null;
-  /** Whether a tool is kept. */
-  keeps: (tool: string) => boolean;
+  /** The group the server keeps: one `action:github.*` asked for. */
+  group: string | null;
+  /** Whether an action is kept. */
+  keeps: (action: string) => boolean;
   fault: QueryFault | null;
 }
 
-/** A value of `tool:`: a name, or the tools of a namespace (`github.*`). */
-function toolMatches(value: string, tool: string): boolean {
-  return value.endsWith("*") ? tool.startsWith(value.slice(0, -1)) : tool === value;
-}
-
 /**
- * What a query keeps of the tool statistics, kept per tool by the hourly counters (archi/05,
- * "Statistics"): `namespace:` asks the server for one end user's calls, and one `tool:` pattern
- * for the tools whose name starts with it; `tool:` (a name or a pattern), free text (in the tool's
- * name) and their negations are applied to the tools the server returns.
+ * What a query keeps of the action statistics, kept per action by the hourly counters (archi/05,
+ * "Statistics"): `namespace:` asks the server for one end user's calls, and one `action:github.*`
+ * for the actions of the group `github`; `action:` (a name or a group), free text (in the action's
+ * name) and their negations are applied to the actions the server returns.
  */
-export function toolsSearch(q: string): ToolsSearch {
+export function actionsSearch(q: string): ActionsSearch {
   let namespace: string | null = null;
   const patterns: string[] = [];
-  const tests: ((tool: string) => boolean)[] = [];
-  const done = (fault: QueryFault | null): ToolsSearch => {
+  const tests: ((action: string) => boolean)[] = [];
+  const done = (fault: QueryFault | null): ActionsSearch => {
     const only = patterns.length === 1 ? (patterns[0] ?? "") : "";
+    const group = /^([^.*]+)\.\*$/.exec(only)?.[1] ?? null;
     return {
       namespace,
-      prefix: only.endsWith("*") && only.length > 1 ? only.slice(0, -1) : null,
-      keeps: (tool: string) => tests.every((test) => test(tool)),
+      group,
+      keeps: (action: string) => tests.every((test) => test(action)),
       fault,
     };
   };
   for (const term of splitTerms(q)) {
     const values = valuesOf(term);
     const fault = (message: string) => done(termFault(q, term, message));
-    let test: (tool: string) => boolean;
+    let test: (action: string) => boolean;
     if (term.kind === "field" && term.field === "namespace") {
       const name = values.length === 1 ? (values[0] ?? "") : "";
       if (term.negated) return fault("A namespace cannot be excluded: remove the -");
@@ -175,40 +192,45 @@ export function toolsSearch(q: string): ToolsSearch {
       namespace = name;
       continue;
     }
-    if (term.kind === "field" && term.field === "toolset")
-      return fault("Tool statistics are kept per tool, not per toolset: search by tool and name");
-    if (term.kind === "field" && term.field === "tool") {
-      if (values.length === 0) return fault("tool: needs a tool: tool:github.close_issue");
-      test = (tool) => values.some((v) => toolMatches(v, tool));
+    if (term.kind === "field" && term.field === "action_set")
+      return fault(
+        "Action statistics are kept per action, not per action set: search by action and name",
+      );
+    if (term.kind === "field" && term.field === "action") {
+      if (values.length === 0) return fault("action: needs an action: action:github.close_issue");
+      test = (action) => values.some((v) => actionMatches(v, action));
       if (!term.negated) patterns.push(values.length === 1 ? (values[0] ?? "") : "");
     } else if (term.kind === "text") {
       const text = textOf(term).toLowerCase();
-      test = (tool) => tool.toLowerCase().includes(text);
+      test = (action) => action.toLowerCase().includes(text);
     } else {
-      return fault(TOOLS_TERMS);
+      return fault(ACTIONS_TERMS);
     }
-    tests.push(term.negated ? (tool) => !test(tool) : test);
+    tests.push(term.negated ? (action) => !test(action) : test);
   }
   return done(null);
 }
 
-/** `?toolset=…`, as the Tools view's links wrote it: a term the view explains it cannot read. */
-export function legacyToolsQuery(params: URLSearchParams): string | null {
-  return legacy(params, (p) => p.getAll("toolset").map((t) => `toolset:${quoteValue(t)}`));
+/**
+ * `?toolset=…` and `?q=tool:…`, as the Tools view's links wrote them: a toolset is an action set,
+ * a term the view explains it cannot read, and a tool an action.
+ */
+export function legacyActionsQuery(params: URLSearchParams): string | null {
+  return legacy(params, (p) => p.getAll("toolset").map((t) => `action_set:${quoteValue(t)}`));
 }
 
-/** The statistics a search of the Tools asks for: a window of whole hours, a scope, a prefix. */
-export function toToolStatsQuery(
+/** The statistics a search of the Actions asks for: a window of whole hours, a scope, a group. */
+export function toActionStatsQuery(
   window: RangeKey,
-  search: Pick<ToolsSearch, "namespace" | "prefix">,
+  search: Pick<ActionsSearch, "namespace" | "group">,
   now: number,
-): ToolStatsQuery {
-  const query: ToolStatsQuery = {
+): ActionStatsQuery {
+  const query: ActionStatsQuery = {
     since: new Date(now - RANGES[window]).toISOString(),
     until: new Date(now).toISOString(),
   };
   if (search.namespace) query.q = `namespace:${quoteValue(search.namespace)}`;
-  if (search.prefix) query.prefix = search.prefix;
+  if (search.group) query.group = search.group;
   return query;
 }
 

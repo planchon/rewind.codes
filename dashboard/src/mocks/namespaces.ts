@@ -1,6 +1,6 @@
 // The mocked namespaces (archi/06, "Namespaces" and "Quotas"): the end users of the tenant, their
 // exceptions to the defaults, the operator's ceiling, their use day by day (CPU time and runs
-// started) over this month and the last, the runs active now, their distinct scripts, their
+// started) over this month and the last, the runs active now, their distinct workflows, their
 // tokens, and the alerts recorded when a use crossed 80 % or 100 % of a limit. A few named end
 // users tell a story (bob abuses, chen pays, erin is blocked); a thousand more fill the lists.
 
@@ -36,8 +36,8 @@ export interface MockNamespace {
   days: Map<string, DayUse>;
   /** Runs active now. */
   activeRuns: number;
-  /** Distinct scripts with a run kept. */
-  scripts: number;
+  /** Distinct workflows with a run kept. */
+  workflows: number;
   /** Opaque tokens neither revoked nor expired. */
   tokens: number;
   tokensRevokedBefore: number | null;
@@ -88,7 +88,7 @@ export function newNamespace(name: string, createdAt: number): MockNamespace {
     deletingSince: null,
     days: new Map(),
     activeRuns: 0,
-    scripts: 0,
+    workflows: 0,
     tokens: 0,
     tokensRevokedBefore: null,
   };
@@ -120,20 +120,20 @@ export function usageOf(ns: MockNamespace, month: string): QuotaUsage {
     activeRuns: ns.activeRuns,
     runsStarted: use.runsStarted,
     cpu: apiDuration(use.cpuMs),
-    scripts: ns.scripts,
+    workflows: ns.workflows,
   };
 }
 
 /** The tenant's use of a month: the sum over its namespaces, erased ones included. */
 export function tenantUsage(world: NamespaceWorld, month: string): QuotaUsage {
   let cpuMs = 0;
-  const usage = { activeRuns: 0, runsStarted: 0, scripts: 0 };
+  const usage = { activeRuns: 0, runsStarted: 0, workflows: 0 };
   for (const ns of world.namespaces.values()) {
     const use = monthUse(ns, month);
     cpuMs += use.cpuMs;
     usage.runsStarted += use.runsStarted;
     usage.activeRuns += ns.activeRuns;
-    usage.scripts += ns.scripts;
+    usage.workflows += ns.workflows;
   }
   return { ...usage, cpu: apiDuration(cpuMs) };
 }
@@ -201,7 +201,7 @@ export function highest(world: NamespaceWorld, ns: MockNamespace, month: string)
     [use.cpuMs, limitOf(limits, "cpuPerMonth")],
     [ns.activeRuns, limitOf(limits, "activeRuns")],
     [use.runsStarted, limitOf(limits, "runsPerMonth")],
-    [ns.scripts, limitOf(limits, "scripts")],
+    [ns.workflows, limitOf(limits, "workflows")],
   ];
   let best = 0;
   for (const [used, limit] of pairs) {
@@ -240,7 +240,7 @@ function spread(
 
 /**
  * Records the alerts a month's use crossed: CPU and runs as they added up day after day,
- * scripts when the stock reached the threshold, active runs at a first refusal.
+ * workflows when the stock reached the threshold, active runs at a first refusal.
  */
 function recordAlerts(
   world: NamespaceWorld,
@@ -280,12 +280,18 @@ function recordAlerts(
   };
   cumulative("cpu_per_month", limitOf(limits, "cpuPerMonth"), (u) => u.cpuMs);
   cumulative("runs_per_month", limitOf(limits, "runsPerMonth"), (u) => u.runsStarted);
-  const scripts = limitOf(limits, "scripts");
+  const workflows = limitOf(limits, "workflows");
   const lastDay = days[days.length - 1]?.[0];
-  if (scripts !== null && scripts > 0 && lastDay) {
+  if (workflows !== null && workflows > 0 && lastDay) {
     for (const threshold of [80, 100]) {
-      if (ns.scripts * 100 >= scripts * threshold)
-        raise("scripts", threshold, ns.scripts, scripts, Date.parse(`${lastDay}T09:40:00Z`) - DAY);
+      if (ns.workflows * 100 >= workflows * threshold)
+        raise(
+          "workflows",
+          threshold,
+          ns.workflows,
+          workflows,
+          Date.parse(`${lastDay}T09:40:00Z`) - DAY,
+        );
     }
   }
   const active = limitOf(limits, "activeRuns");
@@ -302,7 +308,7 @@ interface Story {
   cpuMs: number;
   runs: number;
   activeRuns: number;
-  scripts: number;
+  workflows: number;
   tokens: number;
   lastActiveAgoMs: number;
   /** The last month's totals. */
@@ -314,13 +320,13 @@ interface Story {
 /** The end users the mocked runs act for, and those whose use tells something. */
 const STORIES: Story[] = [
   {
-    // Abuses the product: above its CPU, at its active runs, close to its runs and scripts.
+    // Abuses the product: above its CPU, at its active runs, close to its runs and workflows.
     name: "bob",
     createdDaysAgo: 43,
     cpuMs: 3 * HOUR + 12 * MINUTE,
     runs: 2_950,
     activeRuns: 10,
-    scripts: 412,
+    workflows: 412,
     tokens: 3,
     lastActiveAgoMs: 40_000,
     last: { cpuMs: 74 * MINUTE, runs: 1_820 },
@@ -331,11 +337,11 @@ const STORIES: Story[] = [
     name: "chen",
     displayName: "Chen Logistics",
     createdDaysAgo: 120,
-    exceptions: { runsPerMonth: 20_000, cpuPerMonth: "10h", scripts: 2_000 },
+    exceptions: { runsPerMonth: 20_000, cpuPerMonth: "10h", workflows: 2_000 },
     cpuMs: 2 * HOUR + 45 * MINUTE,
     runs: 4_120,
     activeRuns: 4,
-    scripts: 220,
+    workflows: 220,
     tokens: 5,
     lastActiveAgoMs: 3 * MINUTE,
     last: { cpuMs: 5 * HOUR + 10 * MINUTE, runs: 7_300 },
@@ -346,7 +352,7 @@ const STORIES: Story[] = [
     cpuMs: 1 * HOUR + 41 * MINUTE,
     runs: 1_480,
     activeRuns: 3,
-    scripts: 64,
+    workflows: 64,
     tokens: 1,
     lastActiveAgoMs: 12 * MINUTE,
     last: { cpuMs: 52 * MINUTE, runs: 900 },
@@ -357,7 +363,7 @@ const STORIES: Story[] = [
     cpuMs: 41 * MINUTE,
     runs: 312,
     activeRuns: 2,
-    scripts: 57,
+    workflows: 57,
     tokens: 2,
     lastActiveAgoMs: 4 * MINUTE,
     last: { cpuMs: 66 * MINUTE, runs: 540 },
@@ -370,7 +376,7 @@ const STORIES: Story[] = [
     cpuMs: 9 * MINUTE,
     runs: 41,
     activeRuns: 0,
-    scripts: 12,
+    workflows: 12,
     tokens: 0,
     lastActiveAgoMs: 2 * DAY,
     last: { cpuMs: 47 * MINUTE, runs: 610 },
@@ -381,7 +387,7 @@ const STORIES: Story[] = [
     cpuMs: 6 * MINUTE,
     runs: 58,
     activeRuns: 1,
-    scripts: 9,
+    workflows: 9,
     tokens: 0,
     lastActiveAgoMs: 20 * MINUTE,
   },
@@ -392,7 +398,7 @@ const STORIES: Story[] = [
     cpuMs: 14 * MINUTE,
     runs: 160,
     activeRuns: 0,
-    scripts: 21,
+    workflows: 21,
     tokens: 1,
     lastActiveAgoMs: 5 * HOUR,
   },
@@ -403,7 +409,7 @@ const STORIES: Story[] = [
     cpuMs: 22 * MINUTE,
     runs: 2_480,
     activeRuns: 1,
-    scripts: 33,
+    workflows: 33,
     tokens: 2,
     lastActiveAgoMs: 50 * MINUTE,
   },
@@ -430,17 +436,17 @@ export function createNamespaceWorld({
       activeRuns: 10,
       runsPerMonth: 3_000,
       cpuPerMonth: "2h",
-      scripts: 500,
+      workflows: 500,
       maxTtl: "7d",
-      maxScriptLines: 300,
+      maxCodeLines: 300,
     },
     ceiling: {
       activeRuns: 5_000,
       runsPerMonth: 1_000_000,
       cpuPerMonth: "1000h",
-      scripts: 500_000,
+      workflows: 500_000,
       maxTtl: "30d",
-      maxScriptLines: 2_000,
+      maxCodeLines: 2_000,
     },
     namespaces: new Map(),
     alerts: [],
@@ -462,7 +468,7 @@ export function createNamespaceWorld({
     if (s.exceptions) ns.exceptions = s.exceptions;
     if (s.displayName) ns.displayName = s.displayName;
     ns.activeRuns = s.activeRuns;
-    ns.scripts = s.scripts;
+    ns.workflows = s.workflows;
     ns.tokens = s.tokens;
     if (s.last && s.createdDaysAgo > today)
       spread(ns, last, lastDays, s.last.cpuMs, s.last.runs, random, 0.05);
@@ -490,7 +496,7 @@ export function createNamespaceWorld({
     if (quiet) continue;
     const size = random() ** 3;
     ns.activeRuns = random() < 0.15 ? 1 + Math.floor(random() * 3) : 0;
-    ns.scripts = 1 + Math.floor(size * 220);
+    ns.workflows = 1 + Math.floor(size * 220);
     ns.tokens = Math.floor(random() * 3);
     spread(
       ns,

@@ -7,7 +7,7 @@ import type {
   Organization,
   OrganizationSettings,
   Permission,
-  User,
+  Person,
 } from "../model/types";
 
 export interface Section {
@@ -57,8 +57,8 @@ export interface Access {
   /** What the caller may use: its role's permissions, less the administration ones with labels. */
   permissions: ReadonlySet<Permission>;
   can(permission: Permission): boolean;
-  /** The member signed in; `null` for a key or over the socket. */
-  user: User | null;
+  /** The person signed in as a member; `null` for a key or over the socket. */
+  person: Person | null;
   /** The organization of a member's session, with its settings. */
   organization: OrganizationSettings | null;
   /** Every organization of the member. */
@@ -87,7 +87,7 @@ export function accessOf(identity: Identity): Access {
     identity,
     permissions,
     can,
-    user: identity.principal?.kind === "user" ? identity.principal.user : null,
+    person: identity.principal?.kind === "member" ? identity.principal.person : null,
     organization,
     organizations: identity.organizations ?? [],
     operator: identity.operator,

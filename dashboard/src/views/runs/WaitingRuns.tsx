@@ -1,7 +1,7 @@
-// Observability's waiting runs: every run paused on the outside world, grouped by what it waits
-// for (a signal, an approval, a timer, a tool), with the line it is paused on and when it wakes.
-// The soonest to wake first. A row opens the run at its last step. Live: read again a second after
-// the last change of a run.
+// The waiting runs of Runs: every run paused on the outside world, grouped by what it waits for
+// (a signal, a timer, a harness action, an approval, a deferred answer, a parked call, a
+// quarantine), with the line it is paused on and when it wakes. The soonest to wake first. A row
+// opens the run at its last step. Live: read again a second after the last change of a run.
 import { Fragment, type ReactNode, useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
@@ -11,20 +11,40 @@ import { TableScroll } from "../../components/TableScroll";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
 import { joinQuery, labelTerm, type QueryFault, withTerm } from "../../model/query";
 import { waitingRuns } from "../../model/scope";
-import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../model/types";
+import type {
+  RunStats,
+  RunSummary,
+  RunWait,
+  RunWorkflow,
+  WaitCounts,
+  WaitKind,
+} from "../../model/types";
+import { WAIT_WORDS } from "../../model/waits";
+import { shortIdOf, versionLabel } from "../../model/workflows";
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
-import { useScript } from "../../state/scripts";
+import { useWorkflow, useWorkflowLabels } from "../../state/workflows";
 import { TableTop } from "../TableTop";
 
-type Tab = "all" | "signals" | "approvals" | "timers" | "tools";
+type Tab =
+  | "all"
+  | "signals"
+  | "timers"
+  | "harness"
+  | "approvals"
+  | "deferred"
+  | "parked"
+  | "quarantines";
 
 const TABS: { tab: Tab; label: string; kinds: readonly WaitKind[] }[] = [
   { tab: "all", label: "All", kinds: [] },
   { tab: "signals", label: "Signals", kinds: ["signal"] },
-  { tab: "approvals", label: "Approvals", kinds: ["approval", "parked"] },
   { tab: "timers", label: "Timers", kinds: ["timer"] },
-  { tab: "tools", label: "Tools", kinds: ["call", "host", "deferred"] },
+  { tab: "harness", label: "Harness actions", kinds: ["harness"] },
+  { tab: "approvals", label: "Approvals", kinds: ["approval"] },
+  { tab: "deferred", label: "Deferred", kinds: ["deferred"] },
+  { tab: "parked", label: "Parked", kinds: ["parked"] },
+  { tab: "quarantines", label: "Quarantines", kinds: ["quarantined"] },
 ];
 
 function readTab(params: URLSearchParams): (typeof TABS)[number] {
@@ -37,25 +57,17 @@ function tabCount(tab: (typeof TABS)[number], waiting: WaitCounts): number {
   return tab.kinds.reduce((n, k) => n + waiting[k], 0);
 }
 
-const KIND_WORD: Record<WaitKind, string> = {
-  signal: "signal",
-  timer: "timer",
-  call: "tool call",
-  host: "host tool",
-  approval: "approval",
-  parked: "parked",
-  deferred: "deferred",
-};
-
-/** What a wait is about: a signal's name, a call's tool, a timer. */
+/** What a wait is about: a signal's name, a call's action, a timer. */
 function waitTitle(w: RunWait): string {
   switch (w.kind) {
     case "signal":
-      return `signal "${w.name ?? "?"}"`;
+      return `"${w.name ?? "?"}"`;
     case "timer":
-      return `timer${w.seq != null ? ` #${w.seq}` : ""}`;
+      return w.seq != null ? `#${w.seq}` : "";
+    case "quarantined":
+      return "";
     default:
-      return `${w.seq != null ? `#${w.seq} ` : ""}${w.name ?? "a tool"}`;
+      return `${w.seq != null ? `#${w.seq} ` : ""}${w.name ?? "a call"}`;
   }
 }
 
@@ -66,11 +78,10 @@ function groupOf(w: RunWait): string {
       return `signal "${w.name ?? "?"}"`;
     case "timer":
       return "sleep and timers";
-    case "approval":
-    case "parked":
-      return `${w.kind} · ${w.name ?? "a tool"}`;
+    case "quarantined":
+      return "quarantine";
     default:
-      return `${KIND_WORD[w.kind]} · ${w.name ?? "a tool"}`;
+      return `${WAIT_WORDS[w.kind]} · ${w.name ?? "a call"}`;
   }
 }
 
@@ -78,7 +89,7 @@ function groupOf(w: RunWait): string {
 function wakeText(w: RunWait, now: number): string {
   if (w.until) {
     const at = formatRelative(Date.parse(w.until), now);
-    return w.kind === "signal" ? `gives up ${at}` : at;
+    return w.kind === "signal" ? `times out ${at}` : at;
   }
   switch (w.kind) {
     case "signal":
@@ -89,15 +100,19 @@ function wakeText(w: RunWait, now: number): string {
       return "when released";
     case "deferred":
       return "when its handler answers";
+    case "harness":
+      return "when its worker answers";
+    case "quarantined":
+      return "when released or given up";
     default:
-      return "when the tool answers";
+      return "";
   }
 }
 
-/** The line a run is paused on, read from its script once per digest. */
-function PausedLine({ digest, line }: { digest: string; line: number }) {
-  const script = useScript(digest);
-  const text = script.data?.source.split("\n")[line - 1]?.trim();
+/** The line a run is paused on, read from the code of the version it executes. */
+function PausedLine({ workflow, line }: { workflow: RunWorkflow; line: number }) {
+  const read = useWorkflow(workflow.id, workflow.version);
+  const text = read.data?.code.split("\n")[line - 1]?.trim();
   return (
     <span className="paused-line" title={text}>
       <b className="num">L{line}</b>
@@ -130,6 +145,7 @@ export function WaitingRuns({
   const navigate = useNavigate();
   const linkState = useRunLinkState();
   const now = useNow(10_000);
+  const labelOf = useWorkflowLabels();
   const tabTerm = tab.kinds.length === 0 ? "waiting:*" : `waiting:${tab.kinds.join(",")}`;
   const runs = useRunSearch({ q: joinQuery(q, tabTerm), sort: "wakes", pageSize: 100 });
   const fault = queryFault(runs.error);
@@ -206,9 +222,9 @@ export function WaitingRuns({
                     }}
                   >
                     <td className="wrap waiting-run">
-                      <span className="labels">
-                        <span className="status active">
-                          <StatusGlyph status="active" size={12} />
+                      <span className="waiting-run-head">
+                        <span className="status waiting">
+                          <StatusGlyph status="waiting" size={12} />
                         </span>
                         <Link
                           to={runPath(run.handle)}
@@ -218,10 +234,17 @@ export function WaitingRuns({
                         >
                           <RunHandle handle={run.handle} id={run.id} whole />
                         </Link>
-                        <span className="headline mono" title={run.headline}>
-                          {run.headline}
-                        </span>
                       </span>
+                      {run.workflow && (
+                        <span className="waiting-workflow">
+                          {versionLabel(
+                            labelOf(run.workflow.id) ??
+                              run.workflow.name ??
+                              shortIdOf(run.workflow.id),
+                            run.workflow.version,
+                          )}
+                        </span>
+                      )}
                       <LabelList
                         labels={run.labels}
                         onPick={(pair) => {
@@ -231,7 +254,7 @@ export function WaitingRuns({
                       />
                     </td>
                     <td>
-                      <span className={`wait-kind kind-${wait.kind}`}>{KIND_WORD[wait.kind]}</span>{" "}
+                      <span className={`wait-kind kind-${wait.kind}`}>{WAIT_WORDS[wait.kind]}</span>{" "}
                       <span className="mono">{waitTitle(wait)}</span>
                       {more > 0 && <span className="muted"> +{more} more</span>}
                     </td>
@@ -242,8 +265,8 @@ export function WaitingRuns({
                       {wakeText(wait, now)}
                     </td>
                     <td>
-                      {wait.callsite ? (
-                        <PausedLine digest={run.script} line={wait.callsite.line} />
+                      {wait.callsite && run.workflow ? (
+                        <PausedLine workflow={run.workflow} line={wait.callsite.line} />
                       ) : (
                         <span className="muted">no callsite</span>
                       )}

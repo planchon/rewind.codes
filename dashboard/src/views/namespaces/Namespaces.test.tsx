@@ -27,7 +27,7 @@ function graceWith(permissions: Permission[]) {
   });
   world.access.grants
     .get("org_01ACME")
-    ?.set("user:user_01GRACE", { role: "custom", allowedLabels: {} });
+    ?.set("member:user_01GRACE", { role: "custom", allowedLabels: {} });
   return world;
 }
 
@@ -73,7 +73,7 @@ describe("the Namespaces view", () => {
     expect(within(ceiling).getByRole("img", { name: /^Active runs: .* of 5,000/ })).toBeVisible();
     // The defaults, with the limits that are not meters.
     const defaults = rows()[1] as HTMLElement;
-    expect(within(defaults).getByText("TTL 7d · script 300 lines")).toBeInTheDocument();
+    expect(within(defaults).getByText("TTL 7d · code 300 lines")).toBeInTheDocument();
     expect(within(defaults).getByText("3,000")).toBeInTheDocument();
     // The first page of how many there are.
     expect(screen.getByText(/^50 of 1,2\d\d namespaces$/)).toBeInTheDocument();
@@ -250,8 +250,8 @@ describe("the Namespaces view", () => {
         activeRuns: 10,
         runsPerMonth: 3000,
         cpuPerMonth: "3h",
-        scripts: 500,
-        maxScriptLines: 300,
+        workflows: 500,
+        maxCodeLines: 300,
       },
     });
     // With a quota of 3h, bob is still above his.
@@ -284,23 +284,23 @@ describe("a namespace's page", () => {
       .getAllByRole("listitem")
       .map((li) => li.firstChild?.textContent);
     expect(chips).toEqual(
-      expect.arrayContaining(["CPU 100%", "CPU 80%", "scripts 80%", "active runs 100%"]),
+      expect.arrayContaining(["CPU 100%", "CPU 80%", "workflows 80%", "active runs 100%"]),
     );
     expect(within(alerts).getAllByText(/webhook sent/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("tokens")).toHaveTextContent("3");
     expect(screen.getByText("none: the defaults apply")).toBeInTheDocument();
     // The month going on has no end: its query does not change as time passes.
-    const runs = screen.getByRole("link", { name: "Open in Observability →" });
+    const runs = screen.getByRole("link", { name: "Open in Runs →" });
     expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
       /^namespace:bob started:>=\S+$/,
     );
-    expect(screen.getByRole("link", { name: "Open in Scripts →" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "See its workflows →" })).toHaveAttribute(
       "href",
-      "/scripts?q=namespace%3Abob",
+      "/workflows?q=namespace%3Abob",
     );
   });
 
-  it("shows how its runs went this month, then its runs and its scripts", async () => {
+  it("shows how its runs went this month, then its runs and its workflows", async () => {
     const { requested, callsTo } = renderApp("/namespaces/bob");
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
     const figures = await screen.findByRole("region", { name: /^Runs in / });
@@ -312,20 +312,24 @@ describe("a namespace's page", () => {
       expect(
         requested("/v1/runs/stats").some(
           (u) =>
-            u.searchParams.get("q") === "namespace:bob" && u.searchParams.get("bucket") === "1d",
+            u.searchParams.get("q") === "namespace:bob" && u.searchParams.get("interval") === "1d",
         ),
       ).toBe(true),
     );
     expect(screen.getByRole("region", { name: "What fails most" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Tools its runs call" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Actions its runs call" })).toBeInTheDocument();
     const runs = screen.getByRole("region", { name: "Its runs" });
     await waitFor(() => expect(within(runs).getAllByRole("row").length).toBeGreaterThan(1));
-    const scripts = screen.getByRole("region", { name: "Its scripts" });
-    await waitFor(() => expect(within(scripts).getAllByRole("row").length).toBeGreaterThan(1));
-    // Its scripts are counted over its runs (the titles of every script are read apart).
-    expect(callsTo("/v1/scripts").some((c) => c.headers.get("Rewind-Namespace") === "bob")).toBe(
-      true,
-    );
+    const workflows = screen.getByRole("region", { name: "Its workflows" });
+    await waitFor(() => expect(within(workflows).getAllByRole("row").length).toBeGreaterThan(1));
+    // Its workflows and the organization's, counted over its runs.
+    expect(
+      callsTo("/v1/workflows").some(
+        (c) =>
+          c.headers.get("Rewind-Namespace") === "bob" &&
+          c.url.searchParams.get("q") === "namespace:bob",
+      ),
+    ).toBe(true);
   });
 
   it("filters and orders its runs from the table's headers, in the page's URL", async () => {
@@ -506,7 +510,7 @@ describe("a namespace's page", () => {
     // A reader sees, and changes nothing.
     renderApp("/namespaces/bob", { world: graceWith(["runs:read", "namespaces:read"]) });
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
-    expect(screen.getByRole("link", { name: "Open in Observability →" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open in Runs →" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit its limits" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Revoke its tokens" })).toBeNull();

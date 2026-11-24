@@ -4,35 +4,65 @@ import type { components, paths } from "../generated/api";
 type Schemas = components["schemas"];
 
 export type { paths };
+
+// Statuses (archi/03, archi/05 "Read model"; archi/08, "Waiting is a status"). A run is `queued`
+// until a step is committed, `running` while a step is in progress or a call Rewind makes itself
+// is in flight or backing off, `waiting` on the outside world otherwise, until it ends.
+
+export type RunStatus = Schemas["RunStatus"];
+
+/**
+ * What a waiting run waits for, as the query `waiting:` and the counts name it: a signal, a timer,
+ * a harness action's call (`ready` or `claimed`), a call waiting for its approval, deferred or
+ * parked, or a quarantine.
+ */
+export type WaitKind = Schemas["WaitKind"];
+
+/** The runs of a scope by status: the active ones now, the ended ones of the window. */
+export type StatusCounts = Schemas["StatusCounts"];
+/**
+ * A workflow's runs of a window, from the hourly counters: the active ones (queued, running or
+ * waiting) together, the others by how they ended.
+ */
+export type RunCounts = Schemas["RunCounts"];
+/** The waiting runs now, by what they wait for (a run may count under several). */
+export type WaitCounts = Schemas["WaitCounts"];
+
+/** What a run in a list waits for, each with the event that opened it and its callsite. */
+export type RunWait = Schemas["RunWait"];
+
+/** What a run waits for, in its details: a signal, a timer, a call with its state, a quarantine. */
+export type Waiting = Schemas["Waiting"];
+
 export type Run = Schemas["Run"];
 export type RunSummary = Schemas["RunSummary"];
 export type RunPage = Schemas["RunPage"];
-export type RunStatus = Schemas["RunStatus"];
+export type RunStats = Schemas["RunStats"];
+export type FailureSample = Schemas["FailureSample"];
+export type Fingerprint = Schemas["Fingerprint"];
+export type FingerprintPage = Schemas["FingerprintPage"];
+
 export type RunMode = Schemas["RunMode"];
-export type RunCounts = Schemas["RunCounts"];
-export type RunError = Schemas["RunError"];
-export type Waiting = Schemas["Waiting"];
-export type Entry = Schemas["Entry"];
-export type JournalEvent = Schemas["Event"];
-export type EventOf<T extends JournalEvent["type"]> = Extract<JournalEvent, { type: T }>;
-export type StreamEvent = Schemas["StreamEvent"];
+/** A run's error, a `fail_run`'s and a test's: its name, message and stack. */
+export type ErrorInfo = Schemas["ErrorInfo"];
+/** One event of a run's history, at its position `idx`. */
+export type HistoryEvent = Schemas["HistoryEvent"];
+/** What an event of the history says: `run_started`, `schedule_call`, `call_completed`… */
+export type HistoryEventBody = Schemas["Event"];
+export type EventOf<T extends HistoryEventBody["type"]> = Extract<HistoryEventBody, { type: T }>;
+export type StreamMessage = Schemas["StreamMessage"];
 export type Payload = Schemas["Payload"];
 export type Callsite = Schemas["Callsite"];
 export type Labels = Schemas["Labels"];
 export type LogLevel = Schemas["LogLevel"];
-export type ToolFailure = Schemas["ToolFailure"];
-export type ToolFailureKind = Schemas["ToolFailureKind"];
-export type ScriptError = Schemas["ScriptError"];
+export type ActionFailure = Schemas["ActionFailure"];
+export type ActionFailureKind = Schemas["ActionFailureKind"];
 export type AbortReason = Schemas["AbortReason"];
 export type CancelReason = Schemas["CancelReason"];
-export type Script = Schemas["Script"];
-export type ScriptSummary = Schemas["ScriptSummary"];
-export type SetScriptTitle = Schemas["SetScriptTitle"];
-export type ScriptPage = Schemas["ScriptPage"];
-export type ToolStats = Schemas["ToolStats"];
-export type ToolStatsPage = Schemas["ToolStatsPage"];
+export type ActionStats = Schemas["ActionStats"];
+export type ActionStatsPage = Schemas["ActionStatsPage"];
 export type ServerInfo = Schemas["ServerInfo"];
-export type ToolsetSummary = Schemas["ToolsetSummary"];
+export type ActionSetSummary = Schemas["ActionSetSummary"];
 export type QuotaReached = Schemas["QuotaReached"];
 /**
  * An answer that is not a success. The document flattens an optional `QuotaReached` into it
@@ -41,30 +71,22 @@ export type QuotaReached = Schemas["QuotaReached"];
  */
 export type Problem = Omit<Schemas["Problem"], keyof QuotaReached> & Partial<QuotaReached>;
 export type Quarantine = Schemas["Quarantine"];
-export type RunWait = Schemas["RunWait"];
-export type WaitKind = Schemas["WaitKind"];
-export type RunStats = Schemas["RunStats"];
-export type ScriptChanged = Schemas["ScriptChanged"];
 export type WorkflowChanged = Schemas["WorkflowChanged"];
 export type SecretChanged = Schemas["SecretChanged"];
 export type NamespaceChanged = Schemas["NamespaceChanged"];
 export type ConnectionChanged = Schemas["ConnectionChanged"];
-/** What changed in the control plane, from an event of `GET /v1/changes` (its `event`, its data). */
+/** What changed in the control plane, from a change of `GET /v1/changes` (its type, its data). */
 export type ControlChange =
-  | ({ kind: "script" } & ScriptChanged)
   | ({ kind: "workflow" } & WorkflowChanged)
   | ({ kind: "secret" } & SecretChanged)
   | ({ kind: "namespace" } & NamespaceChanged)
   | ({ kind: "connection" } & ConnectionChanged);
-export type StatusCounts = Schemas["StatusCounts"];
-export type WaitCounts = Schemas["WaitCounts"];
-export type SeriesBucket = Schemas["SeriesBucket"];
+/** One interval of a series of runs: its start, and the runs started in it by status. */
+export type SeriesInterval = Schemas["SeriesInterval"];
 export type DurationStats = Schemas["DurationStats"];
 export type Facets = Schemas["Facets"];
 export type FacetValue = Schemas["FacetValue"];
 export type LabelFacet = Schemas["LabelFacet"];
-export type FailureGroup = Schemas["FailureGroup"];
-export type FailureGroupPage = Schemas["FailureGroupPage"];
 export type QuerySpan = Schemas["QuerySpan"];
 export type SignalAccepted = Schemas["SignalAccepted"];
 export type CancelRun = Schemas["CancelRun"];
@@ -75,7 +97,8 @@ export type AuthConfig = Schemas["AuthConfig"];
 export type AuthState = Schemas["AuthState"];
 export type Authenticated = Extract<AuthState, { status: "authenticated" }>;
 export type SignInMethod = Schemas["SignInMethod"];
-export type User = Schemas["User"];
+/** A person: a member of an organization, as WorkOS knows them. */
+export type Person = Schemas["Person"];
 export type Organization = Schemas["Organization"];
 export type OrganizationSettings = Schemas["OrganizationSettings"];
 export type Identity = Schemas["Identity"];
@@ -140,31 +163,43 @@ export type RevokedTokens = Schemas["RevokedTokens"];
 export type Secret = Schemas["Secret"];
 export type SecretUsage = Schemas["SecretUsage"];
 export type PutSecret = Schemas["PutSecret"];
-export type WorkflowAttaching = Schemas["WorkflowAttaching"];
+/** A workflow whose latest version uses a secret, and for which servers. */
+export type WorkflowSecrets = Schemas["WorkflowSecrets"];
 export type DailyReads = Schemas["DailyReads"];
 export type SigningKey = Schemas["SigningKey"];
 export type SigningKeyList = Schemas["SigningKeyList"];
 
-// Workflows: their versions, each with its suite, and the tests (archi/05, "Suites and the gate").
-export type Workflow = Schemas["Workflow"];
+// Workflows (archi/01, "Workflows"): one entity, an id the API assigns, an optional name unique in
+// its scope (a namespace's, or the organization's), versions numbered from 1, each with its code,
+// interface and action set, and a suite; a fork of an organization's workflow names its source.
+export type WorkflowSummary = Schemas["WorkflowSummary"];
 export type WorkflowPage = Schemas["WorkflowPage"];
-export type WorkflowVersions = Schemas["WorkflowVersions"];
+export type Workflow = Schemas["Workflow"];
+export type WorkflowVersion = Schemas["WorkflowVersion"];
+export type WorkflowSource = Schemas["WorkflowSource"];
+export type RunWorkflow = Schemas["RunWorkflow"];
+export type CodeComment = Schemas["CodeComment"];
+export type PatchWorkflow = Schemas["PatchWorkflow"];
+/** A test of a suite, now or before: when it joined, and when and why it left. */
+export type SuiteEntry = Schemas["SuiteEntry"];
 export type SuiteTest = Schemas["SuiteTest"];
 export type RetiredTest = Schemas["RetiredTest"];
-export type UpdatedTest = Schemas["UpdatedTest"];
+export type ReplacedTest = Schemas["ReplacedTest"];
 /** A test document: the world a run meets, and what must hold at its end. */
 export type Test = Schemas["Test"];
 export type TestWorld = Schemas["World"];
-export type ToolRules = Schemas["ToolRules"];
-export type ToolRule = Schemas["ToolRule"];
+export type ActionRules = Schemas["ActionRules"];
+export type ActionRule = Schemas["ActionRule"];
 export type TestSignal = Schemas["TestSignal"];
 export type Expectations = Schemas["Expectations"];
 export type ExpectedCall = Schemas["ExpectedCall"];
-export type TestOrigin = Schemas["TestOrigin"];
+/** The run a recorded test comes from: its id, namespace and the version it executed. */
+export type TestFromRun = Schemas["TestFromRun"];
 
 export type ListRunsQuery = NonNullable<paths["/v1/runs"]["get"]["parameters"]["query"]>;
-export type ListScriptsQuery = NonNullable<paths["/v1/scripts"]["get"]["parameters"]["query"]>;
-export type ToolStatsQuery = NonNullable<paths["/v1/tools/stats"]["get"]["parameters"]["query"]>;
+export type ActionStatsQuery = NonNullable<
+  paths["/v1/actions/stats"]["get"]["parameters"]["query"]
+>;
 export type RunStatsQuery = NonNullable<paths["/v1/runs/stats"]["get"]["parameters"]["query"]>;
 export type FailuresQuery = NonNullable<paths["/v1/runs/failures"]["get"]["parameters"]["query"]>;
 export type ListWorkflowsQuery = NonNullable<paths["/v1/workflows"]["get"]["parameters"]["query"]>;
@@ -177,7 +212,17 @@ export type QuotaAlertsQuery = NonNullable<
 >;
 
 export const RUN_STATUSES: readonly RunStatus[] = [
-  "pending",
+  "queued",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "cancelled",
+  "aborted",
+];
+
+/** The keys of a workflow's counts, in the order its outcomes show: the active runs first. */
+export const RUN_COUNT_KEYS: readonly (keyof RunCounts)[] = [
   "active",
   "completed",
   "failed",
@@ -188,21 +233,26 @@ export const RUN_STATUSES: readonly RunStatus[] = [
 export const WAIT_KINDS: readonly WaitKind[] = [
   "signal",
   "timer",
-  "call",
-  "host",
+  "harness",
   "approval",
-  "parked",
   "deferred",
+  "parked",
+  "quarantined",
 ];
 
-export const TOOL_FAILURE_KINDS: readonly ToolFailureKind[] = [
+export const ACTION_FAILURE_KINDS: readonly ActionFailureKind[] = [
   "error",
   "unavailable",
   "timeout",
   "outcome_unknown",
 ];
 
-/** Whether a status is final: nothing will be appended to the journal. */
+/** Whether a run is active: queued, running or waiting, not ended. */
+export function isActive(status: RunStatus): boolean {
+  return status === "queued" || status === "running" || status === "waiting";
+}
+
+/** Whether a status is final: nothing will be appended to the history. */
 export function isEnded(status: RunStatus): boolean {
-  return status !== "pending" && status !== "active";
+  return !isActive(status);
 }

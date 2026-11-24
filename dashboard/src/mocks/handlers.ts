@@ -1,31 +1,31 @@
 // The mocked API, as MSW handlers over a world of fixtures: `/v1` and the sign-in `/auth`. The
 // tests run them with `msw/node`; `pnpm dev:mock` serves them from the Vite dev server.
 import { HttpResponse, http } from "msw";
+import { buildRunModel } from "../model/run";
 import type {
   FailuresQuery,
+  HistoryEvent,
   ListRunsQuery,
   RunSort,
   RunStatsQuery,
   RunStatus,
-  StreamEvent,
 } from "../model/types";
+import { isEnded } from "../model/types";
 import { type Caller, principalOf } from "./access";
 import { accessHandlers, authenticate, guard, runsWorld } from "./access-handlers";
-import { told } from "./changes";
 import { connectionHandlers } from "./connection-handlers";
-import type { World } from "./fixtures";
-import { findRun, scriptTitleOf } from "./handles";
+import type { RunFixture, World } from "./fixtures";
+import { findRun } from "./handles";
 import { headerNamespace, namespaceHandlers } from "./namespace-handlers";
 import { invalidQuery, problem } from "./problem";
 import { QueryError } from "./query";
 import {
+  actionStats,
   deriveRun,
-  failureGroups,
+  fingerprints,
   listRuns,
-  listScripts,
   runStats,
-  toolStats,
-  visibleEntries,
+  visibleEvents,
 } from "./readmodel";
 import { eventStream, runHandlers } from "./run-handlers";
 import { secretHandlers } from "./secret-handlers";
@@ -59,7 +59,6 @@ function withRuns(
   return answer(inNamespace(runsWorld(world, caller), namespace), caller);
 }
 
-/** The runs of one namespace, and the scripts they ran; every namespace without one. */
 /**
  * As `withRuns`, for the routes that answer from the hourly counters (archi/05, "Statistics"):
  * refused to a grant limited to labels, since counters know no labels.
@@ -73,9 +72,7 @@ function withCounters(
     const grant =
       caller.kind === "socket"
         ? null
-        : world.access.grants
-            .get(caller.tenant ?? "")
-            ?.get(caller.kind === "key" ? `key:${caller.key.id}` : `user:${caller.user.id}`);
+        : world.access.grants.get(caller.tenant ?? "")?.get(principalOf(caller) ?? "");
     if (Object.keys(grant?.allowedLabels ?? {}).length > 0)
       return problem(
         403,
@@ -86,16 +83,53 @@ function withCounters(
   });
 }
 
-function inNamespace(world: World, namespace: string | null): World {
+export function inNamespace(world: World, namespace: string | null): World {
   if (namespace === null) return world;
   const runs = world.runs.filter((r) => r.namespace === namespace);
-  const digests = new Set(runs.map((r) => r.script.digest));
-  return { ...world, runs, scripts: world.scripts.filter((s) => digests.has(s.digest)) };
+  const digests = new Set(runs.map((r) => r.code.digest));
+  return { ...world, runs, codes: world.codes.filter((c) => digests.has(c.digest)) };
 }
 
-function sse(event: StreamEvent): string {
-  const id = event.type === "entry" ? `id: ${event.idx}\n` : "";
-  return `event: ${event.type}\n${id}data: ${JSON.stringify(event)}\n\n`;
+/** An event of a run's event stream: one of its history, or its end. */
+export function historyMessage(event: HistoryEvent): string {
+  return `event: event\nid: ${event.idx}\ndata: ${JSON.stringify({ type: "event", ...event })}\n\n`;
+}
+
+function endMessage(status: RunStatus): string {
+  return `event: end\ndata: ${JSON.stringify({ type: "end", status })}\n\n`;
+}
+
+/**
+ * The cassette of a run: its calls with their outcomes, and the signals it received, at their
+ * time from its start.
+ */
+function cassetteOf(world: World, fixture: RunFixture, now: number) {
+  const events = visibleEvents(fixture, now);
+  const model = buildRunModel(events);
+  const start = model.firstAt ?? now;
+  return {
+    v: 1,
+    matching: "sequential",
+    calls: model.calls.flatMap((c) =>
+      c.end
+        ? [
+            {
+              action: c.action,
+              args: world.payloads.get(c.args.digest) ?? c.args.value,
+              outcome:
+                c.end.outcome === "ok"
+                  ? { result: world.payloads.get(c.end.result.digest) ?? c.end.result.value }
+                  : { error: c.end.error },
+            },
+          ]
+        : [],
+    ),
+    signals: model.received.map((r) => ({
+      name: r.name,
+      payload: world.payloads.get(r.payload.digest) ?? r.payload.value,
+      elapsed_ms: r.at - start,
+    })),
+  };
 }
 
 function bool(value: string | null): boolean | undefined {
@@ -110,7 +144,7 @@ function int(value: string | null): number | undefined {
 export interface HandlerOptions {
   /** The current time; the real clock by default, so that a live run goes on. */
   now?: () => number;
-  /** How often a followed stream looks for new entries. */
+  /** How often a followed stream looks for new events. */
   pollMs?: number;
   /** How often the change stream looks for runs that changed. */
   changesMs?: number;
@@ -120,7 +154,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
   const now = options.now ?? (() => Date.now());
   const pollMs = options.pollMs ?? 250;
   const changesMs = options.changesMs ?? 1_000;
-  const noRun = (id: string) => problem(404, "not-found", `No run ${id} for this tenant.`);
+  const noRun = (id: string) => problem(404, "not-found", `No run ${id} in this organization.`);
   const find = (w: World, id: string) => {
     const run = findRun(world, id);
     return run && w.runs.includes(run) ? run : undefined;
@@ -137,7 +171,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
 
     ...namespaceHandlers(world, now),
 
-    ...workflowHandlers(world),
+    ...workflowHandlers(world, now),
 
     ...runHandlers(world, now, changesMs),
 
@@ -169,10 +203,9 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
         if (sort) query.sort = sort as RunSort;
         for (const key of [
           "q",
-          "tool",
-          "script",
+          "action",
           "error",
-          "parent",
+          "source",
           "workflow",
           "startedBy",
           "startedAfter",
@@ -194,7 +227,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
         const query: RunStatsQuery = {};
-        for (const key of ["q", "since", "until", "bucket"] as const) {
+        for (const key of ["q", "since", "until", "interval"] as const) {
           const value = q.get(key);
           if (value !== null) query[key] = value;
         }
@@ -208,13 +241,13 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
         const query: FailuresQuery = {};
-        for (const key of ["q", "since", "until", "bucket"] as const) {
+        for (const key of ["q", "since", "until", "interval"] as const) {
           const value = q.get(key);
           if (value !== null) query[key] = value;
         }
         const limit = int(q.get("limit"));
         if (limit !== undefined) query.limit = limit;
-        return reading(() => failureGroups(w, query, now()));
+        return reading(() => fingerprints(w, query, now()));
       }),
     ),
 
@@ -227,15 +260,15 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       }),
     ),
 
-    http.get("*/v1/runs/:id/entries/:idx", ({ request, params }) =>
+    http.get("*/v1/runs/:id/events/:idx", ({ request, params }) =>
       withRuns(world, request, (w) => {
         const fixture = find(w, String(params.id));
         if (!fixture) return noRun(String(params.id));
-        const entry = visibleEntries(fixture, now())[Number(params.idx)];
-        if (!entry)
-          return problem(404, "not-found", `No entry ${String(params.idx)} in run ${fixture.id}.`);
+        const event = visibleEvents(fixture, now())[Number(params.idx)];
+        if (!event)
+          return problem(404, "not-found", `No event ${String(params.idx)} in run ${fixture.id}.`);
         // This endpoint gives every value, whatever its size.
-        const full = JSON.parse(JSON.stringify(entry), (key, value) => {
+        const full = JSON.parse(JSON.stringify(event), (key, value) => {
           if (
             key === "" ||
             !value ||
@@ -250,21 +283,23 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       }),
     ),
 
-    http.get("*/v1/runs/:id/journal", ({ request, params }) =>
+    http.get("*/v1/runs/:id/export", ({ request, params }) =>
       withRuns(world, request, (w) => {
         const fixture = find(w, String(params.id));
         if (!fixture) return noRun(String(params.id));
-        const as = new URL(request.url).searchParams.get("as") ?? "journal";
-        const entries = visibleEntries(fixture, now());
+        const as = new URL(request.url).searchParams.get("as") ?? "run";
+        if (as !== "run" && as !== "cassette")
+          return problem(400, "invalid-request", `as: "${as}" is not one of run, cassette.`);
+        const events = visibleEvents(fixture, now());
         return HttpResponse.json(
           as === "cassette"
-            ? { v: 1, matching: "sequential", calls: [], signals: [] }
+            ? cassetteOf(world, fixture, now())
             : {
                 v: 1,
                 run: fixture.id,
-                script: fixture.script.digest,
-                toolset: fixture.toolset,
-                entries,
+                code: fixture.code.digest,
+                actionSet: fixture.actionSet,
+                events,
               },
         );
       }),
@@ -290,15 +325,15 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
               clearTimeout(expiry);
             };
             const push = (): boolean => {
-              const entries = visibleEntries(fixture, now());
+              const events = visibleEvents(fixture, now());
               let chunk = "";
-              for (; next < entries.length; next += 1) {
-                const entry = entries[next];
-                if (entry) chunk += sse({ type: "entry", ...entry });
+              for (; next < events.length; next += 1) {
+                const event = events[next];
+                if (event) chunk += historyMessage(event);
               }
               const status = deriveRun(world, fixture, now()).status;
-              const ended = status !== "active" && status !== "pending";
-              if (ended || !follow) chunk += sse({ type: "end", status });
+              const ended = isEnded(status);
+              if (ended || !follow) chunk += endMessage(status);
               if (chunk) controller.enqueue(encoder.encode(chunk));
               if (ended || !follow) {
                 controller.close();
@@ -338,73 +373,15 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       }),
     ),
 
-    http.get("*/v1/scripts", ({ request }) =>
+    http.get("*/v1/actions/stats", ({ request }) =>
       withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
         const query: Record<string, string> = {};
-        for (const key of ["tool", "since", "until", "cursor"]) {
+        for (const key of ["q", "group", "actionSet", "action", "since", "until"]) {
           const value = q.get(key);
           if (value) query[key] = value;
         }
-        const limit = int(q.get("limit"));
-        return HttpResponse.json(
-          listScripts(w, { ...query, ...(limit !== undefined ? { limit } : {}) }, now()),
-        );
-      }),
-    ),
-
-    http.get("*/v1/scripts/:digest", ({ request, params }) =>
-      withRuns(world, request, (w) => {
-        const script = w.scripts.find((s) => s.digest === params.digest);
-        return script
-          ? HttpResponse.json(scriptOf(world, script))
-          : problem(404, "not-found", `No script ${String(params.digest)} for this tenant.`);
-      }),
-    ),
-
-    http.patch("*/v1/scripts/:digest", async ({ request, params }) => {
-      const caller = guard(world, request, "scripts:write");
-      if (caller instanceof Response) return caller;
-      const script = runsWorld(world, caller).scripts.find((s) => s.digest === params.digest);
-      if (!script)
-        return problem(404, "not-found", `No script ${String(params.digest)} for this tenant.`);
-      const body = (await request.json()) as { title: string | null; description?: string | null };
-      if (body.title === null) {
-        world.scriptTitles.delete(script.digest);
-        return told(
-          world,
-          { kind: "script", digest: script.digest },
-          HttpResponse.json(scriptOf(world, script)),
-        );
-      }
-      const title = body.title.trim();
-      const description = body.description?.trim() || null;
-      if (title.length === 0 || title.length > 120)
-        return problem(422, "invalid-title", "A title is 1 to 120 characters.");
-      if ((description?.length ?? 0) > 2_000)
-        return problem(422, "invalid-title", "A description is at most 2,000 characters.");
-      world.scriptTitles.set(script.digest, {
-        title,
-        description,
-        updatedBy: principalOf(caller) ?? "operator",
-        updatedAt: now(),
-      });
-      return told(
-        world,
-        { kind: "script", digest: script.digest },
-        HttpResponse.json(scriptOf(world, script)),
-      );
-    }),
-
-    http.get("*/v1/tools/stats", ({ request }) =>
-      withCounters(world, request, (w) => {
-        const q = new URL(request.url).searchParams;
-        const query: Record<string, string> = {};
-        for (const key of ["q", "prefix", "toolset", "tool", "since", "until"]) {
-          const value = q.get(key);
-          if (value) query[key] = value;
-        }
-        return reading(() => toolStats(w, query, now()));
+        return reading(() => actionStats(w, query, now()));
       }),
     ),
 
@@ -422,20 +399,8 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
         if (!find(w, run)) return noRun(run);
         return w.payloads.has(digest)
           ? HttpResponse.json(w.payloads.get(digest) as never)
-          : problem(404, "not-found", `no payload ${digest} in the journal of run ${run}`);
+          : problem(404, "not-found", `no payload ${digest} in the history of run ${run}`);
       }),
     ),
   ];
-}
-
-/** A script as `GET /v1/scripts/{digest}` answers it, with its title. */
-function scriptOf(world: World, script: { digest: string; source: string }) {
-  const title = scriptTitleOf(world, script.digest, script.source);
-  return {
-    digest: script.digest,
-    source: script.source,
-    ...(title
-      ? { title: title.title, description: title.description, titleSource: title.source }
-      : {}),
-  };
 }

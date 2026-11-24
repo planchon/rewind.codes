@@ -2,15 +2,15 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createWorld, type RunFixture, WORKFLOWS, type World } from "../../mocks/fixtures";
-import { publicSummary, summarize, visibleEntries } from "../../mocks/readmodel";
+import { publicSummary, summarize, visibleEvents } from "../../mocks/readmodel";
 import { shortRunId } from "../../model/format";
 import { confirmInDialog, NOW, renderApp, signedIn } from "../../test/app";
 import { changeStream, runEvents } from "../../test/streams";
 
-/** The triage run waiting for its approval, as a run of the workflow triage. */
+/** The triage run waiting for its approval, as a run of the workflow triage, which declares it. */
 function waitingRun(world: World): RunFixture {
   const fixture = world.runs.find((r) => r.labels.conversation === "c-42") as RunFixture;
-  fixture.workflow = WORKFLOWS.triage;
+  fixture.workflow = world.runs.find((r) => r.workflow?.id === WORKFLOWS.triage)?.workflow;
   return fixture;
 }
 
@@ -31,8 +31,8 @@ describe("the run's controls", () => {
     const run = waitingRun(world);
     const { callsTo } = renderApp(`/runs/${run.id}`, { world });
     // The run's events come when the test sends them.
-    let streamed = visibleEntries(run, NOW).length;
-    const events = runEvents(run.id, () => visibleEntries(run, NOW).slice(0, streamed));
+    let streamed = visibleEvents(run, NOW).length;
+    const events = runEvents(run.id, () => visibleEvents(run, NOW).slice(0, streamed));
 
     await pick(user, "Send approval");
     const form = await screen.findByRole("form", { name: "Send approval" });
@@ -60,12 +60,12 @@ describe("the run's controls", () => {
     expect(new Set(keys).size).toBe(1);
     expect(await sent[2]?.body).toBe('{"close":true}');
 
-    // "Sent", beside the menu, until the run's journal says it received it.
+    // "Sent", beside the menu, until the run's history says it received it.
     const note = () => screen.getByRole("status", { name: "" });
     await waitFor(() => expect(note()).toHaveTextContent("Signal approval sent"));
-    const received = visibleEntries(run, NOW).slice(streamed);
+    const received = visibleEvents(run, NOW).slice(streamed);
     expect(received.map((e) => e.event.type)).toContain("signal_received");
-    for (const entry of received) events.send(entry);
+    for (const event of received) events.send(event);
     streamed += received.length;
     await waitFor(() => expect(note()).toHaveTextContent(""));
 
@@ -121,7 +121,7 @@ describe("the run's controls", () => {
     const world = signedIn("grace@example.net", undefined, { now: NOW });
     const run = waitingRun(world);
     const grants = world.access.grants.get("org_01ACME");
-    const key = "user:user_01GRACE";
+    const key = "member:user_01GRACE";
     const grant = grants?.get(key);
     if (!grants || !grant) throw new Error("no grant for Grace");
     grants.set(key, { ...grant, role: "reader" });

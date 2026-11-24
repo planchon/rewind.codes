@@ -1,17 +1,16 @@
 // The frame of the app (archi/05, "One sidebar"): a sidebar with the organization picker and Find
 // at its top, the views or the page's own sidebar below, the account at its bottom; the page on
-// the right. The query (`q`) follows the reader from the Overview to Observability.
+// the right. The query (`q`) follows the reader from the Overview to Runs.
 import {
+  Activity,
   ChevronLeft,
   ChevronRight,
-  Eye,
-  FileCode,
-  FlaskConical,
   LayoutGrid,
   LockKeyhole,
   Search,
   Users,
-  Wrench,
+  Workflow,
+  Zap,
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
@@ -20,16 +19,16 @@ import { useAccess } from "../state/access";
 import { useSession } from "../state/session";
 import { AccountMenu, OrganizationSwitcher, useServerLine } from "./AccountMenus";
 import { FindDialog, useFindShortcut } from "./Find";
+import { isRunsView } from "./runLinks";
 import { SidebarResizer, useFoldShortcut } from "./SidebarResizer";
 import { SidebarProvider, useSidebar } from "./sidebar";
 
 /**
  * The query (`q`) and the window (`window`) of the views that take them: they follow the reader
- * from the Overview to Observability and back.
+ * from the Overview to Runs and back.
  */
 function carried(pathname: string, search: string): { q: string; extra: Record<string, string> } {
-  if (pathname !== "/overview" && !pathname.startsWith("/observability"))
-    return { q: "", extra: {} };
+  if (pathname !== "/overview" && !isRunsView(pathname)) return { q: "", extra: {} };
   const params = new URLSearchParams(search);
   const win = params.get("window");
   return { q: params.get("q") ?? "", extra: win ? { window: win } : {} };
@@ -81,7 +80,7 @@ function MainNav() {
   const { pane, setShowViews } = useSidebar();
   const reads = access.can("runs:read");
   const { q, extra } = carried(pathname, search);
-  const inObservability = pathname.startsWith("/observability") || pathname.startsWith("/runs/");
+  const inRuns = pathname === "/runs" || pathname.startsWith("/runs/");
   const reopen = pane ? () => setShowViews(false) : undefined;
   return (
     <div className="nav">
@@ -96,40 +95,29 @@ function MainNav() {
             />
           )}
           <NavItem
-            to={queryLink("/observability", q, extra)}
-            icon={<Eye size={16} />}
-            label="Observability"
-            current={inObservability}
+            to={queryLink("/runs", q, extra)}
+            icon={<Activity size={16} />}
+            label="Runs"
+            current={inRuns}
             opensSidebar
             {...(reopen ? { onReopen: reopen } : {})}
           />
-          {access.statistics && (
-            <NavItem
-              to="/scripts"
-              icon={<FileCode size={16} />}
-              label="Scripts"
-              current={pathname.startsWith("/scripts")}
-            />
-          )}
+          <NavItem
+            to="/workflows"
+            icon={<Workflow size={16} />}
+            label="Workflows"
+            current={pathname.startsWith("/workflows")}
+            {...(reopen && pathname.startsWith("/workflows/") ? { onReopen: reopen } : {})}
+          />
         </>
-      )}
-      {access.can("toolsets:read") && (
-        <NavItem
-          to="/testing"
-          icon={<FlaskConical size={16} />}
-          label="Testing"
-          current={pathname.startsWith("/testing")}
-          opensSidebar
-          {...(reopen ? { onReopen: reopen } : {})}
-        />
       )}
       {/* Statistics need `runs:read`, and a grant not limited to labels. */}
       {access.statistics && (
         <NavItem
-          to="/tools"
-          icon={<Wrench size={16} />}
-          label="Tools"
-          current={pathname.startsWith("/tools")}
+          to="/actions"
+          icon={<Zap size={16} />}
+          label="Actions"
+          current={pathname.startsWith("/actions")}
         />
       )}
       {access.can("namespaces:read") && (
@@ -159,7 +147,7 @@ function Sidebar({ onFind }: { onFind: () => void }) {
   const { phase } = useSession();
   const server = useServerLine();
   const paneShown = pane !== null && !showViews;
-  const member = phase.kind === "member" ? phase.state.user : null;
+  const member = phase.kind === "member" ? phase.state.person : null;
   return (
     <aside className="sidebar" aria-label="Sidebar">
       <div className="sidebar-head">

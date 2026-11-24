@@ -65,7 +65,12 @@ describe("secrets", () => {
     };
     expect(stopsNothing(usage)).toBe(true);
     expect(
-      stopsNothing({ ...usage, workflows: [{ name: "triage", version: "v", servers: [] }] }),
+      stopsNothing({
+        ...usage,
+        workflows: [
+          { workflow: "wf_7k2m9q4x8d1c", name: "triage", version: 1, digest: "d", servers: [] },
+        ],
+      }),
     ).toBe(false);
   });
 });

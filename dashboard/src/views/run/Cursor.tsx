@@ -1,7 +1,7 @@
 // The time cursor of the Run page (archi/05-testing-and-observability.md, "Dashboard"): the
 // steps of the history, which one the page shows (`?step=`, the head when absent), the bar that
 // moves it, the panel of what the step did, the values a hover shows and the watches. Only values
-// that crossed the journal are known: what the script computes in between is not recorded.
+// that crossed the history are known: what the code computes in between is not recorded.
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
@@ -23,19 +23,19 @@ import {
   stepFromParam,
   stepOf,
 } from "../../model/steps";
-import type { Entry, Payload } from "../../model/types";
+import type { HistoryEvent, Payload } from "../../model/types";
 import { usePayloadValue } from "../../state/runs";
 import { ENDED } from "./RunEnd";
 import type { BindingTarget, Target } from "./targets";
 
 export interface TimeCursor {
   steps: Step[];
-  /** The step shown, from 0; -1 before the first entry. */
+  /** The step shown, from 0; -1 before the first event. */
   n: number;
   /** The cursor follows the head: no `?step=`. */
   atHead: boolean;
   step: Step | null;
-  /** The last entry the cursor includes. */
+  /** The last event the cursor includes. */
   cursor: number;
   every: boolean;
   setEvery: (every: boolean) => void;
@@ -43,7 +43,7 @@ export interface TimeCursor {
   move: (by: 1 | -1) => void;
 }
 
-export function useTimeCursor(entries: readonly Entry[]): TimeCursor {
+export function useTimeCursor(entries: readonly HistoryEvent[]): TimeCursor {
   const [params, setParams] = useSearchParams();
   const steps = useMemo(() => buildSteps(entries), [entries]);
   const head = steps.length - 1;
@@ -137,7 +137,7 @@ export function CursorBar({
         <span className="cursor-when num">
           {formatTime(step.at, zone)}
           {zone === "utc" ? " UTC" : ""}
-          {t0 !== null ? ` · ${formatOffset(step.at - t0)}` : ""} · entries {step.first}
+          {t0 !== null ? ` · ${formatOffset(step.at - t0)}` : ""} · events {step.first}
           {step.last > step.first ? `–${step.last}` : ""}
         </span>
       </div>
@@ -254,7 +254,7 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-/** A payload's value, or its field: inline, or read on demand when the entry left it out. */
+/** A payload's value, or its field: inline, or read on demand when the event left it out. */
 export function PayloadValue({
   payload,
   path = null,
@@ -291,7 +291,7 @@ export function PayloadValue({
   );
 }
 
-/** "step 4", from an entry. */
+/** "step 4", from an event. */
 function stepWord(steps: readonly Step[], idx: number): string {
   return `step ${stepOf(steps, idx) + 1}`;
 }
@@ -304,7 +304,7 @@ function StatePill({ a, cursor }: { a: Activity; cursor: number }) {
     word = "not yet";
     tone = "future";
   } else if (state === "open") {
-    word = a.kind === "tool_call" ? "in flight" : a.kind === "timer" ? "pending" : "waiting";
+    word = a.kind === "call" ? "in flight" : a.kind === "timer" ? "pending" : "waiting";
     tone = "open";
   } else if (a.kind === "log") {
     word = "done";
@@ -326,8 +326,8 @@ function StatePill({ a, cursor }: { a: Activity; cursor: number }) {
 
 function activityName(a: Activity): string {
   switch (a.kind) {
-    case "tool_call":
-      return `#${a.seq} ${a.tool}`;
+    case "call":
+      return `#${a.seq} ${a.action}`;
     case "timer":
       return `sleep ${formatDuration(a.durationMs)} · timer #${a.seq}`;
     case "signal":
@@ -360,7 +360,7 @@ function ActivityAt({
   let input: ReactNode = null;
   let output: ReactNode;
   switch (a.kind) {
-    case "tool_call":
+    case "call":
       input = <PayloadValue payload={a.args} runId={runId} />;
       if (state === "future")
         output = <p className="meta">Not called yet: it is called in {stepWord(steps, a.idx)}.</p>;
@@ -395,7 +395,7 @@ function ActivityAt({
     case "signal":
       input = (
         <p className="meta">
-          {a.timeoutAt !== null ? `timeout: gives up ${time(a.timeoutAt)}` : "no timeout"}
+          {a.timeoutAt !== null ? `times out ${time(a.timeoutAt)}` : "no timeout"}
         </p>
       );
       if (state === "future")
@@ -404,7 +404,7 @@ function ActivityAt({
         output = (
           <p className="meta">
             Waiting since {stepWord(steps, a.idx)}
-            {a.timeoutAt !== null ? `; gives up ${time(a.timeoutAt)} and returns undefined` : ""}.
+            {a.timeoutAt !== null ? `; times out ${time(a.timeoutAt)} and returns undefined` : ""}.
           </p>
         );
       else if (a.end?.outcome === "received")
@@ -468,11 +468,11 @@ function BindingValue({
   }
   const field = target.path === null ? null : target.path;
   let value: ReactNode;
-  if (latest.kind === "tool_call" && latest.end?.outcome === "ok")
+  if (latest.kind === "call" && latest.end?.outcome === "ok")
     value = (
       <PayloadValue payload={latest.end.result} path={field} runId={runId} compact={compact} />
     );
-  else if (latest.kind === "tool_call" && latest.end?.outcome === "failed")
+  else if (latest.kind === "call" && latest.end?.outcome === "failed")
     value = (
       <span className="meta tone-critical">
         the await threw {latest.end.error.kind}: {latest.end.error.message}
@@ -501,8 +501,8 @@ function bindingSource(target: BindingTarget): string {
   const a = target.call.activities[0];
   const of = !a
     ? "its call"
-    : a.kind === "tool_call"
-      ? `#${a.seq} ${a.tool}`
+    : a.kind === "call"
+      ? `#${a.seq} ${a.action}`
       : a.kind === "signal"
         ? `signal "${a.name}"`
         : "the call";
@@ -562,8 +562,8 @@ export function TargetDetail({ target, ctx }: { target: Target; ctx: ValueContex
     <>
       {acts.length > 1 && (
         <p className="meta">
-          {acts.length} {acts[0]?.kind === "tool_call" ? "calls" : "activities"} from this line (a
-          loop or a fan-out):
+          {acts.length} {acts[0]?.kind === "call" ? "calls" : "activities"} from this line (a loop
+          or a fan-out):
         </p>
       )}
       {shown.map((a) => (
@@ -613,7 +613,7 @@ function WatchValue({ target, ctx }: { target: Target; ctx: ValueContext }) {
     <span className="watch-calls">
       {target.activities.slice(0, 4).map((a) => (
         <span key={a.idx} className="watch-call">
-          <span className="muted mono">{a.kind === "tool_call" ? `#${a.seq}` : a.kind}</span>{" "}
+          <span className="muted mono">{a.kind === "call" ? `#${a.seq}` : a.kind}</span>{" "}
           <CallOutcome a={a} ctx={ctx} />
         </span>
       ))}
@@ -628,10 +628,10 @@ function CallOutcome({ a, ctx }: { a: Activity; ctx: ValueContext }) {
   const state = stateAt(a, ctx.cursor);
   if (state === "future") return <span className="meta">not yet</span>;
   if (state === "open")
-    return <span className="meta">{a.kind === "tool_call" ? "in flight" : "waiting"}</span>;
-  if (a.kind === "tool_call" && a.end?.outcome === "ok")
+    return <span className="meta">{a.kind === "call" ? "in flight" : "waiting"}</span>;
+  if (a.kind === "call" && a.end?.outcome === "ok")
     return <PayloadValue payload={a.end.result} runId={ctx.runId} compact />;
-  if (a.kind === "tool_call" && a.end?.outcome === "failed")
+  if (a.kind === "call" && a.end?.outcome === "failed")
     return <span className="meta tone-critical">{a.end.error.kind}</span>;
   if (a.kind === "signal" && a.end?.outcome === "received")
     return <PayloadValue payload={a.end.payload} runId={ctx.runId} compact />;
@@ -688,7 +688,7 @@ export function StepPanel({
   ctx,
   onUnwatch,
   onSelectLine,
-  onSelectEntry,
+  onSelectEvent,
 }: {
   cursor: TimeCursor;
   model: RunModel;
@@ -697,7 +697,7 @@ export function StepPanel({
   ctx: ValueContext;
   onUnwatch: (key: string) => void;
   onSelectLine: (line: number) => void;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
 }) {
   const { zone } = useSettings();
   const step = cursor.step;
@@ -726,24 +726,24 @@ export function StepPanel({
         </>
       );
       break;
-    case "tool_call_completed": {
+    case "call_completed": {
       const a = model.byIdx.get(step.first);
       woke = (
         <>
           <b className="mono">
-            #{e.seq} {a?.kind === "tool_call" ? a.tool : ""}
+            #{e.seq} {a?.kind === "call" ? a.action : ""}
           </b>{" "}
           returned <PayloadValue payload={e.result} runId={ctx.runId} compact />
         </>
       );
       break;
     }
-    case "tool_call_failed": {
+    case "call_failed": {
       const a = model.byIdx.get(step.first);
       woke = (
         <span className="tone-critical">
           <b className="mono">
-            #{e.seq} {a?.kind === "tool_call" ? a.tool : ""}
+            #{e.seq} {a?.kind === "call" ? a.action : ""}
           </b>{" "}
           failed: <span className="mono">{e.error.kind}</span>, {e.error.message}
         </span>
@@ -795,16 +795,16 @@ export function StepPanel({
     const key = entry.idx;
     const a = model.byIdx.get(entry.idx);
     switch (ev.type) {
-      case "schedule_tool_call":
+      case "schedule_call":
         return (
           <li key={key}>
             <span className="mk issued">{rank(entry.idx)}</span> called{" "}
             <button
               type="button"
               className="link-btn mono"
-              onClick={() => onSelectEntry(entry.idx)}
+              onClick={() => onSelectEvent(entry.idx)}
             >
-              #{ev.seq} {ev.tool}
+              #{ev.seq} {ev.action}
             </button>
             {line(ev.callsite?.line)}
           </li>
@@ -867,7 +867,7 @@ export function StepPanel({
           <li key={key} className="step-end">
             <EndGlyph kind="aborted" size={13} />
             <span>
-              was aborted by the host:{" "}
+              was aborted by the engine:{" "}
               <code className="err-name end-aborted">{ev.reason.kind}</code> {ev.reason.message}
             </span>
           </li>
@@ -887,10 +887,10 @@ export function StepPanel({
   const paused = open.map((a) => (
     <li key={a.idx}>
       <span className="mk paused">‖</span>
-      {a.kind === "tool_call" ? (
+      {a.kind === "call" ? (
         <>
           <span className="mono">
-            #{a.seq} {a.tool}
+            #{a.seq} {a.action}
           </span>
           , in flight
         </>
@@ -899,7 +899,7 @@ export function StepPanel({
       ) : a.kind === "signal" ? (
         <>
           signal <span className="mono">"{a.name}"</span>
-          {a.timeoutAt !== null ? `, gives up ${time(a.timeoutAt)}` : ", no timeout"}
+          {a.timeoutAt !== null ? `, times out ${time(a.timeoutAt)}` : ", no timeout"}
         </>
       ) : null}
       {line(a.callsite?.line)}
@@ -936,7 +936,7 @@ export function StepPanel({
               did
             ) : (
               <li className="muted">
-                Nothing: the script still waits
+                Nothing: its code still waits
                 {open.length > 0 ? ` for ${open.map((a) => activityName(a)).join(", ")}` : ""}.
               </li>
             )}
@@ -989,8 +989,8 @@ export function StepPanel({
             </ul>
           )}
           <p className="muted limit-note">
-            Only values that crossed the journal are known: inputs, results, signals, and the
-            variables bound to an awaited call. What the script computes in between is not recorded.
+            Only values that crossed the history are known: inputs, results, signals, and the
+            variables bound to an awaited call. What the code computes in between is not recorded.
           </p>
         </div>
       </div>

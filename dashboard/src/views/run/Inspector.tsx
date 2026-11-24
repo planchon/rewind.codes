@@ -1,4 +1,4 @@
-// The details of what is selected: a tool call, a timer, a signal wait, a log, a journal entry or
+// The details of what is selected: a call, a timer, a signal wait, a log, an event of the history or
 // a source line; the run's input and output when nothing is.
 import { X } from "lucide-react";
 import { useState } from "react";
@@ -10,7 +10,7 @@ import { formatDuration, formatOffset } from "../../model/format";
 import { fieldTerm, queryLink } from "../../model/query";
 import type { Activity, RunModel } from "../../model/run";
 import { type Step, stepOf } from "../../model/steps";
-import type { Entry, Payload, Run } from "../../model/types";
+import type { HistoryEvent, Payload, Run } from "../../model/types";
 import {
   endedRunOf,
   readRunEnd,
@@ -18,16 +18,16 @@ import {
   startedRunOf,
   workflowCallOf,
 } from "../../model/workflows";
-import { useRunEntry } from "../../state/runs";
-import { activityOutcome, activityTitle, entrySummary } from "./describe";
+import { useRunEvent } from "../../state/runs";
+import { activityOutcome, activityTitle, eventSummary } from "./describe";
 
-export type Selection = { kind: "entry"; idx: number } | { kind: "line"; line: number } | null;
+export type Selection = { kind: "event"; idx: number } | { kind: "line"; line: number } | null;
 
 interface InspectorProps {
   run: Run;
   model: RunModel;
   selection: Selection;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
   onSelectLine: (line: number) => void;
   onClear: () => void;
   /** The steps of the time cursor, to move it to an activity's start or end. */
@@ -44,9 +44,9 @@ function At({ ms, t0 }: { ms: number; t0: number | null }) {
   );
 }
 
-function RawEntry({ runId, idx }: { runId: string; idx: number }) {
+function RawEvent({ runId, idx }: { runId: string; idx: number }) {
   const [open, setOpen] = useState(false);
-  const entry = useRunEntry(runId, idx, open);
+  const event = useRunEvent(runId, idx, open);
   return (
     <div className="raw-entry">
       <button
@@ -55,16 +55,16 @@ function RawEntry({ runId, idx }: { runId: string; idx: number }) {
         onClick={() => setOpen(!open)}
         aria-expanded={open}
       >
-        entry #{idx} {open ? "▾" : "▸"}
+        event #{idx} {open ? "▾" : "▸"}
       </button>
       {open &&
-        (entry.isPending ? (
+        (event.isPending ? (
           <span className="spinner" />
-        ) : entry.isError ? (
-          <ProblemView error={entry.error} title="The entry could not be read" />
+        ) : event.isError ? (
+          <ProblemView error={event.error} title="The event could not be read" />
         ) : (
           <div className="payload-body">
-            <JsonBox name={`entry #${idx}`} value={entry.data} />
+            <JsonBox name={`event #${idx}`} value={event.data} />
           </div>
         ))}
     </div>
@@ -135,7 +135,7 @@ function ActivityDetail({
   run,
   model,
   activity,
-  onSelectEntry,
+  onSelectEvent,
   onSelectLine,
   steps,
   onGoStep,
@@ -143,7 +143,7 @@ function ActivityDetail({
   run: Run;
   model: RunModel;
   activity: Activity;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
   onSelectLine: (line: number) => void;
   steps?: readonly Step[] | undefined;
   onGoStep?: ((n: number) => void) | undefined;
@@ -151,14 +151,14 @@ function ActivityDetail({
   const t0 = model.firstAt;
   const a = activity;
   const outcome = activityOutcome(a, model.end !== null);
-  const workflowCall = a.kind === "tool_call" ? workflowCallOf(a.tool) : null;
-  const startedRun = a.kind === "tool_call" ? startedRunOf(a) : null;
+  const workflowCall = a.kind === "call" ? workflowCallOf(a.action) : null;
+  const startedRun = a.kind === "call" ? startedRunOf(a) : null;
   const signalTarget =
-    a.kind === "tool_call" && workflowCall?.op === "signal" ? signalTargetOf(a.args) : null;
+    a.kind === "call" && workflowCall?.op === "signal" ? signalTargetOf(a.args) : null;
   const endedRun = a.kind === "signal" ? endedRunOf(a.name) : null;
   const waiting =
-    a.kind === "tool_call"
-      ? run.waitingFor?.find((w) => w.kind === "tool_call" && w.seq === a.seq)
+    a.kind === "call"
+      ? run.waitingFor?.find((w) => w.kind === "call" && w.seq === a.seq)
       : undefined;
   const line = a.callsite ? (
     <button
@@ -166,7 +166,7 @@ function ActivityDetail({
       className="link-btn mono"
       onClick={() => a.callsite && onSelectLine(a.callsite.line)}
     >
-      script.ts:{a.callsite.line}:{a.callsite.column}
+      workflow.ts:{a.callsite.line}:{a.callsite.column}
     </button>
   ) : (
     <span className="muted">no callsite</span>
@@ -181,22 +181,22 @@ function ActivityDetail({
       <dl className="kv">
         <dt>line</dt>
         <dd>{line}</dd>
-        {a.kind === "tool_call" && (
+        {a.kind === "call" && (
           <>
-            <dt>tool</dt>
+            <dt>action</dt>
             <dd>
               <Link
-                to={queryLink("/observability", fieldTerm("tool", a.tool))}
+                to={queryLink("/runs", fieldTerm("action", a.action))}
                 className="mono"
-                title="Runs that called this tool"
+                title="Runs that called this action"
               >
-                {a.tool}
+                {a.action}
               </Link>
             </dd>
           </>
         )}
         <dt>
-          {a.kind === "tool_call"
+          {a.kind === "call"
             ? "scheduled"
             : a.kind === "signal"
               ? "awaited"
@@ -246,7 +246,7 @@ function ActivityDetail({
         )}
         {a.kind === "signal" && a.timeoutAt !== null && (
           <>
-            <dt>gives up at</dt>
+            <dt>times out at</dt>
             <dd>
               <At ms={a.timeoutAt} t0={t0} />
             </dd>
@@ -274,14 +274,14 @@ function ActivityDetail({
             <dd className="num">{formatDuration(a.end.at - a.at)}</dd>
           </>
         )}
-        {waiting?.kind === "tool_call" && (
+        {waiting?.kind === "call" && (
           <>
-            <dt>task</dt>
+            <dt>state</dt>
             <dd>
               <span className="mono">{waiting.state}</span>
               {waiting.parked && <span className="mono"> · {waiting.parked}</span>}
-              {waiting.attempt > 1 && <span> · attempt {waiting.attempt}</span>}
-              <span className="muted mono"> · {waiting.taskId}</span>
+              {waiting.delivery > 1 && <span> · delivery {waiting.delivery}</span>}
+              <span className="muted mono"> · {waiting.callId}</span>
             </dd>
           </>
         )}
@@ -292,9 +292,9 @@ function ActivityDetail({
               <button
                 type="button"
                 className="link-btn"
-                onClick={() => a.timeoutOf !== null && onSelectEntry(a.timeoutOf)}
+                onClick={() => a.timeoutOf !== null && onSelectEvent(a.timeoutOf)}
               >
-                the signal wait at entry #{a.timeoutOf}
+                the signal wait at event #{a.timeoutOf}
               </button>
             </dd>
           </>
@@ -302,22 +302,22 @@ function ActivityDetail({
         {a.kind === "signal" && a.end?.outcome === "received" && a.end.buffered && (
           <>
             <dt>mailbox</dt>
-            <dd>The signal arrived before the script waited for it.</dd>
+            <dd>The signal arrived before its code waited for it.</dd>
           </>
         )}
         {steps && onGoStep && <StepLinks activity={a} steps={steps} onGoStep={onGoStep} />}
-        <dt>entries</dt>
+        <dt>events</dt>
         <dd className="entry-links">
-          <RawEntry runId={run.id} idx={a.idx} />
-          {a.kind !== "log" && a.end && <RawEntry runId={run.id} idx={a.end.idx} />}
+          <RawEvent runId={run.id} idx={a.idx} />
+          {a.kind !== "log" && a.end && <RawEvent runId={run.id} idx={a.end.idx} />}
         </dd>
       </dl>
       {a.kind === "log" && <pre className="log-message">{a.message}</pre>}
-      {a.kind === "tool_call" && <PayloadView runId={run.id} name="args" payload={a.args} />}
-      {a.kind === "tool_call" && a.end?.outcome === "ok" && (
+      {a.kind === "call" && <PayloadView runId={run.id} name="args" payload={a.args} />}
+      {a.kind === "call" && a.end?.outcome === "ok" && (
         <PayloadView runId={run.id} name="result" payload={a.end.result} />
       )}
-      {a.kind === "tool_call" && a.end?.outcome === "failed" && (
+      {a.kind === "call" && a.end?.outcome === "failed" && (
         <section className="failure">
           <h4>
             <span className="mono">{a.end.error.kind}</span>: {a.end.error.message}
@@ -340,7 +340,7 @@ function ActivityDetail({
   );
 }
 
-function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: Entry }) {
+function EventDetail({ run, model, entry }: { run: Run; model: RunModel; entry: HistoryEvent }) {
   const e = entry.event;
   const endedRun = e.type === "signal_received" ? endedRunOf(e.name) : null;
   return (
@@ -354,14 +354,14 @@ function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: 
         <dd>
           <At ms={Date.parse(entry.recordedAt)} t0={model.firstAt} />
         </dd>
-        <dt>event</dt>
-        <dd>{entrySummary(entry)}</dd>
+        <dt>what</dt>
+        <dd>{eventSummary(entry)}</dd>
         {endedRun !== null && e.type === "signal_received" && (
           <RunEndRows runId={endedRun} payload={e.payload} />
         )}
-        <dt>entry</dt>
+        <dt>event</dt>
         <dd>
-          <RawEntry runId={run.id} idx={entry.idx} />
+          <RawEvent runId={run.id} idx={entry.idx} />
         </dd>
       </dl>
       {e.type === "run_started" && <PayloadView runId={run.id} name="input" payload={e.input} />}
@@ -381,17 +381,17 @@ function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: 
 function LineDetail({
   model,
   line,
-  onSelectEntry,
+  onSelectEvent,
 }: {
   model: RunModel;
   line: number;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
 }) {
   const activities = model.byLine.get(line) ?? [];
   return (
     <div className="inspector-body">
       <div className="inspector-title">
-        <h3 className="mono">script.ts:{line}</h3>
+        <h3 className="mono">workflow.ts:{line}</h3>
         <span className="muted">
           {activities.length === 0 ? "nothing recorded" : `${activities.length} recorded`}
         </span>
@@ -400,7 +400,7 @@ function LineDetail({
         <ul className="line-list">
           {activities.map((a) => (
             <li key={a.idx}>
-              <button type="button" className="line-item" onClick={() => onSelectEntry(a.idx)}>
+              <button type="button" className="line-item" onClick={() => onSelectEvent(a.idx)}>
                 {a.kind === "log" ? (
                   <span className={`log-level level-${a.level}`}>{a.level}</span>
                 ) : (
@@ -423,7 +423,7 @@ function Overview({ run }: { run: Run }) {
   return (
     <div className="inspector-body">
       <p className="muted" style={{ margin: 0 }}>
-        Select a line, a note beside it, a span of the timeline or a journal entry.
+        Select a line, a note beside it, a span of the timeline or an event of the history.
       </p>
       {run.input && <PayloadView runId={run.id} name="input" payload={run.input} />}
       {run.output && <PayloadView runId={run.id} name="output" payload={run.output} />}
@@ -435,7 +435,7 @@ export function Inspector({
   run,
   model,
   selection,
-  onSelectEntry,
+  onSelectEvent,
   onSelectLine,
   onClear,
   steps,
@@ -445,14 +445,14 @@ export function Inspector({
   let title = "Run";
   if (selection?.kind === "line") {
     title = "Line";
-    body = <LineDetail model={model} line={selection.line} onSelectEntry={onSelectEntry} />;
-  } else if (selection?.kind === "entry") {
+    body = <LineDetail model={model} line={selection.line} onSelectEvent={onSelectEvent} />;
+  } else if (selection?.kind === "event") {
     const activity = model.byIdx.get(selection.idx);
     const entry = model.entries[selection.idx];
     if (activity) {
       title =
-        activity.kind === "tool_call"
-          ? "Tool call"
+        activity.kind === "call"
+          ? "Call"
           : activity.kind === "timer"
             ? "Timer"
             : activity.kind === "signal"
@@ -465,17 +465,17 @@ export function Inspector({
           run={run}
           model={model}
           activity={activity}
-          onSelectEntry={onSelectEntry}
+          onSelectEvent={onSelectEvent}
           onSelectLine={onSelectLine}
           steps={steps}
           onGoStep={onGoStep}
         />
       );
     } else if (entry) {
-      title = "Entry";
-      body = <EntryDetail run={run} model={model} entry={entry} />;
+      title = "Event";
+      body = <EventDetail run={run} model={model} entry={entry} />;
     } else {
-      body = <p className="muted inspector-body">Entry #{selection.idx} has not arrived yet.</p>;
+      body = <p className="muted inspector-body">Event #{selection.idx} has not arrived yet.</p>;
     }
   }
   return (

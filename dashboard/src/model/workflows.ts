@@ -1,15 +1,24 @@
-// Workflows across runs, as a run's journal shows them (archi/03-execution.md, "Workflows across
-// runs"): a script starts a run of a workflow with a call of `workflows.<name>.start`, whose
-// result is `{ runId }`, signals a run with `workflows.<name>.signal` (`{ run, name, payload }`),
-// and the end of a run it started comes back as the signal `rewind:ended:<run id>`, whose payload
-// is `{ status, output | error | reason }`.
+// Workflows across runs, as a run's history shows them (archi/03-execution.md, "Workflows across
+// runs"): code starts a run of a workflow with a call of `workflows.<name>.start`, whose result is
+// `{ runId }`, signals a run with `workflows.<name>.signal` (`{ run, name, payload }`), and the end
+// of a run it started comes back as the signal `rewind:ended:<run id>`, whose payload is
+// `{ status, output | error | reason }`.
 //
-// And a workflow's versions, each with its suite (archi/05, "Suites and the gate"): the tests it
-// passed, which it inherited from its parent, added, or updated, and those of the parent it
-// retired, with their reasons.
+// And a workflow (archi/01, "Workflows"): its id, its name or what shows for it without one, its
+// versions numbered from 1, each with the suite it passed: the tests it inherited from its base,
+// added, or replaced, and those of its base it retired, with their reasons.
 
-import type { RunModel, ToolCall } from "./run";
-import type { ExpectedCall, Payload, RetiredTest, ToolRule, ToolRules, Workflow } from "./types";
+import type { Call, RunModel } from "./run";
+import type {
+  ActionRule,
+  ActionRules,
+  CodeComment,
+  ExpectedCall,
+  Payload,
+  RetiredTest,
+  RunWorkflow,
+  WorkflowVersion,
+} from "./types";
 
 /** The prefix of the signals that carry the end of a run. */
 export const ENDED_PREFIX = "rewind:ended:";
@@ -19,18 +28,50 @@ export function endedRunOf(signalName: string): string | null {
   return signalName.startsWith(ENDED_PREFIX) ? signalName.slice(ENDED_PREFIX.length) : null;
 }
 
-/** A call of a workflow's built-in tools, `workflows.<name>.start` or `workflows.<name>.signal`. */
-export function workflowCallOf(tool: string): { workflow: string; op: "start" | "signal" } | null {
-  const match = /^workflows\.(.+)\.(start|signal)$/.exec(tool);
+/** A call of a workflow's built-in actions, `workflows.<name>.start` or `workflows.<name>.signal`. */
+export function workflowCallOf(
+  action: string,
+): { workflow: string; op: "start" | "signal" } | null {
+  const match = /^workflows\.(.+)\.(start|signal)$/.exec(action);
   if (!match?.[1] || !match[2]) return null;
   return { workflow: match[1], op: match[2] as "start" | "signal" };
 }
 
-/** `triage@9f2c4e1a07b3`: a workflow's name and the first 12 hex digits of its version. */
-export function workflowRef(workflow: { name: string; version: string; number?: number }): string {
-  return workflow.number
-    ? `${workflow.name} v${workflow.number}`
-    : `${workflow.name}@${workflow.version.slice(0, 12)}`;
+/** What a workflow shows as, with its id: its name, else its code's first comment line, else its short id. */
+export interface WorkflowNaming {
+  id: string;
+  name?: string | null;
+  shortId?: string;
+  /** The comment at the top of its latest version's code. */
+  comment?: CodeComment | null;
+}
+
+/** `wf-7k2m9q`: how a workflow without a name or a comment shows (`wf_` and its first 6 characters). */
+export function shortIdOf(id: string): string {
+  return `wf-${id.startsWith("wf_") ? id.slice(3, 9) : id.slice(0, 6)}`;
+}
+
+/** How a workflow shows (archi/05, "Names, not ids"). */
+export function workflowLabel(workflow: WorkflowNaming): string {
+  return workflow.name || workflow.comment?.title || workflow.shortId || shortIdOf(workflow.id);
+}
+
+/** Whether a workflow shows by its name, rather than its comment or its short id. */
+export function isNamed(workflow: Pick<WorkflowNaming, "name">): boolean {
+  return Boolean(workflow.name);
+}
+
+/** `triage v12`: a version by its workflow and its number. */
+export function versionLabel(workflow: string, version: number): string {
+  return `${workflow} v${version}`;
+}
+
+/**
+ * `triage v12`: the workflow a run is a run of, and its version. Its name when the run was
+ * created, else `label` (what the workflow shows as now, when known), else its short id.
+ */
+export function workflowRef(workflow: RunWorkflow, label?: string): string {
+  return versionLabel(workflow.name || label || shortIdOf(workflow.id), workflow.version);
 }
 
 /** A payload's value: inline, or read from its preview when it is whole JSON. */
@@ -69,8 +110,8 @@ function isDetached(args: Payload): boolean {
 }
 
 /** The run a `workflows.<name>.start` call started, once it answered. */
-export function startedRunOf(call: ToolCall): string | null {
-  if (workflowCallOf(call.tool)?.op !== "start" || call.end?.outcome !== "ok") return null;
+export function startedRunOf(call: Call): string | null {
+  if (workflowCallOf(call.action)?.op !== "start" || call.end?.outcome !== "ok") return null;
   const runId = field(call.end.result, "runId");
   return typeof runId === "string" ? runId : null;
 }
@@ -88,12 +129,12 @@ export function signalNameOf(args: Payload): string | null {
 }
 
 /**
- * How the script wrote a call: `triage.start(…)`, `run.signal("approval", …)`, or the tool's
+ * How the code wrote a call: `triage.start(…)`, `run.signal("approval", …)`, or the action's
  * own name.
  */
-export function callName(tool: string, args?: Payload): string {
-  const call = workflowCallOf(tool);
-  if (!call) return tool;
+export function callName(action: string, args?: Payload): string {
+  const call = workflowCallOf(action);
+  if (!call) return action;
   if (call.op === "start") return `${call.workflow}.start(…)`;
   const name = args ? signalNameOf(args) : null;
   return name === null ? "run.signal(…)" : `run.signal(${JSON.stringify(name)}, …)`;
@@ -151,12 +192,12 @@ export function readRunEnd(payload: Payload): RunEndInfo {
 export interface StartedRun {
   runId: string;
   workflow: string;
-  call: ToolCall;
+  call: Call;
   detached: boolean;
   end: (RunEndInfo & { idx: number; at: number }) | null;
 }
 
-/** The runs a run started, in the order it started them, from its journal. */
+/** The runs a run started, in the order it started them, from its history. */
 export function startedRuns(model: RunModel): StartedRun[] {
   const ends = new Map<string, RunEndInfo & { idx: number; at: number }>();
   for (const signal of model.received) {
@@ -166,7 +207,7 @@ export function startedRuns(model: RunModel): StartedRun[] {
   }
   const started: StartedRun[] = [];
   for (const call of model.calls) {
-    const workflow = workflowCallOf(call.tool);
+    const workflow = workflowCallOf(call.action);
     const runId = startedRunOf(call);
     if (workflow === null || runId === null) continue;
     started.push({
@@ -184,29 +225,35 @@ export function startedRuns(model: RunModel): StartedRun[] {
 // Versions and suites
 
 /**
- * The version a reference names among a workflow's versions: its digest, or the start of it (its
- * first 12 digits, as `name@<version>` writes it).
+ * The version a reference names among a workflow's versions: its number (`12`, `v12`), or its
+ * digest or the start of it (its first 12 digits, as `triage@<digest>` writes it).
  */
-export function findVersion(versions: readonly Workflow[], ref: string): Workflow | null {
-  const exact = versions.find((v) => v.version === ref);
+export function findVersion(
+  versions: readonly WorkflowVersion[],
+  ref: string,
+): WorkflowVersion | null {
+  // A number is short; a digest, or its start, has 12 digits at least.
+  const number = ref.length < 12 ? /^v?(\d+)$/.exec(ref)?.[1] : undefined;
+  if (number !== undefined) return versions.find((v) => v.version === Number(number)) ?? null;
+  const exact = versions.find((v) => v.digest === ref);
   if (exact) return exact;
   if (ref.length < 12) return null;
-  const matches = versions.filter((v) => v.version.startsWith(ref));
+  const matches = versions.filter((v) => v.digest.startsWith(ref));
   return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 /**
- * Where a test of a version's suite comes from: kept from its parent as it was (`inherited`), new
- * (`added`), or replacing the parent's test of the same name (`updated`). `kept` is a test of a
- * version whose parent is not among the versions read: it was inherited or added.
+ * Where a test of a version's suite comes from: kept from its base as it was (`inherited`), new
+ * (`added`), or replacing the base's test of the same name (`replaced`). `kept` is a test of a
+ * version whose base is not among the versions read: it was inherited or added.
  */
-export type SuiteKind = "inherited" | "added" | "updated" | "kept";
+export type SuiteKind = "inherited" | "added" | "replaced" | "kept";
 
-export interface SuiteEntry {
+export interface SuitePlace {
   name: string;
   digest: string;
   kind: SuiteKind;
-  /** For an updated test: the parent's test it replaced, and why (`null` when none was given). */
+  /** For a replaced test: the base's test it replaced, and why (`null` when none was given). */
   from: string | null;
   reason: string | null;
   /** The run a recorded test was recorded from, read from its name `recorded <run id>`. */
@@ -215,63 +262,69 @@ export interface SuiteEntry {
 
 export interface Suite {
   /** The tests of the version, in its order. */
-  tests: SuiteEntry[];
-  /** The parent's tests it does not keep, with their reasons. */
+  tests: SuitePlace[];
+  /** The base's tests it does not keep, with their reasons. */
   retired: RetiredTest[];
   /** The version it derives from; `null` for a first version, or one not among the versions. */
-  parent: Workflow | null;
-  /** It has a parent that is not among the versions read. */
-  parentMissing: boolean;
+  base: WorkflowVersion | null;
+  /** It has a base that is not among the versions read. */
+  baseMissing: boolean;
 }
 
 const RECORDED = /^recorded ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /**
  * The run a test was recorded from, from its name: recording names a test `recorded <run id>`
- * (archi/05, "Tests recorded from runs"). The test document's `origin` says it for sure.
+ * (archi/05, "Tests recorded from runs"). The test document's `from` says it for sure.
  */
 export function recordedRunOf(name: string): string | null {
   return RECORDED.exec(name)?.[1] ?? null;
 }
 
-/** A version's suite, read against its parent's when the parent is among `versions`. */
-export function suiteOf(version: Workflow, versions: readonly Workflow[]): Suite {
-  const parent = version.parent ? findVersion(versions, version.parent) : null;
-  const parentMissing = Boolean(version.parent) && parent === null;
-  const before = new Map((parent?.tests ?? []).map((t) => [t.name, t.digest]));
-  const updated = new Map((version.updated ?? []).map((u) => [u.name, u]));
-  const tests = (version.tests ?? []).map((test): SuiteEntry => {
+/** A version's suite, read against its base's when the base is among `versions`. */
+export function suiteOf(version: WorkflowVersion, versions: readonly WorkflowVersion[]): Suite {
+  const base = version.base ? findVersion(versions, version.base) : null;
+  const baseMissing = Boolean(version.base) && base === null;
+  const before = new Map((base?.tests ?? []).map((t) => [t.name, t.digest]));
+  const replaced = new Map((version.replaced ?? []).map((r) => [r.name, r]));
+  const tests = (version.tests ?? []).map((test): SuitePlace => {
     const recordedFrom = recordedRunOf(test.name);
-    const update = updated.get(test.name);
-    if (update) {
-      return { ...test, kind: "updated", from: update.from, reason: update.reason, recordedFrom };
+    const replacement = replaced.get(test.name);
+    if (replacement) {
+      return {
+        ...test,
+        kind: "replaced",
+        from: replacement.old,
+        reason: replacement.reason,
+        recordedFrom,
+      };
     }
     const entry = { ...test, from: null, reason: null, recordedFrom };
-    if (!version.parent) return { ...entry, kind: "added" };
-    if (parent === null) return { ...entry, kind: "kept" };
+    if (!version.base) return { ...entry, kind: "added" };
+    if (base === null) return { ...entry, kind: "kept" };
     const old = before.get(test.name);
     if (old === undefined) return { ...entry, kind: "added" };
-    // Replaced without a reason in `updated`: shown as an update all the same.
+    // Replaced without a reason in `replaced`: shown as a replacement all the same.
     return old === test.digest
       ? { ...entry, kind: "inherited" }
-      : { ...entry, kind: "updated", from: old };
+      : { ...entry, kind: "replaced", from: old };
   });
-  return { tests, retired: version.retired ?? [], parent, parentMissing };
+  return { tests, retired: version.retired ?? [], base, baseMissing };
 }
 
-/** A test's place in a version's suite: one of its tests, or one of the parent's it retired. */
+/** A test's place in a version's suite: one of its tests, or one of the base's it retired. */
 export interface TestPlace {
   name: string;
   digest: string;
   kind: SuiteKind | "retired";
-  /** For an updated test: the parent's test it replaced. */
+  /** For a replaced test: the base's test it replaced. */
   from: string | null;
-  /** Why it was updated or retired; `null` when no reason was recorded. */
+  /** Why it was replaced or retired; `null` when no reason was recorded. */
   reason: string | null;
   recordedFrom: string | null;
 }
 
-/** The tests of a suite in the order Testing lists them: its tests, then those it retired. */
+/** The tests of a suite in the order Workflows lists them: its tests, then those it retired. */
 export function suitePlaces(suite: Suite): TestPlace[] {
   return [
     ...suite.tests,
@@ -288,27 +341,27 @@ export function suitePlaces(suite: Suite): TestPlace[] {
   ];
 }
 
-/** Testing's page of a workflow, at a version (its latest when none is named). */
-export function workflowPath(name: string, version?: string | null): string {
-  const path = `/testing/${encodeURIComponent(name)}`;
+/** A workflow's page, by its id, at a version (its latest when none is named). */
+export function workflowPath(id: string, version?: number | null): string {
+  const path = `/workflows/${encodeURIComponent(id)}`;
   return version ? `${path}?version=${version}` : path;
 }
 
-/** Testing's page of a test, in the suite of a version (the latest when none is named). */
-export function testPath(name: string, digest: string, version?: string | null): string {
-  const path = `/testing/${encodeURIComponent(name)}/tests/${digest}`;
+/** A test's page, in the suite of a version of a workflow (the latest when none is named). */
+export function testPath(id: string, digest: string, version?: number | null): string {
+  const path = `/workflows/${encodeURIComponent(id)}/tests/${digest}`;
   return version ? `${path}?version=${version}` : path;
 }
 
 /** How many of each kind a suite has. */
 export function suiteCounts(suite: Suite): Record<SuiteKind | "retired", number> {
-  const counts = { inherited: 0, added: 0, updated: 0, kept: 0, retired: suite.retired.length };
+  const counts = { inherited: 0, added: 0, replaced: 0, kept: 0, retired: suite.retired.length };
   for (const t of suite.tests) counts[t.kind] += 1;
   return counts;
 }
 
-/** A tool's rules, one or several: always a list. */
-export function rulesOf(rules: ToolRules): ToolRule[] {
+/** An action's rules, one or several: always a list. */
+export function rulesOf(rules: ActionRules): ActionRule[] {
   return Array.isArray(rules) ? rules : [rules];
 }
 
@@ -326,16 +379,16 @@ export function expectedTimes(call: ExpectedCall): string {
   return times === 1 ? "exactly once" : `exactly ${times} times`;
 }
 
-/** When a test sends a signal: once the run is blocked (the default), or after a duration. */
+/** When a test sends a signal: once the run waits (the default), or after a duration. */
 export function signalWhen(when: string | null | undefined): string {
-  return !when || when === "blocked" ? "once the run is blocked" : `after ${when}`;
+  return !when || when === "waiting" || when === "blocked" ? "once the run waits" : `after ${when}`;
 }
 
-/** What a cassette holds, in short: how it is matched, its calls by tool, its signals. */
+/** What a cassette holds, in short: how it is matched, its calls by action, its signals. */
 export interface CassetteSummary {
   matching: string | null;
   calls: number;
-  byTool: { tool: string; count: number }[];
+  byAction: { action: string; count: number }[];
   signals: { name: string; at: number | null }[];
 }
 
@@ -352,8 +405,10 @@ export function summarizeCassette(cassette: unknown): CassetteSummary | null {
   const calls = Array.isArray(doc.calls) ? doc.calls : [];
   const counts = new Map<string, number>();
   for (const call of calls) {
-    const tool = asRecord(call)?.tool;
-    const name = typeof tool === "string" ? tool : "?";
+    const record = asRecord(call);
+    // Its action, or its tool in a cassette written before the actions were named.
+    const action = record?.action ?? record?.tool;
+    const name = typeof action === "string" ? action : "?";
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const signals = (Array.isArray(doc.signals) ? doc.signals : []).map((s) => {
@@ -367,9 +422,9 @@ export function summarizeCassette(cassette: unknown): CassetteSummary | null {
   return {
     matching: typeof doc.matching === "string" ? doc.matching : null,
     calls: calls.length,
-    byTool: [...counts]
-      .map(([tool, count]) => ({ tool, count }))
-      .sort((a, b) => b.count - a.count || a.tool.localeCompare(b.tool)),
+    byAction: [...counts]
+      .map(([action, count]) => ({ action, count }))
+      .sort((a, b) => b.count - a.count || a.action.localeCompare(b.action)),
     signals,
   };
 }

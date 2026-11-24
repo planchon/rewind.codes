@@ -18,7 +18,7 @@ const reader: Role = {
   name: "reader",
   builtIn: true,
   description: "",
-  permissions: ["runs:read", "toolsets:read", "subscriptions:read", "members:read", "roles:read"],
+  permissions: ["runs:read", "actions:read", "subscriptions:read", "members:read", "roles:read"],
 };
 
 describe("access", () => {

@@ -57,7 +57,7 @@ export function namespacesOf(world: World, caller: Caller): NamespaceWorld {
   return found;
 }
 
-const COUNTS = ["activeRuns", "runsPerMonth", "scripts", "maxScriptLines"] as const;
+const COUNTS = ["activeRuns", "runsPerMonth", "workflows", "maxCodeLines"] as const;
 const DURATIONS = ["cpuPerMonth", "maxTtl"] as const;
 
 /** Why limits are refused, as the server reads `Quotas` (unknown fields refused), or `null`. */
@@ -90,7 +90,7 @@ function cleanQuotas(value: Quotas | undefined): Quotas {
   ) as Quotas;
 }
 
-const ORDERS: readonly NamespaceOrder[] = ["cpu", "runs", "scripts", "name"];
+const ORDERS: readonly NamespaceOrder[] = ["cpu", "runs", "workflows", "name"];
 
 export function namespaceHandlers(world: World, now: () => number) {
   /** The month of a request (`month`), the current one by default. */
@@ -145,7 +145,7 @@ export function namespaceHandlers(world: World, now: () => number) {
         if (!ns || order === "name") return 0;
         const usage = usageOf(ns, month);
         if (order === "cpu") return durationMs(usage.cpu) ?? 0;
-        return order === "runs" ? usage.runsStarted : usage.scripts;
+        return order === "runs" ? usage.runsStarted : usage.workflows;
       };
       const listed = [...namespaces.namespaces.values()]
         .filter(

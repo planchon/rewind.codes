@@ -107,7 +107,7 @@ export function QueryBar({
   language = RUNS_LANGUAGE,
   onTyping,
   fault = null,
-  placeholder = '@agent:triage status:failed tool:github.* error:timeout "rate limit"',
+  placeholder = '@agent:triage status:failed action:github.* error:timeout "rate limit"',
   children,
 }: QueryBarProps) {
   const [draft, setDraft] = useState(value);

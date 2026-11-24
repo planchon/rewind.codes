@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCRIPTS } from "../mocks/fixtures";
+import { CODES } from "../mocks/fixtures";
 import {
   bindingsOf,
   indexSource,
@@ -9,7 +9,7 @@ import {
   startLine,
 } from "./callsites";
 
-const index = indexSource(SCRIPTS.TRIAGE_WORKFLOW.source);
+const index = indexSource(CODES.TRIAGE_WORKFLOW.source);
 const text = (s: { from: number; to: number }) => index.text.slice(s.from, s.to);
 
 describe("callsites", () => {

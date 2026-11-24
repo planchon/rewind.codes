@@ -188,12 +188,11 @@ describe("the live views", () => {
     stream.open();
     stream.control({ kind: "secret", name: "github" });
     expect([secrets, workflows, alice, search].map((i) => i.reads.length)).toEqual([1, 0, 0, 0]);
-    stream.control({ kind: "workflow", name: "triage", version: "ab" });
+    stream.control({ kind: "workflow", workflow: "wf_7k2m9q4x8d1c" });
     stream.control({ kind: "namespace", name: "bob" });
     expect([secrets, workflows, alice, search].map((i) => i.reads.length)).toEqual([1, 1, 0, 0]);
     stream.control({ kind: "namespace" });
     stream.control({ kind: "namespace", name: "alice" });
-    stream.control({ kind: "script", digest: "cd" });
     stream.control({ kind: "connection", id: "conn_1" });
     expect([secrets, workflows, alice, search].map((i) => i.reads.length)).toEqual([1, 1, 2, 0]);
     expect(counted.controls.map((c) => c.kind)).toEqual([
@@ -202,7 +201,6 @@ describe("the live views", () => {
       "namespace",
       "namespace",
       "namespace",
-      "script",
       "connection",
     ]);
     // A control-plane change moves no count of runs.

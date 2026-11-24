@@ -1,50 +1,65 @@
-// A small world of scripts and runs for the mocked API: every status, a quarantine, a fork, a
-// ten-day sleep, retries, a payload above the inline limit and, for `pnpm dev:mock`, a run that
-// goes on live. Times are relative to `now`. Who may read them is the access world's
-// (`access.ts`): the tenant `local` without WorkOS, the organization Acme with it.
-import type { Labels, Quarantine, Run, Waiting } from "../model/types";
+// A small world of workflows and runs for the mocked API: every status (queued, running, waiting
+// on a signal, a timer, a harness action, an approval, a parked call or a quarantine, and each
+// ending), a fork, a ten-day sleep, redeliveries, a payload above the inline limit and, for
+// `pnpm dev:mock`, a run that goes on live. Times are relative to `now`. Who may read them is the
+// access world's (`access.ts`): the tenant `local` without WorkOS, the organization Acme with it.
+import type { Labels, Quarantine, Run, RunWorkflow, Waiting } from "../model/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
-import { type ConnectionWorld, createConnectionWorld } from "./connections";
-import { ensureHandles, type ScriptTitle } from "./handles";
-import { fakeDigest, JournalBuilder } from "./journal";
+import { ACTION_SETS, type ConnectionWorld, createConnectionWorld } from "./connections";
+import { ensureHandles, originSlug } from "./handles";
+import { fakeDigest, HistoryBuilder } from "./history";
 import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
 import { createSecretWorld, type SecretWorld } from "./secrets";
-import { createWorkflowWorld, type RecordedRun, type WorkflowWorld } from "./workflows";
+import {
+  codeComment,
+  createWorkflowWorld,
+  type RecordedRun,
+  resolveByCode,
+  runWorkflowOf,
+  shortIdOf,
+  type WorkflowWorld,
+  workflowId,
+} from "./workflows";
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-export interface ScriptFixture {
+/** A code of the world: the file it was written as, its digest and its TypeScript source. */
+export interface CodeFixture {
   name: string;
   digest: string;
   source: string;
 }
 
+/** What a call's state is while it waits, when not simply `claimed` by the harness's worker. */
+type CallState = Pick<Extract<Waiting, { kind: "call" }>, "state" | "parked">;
+
 export interface RunFixture {
   id: string;
   /** The end user the run acts for. */
   namespace: string;
-  script: ScriptFixture;
-  toolset: string;
+  code: CodeFixture;
+  actionSet: string;
   labels: Labels;
-  journal: JournalBuilder;
-  parent?: { run: string; at?: number | null };
-  /** For a run of a workflow, the workflow and its version. */
-  workflow?: NonNullable<Run["workflow"]>;
-  /** For a run a script started, that run and the `seq` of its call. */
+  history: HistoryBuilder;
+  /** For a fork, the run it copies and the event it was forked at. */
+  source?: { run: string; at?: number | null };
+  /** The workflow it is a run of, and the version it executes: every run has one. */
+  workflow?: RunWorkflow;
+  /** For a run code started, that run and the `seq` of its call. */
   startedBy?: Omit<NonNullable<Run["startedBy"]>, "handle">;
   quarantine?: Quarantine;
   /** Where `fail_run` happened, for `Run.error.location`. */
   errorAt?: { line: number; column: number };
   /** The `seq` of the call whose failure failed the run. */
   failedSeq?: number;
-  /** States of calls in flight, by `seq`, when they are not simply `claimed`. */
-  taskStates?: Record<number, Pick<Extract<Waiting, { kind: "tool_call" }>, "state" | "parked">>;
-  /** Dispatcher attempts beyond the first, by `seq`. */
-  retries?: Record<number, number>;
-  /** The secrets it attached at start, by server (`ns/github`, `org/slack`). */
+  /** States of calls waiting, by `seq`, when they are not simply `claimed`. */
+  callStates?: Record<number, CallState>;
+  /** Deliveries beyond the first, by `seq`. */
+  redeliveries?: Record<number, number>;
+  /** The secrets it uses, by server (`ns/github`, `org/slack`). */
   secrets?: Record<string, string>;
   /** What ran, the middle of its handle, and the characters of its suffix: given once. */
   origin?: string;
@@ -52,14 +67,14 @@ export interface RunFixture {
 }
 
 /**
- * The secrets a run of this script attaches: each end user's GitHub for triage, the organization's
- * for the digest, the organization's Slack and CRM; `dax` is signed, `llm` and `weather` take none.
+ * The secrets a run of this code uses: each end user's GitHub for triage, the organization's for
+ * the digest, the organization's Slack and CRM; `dax` is signed, `llm` and `weather` take none.
  */
-function attachmentsOf(s: ScriptFixture): Record<string, string> {
-  const imported = /import \{([^}]*)\} from "rewind:tools"/.exec(s.source)?.[1] ?? "";
+function secretsOf(c: { name?: string; source: string }): Record<string, string> {
+  const imported = /import \{([^}]*)\} from "rewind:actions"/.exec(c.source)?.[1] ?? "";
   const servers = new Set(imported.split(",").map((name) => name.trim()));
   const out: Record<string, string> = {};
-  if (servers.has("github")) out.github = s.name.startsWith("digest") ? "org/github" : "ns/github";
+  if (servers.has("github")) out.github = c.name?.startsWith("digest") ? "org/github" : "ns/github";
   if (servers.has("slack")) out.slack = "org/slack";
   if (servers.has("crm")) out.crm = "org/crm";
   return out;
@@ -67,7 +82,7 @@ function attachmentsOf(s: ScriptFixture): Record<string, string> {
 
 export interface World {
   now: number;
-  scripts: ScriptFixture[];
+  codes: CodeFixture[];
   runs: RunFixture[];
   payloads: Map<string, unknown>;
   /** The operator's key: when set, every request must carry a key or an access token. */
@@ -77,23 +92,21 @@ export interface World {
   access: AccessWorld;
   /** The end users of each tenant, their quotas, use and alerts. */
   namespaces: Map<string, NamespaceWorld>;
-  /** The workflows' versions and their suites, and the stored tests: the tenant's. */
+  /** The workflows, their versions and suites, and the stored tests: the tenant's. */
   workflows: WorkflowWorld;
-  /** People's connections, the requests waiting for their consent, the toolsets, `/mcp`. */
+  /** People's connections, the requests waiting for their consent, the action sets, `/mcp`. */
   connections: ConnectionWorld;
   /** The secrets of each tenant, the organization's and its namespaces', and its signing keys. */
   secrets: Map<string, SecretWorld>;
-  /** The titles people gave scripts, by digest. */
-  scriptTitles: Map<string, ScriptTitle>;
 }
 
-function script(name: string, source: string): ScriptFixture {
+function code(name: string, source: string): CodeFixture {
   return { name, source, digest: fakeDigest(source) };
 }
 
-const TRIAGE = script(
+const TRIAGE = code(
   "triage.ts",
-  `import { github, slack } from "rewind:tools";
+  `import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -115,9 +128,9 @@ export default async function main(input: { repo: string }) {
 `,
 );
 
-const TRIAGE_FIXED = script(
+const TRIAGE_FIXED = code(
   "triage.ts",
-  `import { github, slack } from "rewind:tools";
+  `import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -139,9 +152,9 @@ export default async function main(input: { repo: string }) {
 `,
 );
 
-const DIGEST = script(
+const DIGEST = code(
   "digest.ts",
-  `import { github, llm, slack } from "rewind:tools";
+  `import { github, llm, slack } from "rewind:actions";
 
 export default async function main(input: { repos: string[]; channel: string }) {
   const prs = [];
@@ -162,9 +175,9 @@ export default async function main(input: { repos: string[]; channel: string }) 
 `,
 );
 
-const ONBOARDING = script(
+const ONBOARDING = code(
   "onboarding.ts",
-  `import { ask_user, crm } from "rewind:tools";
+  `import { ask_user, crm } from "rewind:actions";
 import { sleep } from "rewind";
 
 export default async function main(input: { email: string }) {
@@ -187,10 +200,10 @@ export default async function main(input: { email: string }) {
 `,
 );
 
-const FORECAST = script(
+const FORECAST = code(
   "forecast.ts",
   `// One-shot lookup started by the support agent.
-import { weather } from "rewind:tools";
+import { weather } from "rewind:actions";
 
 export default async function main(input: { city: string }) {
   const forecast = await weather.forecast({ city: input.city, days: 3 });
@@ -203,9 +216,9 @@ export default async function main(input: { city: string }) {
  * A notifications workflow that never returns: it loops on \`signal("notify")\` (line 25) until
  * its deadline cancels it, as the run 01a1e9ea-…-2f2ec0a9da28 of dev_notifications did.
  */
-const DEV_NOTIFICATIONS = script(
+const DEV_NOTIFICATIONS = code(
   "dev_notifications.ts",
-  `import { dax } from "rewind:tools";
+  `import { dax } from "rewind:actions";
 import { signal } from "rewind";
 
 // The user's notifications for one day: the one door to the lock screen.
@@ -246,10 +259,10 @@ export default async function main({ user, settings }: Input) {
 `,
 );
 
-/** The script of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow. */
-const TRIAGE_WORKFLOW = script(
+/** The code of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow. */
+const TRIAGE_WORKFLOW = code(
   "triage_workflow.ts",
-  `import { github, slack } from "rewind:tools";
+  `import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -270,10 +283,45 @@ export default async function main(input: { repo: string }) {
 `,
 );
 
-/** The script of the workflow `triage`: a run per repository, which the run below starts. */
-const TRIAGE_REPO = script(
+/** The first version of the workflow `triage`: it closed the closed issues too. */
+const TRIAGE_REPO_V1 = code(
   "triage_repo.ts",
-  `import { github } from "rewind:tools";
+  `import { github } from "rewind:actions";
+import { signal } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "all" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+  const { close } = await signal("approval");
+  if (!close) return { closed: 0 };
+  await Promise.all(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+  return { closed: stale.length };
+}
+`,
+);
+
+/** The third version of the workflow `triage`: it says how many issues it found stale. */
+const TRIAGE_REPO_V3 = code(
+  "triage_repo.ts",
+  `import { github } from "rewind:actions";
+import { signal } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+  console.log(\`\${stale.length} of \${issues.length} open issues are stale\`);
+  const { close } = await signal("approval");
+  if (!close) return { closed: 0 };
+  await Promise.all(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+  return { closed: stale.length };
+}
+`,
+);
+
+/** The code of the workflow `triage` at its second version: a run per repository, which the run below starts. */
+const TRIAGE_REPO = code(
+  "triage_repo.ts",
+  `import { github } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -287,8 +335,8 @@ export default async function main(input: { repo: string }) {
 `,
 );
 
-/** A script that starts runs of the workflows `triage` and `digest`, signals them and waits. */
-const TRIAGE_ALL = script(
+/** Code that starts runs of the workflows `triage` and `digest`, signals them and waits. */
+const TRIAGE_ALL = code(
   "triage_all.ts",
   `import { digest, triage } from "rewind:workflows";
 
@@ -302,37 +350,52 @@ export default async function main(input: { repos: string[] }) {
 `,
 );
 
-/** The versions of the workflows the world's runs execute. */
+/** The ids of the world's workflows. */
 export const WORKFLOWS = {
-  triage: { name: "triage", version: fakeDigest("workflow:triage"), number: 2 },
-  digest: { name: "digest", version: fakeDigest("workflow:digest"), number: 1 },
-  devNotifications: {
-    name: "dev_notifications",
-    version: fakeDigest("workflow:dev_notifications"),
-    number: 12,
-  },
+  /** The organization's `triage`, versions 1 to 3. */
+  triage: workflowId("triage"),
+  /** The organization's `digest`, version 1. */
+  digest: workflowId("digest"),
+  /** dana's fork of `triage`, at its version 2. */
+  triageFork: workflowId("triage@dana"),
+  /** The organization's forecast, unnamed: it shows by its code's first comment line. */
+  forecast: workflowId("forecast"),
+  /** The organization's onboarding, unnamed and without a comment: its short id. */
+  onboarding: workflowId("onboarding"),
+  /** chen's daily digest, unnamed and without a comment: its short id. */
+  chenDigest: workflowId("digest@chen"),
+  /** alice's `triage_stale_issues`, versions 1 and 2. */
+  staleIssues: workflowId("triage_stale_issues"),
+  /** alice's run that starts runs of triage and digest, unnamed. */
+  triageAll: workflowId("triage_all@alice"),
+  /** local's run of the e2e corpus's triage_workflow, unnamed. */
+  triageWorkflow: workflowId("triage_workflow@local"),
+  /** Dax's `dev_notifications`, in its end user's namespace. */
+  devNotifications: workflowId("dev_notifications"),
 };
 
-export const SCRIPTS = {
+export const CODES = {
   TRIAGE,
   TRIAGE_FIXED,
   DIGEST,
   ONBOARDING,
   FORECAST,
   TRIAGE_WORKFLOW,
+  TRIAGE_REPO_V1,
   TRIAGE_REPO,
+  TRIAGE_REPO_V3,
   TRIAGE_ALL,
   DEV_NOTIFICATIONS,
 };
 
 /**
- * The journal of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow, started at `start`: 18
- * entries, 8 steps. Its callsites are the ones the runtime recorded.
+ * The history of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow, started at `start`: 18
+ * events, 8 steps. Its callsites are the ones the runtime recorded.
  */
-export function triageWorkflowJournal(start: number, toolset = fakeDigest("toolset:github,slack")) {
+export function triageWorkflowHistory(start: number, actionSet = ACTION_SETS.github) {
   const repo = "acme/api";
-  return new JournalBuilder(start)
-    .started({ script: TRIAGE_WORKFLOW.digest, toolset, input: { repo }, mode: "mock" })
+  return new HistoryBuilder(start)
+    .started({ code: TRIAGE_WORKFLOW.digest, actionSet, input: { repo }, mode: "test" })
     .call(1, "github.list_issues", { repo, state: "open" }, 5, 31)
     .ok(1, [
       { number: 1, updated_at: "2025-10-01T00:00:00Z" },
@@ -365,10 +428,10 @@ export function triageWorkflowJournal(start: number, toolset = fakeDigest("tools
 }
 
 /** The name a callsite points at: the callee's last name (`list_issues` of `github.list_issues`). */
-function calleeNames(event: { type: string; tool?: string; level?: string }): string[] {
+function calleeNames(event: { type: string; action?: string; level?: string }): string[] {
   switch (event.type) {
-    case "schedule_tool_call":
-      return [event.tool?.slice(event.tool.lastIndexOf(".") + 1) ?? ""];
+    case "schedule_call":
+      return [event.action?.slice(event.action.lastIndexOf(".") + 1) ?? ""];
     case "start_timer":
       return ["sleep", "signal"];
     case "signal_awaited":
@@ -385,8 +448,8 @@ function calleeNames(event: { type: string; tool?: string; level?: string }): st
  * only the line: the column of the first name on the line the event could have come from.
  */
 function alignCallsites(fixture: RunFixture) {
-  const lines = fixture.script.source.split("\n");
-  for (const entry of fixture.journal.entries) {
+  const lines = fixture.code.source.split("\n");
+  for (const entry of fixture.history.events) {
     const event = entry.event as {
       type: string;
       callsite?: { line: number; column: number } | null;
@@ -404,12 +467,12 @@ function alignCallsites(fixture: RunFixture) {
   }
 }
 
-const TOOLSET_GITHUB = fakeDigest("toolset:github,slack");
-const TOOLSET_DIGEST = fakeDigest("toolset:github,llm,slack");
-const TOOLSET_CRM = fakeDigest("toolset:ask_user,crm");
-const TOOLSET_WEATHER = fakeDigest("toolset:weather");
-const TOOLSET_WORKFLOWS = fakeDigest("toolset:github,slack+workflows:digest,triage");
-const TOOLSET_DAX = fakeDigest("toolset:dax");
+const SET_GITHUB = ACTION_SETS.github;
+const SET_DIGEST = ACTION_SETS.digest;
+const SET_CRM = ACTION_SETS.crm;
+const SET_WEATHER = ACTION_SETS.weather;
+const SET_WORKFLOWS = ACTION_SETS.workflows;
+const SET_DAX = ACTION_SETS.dax;
 
 /** A deterministic UUID v7 for a run started at `at`. */
 export function runId(at: number, n: number): string {
@@ -440,7 +503,7 @@ function issues(count: number, now: number, pad = 0) {
 
 export interface WorldOptions {
   now: number;
-  /** Adds a run whose entries keep arriving after `now`, for `pnpm dev:mock`. */
+  /** Adds a run whose events keep arriving after `now`, for `pnpm dev:mock`. */
   live?: boolean;
   requireKey?: string | undefined;
   embedded?: boolean;
@@ -473,27 +536,27 @@ export function createWorld(options: WorldOptions): World {
   let n = 0;
   const run = (
     start: number,
-    s: ScriptFixture,
-    toolset: string,
+    c: CodeFixture,
+    actionSet: string,
     labels: Labels,
     input: unknown,
     extra: Partial<RunFixture> = {},
-    mode: "live" | "mock" = "live",
+    mode: "live" | "test" = "live",
   ): RunFixture => {
     n += 1;
-    const journal = new JournalBuilder(start).started({
-      script: s.digest,
-      toolset,
+    const history = new HistoryBuilder(start).started({
+      code: c.digest,
+      actionSet,
       input,
       mode,
     });
     const fixture: RunFixture = {
       id: runId(start, n),
       namespace: namespaceOf(labels, n),
-      script: s,
-      toolset,
+      code: c,
+      actionSet,
       labels,
-      journal,
+      history,
       ...extra,
     };
     runs.push(fixture);
@@ -505,11 +568,11 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 14 * DAY - 3 * HOUR,
       TRIAGE,
-      TOOLSET_GITHUB,
+      SET_GITHUB,
       { agent: "triage", conversation: "c-41", env: "prod" },
       { repo: "acme/api" },
     );
-    const j = r.journal;
+    const j = r.history;
     j.after(40)
       .call(1, "github.list_issues", { repo: "acme/api", state: "open" }, 5)
       .after(310)
@@ -539,7 +602,7 @@ export function createWorld(options: WorldOptions): World {
       .after(260)
       .ok(8, issues(1, now - 4 * DAY))
       .complete({ closed: 3, reopened: 1 });
-    r.retries = { 1: 1 };
+    r.redeliveries = { 1: 1 };
   }
 
   // triage: active, waiting for the approval, with a result above the inline limit.
@@ -547,11 +610,11 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 2 * HOUR - 11 * MINUTE,
       TRIAGE,
-      TOOLSET_GITHUB,
+      SET_GITHUB,
       { agent: "triage", conversation: "c-42", env: "prod" },
       { repo: "acme/web" },
     );
-    r.journal
+    r.history
       .after(35)
       .call(1, "github.list_issues", { repo: "acme/web", state: "open" }, 5)
       .after(1_840)
@@ -568,7 +631,7 @@ export function createWorld(options: WorldOptions): World {
   const failedTriage = run(
     now - 26 * HOUR,
     TRIAGE,
-    TOOLSET_GITHUB,
+    SET_GITHUB,
     { agent: "triage", conversation: "c-39", env: "prod" },
     { repo: "acme/infra" },
     {
@@ -577,7 +640,7 @@ export function createWorld(options: WorldOptions): World {
     },
   );
   {
-    const j = failedTriage.journal;
+    const j = failedTriage.history;
     j.after(30)
       .call(1, "github.list_issues", { repo: "acme/infra", state: "open" }, 5)
       .after(410)
@@ -615,9 +678,9 @@ export function createWorld(options: WorldOptions): World {
       .ok(7, { state: "closed" })
       .ok(8, { state: "closed" })
       .failRun(
-        "ToolError",
+        "ActionError",
         "github.close_issue: Resource not accessible by integration (403)",
-        "ToolError: github.close_issue: Resource not accessible by integration (403)\n    at async Promise.all (index 2)\n    at async main (script.ts:14:3)",
+        "ActionError: github.close_issue: Resource not accessible by integration (403)\n    at async Promise.all (index 2)\n    at async main (workflow.ts:14:3)",
       );
   }
 
@@ -626,14 +689,14 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 25 * HOUR,
       TRIAGE_FIXED,
-      TOOLSET_GITHUB,
+      SET_GITHUB,
       { agent: "triage", conversation: "c-39", env: "prod" },
       { repo: "acme/infra" },
       {
-        parent: { run: failedTriage.id, at: null },
+        source: { run: failedTriage.id, at: null },
       },
     );
-    const j = r.journal;
+    const j = r.history;
     j.after(5)
       .call(1, "github.list_issues", { repo: "acme/infra", state: "open" }, 5)
       .ok(1, issues(12, now - 26 * HOUR))
@@ -672,11 +735,11 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 6 * DAY - 2 * HOUR,
       TRIAGE,
-      TOOLSET_GITHUB,
+      SET_GITHUB,
       { agent: "triage", conversation: "c-40", env: "prod" },
       { repo: "acme/docs" },
     );
-    r.journal
+    r.history
       .after(20)
       .call(1, "github.list_issues", { repo: "acme/docs", state: "open" }, 5)
       .after(220)
@@ -704,11 +767,11 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 3 * DAY - 5 * HOUR,
       DIGEST,
-      TOOLSET_DIGEST,
+      SET_DIGEST,
       { agent: "digest", schedule: "weekly", env: "prod" },
       { repos: ["acme/api", "acme/web", "acme/infra"], channel: "#eng" },
     );
-    const j = r.journal;
+    const j = r.history;
     ["acme/api", "acme/web", "acme/infra"].forEach((repo, i) => {
       j.after(25)
         .call(i + 1, "github.list_pull_requests", { repo, state: "closed", since: "7d" }, 6, 18)
@@ -745,7 +808,7 @@ export function createWorld(options: WorldOptions): World {
       .after(160)
       .ok(5, { ok: true, ts: "1731150000.000900" })
       .complete({ prs: 12, ts: "1731150000.000900" });
-    r.retries = { 4: 2 };
+    r.redeliveries = { 4: 2 };
   }
 
   // digest: aborted by the CPU budget.
@@ -753,11 +816,11 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 10 * DAY,
       DIGEST,
-      TOOLSET_DIGEST,
+      SET_DIGEST,
       { agent: "digest", schedule: "weekly", env: "prod" },
       { repos: ["acme/api", "acme/monorepo"], channel: "#eng" },
     );
-    r.journal
+    r.history
       .after(20)
       .call(
         1,
@@ -784,10 +847,7 @@ export function createWorld(options: WorldOptions): World {
           merged_at: k % 2 ? "2026-11-02T09:00:00Z" : null,
         })),
       )
-      .abort(
-        "limit_exceeded",
-        "The script used more than its CPU budget of 2s in one call (2.31s).",
-      );
+      .abort("limit_exceeded", "The code used more than its CPU budget of 2s in one call (2.31s).");
   }
 
   // digest: failed with a TypeError.
@@ -795,14 +855,14 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 17 * HOUR,
       DIGEST,
-      TOOLSET_DIGEST,
+      SET_DIGEST,
       { agent: "digest", schedule: "adhoc", env: "staging" },
       { repos: ["acme/api"], channel: "#eng-staging" },
       {
         errorAt: { line: 16, column: 75 },
       },
     );
-    r.journal
+    r.history
       .after(20)
       .call(
         1,
@@ -826,7 +886,7 @@ export function createWorld(options: WorldOptions): World {
       .failRun(
         "TypeError",
         "Cannot read properties of undefined (reading 'text')",
-        "TypeError: Cannot read properties of undefined (reading 'text')\n    at main (script.ts:16:75)",
+        "TypeError: Cannot read properties of undefined (reading 'text')\n    at main (workflow.ts:16:75)",
       );
   }
 
@@ -835,18 +895,18 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 9 * HOUR,
       DIGEST,
-      TOOLSET_DIGEST,
+      SET_DIGEST,
       { agent: "digest", schedule: "weekly", env: "prod" },
       { repos: ["acme/web", "acme/api"], channel: "#eng" },
       {
         quarantine: {
           cause: "non_determinism",
           reason:
-            'Replay diverged at entry 3: the script scheduled github.list_pull_requests({"repo":"acme/api",…}) at script.ts:6, where the journal has github.list_pull_requests({"repo":"acme/web",…}).',
+            'Replay diverged at event 3: the code scheduled github.list_pull_requests({"repo":"acme/api",…}) at workflow.ts:6, where the history has github.list_pull_requests({"repo":"acme/web",…}).',
         },
       },
     );
-    r.journal
+    r.history
       .after(20)
       .call(
         1,
@@ -871,12 +931,12 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 4 * DAY - 7 * HOUR,
       ONBOARDING,
-      TOOLSET_CRM,
+      SET_CRM,
       { agent: "support", conversation: "c-77", env: "prod" },
       { email: "lee@example.org" },
       { namespace: "bob" },
     );
-    const j = r.journal;
+    const j = r.history;
     j.after(15)
       .call(1, "crm.find_account", { email: "lee@example.org" }, 5)
       .after(95)
@@ -902,23 +962,23 @@ export function createWorld(options: WorldOptions): World {
       .after(1_420)
       .ok(7, { id: "acct_9f2", plan: "trial", created: true })
       .complete({ id: "acct_9f2", plan: "trial", created: true });
-    r.retries = { 3: 2, 5: 1 };
+    r.redeliveries = { 3: 2, 5: 1 };
   }
 
-  // onboarding: active, its host-tool call waits for the harness's approval.
+  // onboarding: waiting, its harness action's call waits for the harness's approval.
   {
     const r = run(
       now - 47 * MINUTE,
       ONBOARDING,
-      TOOLSET_CRM,
+      SET_CRM,
       { agent: "support", conversation: "c-81", env: "prod" },
       { email: "kim@example.org" },
       {
         namespace: "bob",
-        taskStates: { 2: { state: "approval" } },
+        callStates: { 2: { state: "approval" } },
       },
     );
-    r.journal
+    r.history
       .after(15)
       .call(1, "crm.find_account", { email: "kim@example.org" }, 5)
       .after(88)
@@ -926,17 +986,17 @@ export function createWorld(options: WorldOptions): World {
       .call(2, "ask_user", { question: "No account for kim@example.org. Create one?" }, 7, 26);
   }
 
-  // onboarding: active, its host-tool call claimed by the harness's worker.
+  // onboarding: waiting, its harness action's call claimed by the harness's worker.
   {
     const r = run(
       now - 12 * MINUTE,
       ONBOARDING,
-      TOOLSET_CRM,
+      SET_CRM,
       { agent: "support", conversation: "c-85", env: "prod" },
       { email: "jo@example.org" },
       { namespace: "dana" },
     );
-    r.journal
+    r.history
       .after(15)
       .call(1, "crm.find_account", { email: "jo@example.org" }, 5)
       .after(91)
@@ -944,18 +1004,18 @@ export function createWorld(options: WorldOptions): World {
       .call(2, "ask_user", { question: "No account for jo@example.org. Create one?" }, 7, 26);
   }
 
-  // The run of the e2e corpus's triage_workflow, in mock mode.
+  // The run of the e2e corpus's triage_workflow, a test run.
   {
     const r = run(
       now - 12 * DAY,
       TRIAGE_WORKFLOW,
-      TOOLSET_GITHUB,
+      SET_GITHUB,
       { agent: "triage", conversation: "c-12", env: "test" },
       { repo: "acme/api" },
       {},
-      "mock",
+      "test",
     );
-    r.journal = triageWorkflowJournal(now - 12 * DAY, TOOLSET_GITHUB);
+    r.history = triageWorkflowHistory(now - 12 * DAY, SET_GITHUB);
   }
 
   // onboarding: cancelled while waiting for the user.
@@ -963,7 +1023,7 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       now - 2 * DAY - 3 * HOUR,
       ONBOARDING,
-      TOOLSET_CRM,
+      SET_CRM,
       { agent: "support", conversation: "c-63", env: "prod" },
       { email: "ana@example.org" },
       {
@@ -971,7 +1031,7 @@ export function createWorld(options: WorldOptions): World {
         errorAt: { line: 7, column: 20 },
       },
     );
-    r.journal
+    r.history
       .after(15)
       .call(1, "crm.find_account", { email: "ana@example.org" }, 5)
       .after(102)
@@ -983,19 +1043,19 @@ export function createWorld(options: WorldOptions): World {
       .failRun(
         "CancelledError",
         "The conversation was closed.",
-        "CancelledError: The conversation was closed.\n    at main (script.ts:7:20)",
+        "CancelledError: The conversation was closed.\n    at main (workflow.ts:7:20)",
       );
   }
 
-  // dev_notifications: its script loops on signal("notify") and never returns; its deadline
-  // passed after 11h29m, which cancelled it in the await (no frame of script.ts in the stack).
+  // dev_notifications: its code loops on signal("notify") and never returns; its deadline
+  // passed after 11h29m, which cancelled it in the await (no frame of workflow.ts in the stack).
   {
     const start = now - DAY - 2 * HOUR;
     const ttl = 11 * HOUR + 29 * MINUTE;
     const r = run(
       start,
       DEV_NOTIFICATIONS,
-      TOOLSET_DAX,
+      SET_DAX,
       {
         dax: "iteration",
         env: "development",
@@ -1008,13 +1068,13 @@ export function createWorld(options: WorldOptions): World {
       {
         id: "01a1e9ea-8258-7525-9241-2f2ec0a9da28",
         namespace: "6afc64fd2de4a3f3f4c9e127",
-        workflow: WORKFLOWS.devNotifications,
+        origin: "dev_notifications",
       },
     );
-    r.journal = new JournalBuilder(start)
+    r.history = new HistoryBuilder(start)
       .started({
-        script: DEV_NOTIFICATIONS.digest,
-        toolset: TOOLSET_DAX,
+        code: DEV_NOTIFICATIONS.digest,
+        actionSet: SET_DAX,
         input: {
           user: "6afc64fd2de4a3f3f4c9e127",
           settings: { perDay: 4, quietFrom: 22, quietTo: 8 },
@@ -1031,18 +1091,18 @@ export function createWorld(options: WorldOptions): World {
       );
   }
 
-  // onboarding: a scenario in mock mode, in virtual time.
+  // onboarding: a test run, in virtual time.
   {
     const r = run(
       now - 5 * HOUR,
       ONBOARDING,
-      TOOLSET_CRM,
+      SET_CRM,
       { agent: "support", env: "test" },
       { email: "test@example.org" },
       {},
-      "mock",
+      "test",
     );
-    r.journal
+    r.history
       .call(1, "crm.find_account", { email: "test@example.org" }, 5)
       .ok(1, { id: "acct_1", plan: "pro" })
       .call(2, "crm.provision", { email: "test@example.org", plan: "pro" }, 13, 20)
@@ -1050,7 +1110,7 @@ export function createWorld(options: WorldOptions): World {
       .complete({ id: "acct_1", plan: "pro", created: false });
   }
 
-  // forecast: many short runs, for the lists and the tool statistics.
+  // forecast: many short runs, for the lists and the action statistics.
   const random = mulberry32(7);
   const cities = ["Lyon", "Oslo", "Lima", "Kyoto", "Accra", "Perth", "Quito", "Riga"];
   for (let i = 0; i < 64; i += 1) {
@@ -1059,29 +1119,29 @@ export function createWorld(options: WorldOptions): World {
     const r = run(
       start,
       FORECAST,
-      TOOLSET_WEATHER,
+      SET_WEATHER,
       { agent: "support", conversation: `c-${200 + i}`, env: "prod" },
       { city },
     );
     const latency = Math.round(120 + random() * 380 + (random() < 0.1 ? 4_000 : 0));
-    r.journal.after(10).call(1, "weather.forecast", { city, days: 3 }, 5, 26).after(latency);
+    r.history.after(10).call(1, "weather.forecast", { city, days: 3 }, 5, 26).after(latency);
     const roll = random();
     if (roll < 0.06) {
-      r.journal
+      r.history
         .fail(1, "timeout", "no answer within 5s")
         .after(2)
         .failRun(
-          "ToolError",
+          "ActionError",
           "weather.forecast: no answer within 5s",
-          "ToolError: weather.forecast: no answer within 5s\n    at main (script.ts:5:26)",
+          "ActionError: weather.forecast: no answer within 5s\n    at main (workflow.ts:5:26)",
         );
       r.errorAt = { line: 5, column: 26 };
       r.failedSeq = 1;
     } else if (roll < 0.09) {
-      r.journal
+      r.history
         .fail(1, "unavailable", "weather is unavailable: connection refused")
         .after(2)
-        .failRun("ToolError", "weather.forecast: weather is unavailable: connection refused");
+        .failRun("ActionError", "weather.forecast: weather is unavailable: connection refused");
       r.errorAt = { line: 5, column: 26 };
       r.failedSeq = 1;
     } else {
@@ -1091,12 +1151,12 @@ export function createWorld(options: WorldOptions): World {
         low: Math.round(random() * 6),
         sky: random() < 0.5 ? "rain" : "clear",
       };
-      r.journal
+      r.history
         .ok(1, { city, days: [day, day, day] })
         .after(1)
         .complete(day);
     }
-    if (random() < 0.15) r.retries = { 1: 1 + Math.floor(random() * 2) };
+    if (random() < 0.15) r.redeliveries = { 1: 1 + Math.floor(random() * 2) };
   }
 
   // Workflows: a run that starts two runs of triage and waits for them, and a detached digest.
@@ -1104,16 +1164,16 @@ export function createWorld(options: WorldOptions): World {
     const start = now - 5 * HOUR - 20 * MINUTE;
     const labels = { agent: "triage", conversation: "c-50", env: "prod" };
     const repos = ["acme/api", "acme/web"];
-    const parent = run(start, TRIAGE_ALL, TOOLSET_WORKFLOWS, labels, { repos });
+    const parent = run(start, TRIAGE_ALL, SET_WORKFLOWS, labels, { repos });
     const children = repos.map((repo, i) =>
       run(
         start + 60 + 5 * i,
         TRIAGE_REPO,
-        TOOLSET_GITHUB,
+        SET_GITHUB,
         labels,
         { repo },
         {
-          workflow: WORKFLOWS.triage,
+          origin: "triage",
           startedBy: { run: parent.id, seq: i + 1, detached: false },
         },
       ),
@@ -1121,11 +1181,11 @@ export function createWorld(options: WorldOptions): World {
     const detached = run(
       start + 400,
       DIGEST,
-      TOOLSET_DIGEST,
+      SET_DIGEST,
       labels,
       { repos, channel: "#eng" },
       {
-        workflow: WORKFLOWS.digest,
+        origin: "digest",
         startedBy: { run: parent.id, seq: 5, detached: true },
       },
     );
@@ -1146,7 +1206,7 @@ export function createWorld(options: WorldOptions): World {
     );
     children.forEach((child, i) => {
       const repo = repos[i] as string;
-      child.journal
+      child.history
         .after(30)
         .call(1, "github.list_issues", { repo, state: "open" }, 5)
         .after(240)
@@ -1155,13 +1215,13 @@ export function createWorld(options: WorldOptions): World {
         .after(50 + 10 * i)
         .signal("approval", { close: true });
       for (let k = 0; k < (closed[i] ?? 0); k += 1)
-        child.journal.call(2 + k, "github.close_issue", { repo, number: 4100 + 3 * k }, 9, 52);
-      child.journal.after(180);
-      for (let k = 0; k < (closed[i] ?? 0); k += 1) child.journal.ok(2 + k, { state: "closed" });
-      child.journal.complete({ closed: closed[i] });
+        child.history.call(2 + k, "github.close_issue", { repo, number: 4100 + 3 * k }, 9, 52);
+      child.history.after(180);
+      for (let k = 0; k < (closed[i] ?? 0); k += 1) child.history.ok(2 + k, { state: "closed" });
+      child.history.complete({ closed: closed[i] });
     });
     const result = TRIAGE_ALL.source.split("\n")[6]?.indexOf("run.result") ?? 0;
-    parent.journal
+    parent.history
       .after(20)
       .call(1, "workflows.triage.start", { input: { repo: "acme/api" } }, 4, 59)
       .call(2, "workflows.triage.start", { input: { repo: "acme/web" } }, 4, 59)
@@ -1203,7 +1263,7 @@ export function createWorld(options: WorldOptions): World {
       .signal(`rewind:ended:${web.id}`, { status: "completed", output: { closed: 1 } })
       .complete({ closed: 3 });
     // The detached run ends after its parent: its end goes nowhere.
-    detached.journal
+    detached.history
       .after(25)
       .call(
         1,
@@ -1239,17 +1299,88 @@ export function createWorld(options: WorldOptions): World {
       .complete({ prs: 1, ts: "1731390000.000300" });
   }
 
-  // digest: live, for pnpm dev:mock. Its entries arrive over the next minute.
+  // Runs started since the workflows have ids: their handles take their workflow's name, else
+  // its short id (archi/08, W3).
+  const fresh = new Set<RunFixture>();
+
+  // onboarding: queued, no step committed yet.
+  fresh.add(
+    run(
+      now - 40 * SECOND,
+      ONBOARDING,
+      SET_CRM,
+      { agent: "support", conversation: "c-90", env: "prod" },
+      { email: "max@example.org" },
+      { namespace: "user_2fQ81" },
+    ),
+  );
+
+  // chen's digest: running, its llm.complete delivered a third time after two transient failures.
+  {
+    const r = run(
+      now - 26 * MINUTE,
+      DIGEST,
+      SET_DIGEST,
+      { agent: "digest", schedule: "adhoc", env: "staging" },
+      { repos: ["acme/web"], channel: "#eng-staging" },
+    );
+    r.history
+      .after(20)
+      .call(
+        1,
+        "github.list_pull_requests",
+        { repo: "acme/web", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(410)
+      .ok(1, [{ number: 12, title: "Dark mode", merged_at: "2026-11-10T09:00:00Z" }])
+      .log("info", "summarising 1 merged pull requests", 9)
+      .call(
+        2,
+        "llm.complete",
+        { model: "claude-haiku-5-5", prompt: "Summarise these changes for the team:\n- Dark mode" },
+        11,
+        25,
+      );
+    r.redeliveries = { 2: 2 };
+    fresh.add(r);
+  }
+
+  // onboarding: waiting, its harness action's call parked: the action's schema changed.
+  {
+    const r = run(
+      now - 3 * HOUR - 12 * MINUTE,
+      ONBOARDING,
+      SET_CRM,
+      { agent: "support", conversation: "c-88", env: "prod" },
+      { email: "ivy@example.org" },
+      {
+        namespace: "user_7Kd02",
+        callStates: { 2: { state: "parked", parked: "schema_changed" } },
+      },
+    );
+    r.history
+      .after(15)
+      .call(1, "crm.find_account", { email: "ivy@example.org" }, 5)
+      .after(90)
+      .ok(1, null)
+      .call(2, "ask_user", { question: "No account for ivy@example.org. Create one?" }, 7, 26);
+    fresh.add(r);
+  }
+
+  // chen's digest: live, for pnpm dev:mock. Its events arrive over the next minute.
   if (options.live) {
     const repos = ["acme/api", "acme/web", "acme/infra", "acme/docs", "acme/cli", "acme/sdk"];
     const r = run(
       now - 4 * SECOND,
       DIGEST,
-      TOOLSET_DIGEST,
+      SET_DIGEST,
       { agent: "digest", schedule: "adhoc", env: "staging" },
       { repos, channel: "#eng-staging" },
     );
-    const j = r.journal;
+    fresh.add(r);
+    const j = r.history;
     repos.forEach((repo, i) => {
       j.after(1_500)
         .call(i + 1, "github.list_pull_requests", { repo, state: "closed", since: "7d" }, 6, 18)
@@ -1284,7 +1415,7 @@ export function createWorld(options: WorldOptions): World {
   for (const r of runs) alignCallsites(r);
   const payloads = new Map<string, unknown>();
   for (const r of runs)
-    for (const [digest, value] of r.journal.payloads) payloads.set(digest, value);
+    for (const [digest, value] of r.history.payloads) payloads.set(digest, value);
   const access = createAccessWorld({
     requireKey: options.requireKey,
     ...(options.workos !== undefined ? { workos: options.workos } : {}),
@@ -1293,23 +1424,41 @@ export function createWorld(options: WorldOptions): World {
     ...(options.log ? { log: options.log } : {}),
   });
   for (const r of runs) {
-    const attached = attachmentsOf(r.script);
-    if (Object.keys(attached).length > 0) r.secrets = attached;
+    const used = secretsOf(r.code);
+    if (Object.keys(used).length > 0) r.secrets = used;
+  }
+
+  const workflows = createWorkflowWorld({
+    now,
+    codes: {
+      triageV1: TRIAGE_REPO_V1,
+      triageV2: TRIAGE_REPO,
+      triageV3: TRIAGE_REPO_V3,
+      digest: DIGEST,
+      forecast: FORECAST,
+      onboarding: ONBOARDING,
+      staleIssues: TRIAGE,
+      staleIssuesFixed: TRIAGE_FIXED,
+      devNotifications: DEV_NOTIFICATIONS,
+      triageAll: TRIAGE_ALL,
+      triageWorkflow: TRIAGE_WORKFLOW,
+    },
+    actionSets: ACTION_SETS,
+    secretsOf,
+    recorded: recordedRuns,
+  });
+  // Every run is a run of a workflow: its namespace's with its code, else the organization's.
+  for (const r of runs) {
+    const found = resolveByCode(workflows, r.namespace, r.code.digest);
+    if (!found) throw new Error(`no workflow runs ${r.code.name} in ${r.namespace}`);
+    r.workflow = runWorkflowOf(found.workflow, found.version);
+    if (fresh.has(r)) r.origin ??= found.workflow.name ?? shortIdOf(found.workflow.id);
+    else r.origin ??= legacyOrigin(r.code);
   }
 
   const world: World = {
     now,
-    scripts: [
-      TRIAGE,
-      TRIAGE_FIXED,
-      DIGEST,
-      ONBOARDING,
-      FORECAST,
-      TRIAGE_WORKFLOW,
-      TRIAGE_REPO,
-      TRIAGE_ALL,
-      DEV_NOTIFICATIONS,
-    ],
+    codes: Object.values(CODES),
     runs,
     payloads,
     embedded: options.embedded ?? false,
@@ -1317,16 +1466,7 @@ export function createWorld(options: WorldOptions): World {
     namespaces: new Map([
       [access.tenant, createNamespaceWorld({ now, names: runs.map((r) => r.namespace) })],
     ]),
-    workflows: createWorkflowWorld({
-      now,
-      triageVersion: WORKFLOWS.triage.version,
-      digestVersion: WORKFLOWS.digest.version,
-      triageScript: TRIAGE_REPO.digest,
-      digestScript: DIGEST.digest,
-      triageToolset: TOOLSET_GITHUB,
-      digestToolset: TOOLSET_DIGEST,
-      recorded: recordedRuns,
-    }),
+    workflows,
     connections: createConnectionWorld(access, {
       ...(options.mcp ? { mcp: options.mcp } : {}),
       ...(options.live ? { live: true } : {}),
@@ -1339,35 +1479,28 @@ export function createWorld(options: WorldOptions): World {
           runs: runs.map((r) => ({
             id: r.id,
             namespace: r.namespace,
-            start: Date.parse(r.journal.entries[0]?.recordedAt ?? new Date(now).toISOString()),
+            start: Date.parse(r.history.events[0]?.recordedAt ?? new Date(now).toISOString()),
             secrets: r.secrets ?? {},
           })),
         }),
-      ],
-    ]),
-    // Titles people gave two scripts; the others have their comment's, or none.
-    scriptTitles: new Map([
-      [
-        TRIAGE.digest,
-        {
-          title: "Triage stale issues",
-          description: "Posts the stale issues of a repository, then closes them once approved.",
-          updatedBy: "user:user_01ADA",
-          updatedAt: now - 5 * DAY,
-        },
-      ],
-      [
-        DIGEST.digest,
-        {
-          title: "Daily digest",
-          description: null,
-          updatedBy: "user:user_01GRACE",
-          updatedAt: now - 2 * DAY,
-        },
       ],
     ]),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
   ensureHandles(world);
   return world;
+}
+
+/**
+ * The middle of the handle of a run stored before workflows had ids, as it was computed then and
+ * kept since: the title a person gave its code, else its first comment line, as a slug; else
+ * `script`.
+ */
+function legacyOrigin(c: CodeFixture): string {
+  const titles = new Map([
+    [TRIAGE.digest, "Triage stale issues"],
+    [DIGEST.digest, "Daily digest"],
+  ]);
+  const title = titles.get(c.digest) ?? codeComment(c.source)?.title;
+  return (title ? originSlug(title) : null) ?? "script";
 }

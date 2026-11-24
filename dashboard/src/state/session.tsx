@@ -151,7 +151,7 @@ function dropInvitationToken(): void {
 function identityOf(phase: AuthPhase, key: string | null): string {
   if (phase.kind === "key") return `key:${key ?? ""}`;
   if (phase.kind === "member")
-    return `user:${phase.state.user.id}@${phase.state.organizationId ?? ""}`;
+    return `member:${phase.state.person.id}@${phase.state.organizationId ?? ""}`;
   return "";
 }
 

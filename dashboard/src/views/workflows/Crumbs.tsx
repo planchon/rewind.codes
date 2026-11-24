@@ -1,4 +1,4 @@
-// The breadcrumb of Testing's pages: Testing / a workflow / a version / a test. The version and
+// The breadcrumb of a workflow's pages: Workflows / a workflow / a version / a test. The version and
 // the test are switchers: a click lists the workflow's versions, or the tests of the version's
 // suite, and picks another.
 import { Menu } from "@base-ui/react/menu";

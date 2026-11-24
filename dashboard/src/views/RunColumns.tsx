@@ -8,12 +8,19 @@ import { ArrowDown, ArrowUp, Check, ChevronDown } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useNamespaceLabel } from "../components/NamespaceName";
 import type { RangeKey } from "../model/filters";
-import { shortDigest } from "../model/format";
 import { askedTerms, countTerms, toggleFacet, withFieldTerm } from "../model/query";
 import { ascending, SORT_WORDS } from "../model/sorts";
-import type { Facets, FacetValue, RunSort, RunStatus } from "../model/types";
+import {
+  type Facets,
+  type FacetValue,
+  RUN_STATUSES,
+  type RunSort,
+  type WaitKind,
+} from "../model/types";
+import { WAIT_WORDS } from "../model/waits";
+import { shortIdOf } from "../model/workflows";
 import { useAccess } from "../state/access";
-import { useScriptTitles } from "../state/scripts";
+import { useWorkflowLabels } from "../state/workflows";
 import {
   FacetToggles,
   facetRows,
@@ -21,7 +28,7 @@ import {
   rowsStartingWith,
   timelineOf,
   withTimeline,
-} from "./observability/Filters";
+} from "./runs/Filters";
 import { WINDOW_WORDS, WINDOWS } from "./search";
 
 /** What the headers of a table can change: its query and its order. */
@@ -35,14 +42,10 @@ export interface RunTableControls {
   facets?: Facets | undefined;
 }
 
-/** The statuses a run of the read model has: never `pending`. */
-const LISTED_STATUSES: readonly RunStatus[] = [
-  "active",
-  "completed",
-  "failed",
-  "cancelled",
-  "aborted",
-];
+/** What a waiting run waits for, as a person says it. */
+function waitWord(value: string): string {
+  return WAIT_WORDS[value as WaitKind] ?? value;
+}
 
 /** The values of a facet: those counted, else the ones given, without a count. */
 function counted(values: readonly FacetValue[] | undefined, all: readonly string[] = []) {
@@ -273,7 +276,7 @@ export function RunHeader({ controls }: { controls: RunTableControls }) {
     <ColumnHeader
       title="Run"
       column="run"
-      fields={["@", "id", "workflow", "parent"]}
+      fields={["@", "id", "source", "started_by"]}
       controls={controls}
     >
       {() =>
@@ -302,30 +305,25 @@ export function RunHeader({ controls }: { controls: RunTableControls }) {
 
 export function StatusHeader({ controls }: { controls: RunTableControls }) {
   return (
-    <ColumnHeader
-      title="Status"
-      column="status"
-      fields={["status", "quarantined"]}
-      controls={controls}
-    >
-      {(close) => (
+    <ColumnHeader title="Status" column="status" fields={["status"]} controls={controls}>
+      {() => (
         <>
           <FacetSection
             title="Status"
             field="status"
-            values={counted(controls.facets?.statuses, LISTED_STATUSES)}
+            values={counted(controls.facets?.statuses, RUN_STATUSES)}
             controls={controls}
             dot
           />
-          <ChoiceSection
+          <FacetSection
             title="Quarantine"
-            field="quarantined"
-            options={[
-              { term: "quarantined:yes", label: "Quarantined only" },
-              { term: "quarantined:no", label: "Not quarantined" },
-            ]}
+            field="waiting"
+            values={counted(
+              controls.facets?.waiting?.filter((v) => v.value === "quarantined"),
+              ["quarantined"],
+            )}
             controls={controls}
-            close={close}
+            show={waitWord}
           />
         </>
       )}
@@ -358,17 +356,17 @@ export function NamespaceHeader({ controls }: { controls: RunTableControls }) {
   );
 }
 
-export function ScriptHeader({ controls }: { controls: RunTableControls }) {
-  const titleOf = useScriptTitles();
+export function WorkflowHeader({ controls }: { controls: RunTableControls }) {
+  const labelOf = useWorkflowLabels();
   return (
-    <ColumnHeader title="Script" column="script" fields={["script"]} controls={controls}>
+    <ColumnHeader title="Workflow" column="workflow" fields={["workflow"]} controls={controls}>
       {() => (
         <FacetSection
-          title="Script"
-          field="script"
-          values={controls.facets?.scripts ?? []}
+          title="Workflow"
+          field="workflow"
+          values={controls.facets?.workflows ?? []}
           controls={controls}
-          show={(digest) => titleOf(digest) ?? `Untitled · ${shortDigest(digest)}`}
+          show={(id) => labelOf(id) ?? shortIdOf(id)}
         />
       )}
     </ColumnHeader>
@@ -441,15 +439,15 @@ export function CallsHeader({ controls }: { controls: RunTableControls }) {
       title="Calls"
       column="calls"
       right
-      hint="Tool calls, and those that failed"
+      hint="Calls, and those that failed"
       sorts={["calls"]}
-      fields={["calls", "errors", "tool"]}
+      fields={["calls", "errors", "action"]}
       controls={controls}
     >
       {(close) => (
         <>
           <ChoiceSection
-            title="Tool calls"
+            title="Calls"
             field="calls"
             options={[
               { term: "calls:0", label: "No call" },
@@ -471,8 +469,8 @@ export function CallsHeader({ controls }: { controls: RunTableControls }) {
           />
           <FacetSection
             title="Called"
-            field="tool"
-            values={controls.facets?.tools ?? []}
+            field="action"
+            values={controls.facets?.actions ?? []}
             controls={controls}
           />
         </>
@@ -497,6 +495,7 @@ export function WakesHeader({ controls }: { controls: RunTableControls }) {
           field="waiting"
           values={controls.facets?.waiting ?? []}
           controls={controls}
+          show={waitWord}
         />
       )}
     </ColumnHeader>

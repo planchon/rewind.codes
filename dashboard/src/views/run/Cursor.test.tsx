@@ -1,13 +1,13 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { createWorld, type RunFixture, SCRIPTS } from "../../mocks/fixtures";
+import { CODES, createWorld, type RunFixture } from "../../mocks/fixtures";
 import { NOW, renderApp, search } from "../../test/app";
 
 /** The run of the e2e corpus's triage_workflow: 18 entries, 8 steps. */
 function corpusRun(): { world: ReturnType<typeof createWorld>; run: RunFixture } {
   const world = createWorld({ now: NOW });
-  const run = world.runs.find((r) => r.script === SCRIPTS.TRIAGE_WORKFLOW);
+  const run = world.runs.find((r) => r.code === CODES.TRIAGE_WORKFLOW);
   if (!run) throw new Error("no corpus run");
   return { world, run };
 }
@@ -176,7 +176,7 @@ describe("the time cursor", () => {
   it("marks the step a failed run failed in, and its error line", async () => {
     const world = createWorld({ now: NOW });
     const run = world.runs.find(
-      (r) => r.labels.conversation === "c-39" && r.script === SCRIPTS.TRIAGE,
+      (r) => r.labels.conversation === "c-39" && r.code === CODES.TRIAGE,
     ) as RunFixture;
     renderApp(`/runs/${run.id}`, { world });
     await waitFor(() =>

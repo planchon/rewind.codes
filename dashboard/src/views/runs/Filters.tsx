@@ -1,4 +1,4 @@
-// The filters of Observability's sidebar, as on Vercel's Logs: the timeline, then a group per
+// The filters of the sidebar of Runs, as on Vercel's Logs: the timeline, then a group per
 // field with its values and their counts. A filter and the query are one (archi/08): a click on a
 // value asks for it (its term is added to the query), a second excludes it, a third removes it.
 import { Check, Minus } from "lucide-react";
@@ -6,7 +6,7 @@ import { useState } from "react";
 import { useSettled } from "../../components/bits";
 import { useNamespaceLabel } from "../../components/NamespaceName";
 import type { RangeKey } from "../../model/filters";
-import { formatCount, shortDigest } from "../../model/format";
+import { formatCount } from "../../model/format";
 import {
   type FacetState,
   facetState,
@@ -15,10 +15,12 @@ import {
   removeTerm,
   splitTerms,
 } from "../../model/query";
-import type { Facets, FacetValue } from "../../model/types";
+import type { Facets, FacetValue, WaitKind } from "../../model/types";
+import { WAIT_WORDS } from "../../model/waits";
+import { shortIdOf } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import { useNamespaceSuggestions } from "../../state/namespaces";
-import { useScriptTitles } from "../../state/scripts";
+import { useWorkflowLabels } from "../../state/workflows";
 import { WINDOW_WORDS, WINDOWS } from "../search";
 
 /** The window a query's `started:>now-…` term names, if it names one of the timeline's. */
@@ -255,7 +257,7 @@ export function FilterGroups({
 }) {
   const access = useAccess();
   const label = useNamespaceLabel();
-  const titleOf = useScriptTitles();
+  const labelOf = useWorkflowLabels();
   const groups: Group[] = [
     { field: "status", title: "Status", values: facets?.statuses ?? [], dot: true, open: true },
     {
@@ -266,23 +268,28 @@ export function FilterGroups({
       show: (name: string) => label(name) ?? name,
       ...(access.can("namespaces:read") ? { search: "namespace" as const } : {}),
     },
-    { field: "workflow", title: "Workflow", values: facets?.workflows ?? [], open: true },
+    {
+      field: "workflow",
+      title: "Workflow",
+      values: facets?.workflows ?? [],
+      open: true,
+      show: (id: string) => labelOf(id) ?? shortIdOf(id),
+    },
     ...(facets?.labels ?? []).slice(0, 6).map((l, i) => ({
       field: `@${l.key}`,
       title: `@${l.key}`,
       values: l.values.slice(0, 8),
       open: i === 0,
     })),
-    { field: "tool", title: "Tool", values: facets?.tools ?? [] },
+    { field: "action", title: "Action", values: facets?.actions ?? [] },
     { field: "error", title: "Error", values: facets?.errors ?? [] },
-    { field: "waiting", title: "Waiting for", values: facets?.waiting ?? [] },
-    { field: "signal", title: "Signal", values: facets?.signals ?? [] },
     {
-      field: "script",
-      title: "Script",
-      values: facets?.scripts ?? [],
-      show: (digest: string) => titleOf(digest) ?? `Untitled · ${shortDigest(digest)}`,
+      field: "waiting",
+      title: "Waiting for",
+      values: facets?.waiting ?? [],
+      show: (kind: string) => WAIT_WORDS[kind as WaitKind] ?? kind,
     },
+    { field: "signal", title: "Signal", values: facets?.signals ?? [] },
   ];
   return (
     <div className="filters-list">

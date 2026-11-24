@@ -35,7 +35,7 @@ export function NoPermission({
         ) : (
           <>You have no role here yet, so no permission.</>
         )}{" "}
-        {access.user
+        {access.person
           ? "Ask an owner of the organization for a role that gives it."
           : "Use a key whose role gives it."}
       </p>

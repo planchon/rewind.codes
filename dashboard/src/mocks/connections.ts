@@ -1,29 +1,30 @@
 // The mocked connections of people (archi/06, "Connections"), the authorization requests waiting
-// for their consent, and the tenant's toolsets. A connection is a principal with a grant in each
+// for their consent, and the tenant's action sets. A connection is a principal with a grant in each
 // organization it opens (`connection:cn_…`, the built-in role `reader` for `read`, `harness` for
 // `run`), kept in the access world's grants as the server keeps them. The mock creates the
 // connection at the consent, as if Claude exchanged its code at once.
 import { ADMIN_PERMISSIONS } from "../model/access";
 import type {
+  ActionSetSummary,
   Connection,
   ConnectionAccess,
   ConnectionClient,
   ConsentOrganization,
   Permission,
-  ToolsetSummary,
 } from "../model/types";
 import {
   type AccessWorld,
   grantsOf,
   HEX,
   iso,
+  memberPrincipal,
   newId,
   organizationsOf,
   random,
   rolePermissions,
   userOf,
 } from "./access";
-import { fakeDigest } from "./journal";
+import { fakeDigest } from "./history";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -31,8 +32,16 @@ const DAY = 24 * HOUR;
 
 /** The permissions each access needs, and gives (archi/06, "Connections"). */
 export const ACCESS_PERMISSIONS: Record<ConnectionAccess, Permission[]> = {
-  read: ["runs:read", "toolsets:read", "namespaces:read"],
-  run: ["runs:read", "toolsets:read", "namespaces:read", "runs:start", "runs:control"],
+  read: ["runs:read", "actions:read", "namespaces:read", "secrets:read"],
+  run: [
+    "runs:read",
+    "runs:start",
+    "runs:control",
+    "actions:read",
+    "namespaces:read",
+    "secrets:read",
+    "secrets:use",
+  ],
 };
 
 const ROLE_OF: Record<ConnectionAccess, string> = { read: "reader", run: "harness" };
@@ -59,13 +68,13 @@ export interface MockConsentRequest {
 export interface ConnectionWorld {
   connections: MockConnection[];
   requests: Map<string, MockConsentRequest>;
-  /** The tenant's toolsets; other tenants have none. */
-  toolsets: ToolsetSummary[];
+  /** The tenant's action sets; other tenants have none. */
+  actionSets: ActionSetSummary[];
   /** What `GET /v1/server` says of `/mcp`. */
   mcp: { mcpUrl: string | null; oauth: boolean };
   /**
    * `pnpm dev:mock`: a connection made at the consent is used by "Claude" a few seconds later,
-   * as Claude lists the tools right after connecting.
+   * as Claude lists the agent tools right after connecting.
    */
   simulateUse: boolean;
 }
@@ -89,34 +98,56 @@ export const CLAUDE_CODE: ConnectionClient & { logoUri: string | null } = {
 /** The redirect URI of claude.ai, Desktop and mobile. */
 export const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 
-function toolsets(): ToolsetSummary[] {
-  const http = (name: string, tools: number) => ({ name, tools, transport: "http" as const });
+/** The ids of the world's action sets, by what they hold. */
+export const ACTION_SETS = {
+  github: fakeDigest("action-set:github,slack"),
+  digest: fakeDigest("action-set:github,llm,slack"),
+  crm: fakeDigest("action-set:ask_user,crm"),
+  weather: fakeDigest("action-set:weather"),
+  workflows: fakeDigest("action-set:github,slack+workflows:digest,triage"),
+  dax: fakeDigest("action-set:dax"),
+};
+
+function actionSets(): ActionSetSummary[] {
+  const http = (name: string, actions: number) => ({ name, actions, transport: "http" as const });
   return [
     {
-      id: fakeDigest("toolset:github,slack"),
+      id: ACTION_SETS.github,
       servers: [http("github", 2), http("slack", 1)],
-      tools: ["github.close_issue", "github.list_issues", "slack.post_message"],
+      actions: ["github.close_issue", "github.list_issues", "slack.post_message"],
     },
     {
-      id: fakeDigest("toolset:github,llm,slack"),
+      id: ACTION_SETS.digest,
       servers: [http("github", 2), http("llm", 1), http("slack", 1)],
-      tools: ["github.list_issues", "github.list_pulls", "llm.complete", "slack.post_message"],
+      actions: [
+        "github.list_issues",
+        "github.list_pull_requests",
+        "llm.complete",
+        "slack.post_message",
+      ],
     },
     {
-      id: fakeDigest("toolset:ask_user,crm"),
+      // ask_user is a harness action: the harness's worker answers it.
+      id: ACTION_SETS.crm,
       servers: [http("crm", 2)],
-      tools: ["ask_user", "crm.find_account", "crm.provision"],
+      actions: ["ask_user", "crm.find_account", "crm.provision"],
     },
     {
-      id: fakeDigest("toolset:weather"),
-      servers: [http("weather", 1)],
-      tools: ["weather.forecast"],
+      id: ACTION_SETS.weather,
+      servers: [],
+      apis: [{ name: "weather", baseUrl: "https://api.weather.example/v2", actions: 1 }],
+      actions: ["weather.forecast"],
     },
     {
-      id: fakeDigest("toolset:github,slack+workflows:digest,triage"),
+      id: ACTION_SETS.workflows,
       servers: [http("github", 2), http("slack", 1)],
-      tools: ["github.close_issue", "github.list_issues", "slack.post_message"],
+      actions: ["github.close_issue", "github.list_issues", "slack.post_message"],
       workflows: ["digest", "triage"],
+    },
+    {
+      id: ACTION_SETS.dax,
+      servers: [http("dax", 2)],
+      actions: ["dax.notify", "dax.push"],
     },
   ];
 }
@@ -135,7 +166,7 @@ export function createConnectionWorld(
   const world: ConnectionWorld = {
     connections: [],
     requests: new Map(),
-    toolsets: toolsets(),
+    actionSets: actionSets(),
     mcp:
       options.mcp ??
       (access.workos
@@ -244,7 +275,7 @@ export function setOrganizations(
       role: ROLE_OF[o.access],
       allowedLabels: o.allowedLabels,
       grantedAt: iso(Date.now()),
-      grantedBy: `user:${connection.userId}`,
+      grantedBy: memberPrincipal(connection.userId),
     });
   }
 }
@@ -295,7 +326,7 @@ export function accessesOf(
   userId: string,
   organizationId: string,
 ): ConnectionAccess[] {
-  const grant = grantsOf(access, organizationId).get(`user:${userId}`);
+  const grant = grantsOf(access, organizationId).get(memberPrincipal(userId));
   if (!grant) return [];
   const limited = Object.keys(grant.allowedLabels ?? {}).length > 0;
   const held = new Set(
@@ -315,7 +346,7 @@ export function consentOrganizations(
   return organizationsOf(access, userId).map((o) => ({
     id: o.id,
     name: o.name,
-    role: grantsOf(access, o.id).get(`user:${userId}`)?.role ?? null,
+    role: grantsOf(access, o.id).get(memberPrincipal(userId))?.role ?? null,
     accesses: accessesOf(access, userId, o.id),
     current: o.id === current,
   }));

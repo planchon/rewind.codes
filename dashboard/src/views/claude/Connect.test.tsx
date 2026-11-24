@@ -12,7 +12,7 @@ function step(n: number): Promise<HTMLElement> {
 }
 
 describe("Connect Claude", () => {
-  it("is in the account menu, not among the views, and lists the toolsets, warning of host tools", async () => {
+  it("is in the account menu, not among the views, and lists the action sets, warning of harness actions", async () => {
     const user = userEvent.setup();
     const world = signedIn("grace@example.net");
     renderApp("/", { world });
@@ -22,22 +22,22 @@ describe("Connect Claude", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Connect Claude" }));
     expect(await screen.findByRole("heading", { name: "Connect Claude" })).toBeInTheDocument();
 
-    const toolsets = await step(1);
-    expect(await within(toolsets).findAllByText("github, slack")).toHaveLength(2);
-    expect(toolsets).toHaveAccessibleName(/have a toolset \(done\)/i);
-    expect(within(toolsets).getByText(/host tools \(ask_user\)/i)).toHaveTextContent(
+    const actionSets = await step(1);
+    expect(await within(actionSets).findAllByText("github, slack")).toHaveLength(2);
+    expect(actionSets).toHaveAccessibleName(/have an action set \(done\)/i);
+    expect(within(actionSets).getByText(/harness actions \(ask_user\)/i)).toHaveTextContent(
       "Claude reaches them only while your worker runs",
     );
   });
 
-  it("links to creating a toolset when the organization has none", async () => {
+  it("links to creating an action set when the organization has none", async () => {
     const world = signedIn("grace@example.net");
-    world.connections.toolsets = [];
+    world.connections.actionSets = [];
     renderApp("/connect", { world });
-    const toolsets = await step(1);
-    const link = await within(toolsets).findByRole("link", { name: "Create a toolset" });
-    expect(link).toHaveAttribute("href", "https://docs.rewind.codes/sdk/toolsets");
-    expect(toolsets).not.toHaveAccessibleName(/done/);
+    const actionSets = await step(1);
+    const link = await within(actionSets).findByRole("link", { name: "Create an action set" });
+    expect(link).toHaveAttribute("href", "https://docs.rewind.codes/sdk/action-sets");
+    expect(actionSets).not.toHaveAccessibleName(/done/);
   });
 
   it("gives the URL, and the exact steps of each client", async () => {
@@ -144,20 +144,20 @@ describe("Connect Claude", () => {
     );
   });
 
-  it("writes a first message naming the organization, a toolset and a namespace", async () => {
+  it("writes a first message naming the organization, an action set and a namespace", async () => {
     const user = userEvent.setup();
     const world = signedIn("grace@example.net");
     renderApp("/connect", { world });
     const tryIt = await step(5);
-    const toolset = await within(tryIt).findByRole("combobox", { name: "Toolset" });
-    await user.selectOptions(toolset, world.connections.toolsets[3]?.id ?? "");
+    const actionSet = await within(tryIt).findByRole("combobox", { name: "Action set" });
+    await user.selectOptions(actionSet, world.connections.actionSets[3]?.id ?? "");
     const namespace = within(tryIt).getByRole("textbox", { name: "Namespace" });
     await user.clear(namespace);
     await user.type(namespace, "alice");
     expect(
       within(tryIt).getByText(
         new RegExp(
-          `^With Rewind, org Acme, toolset ${world.connections.toolsets[3]?.id}, namespace alice: `,
+          `^With Rewind, organization Acme, action set ${world.connections.actionSets[3]?.id}, namespace alice: `,
         ),
       ),
     ).toBeInTheDocument();

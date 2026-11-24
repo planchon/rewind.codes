@@ -1,7 +1,7 @@
 // Namespaces: the end users of the organization and what they use of their limits this month.
 // First the alerts of the month, then the organization's ceiling (the operator's) with its
 // totals, then, folding under it, the
-// default limits and the namespaces, sorted by CPU, runs or scripts of the month, so that an end
+// default limits and the namespaces, sorted by CPU, runs or workflows of the month, so that an end
 // user who abuses the product comes first; the query bar of the runs, which reads the start of a
 // name here, and a filter of those at 80 % or more of a limit. Live: their use moves with their
 // runs (`state/namespaces.ts`).
@@ -45,7 +45,7 @@ import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm, worstAlert } from ".
 const ORDERS: { value: NamespaceOrder; label: string; title: string }[] = [
   { value: "cpu", label: "CPU", title: "The most CPU time this month first" },
   { value: "runs", label: "Runs", title: "The most runs started this month first" },
-  { value: "scripts", label: "Scripts", title: "The most distinct scripts first" },
+  { value: "workflows", label: "Workflows", title: "The most workflows first" },
   { value: "name", label: "Name", title: "By name" },
 ];
 
@@ -53,7 +53,7 @@ const ORDERS: { value: NamespaceOrder; label: string; title: string }[] = [
 const SORTED: Partial<Record<NamespaceOrder, string>> = {
   cpu: "cpuPerMonth",
   runs: "runsPerMonth",
-  scripts: "scripts",
+  workflows: "workflows",
 };
 
 const ABOVE = 0.8;
@@ -70,11 +70,11 @@ export function namespacePath(name: string): string {
   return `/namespaces/${encodeURIComponent(name)}`;
 }
 
-/** The limits that are not meters: the longest TTL and the longest script. */
+/** The limits that are not meters: the longest TTL and the longest code. */
 function otherLimits(quotas: Quotas | undefined): string {
-  const parts = (["maxTtl", "maxScriptLines"] as const).map((key) => {
+  const parts = (["maxTtl", "maxCodeLines"] as const).map((key) => {
     const limit = limitOf(quotas, key);
-    const name = key === "maxTtl" ? "TTL" : "script";
+    const name = key === "maxTtl" ? "TTL" : "code";
     return limit === null ? `${name}: no limit` : `${name} ${formatQuota(key, limit)}`;
   });
   return parts.join(" · ");
@@ -181,7 +181,7 @@ function Namespaces() {
     }
     return map;
   }, [alerts.data]);
-  const tenantAlerts = (alerts.data?.alerts ?? []).filter((a) => !a.namespace);
+  const organizationAlerts = (alerts.data?.alerts ?? []).filter((a) => !a.namespace);
   const sorted = SORTED[order];
   const header = (key: string, title: string): ReactNode => (
     <th key={key} aria-sort={sorted === key ? "descending" : undefined}>
@@ -224,10 +224,10 @@ function Namespaces() {
         )}
       </FormDialog>
 
-      {tenantAlerts.length > 0 && (
+      {organizationAlerts.length > 0 && (
         <div className="notice notice-critical" role="status">
           The organization crossed its ceiling:{" "}
-          {tenantAlerts.map((a) => (
+          {organizationAlerts.map((a) => (
             <span key={`${a.quota}-${a.threshold}`}>
               <AlertChip alert={a} />{" "}
             </span>

@@ -1,20 +1,20 @@
-// What a run did, derived from its journal entries: tool calls, timers, signal waits and logs,
-// each with the source line that caused it, its start and its end. A pure function of the
-// entries, like the run's state on the server (archi/02-journal.md).
+// What a run did, derived from the events of its history: calls, timers, signal waits and logs,
+// each with the line of the code that caused it, its start and its end. A pure function of the
+// events, like the run's state on the server (archi/02-history.md).
 import type {
   AbortReason,
+  ActionFailure,
   Callsite,
   CancelReason,
-  Entry,
+  ErrorInfo,
   EventOf,
+  HistoryEvent,
   LogLevel,
   Payload,
-  ScriptError,
-  ToolFailure,
 } from "./types";
 
 interface Point {
-  /** The journal entry. */
+  /** The event's position in the history. */
   idx: number;
   /** Its `recordedAt`, in milliseconds since the epoch. */
   at: number;
@@ -22,12 +22,13 @@ interface Point {
 
 export type CallEnd =
   | (Point & { outcome: "ok"; result: Payload })
-  | (Point & { outcome: "failed"; error: ToolFailure });
+  | (Point & { outcome: "failed"; error: ActionFailure });
 
-export interface ToolCall extends Point {
-  kind: "tool_call";
+/** A call of an action, from its `schedule_call` to its result. */
+export interface Call extends Point {
+  kind: "call";
   seq: number;
-  tool: string;
+  action: string;
   args: Payload;
   callsite: Callsite | null;
   end: CallEnd | null;
@@ -40,7 +41,7 @@ export interface Timer extends Point {
   fireAt: number;
   callsite: Callsite | null;
   end: (Point & { outcome: "fired" | "cancelled" }) | null;
-  /** The entry of the signal wait this timer is the timeout of. */
+  /** The event of the signal wait this timer is the timeout of. */
   timeoutOf: number | null;
 }
 
@@ -69,34 +70,34 @@ export interface LogLine extends Point {
 export interface ReceivedSignal extends Point {
   name: string;
   payload: Payload;
-  /** The entry of the wait it resolved; `null` while it sits in the mailbox. */
+  /** The event of the wait it resolved; `null` while it sits in the mailbox. */
   waitIdx: number | null;
 }
 
-export type Activity = ToolCall | Timer | SignalWait | LogLine;
+export type Activity = Call | Timer | SignalWait | LogLine;
 
 export type RunEnd =
   | (Point & { outcome: "completed"; output: Payload })
-  | (Point & { outcome: "failed"; error: ScriptError })
+  | (Point & { outcome: "failed"; error: ErrorInfo })
   | (Point & { outcome: "aborted"; reason: AbortReason });
 
 export interface RunModel {
-  entries: readonly Entry[];
+  entries: readonly HistoryEvent[];
   start: (Point & { event: EventOf<"run_started"> }) | null;
   end: RunEnd | null;
   cancel: (Point & { reason: CancelReason; message: string | null }) | null;
-  calls: ToolCall[];
+  calls: Call[];
   timers: Timer[];
   signals: SignalWait[];
   received: ReceivedSignal[];
   logs: LogLine[];
   /** Every activity, in the order it started. */
   activities: Activity[];
-  /** The activities caused by each line of `script.ts`. */
+  /** The activities caused by each line of `workflow.ts`. */
   byLine: Map<number, Activity[]>;
   /** Activities without a callsite. */
   unattributed: Activity[];
-  /** The activity each entry starts or ends. */
+  /** The activity each event starts or ends. */
   byIdx: Map<number, Activity>;
   /** The first and last `recordedAt`. */
   firstAt: number | null;
@@ -107,8 +108,8 @@ export function time(rfc3339: string): number {
   return Date.parse(rfc3339);
 }
 
-/** Builds the model of a run from its entries, in index order. */
-export function buildRunModel(entries: readonly Entry[]): RunModel {
+/** Builds the model of a run from its events, in the order of their position. */
+export function buildRunModel(entries: readonly HistoryEvent[]): RunModel {
   const model: RunModel = {
     entries,
     start: null,
@@ -126,7 +127,7 @@ export function buildRunModel(entries: readonly Entry[]): RunModel {
     firstAt: null,
     lastAt: null,
   };
-  const calls = new Map<number, ToolCall>();
+  const calls = new Map<number, Call>();
   const timers = new Map<number, Timer>();
   // Signal waits not yet resolved, and signals no wait took yet, per name (FIFO mailboxes).
   const waiting = new Map<string, SignalWait[]>();
@@ -160,12 +161,12 @@ export function buildRunModel(entries: readonly Entry[]): RunModel {
       case "run_started":
         model.start = { ...point, event };
         break;
-      case "schedule_tool_call": {
-        const call: ToolCall = {
+      case "schedule_call": {
+        const call: Call = {
           ...point,
-          kind: "tool_call",
+          kind: "call",
           seq: event.seq,
-          tool: event.tool,
+          action: event.action,
           args: event.args,
           callsite: event.callsite ?? null,
           end: null,
@@ -175,7 +176,7 @@ export function buildRunModel(entries: readonly Entry[]): RunModel {
         add(call);
         break;
       }
-      case "tool_call_completed": {
+      case "call_completed": {
         const call = calls.get(event.seq);
         if (call) {
           call.end = { ...point, outcome: "ok", result: event.result };
@@ -183,7 +184,7 @@ export function buildRunModel(entries: readonly Entry[]): RunModel {
         }
         break;
       }
-      case "tool_call_failed": {
+      case "call_failed": {
         const call = calls.get(event.seq);
         if (call) {
           call.end = { ...point, outcome: "failed", error: event.error };
@@ -329,8 +330,8 @@ export function outcomeOf(activity: Activity): string {
 /** A short label: `#3 github.list_issues`, `timer #4 3d`, `signal "approval"`, `log`. */
 export function labelOf(activity: Activity): string {
   switch (activity.kind) {
-    case "tool_call":
-      return activity.tool;
+    case "call":
+      return activity.action;
     case "timer":
       return activity.timeoutOf !== null ? "timeout" : "sleep";
     case "signal":
@@ -340,7 +341,7 @@ export function labelOf(activity: Activity): string {
   }
 }
 
-/** A stable key for an activity, used for selection: its first entry. */
+/** A stable key for an activity, used for selection: its first event. */
 export function keyOf(activity: Activity): string {
   return String(activity.idx);
 }

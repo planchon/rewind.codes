@@ -1,7 +1,7 @@
 // The mocked secrets of a tenant: the organization's and each namespace's, their reads and last
 // read; and the signing keys. A value is kept only to be written over: no answer holds it.
 import type { Labels, Secret, SigningKey } from "../model/types";
-import { fakeDigest } from "./journal";
+import { fakeDigest } from "./history";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -18,7 +18,7 @@ export interface MockSecret {
   updatedAt: number;
   /** Reads by UTC day (`2026-11-20`). */
   reads: Map<string, number>;
-  /** Its last read; `run` and `namespace` null for a toolset's registration. */
+  /** Its last read; `run` and `namespace` null for an action set's registration. */
   lastRead: { run: string | null; namespace: string | null; at: number } | null;
 }
 
@@ -34,8 +34,8 @@ export interface SecretWorld {
   signingKeys: MockSigningKey[];
 }
 
-/** A run the fixtures hold, as far as its attachments go. */
-export interface AttachingRun {
+/** A run the fixtures hold, as far as the secrets it uses go. */
+export interface UsingRun {
   id: string;
   namespace: string;
   start: number;
@@ -53,15 +53,12 @@ export function newKid(seed: string): string {
   return fakeDigest(`signing-key:${seed}`).slice(0, 16);
 }
 
-/** Whether the run attaches the secret: `org/<name>`, or `ns/<name>` of the run's own namespace. */
-export function attaches(
-  run: { namespace: string; secrets?: Record<string, string> },
-  s: MockSecret,
-) {
+/** Whether the run uses the secret: `org/<name>`, or `ns/<name>` of the run's own namespace. */
+export function uses(run: { namespace: string; secrets?: Record<string, string> }, s: MockSecret) {
   return Object.values(run.secrets ?? {}).some((ref) => refersTo(ref, s, run.namespace));
 }
 
-/** Whether an attachment, read in a namespace (or any, `null`), names the secret. */
+/** Whether a reference, read in a namespace (or any, `null`), names the secret. */
 export function refersTo(ref: string, s: MockSecret, namespace: string | null): boolean {
   if (s.namespace === null) return ref === `org/${s.name}`;
   return ref === `ns/${s.name}` && (namespace === null || namespace === s.namespace);
@@ -72,7 +69,7 @@ export function createSecretWorld({
   runs,
 }: {
   now: number;
-  runs: readonly AttachingRun[];
+  runs: readonly UsingRun[];
 }): SecretWorld {
   const secret = (
     namespace: string | null,
@@ -100,25 +97,25 @@ export function createSecretWorld({
       const n = d % 7 === 3 ? 0 : perDay + ((d * 13) % 5);
       if (n > 0) s.reads.set(dayOf(now - d * DAY), n);
     }
-    // Its last read is the newest run that attaches it.
-    const last = runs.filter((r) => attaches(r, s)).sort((a, b) => b.start - a.start)[0];
+    // Its last read is the newest run that uses it.
+    const last = runs.filter((r) => uses(r, s)).sort((a, b) => b.start - a.start)[0];
     if (last && perDay > 0)
       s.lastRead = { run: last.id, namespace: last.namespace, at: last.start };
     return s;
   };
-  // Read once, to list the tools of the MCP server a toolset's registration attached it for.
-  const listing = secret(null, "notion", {}, "user:user_01ADA", 1, 0);
+  // Read once, to list the actions of the MCP server an action set's registration used it for.
+  const listing = secret(null, "notion", {}, "member:user_01ADA", 1, 0);
   listing.reads.set(dayOf(now - 3 * HOUR), 1);
   listing.lastRead = { run: null, namespace: null, at: now - 3 * HOUR };
   return {
     secrets: [
-      secret(null, "github", {}, "user:user_01ADA", 40, 12),
-      secret(null, "slack", {}, "user:user_01ADA", 40, 20, 6),
-      secret(null, "crm", { env: "prod" }, "user:user_01GRACE", 18, 4),
-      secret(null, "zendesk", { env: "prod" }, "user:user_01GRACE", 2, 0),
+      secret(null, "github", {}, "member:user_01ADA", 40, 12),
+      secret(null, "slack", {}, "member:user_01ADA", 40, 20, 6),
+      secret(null, "crm", { env: "prod" }, "member:user_01GRACE", 18, 4),
+      secret(null, "zendesk", { env: "prod" }, "member:user_01GRACE", 2, 0),
       listing,
       secret("alice", "github", {}, "token:alice", 25, 6),
-      secret("bob", "github", {}, "user:user_01GRACE", 12, 2),
+      secret("bob", "github", {}, "member:user_01GRACE", 12, 2),
       secret("chen", "linear", {}, "token:chen", 5, 0),
     ],
     // Rotated two hours ago: the previous key is still published.

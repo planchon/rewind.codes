@@ -7,16 +7,17 @@ import {
   type RouteObject,
   RouterProvider,
   useLocation,
+  useParams,
   useRouteError,
 } from "react-router";
 import { ProblemView } from "../components/bits";
 import { fieldTerm, joinQuery } from "../model/query";
 import { useAccess } from "../state/access";
 import { SessionProvider, type SessionProviderProps, SessionState } from "../state/session";
+import { ActionsView } from "../views/ActionsView";
 import { OverviewView } from "../views/OverviewView";
-import { ObservabilityView } from "../views/observability/ObservabilityView";
-import { ScriptsView } from "../views/ScriptsView";
-import { ToolsView } from "../views/ToolsView";
+import { RunsView } from "../views/runs/RunsView";
+import { WorkflowsView } from "../views/workflows/WorkflowsView";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
@@ -69,7 +70,7 @@ function Statistics({ children }: { children: ReactNode }) {
           </h1>
           <p>
             Your grant only reaches the runs carrying its labels, and the statistics count every run
-            of the organization. Search your runs in Observability.
+            of the organization. Search your runs in Runs.
           </p>
         </div>
       </div>
@@ -79,8 +80,9 @@ function Statistics({ children }: { children: ReactNode }) {
 }
 
 /**
- * A link of an earlier version: `/runs`, `/waiting` and `/failures` open Observability with their
- * query, and the namespace filter they named (`?ns=bob`) becomes the term `namespace:bob`.
+ * A link of an earlier version: `/waiting`, `/failures` and Observability's views open Runs with
+ * their query, the namespace filter they named (`?ns=bob`) becoming the term `namespace:bob`;
+ * Scripts, Testing and Tools open Workflows and Actions.
  */
 function Moved({ to }: { to: string }) {
   const { search } = useLocation();
@@ -92,11 +94,30 @@ function Moved({ to }: { to: string }) {
   return <Navigate to={rest ? `${to}?${rest}` : to} replace />;
 }
 
+/** Observability's views, by their names then: every run, the active ones, waiting, failures. */
+const OBSERVABILITY_VIEWS: Record<string, string> = {
+  active: "/runs/running",
+  waiting: "/runs/waiting",
+  failures: "/runs/failures",
+};
+
+function MovedObservability() {
+  const { view } = useParams();
+  return <Moved to={OBSERVABILITY_VIEWS[view ?? ""] ?? "/runs"} />;
+}
+
+/** Testing's pages of a workflow and of a test, by the workflow's name: its page takes a name. */
+function MovedTesting() {
+  const { name, digest } = useParams();
+  const path = `/workflows/${encodeURIComponent(name ?? "")}${digest ? `/tests/${digest}` : ""}`;
+  return <Moved to={path} />;
+}
+
 /** The first view the caller may open. */
 function Home() {
   const access = useAccess();
   if (access.can("runs:read"))
-    return <Navigate to={access.statistics ? "/overview" : "/observability"} replace />;
+    return <Navigate to={access.statistics ? "/overview" : "/runs"} replace />;
   if (access.can("namespaces:read")) return <Navigate to="/namespaces" replace />;
   if (access.can("secrets:read")) return <Navigate to="/secrets" replace />;
   if (access.sections.length > 0) return <Navigate to="/organization" replace />;
@@ -124,54 +145,53 @@ export const routes: RouteObject[] = [
               </Statistics>
             ),
           },
-          { path: "observability", element: <ObservabilityView /> },
-          { path: "observability/:view", element: <ObservabilityView /> },
-          { path: "runs", element: <Moved to="/observability" /> },
-          { path: "waiting", element: <Moved to="/observability/waiting" /> },
-          { path: "failures", element: <Moved to="/observability/failures" /> },
-          // One route for every section: the page stays mounted, and its event stream open. A run
-          // is named by its UUID or by its handle, `namespace/origin/suffix` (`runPath`).
+          // Runs: every run, the running ones, the waiting ones, the failures. A run's page is
+          // `/runs/` and its handle (`namespace/origin/suffix`) or its UUID (`runPath`), which
+          // never reads as these three words alone.
+          { path: "runs", element: <RunsView /> },
+          { path: "runs/running", element: <RunsView /> },
+          { path: "runs/waiting", element: <RunsView /> },
+          { path: "runs/failures", element: <RunsView /> },
+          // One route for every section: the page stays mounted, and its event stream open.
           { path: "runs/*", lazy: runView },
+          { path: "workflows", element: <WorkflowsView /> },
           {
-            path: "scripts",
+            path: "workflows/:id",
+            lazy: async () => ({
+              Component: (await import("../views/workflows/WorkflowView")).WorkflowView,
+            }),
+          },
+          {
+            path: "workflows/:id/tests/:digest",
+            lazy: async () => ({
+              Component: (await import("../views/workflows/TestView")).TestView,
+            }),
+          },
+          {
+            path: "actions",
             element: (
               <Statistics>
-                <ScriptsView />
+                <ActionsView />
               </Statistics>
             ),
           },
+          // The views of earlier versions.
+          { path: "observability", element: <Moved to="/runs" /> },
+          { path: "observability/:view", element: <MovedObservability /> },
+          { path: "waiting", element: <Moved to="/runs/waiting" /> },
+          { path: "failures", element: <Moved to="/runs/failures" /> },
+          { path: "scripts", element: <Moved to="/workflows" /> },
           {
             path: "scripts/:digest",
-            lazy: async () => ({ Component: (await import("../views/ScriptView")).ScriptView }),
+            lazy: async () => ({
+              Component: (await import("../views/workflows/WorkflowView")).WorkflowOfCode,
+            }),
           },
-          {
-            path: "tools",
-            element: (
-              <Statistics>
-                <ToolsView />
-              </Statistics>
-            ),
-          },
+          { path: "testing", element: <Moved to="/workflows" /> },
+          { path: "testing/:name", element: <MovedTesting /> },
+          { path: "testing/:name/tests/:digest", element: <MovedTesting /> },
+          { path: "tools", element: <Moved to="/actions" /> },
         ],
-      },
-      // Testing reads the workflows with the toolsets (`toolsets:read`): its views check it.
-      {
-        path: "testing",
-        lazy: async () => ({
-          Component: (await import("../views/testing/TestingView")).TestingView,
-        }),
-      },
-      {
-        path: "testing/:name",
-        lazy: async () => ({
-          Component: (await import("../views/testing/WorkflowView")).WorkflowView,
-        }),
-      },
-      {
-        path: "testing/:name/tests/:digest",
-        lazy: async () => ({
-          Component: (await import("../views/testing/TestView")).TestView,
-        }),
       },
       {
         path: "namespaces",

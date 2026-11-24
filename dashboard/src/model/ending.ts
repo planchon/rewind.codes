@@ -1,8 +1,8 @@
 // How a run ended, in the words of the dashboard. The model does not change: a cancelled run is a
-// `fail_run` whose error is `CancelledError` (archi/02-journal.md, "Run state"), and a cancellation
+// `fail_run` whose error is `CancelledError` (archi/02-history.md, "Run state"), and a cancellation
 // is `cancel_requested` rejecting every pending await (archi/03-execution.md, "Cancellation").
 // What changes is how it is told: a cancellation is not a failure, and says why it happened (its
-// deadline, a request, the script itself) and what the run was waiting for then.
+// deadline, a request, its code itself) and what the run was waiting for then.
 
 import { formatDuration, shortRunId } from "./format";
 import type { Activity, RunModel } from "./run";
@@ -32,16 +32,16 @@ export type CancelCause =
   | { kind: "ttl"; ttlMs: number | null }
   /** Someone asked (`POST /v1/runs/{id}/cancel`, or the end of the run that started it). */
   | { kind: "requested"; message: string | null }
-  /** No cancellation was requested: the script threw `CancelledError` itself. */
-  | { kind: "script" }
-  /** Not known from what was read (a run's summary without its journal). */
+  /** No cancellation was requested: its code threw `CancelledError` itself. */
+  | { kind: "code" }
+  /** Not known from what was read (a run's summary without its history). */
   | { kind: "unknown" };
 
 export interface CancelFacts {
-  /** The `cancel_requested` of the journal, when it was read. */
+  /** The `cancel_requested` of the history, when it was read. */
   cancel?: { reason: CancelReason; message: string | null } | null;
-  /** Whether the journal was read: without a `cancel_requested`, the script threw it. */
-  journalRead?: boolean;
+  /** Whether the history was read: without a `cancel_requested`, the code threw it. */
+  historyRead?: boolean;
   createdAt?: string | null;
   expiresAt?: string | null;
   endedAt?: string | null;
@@ -57,14 +57,14 @@ export function cancelCause(facts: CancelFacts): CancelCause {
       ? { kind: "ttl", ttlMs }
       : { kind: "requested", message: facts.cancel.message };
   }
-  if (facts.journalRead) return { kind: "script" };
+  if (facts.historyRead) return { kind: "code" };
   // From a run's details alone: it ended at or after its deadline.
   if (facts.expiresAt && facts.endedAt && Date.parse(facts.endedAt) >= Date.parse(facts.expiresAt))
     return { kind: "ttl", ttlMs };
   return { kind: "unknown" };
 }
 
-/** The headline of an end: "Cancelled at its deadline", "Failed", "Aborted by the host". */
+/** The headline of an end: "Cancelled at its deadline", "Failed", "Aborted by the engine". */
 export function endTitle(kind: EndKind, cause: CancelCause | null = null): string {
   switch (kind) {
     case "completed":
@@ -72,15 +72,15 @@ export function endTitle(kind: EndKind, cause: CancelCause | null = null): strin
     case "failed":
       return "Failed";
     case "aborted":
-      return "Aborted by the host";
+      return "Aborted by the engine";
     case "cancelled":
       switch (cause?.kind) {
         case "ttl":
           return "Cancelled at its deadline";
         case "requested":
           return "Cancelled on request";
-        case "script":
-          return "Cancelled by its script";
+        case "code":
+          return "Cancelled by its code";
         default:
           return "Cancelled";
       }
@@ -98,8 +98,8 @@ export function causeText(cause: CancelCause): string | null {
       return cause.message
         ? `Cancellation was requested: “${cause.message}”.`
         : "Cancellation was requested, without a message.";
-    case "script":
-      return "The script threw CancelledError itself; no cancellation was requested.";
+    case "code":
+      return "Its code threw CancelledError itself; no cancellation was requested.";
     case "unknown":
       return null;
   }
@@ -115,7 +115,7 @@ export interface Pending {
   line: number | null;
 }
 
-/** The awaits pending just before entry `idx` (the cancellation, or the end). */
+/** The awaits pending just before event `idx` (the cancellation, or the end). */
 export function pendingBefore(model: RunModel, idx: number): Pending[] {
   return model.activities
     .filter((a) => {
@@ -133,8 +133,8 @@ export function pendingBefore(model: RunModel, idx: number): Pending[] {
 
 function pendingWhat(a: Activity): string {
   switch (a.kind) {
-    case "tool_call":
-      return `#${a.seq} ${a.tool}`;
+    case "call":
+      return `#${a.seq} ${a.action}`;
     case "timer":
       return `the ${formatDuration(a.durationMs)} sleep (timer #${a.seq})`;
     case "signal": {
@@ -148,8 +148,8 @@ function pendingWhat(a: Activity): string {
 
 function pendingText(a: Activity): string {
   switch (a.kind) {
-    case "tool_call":
-      return `#${a.seq} ${a.tool} was in flight`;
+    case "call":
+      return `#${a.seq} ${a.action} was in flight`;
     case "timer":
       return `it was sleeping ${formatDuration(a.durationMs)} (timer #${a.seq})`;
     case "signal": {
@@ -163,7 +163,7 @@ function pendingText(a: Activity): string {
   }
 }
 
-/** Whether an error, or a failure group's, is a cancellation. */
+/** Whether an error, or a fingerprint's, is a cancellation. */
 export function isCancellation(errorName: string | null | undefined): boolean {
   return errorName === CANCELLED_ERROR;
 }

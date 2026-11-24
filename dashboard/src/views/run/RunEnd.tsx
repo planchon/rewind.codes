@@ -1,5 +1,5 @@
 // How the run ended, told once at the top of its page: a cancellation says why (its deadline, a
-// request, its script) and what the run awaited then; a failure says what threw, where. The
+// request, its code) and what the run awaited then; a failure says what threw, where. The
 // error itself follows, its name apart from its message. The time cursor's bar says in which
 // step it ended, with the same mark.
 
@@ -29,7 +29,7 @@ export interface Ending {
   at: number | null;
 }
 
-/** How the run ended, from its details and its journal; `null` while it goes on. */
+/** How the run ended, from its details and its history; `null` while it goes on. */
 export function endingOf(run: Run, model: RunModel): Ending | null {
   const kind = endKindOf(run.status);
   if (!kind) return null;
@@ -37,7 +37,7 @@ export function endingOf(run: Run, model: RunModel): Ending | null {
     kind === "cancelled"
       ? cancelCause({
           cancel: model.cancel,
-          journalRead: model.end !== null,
+          historyRead: model.end !== null,
           createdAt: run.createdAt,
           expiresAt: run.expiresAt,
           endedAt: run.endedAt ?? null,
@@ -115,13 +115,13 @@ export function RunEndBanner({
   run,
   ending,
   model,
-  onSelectEntry,
+  onSelectEvent,
   onSelectLine,
 }: {
   run: Run;
   ending: Ending;
   model: RunModel;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
   onSelectLine: (line: number) => void;
 }) {
   const { zone } = useSettings();
@@ -150,7 +150,7 @@ export function RunEndBanner({
           {pending.length > 0 && (
             <>
               {why ? " " : ""}
-              {kind === "cancelled" ? "When it came, " : "When the host aborted it, "}
+              {kind === "cancelled" ? "When it came, " : "When the engine aborted it, "}
               <PendingList pending={pending} onSelectLine={onSelectLine} />.
             </>
           )}
@@ -170,19 +170,19 @@ export function RunEndBanner({
               className="link-btn mono"
               onClick={() => e.location && onSelectLine(e.location.line)}
             >
-              script.ts:{e.location.line}:{e.location.column}
+              workflow.ts:{e.location.line}:{e.location.column}
             </button>
           )}
           {failedCall && (
             <button
               type="button"
               className="link-btn"
-              onClick={() => call && onSelectEntry(call.idx)}
+              onClick={() => call && onSelectEvent(call.idx)}
               disabled={!call}
             >
               thrown by{" "}
               <span className="mono">
-                #{failedCall.seq} {failedCall.tool}
+                #{failedCall.seq} {failedCall.action}
               </span>
               : {failedCall.error.kind}, {failedCall.error.message}
             </button>

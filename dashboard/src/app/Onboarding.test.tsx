@@ -26,7 +26,7 @@ describe("the onboarding", () => {
     const switched = callsTo("/auth/session", "POST").at(-1);
     expect(JSON.parse((await switched?.body) ?? "")).toEqual({ organizationId: "org_01GLOBEX" });
     // The invitation's grant is hers.
-    expect(world.access.grants.get("org_01GLOBEX")?.get("user:user_01MARGARET")?.role).toBe(
+    expect(world.access.grants.get("org_01GLOBEX")?.get("member:user_01MARGARET")?.role).toBe(
       "harness",
     );
   });

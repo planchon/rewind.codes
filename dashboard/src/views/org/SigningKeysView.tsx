@@ -89,8 +89,8 @@ function SigningKeys() {
           </dl>
           {keys.data.keys.length === 0 ? (
             <p className="muted">
-              No key yet: the first toolset that names a server with <code>auth: rewind</code> makes
-              it.
+              No key yet: the first action set that names a server with <code>auth: rewind</code>{" "}
+              makes it.
             </p>
           ) : (
             <TableScroll>

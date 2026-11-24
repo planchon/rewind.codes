@@ -281,7 +281,7 @@ export interface paths {
         put?: never;
         /**
          * Inbound webhook: becomes a signal
-         * @description At the URL a script got from `webhook(name)`. A JSON body is the signal's payload; any
+         * @description At the URL a code got from `signalUrl(name)`. A JSON body is the signal's payload; any
          *     other body becomes the payload as a string; an empty body is `null`. The first of
          *     `Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's
          *     idempotency key.
@@ -383,7 +383,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/organizations/{tenant}/jwks.json": {
+    "/organizations/{organization}/jwks.json": {
         parameters: {
             query?: never;
             header?: never;
@@ -397,6 +397,94 @@ export interface paths {
          *     authentication; `Cache-Control: max-age=300`.
          */
         get: operations["getJwks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the action sets
+         * @description The action sets the tenant registered, by id, with their servers and action names.
+         */
+        get: operations["listActionSets"];
+        put?: never;
+        /**
+         * Register and pin an action set
+         * @description Connects to the MCP servers and lists their actions, reads the APIs' OpenAPI documents
+         *     (one action per operation), pins their schemas, policies and `auth`, and returns the
+         *     action set with its declarations, for the model's prompt, and the API operations it left
+         *     out. Content-addressed: registering the same action set again returns it (200). `secrets`
+         *     names the organization's secrets used to list the actions of an MCP server that needs one
+         *     (`secrets:use`). Requires `actions:write`.
+         */
+        post: operations["createActionSet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-sets/{id}/declarations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The action set's declarations */
+        get: operations["getActionSetDeclarations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-sets/{id}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the action set's actions (`search_actions`)
+         * @description For action sets too large for the prompt: the declarations of the actions matching a query.
+         */
+        get: operations["searchActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/actions/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latency, errors and redeliveries per action
+         * @description From the hourly counters, over a window of whole hours: per action, the calls of the runs of
+         *     a namespace or the tenant, filtered by the start of an action's name. The scope as
+         *     `GET /v1/runs/stats` takes it.
+         */
+        get: operations["getActionStats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -451,6 +539,133 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/calls/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Follow the harness calls handed to this worker (server-sent events)
+         * @description The calls of the harness actions it names (`actionSet`, `actions`), as they become ready,
+         *     among the runs the caller sees: an end user's token those of its namespace, a key limited to
+         *     labels those of the runs carrying them. At most `slots` are in flight on the stream at once.
+         *     Each event's `event` field names it and its `data` is a `CallStreamMessage`: `call`, a call
+         *     handed with its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call
+         *     handed on this stream that no longer waits for its answer. The open stream is the liveness
+         *     of every call handed on it: no heartbeat. When it closes, its calls wait for the grace of
+         *     their action (60 s by default) for a stream opened again with the same `worker`, which keeps
+         *     them; then each is handed to another worker with its delivery + 1, or fails with
+         *     `outcomeUnknown` when its action is not idempotent. A worker opens the stream again after it
+         *     drops, with a backoff. The server writes a comment line at least every 15 seconds while it
+         *     sends nothing else.
+         */
+        get: operations["streamCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/calls/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a call that waits for the harness
+         * @description A call under the `approval` policy is sent; a call parked by a schema change continues
+         *     against the new schema.
+         */
+        post: operations["approveCall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/calls/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject a call that waits for the harness
+         * @description The call fails with an `ActionError`.
+         */
+        post: operations["rejectCall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/calls/{token}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete a call with its result */
+        post: operations["completeCall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/calls/{token}/defer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer later
+         * @description The call waits for `/complete` or `/fail` with the same token, whether the stream it was
+         *     handed on stays open or not, up to its timeout.
+         */
+        post: operations["deferCall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/calls/{token}/fail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fail a call */
+        post: operations["failCall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/changes": {
         parameters: {
             query?: never;
@@ -464,10 +679,10 @@ export interface paths {
          *     plane, as the caller may see them: an end user's token its namespace's, a key or a member
          *     with `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them
          *     all. A run the caller cannot open never shows, not even its id. Each event's `event` field
-         *     names it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the
+         *     names it and its `data` is a `Change`: `run`, with the run's summary as it is now, the
          *     same object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's
-         *     owner once its batch is durable (a deleted run is not announced); `script`, `workflow`,
-         *     `secret`, `namespace` and `connection`, naming what changed in the control plane, whose
+         *     owner once its batch is durable (a deleted run is not announced); `workflow`, `secret`,
+         *     `namespace` and `connection`, naming what changed in the control plane, whose
          *     views are read again; `resync`, with `{}`, when more changed at once than the server reads
          *     in one pass: read again what is shown. Nothing is read on a timer: after a drop, read again
          *     what is shown and open a new stream, as there is no resume. The server writes a comment
@@ -496,11 +711,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Type-check a script (`check_script`)
-         * @description Against the sandbox lib and the toolset's declarations, in strict mode, with the checks
-         *     at start and the checker's own rules. Nothing runs.
+         * Type-check code (`check_workflow`)
+         * @description Against the sandbox lib and the action set's declarations, in strict mode, with the checks
+         *     at start and the checker's own rules. Nothing runs, nothing is created: when the
+         *     namespace or the organization already has the code, `workflow` names its workflow and
+         *     version.
          */
-        post: operations["checkScript"];
+        post: operations["checkWorkflow"];
         delete?: never;
         options?: never;
         head?: never;
@@ -607,7 +824,7 @@ export interface paths {
         /**
          * List the namespaces
          * @description The end users of the organization, each with the limits that apply, its exceptions and
-         *     its use of a month, by CPU, runs, scripts or name. Requires `namespaces:read`.
+         *     its use of a month, by CPU, runs, workflows or name. Requires `namespaces:read`.
          */
         get: operations["listNamespaces"];
         put?: never;
@@ -686,9 +903,9 @@ export interface paths {
         get?: never;
         /**
          * Put an end user's secret
-         * @description Creates or replaces the secret `secret` of the namespace, read by its runs that attach
+         * @description Creates or replaces the secret `secret` of the namespace, read by its runs that use
          *     `ns/<secret>`; a token puts its own namespace's. It takes no labels. The calls parked by a
-         *     refusal or a missing secret in the namespace's runs that attach it are ready again.
+         *     refusal or a missing secret in the namespace's runs that use it are ready again.
          *     Refused to a grant or a token limited to labels. Requires `secrets:write`.
          */
         put: operations["putNamespaceSecret"];
@@ -713,7 +930,7 @@ export interface paths {
         /**
          * What reads an end user's secret
          * @description As `GET /v1/secrets/{name}/usage`, for the namespace's secret: its runs, and the
-         *     workflows whose latest version attaches `ns/<secret>`. Requires `secrets:read`.
+         *     workflows whose latest version uses `ns/<secret>`. Requires `secrets:read`.
          */
         get: operations["getNamespaceSecretUsage"];
         put?: never;
@@ -927,7 +1144,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/organization/members/{user}": {
+    "/v1/organization/members/{member}": {
         parameters: {
             query?: never;
             header?: never;
@@ -948,7 +1165,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/organization/members/{user}/grant": {
+    "/v1/organization/members/{member}/grant": {
         parameters: {
             query?: never;
             header?: never;
@@ -1133,7 +1350,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/organizations/{tenant}/quotas": {
+    "/v1/organizations/{organization}/quotas": {
         parameters: {
             query?: never;
             header?: never;
@@ -1253,8 +1470,8 @@ export interface paths {
         get: operations["listRuns"];
         put?: never;
         /**
-         * Start a run (`run_script`)
-         * @description Compiles, checks and type-checks the script, then starts the run. With `wait`, the one
+         * Start a run (`run_workflow`)
+         * @description Compiles, checks and type-checks the code, then starts the run. With `wait`, the one
          *     request is answered when the run ends or is quarantined, or when `wait` passes, whichever
          *     comes first, however long `wait` is.
          */
@@ -1276,7 +1493,7 @@ export interface paths {
          * Failures grouped by cause
          * @description From the hourly counters, over a window of whole hours: the failed, cancelled and aborted
          *     runs of a namespace or the tenant, ended in the window, grouped by fingerprint: across
-         *     scripts, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
+         *     workflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
          *     it.
          */
         get: operations["listRunFailures"];
@@ -1329,7 +1546,7 @@ export interface paths {
         post?: never;
         /**
          * Erase a run
-         * @description Its journal, its archive, its read model rows and its payload references. An active run
+         * @description Its history, its archive, its read model rows and its payload references. An active run
          *     is cancelled first.
          */
         delete: operations["deleteRun"];
@@ -1355,26 +1572,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/runs/{id}/entries/{idx}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * One journal entry in full
-         * @description Every payload of the entry has its value, whatever its size.
-         */
-        get: operations["getRunEntry"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/runs/{id}/events": {
         parameters: {
             query?: never;
@@ -1383,11 +1580,51 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Stream the run's journal (server-sent events)
-         * @description Each event's `data` is a `StreamEvent`: the committed entries from `from`, then, with
-         *     `follow=1`, each new entry as it is committed, and `end` when the run has ended.
+         * Stream the run's history (server-sent events)
+         * @description Each event's `data` is a `StreamMessage`: the committed events from `from`, then, with
+         *     `follow=1`, each new event as it is committed, and `end` when the run has ended.
          */
         get: operations["streamRunEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{id}/events/{idx}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One event in full
+         * @description Every payload of the event has its value, whatever its size.
+         */
+        get: operations["getRunEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the history, or a cassette
+         * @description A document of the stored format v1 (`archi/02-history.md`).
+         */
+        get: operations["exportRun"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1405,7 +1642,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Fork a run with a corrected script (`retry_run`) */
+        /** Fork a run with a corrected code (`retry_run`) */
         post: operations["forkRun"];
         delete?: never;
         options?: never;
@@ -1428,26 +1665,6 @@ export interface paths {
          *     failures.
          */
         post: operations["giveUpRun"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/runs/{id}/journal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export the journal, or a cassette
-         * @description A document of the stored format v1 (`archi/02-journal.md`).
-         */
-        get: operations["exportRunJournal"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1486,7 +1703,7 @@ export interface paths {
         /**
          * Send a signal (`signal_run`)
          * @description The body, any JSON value, is the signal's payload (`null` when empty). It resolves the
-         *     script's `signal(name)`, now or the next time the script waits for that name.
+         *     code's `signal(name)`, now or the next time the code waits for that name.
          */
         post: operations["signalRun"];
         delete?: never;
@@ -1495,67 +1712,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/runs/{id}/trace": {
+    "/v1/runs/{id}/transcript": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** The run's trace, for a model */
-        get: operations["getRunTrace"];
+        /** The run's transcript, for a model */
+        get: operations["getRunTranscript"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/v1/scripts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List the distinct scripts executed
-         * @description From the hourly counters, over a window of whole hours: each script the runs of a
-         *     namespace or the tenant ran, with its runs by status and the tools it called. The scope as
-         *     `GET /v1/runs/stats` takes it.
-         */
-        get: operations["listScripts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/scripts/{digest}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** One script's source */
-        get: operations["getScript"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Give a script a title
-         * @description The title and description people see for the script, for the whole organization, over
-         *     those of the comment at its top: the source does not change. `title: null` removes them,
-         *     and the comment's show again. A new run of the script takes its origin from the title.
-         *     Requires `scripts:write`.
-         */
-        patch: operations["setScriptTitle"];
         trace?: never;
     };
     "/v1/secrets": {
@@ -1591,7 +1762,7 @@ export interface paths {
         /**
          * Put an organization's secret
          * @description Creates or replaces it, with its labels (a grant limited to labels gives it its own).
-         *     The calls parked by a refusal or a missing secret in the runs that attach it are ready
+         *     The calls parked by a refusal or a missing secret in the runs that use it are ready
          *     again, sent with the same idempotency key. Refused to an end user's token. Requires
          *     `secrets:write`.
          */
@@ -1599,7 +1770,7 @@ export interface paths {
         post?: never;
         /**
          * Delete an organization's secret
-         * @description The next call of a run that attaches it is parked (`credentials.expired`, reason
+         * @description The next call of a run that uses it is parked (`secret.expired`, reason
          *     `missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires
          *     `secrets:write`.
          */
@@ -1618,8 +1789,8 @@ export interface paths {
         };
         /**
          * What reads an organization's secret
-         * @description The active runs that attach it, those of them waiting on a call it serves, the
-         *     workflows whose latest version attaches it, its reads per day and its last read.
+         * @description The active runs that use it, those of them waiting on a call it serves, the
+         *     workflows whose latest version uses it, its reads per day and its last read.
          *     Requires `secrets:read`.
          */
         get: operations["getSecretUsage"];
@@ -1684,7 +1855,7 @@ export interface paths {
         get: operations["listSubscriptions"];
         put?: never;
         /**
-         * Subscribe to lifecycle events
+         * Subscribe to webhooks
          * @description The answer holds the signing secret, once.
          */
         post: operations["createSubscription"];
@@ -1711,132 +1882,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/tasks/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Follow the host-tool tasks handed to this worker (server-sent events)
-         * @description The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among
-         *     the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
-         *     runs carrying them. At most `slots` are in flight on the stream at once. Each event's
-         *     `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
-         *     its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
-         *     stream that no longer waits for its answer. The open stream is the liveness of every task
-         *     handed on it: no heartbeat. When it closes, its tasks wait for the grace of their tool
-         *     (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
-         *     each is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`
-         *     under `at_most_once`. A worker opens the stream again after it drops, with a backoff. The
-         *     server writes a comment line at least every 15 seconds while it sends nothing else.
-         */
-        get: operations["streamTasks"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/tasks/{id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Approve a task that waits for the harness
-         * @description A task under the `approval` policy is sent; a task parked by a schema change continues
-         *     against the new schema.
-         */
-        post: operations["approveTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/tasks/{id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reject a task that waits for the harness
-         * @description The call fails with a `ToolError`.
-         */
-        post: operations["rejectTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/tasks/{token}/complete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Complete a task with its result */
-        post: operations["completeTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/tasks/{token}/defer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Answer later
-         * @description The task waits for `/complete` or `/fail` with the same token, whether the stream it was
-         *     handed on stays open or not, up to its timeout.
-         */
-        post: operations["deferTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/tasks/{token}/fail": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Fail a task */
-        post: operations["failTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/test": {
         parameters: {
             query?: never;
@@ -1847,12 +1892,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run tests in mock mode (`test_script`)
-         * @description In virtual time, each test against its world: rules, mock handlers and a cassette. No
-         *     tool is really called. With `workflow`, the suite of that version runs too, against the
-         *     given script or toolset. Served by a server with the worker role.
+         * Run tests in a test run (`test_workflow`)
+         * @description In virtual time, each test against its world: rules, handlers and a cassette. No
+         *     action is really called. With `workflow`, its suite runs too, against the given code or
+         *     action set, else its version's, on the node that serves the request. Creates nothing and
+         *     changes no workflow.
          */
-        post: operations["testScript"];
+        post: operations["testWorkflow"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1900,94 +1946,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/tools/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Latency, errors and retries per tool
-         * @description From the hourly counters, over a window of whole hours: per tool, the calls of the runs of
-         *     a namespace or the tenant, filtered by the start of a tool's name. The scope as
-         *     `GET /v1/runs/stats` takes it.
-         */
-        get: operations["getToolStats"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/toolsets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List the toolsets
-         * @description The toolsets the tenant registered, by id, with their servers and tool names.
-         */
-        get: operations["listToolsets"];
-        put?: never;
-        /**
-         * Register and pin a toolset
-         * @description Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents
-         *     (one tool per operation), pins their schemas, policies and `auth`, and returns the
-         *     toolset with its declarations, for the model's prompt, and the API operations it left
-         *     out. Content-addressed: registering the same toolset again returns it (200). `secrets`
-         *     attaches organization's secrets to list the tools of an MCP server that needs one
-         *     (`secrets:use`). Requires `toolsets:write`.
-         */
-        post: operations["createToolset"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/toolsets/{id}/declarations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** The toolset's declarations */
-        get: operations["getToolsetDeclarations"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/toolsets/{id}/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search the toolset's tools (`search_tools`)
-         * @description For toolsets too large for the prompt: the declarations of the tools matching a query.
-         */
-        get: operations["searchTools"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/whoami": {
         parameters: {
             query?: never;
@@ -2020,20 +1978,23 @@ export interface paths {
         };
         /**
          * List the workflows
-         * @description The latest version of each workflow the caller sees, by name; with `script`, every version
-         *     whose script it is, newest first.
+         * @description The workflows the caller sees, by id: a caller of a namespace, its namespace's and the
+         *     organization's; else every namespace's and the organization's. Each with its latest
+         *     version and what its runs did in the window, from the hourly counters (the scope of the
+         *     counts as `GET /v1/runs/stats` takes it). Requires `runs:read`.
          */
         get: operations["listWorkflows"];
         put?: never;
         /**
-         * Save a workflow (`save_workflow`)
-         * @description Checks the workflow's script against its toolset and its own schemas, then runs its
-         *     suite: its parent's tests, minus those it retires and with those it updates, each with a
-         *     reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
-         *     every test passes. Saving the same workflow again returns the version saved first (200).
-         *     A key limited to labels saves a version of its own, carrying its labels, even when the
-         *     same workflow was saved under other labels or tenant-wide. Runs the script's tests:
-         *     served by a server with the worker role (503 on the api role when there is a test to run).
+         * Create a workflow
+         * @description Creates a workflow and its version 1 in the namespace `Rewind-Namespace` names, else the
+         *     organization's (a member or a key; an end user's token has no `workflows:write`). Checks
+         *     its code against its action set and, when it has one, its interface; checks the secrets
+         *     its runs use against the caller's rights; runs its tests through the gate. Without a
+         *     name, a code its scope already has answers that code's workflow, unchanged (200); a
+         *     creation sent again answers the workflow it created (200). Runs the tests on the node
+         *     that serves the request (503 when the run plane they run on fails). Requires
+         *     `workflows:write`.
          */
         post: operations["createWorkflow"];
         delete?: never;
@@ -2042,24 +2003,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workflows/{name}": {
+    "/v1/workflows/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** A workflow's versions */
-        get: operations["getWorkflowVersions"];
+        /**
+         * One workflow
+         * @description Its name and description, its scope, its source for a fork, its versions newest first,
+         *     its suite with the reasons its tests left it, and the code of its latest version, or of
+         *     the version `@v12` or `@<digest>` names. Requires `runs:read`.
+         */
+        get: operations["getWorkflow"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Name or describe a workflow
+         * @description A JSON merge patch of its name and its description: the same id, no new version; `null`
+         *     removes one. Requires `workflows:write`.
+         */
+        patch: operations["updateWorkflow"];
+        trace?: never;
+    };
+    "/v1/workflows/{id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork an organization's workflow into a namespace
+         * @description A workflow of the namespace `Rewind-Namespace` names, with the same name and description,
+         *     its `source` the organization's workflow and the version forked (its latest, or the one
+         *     `@v12` names), its version 1 that version, and a copy of its suite without the tests
+         *     recorded from another namespace's runs. The namespace's runs that name the workflow get
+         *     the fork from then on. Requires `workflows:write` and a namespace.
+         */
+        post: operations["forkWorkflow"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/workflows/{name}/record": {
+    "/v1/workflows/{id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote a workflow to the organization
+         * @description Moves a namespace's workflow to the organization, with its id, its versions and its
+         *     suite: every namespace's runs execute it from then on. An organization's workflow is
+         *     answered as it is. Requires `workflows:write`.
+         */
+        post: operations["promoteWorkflow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{id}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull a fork's source
+         * @description The source's latest version (its code, interface, action set and secrets) becomes the
+         *     fork's next version once the fork's own suite passes against it, and its `source` moves
+         *     to it. Nothing to pull answers the fork unchanged. Requires `workflows:write`.
+         */
+        post: operations["pullWorkflow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{id}/record": {
         parameters: {
             query?: never;
             header?: never;
@@ -2073,7 +2112,7 @@ export interface paths {
          * @description Takes the workflow's completed and failed runs the caller sees, those `runs` names or
          *     those `query` selects (the 1,000 newest at most), groups them by the path they took, and
          *     records the newest run of each path as a test, up to `limit`. The tests are stored and
-         *     join no suite: a save references them by digest.
+         *     join no suite: a version or a change of tests references them by digest.
          */
         post: operations["recordTests"];
         delete?: never;
@@ -2082,9 +2121,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-}
-export interface webhooks {
-    "credentials.expired": {
+    "/v1/workflows/{id}/tests": {
         parameters: {
             query?: never;
             header?: never;
@@ -2094,10 +2131,58 @@ export interface webhooks {
         get?: never;
         put?: never;
         /**
-         * The lifecycle event `credentials.expired`
-         * @description Sent to every subscription to `credentials.expired` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
+         * Change a workflow's tests
+         * @description Adds tests to its suite, replaces or retires some, with their reasons, without a version:
+         *     each test given and each replacement runs against its latest version first. Requires
+         *     `workflows:write`.
          */
-        post: operations["webhook_credentials_expired"];
+        post: operations["changeTests"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make a workflow's next version (`update_workflow`)
+         * @description Makes its next version through the gate: the workflow's suite, minus `retire`, with
+         *     `replace` applied, plus `tests`, runs against it, and the version is stored only if each
+         *     test passes. What the request leaves out is its latest version's. The same content
+         *     without a change of tests makes no version: the latest is answered (200). Requires
+         *     `workflows:write`.
+         */
+        post: operations["createVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
+export interface webhooks {
+    "action.schema_changed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The lifecycle event `action.schema_changed`
+         * @description Sent to every subscription to `action.schema_changed` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
+         */
+        post: operations["webhook_action_schema_changed"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2224,7 +2309,7 @@ export interface webhooks {
         patch?: never;
         trace?: never;
     };
-    "run.suspended": {
+    "run.waiting": {
         parameters: {
             query?: never;
             header?: never;
@@ -2234,17 +2319,17 @@ export interface webhooks {
         get?: never;
         put?: never;
         /**
-         * The lifecycle event `run.suspended`
-         * @description Sent to every subscription to `run.suspended` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
+         * The lifecycle event `run.waiting`
+         * @description Sent to every subscription to `run.waiting` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
          */
-        post: operations["webhook_run_suspended"];
+        post: operations["webhook_run_waiting"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "tool.schema_changed": {
+    "secret.expired": {
         parameters: {
             query?: never;
             header?: never;
@@ -2254,10 +2339,10 @@ export interface webhooks {
         get?: never;
         put?: never;
         /**
-         * The lifecycle event `tool.schema_changed`
-         * @description Sent to every subscription to `tool.schema_changed` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
+         * The lifecycle event `secret.expired`
+         * @description Sent to every subscription to `secret.expired` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
          */
-        post: operations["webhook_tool_schema_changed"];
+        post: operations["webhook_secret_expired"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2268,7 +2353,7 @@ export interface webhooks {
 export interface components {
     schemas: {
         /** @enum {string} */
-        AbortKind: "limit_exceeded" | "non_determinism" | "cancelled" | "invalid_script" | "internal";
+        AbortKind: "limit_exceeded" | "non_determinism" | "cancelled" | "invalid_code" | "internal";
         /** @description Why the host ended a run (`run_aborted`). */
         AbortReason: {
             kind: components["schemas"]["AbortKind"];
@@ -2279,9 +2364,183 @@ export interface components {
          * @enum {string}
          */
         Access: "read" | "run";
+        /** @description A pinned action. */
+        Action: {
+            /** @description The API, for an API action. */
+            api?: string | null;
+            description: string;
+            inputSchema: Record<string, unknown>;
+            /** @description As workflows call it: `github.list_issues`, `ask_user`, `http`. */
+            name: string;
+            outputSchema?: Record<string, unknown> | null;
+            /** @description The policy with its defaults filled in. */
+            policy: components["schemas"]["ActionPolicy"];
+            route: components["schemas"]["Route"];
+            /** @description The MCP server, for an MCP action. */
+            server?: string | null;
+        };
+        /** @description How a call failed, as the code sees it (a thrown `ActionError`). */
+        ActionFailure: {
+            data?: unknown;
+            kind: components["schemas"]["ActionFailureKind"];
+            message: string;
+        };
+        /** @enum {string} */
+        ActionFailureKind: "error" | "unavailable" | "timeout" | "outcome_unknown";
+        ActionMatch: {
+            description: string;
+            /** @description The action's declaration in `rewind-actions.d.ts`, with the types it uses. */
+            dts: string;
+            name: string;
+            /** @description The action's line of the prompt rendering. */
+            prompt: string;
+        };
         /**
-         * @description An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, "API tools"). Each
-         *     operation is a tool: its input the path, query and header parameters by name and the JSON
+         * @description An action's policy, pinned in the action set (`archi/04-tools.md`, "Policies"). Every field is
+         *     optional: what is not given takes its default.
+         */
+        ActionPolicy: {
+            /**
+             * @description The call waits for the harness's approval (`POST /v1/calls/{id}/approve`) before it is
+             *     sent. Off by default.
+             */
+            approval?: boolean | null;
+            /**
+             * Format: int32
+             * @description At most this many calls of the action in flight per run. The run's own limit (16) still
+             *     applies.
+             */
+            concurrency?: number | null;
+            /**
+             * @description Whether a call interrupted mid-flight (the dispatcher or the worker died) may be delivered
+             *     again. `true`: it is delivered again with the same idempotency key, up to 5 deliveries,
+             *     then fails with `outcomeUnknown`. `false`: it fails with `outcomeUnknown` at once, for
+             *     actions that ignore idempotency keys. `true` by default, but for an API's `POST` or `PATCH`
+             *     without an `Idempotency-Key` header.
+             */
+            idempotent?: boolean | null;
+            reconnectTimeout?: components["schemas"]["Duration"] | null;
+            timeout?: components["schemas"]["Duration"] | null;
+        };
+        /**
+         * @description An answer to the calls whose args contain `args`: `returns` (the result, `null` included) or
+         *     `error`, for `times` calls at most.
+         */
+        ActionRule: {
+            /** @description The call's args contain these (objects compared key by key); any call when absent. */
+            args?: Record<string, unknown> | null;
+            error?: components["schemas"]["RuleError"] | null;
+            /** @description The result. */
+            returns?: unknown;
+            /**
+             * Format: int32
+             * @description How many calls it answers; any number when absent.
+             */
+            times?: number | null;
+        };
+        /** @description One rule, or several tried in order. */
+        ActionRules: components["schemas"]["ActionRule"][] | components["schemas"]["ActionRule"];
+        /**
+         * @description A call parked because the action no longer matches its pinned schema
+         *     (`archi/04-tools.md`, "When an action set changes during a run"). Approve the call to continue
+         *     against the new schema, reject it, fork the run, or cancel it. The pinned schema is in the
+         *     action set; `message` says what changed.
+         */
+        ActionSchemaChanged: {
+            action: string;
+            /** @description The run's action set, where the pinned schema is. */
+            actionSet: string;
+            /** @description For `POST /v1/calls/{id}/approve` and `/reject`. */
+            callId: string;
+            labels: components["schemas"]["Labels"];
+            /**
+             * @description What changed, as the dispatcher saw it: the action is gone, its input schema refuses the
+             *     call's arguments, or its output schema changed. Written for the harness developer and
+             *     the model.
+             */
+            message: string;
+            namespace: components["schemas"]["NamespaceName"];
+            runId: string;
+            /** Format: int32 */
+            seq: number;
+            /** @description The action's MCP server. */
+            server?: string | null;
+        };
+        /** @description The actions matching a search, best first. */
+        ActionSearchResults: {
+            actions: components["schemas"]["ActionMatch"][];
+        };
+        /** @description A registered action set, as pinned. */
+        ActionSet: {
+            /** @description Every action a code of this action set can call, sorted by name. */
+            actions: components["schemas"]["Action"][];
+            /** @description Its APIs, sorted by name. */
+            apis?: components["schemas"]["ApiSummary"][];
+            declarations: components["schemas"]["Declarations"];
+            /** @description The digest of the pinned action set (SHA-256, lowercase hex). Runs record it. */
+            id: string;
+            servers: components["schemas"]["ServerSummary"][];
+            /**
+             * @description The operations of its APIs left out at registration: a body other than JSON, a cookie
+             *     parameter. Only in the answer of the registration.
+             */
+            skipped?: components["schemas"]["SkippedOperation"][];
+            /** @description The workflows its workflows may start, sorted by name. */
+            workflows?: components["schemas"]["PinnedWorkflow"][];
+        };
+        /** @description `GET /v1/action-sets`: the action sets registered by the tenant, by id. */
+        ActionSetList: {
+            actionSets: components["schemas"]["ActionSetSummary"][];
+        };
+        /** @description A registered action set, without its schemas and declarations. */
+        ActionSetSummary: {
+            /** @description The names of its actions, sorted. */
+            actions: string[];
+            /** @description Its APIs, sorted by name. */
+            apis?: components["schemas"]["ApiSummary"][];
+            id: string;
+            servers: components["schemas"]["ServerSummary"][];
+            /** @description The names of the workflows it pins, sorted. */
+            workflows?: string[];
+        };
+        ActionStats: {
+            action: string;
+            /**
+             * Format: int64
+             * @description Calls scheduled in the window.
+             */
+            calls: number;
+            /** @description Failed calls by kind: `error`, `unavailable`, `timeout`, `outcome_unknown`. */
+            errorKinds: {
+                [key: string]: number;
+            };
+            /**
+             * Format: int64
+             * @description Calls that failed, whatever the kind.
+             */
+            errors: number;
+            /**
+             * @description From `schedule_call` to the completion, in milliseconds, over the calls that have an
+             *     outcome; zeros when none has.
+             */
+            latencyMs: components["schemas"]["Latency"];
+            /**
+             * Format: int64
+             * @description Deliveries beyond the first, over every call.
+             */
+            redeliveries: number;
+        };
+        ActionStatsPage: {
+            /** @description By action name. */
+            actions: components["schemas"]["ActionStats"][];
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
+        };
+        /**
+         * @description An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, "API actions"). Each
+         *     operation is an action: its input the path, query and header parameters by name and the JSON
          *     body under `body`; its output the schema of its first `2xx` JSON response.
          */
         Api: {
@@ -2296,7 +2555,7 @@ export interface components {
              * @description Its calls in flight in the organization. 8 by default.
              */
             concurrency?: number | null;
-            /** @description The namespace of its tools in `rewind:tools`, an identifier as a server's name is. */
+            /** @description The namespace of its actions in `rewind:actions`, an identifier as a server's name is. */
             name: string;
             /**
              * @description Its OpenAPI document in JSON, or the URL it is read from once, at registration (at most
@@ -2309,12 +2568,12 @@ export interface components {
              */
             operations?: string[] | null;
             /**
-             * @description Policies of its tools, by operation name. An operation not listed gets the default of
-             *     its method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`
+             * @description Policies of its actions, by operation name. An operation not listed gets the default of
+             *     its method: idempotent for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; not idempotent
              *     for `POST` and `PATCH` unless it declares an `Idempotency-Key` header.
              */
             policies?: {
-                [key: string]: components["schemas"]["ToolPolicy"];
+                [key: string]: components["schemas"]["ActionPolicy"];
             };
         };
         /** @description An API key, without its secret but in the answer to its creation. */
@@ -2324,7 +2583,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /**
-             * @description The principal who created it: `user:<id>` or `key:<id>`. Absent for the operator's key
+             * @description The principal who created it: `member:<id>` or `key:<id>`. Absent for the operator's key
              *     given at start.
              */
             createdBy?: string | null;
@@ -2336,48 +2595,31 @@ export interface components {
              */
             key?: string | null;
             name: string;
+            /** @description The organization the key acts in, by its id. */
+            organizationId: string;
             /** Format: date-time */
             revokedAt?: string | null;
             /** @description The role of the key's grant. */
             role: string;
-            tenant: string;
         };
         /** @description `GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first. */
         ApiKeyList: {
             keys: components["schemas"]["ApiKey"][];
         };
-        /** @description An API of a toolset, as pinned. */
+        /** @description An API of an action set, as pinned. */
         ApiSummary: {
+            /**
+             * Format: int32
+             * @description How many actions it has.
+             */
+            actions: number;
             auth?: components["schemas"]["Auth"] | null;
             baseUrl: string;
             name: string;
-            /**
-             * Format: int32
-             * @description How many tools it has.
-             */
-            tools: number;
         };
-        /**
-         * @description One attachment that refused a start, a fork or a save, with what the caller may attach for
-         *     that server instead.
-         */
-        AttachmentProblem: {
-            /** @description The secrets the caller may attach for that server, `org/<name>` and `ns/<name>`. */
-            attachable?: string[];
-            problem: components["schemas"]["AttachmentProblemKind"];
-            /** @description The secret attached, as the request named it. */
-            secret?: string | null;
-            /** @description The MCP server or API. */
-            server: string;
-        };
-        /**
-         * @description Why an attachment refused a start, a fork or a save (`secret-required`).
-         * @enum {string}
-         */
-        AttachmentProblemKind: "missing" | "takes_none" | "unknown" | "forbidden";
         /**
          * @description How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,
-         *     "Authenticating calls"). Part of the pinned toolset; never a value.
+         *     "Authenticating calls"). Part of the pinned action set; never a value.
          */
         Auth: {
             /** @enum {string} */
@@ -2417,14 +2659,14 @@ export interface components {
              *     create one, or accept an invitation.
              */
             organizationId?: string | null;
+            person: components["schemas"]["Person"];
             /** @enum {string} */
             status: "authenticated";
-            user: components["schemas"]["User"];
         } | {
             organizations: components["schemas"]["Organization"][];
+            person: components["schemas"]["Person"];
             /** @enum {string} */
             status: "organization_selection_required";
-            user: components["schemas"]["User"];
         } | {
             email: string;
             /** @enum {string} */
@@ -2454,19 +2696,32 @@ export interface components {
         BTreeMap: {
             [key: string]: string;
         };
-        /** @description How many times a tool call was sent. */
-        CallAttempts: {
-            /**
-             * Format: int32
-             * @description From 1.
-             */
-            attempts: number;
-            /** Format: int32 */
-            seq: number;
+        /**
+         * @description The data of a `gone` message: a call handed on this stream no longer waits for its answer. Its
+         *     run ended, or its call timed out; an answer sent now is dropped (`call-gone`), and its slot is
+         *     free.
+         */
+        CallGone: {
+            /** @description The token the call was handed with. */
+            token: string;
         };
         /** @enum {string} */
         CallOrder: "any" | "listed";
-        /** @description A position in the script's TypeScript source (`script.ts`), 1-based. */
+        /**
+         * @description The state of a call.
+         * @enum {string}
+         */
+        CallState: "approval" | "ready" | "claimed" | "deferred" | "parked" | "done";
+        /**
+         * @description One message of the call stream (`GET /v1/calls/stream`). On the wire, each is a server-sent
+         *     event whose `event` field is `call` or `gone` and whose `data` is this JSON object; events
+         *     have no `id`. While it sends nothing else, the server writes a comment line (`:`) at least
+         *     every 15 seconds, so that proxies keep the stream open: a client skips comments, and may take
+         *     a stream silent for longer as broken. The stream closes once the caller stops authenticating
+         *     or no longer holds `calls:work`, as the change stream does.
+         */
+        CallStreamMessage: components["schemas"]["HandedCall"] | components["schemas"]["CallGone"];
+        /** @description A position in the code's TypeScript source (`workflow.ts`), 1-based. */
         Callsite: {
             /** Format: int32 */
             column: number;
@@ -2479,8 +2734,8 @@ export interface components {
          */
         CancelReason: "requested" | "ttl";
         /**
-         * @description `POST /v1/runs/{id}/cancel`: every pending await of the script rejects with
-         *     `CancelledError`; the script gets one activation to clean up.
+         * @description `POST /v1/runs/{id}/cancel`: every pending await of the code rejects with
+         *     `CancelledError`; the code gets one activation to clean up.
          */
         CancelRun: {
             /** @description The message of the `CancelledError`. */
@@ -2488,31 +2743,54 @@ export interface components {
             wait?: components["schemas"]["Duration"] | null;
         };
         /**
-         * @description One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
+         * @description One change of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
          *     whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
          *     summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
-         *     durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
+         *     durable; for `workflow`, `secret`, `namespace` and `connection`, what changed in the
          *     control plane, by its name or id (the client reads again the views that show it); for
          *     `resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:
          *     the stream is not resumed, the client reads again what it shows. While it sends nothing else,
          *     the server writes a comment line (`:`) at least every 15 seconds.
          */
-        ChangeEvent: components["schemas"]["RunSummary"] | components["schemas"]["ScriptChanged"] | components["schemas"]["WorkflowChanged"] | components["schemas"]["SecretChanged"] | components["schemas"]["NamespaceChanged"] | components["schemas"]["ConnectionChanged"] | components["schemas"]["Resync"];
+        Change: components["schemas"]["RunSummary"] | components["schemas"]["WorkflowChanged"] | components["schemas"]["SecretChanged"] | components["schemas"]["NamespaceChanged"] | components["schemas"]["ConnectionChanged"] | components["schemas"]["Resync"];
         /**
-         * @description `POST /v1/check`: type-checks a script against the sandbox lib and a toolset's
+         * @description `POST /v1/workflows/{id}/tests`: adds tests to its suite, replaces or retires some, with
+         *     their reasons, without a version: each test given and each replacement runs against its
+         *     latest version first (`tests-failed`). Its next version lists them.
+         */
+        ChangeTests: {
+            /** @description Tests of the suite replaced, each with a reason: their state or result is out of date. */
+            replace?: components["schemas"]["TestReplacement"][];
+            /** @description Tests of the suite retired, with a reason: they are deprecated. */
+            retire?: components["schemas"]["TestRetirement"][];
+            /**
+             * @description New tests: inline, by the digest of a recorded test, or a recorded test with a new
+             *     expectation.
+             */
+            tests?: components["schemas"]["TestInput"][];
+        };
+        /**
+         * @description `POST /v1/check`: type-checks a code against the sandbox lib and an action set's
          *     declarations, in strict mode, before anything runs.
          */
         CheckRequest: {
+            /**
+             * @description The action set whose `rewind:actions` the code imports. Without one, `rewind:actions` is
+             *     empty.
+             */
+            actionSet?: string | null;
             /** @description The TypeScript source: a single ES module whose default export is the entry point. */
-            script: string;
-            /** @description The toolset whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty. */
-            toolset?: string | null;
+            code: string;
         };
-        /** @description The diagnostics of a check. A script with only warnings passes. */
+        /**
+         * @description The diagnostics of a check. A code with only warnings passes. With `Rewind-Namespace`, the
+         *     workflow that has the code, if its namespace or the organization has one.
+         */
         CheckResult: {
             diagnostics: components["schemas"]["Diagnostic"][];
             /** @description No diagnostic of severity `error`. */
             ok: boolean;
+            workflow?: components["schemas"]["RunWorkflow"] | null;
         };
         /**
          * @description How a client made itself known to Rewind.
@@ -2545,8 +2823,16 @@ export interface components {
              */
             token_endpoint_auth_method?: string | null;
         };
-        /** @description `POST /v1/tasks/{token}/complete`: the tool's result, delivered to the script. */
-        CompleteTask: {
+        /**
+         * @description The comment at the top of a version's code: its first line, then the lines after it. Shown
+         *     for a workflow without a name or a description; never part of its identity.
+         */
+        CodeComment: {
+            description?: string | null;
+            title: string;
+        };
+        /** @description `POST /v1/calls/{token}/complete`: the action's result, delivered to the code. */
+        CompleteCall: {
             result: unknown;
         };
         /** @description A person's connection. */
@@ -2684,24 +2970,106 @@ export interface components {
             redirectTo: string;
         };
         /**
+         * @description `POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy
+         *     per action. Registering connects to the MCP servers and lists their actions, reads the APIs'
+         *     OpenAPI documents, and pins their schemas. The action set is content-addressed: registering the
+         *     same action set twice gives the same id. It holds no secret: a run uses its secrets when it
+         *     starts.
+         * @example {
+         *       "apis": [
+         *         {
+         *           "auth": {
+         *             "type": "rewind"
+         *           },
+         *           "name": "crm",
+         *           "openapi": "https://api.example.com/openapi.json"
+         *         }
+         *       ],
+         *       "harness": [
+         *         {
+         *           "description": "Ask the end user a question and return their answer.",
+         *           "inputSchema": {
+         *             "properties": {
+         *               "question": {
+         *                 "type": "string"
+         *               }
+         *             },
+         *             "required": [
+         *               "question"
+         *             ],
+         *             "type": "object"
+         *           },
+         *           "name": "ask_user",
+         *           "policy": {
+         *             "idempotent": false
+         *           }
+         *         }
+         *       ],
+         *       "mcp": [
+         *         {
+         *           "auth": {
+         *             "format": "Bearer {secret}",
+         *             "header": "Authorization",
+         *             "type": "secret"
+         *           },
+         *           "name": "github",
+         *           "url": "https://mcp.example.com/github"
+         *         }
+         *       ]
+         *     }
+         */
+        CreateActionSet: {
+            /**
+             * @description APIs described by OpenAPI documents: one action per operation, named
+             *     `<api>.<operationId>`, called by Rewind.
+             */
+            apis?: components["schemas"]["Api"][];
+            /**
+             * @description Derives the action set from a registered one: its servers, actions and workflows are kept as
+             *     pinned, without listing the servers again; `workflows` adds workflows or pins them again.
+             *     `mcp`, `harness` and `http` must then be empty.
+             */
+            base?: string | null;
+            /**
+             * @description Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/calls`). A
+             *     name `group.action` puts the action in the `group` namespace of `rewind:actions`.
+             */
+            harness?: components["schemas"]["HarnessAction"][];
+            http?: components["schemas"]["HttpAction"] | null;
+            /** @description MCP servers. Their actions are called by Rewind and named `<server>.<action>`. */
+            mcp?: components["schemas"]["McpServer"][];
+            /**
+             * @description The organization's secrets that list the actions of the MCP servers whose `auth` takes one,
+             *     by server: `{ "github": "org/github" }`. Only `org/` secrets; no run keeps them, and they
+             *     are not part of the action set's id. Requires `secrets:use`.
+             */
+            secrets?: components["schemas"]["BTreeMap"];
+            /**
+             * @description The workflows its workflows may start, from `rewind:workflows`: `triage` pins the latest
+             *     version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
+             *     action set's workflows are checked against them, and start them, for their whole life.
+             */
+            workflows?: string[];
+        };
+        /**
          * @description `POST /v1/api-keys`: a key `rewind_sk_…`, with its grant. Keys are stored hashed: the key
          *     itself is only in the answer. Creating a key needs every permission of its role.
          */
         CreateApiKey: {
             /**
-             * @description The key only sees runs carrying all these labels: an agent's tools see only their own
+             * @description The key only sees runs carrying all these labels: an agent's actions see only their own
              *     conversation's runs.
              */
             allowedLabels?: components["schemas"]["Labels"];
             /** @description What the key is for. */
             name: string;
+            /**
+             * @description Another organization than the caller's, by its id: only the operator names one, and the
+             *     organization is created with its first key.
+             */
+            organizationId?: string | null;
             /** @description A built-in role, a role of the tenant, or `operator` (only from the operator). */
             role: string;
-            /**
-             * @description Another tenant than the caller's: only the operator names one, and the tenant is
-             *     created with its first key.
-             */
-            tenant?: string | null;
         };
         /**
          * @description `POST /v1/organization/invitations`: invites an email with a role and allowed labels.
@@ -2716,15 +3084,15 @@ export interface components {
         CreateOrganization: {
             name: string;
         };
-        /** @description `POST /v1/subscriptions`: send these lifecycle events to `url`. */
+        /** @description `POST /v1/subscriptions`: send these webhooks to `url`. */
         CreateSubscription: {
-            /** @description The events to send. Every event when empty. */
-            events?: components["schemas"]["WebhookEventType"][];
             /**
-             * @description Only events about runs carrying these labels. A key limited to labels can only
+             * @description Only webhooks about runs carrying these labels. A key limited to labels can only
              *     subscribe within them.
              */
             labels?: components["schemas"]["Labels"];
+            /** @description The types of webhooks to send. Every type when empty. */
+            types?: components["schemas"]["WebhookType"][];
             /** @description An HTTPS URL of the harness. */
             url: string;
         };
@@ -2755,94 +3123,46 @@ export interface components {
             permissions?: components["schemas"]["Permission"][] | null;
         };
         /**
-         * @description `POST /v1/toolsets`: MCP servers, APIs, host tools and the `http` tool, with a policy per
-         *     tool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI
-         *     documents, and pins their schemas. The toolset is content-addressed: registering the same
-         *     toolset twice gives the same id. It holds no secret: a run attaches its secrets when it
-         *     starts.
-         * @example {
-         *       "apis": [
-         *         {
-         *           "auth": {
-         *             "type": "rewind"
-         *           },
-         *           "name": "crm",
-         *           "openapi": "https://api.example.com/openapi.json"
-         *         }
-         *       ],
-         *       "host": [
-         *         {
-         *           "description": "Ask the end user a question and return their answer.",
-         *           "inputSchema": {
-         *             "properties": {
-         *               "question": {
-         *                 "type": "string"
-         *               }
-         *             },
-         *             "required": [
-         *               "question"
-         *             ],
-         *             "type": "object"
-         *           },
-         *           "name": "ask_user",
-         *           "policy": {
-         *             "onInterruption": "at_most_once"
-         *           }
-         *         }
-         *       ],
-         *       "mcp": [
-         *         {
-         *           "auth": {
-         *             "format": "Bearer {secret}",
-         *             "header": "Authorization",
-         *             "type": "secret"
-         *           },
-         *           "name": "github",
-         *           "url": "https://mcp.example.com/github"
-         *         }
-         *       ]
-         *     }
+         * @description `POST /v1/workflows/{id}/versions`: makes its next version, through the gate: the workflow's
+         *     suite, minus `retire`, with `replace` applied, plus `tests`, runs against it, and the version
+         *     is stored only if each test passes (`tests-failed`). What it leaves out is its latest
+         *     version's: its code, its action set, its interface, its secrets. The same content without a
+         *     change of tests makes no version: the latest is answered (200).
          */
-        CreateToolset: {
+        CreateVersion: {
+            actionSet?: string | null;
+            code?: string | null;
             /**
-             * @description APIs described by OpenAPI documents: one tool per operation, named
-             *     `<api>.<operationId>`, called by Rewind.
+             * @description JSON Schema of the input of `main`. Given with `output` or `signals`, or alone, it gives
+             *     the version a new interface, as `CreateWorkflow.input` does; without any of the three, the
+             *     version keeps its latest version's.
              */
-            apis?: components["schemas"]["Api"][];
+            input?: Record<string, unknown> | null;
+            /** @description JSON Schema of what `main` returns. */
+            output?: Record<string, unknown> | null;
+            /** @description Tests of the suite replaced, each with a reason. */
+            replace?: components["schemas"]["TestReplacement"][];
+            /** @description Tests of the suite retired, with a reason. */
+            retire?: components["schemas"]["TestRetirement"][];
+            secrets?: components["schemas"]["BTreeMap"] | null;
             /**
-             * @description Derives the toolset from a registered one: its servers, tools and workflows are kept as
-             *     pinned, without listing the servers again; `workflows` adds workflows or pins them again.
-             *     `mcp`, `host` and `http` must then be empty.
+             * @description The signals its runs accept, by name, each with the JSON Schema of its payload. Names
+             *     starting with `rewind:` are reserved.
              */
-            base?: string | null;
-            /**
-             * @description Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
-             *     name `group.tool` puts the tool in the `group` namespace of `rewind:tools`.
-             */
-            host?: components["schemas"]["HostTool"][];
-            http?: components["schemas"]["HttpTool"] | null;
-            /** @description MCP servers. Their tools are called by Rewind and named `<server>.<tool>`. */
-            mcp?: components["schemas"]["McpServer"][];
-            /**
-             * @description The organization's secrets that list the tools of the MCP servers whose `auth` takes one,
-             *     by server: `{ "github": "org/github" }`. Only `org/` secrets; no run keeps them, and they
-             *     are not part of the toolset's id. Requires `secrets:use`.
-             */
-            secrets?: components["schemas"]["BTreeMap"];
-            /**
-             * @description The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
-             *     version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
-             *     toolset's scripts are checked against them, and start them, for their whole life.
-             */
-            workflows?: string[];
+            signals?: Record<string, unknown> | null;
+            /** @description New tests. */
+            tests?: components["schemas"]["TestInput"][];
         };
         /**
-         * @description `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
-         *     against its toolset and against its own schemas: its default export must take the input and
-         *     return the output, and `signal()` only takes the declared names. Saving the same workflow
-         *     again under the same labels returns the version saved first (200): the labels of a key limited
-         *     to labels are part of the version, so such a key saves a version of its own.
+         * @description `POST /v1/workflows`: creates a workflow and its version 1, in the namespace
+         *     `Rewind-Namespace` names, else the organization's. Its code is checked against its action set
+         *     and, when it has one, its interface: its default export must take the input and return the
+         *     output, and `signal()` only takes the declared names. Its tests run through the gate. Without
+         *     a name, a code its scope already has answers that code's workflow, unchanged (200); a
+         *     creation sent again answers the workflow it created (200).
          * @example {
+         *       "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+         *       "code": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
          *       "description": "Triage the stale issues of a repository, after approval.",
          *       "input": {
          *         "properties": {
@@ -2867,7 +3187,6 @@ export interface components {
          *         ],
          *         "type": "object"
          *       },
-         *       "script": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
          *       "signals": {
          *         "approval": {
          *           "properties": {
@@ -2880,85 +3199,48 @@ export interface components {
          *           ],
          *           "type": "object"
          *         }
-         *       },
-         *       "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4"
+         *       }
          *     }
          */
         CreateWorkflow: {
-            /** @description Shown to the model in the declarations. */
-            description?: string | null;
-            /** @description JSON Schema of the input of `main`. */
-            input: Record<string, unknown>;
-            /**
-             * @description What scripts import from `rewind:workflows`: an identifier that is not a reserved word of
-             *     JavaScript.
-             */
-            name: string;
-            /** @description JSON Schema of what `main` returns. */
-            output: Record<string, unknown>;
-            /**
-             * @description The version it derives from, `name@<version>`, `name@v<number>` or a version: the latest
-             *     version of the same name saved under the caller's labels when absent. Its suite is
-             *     inherited.
-             */
-            parent?: string | null;
-            /** @description Inherited tests dropped, with a reason: they are deprecated. */
-            retire?: components["schemas"]["TestRetirement"][];
+            /** @description The id of the action set its runs call, already registered. */
+            actionSet: string;
             /** @description The TypeScript source: a single ES module whose default export is the entry point. */
-            script: string;
+            code: string;
+            /** @description Shown, never part of its identity: at most 2,000 characters. */
+            description?: string | null;
             /**
-             * @description The secrets its runs attach, by MCP server or API (`org/<name>`, `ns/<name>`), part of
-             *     the version: checked against the saver's rights now (an `ns/` secret by its name only),
-             *     and read by its runs without checking the caller's again (`secret-required`).
+             * @description JSON Schema of the input of `main`. Given with `output` or `signals`, or alone, it gives
+             *     the version an interface; a missing input or output then takes anything (`true`), missing
+             *     signals declare none. Without any of the three, the version has no interface: any input,
+             *     output and signal name.
+             */
+            input?: Record<string, unknown> | null;
+            /**
+             * @description What `rewind:workflows` exports and callers start it by: an identifier of at most 64
+             *     characters that is not a reserved word of JavaScript and does not start with `wf_`,
+             *     unique in its scope (`name-taken`).
+             */
+            name?: string | null;
+            /** @description JSON Schema of what `main` returns. */
+            output?: Record<string, unknown> | null;
+            /**
+             * @description The secrets its runs use, by MCP server or API (`org/<name>`, `ns/<name>`), part of
+             *     the version: checked against the caller's rights now (an `ns/` secret by its name only),
+             *     and read by its runs without checking their callers' (`secret-required`).
              */
             secrets?: components["schemas"]["BTreeMap"];
             /**
              * @description The signals its runs accept, by name, each with the JSON Schema of its payload. Names
              *     starting with `rewind:` are reserved.
              */
-            signals?: Record<string, unknown>;
+            signals?: Record<string, unknown> | null;
             /**
-             * @description New tests: inline, by the digest of a recorded test, or a recorded test with a new
-             *     expectation.
+             * @description Its first suite: inline tests, digests of recorded tests, or recorded tests with a new
+             *     expectation. Each passes against version 1 first (`tests-failed`).
              */
             tests?: components["schemas"]["TestInput"][];
-            /** @description The id of the toolset its runs call, already registered. */
-            toolset: string;
-            /** @description Inherited tests replaced, each with a reason: their state or result is out of date. */
-            update?: components["schemas"]["TestUpdate"][];
         };
-        /**
-         * @description A call parked because its server refused the secret or the signature (`refused`), or
-         *     because the secret the run attached no longer exists (`missing`, nothing was sent). Put the
-         *     secret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,
-         *     for a refused signature, approve the call once the server accepts the key: the call is then
-         *     sent again with the same idempotency key.
-         */
-        CredentialsExpired: {
-            labels: components["schemas"]["Labels"];
-            /** @description What the server answered, or which secret is missing. */
-            message: string;
-            namespace: components["schemas"]["NamespaceName"];
-            reason: components["schemas"]["CredentialsExpiredReason"];
-            runId: string;
-            /**
-             * @description The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);
-             *     absent for a signed call.
-             */
-            secret?: string | null;
-            /** Format: int32 */
-            seq: number;
-            /** @description The tool's MCP server or API. */
-            server?: string | null;
-            taskId: string;
-            tool: string;
-            toolset: string;
-        };
-        /**
-         * @description Why a call waits in `credentials.expired`.
-         * @enum {string}
-         */
-        CredentialsExpiredReason: "refused" | "missing";
         /** @description The reads of a secret on one day (UTC). */
         DailyReads: {
             /** @description `2026-11-20`. */
@@ -2979,14 +3261,14 @@ export interface components {
         };
         /** @enum {string} */
         DeclarationFormat: "dts" | "prompt";
-        /** @description The toolset's declarations, generated by `rewind-codegen`. */
+        /** @description The action set's declarations, generated by `rewind-codegen`. */
         Declarations: {
             /**
-             * @description `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the
-             *     `rewind:workflows` module when the toolset pins workflows.
+             * @description `rewind-actions.d.ts`: the `rewind:actions` module, with action descriptions as JSDoc, and
+             *     the `rewind:workflows` module when the action set pins workflows.
              */
             dts: string;
-            /** @description The compact rendering for the model's prompt, one line per tool. */
+            /** @description The compact rendering for the model's prompt, one line per action. */
             prompt: string;
         };
         /** @description The declarations in one format. */
@@ -2995,12 +3277,22 @@ export interface components {
             text: string;
         };
         /**
-         * @description `POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with
-         *     `/complete` or `/fail` and the same token, whether the task stream it was handed on stays open
+         * @description `POST /v1/calls/{token}/defer`: the handler will answer later, possibly days later, with
+         *     `/complete` or `/fail` and the same token, whether the call stream it was handed on stays open
          *     or not: its slot on the stream is free.
          */
-        DeferTask: {
+        DeferCall: {
             timeout?: components["schemas"]["Duration"] | null;
+        };
+        /** @description How many times a call was sent. */
+        Deliveries: {
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            deliveries: number;
+            /** Format: int32 */
+            seq: number;
         };
         /**
          * @description One finding of the checks: tsgo's type errors, the checks at start, and the checker's own
@@ -3054,31 +3346,32 @@ export interface components {
         EmailVerification: {
             code: string;
         };
-        /** @description One journal entry. */
-        Entry: {
-            event: components["schemas"]["Event"];
-            /**
-             * Format: int64
-             * @description Position in the history: from 0, contiguous.
-             */
-            idx: number;
-            /**
-             * Format: date-time
-             * @description When the entry was committed; monotonic per run. Once a trigger is delivered, it is the
-             *     script's logical time.
-             */
-            recordedAt: string;
+        /**
+         * @description How a run failed: what `main` threw, the rejection it left unhandled, `DeadlockError`, or
+         *     `CancelledError`. The error of `fail_run` in the history, and a run's `error`, which adds
+         *     where it failed, for a model to fix it.
+         */
+        ErrorInfo: {
+            failedCall?: components["schemas"]["FailedCall"] | null;
+            /** @description A run's error: a few lines of the source around `location`. */
+            frame?: string | null;
+            location?: components["schemas"]["Callsite"] | null;
+            message: string;
+            /** @description `ActionError`, `TypeError`, `DeadlockError`, `CancelledError`… */
+            name: string;
+            /** @description The stack, source-mapped to `workflow.ts`, without the runtime's own frames. */
+            stack?: string | null;
         };
-        /** @description A journal event (`archi/02-journal.md`): lifecycle, commands, completions and annotations. */
+        /** @description A history event (`archi/02-history.md`): lifecycle, commands, completions and annotations. */
         Event: {
+            actionSet: string;
+            code: string;
             /** Format: int32 */
             epoch: number;
             /** Format: date-time */
             expiresAt: string;
             input: components["schemas"]["Payload"];
             mode: components["schemas"]["RunMode"];
-            script: string;
-            toolset: string;
             /** @enum {string} */
             type: "run_started";
         } | {
@@ -3086,13 +3379,13 @@ export interface components {
             /** @enum {string} */
             type: "run_aborted";
         } | {
+            action: string;
             args: components["schemas"]["Payload"];
             callsite?: components["schemas"]["Callsite"] | null;
             /** Format: int32 */
             seq: number;
-            tool: string;
             /** @enum {string} */
-            type: "schedule_tool_call";
+            type: "schedule_call";
         } | {
             callsite?: components["schemas"]["Callsite"] | null;
             /** Format: int64 */
@@ -3113,7 +3406,7 @@ export interface components {
             /** @enum {string} */
             type: "complete_run";
         } | {
-            error: components["schemas"]["ScriptError"];
+            error: components["schemas"]["ErrorInfo"];
             /** @enum {string} */
             type: "fail_run";
         } | {
@@ -3121,13 +3414,13 @@ export interface components {
             /** Format: int32 */
             seq: number;
             /** @enum {string} */
-            type: "tool_call_completed";
+            type: "call_completed";
         } | {
-            error: components["schemas"]["ToolFailure"];
+            error: components["schemas"]["ActionFailure"];
             /** Format: int32 */
             seq: number;
             /** @enum {string} */
-            type: "tool_call_failed";
+            type: "call_failed";
         } | {
             /** Format: int32 */
             seq: number;
@@ -3163,7 +3456,7 @@ export interface components {
         /** @description What must hold at the end of a test. Everything not given is not checked. */
         Expectations: {
             /**
-             * @description Calls that must happen: those to `tool` whose args contain `args`, exactly `times` of
+             * @description Calls that must happen: those to `action` whose args contain `args`, exactly `times` of
              *     them, at least one when `times` is absent; `times: 0` forbids them. Calls the world
              *     answers that are not listed are allowed.
              */
@@ -3175,10 +3468,10 @@ export interface components {
             status?: components["schemas"]["RunStatus"] | null;
         };
         ExpectedCall: {
+            action: string;
             args?: Record<string, unknown> | null;
             /** Format: int32 */
             times?: number | null;
-            tool: string;
         };
         ExpectedError: {
             message?: string | null;
@@ -3195,48 +3488,54 @@ export interface components {
          *     workflow and by namespace; the facets they do not count are empty.
          */
         Facets: {
+            actions: components["schemas"]["FacetValue"][];
             /** @description Errors the runs ended with (names and abort kinds), and kinds their calls failed with. */
             errors: components["schemas"]["FacetValue"][];
             /** @description The most frequent label keys, each with its most frequent values. */
             labels: components["schemas"]["LabelFacet"][];
             /** @description Namespaces, for a reader of every namespace; a reader of one sees only its own. */
             namespaces?: components["schemas"]["FacetValue"][];
-            /** @description Script digests. */
-            scripts: components["schemas"]["FacetValue"][];
             /** @description Signals waited for. */
             signals: components["schemas"]["FacetValue"][];
             statuses: components["schemas"]["FacetValue"][];
-            tools: components["schemas"]["FacetValue"][];
             waiting: components["schemas"]["FacetValue"][];
-            /** @description Workflows, by name: the runs of each. */
+            /** @description Workflows, by id: the runs of each. */
             workflows?: components["schemas"]["FacetValue"][];
         };
         /**
-         * @description `POST /v1/tasks/{token}/fail`: the tool failed. The script gets a `ToolError`, unless the
-         *     failure is retryable and the tool's policy is `retry`: the call is then made again, with
+         * @description `POST /v1/calls/{token}/fail`: the action failed. The code gets an `ActionError`, unless the
+         *     failure is retryable and the action is idempotent: the call is then delivered again, with
          *     backoff.
          */
-        FailTask: {
-            /** @description `ToolError.data`. */
+        FailCall: {
+            /** @description `ActionError.data`. */
             data?: unknown;
-            /** @description The message of the `ToolError`, written for the model. */
+            /** @description The message of the `ActionError`, written for the model. */
             message: string;
             /** @description A transient failure: call again later. */
             retryable?: boolean;
         };
+        /** @description The call a run's error names: the one whose failure the code did not catch. */
         FailedCall: {
+            action: string;
             args: components["schemas"]["Payload"];
             callsite?: components["schemas"]["Callsite"] | null;
-            error: components["schemas"]["ToolFailure"];
+            error: components["schemas"]["ActionFailure"];
             /** Format: int32 */
             seq: number;
-            tool: string;
+        };
+        FailureSample: {
+            /** @description Its handle, `<namespace>/<origin>/<suffix>`. */
+            handle: string;
+            id: string;
+            message: string;
+            status: components["schemas"]["RunStatus"];
         };
         /**
          * @description The runs that ended the same way: the same error name, and the same message once numbers,
          *     ids, times and double-quoted strings are set aside.
          */
-        FailureGroup: {
+        Fingerprint: {
             /** @description The error's name, or the abort's kind. */
             error: string;
             /** @description 16 hexadecimal digits: `fingerprint:` in a query. */
@@ -3251,86 +3550,79 @@ export interface components {
             latest: components["schemas"]["FailureSample"];
             /**
              * Format: int32
-             * @description The line of `script.ts` most of its runs ended at.
+             * @description The line of `workflow.ts` most of its runs ended at.
              */
             line?: number | null;
             /** Format: int64 */
             runs: number;
-            /**
-             * Format: int64
-             * @description Distinct scripts.
-             */
-            scripts: number;
-            /** @description One count per bucket from `since`: the runs that ended in it. */
+            /** @description One count per interval from `since`: the runs that ended in it. */
             series?: number[];
             /**
              * @description The error's name and message with placeholders (`<n>`, `<id>`, `<uuid>`, `<time>`,
              *     `<str>`) where they vary.
              */
             signature: string;
-        };
-        FailureGroupPage: {
-            bucket?: string | null;
-            /** @description The most runs first, then the latest ending first. */
-            groups: components["schemas"]["FailureGroup"][];
             /**
              * Format: int64
-             * @description Runs in every group.
+             * @description Distinct workflows.
+             */
+            workflows: number;
+        };
+        FingerprintPage: {
+            /** @description The most runs first, then the latest ending first. */
+            fingerprints: components["schemas"]["Fingerprint"][];
+            interval?: string | null;
+            /**
+             * Format: int64
+             * @description Runs of every fingerprint.
              */
             runs: number;
             /** Format: date-time */
             since?: string | null;
             /**
              * Format: int64
-             * @description Groups in all, beyond `limit` included.
+             * @description Fingerprints in all, beyond `limit` included.
              */
-            totalGroups: number;
+            totalFingerprints: number;
             /** Format: date-time */
             until: string;
         };
-        FailureSample: {
-            /** @description Its handle, `<namespace>/<origin>/<suffix>`. */
-            handle: string;
-            id: string;
-            message: string;
-            status: components["schemas"]["RunStatus"];
-        };
-        /** @description The run a fork was started from. */
-        ForkParent: {
-            /**
-             * Format: int64
-             * @description The entry from which the fork was forced live, if the request gave one.
-             */
-            at?: number | null;
-            /** @description The parent's handle; its id once it is erased. */
-            handle: string;
-            /** @description The parent's id. */
-            run: string;
-        };
         /**
-         * @description `POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected script. While its
-         *     commands match the parent's, the parent's recorded results are reused and no tool is called
-         *     again; it continues live at the first difference, at `at`, or at the end of the parent's
+         * @description `POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its
+         *     commands match the source's, the source's recorded results are reused and no action is called
+         *     again; it continues live at the first difference, at `at`, or at the end of the source's
          *     history (`archi/03-execution.md`, "Forks"). Takes `Idempotency-Key` as `POST /v1/runs`.
          */
         ForkRun: {
             /**
              * Format: int64
-             * @description Go live from this journal entry even if the commands still match.
+             * @description Go live from this event even if the commands still match.
              */
             at?: number | null;
-            /** @description Type-check the corrected script first. `true` by default. */
+            /** @description Type-check the corrected code first. `true` by default. */
             check?: boolean | null;
-            /** @description The fork's input. The parent's when absent. */
+            /** @description The corrected TypeScript source. */
+            code: string;
+            /** @description The fork's input. The source's when absent. */
             input?: unknown;
             labels?: components["schemas"]["Labels"] | null;
-            /** @description The corrected TypeScript source. */
-            script: string;
             secrets?: components["schemas"]["BTreeMap"] | null;
             traceparent?: string | null;
             tracestate?: string | null;
             ttl?: components["schemas"]["Duration"] | null;
             wait?: components["schemas"]["Duration"] | null;
+        };
+        /** @description The run a fork was started from. */
+        ForkSource: {
+            /**
+             * Format: int64
+             * @description The event from which the fork was forced live, if the request gave one.
+             */
+            at?: number | null;
+            /** @description The source's handle; its id once it is erased. */
+            handle: string;
+            /** @description The source's id. */
+            run: string;
         };
         /** @description What a principal holds in a tenant: a role, and optionally allowed labels. */
         Grant: {
@@ -3342,7 +3634,7 @@ export interface components {
              */
             grantedAt?: string | null;
             /**
-             * @description The principal who gave it: `user:<id>` or `key:<id>`. Absent for the grants the server
+             * @description The principal who gave it: `member:<id>` or `key:<id>`. Absent for the grants the server
              *     gives (an organization's creator, a member's default role, the operator).
              */
             grantedBy?: string | null;
@@ -3353,24 +3645,25 @@ export interface components {
             role: string;
         };
         /**
-         * @description A host-tool call handed to a worker on its task stream. The worker answers it by its token,
+         * @description A harness call handed to a worker on its call stream. The worker answers it by its token,
          *     with `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it
          *     works.
          */
-        HandedTask: {
-            /** @description The arguments, validated against the tool's input schema. */
+        HandedCall: {
+            action: string;
+            /** @description The arguments, validated against the action's input schema. */
             args: unknown;
             /**
              * Format: int32
-             * @description From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed
+             * @description From 1. Above 1, an earlier delivery was interrupted: the stream it was handed on closed
              *     and did not come back within its grace.
              */
-            attempt: number;
-            /** @description The task's id, as listed in the run's state. */
+            delivery: number;
+            /** @description The call's id, as listed in the run's state. */
             id: string;
             /**
-             * @description `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
-             *     attempt: the handler uses it to recognize a call it already made.
+             * @description `{run_id}/{seq}` (a fork's call made again keeps its source's), the same on every
+             *     delivery: the handler uses it to recognize a call it already made.
              */
             idempotencyKey: string;
             /** @description The run's labels. */
@@ -3382,43 +3675,58 @@ export interface components {
             seq: number;
             /**
              * Format: int64
-             * @description The tool's execution timeout, in milliseconds: past it, the call is not waited for any
-             *     more. Absent when the tool has none, the default of host tools: the run's TTL bounds it.
+             * @description The action's execution timeout, in milliseconds: past it, the call is not waited for any
+             *     more. Absent when the action has none, the default of harness actions: the run's TTL bounds
+             *     it.
              */
             timeoutMs?: number | null;
             /**
-             * @description The hand-out's secret token: `/v1/tasks/{token}/…`. A new one at each hand-out. It names
+             * @description The hand-out's secret token: `/v1/calls/{token}/…`. A new one at each hand-out. It names
              *     the run, so an answer reaches the run's owner from whichever process receives it.
              */
             token: string;
-            tool: string;
-            /** @description W3C trace context, with the tool call's span as parent. */
+            /** @description W3C trace context, with the call's span as parent. */
             traceparent?: string | null;
             tracestate?: string | null;
         };
-        /** @description A function of the harness, called by scripts and executed by the harness's SDK worker. */
-        HostTool: {
+        /** @description A function of the harness, called by workflows and executed by the harness's SDK worker. */
+        HarnessAction: {
             /** @description Shown to the model in the declarations. */
             description: string;
             /** @description JSON Schema of the arguments. Arguments are validated against it before the call. */
             inputSchema: Record<string, unknown>;
             /**
-             * @description `group.tool` puts the tool in a group, the namespace `rewind:tools` exports it under. The
-             *     group, and a name without a dot, may not be a reserved word of JavaScript.
+             * @description `group.action` puts the action in a group, the namespace `rewind:actions` exports it under.
+             *     The group, and a name without a dot, may not be a reserved word of JavaScript.
              */
             name: string;
             /** @description JSON Schema of the result, for the declarations. Results are not validated. */
             outputSchema?: Record<string, unknown> | null;
-            policy?: components["schemas"]["ToolPolicy"] | null;
+            policy?: components["schemas"]["ActionPolicy"] | null;
+        };
+        /** @description One event. */
+        HistoryEvent: {
+            event: components["schemas"]["Event"];
+            /**
+             * Format: int64
+             * @description Position in the history: from 0, contiguous.
+             */
+            idx: number;
+            /**
+             * Format: date-time
+             * @description When the event was committed; monotonic per run. Once a trigger is delivered, it is the
+             *     code's logical time.
+             */
+            recordedAt: string;
         };
         /**
-         * @description The built-in `http` tool: requests leave from the dispatcher, never from the isolate, and
-         *     only toward these hosts (`archi/04-tools.md`, "The `http` tool and egress").
+         * @description The built-in `http` action: requests leave from the dispatcher, never from the isolate, and
+         *     only toward these hosts (`archi/04-tools.md`, "The `http` action and egress").
          */
-        HttpTool: {
+        HttpAction: {
             /** @description Host names, such as `api.example.com`. `*.example.com` allows the subdomains. */
             allow: string[];
-            policy?: components["schemas"]["ToolPolicy"] | null;
+            policy?: components["schemas"]["ActionPolicy"] | null;
         };
         /**
          * @description `GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which
@@ -3429,16 +3737,16 @@ export interface components {
             /** @description The deployment's operator: every permission in its tenant, and the keys of every tenant. */
             operator: boolean;
             organization?: components["schemas"]["OrganizationSettings"] | null;
+            /**
+             * @description The organization the caller acts in, by its id. Absent for a member signed in without
+             *     an organization, who reaches only the onboarding endpoints.
+             */
+            organizationId?: string | null;
             /** @description For a member: every organization they belong to. */
             organizations?: components["schemas"]["Organization"][];
             /** @description What the grant's role allows, in the catalog's order. */
             permissions: components["schemas"]["Permission"][];
             principal?: components["schemas"]["Principal"] | null;
-            /**
-             * @description The tenant the caller acts in. Absent for a member signed in without an organization,
-             *     who reaches only the onboarding endpoints.
-             */
-            tenant?: string | null;
         };
         /** @description An invitation sent by email, with the grant its invitee gets on accepting it. */
         Invitation: {
@@ -3476,7 +3784,7 @@ export interface components {
             x: string;
         };
         /**
-         * @description `GET /organizations/{tenant}/jwks.json`: the organization's public keys, as a JSON Web Key
+         * @description `GET /organizations/{organization}/jwks.json`: the organization's public keys, as a JSON Web Key
          *     Set (RFC 7517), served without authentication.
          */
         Jwks: {
@@ -3493,21 +3801,21 @@ export interface components {
         };
         /**
          * @description Run labels: a bounded string map set when a run starts (agent, conversation, end user…).
-         *     They filter runs and scope API keys and webhooks. The script never sees them.
+         *     They filter runs and scope API keys and webhooks. The code never sees them.
          */
         Labels: {
             [key: string]: string;
         };
         /**
-         * @description The last read of a secret: by which run, of which namespace, when. A toolset's registration
-         *     reads an organization's secret to list the tools of the MCP server it is attached for, before
+         * @description The last read of a secret: by which run, of which namespace, when. An action set's registration
+         *     reads an organization's secret to list the actions of the MCP server it is used for, before
          *     any run exists: such a read names neither run nor namespace.
          */
         LastRead: {
             /** Format: date-time */
             at: string;
             namespace?: components["schemas"]["NamespaceName"] | null;
-            /** @description The run that read it; `null` for a toolset's registration. */
+            /** @description The run that read it; `null` for an action set's registration. */
             run?: string | null;
             /** @description That run's handle, while the run is kept. */
             runHandle?: string | null;
@@ -3522,7 +3830,7 @@ export interface components {
             /** Format: int64 */
             p99: number;
         };
-        /** @description A span in `script.ts`, 1-based, the end exclusive. */
+        /** @description A span in `workflow.ts`, 1-based, the end exclusive. */
         Location: {
             /** Format: int32 */
             column: number;
@@ -3535,14 +3843,14 @@ export interface components {
         };
         /** @enum {string} */
         LogLevel: "debug" | "info" | "warn" | "error";
-        /** @description One line of the script's console. */
+        /** @description One line of the code's console. */
         LogLine: {
             /** Format: date-time */
             at: string;
             callsite?: components["schemas"]["Callsite"] | null;
             /**
              * Format: int64
-             * @description The journal entry.
+             * @description The event.
              */
             idx: number;
             level: components["schemas"]["LogLevel"];
@@ -3579,16 +3887,16 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description The namespace of its tools in `rewind:tools`: an identifier that is not a reserved word of
-             *     JavaScript (`default`, `delete`, `let`…).
+             * @description The namespace of its actions in `rewind:actions`: an identifier that is not a reserved word
+             *     of JavaScript (`default`, `delete`, `let`…).
              */
             name: string;
             /**
-             * @description Policies of its tools, by tool name as the server defines it. Tools not listed get the
+             * @description Policies of its actions, by action name as the server defines it. Actions not listed get the
              *     default policy.
              */
             policies?: {
-                [key: string]: components["schemas"]["ToolPolicy"];
+                [key: string]: components["schemas"]["ActionPolicy"];
             };
             /**
              * @description The URL of a streamable HTTP server. A server of a deployment reaches it only at a public
@@ -3601,8 +3909,8 @@ export interface components {
         /** @description A member of the organization, with their grant. */
         Member: {
             grant?: components["schemas"]["Grant"] | null;
+            person: components["schemas"]["Person"];
             status: components["schemas"]["MembershipStatus"];
-            user: components["schemas"]["User"];
         };
         /** @description `GET /v1/organization/members`. */
         MemberList: {
@@ -3734,11 +4042,6 @@ export interface components {
             error: string;
             error_description?: string | null;
         };
-        /**
-         * @description After an interruption (the dispatcher or the worker died mid-call).
-         * @enum {string}
-         */
-        OnInterruption: "retry" | "at_most_once";
         /** @description An OpenAPI document, or where to read it. */
         OpenApiDocument: string | Record<string, unknown>;
         /** @description An organization to open, with its access and labels. */
@@ -3769,12 +4072,26 @@ export interface components {
             name: string;
         };
         /**
-         * @description Why a task is parked.
+         * @description Why a call is parked.
          * @enum {string}
          */
         ParkedReason: "schema_changed" | "credentials_refused" | "secret_missing";
         /**
-         * @description A JSON value carried by a run (its input and output, tool arguments and results, signal
+         * @description `PATCH /v1/workflows/{id}`: a JSON merge patch of its name and description. The same id, no
+         *     new version.
+         * @example {
+         *       "description": null,
+         *       "name": "triage"
+         *     }
+         */
+        PatchWorkflow: {
+            /** @description At most 2,000 characters; `null` removes it. */
+            description?: string | null;
+            /** @description A name gives or changes it (`name-taken`, `invalid-workflow`); `null` removes it. */
+            name?: string | null;
+        };
+        /**
+         * @description A JSON value carried by a run (its input and output, action arguments and results, signal
          *     payloads), identified by the SHA-256 of its canonical JSON (RFC 8785).
          */
         Payload: {
@@ -3797,7 +4114,7 @@ export interface components {
          * @description A kind of action. Every endpoint requires one; a role is a set of them.
          * @enum {string}
          */
-        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "scripts:write" | "secrets:read" | "secrets:write" | "secrets:use" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
+        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "actions:read" | "actions:write" | "workflows:write" | "secrets:read" | "secrets:write" | "secrets:use" | "calls:work" | "calls:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
         /** @description A permission of the catalog, with what it lets the caller do. */
         PermissionInfo: {
             description: string;
@@ -3807,11 +4124,23 @@ export interface components {
         PermissionList: {
             permissions: components["schemas"]["PermissionInfo"][];
         };
-        /** @description A workflow a toolset pins. */
+        /** @description A person, as the identity provider knows them. */
+        Person: {
+            email: string;
+            firstName?: string | null;
+            /** @description `user_01J…`. */
+            id: string;
+            lastName?: string | null;
+            pictureUrl?: string | null;
+        };
+        /** @description A workflow an action set pins, and the version it pins. */
         PinnedWorkflow: {
             description?: string | null;
+            digest: string;
+            id: string;
             name: string;
-            version: string;
+            /** Format: int32 */
+            version: number;
         };
         /** @description Who calls. */
         Principal: {
@@ -3821,8 +4150,8 @@ export interface components {
             kind: "key";
         } | {
             /** @enum {string} */
-            kind: "user";
-            user: components["schemas"]["User"];
+            kind: "member";
+            person: components["schemas"]["Person"];
         } | {
             /** Format: date-time */
             expires_at: string;
@@ -3866,15 +4195,15 @@ export interface components {
             /** Format: int64 */
             used?: number;
         } & {
-            /** @description With `secret-required`: each attachment at fault, with what the caller may attach. */
-            attachments?: components["schemas"]["AttachmentProblem"][];
             /** @description What went wrong in this request, and what to do instead. Written for a model. */
             detail: string;
-            /** @description With `invalid-script`: why the script was refused, with locations in `script.ts`. */
+            /** @description With `invalid-code`: why the code was refused, with locations in `workflow.ts`. */
             diagnostics?: components["schemas"]["Diagnostic"][];
             /** @description The path of the request, or of the resource the problem is about. */
             instance?: string | null;
             query?: components["schemas"]["QuerySpan"] | null;
+            /** @description With `secret-required`: each secret at fault, with what the caller may use. */
+            secrets?: components["schemas"]["SecretProblem"][];
             /**
              * Format: int32
              * @description The HTTP status code.
@@ -3900,7 +4229,7 @@ export interface components {
             resource_name: string;
             scopes_supported: string[];
         };
-        /** @description `PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling. */
+        /** @description `PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling. */
         PutCeiling: {
             ceiling: components["schemas"]["Quotas"];
         };
@@ -3926,7 +4255,7 @@ export interface components {
         /**
          * @description `PUT /v1/secrets/{name}` and `PUT /v1/namespaces/{name}/secrets/{secret}`: creates or
          *     replaces a secret. Replacing it makes ready the calls a refusal or a missing secret parked in
-         *     the runs that attach it, sent again with the same idempotency key.
+         *     the runs that use it, sent again with the same idempotency key.
          * @example {
          *       "labels": {
          *         "env": "prod"
@@ -3936,7 +4265,7 @@ export interface components {
          */
         PutSecret: {
             /**
-             * @description An organization's secret's labels: a grant limited to labels sees, writes and attaches
+             * @description An organization's secret's labels: a grant limited to labels sees, writes and uses
              *     only the secrets carrying them, and the secrets it writes take them. A namespace's secret
              *     takes none (`invalid-request`).
              */
@@ -3998,7 +4327,7 @@ export interface components {
          * @description A quota, as `quota-exceeded` and `quota.alert` name it.
          * @enum {string}
          */
-        QuotaKind: "cpu_per_month" | "active_runs" | "runs_per_month" | "scripts" | "max_ttl" | "max_script_lines";
+        QuotaKind: "cpu_per_month" | "active_runs" | "runs_per_month" | "workflows" | "max_ttl" | "max_code_lines";
         /**
          * @description The quota a `quota-exceeded` problem reached. A monthly quota's answer also carries
          *     `Retry-After`.
@@ -4042,9 +4371,9 @@ export interface components {
             runsStarted: number;
             /**
              * Format: int64
-             * @description Distinct scripts with at least one run kept.
+             * @description Distinct workflows with at least one run kept.
              */
-            scripts: number;
+            workflows: number;
         };
         /**
          * @description Limits, each optional: an absent one does not limit. The same shape serves a tenant's
@@ -4060,9 +4389,9 @@ export interface components {
             cpuPerMonth?: components["schemas"]["Duration"] | null;
             /**
              * Format: int32
-             * @description The most lines a script may have (422 `invalid-script` above it).
+             * @description The most lines a code may have (422 `invalid-code` above it).
              */
-            maxScriptLines?: number | null;
+            maxCodeLines?: number | null;
             maxTtl?: components["schemas"]["Duration"] | null;
             /**
              * Format: int64
@@ -4071,14 +4400,14 @@ export interface components {
             runsPerMonth?: number | null;
             /**
              * Format: int64
-             * @description Distinct scripts with at least one run kept in the namespace (429 for a new one above
+             * @description Distinct workflows with at least one run kept in the namespace (429 for a new one above
              *     it).
              */
-            scripts?: number | null;
+            workflows?: number | null;
         };
         /**
-         * @description `POST /v1/workflows/{name}/record`: tests recorded from the workflow's past runs, one per
-         *     path. They are stored, and join a suite only when a save references them.
+         * @description `POST /v1/workflows/{id}/record`: tests recorded from the workflow's past runs, one per
+         *     path. They are stored, and join a suite only when a version or a change of tests gives them.
          * @example {
          *       "limit": 20,
          *       "query": "status:completed"
@@ -4100,7 +4429,7 @@ export interface components {
         };
         /** @description A test recorded from a run. */
         RecordedTest: {
-            /** @description What `save_workflow` takes in `tests`. */
+            /** @description What a version or a change of tests takes in `tests`. */
             digest: string;
             name: string;
             /**
@@ -4143,14 +4472,21 @@ export interface components {
             response_types: string[];
             token_endpoint_auth_method: string;
         };
-        /** @description `POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message. */
-        RejectTask: {
+        /** @description `POST /v1/calls/{id}/reject`: the call fails with an `ActionError` carrying this message. */
+        RejectCall: {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
             message?: string | null;
         };
+        /** @description A test of the workflow's suite a version replaced. */
+        ReplacedTest: {
+            name: string;
+            new: string;
+            old: string;
+            reason: string;
+        };
         /** @description The data of a `resync` event: an empty object. */
         Resync: Record<string, unknown>;
-        /** @description A test of the parent a version does not keep. */
+        /** @description A test of the workflow's suite a version does not keep. */
         RetiredTest: {
             digest: string;
             name: string;
@@ -4200,27 +4536,31 @@ export interface components {
             roles: components["schemas"]["Role"][];
         };
         /**
-         * @description Who calls the tool (`archi/04-tools.md`, "Routes").
+         * @description Who calls the action (`archi/04-tools.md`, "Routes").
          * @enum {string}
          */
-        Route: "mcp" | "api" | "host" | "builtin";
+        Route: "mcp" | "api" | "harness" | "builtin";
         /** @description A failure a rule answers with. */
         RuleError: {
             data?: unknown;
-            kind?: components["schemas"]["ToolFailureKind"] | null;
+            kind?: components["schemas"]["ActionFailureKind"] | null;
             message: string;
         };
-        /** @description The state of a run: a projection of its journal, with its metadata. */
+        /** @description The state of a run: a projection of its history, with its metadata. */
         Run: {
             abort?: components["schemas"]["AbortReason"] | null;
-            /**
-             * @description How many times each tool call was sent, by seq, for the calls sent more than once: a
-             *     call retried after a transient failure, or sent again after its worker or dispatcher
-             *     died. Attempts live in the tool tasks, not in the journal: the read model keeps them.
-             */
-            attempts?: components["schemas"]["CallAttempts"][];
+            /** @description Digest of the pinned action set. */
+            actionSet: string;
+            /** @description Digest of the run's code, its TypeScript source. */
+            codeDigest: string;
             /** Format: date-time */
             createdAt: string;
+            /**
+             * @description How many times each call was delivered, by seq, for the calls delivered more than once: a
+             *     call delivered again after a transient failure, or after its worker or dispatcher died.
+             *     Deliveries live in the calls' tasks, not in the history: the read model keeps them.
+             */
+            deliveries?: components["schemas"]["Deliveries"][];
             /** Format: date-time */
             endedAt?: string | null;
             /**
@@ -4228,7 +4568,7 @@ export interface components {
              * @description The determinism epoch the run started under.
              */
             epoch: number;
-            error?: components["schemas"]["RunError"] | null;
+            error?: components["schemas"]["ErrorInfo"] | null;
             /**
              * Format: date-time
              * @description The deadline: the run is cancelled then (reason `ttl`).
@@ -4243,37 +4583,28 @@ export interface components {
             handle: string;
             /**
              * Format: int64
-             * @description Number of journal entries.
+             * @description Number of events.
              */
             historyLen: number;
             /** @description The run id (a UUID v7). */
             id: string;
             input?: components["schemas"]["Payload"] | null;
             labels: components["schemas"]["Labels"];
-            /** @description The last log lines of the script (`console.*`), oldest first, at most 20. */
+            /** @description The last log lines of the code (`console.*`), oldest first, at most 20. */
             logs?: components["schemas"]["LogLine"][];
             mode: components["schemas"]["RunMode"];
-            /** @description The end user the run belongs to. A fork has its parent's. */
+            /** @description The end user the run belongs to. A fork has its source's. */
             namespace: components["schemas"]["NamespaceName"];
             output?: components["schemas"]["Payload"] | null;
-            parent?: components["schemas"]["ForkParent"] | null;
             quarantine?: components["schemas"]["Quarantine"] | null;
-            /** @description Digest of the TypeScript source (`GET /v1/scripts/{digest}`). */
-            script: string;
             /**
-             * @description The script's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the
-             *     first line of the comment at its top. Absent when it has neither.
-             */
-            scriptTitle?: string | null;
-            /**
-             * @description The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):
+             * @description The secrets it uses, named at start, by MCP server or API (`org/<name>`, `ns/<name>`):
              *     names, never values.
              */
             secrets?: components["schemas"]["BTreeMap"];
+            source?: components["schemas"]["ForkSource"] | null;
             startedBy?: components["schemas"]["StartedBy"] | null;
             status: components["schemas"]["RunStatus"];
-            /** @description Digest of the pinned toolset. */
-            toolset: string;
             /**
              * @description The OpenTelemetry trace the run belongs to: the caller's if it gave a `traceparent`,
              *     else derived from the run id. 32 hex digits.
@@ -4281,11 +4612,14 @@ export interface components {
             traceId: string;
             /** Format: date-time */
             updatedAt: string;
-            /** @description With `active`: what the run waits for. */
+            /** @description With `waiting`: what the run waits for. */
             waitingFor?: components["schemas"]["Waiting"][];
             workflow?: components["schemas"]["RunWorkflow"] | null;
         };
-        /** @description A number of runs per status. */
+        /**
+         * @description A number of runs per status, from the hourly counters: those started and not ended are
+         *     active (queued, running or waiting), the others by how they ended.
+         */
         RunCounts: {
             /** Format: int64 */
             aborted: number;
@@ -4297,31 +4631,13 @@ export interface components {
             completed: number;
             /** Format: int64 */
             failed: number;
-            /** Format: int64 */
-            pending: number;
-        };
-        /** @description How a script failed, with where, for a model to fix it. */
-        RunError: {
-            failedCall?: components["schemas"]["FailedCall"] | null;
-            /** @description A few lines of the source around `location`. */
-            frame?: string | null;
-            location?: components["schemas"]["Callsite"] | null;
-            message: string;
-            /** @description `ToolError`, `TypeError`, `DeadlockError`, `CancelledError`… */
-            name: string;
-            /** @description Source-mapped to `script.ts`, without the runtime's frames. */
-            stack?: string | null;
-        };
-        /** @description The run an event is about, in the state the event left it in. */
-        RunEvent: {
-            run: components["schemas"]["Run"];
         };
         /**
-         * @description `live`: tools are really called and time is real. `mock`: tools are answered by cassettes
-         *     and mocks, and time is virtual.
+         * @description `live`: actions are really called and time is real. `test`: actions are answered by cassettes
+         *     and handlers, and time is virtual.
          * @enum {string}
          */
-        RunMode: "live" | "mock";
+        RunMode: "live" | "test";
         /**
          * @description A page of runs. It may hold fewer runs than `limit`, possibly none, and still have a
          *     `nextCursor`: the server stopped at its scan budget. Only a page without `nextCursor` is the
@@ -4334,21 +4650,21 @@ export interface components {
         };
         /**
          * @description The runs of a scope. Counts, series, durations and facets are over the runs started in the
-         *     window, from the hourly counters; `since`, `until` and `bucket` are the window and the width
+         *     window, from the hourly counters; `since`, `until` and `interval` are the window and the width
          *     the answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the
          *     scope now, whenever they started, from the gauge of the active runs.
          */
         RunStats: {
-            /** @description The width of the series' buckets, if any. */
-            bucket?: string | null;
             durations?: components["schemas"]["DurationStats"] | null;
             facets: components["schemas"]["Facets"];
+            /** @description The width of the series' intervals, if any. */
+            interval?: string | null;
             /** Format: int64 */
             quarantined: number;
             /** Format: int64 */
             runs: number;
-            /** @description One bucket per `bucket` from `since`, the runs started in it by status. */
-            series?: components["schemas"]["SeriesBucket"][];
+            /** @description One interval per `interval` from `since`, the runs started in it by status. */
+            series?: components["schemas"]["SeriesInterval"][];
             /** Format: date-time */
             since?: string | null;
             statuses: components["schemas"]["StatusCounts"];
@@ -4358,38 +4674,41 @@ export interface components {
             waiting: components["schemas"]["WaitCounts"];
         };
         /**
-         * @description The status of a run, a function of its journal (`archi/02-journal.md`, "Run state").
-         *     Quarantine is not a status: see `Run.quarantine`.
+         * @description The status of a run (`archi/02-history.md`, "Run state"): queued, running or waiting while
+         *     it is active, then how it ended. A quarantined run is `waiting`, for its quarantine.
          * @enum {string}
          */
-        RunStatus: "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted";
+        RunStatus: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "aborted";
         /** @description A run in a list, from the read model. */
         RunSummary: {
+            actionSet: string;
+            /** Format: int64 */
+            calls: number;
+            /** @description Digest of the run's code, as `Run.codeDigest`. */
+            codeDigest: string;
             /** Format: date-time */
             endedAt?: string | null;
             /** @description With `failed` or `cancelled`: the error's name. With `aborted`: the abort's kind. */
             error?: string | null;
             /**
              * Format: int32
-             * @description With `error`: the innermost line of `script.ts` in the error's stack, if any.
+             * @description With `error`: the innermost line of `workflow.ts` in the error's stack, if any.
              */
             errorLine?: number | null;
             /** @description With `error`: the error's or the abort's message. */
             errorMessage?: string | null;
             /**
              * Format: int64
-             * @description Tool calls that failed.
+             * @description Calls that failed.
              */
             errors: number;
-            /** @description With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query). */
+            /** @description With `error`: the fingerprint (`GET /v1/runs/failures`, `fingerprint:` in a query). */
             fingerprint?: string | null;
             /**
              * @description The run's handle, `<namespace>/<origin>/<suffix>`, as `Run.handle`.
              * @example dana/triage/06bqx3k9f2mt
              */
             handle: string;
-            /** @description The first line of the script that is not blank, for display. */
-            headline: string;
             /** Format: int64 */
             historyLen: number;
             id: string;
@@ -4397,34 +4716,28 @@ export interface components {
             /** Format: date-time */
             lastActivityAt: string;
             namespace: components["schemas"]["NamespaceName"];
-            parent?: string | null;
             quarantined: boolean;
-            script: string;
-            /** @description The script's title, as `Run.scriptTitle`. Absent when it has none. */
-            scriptTitle?: string | null;
+            source?: string | null;
             /** Format: date-time */
             startedAt: string;
-            /** @description For a run a script started, that run. */
+            /** @description For a run a code started, that run. */
             startedBy?: string | null;
             status: components["schemas"]["RunStatus"];
-            /** Format: int64 */
-            toolCalls: number;
-            toolset: string;
-            /** @description With `active`: what the run waits for. */
+            /** @description With `waiting`: what the run waits for. */
             waitingFor?: components["schemas"]["RunWait"][];
             /**
              * Format: date-time
-             * @description With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.
+             * @description While it is active: when the run wakes by itself, if a timer or a signal's timeout wakes
+             *     it.
              */
             wakesAt?: string | null;
-            /** @description For a run of a workflow, the workflow's name. */
-            workflow?: string | null;
+            workflow?: components["schemas"]["RunWorkflow"] | null;
         };
         /** @description Something a run in a list waits for. `GET /v1/runs/{id}` has the details (`waitingFor`). */
         RunWait: {
             callsite?: components["schemas"]["Callsite"] | null;
             kind: components["schemas"]["WaitKind"];
-            /** @description The signal's name, or the call's tool. */
+            /** @description The signal's name, or the call's action. */
             name?: string | null;
             /**
              * Format: int32
@@ -4442,94 +4755,30 @@ export interface components {
              */
             until?: string | null;
         };
-        /** @description The workflow a run executes. */
+        /** @description The run an event is about, in the state the event left it in. */
+        RunWebhook: {
+            run: components["schemas"]["Run"];
+        };
+        /** @description The workflow a run is a run of, and the version it executes. */
         RunWorkflow: {
-            name: string;
+            /** @description The version's digest. */
+            digest: string;
+            /** @example wf_7k2m9q4x8d1c */
+            id: string;
+            /** @description Its name when the run was created, if it had one. */
+            name?: string | null;
             /**
              * Format: int32
-             * @description The version's number among the versions of its workflow (`Workflow.number`).
+             * @description The version's number (`WorkflowVersion.version`).
              */
-            number: number;
-            version: string;
-        };
-        /** @description `GET /v1/scripts/{digest}`: one script's source, and what its runs did. */
-        Script: {
-            description?: string | null;
-            digest: string;
-            /**
-             * Format: date-time
-             * @description When its first and last runs started; absent when no run is kept.
-             */
-            firstRunAt?: string | null;
-            /** @description The first line of the source that is not blank, for display. */
-            headline: string;
-            /** Format: date-time */
-            lastRunAt?: string | null;
-            /** @description Runs of this script, by status, as the read model keeps them. */
-            runs: components["schemas"]["RunCounts"];
-            /** @description The TypeScript source, as submitted. */
-            source: string;
-            /** @description The script's title, as in `ScriptSummary.title`. */
-            title?: string | null;
-            titleSource?: components["schemas"]["TitleSource"] | null;
-            /** @description The tools its runs called. */
-            tools: string[];
-        };
-        /**
-         * @description The data of a `script` event: a script the organization's runs ran for the first time, which
-         *     `GET /v1/scripts` now lists, or whose title a person gave or removed.
-         */
-        ScriptChanged: {
-            /** @description SHA-256 of the TypeScript source, lowercase hex. */
-            digest: string;
-        };
-        /**
-         * @description How a script failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,
-         *     or `CancelledError`.
-         */
-        ScriptError: {
-            message: string;
-            name: string;
-            /** @description The stack, source-mapped to `script.ts`, without the runtime's own frames. */
-            stack?: string | null;
-        };
-        ScriptPage: {
-            /** @description Pass it as `cursor` to read the next page; absent on the last page. */
-            nextCursor?: string | null;
-            scripts: components["schemas"]["ScriptSummary"][];
-        };
-        /** @description A distinct script: content-addressed, so every run of the same source counts here. */
-        ScriptSummary: {
-            /**
-             * @description The description that goes with the title: the person's with theirs, else the rest of
-             *     the comment.
-             */
-            description?: string | null;
-            /** @description SHA-256 of the TypeScript source, lowercase hex. */
-            digest: string;
-            /** Format: date-time */
-            firstRunAt: string;
-            /** @description The first line of the source that is not blank, for display. */
-            headline: string;
-            /** Format: date-time */
-            lastRunAt: string;
-            /** @description Runs of this script, by status. */
-            runs: components["schemas"]["RunCounts"];
-            /**
-             * @description The script's title: the one a person gave it, else the first line of the comment at its
-             *     top. Absent when it has neither.
-             */
-            title?: string | null;
-            titleSource?: components["schemas"]["TitleSource"] | null;
-            /** @description The tools its runs called. */
-            tools: string[];
+            version: number;
         };
         /** @description A secret, as listed: its metadata, never its value. */
         Secret: {
             /** Format: date-time */
             createdAt: string;
             /**
-             * @description Who wrote it first: a principal (`user:…`, `key:…`, `connection:…`) or an end user's
+             * @description Who wrote it first: a principal (`member:…`, `key:…`, `connection:…`) or an end user's
              *     token (`token:<namespace>`).
              */
             createdBy: string;
@@ -4541,7 +4790,7 @@ export interface components {
             namespace?: components["schemas"]["NamespaceName"] | null;
             /** @description Its reads per day over the last 30 days, oldest first; a day without a read is left out. */
             reads: components["schemas"]["DailyReads"][];
-            /** @description How an attachment names it: `org/zendesk`, `ns/github`. */
+            /** @description How a reference names it: `org/zendesk`, `ns/github`. */
             reference: string;
             scope: components["schemas"]["SecretScope"];
             /** Format: date-time */
@@ -4560,12 +4809,62 @@ export interface components {
          */
         SecretEncoding: "plain" | "base64";
         /**
+         * @description A call parked because its server refused the secret or the signature (`refused`), or
+         *     because the secret the run uses no longer exists (`missing`, nothing was sent). Put the
+         *     secret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,
+         *     for a refused signature, approve the call once the server accepts the key: the call is then
+         *     sent again with the same idempotency key.
+         */
+        SecretExpired: {
+            action: string;
+            actionSet: string;
+            callId: string;
+            labels: components["schemas"]["Labels"];
+            /** @description What the server answered, or which secret is missing. */
+            message: string;
+            namespace: components["schemas"]["NamespaceName"];
+            reason: components["schemas"]["SecretExpiredReason"];
+            runId: string;
+            /**
+             * @description The secret the run uses for the server, as named (`org/<name>`, `ns/<name>`);
+             *     absent for a signed call.
+             */
+            secret?: string | null;
+            /** Format: int32 */
+            seq: number;
+            /** @description The action's MCP server or API. */
+            server?: string | null;
+        };
+        /**
+         * @description Why a call waits in `secret.expired`.
+         * @enum {string}
+         */
+        SecretExpiredReason: "refused" | "missing";
+        /**
          * @description `GET /v1/secrets`, `GET /v1/namespaces/{name}/secrets`: the secrets the caller sees, sorted
          *     by name.
          */
         SecretList: {
             secrets: components["schemas"]["Secret"][];
         };
+        /**
+         * @description One server whose secret refused a start, a fork or a save, with what the caller may use for
+         *     that server instead.
+         */
+        SecretProblem: {
+            problem: components["schemas"]["SecretProblemKind"];
+            /** @description The secret used, as the request named it. */
+            secret?: string | null;
+            /** @description The MCP server or API. */
+            server: string;
+            /** @description The secrets the caller may use for that server, `org/<name>` and `ns/<name>`. */
+            usable?: string[];
+        };
+        /**
+         * @description Why the secrets of a start, a fork or a save refused it (`secret-required`).
+         * @enum {string}
+         */
+        SecretProblemKind: "missing" | "takes_none" | "unknown" | "forbidden";
         /**
          * @description Whose secret.
          * @enum {string}
@@ -4576,11 +4875,11 @@ export interface components {
          *     reads a secret, what deleting it would stop.
          */
         SecretUsage: {
-            /** @description The active runs that attach it, oldest first, at most 100. */
+            /** @description The active runs that use it, oldest first, at most 100. */
             activeRuns: string[];
             /**
              * Format: int64
-             * @description How many active runs attach it.
+             * @description How many active runs use it.
              */
             activeTotal: number;
             /** @description The secret, with its reads and its last read. */
@@ -4593,15 +4892,15 @@ export interface components {
             /** Format: int64 */
             waitingTotal: number;
             /**
-             * @description The workflows whose latest version attaches it. A version attaching `ns/<name>` counts
+             * @description The workflows whose latest version uses it. A version using `ns/<name>` counts
              *     for the secret `<name>` of every namespace.
              */
-            workflows: components["schemas"]["WorkflowAttaching"][];
+            workflows: components["schemas"]["WorkflowSecrets"][];
         };
-        SeriesBucket: {
+        SeriesInterval: {
             /**
              * Format: date-time
-             * @description The bucket's start.
+             * @description The interval's start.
              */
             at: string;
             statuses: components["schemas"]["StatusCounts"];
@@ -4640,13 +4939,13 @@ export interface components {
             virtualTime: boolean;
         };
         ServerSummary: {
-            auth?: components["schemas"]["Auth"] | null;
-            name: string;
             /**
              * Format: int32
-             * @description How many tools it has.
+             * @description How many actions it has.
              */
-            tools: number;
+            actions: number;
+            auth?: components["schemas"]["Auth"] | null;
+            name: string;
             transport: components["schemas"]["McpTransport"];
         };
         /**
@@ -4663,24 +4962,6 @@ export interface components {
         SetGrant: {
             allowedLabels?: components["schemas"]["Labels"];
             role: string;
-        };
-        /**
-         * @description `PATCH /v1/scripts/{digest}`: the title and description of a script, for the whole
-         *     organization, over those of the comment at its top. The source does not change: a script is
-         *     its digest.
-         * @example {
-         *       "description": "Labels each new issue, and asks for an approval before closing duplicates.",
-         *       "title": "Triage new GitHub issues"
-         *     }
-         */
-        SetScriptTitle: {
-            /** @description The description, trimmed: at most 2,000 characters. Absent, `null` or `""`: none. */
-            description?: string | null;
-            /**
-             * @description The title, trimmed: 1 to 120 characters. `null` removes the title and the description a
-             *     person gave: those of the comment show again.
-             */
-            title: string | null;
         };
         /** @enum {string} */
         Severity: "error" | "warning";
@@ -4738,7 +5019,7 @@ export interface components {
          */
         SigningKeyList: {
             /**
-             * @description The JWT's issuer, `{public-url}/organizations/{tenant}`: what `verifyRewindCall` is
+             * @description The JWT's issuer, `{public-url}/organizations/{organization}`: what `verifyRewindCall` is
              *     given as `issuer`.
              */
             issuer: string;
@@ -4761,12 +5042,14 @@ export interface components {
             run: string;
         };
         /**
-         * @description `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
-         *     script that cannot run is refused (`invalid-script`) before any run exists.
+         * @description `POST /v1/runs`: starts a run. The code is compiled, checked and type-checked first; a
+         *     code that cannot run is refused (`invalid-code`) before any run exists.
          *
          *     With the `Idempotency-Key` header, a request repeated with the same key returns the run the
          *     first one started, instead of starting a second one.
          * @example {
+         *       "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+         *       "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
          *       "input": {
          *         "repo": "acme/api"
          *       },
@@ -4774,41 +5057,42 @@ export interface components {
          *         "agent": "triage",
          *         "conversation": "c-42"
          *       },
-         *       "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
          *       "secrets": {
          *         "github": "ns/github"
          *       },
-         *       "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
          *       "wait": "30s"
          *     }
          */
         StartRun: {
-            /** @description Type-check the script before starting it. `true` by default. */
-            check?: boolean | null;
-            /** @description The input of `main`. `{}` when absent. */
-            input?: unknown;
             /**
-             * @description Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The script never
-             *     sees them.
+             * @description The action set the code imports from `rewind:actions`. Without one, `rewind:actions` is
+             *     empty.
              */
-            labels?: components["schemas"]["Labels"];
+            actionSet?: string | null;
+            /** @description Type-check the code before starting it. `true` by default. */
+            check?: boolean | null;
             /**
              * @description The TypeScript source: a single ES module whose default export is the entry point.
              *     Without it, `workflow` names what the run executes.
              */
-            script?: string;
+            code?: string;
+            /** @description The input of `main`. `{}` when absent. */
+            input?: unknown;
+            /**
+             * @description Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The code never
+             *     sees them.
+             */
+            labels?: components["schemas"]["Labels"];
             /**
              * @description The secrets the run reads, by MCP server or API: `{ "github": "ns/github", "zendesk":
              *     "org/zendesk" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).
-             *     Required for each server the script imports whose `auth` takes a secret; checked against
+             *     Required for each server the code imports whose `auth` takes a secret; checked against
              *     the caller's rights (`secret-required`). A run of a `workflow` gives none: its version's
              *     are read.
              */
             secrets?: components["schemas"]["BTreeMap"];
-            /** @description The toolset the script imports from `rewind:tools`. Without one, `rewind:tools` is empty. */
-            toolset?: string | null;
             /**
-             * @description W3C trace context of the caller (typically the LLM call that wrote the script): the run
+             * @description W3C trace context of the caller (typically the LLM call that wrote the code): the run
              *     appears under it in the caller's trace.
              */
             traceparent?: string | null;
@@ -4816,10 +5100,11 @@ export interface components {
             ttl?: components["schemas"]["Duration"] | null;
             wait?: components["schemas"]["Duration"] | null;
             /**
-             * @description Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version
-             *     or `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one
-             *     version. Its input is checked against the workflow's input schema (`invalid-input`); the
-             *     script is not checked again.
+             * @description Instead of `code` and `actionSet`: a run of this workflow, by its id or its name (the
+             *     namespace's, else the organization's), its latest version, or `triage@v12` (its number)
+             *     or `triage@<digest>` (12 hex digits at least) for one version. Its input is checked
+             *     against the version's input schema, if it has an interface (`invalid-input`); the code is
+             *     not checked again. Given with `code`: 422.
              */
             workflow?: string | null;
         };
@@ -4840,11 +5125,13 @@ export interface components {
              */
             seq: number;
         };
+        /**
+         * @description The runs by status: the active ones now (queued, running, waiting), from the gauges, and the
+         *     ended ones of the window, from the counters.
+         */
         StatusCounts: {
             /** Format: int64 */
             aborted: number;
-            /** Format: int64 */
-            active: number;
             /** Format: int64 */
             cancelled: number;
             /** Format: int64 */
@@ -4852,16 +5139,20 @@ export interface components {
             /** Format: int64 */
             failed: number;
             /** Format: int64 */
-            pending: number;
+            queued: number;
+            /** Format: int64 */
+            running: number;
+            /** Format: int64 */
+            waiting: number;
         };
         /**
-         * @description One event of the stream. On the wire, each is a server-sent event whose `event` field is
-         *     the `type` below, whose `data` is this JSON object, and, for an entry, whose `id` is the
-         *     entry's `idx`.
+         * @description One message of the stream. On the wire, each is a server-sent event whose `event` field is
+         *     the `type` below, whose `data` is this JSON object, and, for an event, whose `id` is the
+         *     event's `idx`.
          */
-        StreamEvent: (components["schemas"]["Entry"] & {
+        StreamMessage: (components["schemas"]["HistoryEvent"] & {
             /** @enum {string} */
-            type: "entry";
+            type: "event";
         }) | {
             status: components["schemas"]["RunStatus"];
             /** @enum {string} */
@@ -4870,55 +5161,47 @@ export interface components {
         Subscription: {
             /** Format: date-time */
             createdAt: string;
-            events: components["schemas"]["WebhookEventType"][];
             id: string;
             labels: components["schemas"]["Labels"];
             /** @description The signing secret, `whsec_…`. Only in the answer to `POST /v1/subscriptions`: keep it. */
             secret?: string | null;
+            types: components["schemas"]["WebhookType"][];
             url: string;
         };
         /** @description `GET /v1/subscriptions`. */
         SubscriptionList: {
             subscriptions: components["schemas"]["Subscription"][];
         };
-        /** @description A test of a version's suite. */
+        /** @description A test the workflow's suite holds or held: when it joined, and when and why it left. */
+        SuiteEntry: {
+            /** Format: date-time */
+            addedAt: string;
+            /** @description Its digest: `GET /v1/tests/{digest}`. */
+            digest: string;
+            name: string;
+            /** @description Why it left. */
+            reason?: string | null;
+            /**
+             * Format: date-time
+             * @description When it left the suite, retired or replaced; absent while it is in it.
+             */
+            retiredAt?: string | null;
+        };
+        /** @description A test a version passed. */
         SuiteTest: {
             /** @description Its digest: `GET /v1/tests/{digest}`. */
             digest: string;
             name: string;
         };
         /**
-         * @description The data of a `gone` event: a task handed on this stream no longer waits for its answer. Its
-         *     run ended, or its call timed out; an answer sent now is dropped (`task-gone`), and its slot is
-         *     free.
-         */
-        TaskGone: {
-            /** @description The token the task was handed with. */
-            token: string;
-        };
-        /**
-         * @description The state of a tool task.
-         * @enum {string}
-         */
-        TaskState: "approval" | "ready" | "claimed" | "deferred" | "parked" | "done";
-        /**
-         * @description One event of the task stream (`GET /v1/tasks/stream`). On the wire, each is a server-sent
-         *     event whose `event` field is `task` or `gone` and whose `data` is this JSON object; events
-         *     have no `id`. While it sends nothing else, the server writes a comment line (`:`) at least
-         *     every 15 seconds, so that proxies keep the stream open: a client skips comments, and may take
-         *     a stream silent for longer as broken. The stream closes once the caller stops authenticating
-         *     or no longer holds `tasks:work`, as the change stream does.
-         */
-        TaskStreamEvent: components["schemas"]["HandedTask"] | components["schemas"]["TaskGone"];
-        /**
-         * @description A test: what the run is given (its input, the tools' answers, signals), and what must hold
-         *     at the end. It never names its script.
+         * @description A test: what the run is given (its input, the actions' answers, signals), and what must hold
+         *     at the end. It never names its code.
          * @example {
          *       "expect": {
          *         "calls": [
          *           {
-         *             "times": 1,
-         *             "tool": "github.close_issue"
+         *             "action": "github.close_issue",
+         *             "times": 1
          *           }
          *         ],
          *         "output": {
@@ -4939,7 +5222,7 @@ export interface components {
          *         }
          *       ],
          *       "world": {
-         *         "tools": {
+         *         "actions": {
          *           "github.close_issue": {
          *             "returns": {}
          *           },
@@ -4962,11 +5245,11 @@ export interface components {
          */
         Test: {
             expect?: components["schemas"]["Expectations"];
+            from?: components["schemas"]["TestFromRun"] | null;
             /** @description The run's input. `{}` when absent. */
             input?: unknown;
             /** @description Unique within a suite. */
             name: string;
-            origin?: components["schemas"]["TestOrigin"] | null;
             /** @description The run's seed, 64 lowercase hex digits; the same fixed seed for every test when absent. */
             seed?: string | null;
             /** @description Sent to the run in order. */
@@ -4985,32 +5268,51 @@ export interface components {
         TestFrom: {
             expect: components["schemas"]["Expectations"];
             /** @description The digest of the stored test. */
-            from: string;
+            test: string;
         };
-        /**
-         * @description A test given to `POST /v1/test` or to a save: inline, by the digest of a stored test (one
-         *     recorded from a run), or as a stored test with a new expectation.
-         */
-        TestInput: string | components["schemas"]["TestFrom"] | components["schemas"]["Test"];
         /** @description The run a recorded test comes from. The test holds that run's data, and is read like it. */
-        TestOrigin: {
+        TestFromRun: {
             namespace: string;
             run: string;
             /** @description The workflow version the run executed. */
             version: string;
         };
         /**
+         * @description A test given to `POST /v1/test` or to a save: inline, by the digest of a stored test (one
+         *     recorded from a run), or as a stored test with a new expectation.
+         */
+        TestInput: string | components["schemas"]["TestFrom"] | components["schemas"]["Test"];
+        /**
          * @description Why a test did not pass.
          * @enum {string}
          */
         TestProblem: "stale" | "incompatible" | "failed";
         /**
-         * @description `POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,
-         *     "Running tests"). The given tests run against the script; with `workflow`, that version's
-         *     suite runs too, and its interface checks every test. This is how a candidate is checked
-         *     before it is saved: a corrected script, or the version on a new toolset.
+         * @description A test of the suite replaced: by a whole new test, which takes its name, or by itself with a
+         *     new expectation.
+         */
+        TestReplacement: {
+            expect?: components["schemas"]["Expectations"] | null;
+            name: string;
+            new?: components["schemas"]["TestInput"] | null;
+            /** @description Why: kept in the lineage. */
+            reason: string;
+        };
+        /** @description `POST /v1/test`: what the tests ran against, and their outcomes. */
+        TestReport: {
+            /** @description Every test passed. */
+            passed: boolean;
+            /** @description In the order given, then the suite's. */
+            tests: components["schemas"]["TestResult"][];
+        };
+        /**
+         * @description `POST /v1/test`: runs tests in a test run, in virtual time (`archi/05-testing-and-observability.md`,
+         *     "Running tests"). The given tests run against the code; with `workflow`, that workflow's suite
+         *     runs too, and its version's interface checks every test. This is how a candidate is checked
+         *     before it becomes a version: a corrected code, or the version on a new action set. A test
+         *     creates and changes nothing.
          * @example {
-         *       "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+         *       "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
          *       "tests": [
          *         {
          *           "expect": {
@@ -5024,7 +5326,7 @@ export interface components {
          *           },
          *           "name": "counts the open issues",
          *           "world": {
-         *             "tools": {
+         *             "actions": {
          *               "github.list_issues": {
          *                 "returns": [
          *                   {
@@ -5039,28 +5341,28 @@ export interface components {
          *     }
          */
         TestRequest: {
-            /** @description The TypeScript source. With `workflow`, the version's own when absent. */
-            script?: string | null;
-            tests?: components["schemas"]["TestInput"][];
             /**
-             * @description The toolset the script imports from `rewind:tools`. With `workflow`, the version's own
+             * @description The action set the code imports from `rewind:actions`. With `workflow`, the version's own
              *     when absent.
              */
-            toolset?: string | null;
+            actionSet?: string | null;
+            /** @description The TypeScript source. With `workflow`, the version's own when absent. */
+            code?: string | null;
+            tests?: components["schemas"]["TestInput"][];
             /**
-             * @description A workflow, `triage` (its latest version), `triage@<version>` or `triage@v12`: its suite
-             *     runs too.
+             * @description A workflow, by its id or its name (`triage`, its latest version), or one version
+             *     (`triage@v12`, `triage@<digest>`): its suite runs too.
              */
             workflow?: string | null;
         };
         /** @description The outcome of a test. */
         TestResult: {
             abort?: components["schemas"]["AbortReason"] | null;
-            /** @description How many times each tool was called. */
+            /** @description How many times each action was called. */
             calls?: {
                 [key: string]: number;
             };
-            error?: components["schemas"]["ScriptError"] | null;
+            error?: components["schemas"]["ErrorInfo"] | null;
             /** @description What does not hold, one sentence each, written for a model. */
             failures: string[];
             name: string;
@@ -5068,48 +5370,26 @@ export interface components {
             passed: boolean;
             problem?: components["schemas"]["TestProblem"] | null;
             status?: components["schemas"]["RunStatus"] | null;
-            /** @description The LLM trace of the run; empty for a test that was not run. */
-            trace?: string;
+            /** @description The run's transcript; empty for a test that was not run. */
+            transcript?: string;
         };
-        /** @description Inherited tests dropped, and why. */
+        /** @description Tests of the suite retired, and why. */
         TestRetirement: {
             names: string[];
             /** @description Why: kept in the lineage. */
             reason: string;
-        };
-        /** @description `POST /v1/test`: what the tests ran against, and their outcomes. */
-        TestRun: {
-            /** @description Every test passed. */
-            passed: boolean;
-            /** @description In the order given, then the suite's. */
-            tests: components["schemas"]["TestResult"][];
         };
         /** @description A signal sent during a test. */
         TestSignal: {
             name: string;
             payload?: unknown;
             /**
-             * @description When it is sent: `"blocked"` (the default) once the run can go no further without the
-             *     outside world; or a duration of virtual time after the start, such as `"2h"`.
+             * @description When it is sent: `"waiting"` (the default) once the run waits for something other than a
+             *     timer, which virtual time moves by itself; or a duration of virtual time after the start,
+             *     such as `"2h"`.
              */
             when?: string | null;
         };
-        /**
-         * @description An inherited test replaced: by a whole new test, which takes its name, or by itself with a
-         *     new expectation.
-         */
-        TestUpdate: {
-            expect?: components["schemas"]["Expectations"] | null;
-            name: string;
-            /** @description Why: kept in the lineage. */
-            reason: string;
-            test?: components["schemas"]["TestInput"] | null;
-        };
-        /**
-         * @description Where a script's title comes from.
-         * @enum {string}
-         */
-        TitleSource: "person" | "comment";
         /** @description An end user's opaque token. */
         Token: {
             /** Format: date-time */
@@ -5183,180 +5463,15 @@ export interface components {
             /** @description `Bearer`. */
             token_type: string;
         };
-        /** @description A pinned tool. */
-        Tool: {
-            /** @description The API, for an API tool. */
-            api?: string | null;
-            description: string;
-            inputSchema: Record<string, unknown>;
-            /** @description As scripts call it: `github.list_issues`, `ask_user`, `http`. */
-            name: string;
-            outputSchema?: Record<string, unknown> | null;
-            /** @description The policy with its defaults filled in. */
-            policy: components["schemas"]["ToolPolicy"];
-            route: components["schemas"]["Route"];
-            /** @description The MCP server, for an MCP tool. */
-            server?: string | null;
-        };
-        /** @description How a tool call failed, as the script sees it (a thrown `ToolError`). */
-        ToolFailure: {
-            data?: unknown;
-            kind: components["schemas"]["ToolFailureKind"];
-            message: string;
-        };
-        /** @enum {string} */
-        ToolFailureKind: "error" | "unavailable" | "timeout" | "outcome_unknown";
-        ToolMatch: {
-            description: string;
-            /** @description The tool's declaration in `rewind-tools.d.ts`, with the types it uses. */
-            dts: string;
-            name: string;
-            /** @description The tool's line of the prompt rendering. */
-            prompt: string;
-        };
         /**
-         * @description A tool's policy, pinned in the toolset (`archi/04-tools.md`, "Policies"). Every field is
-         *     optional: what is not given takes its default.
+         * @description `GET /v1/runs/{id}/transcript`: the run as text for a model
+         *     (`archi/05-testing-and-observability.md`, "Transcript and metrics"): a header, then one line
+         *     per call, timer and signal, with its line in `workflow.ts`; payloads truncated.
          */
-        ToolPolicy: {
-            /**
-             * @description The call waits for the harness's approval (`POST /v1/tasks/{id}/approve`) before it is
-             *     sent. Off by default.
-             */
-            approval?: boolean | null;
-            /**
-             * Format: int32
-             * @description At most this many calls of the tool in flight per run. The run's own limit (16) still
-             *     applies.
-             */
-            concurrency?: number | null;
-            heartbeatTimeout?: components["schemas"]["Duration"] | null;
-            onInterruption?: components["schemas"]["OnInterruption"] | null;
-            timeout?: components["schemas"]["Duration"] | null;
-        };
-        /**
-         * @description An answer to the calls whose args contain `args`: `returns` (the result, `null` included) or
-         *     `error`, for `times` calls at most.
-         */
-        ToolRule: {
-            /** @description The call's args contain these (objects compared key by key); any call when absent. */
-            args?: Record<string, unknown> | null;
-            error?: components["schemas"]["RuleError"] | null;
-            /** @description The result. */
-            returns?: unknown;
-            /**
-             * Format: int32
-             * @description How many calls it answers; any number when absent.
-             */
-            times?: number | null;
-        };
-        /** @description One rule, or several tried in order. */
-        ToolRules: components["schemas"]["ToolRule"][] | components["schemas"]["ToolRule"];
-        /**
-         * @description A call parked because the tool no longer matches its pinned schema
-         *     (`archi/04-tools.md`, "When a toolset changes during a run"). Approve the task to continue
-         *     against the new schema, reject it, fork the run, or cancel it. The pinned schema is in the
-         *     toolset; `message` says what changed.
-         */
-        ToolSchemaChanged: {
-            labels: components["schemas"]["Labels"];
-            /**
-             * @description What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the
-             *     call's arguments, or its output schema changed. Written for the harness developer and
-             *     the model.
-             */
-            message: string;
-            namespace: components["schemas"]["NamespaceName"];
-            runId: string;
-            /** Format: int32 */
-            seq: number;
-            /** @description The tool's MCP server. */
-            server?: string | null;
-            /** @description For `POST /v1/tasks/{id}/approve` and `/reject`. */
-            taskId: string;
-            tool: string;
-            /** @description The run's toolset, where the pinned schema is. */
-            toolset: string;
-        };
-        /** @description The tools matching a search, best first. */
-        ToolSearchResults: {
-            tools: components["schemas"]["ToolMatch"][];
-        };
-        ToolStats: {
-            /**
-             * Format: int64
-             * @description Calls scheduled in the window.
-             */
-            calls: number;
-            /** @description Failed calls by kind: `error`, `unavailable`, `timeout`, `outcome_unknown`. */
-            errorKinds: {
-                [key: string]: number;
-            };
-            /**
-             * Format: int64
-             * @description Calls that failed, whatever the kind.
-             */
-            errors: number;
-            /**
-             * @description From `schedule_tool_call` to the completion, in milliseconds, over the calls that have an
-             *     outcome; zeros when none has.
-             */
-            latencyMs: components["schemas"]["Latency"];
-            /**
-             * Format: int64
-             * @description Attempts beyond the first, over every call.
-             */
-            retries: number;
-            tool: string;
-        };
-        ToolStatsPage: {
-            /** Format: date-time */
-            since: string;
-            /** @description By tool name. */
-            tools: components["schemas"]["ToolStats"][];
-            /** Format: date-time */
-            until: string;
-        };
-        /** @description A registered toolset, as pinned. */
-        Toolset: {
-            /** @description Its APIs, sorted by name. */
-            apis?: components["schemas"]["ApiSummary"][];
-            declarations: components["schemas"]["Declarations"];
-            /** @description The digest of the pinned toolset (SHA-256, lowercase hex). Runs record it. */
-            id: string;
-            servers: components["schemas"]["ServerSummary"][];
-            /**
-             * @description The operations of its APIs left out at registration: a body other than JSON, a cookie
-             *     parameter. Only in the answer of the registration.
-             */
-            skipped?: components["schemas"]["SkippedOperation"][];
-            /** @description Every tool a script of this toolset can call, sorted by name. */
-            tools: components["schemas"]["Tool"][];
-            /** @description The workflows its scripts may start, sorted by name. */
-            workflows?: components["schemas"]["PinnedWorkflow"][];
-        };
-        /** @description `GET /v1/toolsets`: the toolsets registered by the tenant, by id. */
-        ToolsetList: {
-            toolsets: components["schemas"]["ToolsetSummary"][];
-        };
-        /** @description A registered toolset, without its schemas and declarations. */
-        ToolsetSummary: {
-            /** @description Its APIs, sorted by name. */
-            apis?: components["schemas"]["ApiSummary"][];
-            id: string;
-            servers: components["schemas"]["ServerSummary"][];
-            /** @description The names of its tools, sorted. */
-            tools: string[];
-            /** @description The names of the workflows it pins, sorted. */
-            workflows?: string[];
-        };
-        Trace: {
-            format: components["schemas"]["TraceFormat"];
+        Transcript: {
             runId: string;
             text: string;
         };
-        /** @enum {string} */
-        TraceFormat: "llm";
         /**
          * @description `PATCH /v1/connections/{id}`: the organizations the connection opens from now on, each where
          *     the person holds a grant giving its access. An organization left out is closed.
@@ -5370,33 +5485,17 @@ export interface components {
             defaultRole?: string | null;
             name?: string | null;
         };
-        /** @description A test of the parent a version replaced. */
-        UpdatedTest: {
-            from: string;
-            name: string;
-            reason: string;
-            to: string;
-        };
-        /** @description A person, as the identity provider knows them. */
-        User: {
-            email: string;
-            firstName?: string | null;
-            /** @description `user_01J…`. */
-            id: string;
-            lastName?: string | null;
-            pictureUrl?: string | null;
-        };
         WaitCounts: {
             /** Format: int64 */
             approval: number;
             /** Format: int64 */
-            call: number;
-            /** Format: int64 */
             deferred: number;
             /** Format: int64 */
-            host: number;
+            harness: number;
             /** Format: int64 */
             parked: number;
+            /** Format: int64 */
+            quarantined: number;
             /** Format: int64 */
             signal: number;
             /** Format: int64 */
@@ -5406,26 +5505,26 @@ export interface components {
          * @description What a waiting run waits for (`archi/05-testing-and-observability.md`, "Read model").
          * @enum {string}
          */
-        WaitKind: "signal" | "timer" | "call" | "host" | "approval" | "parked" | "deferred";
-        /** @description Something an active run waits for. */
+        WaitKind: "signal" | "timer" | "harness" | "approval" | "parked" | "deferred" | "quarantined";
+        /** @description Something a waiting run waits for. */
         Waiting: {
+            action: string;
             /** @description The call's arguments: what the harness approves or rejects. */
             args: components["schemas"]["Payload"];
+            /** @description For `POST /v1/calls/{id}/approve` and `/reject`. */
+            callId: string;
+            callsite?: components["schemas"]["Callsite"] | null;
             /**
              * Format: int32
-             * @description The attempt in progress, from 1.
+             * @description The delivery in progress, from 1.
              */
-            attempt: number;
-            callsite?: components["schemas"]["Callsite"] | null;
+            delivery: number;
             /** @enum {string} */
-            kind: "tool_call";
+            kind: "call";
             parked?: components["schemas"]["ParkedReason"] | null;
             /** Format: int32 */
             seq: number;
-            state: components["schemas"]["TaskState"];
-            /** @description For `POST /v1/tasks/{id}/approve` and `/reject`. */
-            taskId: string;
-            tool: string;
+            state: components["schemas"]["CallState"];
         } | {
             callsite?: components["schemas"]["Callsite"] | null;
             /** Format: date-time */
@@ -5444,6 +5543,15 @@ export interface components {
              * @description When the wait gives up and returns `undefined`, if it has a timeout.
              */
             timeoutAt?: string | null;
+        } | {
+            cause: components["schemas"]["QuarantineCause"];
+            /** @enum {string} */
+            kind: "quarantined";
+            /**
+             * Format: date-time
+             * @description When it was quarantined.
+             */
+            since: string;
         };
         /** @description `POST /auth/waitlist`. */
         WaitlistRequest: {
@@ -5453,54 +5561,54 @@ export interface components {
          * @description The body of an outbound webhook: `{ "type", "timestamp", "data" }`, as Standard Webhooks
          *     recommends. The delivery's id is the `webhook-id` header; a retried delivery keeps it.
          */
-        WebhookEvent: {
-            data: components["schemas"]["RunEvent"];
+        Webhook: {
+            data: components["schemas"]["RunWebhook"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
             type: "run.completed";
         } | {
-            data: components["schemas"]["RunEvent"];
+            data: components["schemas"]["RunWebhook"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
             type: "run.failed";
         } | {
-            data: components["schemas"]["RunEvent"];
+            data: components["schemas"]["RunWebhook"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
             type: "run.cancelled";
         } | {
-            data: components["schemas"]["RunEvent"];
+            data: components["schemas"]["RunWebhook"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
             type: "run.aborted";
         } | {
-            data: components["schemas"]["RunEvent"];
+            data: components["schemas"]["RunWebhook"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
-            type: "run.suspended";
+            type: "run.waiting";
         } | {
-            data: components["schemas"]["RunEvent"];
+            data: components["schemas"]["RunWebhook"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
             type: "run.quarantined";
         } | {
-            data: components["schemas"]["ToolSchemaChanged"];
+            data: components["schemas"]["ActionSchemaChanged"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
-            type: "tool.schema_changed";
+            type: "action.schema_changed";
         } | {
-            data: components["schemas"]["CredentialsExpired"];
+            data: components["schemas"]["SecretExpired"];
             /** Format: date-time */
             timestamp: string;
             /** @enum {string} */
-            type: "credentials.expired";
+            type: "secret.expired";
         } | {
             data: components["schemas"]["QuotaAlert"];
             /** Format: date-time */
@@ -5509,101 +5617,170 @@ export interface components {
             type: "quota.alert";
         };
         /**
-         * @description The kinds of lifecycle events.
+         * @description The types of webhooks.
          * @enum {string}
          */
-        WebhookEventType: "run.completed" | "run.failed" | "run.cancelled" | "run.aborted" | "run.suspended" | "run.quarantined" | "tool.schema_changed" | "credentials.expired" | "quota.alert";
-        /** @description A version of a workflow: immutable, identified by its digest. */
+        WebhookType: "run.completed" | "run.failed" | "run.cancelled" | "run.aborted" | "run.waiting" | "run.quarantined" | "action.schema_changed" | "secret.expired" | "quota.alert";
+        /** @description A workflow (`GET /v1/workflows/{id}`, and what each write answers). */
         Workflow: {
+            /** @description Its code, the TypeScript source of `version`. */
+            code: string;
             /** Format: date-time */
             createdAt: string;
-            /**
-             * @description How a script that starts it sees it: its declaration in `rewind:workflows`, and its line
-             *     of the prompt rendering.
-             */
-            declarations: components["schemas"]["Declarations"];
+            /** @description The description given; display only. */
             description?: string | null;
-            input: Record<string, unknown>;
             /**
-             * @description The labels of the key that saved it, part of the version: a key limited to labels only
-             *     sees the workflows carrying them. Empty for a version saved tenant-wide.
+             * @description `wf_` and 12 characters: it never changes.
+             * @example wf_7k2m9q4x8d1c
              */
+            id: string;
+            /** @description The labels of the grant that created it. */
             labels: components["schemas"]["Labels"];
-            name: string;
+            name?: string | null;
+            namespace?: components["schemas"]["NamespaceName"] | null;
             /**
-             * Format: int32
-             * @description The version's number among the versions of its workflow, from 1 in the order they were
-             *     saved (`triage v12`): `name@v<number>` names it too.
-             * @example 12
+             * Format: date-time
+             * @description When it was promoted to the organization.
              */
-            number: number;
-            output: Record<string, unknown>;
-            /** @description The version it derives from. */
-            parent?: string | null;
-            retired?: components["schemas"]["RetiredTest"][];
-            /** @description Digest of its script (`GET /v1/scripts/{digest}`). */
-            script: string;
-            /** @description The secrets its runs attach, part of the version. */
-            secrets?: components["schemas"]["BTreeMap"];
-            signals: Record<string, unknown>;
-            /** @description Its suite: the tests it passed when it was saved, by name. */
-            tests?: components["schemas"]["SuiteTest"][];
-            /** @description The id of the toolset its runs call. */
-            toolset: string;
-            updated?: components["schemas"]["UpdatedTest"][];
+            promotedAt?: string | null;
             /**
-             * @description The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its
-             *     first 12 digits.
+             * @description `wf-` and the first 6 characters of its id: how it shows without a name or a comment,
+             *     and the origin of its runs' handles without a name.
+             * @example wf-7k2m9q
              */
-            version: string;
-        };
-        /** @description The latest version of a workflow, which attaches a secret. */
-        WorkflowAttaching: {
-            name: string;
-            /** @description The servers and APIs it attaches the secret for. */
-            servers: string[];
-            /** @description The version (SHA-256, lowercase hex). */
-            version: string;
-        };
-        /** @description The data of a `workflow` event: the version a workflow was saved as. */
-        WorkflowChanged: {
-            name: string;
-            /** @description The digest of the new version, as `GET /v1/workflows/{name}` lists it. */
-            version: string;
+            shortId: string;
+            source?: components["schemas"]["WorkflowSource"] | null;
+            /** @description Every test its suite holds or held, with the reasons they left. */
+            suite: components["schemas"]["SuiteEntry"][];
+            /**
+             * @description The version shown: its latest the caller sees, the one the reference names, or the one a
+             *     write made.
+             */
+            version: components["schemas"]["WorkflowVersion"];
+            /** @description Its versions the caller sees, newest first. */
+            versions: components["schemas"]["WorkflowVersion"][];
         };
         /**
-         * @description `GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every
-         *     version whose script it is, newest first, on one page.
+         * @description The data of a `workflow` event: the workflow that changed, which `GET /v1/workflows/{id}`
+         *     reads again.
          */
+        WorkflowChanged: {
+            /** @description Its id, `wf_` and 12 characters. */
+            workflow: string;
+        };
+        /** @description `GET /v1/workflows`: the workflows the caller sees, by id. */
         WorkflowPage: {
             /** @description Pass it as `after` to read the next page; absent on the last page. */
             next?: string | null;
-            workflows: components["schemas"]["Workflow"][];
+            workflows: components["schemas"]["WorkflowSummary"][];
         };
-        /** @description `GET /v1/workflows/{name}`: the versions of a workflow, newest first. */
-        WorkflowVersions: {
-            name: string;
-            versions: components["schemas"]["Workflow"][];
+        /** @description The latest version of a workflow, which uses a secret. */
+        WorkflowSecrets: {
+            digest: string;
+            name?: string | null;
+            /** @description The servers and APIs it uses the secret for. */
+            servers: string[];
+            /**
+             * Format: int32
+             * @description Its latest version's number, and digest (SHA-256, lowercase hex).
+             */
+            version: number;
+            /** @description The workflow's id. */
+            workflow: string;
+        };
+        /** @description A fork's source: the organization's workflow it copies, and the version of it it last took. */
+        WorkflowSource: {
+            /** Format: int32 */
+            version: number;
+            workflow: string;
         };
         /**
-         * @description What answers the run's calls: the rules, then the mock handlers, then the cassette. A call
+         * @description A workflow in a list (`GET /v1/workflows`), with what its runs did in the window, from the
+         *     hourly counters.
+         */
+        WorkflowSummary: {
+            /** @description The actions its runs of the window called. */
+            actions: string[];
+            /** Format: date-time */
+            createdAt: string;
+            description?: string | null;
+            /**
+             * Format: date-time
+             * @description When its first and last runs of the window started.
+             */
+            firstRunAt?: string | null;
+            id: string;
+            /** Format: date-time */
+            lastRunAt?: string | null;
+            /** @description Its latest version the caller sees, without its suite's tests. */
+            latest: components["schemas"]["WorkflowVersion"];
+            name?: string | null;
+            namespace?: components["schemas"]["NamespaceName"] | null;
+            /** Format: date-time */
+            promotedAt?: string | null;
+            /** @description Its runs of the window, by status. */
+            runs: components["schemas"]["RunCounts"];
+            shortId: string;
+            source?: components["schemas"]["WorkflowSource"] | null;
+        };
+        /** @description A version of a workflow: immutable. */
+        WorkflowVersion: {
+            /** @description The id of the action set its runs call. */
+            actionSet: string;
+            /** @description The version it derives from: its digest. */
+            base?: string | null;
+            /** @description Digest of its code. */
+            codeDigest: string;
+            comment?: components["schemas"]["CodeComment"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            declarations?: components["schemas"]["Declarations"] | null;
+            /**
+             * @description The digest of its document (SHA-256, lowercase hex): `triage@<digest>` names it, as do
+             *     its first 12 digits.
+             */
+            digest: string;
+            /** @description Its interface; absent for a version that accepts any input, output and signal name. */
+            input?: Record<string, unknown> | null;
+            /**
+             * @description The labels of the grant that made it, part of the version: a caller limited to labels
+             *     only sees the versions carrying them.
+             */
+            labels: components["schemas"]["Labels"];
+            output?: Record<string, unknown> | null;
+            replaced?: components["schemas"]["ReplacedTest"][];
+            retired?: components["schemas"]["RetiredTest"][];
+            /** @description The secrets its runs use, part of the version. */
+            secrets?: components["schemas"]["BTreeMap"];
+            signals?: Record<string, unknown> | null;
+            /** @description The suite it passed, by name. */
+            tests?: components["schemas"]["SuiteTest"][];
+            /**
+             * Format: int32
+             * @description Its number among the versions of its workflow, from 1: `triage@v12` names it.
+             * @example 12
+             */
+            version: number;
+        };
+        /**
+         * @description What answers the run's calls: the rules, then the handlers, then the cassette. A call
          *     no source answers fails, and fails the test.
          */
         World: {
+            /**
+             * @description By action, one answer for every call, or rules tried in order. A start of a workflow
+             *     (`workflows.<name>.start`) is answered with the child's output, or its failure.
+             */
+            actions?: {
+                [key: string]: components["schemas"]["ActionRules"];
+            };
             /** @description Calls and signals recorded from a run: a cassette document. */
             cassette?: Record<string, unknown> | null;
             /**
-             * @description TypeScript mock handlers, run in a separate isolate: a module default-exporting its
-             *     handlers by tool name or by namespace.
+             * @description TypeScript handlers, run in a separate isolate: a module default-exporting its
+             *     handlers by action name or by namespace.
              */
-            mocks?: string | null;
-            /**
-             * @description By tool, one answer for every call, or rules tried in order. A start of a workflow
-             *     (`workflows.<name>.start`) is answered with the child's output, or its failure.
-             */
-            tools?: {
-                [key: string]: components["schemas"]["ToolRules"];
-            };
+            handlers?: string | null;
         };
     };
     responses: never;
@@ -6643,8 +6820,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The tenant (the organization's id). */
-                tenant: string;
+                /** @description The organization's id. */
+                organization: string;
             };
             cookie?: never;
         };
@@ -6670,6 +6847,427 @@ export interface operations {
             };
             /** @description No such organization. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listActionSets: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every action set of the tenant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionSetList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createActionSet: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateActionSet"];
+            };
+        };
+        responses: {
+            /** @description Already registered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionSet"];
+                };
+            };
+            /** @description Registered. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionSet"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret used for a listing that does not exist or is not the caller's (`secret-required`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An MCP server or an OpenAPI document's URL cannot be reached (`action-set-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getActionSetDeclarations: {
+        parameters: {
+            query?: {
+                /** @description `dts` by default. */
+                format?: "dts" | "prompt";
+            };
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The action set's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declarations in the requested format. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeclarationsText"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such action set. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    searchActions: {
+        parameters: {
+            query: {
+                /** @description Words to look for in action names and descriptions. */
+                query: string;
+                /** @description At most this many actions (10 by default). */
+                limit?: number;
+            };
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The action set's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching actions, best first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionSearchResults"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such action set. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getActionStats: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 */
+                q?: string;
+                /** @description Only the actions of this group, their name's prefix (`github` for `github.list_issues`). */
+                group?: string;
+                /** @description Only calls of runs of this action set. */
+                actionSet?: string;
+                /** @description Only this action. */
+                action?: string;
+                /** @description Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default. */
+                since?: string;
+                /** @description Calls scheduled before this time, rounded up to the hour. Now by default. */
+                until?: string;
+            };
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Statistics per action over the window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionStatsPage"];
+                };
+            };
+            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6915,6 +7513,563 @@ export interface operations {
             };
         };
     };
+    streamCalls: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The action set whose harness actions this worker executes: only the calls of runs of this
+                 *     action set. Without it, the calls of the actions named in `actions`, whatever the action set
+                 *     of their run (an action set derived from another, as saving a workflow does, keeps its
+                 *     harness actions' names).
+                 */
+                actionSet?: string;
+                /**
+                 * @description Only the calls of runs of this namespace. An end user's token is limited to its own: it
+                 *     may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
+                 *     same way.
+                 */
+                namespace?: string;
+                /**
+                 * @description Only these actions. Repeat for several. All the harness actions of `actionSet` when absent,
+                 *     every harness action without `actionSet` either.
+                 */
+                actions?: string[];
+                /**
+                 * @description At most this many calls in flight on this stream: handed, and neither completed, failed,
+                 *     deferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none
+                 *     is handed: a worker that stops opens its stream again with 0 slots and its `worker`, which
+                 *     keeps alive the calls handed to it before while its handlers finish them.
+                 */
+                slots?: number;
+                /**
+                 * @description The worker's own id, drawn once when it starts (a UUID) and sent again on every
+                 *     reconnection: a stream opened again with it within the grace keeps the calls handed on the
+                 *     one that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without
+                 *     it, the calls of a closed stream go to another worker once the grace has passed.
+                 */
+                worker?: string;
+            };
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A stream of server-sent events `call` and `gone`; each `data` is a `CallStreamMessage`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["CallStreamMessage"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such action set. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    approveCall: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The call's id, from the run's state or the webhook. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The call is ready. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such call. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The call does not wait for the harness (`call-not-waiting`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rejectCall: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The call's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Optional. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RejectCall"] | null;
+            };
+        };
+        responses: {
+            /** @description The call failed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such call. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The call does not wait for the harness (`call-not-waiting`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    completeCall: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The claim's token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteCall"];
+            };
+        };
+        responses: {
+            /** @description Delivered to the run. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The call no longer exists; the result is dropped (`call-gone`). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The result is too large (`payload-too-large`). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deferCall: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The claim's token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        /** @description Optional. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeferCall"] | null;
+            };
+        };
+        responses: {
+            /** @description Deferred. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The call no longer exists (`call-gone`). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    failCall: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The claim's token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FailCall"];
+            };
+        };
+        responses: {
+            /** @description Recorded: delivered as an `ActionError`, or delivered again. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The call no longer exists (`call-gone`). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     streamChanges: {
         parameters: {
             query?: never;
@@ -6929,13 +8084,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`. */
+            /** @description A stream of server-sent events `run`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `Change`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["ChangeEvent"];
+                    "text/event-stream": components["schemas"]["Change"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -6985,7 +8140,7 @@ export interface operations {
             };
         };
     };
-    checkScript: {
+    checkWorkflow: {
         parameters: {
             query?: never;
             header?: {
@@ -7039,7 +8194,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such toolset. */
+            /** @description No such action set. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -7486,7 +8641,7 @@ export interface operations {
                  *     `0.8` for 80 %.
                  */
                 above?: number;
-                order?: "cpu" | "runs" | "scripts" | "name";
+                order?: "cpu" | "runs" | "workflows" | "name";
                 /** @description The calendar month whose use is listed, `2026-11`; the current one by default. */
                 month?: string;
                 /** @description The `next` cursor of the previous page. */
@@ -9220,8 +10375,8 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The member's user id. */
-                user: string;
+                /** @description The member's id, the person's (`user_01J…`). */
+                member: string;
             };
             cookie?: never;
         };
@@ -9316,8 +10471,8 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The member's user id. */
-                user: string;
+                /** @description The member's id, the person's (`user_01J…`). */
+                member: string;
             };
             cookie?: never;
         };
@@ -10122,8 +11277,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The tenant (the organization's id). */
-                tenant: string;
+                /** @description The organization's id. */
+                organization: string;
             };
             cookie?: never;
         };
@@ -10605,27 +11760,25 @@ export interface operations {
                  * @description `started` (the default): the most recently started first; `oldest`: the first started
                  *     first; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself
                  *     first, the runs that do not wake by themselves last; `duration`: the longest from start to
-                 *     end first, the runs that have not ended last; `calls`: the most tool calls first. Ties go
+                 *     end first, the runs that have not ended last; `calls`: the most calls first. Ties go
                  *     to the most recently started (`wakes`: the first started).
                  */
                 sort?: "started" | "oldest" | "activity" | "wakes" | "duration" | "calls";
-                status?: "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted";
+                status?: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "aborted";
                 /** @description Only runs carrying this label, as `key:value`. Repeat to require several. */
                 label?: string[];
-                /** @description Only runs that called this tool. */
-                tool?: string;
-                /** @description Only runs of this script (digest). */
-                script?: string;
+                /** @description Only runs that called this action. */
+                action?: string;
                 /**
-                 * @description Only runs whose tool calls failed with this kind (`error`, `timeout`…), or that failed
+                 * @description Only runs whose calls failed with this kind (`error`, `timeout`…), or that failed
                  *     with this error name (`TypeError`, `DeadlockError`…).
                  */
                 error?: string;
-                /** @description Only quarantined runs, or only runs that are not. */
+                /** @description Only quarantined runs (`waiting:quarantined`), or only runs that are not. */
                 quarantined?: boolean;
                 /** @description Only forks of this run: its id or its handle. */
-                parent?: string;
-                /** @description Only runs of this workflow. */
+                source?: string;
+                /** @description Only runs of this workflow: its name or its id. */
                 workflow?: string;
                 /** @description Only runs this run started: its id or its handle. */
                 startedBy?: string;
@@ -10773,7 +11926,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such toolset. */
+            /** @description No such action set. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -10800,7 +11953,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The script was refused before any run exists (`invalid-script`), with `diagnostics`; or the input does not match the workflow (`invalid-input`). */
+            /** @description The code was refused before any run exists (`invalid-code`), with `diagnostics`; or the input does not match the workflow (`invalid-input`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -10809,7 +11962,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`). */
+            /** @description The namespace or the tenant reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`). */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -10851,10 +12004,10 @@ export interface operations {
                 /** @description Runs ended before this time, rounded up to the hour. Now by default. */
                 until?: string;
                 /**
-                 * @description The width of each group's series' buckets, from `since`, which it requires; whole hours,
-                 *     a shorter or uneven width rounded up to them; 500 buckets at most.
+                 * @description The width of each group's series' intervals, from `since`, which it requires; whole hours,
+                 *     a shorter or uneven width rounded up to them; 500 intervals at most.
                  */
-                bucket?: string;
+                interval?: string;
                 /** @description Groups at most (50 by default, 500 at most). */
                 limit?: number;
             };
@@ -10869,13 +12022,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The groups, the largest first. */
+            /** @description The fingerprints, the largest first. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FailureGroupPage"];
+                    "application/json": components["schemas"]["FingerprintPage"];
                 };
             };
             /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
@@ -10938,11 +12091,11 @@ export interface operations {
                 /** @description Runs started before this time, rounded up to the hour. Now by default. */
                 until?: string;
                 /**
-                 * @description The width of the series' buckets (`"1h"`, `"1d"`), from `since`, which it requires; whole
-                 *     hours, a shorter or uneven width rounded up to them; 500 buckets at most. No series
+                 * @description The width of the series' intervals (`"1h"`, `"1d"`), from `since`, which it requires; whole
+                 *     hours, a shorter or uneven width rounded up to them; 500 intervals at most. No series
                  *     without it.
                  */
-                bucket?: string;
+                interval?: string;
                 /** @description Values per facet (10 by default, 50 at most). */
                 top?: number;
             };
@@ -11277,10 +12430,23 @@ export interface operations {
             };
         };
     };
-    getRunEntry: {
+    streamRunEvents: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `1`: keep the stream open and send events as they are committed, until the run ends.
+                 *     Without it, the stream ends once the events committed so far are sent.
+                 */
+                follow?: boolean;
+                /**
+                 * @description The first event to send. `0` by default; a reconnecting client sends the `id` of the last
+                 *     event it received plus one (or the `Last-Event-ID` header).
+                 */
+                from?: number;
+            };
             header?: {
+                /** @description Resume after this event: the same as `from` set to it plus one. */
+                "Last-Event-ID"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
                 /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
@@ -11289,20 +12455,18 @@ export interface operations {
             path: {
                 /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
                 id: string;
-                /** @description The entry's index, from 0. */
-                idx: number;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The entry. */
+            /** @description A stream of server-sent events; each `data` is a `StreamEvent`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Entry"];
+                    "text/event-stream": components["schemas"]["StreamMessage"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -11332,7 +12496,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such run or entry. */
+            /** @description No such run. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -11361,23 +12525,97 @@ export interface operations {
             };
         };
     };
-    streamRunEvents: {
+    getRunEvent: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
+                id: string;
+                /** @description The event's index, from 0. */
+                idx: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The event. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryEvent"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such run or event. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    exportRun: {
         parameters: {
             query?: {
-                /**
-                 * @description `1`: keep the stream open and send entries as they are committed, until the run ends.
-                 *     Without it, the stream ends once the entries committed so far are sent.
-                 */
-                follow?: boolean;
-                /**
-                 * @description The first entry to send. `0` by default; a reconnecting client sends the `id` of the last
-                 *     event it received plus one (or the `Last-Event-ID` header).
-                 */
-                from?: number;
+                /** @description `run` by default. */
+                as?: "run" | "cassette";
             };
             header?: {
-                /** @description Resume after this entry: the same as `from` set to it plus one. */
-                "Last-Event-ID"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
                 /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
@@ -11391,13 +12629,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A stream of server-sent events; each `data` is a `StreamEvent`. */
+            /** @description The run export or the cassette, stored format v1. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["StreamEvent"];
+                    "application/json": Record<string, unknown>;
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -11468,7 +12706,7 @@ export interface operations {
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The parent run's id, or its handle percent-encoded. */
+                /** @description The source run's id, or its handle percent-encoded. */
                 id: string;
             };
             cookie?: never;
@@ -11533,7 +12771,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The corrected script was refused (`invalid-script`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`). */
+            /** @description The corrected code was refused (`invalid-code`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -11560,7 +12798,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description A run of a workflow forked on a server without the worker role (`unavailable`). */
+            /** @description For a run of a workflow, the run plane its version's suite runs on failed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11635,91 +12873,6 @@ export interface operations {
             };
             /** @description The run is not quarantined (`not-quarantined`). */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    exportRunJournal: {
-        parameters: {
-            query?: {
-                /** @description `journal` by default. */
-                as?: "journal" | "cassette";
-            };
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`). */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The journal document or the cassette, stored format v1. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, unknown>;
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such run. */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11956,12 +13109,9 @@ export interface operations {
             };
         };
     };
-    getRunTrace: {
+    getRunTranscript: {
         parameters: {
-            query?: {
-                /** @description `llm` by default. */
-                format?: "llm";
-            };
+            query?: never;
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
@@ -11976,13 +13126,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The trace. */
+            /** @description The transcript. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Trace"];
+                    "application/json": components["schemas"]["Transcript"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -12014,271 +13164,6 @@ export interface operations {
             };
             /** @description No such run. */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    listScripts: {
-        parameters: {
-            query?: {
-                /**
-                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-                 *     tenant. Any other term is refused with its position (`invalid-query`).
-                 */
-                q?: string;
-                /** @description Runs started at or after this time, rounded down to the hour. No lower bound by default. */
-                since?: string;
-                /** @description Runs started before this time, rounded up to the hour. Now by default. */
-                until?: string;
-                /** @description Only this script: its digest. */
-                digest?: string;
-                /** @description Only scripts that called this tool. */
-                tool?: string;
-                /** @description At most this many scripts (50 by default, 500 at most). */
-                limit?: number;
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: string;
-            };
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description A page of scripts, most recently run first. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScriptPage"];
-                };
-            };
-            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    getScript: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description SHA-256 of the source, lowercase hex. */
-                digest: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The script. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Script"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such script. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    setScriptTitle: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description SHA-256 of the source, lowercase hex. */
-                digest: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetScriptTitle"];
-            };
-        };
-        responses: {
-            /** @description The script, with its title as it now is. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Script"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such script, or not one the caller sees. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The title is empty or longer than 120 characters, or the description longer than 2,000 (`invalid-request`). */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12968,563 +13853,7 @@ export interface operations {
             };
         };
     };
-    streamTasks: {
-        parameters: {
-            query?: {
-                /**
-                 * @description The toolset whose host tools this worker executes: only the tasks of runs of this toolset.
-                 *     Without it, the tasks of the tools named in `tools`, whatever the toolset of their run (a
-                 *     toolset derived from another, as saving a workflow does, keeps its host tools' names).
-                 */
-                toolset?: string;
-                /**
-                 * @description Only the tasks of runs of this namespace. An end user's token is limited to its own: it
-                 *     may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
-                 *     same way.
-                 */
-                namespace?: string;
-                /**
-                 * @description Only these tools. Repeat for several. All the host tools of `toolset` when absent, every
-                 *     host tool without `toolset` either.
-                 */
-                tools?: string[];
-                /**
-                 * @description At most this many tasks in flight on this stream: handed, and neither completed, failed,
-                 *     deferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none
-                 *     is handed: a worker that stops opens its stream again with 0 slots and its `worker`, which
-                 *     keeps alive the tasks handed to it before while its handlers finish them.
-                 */
-                slots?: number;
-                /**
-                 * @description The worker's own id, drawn once when it starts (a UUID) and sent again on every
-                 *     reconnection: a stream opened again with it within the grace keeps the tasks handed on the
-                 *     one that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without
-                 *     it, the tasks of a closed stream go to another worker once the grace has passed.
-                 */
-                worker?: string;
-            };
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": components["schemas"]["TaskStreamEvent"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such toolset. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    approveTask: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The task's id, from the run's state or the webhook. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The task is ready. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such task. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The task does not wait for the harness (`task-not-waiting`). */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    rejectTask: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The task's id. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        /** @description Optional. */
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["RejectTask"] | null;
-            };
-        };
-        responses: {
-            /** @description The call failed. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such task. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The task does not wait for the harness (`task-not-waiting`). */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    completeTask: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The claim's token. */
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompleteTask"];
-            };
-        };
-        responses: {
-            /** @description Delivered to the run. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The task no longer exists; the result is dropped (`task-gone`). */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The result is too large (`payload-too-large`). */
-            413: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    deferTask: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The claim's token. */
-                token: string;
-            };
-            cookie?: never;
-        };
-        /** @description Optional. */
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["DeferTask"] | null;
-            };
-        };
-        responses: {
-            /** @description Deferred. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The task no longer exists (`task-gone`). */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    failTask: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The claim's token. */
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FailTask"];
-            };
-        };
-        responses: {
-            /** @description Recorded: delivered as a `ToolError`, or retried. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The task no longer exists (`task-gone`). */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    testScript: {
+    testWorkflow: {
         parameters: {
             query?: never;
             header?: {
@@ -13548,7 +13877,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TestRun"];
+                    "application/json": components["schemas"]["TestReport"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -13578,7 +13907,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such toolset, workflow or stored test. */
+            /** @description No such action set, workflow or stored test. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13587,7 +13916,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The script was refused at start (`invalid-script`), or a test (`invalid-test`). */
+            /** @description The code was refused at start (`invalid-code`), or a test (`invalid-test`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -13776,427 +14105,6 @@ export interface operations {
             };
         };
     };
-    getToolStats: {
-        parameters: {
-            query?: {
-                /**
-                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-                 *     tenant. Any other term is refused with its position (`invalid-query`).
-                 */
-                q?: string;
-                /** @description Only the tools whose name starts with this (`github.`). */
-                prefix?: string;
-                /** @description Only calls of runs of this toolset. */
-                toolset?: string;
-                /** @description Only this tool. */
-                tool?: string;
-                /** @description Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default. */
-                since?: string;
-                /** @description Calls scheduled before this time, rounded up to the hour. Now by default. */
-                until?: string;
-            };
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Statistics per tool over the window. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolStatsPage"];
-                };
-            };
-            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    listToolsets: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Every toolset of the tenant. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsetList"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    createToolset: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateToolset"];
-            };
-        };
-        responses: {
-            /** @description Already registered. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Toolset"];
-                };
-            };
-            /** @description Registered. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Toolset"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-toolset`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`). */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description An MCP server or an OpenAPI document's URL cannot be reached (`toolset-unavailable`). */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    getToolsetDeclarations: {
-        parameters: {
-            query?: {
-                /** @description `dts` by default. */
-                format?: "dts" | "prompt";
-            };
-            header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The toolset's id. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The declarations in the requested format. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeclarationsText"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such toolset. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    searchTools: {
-        parameters: {
-            query: {
-                /** @description Words to look for in tool names and descriptions. */
-                query: string;
-                /** @description At most this many tools (10 by default). */
-                limit?: number;
-            };
-            header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The toolset's id. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The matching tools, best first. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolSearchResults"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such toolset. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
     whoami: {
         parameters: {
             query?: never;
@@ -14277,17 +14185,30 @@ export interface operations {
     listWorkflows: {
         parameters: {
             query?: {
-                /** @description The workflows whose name comes after this one: the `next` of the previous page. */
+                /** @description Only the namespace's workflows, or only the organization's. */
+                scope?: "namespace" | "organization";
+                /** @description Only the workflows one of whose versions has this code: its digest. */
+                code?: string;
+                /**
+                 * @description The scope of the counts, as a query: one term `namespace:<name>` of one value, or
+                 *     nothing. Any other term is refused with its position (`invalid-query`).
+                 */
+                q?: string;
+                /**
+                 * @description Count the runs started at or after this time, rounded down to the hour; the last 30 days
+                 *     by default.
+                 */
+                since?: string;
+                /** @description Count the runs started before this time, rounded up to the hour. Now by default. */
+                until?: string;
+                /** @description The workflows whose id comes after this one: the `next` of the previous page. */
                 after?: string;
                 /** @description At most this many workflows (50 by default, 500 at most). */
                 limit?: number;
-                /**
-                 * @description The digest of a script: every version of any workflow whose script it is, newest first,
-                 *     rather than the latest version of each workflow. `after` and `limit` do not apply.
-                 */
-                script?: string;
             };
             header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
                 /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
@@ -14296,7 +14217,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of workflows, by name. */
+            /** @description A page of workflows, by id. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -14305,7 +14226,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkflowPage"];
                 };
             };
-            /** @description The request is malformed (`invalid-request`). */
+            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`); or the window is invalid. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -14356,6 +14277,8 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
                 /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
@@ -14368,7 +14291,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Saved earlier. */
+            /** @description Its scope already has this code's workflow, or this creation was made already. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -14377,7 +14300,7 @@ export interface operations {
                     "application/json": components["schemas"]["Workflow"];
                 };
             };
-            /** @description Saved as a new version. */
+            /** @description Created, with its version 1. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -14413,7 +14336,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such toolset, or parent. */
+            /** @description No such action set. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -14422,7 +14345,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`). */
+            /** @description Its scope has a workflow of that name (`name-taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test (`invalid-test`); a secret (`secret-required`); or tests did not pass (`tests-failed`, with `tests`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14440,7 +14372,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description A server without the worker role, with tests to run (`unavailable`). */
+            /** @description The run plane the tests run on failed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -14451,28 +14383,30 @@ export interface operations {
             };
         };
     };
-    getWorkflowVersions: {
+    getWorkflow: {
         parameters: {
             query?: never;
             header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
                 /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The workflow's name. */
-                name: string;
+                /** @description The workflow: its id (`wf_…`) or its name, with `@v12` or `@<digest>` for a version. */
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Its versions, newest first. */
+            /** @description The workflow. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkflowVersions"];
+                    "application/json": components["schemas"]["Workflow"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -14502,8 +14436,403 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such workflow. */
+            /** @description No such workflow, or version, that the caller sees. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateWorkflow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The workflow: its id (`wf_…`) or its name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchWorkflow"];
+            };
+        };
+        responses: {
+            /** @description The workflow, as it now is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow that the caller sees. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Its scope has a workflow of that name (`name-taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An invalid name, or a description above 2,000 characters (`invalid-workflow`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    forkWorkflow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The organization's workflow: its id or its name, with `@v12` or `@<digest>` for a version. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The fork. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description No namespace named (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow that the caller sees. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A namespace's workflow (`not-forkable`), or the namespace has a workflow of its name (`name-taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    promoteWorkflow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The workflow: its id (`wf_…`) or its name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workflow, the organization's. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow that the caller sees. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization has a workflow of its name (`name-taken`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    pullWorkflow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The workflow: its id (`wf_…`) or its name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Nothing to pull: the fork as it is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The fork, with the source's version as its next. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow that the caller sees. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A workflow without a source (`not-a-fork`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The fork's suite did not pass (`tests-failed`, with `tests`). */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14535,12 +14864,14 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                /** @description The namespace a name resolves in first, and the runs recorded. */
+                "Rewind-Namespace"?: string | null;
                 /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
-                /** @description The workflow's name. */
-                name: string;
+                /** @description The workflow: its id (`wf_…`) or its name. */
+                id: string;
             };
             cookie?: never;
         };
@@ -14615,7 +14946,206 @@ export interface operations {
             };
         };
     };
-    webhook_credentials_expired: {
+    changeTests: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The workflow: its id (`wf_…`) or its name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeTests"];
+            };
+        };
+        responses: {
+            /** @description The workflow, with its suite as it now is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow, or stored test. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A test or the suite (`invalid-test`), or tests did not pass (`tests-failed`, with `tests`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createVersion: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
+                "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The workflow: its id (`wf_…`) or its name. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateVersion"];
+            };
+        };
+        responses: {
+            /** @description Unchanged: its latest version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description Its next version. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow, or action set. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The code was refused (`invalid-code`); a schema (`invalid-workflow`); a test or the suite (`invalid-test`); a secret (`secret-required`); or tests did not pass (`tests-failed`, with `tests`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    webhook_action_schema_changed: {
         parameters: {
             query?: never;
             header: {
@@ -14631,7 +15161,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14660,7 +15190,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14689,7 +15219,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14718,7 +15248,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14747,7 +15277,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14776,7 +15306,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14805,7 +15335,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14818,7 +15348,7 @@ export interface operations {
             };
         };
     };
-    webhook_run_suspended: {
+    webhook_run_waiting: {
         parameters: {
             query?: never;
             header: {
@@ -14834,7 +15364,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {
@@ -14847,7 +15377,7 @@ export interface operations {
             };
         };
     };
-    webhook_tool_schema_changed: {
+    webhook_secret_expired: {
         parameters: {
             query?: never;
             header: {
@@ -14863,7 +15393,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookEvent"];
+                "application/json": components["schemas"]["Webhook"];
             };
         };
         responses: {

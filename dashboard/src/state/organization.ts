@@ -27,7 +27,7 @@ import { type Store, useStore } from "./store";
 
 const MEMBERS = (store: Store): ListInit<Member> => ({
   load: (signal) => store.api.members(signal),
-  key: (m) => m.user.id,
+  key: (m) => m.person.id,
 });
 const INVITATIONS = (store: Store): ListInit<Invitation> => ({
   load: (signal) => store.api.invitations(signal),
@@ -93,7 +93,8 @@ export function usePermissionCatalog(enabled = true): Read<PermissionInfo[]> {
 // Members
 
 export interface GrantChange {
-  user: string;
+  /** The member: their person's id. */
+  member: string;
   grant: SetGrant;
   /** The caller's own grant: what it may do is read again. */
   self: boolean;
@@ -102,12 +103,12 @@ export interface GrantChange {
 /** Gives a member a role and allowed labels; shown at once. */
 export function useSetGrant(): Action<GrantChange> {
   const store = useStore();
-  return useAction(async ({ user, grant, self }: GrantChange) => {
+  return useAction(async ({ member, grant, self }: GrantChange) => {
     await members(store).change(
-      () => store.api.setGrant(user, grant),
+      () => store.api.setGrant(member, grant),
       (rows) => {
-        if (!rows.has(user)) return;
-        rows.update(user, (m) => {
+        if (!rows.has(member)) return;
+        rows.update(member, (m) => {
           m.grant = { ...m.grant, role: grant.role, allowedLabels: grant.allowedLabels ?? {} };
         });
       },
@@ -119,11 +120,11 @@ export function useSetGrant(): Action<GrantChange> {
 /** Removes a member from the organization; gone at once. */
 export function useRemoveMember(): Action<string> {
   const store = useStore();
-  return useAction(async (user: string) => {
+  return useAction(async (member: string) => {
     await members(store).change(
-      () => store.api.removeMember(user),
+      () => store.api.removeMember(member),
       (rows) => {
-        if (rows.has(user)) rows.delete(user);
+        if (rows.has(member)) rows.delete(member);
       },
     );
   });

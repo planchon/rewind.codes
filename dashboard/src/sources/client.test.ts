@@ -155,7 +155,7 @@ describe("Api", () => {
             status: "authenticated",
             accessToken: "at",
             expiresAt: "2026-11-14T10:05:00Z",
-            user: { id: "user_1", email: "ada@example.net" },
+            person: { id: "user_1", email: "ada@example.net" },
             organizationId: "org_1",
           },
           { headers: { Date: new Date(Date.now() + 60_000).toUTCString() } },
@@ -181,13 +181,13 @@ describe("Api", () => {
     expect(await api().authConfig()).toEqual({ methods: ["github", "magic_auth"], waitlist: true });
   });
 
-  it("downloads the journal document", async () => {
+  it("downloads the run export", async () => {
     const world = createWorld({ now: NOW });
     server.use(...createHandlers(world, { now: () => NOW }));
     const run = world.runs[0];
-    const blob = await api().journal(run?.id ?? "", "journal");
+    const blob = await api().exportRun(run?.id ?? "", "run");
     const doc = JSON.parse(await blob.text());
     expect(doc).toMatchObject({ v: 1, run: run?.id });
-    expect(doc.entries.length).toBe(run?.journal.entries.length);
+    expect(doc.events.length).toBe(run?.history.events.length);
   });
 });

@@ -1,13 +1,13 @@
 // What the run page does to a run (archi/05, "Run"): send it a signal, cancel it. Each with
 // `runs:control`. A signal carries one `Idempotency-Key` per opening of its form, so that a retry
 // within one opening delivers one signal; a cancellation needs none, the server takes a second one
-// as the first. A signal shows "sent" until its `signal_received` entry arrives on the run's
+// as the first. A signal shows "sent" until its `signal_received` event arrives on the run's
 // event stream; a cancellation, "cancelling" until the run's summary arrives cancelled.
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { isEnded, type Run, type Workflow } from "../model/types";
+import { isEnded, type Run } from "../model/types";
 import { useRunSummary } from "./runs";
 import { type Store, useStore } from "./store";
-import { useWorkflowVersions } from "./workflows";
+import { useWorkflow } from "./workflows";
 
 function newKey(): string {
   return (
@@ -18,7 +18,7 @@ function newKey(): string {
 interface ControlSnapshot {
   signalPending: boolean;
   signalError: unknown;
-  /** The signal sent, and the journal's length when it was sent. */
+  /** The signal sent, and the history's length when it was sent. */
   sent: { name: string; from: number } | null;
   cancelPending: boolean;
   cancelError: unknown;
@@ -64,7 +64,7 @@ class RunControl {
 
   async sendSignal(name: string, payload: unknown): Promise<boolean> {
     if (this.snapshot.signalPending) return false;
-    const from = this.store.journal(this.runId).getSnapshot().entries.length;
+    const from = this.store.history(this.runId).getSnapshot().events.length;
     this.set({ signalPending: true, signalError: null });
     try {
       await this.store.api.signalRun(this.runId, name, payload, this.signalKey);
@@ -136,17 +136,17 @@ export interface SignalRun {
 export function useSignalRun(runId: string): SignalRun {
   const store = useStore();
   const [control, s] = useControl(runId);
-  const journal = store.journal(runId);
-  useEffect(() => journal.retain(), [journal]);
-  const entries = useSyncExternalStore(
-    journal.subscribe,
-    () => journal.getSnapshot().entries,
-    () => journal.getSnapshot().entries,
+  const history = store.history(runId);
+  useEffect(() => history.retain(), [history]);
+  const events = useSyncExternalStore(
+    history.subscribe,
+    () => history.getSnapshot().events,
+    () => history.getSnapshot().events,
   );
   const sent = s.sent;
   const arrived =
     sent !== null &&
-    entries
+    events
       .slice(sent.from)
       .some((e) => e.event.type === "signal_received" && e.event.name === sent.name);
   return {
@@ -191,17 +191,19 @@ export interface DeclaredSignal {
   schema: unknown;
 }
 
-/** The signals a run's workflow declares, at the run's version; none for a run of a script. */
+/** The signals the version a run executes declares; none for a version without an interface. */
 export function useWorkflowSignals(run: Run): { signals: DeclaredSignal[]; loading: boolean } {
   const workflow = run.workflow ?? null;
-  const versions = useWorkflowVersions(workflow?.name ?? null);
-  const data: Workflow[] | undefined = versions.data;
+  const read = useWorkflow(workflow?.id ?? null, workflow?.version ?? null);
+  const data = read.data;
   const signals = useMemo(() => {
     if (!workflow || !data) return [];
-    const version = data.find((v) => v.version === workflow.version) ?? data[0];
+    const version =
+      data.versions.find((v) => v.version === workflow.version) ??
+      (data.version.version === workflow.version ? data.version : null);
     return Object.entries(version?.signals ?? {})
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, schema]) => ({ name, schema }));
   }, [workflow, data]);
-  return { signals, loading: workflow !== null && versions.isPending };
+  return { signals, loading: workflow !== null && read.isPending };
 }

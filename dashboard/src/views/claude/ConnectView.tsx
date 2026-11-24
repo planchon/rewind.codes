@@ -1,4 +1,4 @@
-// Connect Claude (archi/01, "Claude as the harness"): a page read top to bottom, from a toolset to
+// Connect Claude (archi/01, "Claude as the harness"): a page read top to bottom, from an action set to
 // a first message, beside the good practices and the person's connections. The fourth step sees a
 // connection arrive, or one used since the page opened, as the change stream announces it.
 import {
@@ -16,19 +16,19 @@ import { Ago, Empty, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { PageHeader } from "../../components/PageHeader";
 import {
+  actionSetTitle,
   firstMessage,
-  hostTools,
+  harnessActions,
   type McpInfo,
   mcpOf,
   namespaceProblem,
-  toolsetTitle,
 } from "../../model/connections";
 import { shortDigest } from "../../model/format";
-import type { Connection, ToolsetSummary } from "../../model/types";
+import type { ActionSetSummary, Connection } from "../../model/types";
 import { useAccess } from "../../state/access";
+import { useActionSets } from "../../state/actionSets";
 import { useArrivingConnections } from "../../state/connections";
 import { useSession } from "../../state/session";
-import { useToolsets } from "../../state/toolsets";
 import { Field } from "../org/bits";
 import { ClientName, CopyBlock, OrganizationList, Step, Steps } from "./bits";
 
@@ -49,32 +49,37 @@ export function ConnectView() {
   const { phase } = useSession();
   const mcp = mcpOf(server);
   const member = phase.kind === "member";
-  const readsToolsets = access.can("toolsets:read");
-  const toolsets = useToolsets(readsToolsets);
+  const readsActionSets = access.can("actions:read");
+  const actionSets = useActionSets(readsActionSets);
   // Connections are a person's, made through Rewind's OAuth: read again as the change stream
   // announces them. A step turns green when one arrives, compared with what they were when the
   // page opened.
   const { connections, arrived, ready } = useArrivingConnections(member);
 
-  const list = toolsets.data ?? [];
-  const organization = access.organization?.name ?? access.identity.tenant ?? "your organization";
+  const list = actionSets.data ?? [];
+  const organization =
+    access.organization?.name ?? access.identity.organizationId ?? "your organization";
 
   return (
     <div className="page">
-      <PageHeader title="Connect Claude" />
-      <p className="page-intro">
-        Use Rewind from Claude: claude.ai, Claude Desktop, the mobile apps or Claude Code. Claude
-        writes the scripts, checks and tests them, runs them and follows their runs, with the tools
-        of your toolsets.
-      </p>
+      <PageHeader
+        title="Connect Claude"
+        info={
+          <p>
+            Use Rewind from Claude: claude.ai, Claude Desktop, the mobile apps or Claude Code.
+            Claude writes the workflows, checks and tests them, runs them and follows their runs,
+            with the actions of your action sets.
+          </p>
+        }
+      />
       <div className="connect-grid">
         <Steps>
-          <Step n={1} title="Have a toolset" done={list.length > 0}>
-            <ToolsetStep
-              readable={readsToolsets}
-              pending={toolsets.isPending}
-              error={toolsets.isError ? toolsets.error : null}
-              toolsets={list}
+          <Step n={1} title="Have an action set" done={list.length > 0}>
+            <ActionSetStep
+              readable={readsActionSets}
+              pending={actionSets.isPending}
+              error={actionSets.isError ? actionSets.error : null}
+              actionSets={list}
               organization={organization}
             />
           </Step>
@@ -95,7 +100,7 @@ export function ConnectView() {
             />
           </Step>
           <Step n={5} title="Try it">
-            <TryStep organization={organization} toolsets={list} />
+            <TryStep organization={organization} actionSets={list} />
           </Step>
         </Steps>
         <aside className="connect-side" aria-label="Good practices and your connections">
@@ -111,40 +116,40 @@ export function ConnectView() {
   );
 }
 
-function ToolsetStep({
+function ActionSetStep({
   readable,
   pending,
   error,
-  toolsets,
+  actionSets,
   organization,
 }: {
   readable: boolean;
   pending: boolean;
   error: unknown;
-  toolsets: readonly ToolsetSummary[];
+  actionSets: readonly ActionSetSummary[];
   organization: string;
 }) {
   if (!readable) {
     return (
       <p className="step-text">
-        Claude writes scripts against a toolset of {organization}. Your role cannot list them (
-        <code>toolsets:read</code>): ask an owner which one to use.
+        Claude writes workflows against an action set of {organization}. Your role cannot list them
+        (<code>actions:read</code>): ask an owner which one to use.
       </p>
     );
   }
   if (pending) return <Loading />;
   if (error) return <ErrorNote error={error} />;
-  if (toolsets.length === 0) {
+  if (actionSets.length === 0) {
     return (
       <div className="stack">
         <p className="step-text">
-          Claude writes scripts against a toolset: the MCP servers and host tools they may call.{" "}
-          {organization} has none yet. Register one with the SDK (
-          <code>rewind.toolsets.create</code>) or the CLI (
-          <code>rewind toolsets add toolset.json</code>).
+          Claude writes workflows against an action set: the MCP servers, APIs and harness actions
+          they may call. {organization} has none yet. Register one with the SDK (
+          <code>rewind.actionSets.create</code>) or the CLI (
+          <code>rewind action-sets add action-set.json</code>).
         </p>
         <p className="step-text">
-          <DocsLink path="/sdk/toolsets">Create a toolset</DocsLink>
+          <DocsLink path="/sdk/action-sets">Create an action set</DocsLink>
         </p>
       </div>
     );
@@ -152,30 +157,31 @@ function ToolsetStep({
   return (
     <div className="stack">
       <p className="step-text">
-        Claude writes scripts against one of the toolsets of {organization}, and finds them with{" "}
-        <code>list_toolsets</code>.
+        Claude writes workflows against one of the action sets of {organization}, and finds them
+        with <code>list_action_sets</code>.
       </p>
-      <ul className="toolset-list">
-        {toolsets.map((t) => {
-          const host = hostTools(t);
+      <ul className="action-set-list">
+        {actionSets.map((t) => {
+          const harness = harnessActions(t);
           return (
             <li key={t.id}>
-              <div className="toolset-line">
-                <strong>{toolsetTitle(t)}</strong>
+              <div className="action-set-line">
+                <strong>{actionSetTitle(t)}</strong>
                 <span className="digest" title={t.id}>
                   {shortDigest(t.id)}
                 </span>
                 <span className="muted">
-                  {t.tools.length} tool{t.tools.length === 1 ? "" : "s"}
+                  {t.actions.length} action{t.actions.length === 1 ? "" : "s"}
                   {t.workflows && t.workflows.length > 0
                     ? ` · workflows ${t.workflows.join(", ")}`
                     : ""}
                 </span>
               </div>
-              {host.length > 0 && (
-                <p className="toolset-warning">
+              {harness.length > 0 && (
+                <p className="action-set-warning">
                   <TriangleExclamationPoint size={12} aria-hidden="true" />
-                  Host tools ({host.join(", ")}): Claude reaches them only while your worker runs.
+                  Harness actions ({harness.join(", ")}): Claude reaches them only while your worker
+                  runs.
                 </p>
               )}
             </li>
@@ -349,9 +355,9 @@ function AuthorizeStep({ mcp }: { mcp: McpInfo }) {
       </p>
       <dl className="access-list">
         <dt>Read</dt>
-        <dd>runs, namespaces, toolsets and workflows.</dd>
+        <dd>runs, namespaces, action sets and workflows.</dd>
         <dt>Run</dt>
-        <dd>also check, test and start scripts, signal and cancel runs.</dd>
+        <dd>also check, test and run workflows, signal and cancel runs.</dd>
       </dl>
       <p className="step-text">
         Claude never gets more than your own role gives, and never administers anything. The runs it
@@ -421,35 +427,35 @@ function CheckStep({
 
 function TryStep({
   organization,
-  toolsets,
+  actionSets,
 }: {
   organization: string;
-  toolsets: readonly ToolsetSummary[];
+  actionSets: readonly ActionSetSummary[];
 }) {
-  const [toolset, setToolset] = useState<string | null>(null);
+  const [actionSet, setActionSet] = useState<string | null>(null);
   const [namespace, setNamespace] = useState("demo");
-  const chosen = toolset ?? toolsets[0]?.id ?? null;
+  const chosen = actionSet ?? actionSets[0]?.id ?? null;
   const problem = namespaceProblem(namespace);
-  const text = firstMessage({ organization, toolset: chosen, namespace });
+  const text = firstMessage({ organization, actionSet: chosen, namespace });
   return (
     <div className="stack">
       <p className="step-text">
-        Send Claude a first message that names the organization, a toolset and a namespace (an end
-        user, created at its first run), so that it asks nothing before it starts:
+        Send Claude a first message that names the organization, an action set and a namespace (an
+        end user, created at its first run), so that it asks nothing before it starts:
       </p>
       <div className="form-row">
-        {toolsets.length > 0 && (
-          <Field label="Toolset" hint="Its id, as list_toolsets gives it.">
+        {actionSets.length > 0 && (
+          <Field label="Action set" hint="Its id, as list_action_sets gives it.">
             {(props) => (
               <select
                 {...props}
                 className="input"
                 value={chosen ?? ""}
-                onChange={(e) => setToolset(e.target.value)}
+                onChange={(e) => setActionSet(e.target.value)}
               >
-                {toolsets.map((t) => (
+                {actionSets.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {toolsetTitle(t)} · {shortDigest(t.id)}
+                    {actionSetTitle(t)} · {shortDigest(t.id)}
                   </option>
                 ))}
               </select>
@@ -485,22 +491,22 @@ function Practices() {
           account, never a shared one.
         </li>
         <li>
-          <strong>Name the organization, namespace and toolset</strong> in your message: nothing is
-          pinned at connection.
+          <strong>Name the organization, namespace and action set</strong> in your message: nothing
+          is pinned at connection.
         </li>
         <li>
           <strong>The least access that works.</strong> Read to look at runs; Run only where Claude
           should start them.
         </li>
         <li>
-          <strong>Keep Claude's confirmation</strong> on <code>run_script</code>,{" "}
+          <strong>Keep Claude's confirmation</strong> on <code>run_workflow</code>,{" "}
           <code>retry_run</code>, <code>signal_run</code> and <code>cancel_run</code>. The read-only
           tools may be "Always allow".
         </li>
         <li>
           <strong>Secrets stay in Rewind.</strong> Their values are written in{" "}
-          <Link to="/secrets">Secrets</Link>, never in the chat: Claude attaches a secret by its
-          name, and a script never sees it.
+          <Link to="/secrets">Secrets</Link>, never in the chat: Claude names the secrets a run
+          uses, and its code never sees them.
         </li>
         <li>
           <strong>Revoke</strong> a connection you no longer use from{" "}

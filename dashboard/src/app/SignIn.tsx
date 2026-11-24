@@ -27,7 +27,7 @@ export function SignIn() {
   const state = phase.state;
   switch (state.status) {
     case "organization_selection_required":
-      return <ChooseOrganization email={state.user.email} organizations={state.organizations} />;
+      return <ChooseOrganization email={state.person.email} organizations={state.organizations} />;
     case "email_verification_required":
       return <VerifyEmail email={state.email} />;
     case "sign_up_closed":

@@ -1,10 +1,11 @@
-// Run: one run, analysed in depth (archi/05). Its header holds its handle, its tags and its actions
-// (its controls in a menu beside "Forks"); its sidebar, its sections and its details, and no
-// action. Its sections are the debugger (the source with each tool call, timer, signal wait and
-// log next to the line that caused it; the timeline; the time cursor; payloads on demand), the
-// journal, the logs and the runs it started. Live through the event stream while the run goes on. The time cursor steps through the history: the source, its notes and the
-// timeline show the run as it was after a step, and hovering a call or a variable shows its value
-// then. "Back" returns to the list of Observability the run was opened from.
+// Run: one run, analysed in depth (archi/05). Its header holds its handle, its tags and its
+// controls (Forks, the Controls menu beside it, Export run and Export cassette); its sidebar, its
+// sections and its details, and no control. Its sections are the debugger (the code with each
+// call, timer, signal wait and log next to the line that caused it; the timeline; the time cursor;
+// payloads on demand), the history, the logs and the runs it started. Live through the event
+// stream while the run goes on. The time cursor steps through the history: the code, its notes and
+// the timeline show the run as it was after a step, and hovering a call or a variable shows its
+// value then. "Back" returns to the list of Runs the run was opened from.
 import { Bug, FileCode, GitBranch, MessageSquareText, ScrollText, Terminal } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router";
@@ -17,23 +18,24 @@ import { OutcomeGlyph } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
 import { type Activity, buildRunModel, type RunModel } from "../../model/run";
 import { gutterMarks, markMeaning, markSymbol } from "../../model/steps";
-import { isEnded } from "../../model/types";
+import { isEnded, type Run } from "../../model/types";
 import { callName, endedRunOf, readRunEnd, startedRuns } from "../../model/workflows";
 import { ApiError } from "../../state/errors";
-import { useRun, useRunJournal } from "../../state/runs";
-import { useScript } from "../../state/scripts";
+import { useRun, useRunHistory } from "../../state/runs";
+import { useWorkflow } from "../../state/workflows";
 import { CursorBar, StepPanel, useCursorKeys, useTimeCursor, ValuePopover } from "./Cursor";
 import { activityOutcome, activityTitle } from "./describe";
+import { HistoryList, Logs } from "./HistoryPanel";
 import { Inspector, type Selection } from "./Inspector";
-import { JournalList, Logs } from "./JournalPanel";
-import { RunActions, RunBanners, RunDetails, RunTags } from "./RunHeader";
+import { RunBanners, RunDetails, RunHeaderControls, RunTags } from "./RunHeader";
 import { StartedRuns } from "./StartedRuns";
 import { Timeline } from "./Timeline";
 import { buildTargets, sourceIndex } from "./targets";
 
 function readSelection(params: URLSearchParams): Selection {
-  const entry = params.get("entry");
-  if (entry !== null && /^\d+$/.test(entry)) return { kind: "entry", idx: Number(entry) };
+  // `?entry=` is how links of earlier versions named an event.
+  const event = params.get("event") ?? params.get("entry");
+  if (event !== null && /^\d+$/.test(event)) return { kind: "event", idx: Number(event) };
   const line = params.get("line");
   if (line !== null && /^\d+$/.test(line)) return { kind: "line", line: Number(line) };
   return null;
@@ -44,15 +46,15 @@ interface NoteGroup {
   activities: Activity[];
 }
 
-/** The notes of a line: calls of one tool together, a wait with its timeout, logs together. */
+/** The notes of a line: calls of one action together, a wait with its timeout, logs together. */
 export function groupNotes(activities: Activity[]): NoteGroup[] {
   const groups = new Map<string, NoteGroup>();
   const waits = new Set(activities.filter((a) => a.kind === "signal").map((a) => a.idx));
   for (const a of activities) {
     if (a.kind === "timer" && a.timeoutOf !== null && waits.has(a.timeoutOf)) continue;
     const key =
-      a.kind === "tool_call"
-        ? `call:${a.tool}`
+      a.kind === "call"
+        ? `call:${a.action}`
         : a.kind === "signal"
           ? endedRunOf(a.name) !== null
             ? "ended"
@@ -93,7 +95,7 @@ function noteText(group: NoteGroup, now: number, ended: boolean): ReactNode {
   const n = group.activities.length;
   const outcome = (a: Activity) => activityOutcome(a, ended);
   switch (first.kind) {
-    case "tool_call": {
+    case "call": {
       const failed = group.activities.filter((a) => outcome(a) === "failed").length;
       const open = group.activities.filter((a) => outcome(a) === "open").length;
       const cancelled = group.activities.filter((a) => outcome(a) === "cancelled").length;
@@ -101,7 +103,7 @@ function noteText(group: NoteGroup, now: number, ended: boolean): ReactNode {
         const end = first.end;
         return (
           <>
-            {callName(first.tool, first.args)}
+            {callName(first.action, first.args)}
             <span className="note-meta">
               {end
                 ? end.outcome === "failed"
@@ -116,7 +118,7 @@ function noteText(group: NoteGroup, now: number, ended: boolean): ReactNode {
       }
       return (
         <>
-          {callName(first.tool, first.args)} <span className="note-meta">×{n}</span>
+          {callName(first.action, first.args)} <span className="note-meta">×{n}</span>
           {failed > 0 && <span className="note-meta tone-critical">{failed} failed</span>}
           {open > 0 && <span className="note-meta">{open} in flight</span>}
           {cancelled > 0 && <span className="note-meta">{cancelled} cancelled</span>}
@@ -146,7 +148,7 @@ function noteText(group: NoteGroup, now: number, ended: boolean): ReactNode {
               ? "cancelled"
               : end === null
                 ? first.timeoutAt
-                  ? `gives up ${formatRelative(first.timeoutAt, now)}`
+                  ? `times out ${formatRelative(first.timeoutAt, now)}`
                   : "waiting"
                 : end.outcome === "timed_out"
                   ? "timed out"
@@ -183,7 +185,7 @@ function endedNote(group: NoteGroup, now: number, runEnded: boolean): ReactNode 
             ? "cancelled"
             : end === null
               ? first.timeoutAt
-                ? `gives up ${formatRelative(first.timeoutAt, now)}`
+                ? `times out ${formatRelative(first.timeoutAt, now)}`
                 : "waiting"
               : end.outcome === "timed_out"
                 ? "timed out"
@@ -210,14 +212,14 @@ function Notes({
   line,
   selected,
   now,
-  onSelectEntry,
+  onSelectEvent,
   onSelectLine,
 }: {
   model: RunModel;
   line: number;
   selected: number | null;
   now: number;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
   onSelectLine: (line: number) => void;
 }) {
   const activities = model.byLine.get(line);
@@ -239,7 +241,7 @@ function Notes({
             type="button"
             className={`note kind-${first.kind} outcome-${outcome}${isSelected ? " selected" : ""}`}
             onClick={() =>
-              g.activities.length === 1 ? onSelectEntry(first.idx) : onSelectLine(line)
+              g.activities.length === 1 ? onSelectEvent(first.idx) : onSelectLine(line)
             }
           >
             {first.kind !== "log" && <OutcomeGlyph outcome={outcome} size={10} />}
@@ -251,13 +253,37 @@ function Notes({
   );
 }
 
-type Section = "debugger" | "journal" | "logs" | "started";
+type Section = "debugger" | "history" | "logs" | "started";
 
-const SECTIONS: readonly Section[] = ["debugger", "journal", "logs", "started"];
+const SECTIONS: readonly Section[] = ["debugger", "history", "logs", "started"];
+
+/** The code a run executes: its workflow version's, read with the version. */
+function useRunCode(run: Run | undefined): {
+  code: string | null;
+  pending: boolean;
+  error: unknown;
+} {
+  const workflow = run?.workflow ?? null;
+  const read = useWorkflow(workflow?.id ?? null, workflow?.version ?? null);
+  const code =
+    read.data && read.data.version.codeDigest === run?.codeDigest ? read.data.code : null;
+  const missing = run !== undefined && workflow === null;
+  return {
+    code,
+    pending: !missing && read.isPending,
+    error: missing
+      ? new Error("The run names no workflow version, whose code it executes.")
+      : read.isError
+        ? read.error
+        : read.data && code === null
+          ? new Error("The run's code is not its workflow version's.")
+          : null,
+  };
+}
 
 /** A run's page, mounted again for another run: its details are never the previous run's. */
 /**
- * A run's page, by its UUID or its handle (`/runs/dana/triage/06bqx3k9f2mt/journal`). A handle
+ * A run's page, by its UUID or its handle (`/runs/dana/triage/06bqx3k9f2mt/history`). A handle
  * is read once into the run's id, which the page and its streams follow; the URL keeps the handle.
  */
 export function RunPage() {
@@ -296,29 +322,26 @@ function RunView({
   base: string;
   section: string | null;
 }) {
-  const section = (rawSection ?? "debugger") as Section;
+  const section = (rawSection ?? "debugger") as Section | "journal";
   const location = useLocation();
   const folded = useSidebarFolded();
   const back = runBackPath(location.state);
   const [params, setParams] = useSearchParams();
   const run = useRun(id);
-  const journal = useRunJournal(id);
-  const script = useScript(run.data?.script);
-  const model = useMemo(() => buildRunModel(journal.entries), [journal.entries]);
-  const live = run.data ? !isEnded(run.data.status) && journal.state !== "ended" : false;
+  const history = useRunHistory(id);
+  const code = useRunCode(run.data);
+  const model = useMemo(() => buildRunModel(history.events), [history.events]);
+  const live = run.data ? !isEnded(run.data.status) && history.state !== "ended" : false;
   const now = useNow(live ? 5_000 : 60_000);
 
   // The time cursor: the run as it was after a step. At the head, the run as it is.
-  const cursor = useTimeCursor(journal.entries);
+  const cursor = useTimeCursor(history.events);
   useCursorKeys(cursor);
   const atCursor = useMemo(
-    () => (cursor.atHead ? model : buildRunModel(journal.entries.slice(0, cursor.cursor + 1))),
-    [cursor.atHead, cursor.cursor, journal.entries, model],
+    () => (cursor.atHead ? model : buildRunModel(history.events.slice(0, cursor.cursor + 1))),
+    [cursor.atHead, cursor.cursor, history.events, model],
   );
-  const index = useMemo(
-    () => (script.data ? sourceIndex(script.data.source) : null),
-    [script.data],
-  );
+  const index = useMemo(() => (code.code !== null ? sourceIndex(code.code) : null), [code.code]);
   const targets = useMemo(() => (index ? buildTargets(index, model) : null), [index, model]);
   const lastStep = cursor.steps[cursor.steps.length - 1];
   const ending = lastStep?.ends ? { step: cursor.steps.length - 1, kind: lastStep.ends } : null;
@@ -364,18 +387,19 @@ function RunView({
   const select = useCallback(
     (next: Selection) => {
       const p = new URLSearchParams(params);
+      p.delete("event");
       p.delete("entry");
       p.delete("line");
-      if (next?.kind === "entry") p.set("entry", String(next.idx));
+      if (next?.kind === "event") p.set("event", String(next.idx));
       if (next?.kind === "line") p.set("line", String(next.line));
       setParams(p, { replace: true });
     },
     [params, setParams],
   );
-  const selectEntry = useCallback((idx: number) => select({ kind: "entry", idx }), [select]);
+  const selectEvent = useCallback((idx: number) => select({ kind: "event", idx }), [select]);
   const selectLine = useCallback((line: number) => select({ kind: "line", line }), [select]);
 
-  const selectedIdx = selection?.kind === "entry" ? selection.idx : null;
+  const selectedIdx = selection?.kind === "event" ? selection.idx : null;
   const selectedActivity = selectedIdx !== null ? model.byIdx.get(selectedIdx) : undefined;
   const selectedLine =
     selection?.kind === "line" ? selection.line : (selectedActivity?.callsite?.line ?? null);
@@ -394,7 +418,16 @@ function RunView({
     [atCursor, errorLine],
   );
 
-  if (!SECTIONS.includes(section)) return <Navigate to={runPath(base)} replace />;
+  // The journal of earlier versions is the history.
+  if (section === "journal")
+    return (
+      <Navigate
+        to={{ pathname: runPath(base, "history"), search: location.search }}
+        state={location.state}
+        replace
+      />
+    );
+  if (!SECTIONS.includes(section as Section)) return <Navigate to={runPath(base)} replace />;
   if (run.isPending) return <Loading>Loading the run…</Loading>;
   if (run.isError) {
     const notFound = run.error instanceof ApiError && run.error.status === 404;
@@ -439,8 +472,8 @@ function RunView({
         ) : null,
     },
     {
-      section: "journal",
-      label: "Journal",
+      section: "history",
+      label: "History",
       icon: <ScrollText size={16} />,
       end: <span className="count">{formatCount(model.entries.length)}</span>,
     },
@@ -462,7 +495,7 @@ function RunView({
       run={r}
       model={model}
       selection={selection}
-      onSelectEntry={selectEntry}
+      onSelectEvent={selectEvent}
       onSelectLine={selectLine}
       onClear={() => select(null)}
       steps={cursor.steps}
@@ -496,16 +529,16 @@ function RunView({
         </section>
       </PageSidebar>
       <PageHeader
-        crumbs={<Link to={back}>Observability</Link>}
+        crumbs={<Link to={back}>Runs</Link>}
         title={<RunHandle handle={r.handle} id={r.id} />}
         meta={<RunTags run={r} />}
-        actions={<RunActions run={r} />}
+        actions={<RunHeaderControls run={r} />}
       />
       <div className="page-body">
-        {journal.state === "error" && (
-          <ProblemView error={journal.error} title="The journal could not be read" />
+        {history.state === "error" && (
+          <ProblemView error={history.error} title="The history could not be read" />
         )}
-        <RunBanners run={r} model={model} onSelectEntry={selectEntry} onSelectLine={selectLine} />
+        <RunBanners run={r} model={model} onSelectEvent={selectEvent} onSelectLine={selectLine} />
 
         {section === "debugger" && (
           <>
@@ -516,19 +549,19 @@ function RunView({
                 {model.firstAt !== null && model.lastAt !== null && (
                   <span className="muted num">
                     {formatDuration((live ? now : model.lastAt) - model.firstAt)} from the first
-                    entry
+                    event
                     {live ? " to now" : " to the last"}
                   </span>
                 )}
               </header>
-              {journal.entries.length === 0 && journal.state !== "ended" ? (
-                <Loading>Reading the journal…</Loading>
+              {history.events.length === 0 && history.state !== "ended" ? (
+                <Loading>Reading the history…</Loading>
               ) : (
                 <Timeline
                   model={model}
                   now={live ? now : null}
                   selected={selectedIdx}
-                  onSelect={selectEntry}
+                  onSelect={selectEvent}
                   cursor={{
                     steps: cursor.steps,
                     n: cursor.n,
@@ -540,10 +573,10 @@ function RunView({
               )}
             </section>
 
-            <section className="panel source-panel" aria-label="Source">
+            <section className="panel source-panel" aria-label="Code">
               <header className="panel-head">
                 <h2>
-                  <FileCode size={14} aria-hidden="true" /> script.ts
+                  <FileCode size={14} aria-hidden="true" /> workflow.ts
                 </h2>
                 {marks ? (
                   <span className="mark-legend muted">
@@ -569,15 +602,15 @@ function RunView({
                   </span>
                 )}
               </header>
-              {script.isPending ? (
-                <Loading>Loading the source…</Loading>
-              ) : script.isError ? (
+              {code.pending ? (
+                <Loading>Loading the code…</Loading>
+              ) : code.code === null ? (
                 <div className="panel-body">
-                  <ProblemView error={script.error} title="The source could not be read" />
+                  <ProblemView error={code.error} title="The code could not be read" />
                 </div>
               ) : (
                 <CodeView
-                  source={script.data.source}
+                  source={code.code}
                   notesTitle="What each line caused"
                   notes={(line) => (
                     <Notes
@@ -585,7 +618,7 @@ function RunView({
                       line={line}
                       selected={selectedIdx}
                       now={now}
-                      onSelectEntry={selectEntry}
+                      onSelectEvent={selectEvent}
                       onSelectLine={selectLine}
                     />
                   )}
@@ -624,7 +657,7 @@ function RunView({
                 ctx={ctx}
                 onUnwatch={(key) => setWatches((w) => w.filter((k) => k !== key))}
                 onSelectLine={selectLine}
-                onSelectEntry={selectEntry}
+                onSelectEvent={selectEvent}
               />
               {inspector}
             </div>
@@ -641,14 +674,14 @@ function RunView({
           </>
         )}
 
-        {section === "journal" && (
+        {section === "history" && (
           <div className="run-body">
-            <section className="panel" aria-label="Journal">
+            <section className="panel" aria-label="History">
               <header className="panel-head">
-                <h2>Journal</h2>
+                <h2>History</h2>
                 <span className="muted">lifecycle · commands · completions · annotations</span>
               </header>
-              <JournalList model={model} selected={selectedIdx} onSelect={selectEntry} />
+              <HistoryList model={model} selected={selectedIdx} onSelect={selectEvent} />
             </section>
             <div className="run-side">{inspector}</div>
           </div>
@@ -659,9 +692,9 @@ function RunView({
             <section className="panel" aria-label="Logs">
               <header className="panel-head">
                 <h2>Logs</h2>
-                <span className="muted">what the script wrote with console</span>
+                <span className="muted">what its code wrote with console</span>
               </header>
-              <Logs model={model} onSelect={selectEntry} onSelectLine={selectLine} />
+              <Logs model={model} onSelect={selectEvent} onSelectLine={selectLine} />
             </section>
             <div className="run-side">{inspector}</div>
           </div>
@@ -676,7 +709,7 @@ function RunView({
                 runId={r.id}
                 model={model}
                 live={live}
-                onSelectEntry={selectEntry}
+                onSelectEvent={selectEvent}
                 onSelectLine={selectLine}
               />
               <div className="run-side">{inspector}</div>

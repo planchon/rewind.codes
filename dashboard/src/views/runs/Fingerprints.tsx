@@ -1,6 +1,6 @@
-// Observability's failures: the failed, cancelled and aborted runs of a window, grouped by
-// fingerprint (the error's name and its message with what varies set aside), across the many
-// scripts models write. A group opens its runs; its latest run opens on the step that failed.
+// The failures of Runs: the failed, cancelled and aborted runs of a window, by fingerprint (the
+// error's name and its message with what varies set aside), across the many workflows models
+// write. A fingerprint opens its runs; its latest run opens on the step that failed.
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
@@ -14,9 +14,9 @@ import { formatCount, formatDuration, splitLabel } from "../../model/format";
 import { joinQuery, labelTerm, queryLink } from "../../model/query";
 import { useFailures } from "../../state/aggregates";
 import { queryFault } from "../../state/errors";
-import { BUCKETS, WINDOW_WORDS, windowTerm } from "../search";
+import { INTERVALS, WINDOW_WORDS, windowTerm } from "../search";
 
-export function FailureGroups({
+export function Fingerprints({
   q,
   setQ,
   win,
@@ -28,24 +28,22 @@ export function FailureGroups({
   const navigate = useNavigate();
   const linkState = useRunLinkState();
   const width = RANGES[win];
-  const { bucket, ms: bucketMs } = BUCKETS[win];
-  // The groups of the query's namespace, or of the organization: the counters know no other term.
+  const { interval, ms: intervalMs } = INTERVALS[win];
+  // The fingerprints of the query's namespace, or of the organization: the counters know no other
+  // term.
   const failures = useFailures(`failures|${win}|${q}`, () => {
     const now = Date.now();
     return {
       ...(q ? { q } : {}),
       since: new Date(now - width).toISOString(),
       until: new Date(now).toISOString(),
-      bucket,
+      interval,
       limit: 100,
     };
   });
   const fault = queryFault(failures.error);
-  const groupLink = (fingerprint: string) =>
-    queryLink(
-      "/observability",
-      joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)),
-    );
+  const fingerprintLink = (fingerprint: string) =>
+    queryLink("/runs", joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)));
 
   let body: ReactNode;
   if (fault) {
@@ -54,7 +52,7 @@ export function FailureGroups({
     body = <Loading>Loading the failures…</Loading>;
   } else if (failures.isError) {
     body = <ProblemView error={failures.error} title="The failures could not be read" />;
-  } else if (failures.data.groups.length === 0) {
+  } else if (failures.data.fingerprints.length === 0) {
     body = <Empty>No run failed, was cancelled or aborted in {WINDOW_WORDS[win]}.</Empty>;
   } else {
     const page = failures.data;
@@ -63,30 +61,32 @@ export function FailureGroups({
         <table className="grid failures-table">
           <thead>
             <tr>
-              <th>Signature</th>
+              <th title="The error with its numbers, ids, times and quoted strings set aside">
+                Fingerprint
+              </th>
               <th>Error</th>
               <th className="right">Runs</th>
-              <th title={`Runs that ended, by ${formatDuration(bucketMs)}`}>{win}</th>
-              <th className="right">Scripts</th>
+              <th title={`Runs that ended, by ${formatDuration(intervalMs)}`}>{win}</th>
+              <th className="right">Workflows</th>
               <th>Seen</th>
-              <th title="The line of script.ts most of its runs ended at">Line</th>
+              <th title="The line of workflow.ts most of its runs ended at">Line</th>
               <th>Labels</th>
               <th>Latest</th>
             </tr>
           </thead>
           <tbody>
-            {page.groups.map((g) => (
+            {page.fingerprints.map((g) => (
               <tr
                 key={g.fingerprint}
                 className="link"
                 onClick={(e) => {
                   if ((e.target as HTMLElement).closest("a, button")) return;
-                  void navigate(groupLink(g.fingerprint));
+                  void navigate(fingerprintLink(g.fingerprint));
                 }}
               >
                 <td className="wrap signature-cell">
                   <Link
-                    to={groupLink(g.fingerprint)}
+                    to={fingerprintLink(g.fingerprint)}
                     className="row-link mono"
                     title={`fingerprint:${g.fingerprint}`}
                   >
@@ -100,15 +100,16 @@ export function FailureGroups({
                   </span>
                 </td>
                 <td className="right num">
-                  <Link to={groupLink(g.fingerprint)}>{formatCount(g.runs)}</Link>
+                  <Link to={fingerprintLink(g.fingerprint)}>{formatCount(g.runs)}</Link>
                 </td>
                 <td>
                   <Sparkline
                     series={g.series ?? []}
-                    label={`Runs of ${g.error} by ${formatDuration(bucketMs)}`}
+                    label={`Runs of ${g.error} by ${formatDuration(intervalMs)}`}
+                    tone={isCancellation(g.error) ? "neutral" : "critical"}
                   />
                 </td>
-                <td className="right num">{formatCount(g.scripts)}</td>
+                <td className="right num">{formatCount(g.workflows)}</td>
                 <td className="dim seen-cell">
                   <span>
                     first <Ago ms={Date.parse(g.firstEndedAt)} />
@@ -156,23 +157,15 @@ export function FailureGroups({
             ))}
           </tbody>
         </table>
-        {page.totalGroups > page.groups.length && (
+        {page.totalFingerprints > page.fingerprints.length && (
           <div className="list-foot">
-            {formatCount(page.groups.length)} of {formatCount(page.totalGroups)} signatures shown
+            The {formatCount(page.fingerprints.length)} most frequent of{" "}
+            {formatCount(page.totalFingerprints)} fingerprints
           </div>
         )}
       </TableScroll>
     );
   }
 
-  return (
-    <div className="stack">
-      <p className="view-note muted">
-        {failures.data
-          ? `${formatCount(failures.data.runs)} runs, ${formatCount(failures.data.totalGroups)} signatures, ended in ${WINDOW_WORDS[win]}`
-          : WINDOW_WORDS[win]}
-      </p>
-      {body}
-    </div>
-  );
+  return <div className="stack">{body}</div>;
 }

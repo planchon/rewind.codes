@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { createWorld, SCRIPTS } from "../../mocks/fixtures";
+import { CODES, createWorld } from "../../mocks/fixtures";
 import { handleOf } from "../../mocks/handles";
 import { NOW, renderApp, search } from "../../test/app";
 
@@ -18,30 +18,30 @@ function groupRows(): string[] {
   return [...document.querySelectorAll("tr.group-row .mono")].map((e) => e.textContent ?? "");
 }
 
-describe("Observability: every run", () => {
+describe("Runs: every run", () => {
   it("lists runs, most recently started first, with their status, labels and counts", async () => {
-    renderApp("/observability");
+    renderApp("/runs");
     await screen.findByRole("table");
     expect(rows().length).toBe(50);
     expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
     // The run waiting for an approval, started two hours ago.
     const triage = rows().find((r) => within(r).queryByText("c-42"));
     expect(triage).toBeDefined();
-    expect(within(triage as HTMLElement).getByText("active")).toBeInTheDocument();
+    expect(within(triage as HTMLElement).getByText("waiting")).toBeInTheDocument();
   });
 
   it("searches with the query typed, kept in the URL and sent as q", async () => {
     const user = userEvent.setup();
-    const { router, requested } = renderApp("/observability");
+    const { router, requested } = renderApp("/runs");
     await screen.findByRole("table");
-    await user.type(queryInput(), "@agent:triage tool:github.close_issue{Enter}");
+    await user.type(queryInput(), "@agent:triage action:github.close_issue{Enter}");
     await waitFor(() =>
-      expect(search(router).get("q")).toBe("@agent:triage tool:github.close_issue"),
+      expect(search(router).get("q")).toBe("@agent:triage action:github.close_issue"),
     );
     await waitFor(() =>
       expect(
         requested("/v1/runs").some(
-          (u) => u.searchParams.get("q") === "@agent:triage tool:github.close_issue",
+          (u) => u.searchParams.get("q") === "@agent:triage action:github.close_issue",
         ),
       ).toBe(true),
     );
@@ -55,10 +55,10 @@ describe("Observability: every run", () => {
     );
     await waitFor(() =>
       expect(search(router).toString()).toBe(
-        "q=status%3Afailed+%40agent%3Atriage+tool%3Agithub.close_issue",
+        "q=status%3Afailed+%40agent%3Atriage+action%3Agithub.close_issue",
       ),
     );
-    expect(queryInput().value).toBe("status:failed @agent:triage tool:github.close_issue");
+    expect(queryInput().value).toBe("status:failed @agent:triage action:github.close_issue");
     await waitFor(() => expect(rows().length).toBe(1));
     const sent = requested("/v1/runs").map((u) => u.searchParams);
     expect(sent.every((p) => p.get("status") === null && p.get("label") === null)).toBe(true);
@@ -66,20 +66,22 @@ describe("Observability: every run", () => {
 
   it("reads quarantined runs and a time window from an older link", async () => {
     const { router } = renderApp("/runs?quarantined=yes&range=24h");
-    await waitFor(() => expect(search(router).get("q")).toBe("quarantined:yes started:>now-24h"));
+    await waitFor(() =>
+      expect(search(router).get("q")).toBe("waiting:quarantined started:>now-24h"),
+    );
     await waitFor(() => expect(rows().length).toBe(1));
     expect(within(rows()[0] as HTMLElement).getByText("quarantined")).toBeInTheDocument();
   });
 
   it("lists runs on a link whose range it cannot read", async () => {
-    renderApp("/observability?range=toString");
+    renderApp("/runs?range=toString");
     await screen.findByRole("table");
     expect(rows().length).toBe(50);
   });
 
   it("suggests the fields, then the values that exist", async () => {
     const user = userEvent.setup();
-    renderApp("/observability");
+    renderApp("/runs");
     await screen.findByRole("table");
     await user.click(queryInput());
     await user.type(queryInput(), "@ag");
@@ -101,7 +103,7 @@ describe("Observability: every run", () => {
 
   it("underlines the term the server cannot read, with its message", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability");
+    const { router } = renderApp("/runs");
     await screen.findByRole("table");
     await user.type(queryInput(), "@env:prod stauts:failed{Enter}");
     await waitFor(() => expect(search(router).get("q")).toBe("@env:prod stauts:failed"));
@@ -115,7 +117,7 @@ describe("Observability: every run", () => {
 
   it("adds a facet's value, excludes it, then removes it", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability?q=%40agent%3Asupport");
+    const { router } = renderApp("/runs?q=%40agent%3Asupport");
     const filters = await screen.findByRole("region", { name: "Filters" });
     const status = await within(filters).findByRole("group", { name: "Status" });
     const failed = await within(status).findByRole("button", { name: /^Status failed, \d+ runs$/ });
@@ -131,7 +133,7 @@ describe("Observability: every run", () => {
 
   it("adds a label from a run's labels, and shows the error of the runs that ended badly", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability?q=status%3Afailed");
+    const { router } = renderApp("/runs?q=status%3Afailed");
     await screen.findByRole("table");
     await waitFor(() => expect(screen.getByRole("columnheader", { name: "Error" })).toBeVisible());
     expect(
@@ -144,7 +146,7 @@ describe("Observability: every run", () => {
 
   it("shows the labels that fit, the others behind +N, and why a run ended in a card", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability?q=%40goal%3A6afc64fdf4d56d8262048836");
+    const { router } = renderApp("/runs?q=%40goal%3A6afc64fdf4d56d8262048836");
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = within(rows()[0] as HTMLElement);
     // Whole chips, never cut: those that fit, then +4 for the rest.
@@ -179,7 +181,7 @@ describe("Observability: every run", () => {
 
   it("sorts the waiting runs by when they wake, from the Wakes header", async () => {
     const user = userEvent.setup();
-    const { router, requested } = renderApp("/observability?q=waiting%3A*");
+    const { router, requested } = renderApp("/runs?q=waiting%3A*");
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Wakes" }));
     const menu = await screen.findByRole("dialog", { name: "Wakes: order and filters" });
@@ -196,7 +198,7 @@ describe("Observability: every run", () => {
 
   it("orders the runs from the headers: oldest, longest, most calls", async () => {
     const user = userEvent.setup();
-    const { router, requested } = renderApp("/observability");
+    const { router, requested } = renderApp("/runs");
     await screen.findByRole("table");
     const pick = async (header: string, choice: string) => {
       await user.click(screen.getByRole("button", { name: header }));
@@ -231,7 +233,7 @@ describe("Observability: every run", () => {
 
   it("filters from a header's menu, as terms of the query", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability");
+    const { router } = renderApp("/runs");
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Status" }));
     const menu = await screen.findByRole("dialog", { name: "Status: order and filters" });
@@ -240,85 +242,92 @@ describe("Observability: every run", () => {
     await waitFor(() => expect(search(router).get("q")).toBe("status:completed"));
     await user.click(within(menu).getByRole("button", { name: /^Status completed/ }));
     await waitFor(() => expect(search(router).get("q")).toBe("-status:completed"));
-    await user.click(within(menu).getByRole("button", { name: /^Quarantined only/ }));
-    await waitFor(() => expect(search(router).get("q")).toBe("-status:completed quarantined:yes"));
-    expect(queryInput().value).toBe("-status:completed quarantined:yes");
+    await user.click(within(menu).getByRole("button", { name: /^Quarantine quarantine/ }));
+    await waitFor(() =>
+      expect(search(router).get("q")).toBe("-status:completed waiting:quarantined"),
+    );
+    expect(queryInput().value).toBe("-status:completed waiting:quarantined");
 
     await user.click(screen.getByRole("button", { name: "Duration" }));
     const duration = await screen.findByRole("dialog", { name: "Duration: order and filters" });
     await user.click(within(duration).getByRole("button", { name: /^Over a minute/ }));
     await waitFor(() =>
-      expect(search(router).get("q")).toBe("-status:completed quarantined:yes duration:>1m"),
+      expect(search(router).get("q")).toBe("-status:completed waiting:quarantined duration:>1m"),
     );
     // Another threshold replaces it.
     await user.click(screen.getByRole("button", { name: "Duration" }));
     const again = await screen.findByRole("dialog", { name: "Duration: order and filters" });
     await user.click(within(again).getByRole("button", { name: /^Over an hour/ }));
     await waitFor(() =>
-      expect(search(router).get("q")).toBe("-status:completed quarantined:yes duration:>1h"),
+      expect(search(router).get("q")).toBe("-status:completed waiting:quarantined duration:>1h"),
     );
   });
 
   it("keeps no saved searches: the query lives in the URL", async () => {
-    renderApp("/observability?q=status%3Afailed");
+    renderApp("/runs?q=status%3Afailed");
     await screen.findByRole("table");
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Saved searches" })).toBeNull();
   });
 
-  it("carries the query from the Overview to Observability", async () => {
+  it("carries the query from the Overview to Runs", async () => {
     renderApp("/overview?q=%40env%3Aprod");
     await screen.findByRole("region", { name: "Figures" });
     const nav = screen.getByRole("navigation", { name: "Views" });
-    expect(within(nav).getByRole("link", { name: "Observability" })).toHaveAttribute(
+    expect(within(nav).getByRole("link", { name: "Runs" })).toHaveAttribute(
       "href",
-      "/observability?q=%40env%3Aprod",
+      "/runs?q=%40env%3Aprod",
     );
-    expect(within(nav).getByRole("link", { name: "Scripts" })).toHaveAttribute("href", "/scripts");
+    expect(within(nav).getByRole("link", { name: "Workflows" })).toHaveAttribute(
+      "href",
+      "/workflows",
+    );
   });
 
   it("opens the views of the same query, each with its count", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability?q=%40env%3Aprod");
+    const { router } = renderApp("/runs?q=%40env%3Aprod");
     await screen.findByRole("table");
-    await user.click(screen.getByRole("button", { name: "View: All runs" }));
+    await user.click(screen.getByRole("button", { name: "View: All" }));
     const waiting = await screen.findByRole("menuitem", { name: /Waiting/ });
-    expect(waiting).toHaveAttribute("href", "/observability/waiting?q=%40env%3Aprod");
+    expect(waiting).toHaveAttribute("href", "/runs/waiting?q=%40env%3Aprod");
     await user.click(waiting);
-    await waitFor(() => expect(router.state.location.pathname).toBe("/observability/waiting"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/waiting"));
     expect(await screen.findByRole("heading", { name: "Waiting" })).toBeInTheDocument();
   });
 
   it("shows the views again with back, without leaving the page", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability");
+    const { router } = renderApp("/runs");
     await screen.findByRole("table");
     const views = screen.getByRole("navigation", { name: "Views", hidden: true });
     expect(views).toHaveAttribute("inert");
-    await user.click(screen.getByRole("button", { name: "Show the views (Observability)" }));
+    await user.click(screen.getByRole("button", { name: "Show the views (Runs)" }));
     expect(views).not.toHaveAttribute("inert");
-    expect(router.state.location.pathname).toBe("/observability");
-    // Observability, the current view, opens its own sidebar again.
-    await user.click(within(views).getByRole("link", { name: "Observability" }));
+    expect(router.state.location.pathname).toBe("/runs");
+    // Runs, the current view, opens its own sidebar again.
+    await user.click(within(views).getByRole("link", { name: "Runs" }));
     expect(views).toHaveAttribute("inert");
   });
 
-  it("reads an older link: the runs, the waiting and the failures, a namespace filter", async () => {
-    const { router } = renderApp("/runs?ns=bob&q=%40env%3Aprod");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/observability"));
+  it("reads an older link: Observability, the waiting and the failures, a namespace filter", async () => {
+    const { router } = renderApp("/observability?ns=bob&q=%40env%3Aprod");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs"));
     expect(search(router).get("q")).toBe("@env:prod namespace:bob");
     expect(search(router).get("ns")).toBeNull();
-    await router.navigate("/waiting?tab=tools");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/observability/waiting"));
-    expect(search(router).get("tab")).toBe("tools");
+    await router.navigate("/observability/active");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/running"));
+    await router.navigate("/waiting?tab=signals");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/waiting"));
+    expect(search(router).get("tab")).toBe("signals");
     await router.navigate("/failures?window=7d");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/observability/failures"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/failures"));
     expect(search(router).get("window")).toBe("7d");
   });
 
   it("loads the next page by reading as many runs as shown, and a page more", async () => {
     const user = userEvent.setup();
-    const { requested } = renderApp("/observability");
+    const { requested } = renderApp("/runs");
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Load more" }));
     await waitFor(() => expect(rows().length).toBeGreaterThan(50));
@@ -327,17 +336,18 @@ describe("Observability: every run", () => {
   });
 });
 
-describe("Observability: the waiting runs", () => {
+describe("Runs: the waiting runs", () => {
   it("lists the waiting runs, grouped by what they wait for, the soonest to wake first", async () => {
-    const { requested } = renderApp("/observability/waiting");
+    const { requested } = renderApp("/runs/waiting");
     await screen.findByRole("table");
     // Those that wake by themselves first, then the most recently started.
     expect(groupRows()).toEqual([
       'signal "approval"',
       "sleep and timers",
-      "host tool · ask_user",
+      "harness action · ask_user",
       "approval · ask_user",
-      "tool call · github.list_pull_requests",
+      "parked call · ask_user",
+      "quarantine",
     ]);
     const sent = requested("/v1/runs").at(-1)?.searchParams;
     expect(sent?.get("q")).toBe("waiting:*");
@@ -345,20 +355,28 @@ describe("Observability: the waiting runs", () => {
     // Counts by tab, from the statistics of the waiting runs.
     const tabs = screen.getByRole("tablist", { name: "What the runs wait for" });
     await waitFor(() =>
-      expect(within(tabs).getByRole("tab", { name: /All/ })).toHaveTextContent("All 5"),
+      expect(within(tabs).getByRole("tab", { name: /All/ })).toHaveTextContent("All 6"),
     );
     expect(within(tabs).getByRole("tab", { name: /Signals/ })).toHaveTextContent("Signals 1");
-    expect(within(tabs).getByRole("tab", { name: /Approvals/ })).toHaveTextContent("Approvals 1");
     expect(within(tabs).getByRole("tab", { name: /Timers/ })).toHaveTextContent("Timers 1");
-    expect(within(tabs).getByRole("tab", { name: /Tools/ })).toHaveTextContent("Tools 2");
+    expect(within(tabs).getByRole("tab", { name: /Harness actions/ })).toHaveTextContent(
+      "Harness actions 1",
+    );
+    expect(within(tabs).getByRole("tab", { name: /Approvals/ })).toHaveTextContent("Approvals 1");
+    expect(within(tabs).getByRole("tab", { name: /Deferred/ })).toHaveTextContent("Deferred 0");
+    expect(within(tabs).getByRole("tab", { name: /Parked/ })).toHaveTextContent("Parked 1");
+    expect(within(tabs).getByRole("tab", { name: /Quarantines/ })).toHaveTextContent(
+      "Quarantines 1",
+    );
   });
 
   it("shows the wait, since when, when it wakes and the line it is paused on", async () => {
-    renderApp("/observability/waiting");
+    renderApp("/runs/waiting");
     await screen.findByRole("table");
     const row = within(screen.getByRole("table")).getByText("c-42").closest("tr") as HTMLElement;
-    expect(within(row).getByText('signal "approval"')).toBeInTheDocument();
-    expect(within(row).getByText(/^gives up in \d+d$/)).toBeInTheDocument();
+    expect(within(row).getByText("signal")).toBeInTheDocument();
+    expect(within(row).getByText('"approval"')).toBeInTheDocument();
+    expect(within(row).getByText(/^times out in \d+d$/)).toBeInTheDocument();
     expect(within(row).getByText("L11")).toBeInTheDocument();
     // The script is read once per digest, for its line.
     expect(
@@ -373,45 +391,48 @@ describe("Observability: the waiting runs", () => {
     expect(within(approval).getByText("#2 ask_user")).toBeInTheDocument();
   });
 
-  it("reads each script once, whatever the number of its waiting runs", async () => {
-    const { requested } = renderApp("/observability/waiting");
+  it("reads each workflow version once, whatever the number of its waiting runs", async () => {
+    const world = createWorld({ now: NOW });
+    const { requested } = renderApp("/runs/waiting", { world });
     await screen.findByRole("table");
     await waitFor(() =>
       expect(document.querySelectorAll(".paused-line code:not(:empty)").length).toBe(5),
     );
-    // Two triage runs, two onboarding runs, one digest run.
-    for (const script of [SCRIPTS.TRIAGE, SCRIPTS.ONBOARDING, SCRIPTS.DIGEST])
-      expect(requested(`/v1/scripts/${script.digest}`)).toHaveLength(1);
+    // The code of the version each run executes, read once per version: the waiting runs of
+    // onboarding share theirs.
+    const paths = new Set(
+      world.runs.flatMap((r) =>
+        r.workflow
+          ? [`/v1/workflows/${encodeURIComponent(`${r.workflow.id}@v${r.workflow.version}`)}`]
+          : [],
+      ),
+    );
+    const reads = [...paths].map((path) => requested(path).length);
+    expect(reads.every((n) => n <= 1)).toBe(true);
+    expect(reads.filter((n) => n === 1).length).toBeGreaterThanOrEqual(2);
   });
 
   it("filters by tab, joined to the query of the URL", async () => {
     const user = userEvent.setup();
-    const { router, requested } = renderApp("/observability/waiting?q=%40env%3Aprod");
+    const { router, requested } = renderApp("/runs/waiting?q=%40env%3Aprod");
     await screen.findByRole("table");
-    await user.click(screen.getByRole("tab", { name: /Tools/ }));
-    await waitFor(() => expect(search(router).get("tab")).toBe("tools"));
+    await user.click(screen.getByRole("tab", { name: /Harness actions/ }));
+    await waitFor(() => expect(search(router).get("tab")).toBe("harness"));
     await waitFor(() =>
       expect(
-        requested("/v1/runs").some(
-          (u) => u.searchParams.get("q") === "@env:prod waiting:call,host,deferred",
-        ),
+        requested("/v1/runs").some((u) => u.searchParams.get("q") === "@env:prod waiting:harness"),
       ).toBe(true),
     );
-    await waitFor(() =>
-      expect(groupRows()).toEqual([
-        "host tool · ask_user",
-        "tool call · github.list_pull_requests",
-      ]),
-    );
+    await waitFor(() => expect(groupRows()).toEqual(["harness action · ask_user"]));
   });
 
   it("opens a run at its last step", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
-    const { router } = renderApp("/observability/waiting", { world });
+    const { router } = renderApp("/runs/waiting", { world });
     await screen.findByRole("table");
     const row = within(screen.getByRole("table")).getByText("c-42").closest("tr") as HTMLElement;
-    await user.click(within(row).getByText('signal "approval"'));
+    await user.click(within(row).getByText('"approval"'));
     // A run opens by its handle, `namespace/origin/suffix`.
     await waitFor(() =>
       expect(router.state.location.pathname).toMatch(/^\/runs\/[^/]+\/[^/]+\/[0-9a-z]{12,25}$/),
@@ -420,9 +441,9 @@ describe("Observability: the waiting runs", () => {
   });
 });
 
-describe("Observability: the failures", () => {
-  it("groups the runs that ended badly in the window by signature", async () => {
-    const { requested } = renderApp("/observability/failures?window=7d");
+describe("Runs: the failures", () => {
+  it("lists the runs that ended badly in the window by fingerprint", async () => {
+    const { requested } = renderApp("/runs/failures?window=7d");
     const table = await screen.findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
     // The forecast timeouts, its refused connections, the TypeError, the 403, the cancellation,
@@ -437,26 +458,26 @@ describe("Observability: the failures", () => {
       within(typeError).getByRole("img", { name: /Runs of TypeError by 6h/ }),
     ).toBeInTheDocument();
     const timeout = rows.find((r) =>
-      within(r).queryByText("ToolError: weather.forecast: no answer within <n>s"),
+      within(r).queryByText("ActionError: weather.forecast: no answer within <n>s"),
     ) as HTMLElement;
     expect(timeout).toBeDefined();
     expect(within(timeout).getByText("L5")).toBeInTheDocument();
     expect(within(timeout).getByRole("button", { name: /agent:support/ })).toBeInTheDocument();
     const sent = requested("/v1/runs/failures").at(-1)?.searchParams;
-    expect(sent?.get("bucket")).toBe("6h");
+    expect(sent?.get("interval")).toBe("6h");
     expect(Date.now() - Date.parse(sent?.get("since") ?? "")).toBeGreaterThan(
       7 * 86_400_000 - 60_000,
     );
-    expect(screen.getByText(/runs, \d+ signatures, ended in the last 7 days/)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Fingerprint" })).toBeInTheDocument();
   });
 
-  it("opens a group's runs, and its latest run on the step that failed", async () => {
+  it("opens a fingerprint's runs, and its latest run on the step that failed", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
     const digest = world.runs.find(
-      (r) => r.script === SCRIPTS.DIGEST && r.labels.schedule === "adhoc" && r.errorAt,
+      (r) => r.code === CODES.DIGEST && r.labels.schedule === "adhoc" && r.errorAt,
     );
-    const { router } = renderApp("/observability/failures", { world });
+    const { router } = renderApp("/runs/failures", { world });
     const table = await screen.findByRole("table");
     const row = within(table)
       .getByText("TypeError: Cannot read properties of undefined (reading 'text')")
@@ -469,7 +490,7 @@ describe("Observability: the failures", () => {
     );
     expect(row.textContent).not.toContain("…");
     await user.click(within(row).getByRole("link", { name: "1" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/observability"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs"));
     expect(search(router).get("q")).toMatch(/^fingerprint:[0-9a-f]{16} ended:>now-24h$/);
     const runs = await screen.findByRole("table");
     await waitFor(() => expect(within(runs).getAllByRole("row")).toHaveLength(2));
@@ -477,7 +498,7 @@ describe("Observability: the failures", () => {
 
   it("joins a label to the query", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/observability/failures?window=7d");
+    const { router } = renderApp("/runs/failures?window=7d");
     const table = await screen.findByRole("table");
     const label = within(table).getAllByRole("button", { name: /agent:support/ })[0];
     await user.click(label as HTMLElement);

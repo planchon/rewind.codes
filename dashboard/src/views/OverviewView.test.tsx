@@ -24,17 +24,17 @@ describe("OverviewView", () => {
     expect(completed).toHaveTextContent(/%.*of the \d+ runs that ended/);
     expect(hrefOf(completed).get("q")).toBe("@env:prod started:>now-24h status:completed");
     const failed = within(figures).getByRole("link", { name: /Failed/ });
-    expect(failed.getAttribute("href")).toMatch(/^\/observability\/failures\?q=/);
+    expect(failed.getAttribute("href")).toMatch(/^\/runs\/failures\?q=/);
     expect(failed).toHaveTextContent(/aborted, \d+ cancelled/);
-    // Waiting now: whenever they started. The approval, the 10-day sleep, the claimed ask_user, the
-    // quarantined digest; not the triage of the test environment.
+    // Waiting now: whenever they started, by what they wait for (a signal, a timer, a harness
+    // action, an approval, a parked call, a quarantine); not the triage of the test environment.
     const waiting = within(figures).getByRole("link", { name: /Waiting now/ });
-    await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*5\s*1 on a signal/));
-    expect(waiting).toHaveAttribute("href", "/observability/waiting?q=%40env%3Aprod");
+    await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*6\s*1 on a signal/));
+    expect(waiting).toHaveAttribute("href", "/runs/waiting?q=%40env%3Aprod");
     expect(within(figures).getByRole("link", { name: /Duration p95/ })).toHaveTextContent(/p50/);
     const quarantined = within(figures).getByRole("link", { name: /Quarantined/ });
     expect(quarantined).toHaveTextContent(/Quarantined\s*1/);
-    expect(hrefOf(quarantined).get("q")).toBe("@env:prod quarantined:yes");
+    expect(hrefOf(quarantined).get("q")).toBe("@env:prod waiting:quarantined");
   });
 
   it("stacks the runs started by outcome over time, each segment a link", async () => {
@@ -51,15 +51,15 @@ describe("OverviewView", () => {
       /^status:completed started:\d{4}-\d\d-\d\dT[\d:]+Z\.\.\d{4}-\d\d-\d\dT[\d:]+Z$/,
     );
     expect(within(chart).getByText("completed")).toBeInTheDocument();
-    const stats = requested("/v1/runs/stats").find((u) => u.searchParams.get("bucket"));
-    expect(stats?.searchParams.get("bucket")).toBe("1h");
+    const stats = requested("/v1/runs/stats").find((u) => u.searchParams.get("interval"));
+    expect(stats?.searchParams.get("interval")).toBe("1h");
   });
 
-  it("lists what fails most and the failing tools, each a link", async () => {
+  it("lists what fails most and the failing actions, each a link", async () => {
     renderApp("/overview?window=7d");
     const fails = await screen.findByRole("region", { name: "What fails most" });
     const top = (await within(fails).findAllByRole("link")).filter((a) =>
-      a.getAttribute("href")?.startsWith("/observability?"),
+      a.getAttribute("href")?.startsWith("/runs?"),
     );
     expect(top.length).toBeGreaterThan(0);
     expect(hrefOf(top[0] as HTMLElement).get("q")).toMatch(
@@ -67,35 +67,35 @@ describe("OverviewView", () => {
     );
     expect(within(fails).getByRole("link", { name: "Every failure →" })).toHaveAttribute(
       "href",
-      "/observability/failures?window=7d",
+      "/runs/failures?window=7d",
     );
-    const tools = screen.getByRole("region", { name: "Failing tools" });
-    const forecast = await within(tools).findByRole("link", { name: /weather\.forecast/ });
+    const actions = screen.getByRole("region", { name: "Failing actions" });
+    const forecast = await within(actions).findByRole("link", { name: /weather\.forecast/ });
     expect(hrefOf(forecast).get("q")).toMatch(
-      /^started:>now-7d tool:weather\.forecast error:(timeout|unavailable)$/,
+      /^started:>now-7d action:weather\.forecast error:(timeout|unavailable)$/,
     );
   });
 
-  it("changes the window, and asks for its buckets", async () => {
+  it("changes the window, and asks for its intervals", async () => {
     const user = userEvent.setup();
     const { router, requested } = renderApp("/overview");
     await screen.findByRole("region", { name: "Figures" });
     await user.click(screen.getByRole("button", { name: "7d" }));
     await waitFor(() => expect(search(router).get("window")).toBe("7d"));
     await waitFor(() =>
-      expect(requested("/v1/runs/stats").some((u) => u.searchParams.get("bucket") === "6h")).toBe(
+      expect(requested("/v1/runs/stats").some((u) => u.searchParams.get("interval") === "6h")).toBe(
         true,
       ),
     );
     const since = requested("/v1/runs/stats")
-      .find((u) => u.searchParams.get("bucket") === "6h")
+      .find((u) => u.searchParams.get("interval") === "6h")
       ?.searchParams.get("since");
     expect(Date.now() - Date.parse(since ?? "")).toBeGreaterThan(7 * 86_400_000 - 60_000);
-    // The window follows to Observability.
+    // The window follows to Runs.
     expect(
       within(screen.getByRole("navigation", { name: "Views" })).getByRole("link", {
-        name: "Observability",
+        name: "Runs",
       }),
-    ).toHaveAttribute("href", "/observability?window=7d");
+    ).toHaveAttribute("href", "/runs?window=7d");
   });
 });

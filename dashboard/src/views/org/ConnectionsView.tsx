@@ -29,7 +29,7 @@ export function ConnectionsView() {
 
 function Who({ connection, you }: { connection: Connection; you: boolean }) {
   const members = useMembers();
-  const member = members.data?.find((m) => m.user.id === connection.person.id);
+  const member = members.data?.find((m) => m.person.id === connection.person.id);
   if (member) return <Person member={member} you={you} />;
   const { name, email, id } = connection.person;
   return (
@@ -108,7 +108,7 @@ function OrganizationConnections() {
                 return (
                   <tr key={c.id}>
                     <td>
-                      <Who connection={c} you={c.person.id === access.user?.id} />
+                      <Who connection={c} you={c.person.id === access.person?.id} />
                     </td>
                     <td>
                       <ClientName client={c.client} />

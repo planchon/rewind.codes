@@ -1,7 +1,7 @@
-// Run handles and script titles in the mocked API, as the server computes them
-// (rewind-core's `handle.rs` and `doc.rs`): `<namespace>/<origin>/<suffix>`, whose suffix is the
-// start of the run's UUIDv7 in Crockford base32; a script's title from the comment at its top,
-// or the one a person gave it (`PATCH /v1/scripts/{digest}`).
+// Run handles in the mocked API, as the server computes them (rewind-core's `handle.rs`):
+// `<namespace>/<origin>/<suffix>`, whose suffix is the start of the run's UUIDv7 in Crockford
+// base32, and whose origin is its workflow's name, else the workflow's short id (`wf-7k2m9q`). A
+// handle never changes: those stored before workflows had ids keep the origin they had.
 import type { RunFixture, World } from "./fixtures";
 
 const ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
@@ -50,71 +50,6 @@ export function originSlug(title: string): string | null {
   return slug === "" ? null : slug;
 }
 
-export interface ScriptDoc {
-  title: string;
-  description: string | null;
-}
-
-/** The comment at the top of a script: its first line the title, the rest the description. */
-export function scriptDoc(source: string): ScriptDoc | null {
-  const rest = source.trimStart();
-  let lines: string[];
-  if (rest.startsWith("/*")) {
-    const end = rest.indexOf("*/");
-    if (end < 0) return null;
-    lines = rest
-      .slice(2, end)
-      .replace(/^\*+/, "")
-      .split("\n")
-      .map((l) =>
-        l
-          .trim()
-          .replace(/^\*\s?/, "")
-          .trim(),
-      );
-  } else if (rest.startsWith("//")) {
-    lines = [];
-    for (const line of rest.split("\n")) {
-      const t = line.trim();
-      if (!t.startsWith("//")) break;
-      lines.push(t.replace(/^\/+/, "").trim());
-    }
-  } else {
-    return null;
-  }
-  lines = lines.filter((l) => !l.startsWith("@"));
-  const first = lines.findIndex((l) => l !== "");
-  if (first < 0) return null;
-  const title = lines[first] ?? "";
-  const description = lines
-    .slice(first + 1)
-    .join("\n")
-    .split(/\n\s*\n/)
-    .map((p) => p.split("\n").join(" ").trim())
-    .filter(Boolean)
-    .join("\n\n");
-  return { title, description: description || null };
-}
-
-export interface ScriptTitle {
-  title: string;
-  description: string | null;
-  updatedBy: string;
-  updatedAt: number;
-}
-
-/** A script's effective title: the one a person gave it, else its comment's. */
-export function scriptTitleOf(
-  world: World,
-  digest: string,
-  source: string,
-): { title: string; description: string | null; source: "person" | "comment" } | null {
-  const given = world.scriptTitles.get(digest);
-  if (given) return { title: given.title, description: given.description, source: "person" };
-  const doc = scriptDoc(source);
-  return doc ? { ...doc, source: "comment" } : null;
-}
-
 /** Gives every run of the world its origin and suffix length, once: they never change after. */
 export function ensureHandles(world: World): void {
   const pending = world.runs.filter((r) => r.origin === undefined || r.suffixLen === undefined);
@@ -122,8 +57,8 @@ export function ensureHandles(world: World): void {
   const ids = world.runs.map((r) => r.id);
   for (const run of pending) {
     if (run.origin === undefined) {
-      const title = scriptTitleOf(world, run.script.digest, run.script.source)?.title;
-      run.origin = run.workflow?.name ?? (title ? originSlug(title) : null) ?? "script";
+      const id = run.workflow?.id;
+      run.origin = run.workflow?.name ?? (id ? `wf-${id.slice(3, 9)}` : "untitled");
     }
     if (run.suffixLen === undefined) {
       const near = ids.filter((id) => id.slice(0, 18) === run.id.slice(0, 18));
@@ -134,7 +69,7 @@ export function ensureHandles(world: World): void {
 
 export function handleOf(world: World, run: RunFixture): string {
   ensureHandles(world);
-  return `${run.namespace}/${run.origin ?? "script"}/${runSuffix(run.id, run.suffixLen ?? SUFFIX_LEN)}`;
+  return `${run.namespace}/${run.origin ?? "untitled"}/${runSuffix(run.id, run.suffixLen ?? SUFFIX_LEN)}`;
 }
 
 /** The run a path names: its UUID, or its handle (percent-encoded or not). */

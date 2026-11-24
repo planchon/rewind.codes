@@ -53,7 +53,7 @@ function GrantEditor({
   const save = useSetGrant();
   return (
     <DialogForm
-      title={`Role of ${displayName(member.user)}`}
+      title={`Role of ${displayName(member.person)}`}
       description="What they may do in the organization, and the labels of the runs they see."
       submit="Save"
       pending={save.pending}
@@ -63,9 +63,9 @@ function GrantEditor({
         if (!labels.labels) return;
         void save.run(
           {
-            user: member.user.id,
+            member: member.person.id,
             grant: { role, allowedLabels: labels.labels },
-            self: member.user.id === access.user?.id,
+            self: member.person.id === access.person?.id,
           },
           onDone,
         );
@@ -96,7 +96,7 @@ function Members() {
   if (members.isPending) return <Loading />;
   if (members.isError) return <ErrorNote error={members.error} />;
   const list = [...members.data].sort((a, b) =>
-    displayName(a.user).localeCompare(displayName(b.user)),
+    displayName(a.person).localeCompare(displayName(b.person)),
   );
   const columns = manage ? 6 : 5;
 
@@ -125,7 +125,7 @@ function Members() {
             </thead>
             <tbody>
               {list.map((m) => {
-                const you = m.user.id === access.user?.id;
+                const you = m.person.id === access.person?.id;
                 const beyond =
                   m.grant && roles.data
                     ? beyondCaller(m.grant.role, roles.data, access.permissions)
@@ -135,7 +135,7 @@ function Members() {
                     ? `Their role gives ${beyond.join(", ")}, which you do not hold.`
                     : undefined;
                 return (
-                  <Fragment key={m.user.id}>
+                  <Fragment key={m.person.id}>
                     <tr>
                       <td>
                         <Person member={m} you={you} />
@@ -176,7 +176,7 @@ function Members() {
                               className="btn small"
                               disabled={locked !== undefined}
                               title={locked}
-                              aria-label={`Change the role of ${displayName(m.user)}`}
+                              aria-label={`Change the role of ${displayName(m.person)}`}
                               onClick={() => {
                                 setTarget(m);
                                 setEditing(true);
@@ -186,7 +186,7 @@ function Members() {
                             </button>
                             <ConfirmButton
                               confirm={
-                                you ? "Leave the organization?" : `Remove ${displayName(m.user)}?`
+                                you ? "Leave the organization?" : `Remove ${displayName(m.person)}?`
                               }
                               disabled={locked !== undefined}
                               title={locked}
@@ -197,8 +197,8 @@ function Members() {
                               }
                               pending={remove.pending}
                               onConfirm={() => {
-                                setRemoving(m.user.id);
-                                void remove.run(m.user.id);
+                                setRemoving(m.person.id);
+                                void remove.run(m.person.id);
                               }}
                             >
                               {you ? "Leave" : "Remove"}
@@ -207,7 +207,7 @@ function Members() {
                         </td>
                       )}
                     </tr>
-                    {failed?.user === m.user.id && (
+                    {failed?.user === m.person.id && (
                       <tr className="editing">
                         <td colSpan={columns}>
                           <ErrorNote error={failed.error} />

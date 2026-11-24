@@ -1,5 +1,5 @@
 // Overview, the home page: the runs of a window by outcome over time, the share that completed,
-// durations, the runs waiting now, quarantined runs, what fails most and the failing tools. Every
+// durations, the runs waiting now, quarantined runs, what fails most and the failing actions. Every
 // figure, bar and row opens the runs behind it. Its figures are the statistics of the query's
 // namespace, or of the organization; the query's other terms narrow the runs its links open. Live:
 // its figures change in place within 10 s of a run's change.
@@ -16,11 +16,11 @@ import { formatCount, formatDuration, formatPercent, formatTime } from "../model
 import { fieldTerm, joinQuery, queryLink, queryTime } from "../model/query";
 import { statsScope, waitingRuns } from "../model/scope";
 import type { RunStatus } from "../model/types";
-import { useFailures, useRunStats, useToolStats } from "../state/aggregates";
+import { useActionStats, useFailures, useRunStats } from "../state/aggregates";
 import { queryFault } from "../state/errors";
 import { Seg } from "./FilterBits";
 import {
-  BUCKETS,
+  INTERVALS,
   useRunQueryValues,
   useSearchQuery,
   useWindow,
@@ -38,7 +38,7 @@ function change(now: number, before: number, win: RangeKey): string {
   return `${delta > 0 ? "+" : ""}${delta}% on ${previous}`;
 }
 
-/** An axis label for a bucket's start: a time of day within a day, a date beyond. */
+/** An axis label for an interval's start: a time of day within a day, a date beyond. */
 function tickFormat(win: RangeKey, zone: "utc" | "local") {
   return (ms: number) => {
     const t = formatTime(ms, zone);
@@ -54,7 +54,7 @@ export function OverviewView() {
   const { zone } = useSettings();
   const lookup = useRunQueryValues();
   const width = RANGES[win];
-  const { bucket, ms: bucketMs } = BUCKETS[win];
+  const { interval, ms: intervalMs } = INTERVALS[win];
   const key = `${win}|${q}`;
   const withQ = q ? { q } : {};
 
@@ -65,7 +65,7 @@ export function OverviewView() {
       ...withQ,
       since: new Date(now - width).toISOString(),
       until: new Date(now).toISOString(),
-      bucket,
+      interval,
       top: 10,
     };
   });
@@ -87,7 +87,7 @@ export function OverviewView() {
       limit: 5,
     };
   });
-  const tools = useToolStats(`overview-tools|${win}|${scope.q ?? ""}`, () => {
+  const actions = useActionStats(`overview-actions|${win}|${scope.q ?? ""}`, () => {
     const now = Date.now();
     return {
       ...(scope.q ? { q: scope.q } : {}),
@@ -98,8 +98,7 @@ export function OverviewView() {
 
   const fault = queryFault(current.error);
   const started = windowTerm("started", win);
-  const runsLink = (...terms: string[]) =>
-    queryLink("/observability", joinQuery(q, started, ...terms));
+  const runsLink = (...terms: string[]) => queryLink("/runs", joinQuery(q, started, ...terms));
 
   let body: ReactNode;
   if (fault) {
@@ -117,19 +116,19 @@ export function OverviewView() {
     const since = s.since ? Date.parse(s.since) : Date.now() - width;
     const buckets = (s.series ?? []).map((b) => {
       const from = Date.parse(b.at);
-      return { from, to: from + bucketMs, counts: b.statuses };
+      return { from, to: from + intervalMs, counts: b.statuses };
     });
     const tick = tickFormat(win, zone);
-    const failingTools = (tools.data?.tools ?? [])
+    const failingActions = (actions.data?.actions ?? [])
       .filter((t) => t.errors > 0)
       .map((t) => {
         const [kind = "error", n = t.errors] =
           Object.entries(t.errorKinds).sort(([, a], [, b]) => b - a)[0] ?? [];
-        return { tool: t.tool, kind, n, errors: t.errors, calls: t.calls };
+        return { action: t.action, kind, n, errors: t.errors, calls: t.calls };
       })
-      .sort((a, b) => b.errors - a.errors || a.tool.localeCompare(b.tool))
+      .sort((a, b) => b.errors - a.errors || a.action.localeCompare(b.action))
       .slice(0, 5);
-    const groups = failures.data?.groups ?? [];
+    const fingerprints = failures.data?.fingerprints ?? [];
     body = (
       <>
         <section className="tiles" aria-label="Figures">
@@ -147,14 +146,14 @@ export function OverviewView() {
             tone="good"
           />
           <Tile
-            to={queryLink("/observability/failures", q, win === "24h" ? {} : { window: win })}
+            to={queryLink("/runs/failures", q, win === "24h" ? {} : { window: win })}
             label="Failed"
             value={formatCount(s.statuses.failed)}
             context={`+ ${formatCount(s.statuses.aborted)} aborted, ${formatCount(s.statuses.cancelled)} cancelled`}
             tone={failed > 0 ? "critical" : undefined}
           />
           <Tile
-            to={queryLink("/observability/waiting", q)}
+            to={queryLink("/runs/waiting", q)}
             label="Waiting now"
             value={formatCount(waitingRuns(s.waiting))}
             context={`${formatCount(s.waiting.signal)} on a signal`}
@@ -167,7 +166,7 @@ export function OverviewView() {
             context={durations ? `p50 ${formatDuration(durations.p50)}` : "no run ended"}
           />
           <Tile
-            to={queryLink("/observability", joinQuery(q, "quarantined:yes"))}
+            to={queryLink("/runs", joinQuery(q, "waiting:quarantined"))}
             label="Quarantined"
             value={formatCount(s.quarantined)}
             context="held until an operator acts"
@@ -179,7 +178,7 @@ export function OverviewView() {
           <header className="panel-head">
             <h2>Runs started, by outcome</h2>
             <span className="muted">
-              {WINDOW_WORDS[win]}, by {formatDuration(bucketMs)}
+              {WINDOW_WORDS[win]}, by {formatDuration(intervalMs)}
             </span>
           </header>
           <div className="panel-body">
@@ -193,7 +192,7 @@ export function OverviewView() {
                 bucketLabel={(b) => `${formatTime(b.from, zone).slice(0, 16)} – ${tick(b.to)}`}
                 href={(b, status: RunStatus) =>
                   queryLink(
-                    "/observability",
+                    "/runs",
                     joinQuery(
                       q,
                       `status:${status}`,
@@ -211,22 +210,20 @@ export function OverviewView() {
             <header className="panel-head">
               <h2>What fails most</h2>
               <span className="end">
-                <Link
-                  to={queryLink("/observability/failures", q, win === "24h" ? {} : { window: win })}
-                >
+                <Link to={queryLink("/runs/failures", q, win === "24h" ? {} : { window: win })}>
                   Every failure →
                 </Link>
               </span>
             </header>
-            {groups.length === 0 ? (
+            {fingerprints.length === 0 ? (
               <Empty>Nothing failed in {WINDOW_WORDS[win]}.</Empty>
             ) : (
               <ul className="rank-list">
-                {groups.map((g) => (
+                {fingerprints.map((g) => (
                   <li key={g.fingerprint}>
                     <Link
                       to={queryLink(
-                        "/observability",
+                        "/runs",
                         joinQuery(q, `fingerprint:${g.fingerprint}`, windowTerm("ended", win)),
                       )}
                       title={g.signature}
@@ -234,7 +231,7 @@ export function OverviewView() {
                       <span className="rank-name mono">{g.signature}</span>
                       <Meter
                         value={g.runs}
-                        max={groups[0]?.runs ?? 1}
+                        max={fingerprints[0]?.runs ?? 1}
                         tone={isCancellation(g.error) ? "neutral" : "critical"}
                       />
                       <span className="num">{formatCount(g.runs)}</span>
@@ -244,28 +241,28 @@ export function OverviewView() {
               </ul>
             )}
           </section>
-          <section className="panel" aria-label="Failing tools">
+          <section className="panel" aria-label="Failing actions">
             <header className="panel-head">
-              <h2>Failing tools</h2>
+              <h2>Failing actions</h2>
               <span className="end">
-                <Link to={`/tools${win === "24h" ? "" : `?window=${win}`}`}>Every tool →</Link>
+                <Link to={`/actions${win === "24h" ? "" : `?window=${win}`}`}>Every action →</Link>
               </span>
             </header>
-            {failingTools.length === 0 ? (
-              <Empty>No tool call failed in {WINDOW_WORDS[win]}.</Empty>
+            {failingActions.length === 0 ? (
+              <Empty>No call failed in {WINDOW_WORDS[win]}.</Empty>
             ) : (
               <ul className="rank-list">
-                {failingTools.map((t) => (
-                  <li key={t.tool}>
+                {failingActions.map((t) => (
+                  <li key={t.action}>
                     <Link
-                      to={runsLink(fieldTerm("tool", t.tool), fieldTerm("error", t.kind))}
+                      to={runsLink(fieldTerm("action", t.action), fieldTerm("error", t.kind))}
                       title={`${t.errors} of ${t.calls} calls failed`}
                     >
                       <span className="rank-name">
-                        <span className="mono">{t.tool}</span>
+                        <span className="mono">{t.action}</span>
                         <span className="muted"> · {t.kind}</span>
                       </span>
-                      <Meter value={t.errors} max={failingTools[0]?.errors ?? 1} />
+                      <Meter value={t.errors} max={failingActions[0]?.errors ?? 1} />
                       <span className="num">{formatCount(t.errors)}</span>
                     </Link>
                   </li>

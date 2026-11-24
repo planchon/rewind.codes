@@ -23,7 +23,7 @@ import { type FormEvent, useContext, useState } from "react";
 import { useNavigate } from "react-router";
 import { ErrorNote } from "../components/ErrorNote";
 import { displayName } from "../model/access";
-import type { Organization, User } from "../model/types";
+import type { Organization, Person } from "../model/types";
 import { AccessContext, useAccess } from "../state/access";
 import { useJoinOrCreate, useMyInvitations } from "../state/organization";
 import { maskKey, useSession, useSignOut, useSwitchOrganization } from "../state/session";
@@ -55,7 +55,7 @@ export function OrgAvatar({
   );
 }
 
-/** The scope's head: the mark, then the organization (or the key's tenant). */
+/** The scope's head: the mark, then the organization (or the key's organization id). */
 function ScopeHead({ name, role }: { name: string; role?: string | null }) {
   return (
     <>
@@ -95,7 +95,7 @@ function CreateOrganization({
             <div className="dialog-body">
               <Dialog.Title className="dialog-title">Create an organization</Dialog.Title>
               <Dialog.Description className="dialog-text">
-                Runs, scripts and keys belong to an organization. You will be its owner.
+                Runs, workflows and keys belong to an organization. You will be its owner.
               </Dialog.Description>
               <label className="field col">
                 <span className="field-label">Name</span>
@@ -120,7 +120,7 @@ function CreateOrganization({
   );
 }
 
-/** The organization picker, at the top of the sidebar; for a key, its tenant. */
+/** The organization picker, at the top of the sidebar; for a key, its organization. */
 export function OrganizationSwitcher() {
   const access = useAccess();
   const { phase } = useSession();
@@ -138,10 +138,13 @@ export function OrganizationSwitcher() {
   const current = access.organization;
 
   if (phase.kind !== "member" || !current) {
-    const tenant = access.identity.tenant;
+    const organizationId = access.identity.organizationId;
     return (
-      <div className="scope static" title={tenant ? `The key's tenant: ${tenant}` : undefined}>
-        <ScopeHead name={tenant ?? "Rewind"} />
+      <div
+        className="scope static"
+        title={organizationId ? `The key's organization: ${organizationId}` : undefined}
+      >
+        <ScopeHead name={organizationId ?? "Rewind"} />
       </div>
     );
   }
@@ -289,7 +292,7 @@ export function AccountMenu({
   onConnect,
   onConnections,
 }: {
-  user: User | null;
+  user: Person | null;
   server?: string | null;
   /** Opens the organization's parts; the onboarding has none. */
   onOrganization?: () => void;

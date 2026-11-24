@@ -1,5 +1,5 @@
 // The mocked `/v1/connections`, `/v1/organization/connections`, `/v1/oauth/consent` and
-// `/v1/toolsets`, with the server's rules (archi/06, "Connections"; archi/07, "MCP and OAuth"): a
+// `/v1/action-sets`, with the server's rules (archi/06, "Connections"; archi/07, "MCP and OAuth"): a
 // connection is its person's, opens only organizations where the person holds the access given,
 // and an administrator (`members:manage`) removes their organization from it.
 import { HttpResponse, http } from "msw";
@@ -66,11 +66,11 @@ export function connectionHandlers(world: World) {
   const live = () => cw.connections.filter((c) => c.revokedAt === null);
 
   return [
-    http.get("*/v1/toolsets", ({ request }) => {
-      const caller = guard(world, request, "toolsets:read");
+    http.get("*/v1/action-sets", ({ request }) => {
+      const caller = guard(world, request, "actions:read");
       if (caller instanceof Response) return caller;
       return HttpResponse.json({
-        toolsets: caller.tenant === access.tenant ? cw.toolsets : [],
+        actionSets: caller.tenant === access.tenant ? cw.actionSets : [],
       });
     }),
 

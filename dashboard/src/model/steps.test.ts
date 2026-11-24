@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { triageWorkflowJournal } from "../mocks/fixtures";
+import { triageWorkflowHistory } from "../mocks/fixtures";
 import { buildRunModel } from "./run";
 import {
   buildSteps,
@@ -13,7 +13,7 @@ import {
 } from "./steps";
 
 const T0 = Date.parse("2026-01-01T00:00:00Z");
-const entries = triageWorkflowJournal(T0).entries;
+const entries = triageWorkflowHistory(T0).events;
 const model = buildRunModel(entries);
 const steps = buildSteps(entries);
 
@@ -25,7 +25,7 @@ function marksAt(n: number): string[] {
 }
 
 describe("the steps of a run", () => {
-  it("cut the triage journal into its eight triggers and what each committed", () => {
+  it("cut the triage history into its eight triggers and what each committed", () => {
     expect(entries).toHaveLength(18);
     expect(steps.map((s) => [s.first, s.last])).toEqual([
       [0, 1],
@@ -39,13 +39,13 @@ describe("the steps of a run", () => {
     ]);
     expect(steps.map((s) => s.trigger.event.type)).toEqual([
       "run_started",
-      "tool_call_completed",
-      "tool_call_completed",
+      "call_completed",
+      "call_completed",
       "signal_received",
-      "tool_call_completed",
-      "tool_call_completed",
+      "call_completed",
+      "call_completed",
       "timer_fired",
-      "tool_call_completed",
+      "call_completed",
     ]);
     expect(steps[7]?.ends).toBe("completed");
     expect(stepOf(steps, 9)).toBe(3);
@@ -72,7 +72,7 @@ describe("the steps of a run", () => {
   });
 
   it("skip a step that issues nothing, unless every step is asked for", () => {
-    // Step 5 delivers #4: the script still waits in Promise.all for #5.
+    // Step 5 delivers #4: the code still waits in Promise.all for #5.
     expect(stopsAt(steps, 4)).toBe(false);
     expect(moveStep(steps, 3, 1, false)).toBe(5);
     expect(moveStep(steps, 5, -1, false)).toBe(3);
@@ -120,7 +120,7 @@ describe("the steps of a run", () => {
         idx: 2,
         recordedAt: entries[1]?.recordedAt ?? "",
         event: {
-          type: "tool_call_failed" as const,
+          type: "call_failed" as const,
           seq: 1,
           error: { kind: "error" as const, message: "no" },
         },
@@ -128,7 +128,7 @@ describe("the steps of a run", () => {
       {
         idx: 3,
         recordedAt: entries[1]?.recordedAt ?? "",
-        event: { type: "fail_run" as const, error: { name: "ToolError", message: "no" } },
+        event: { type: "fail_run" as const, error: { name: "ActionError", message: "no" } },
       },
     ];
     const m = buildRunModel(failed);

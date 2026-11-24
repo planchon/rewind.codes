@@ -1,7 +1,7 @@
 // What changes in the mocked control plane, told to the open change streams of its world
 // (`GET /v1/changes`): the write handlers say what they changed (a secret, a namespace, a
-// workflow, a connection, a script run for the first time or given a title), as the server's
-// NOTIFY does.
+// workflow named, described, promoted, forked or pulled, a connection), as the server's NOTIFY
+// does.
 import type { ControlChange } from "../model/types";
 import type { World } from "./fixtures";
 
@@ -33,7 +33,7 @@ export function onChange(world: World, listener: Listener): () => void {
   };
 }
 
-/** A control-plane change as an event of the stream. */
+/** A control-plane change as a message of the stream: its type, then its data. */
 export function changeEvent(change: ControlChange): string {
   const { kind, ...data } = change;
   return `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;

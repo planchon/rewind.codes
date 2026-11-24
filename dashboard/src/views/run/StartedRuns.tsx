@@ -1,4 +1,4 @@
-// The runs this run started, from its journal: each call of `workflows.<name>.start` that
+// The runs this run started, from its history: each call of `workflows.<name>.start` that
 // answered a run id, with that run's end once it came back as a `rewind:ended:` signal.
 import { Link } from "react-router";
 import { OutcomeBadge, StatusBadge } from "../../components/Status";
@@ -11,14 +11,14 @@ export function StartedRuns({
   runId,
   model,
   live,
-  onSelectEntry,
+  onSelectEvent,
   onSelectLine,
 }: {
   runId: string;
   model: RunModel;
   /** The run goes on: a run whose end has not come back yet is still running. */
   live: boolean;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
   onSelectLine: (line: number) => void;
 }) {
   const runs = startedRuns(model);
@@ -29,11 +29,8 @@ export function StartedRuns({
         <h2>Runs it started</h2>
         <span className="muted num">{runs.length}</span>
         <span className="end">
-          <Link
-            to={queryLink("/observability", fieldTerm("started_by", runId))}
-            title="These runs in Observability"
-          >
-            In Observability
+          <Link to={queryLink("/runs", fieldTerm("started_by", runId))} title="These runs in Runs">
+            In Runs
           </Link>
         </span>
       </header>
@@ -64,7 +61,7 @@ export function StartedRuns({
             <button
               type="button"
               className="link-btn mono"
-              onClick={() => onSelectEntry(s.call.idx)}
+              onClick={() => onSelectEvent(s.call.idx)}
               title="The call that started it"
             >
               #{s.call.seq} {s.workflow}.start(…)
@@ -82,10 +79,10 @@ export function StartedRuns({
               <button
                 type="button"
                 className="link-btn"
-                onClick={() => s.end && onSelectEntry(s.end.idx)}
+                onClick={() => s.end && onSelectEvent(s.end.idx)}
                 title="The signal that brought its end"
               >
-                end at entry #{s.end.idx}
+                end at event #{s.end.idx}
               </button>
             )}
             {s.end?.message && <span className="muted started-message">{s.end.message}</span>}

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { JournalBuilder } from "../mocks/journal";
+import { HistoryBuilder } from "../mocks/history";
 import { buildRunModel, endOf, isOpen, labelOf, outcomeOf } from "./run";
 
 const T0 = Date.parse("2026-11-09T10:02:11Z");
 
 function started() {
-  return new JournalBuilder(T0).started({ script: "s".repeat(64), toolset: "t".repeat(64) });
+  return new HistoryBuilder(T0).started({ code: "s".repeat(64), actionSet: "t".repeat(64) });
 }
 
 describe("buildRunModel", () => {
@@ -17,7 +17,7 @@ describe("buildRunModel", () => {
       .ok(2, { title: "b" })
       .after(80)
       .fail(1, "timeout", "no answer in 30s");
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
 
     expect(model.calls).toHaveLength(2);
     const [first, second] = model.calls;
@@ -32,7 +32,7 @@ describe("buildRunModel", () => {
   });
 
   it("keeps a call without completion open", () => {
-    const model = buildRunModel(started().call(1, "ask_user", { q: "?" }, 3).entries);
+    const model = buildRunModel(started().call(1, "ask_user", { q: "?" }, 3).events);
     const call = model.calls[0];
     expect(call && isOpen(call)).toBe(true);
     expect(call && outcomeOf(call)).toBe("open");
@@ -47,7 +47,7 @@ describe("buildRunModel", () => {
       .cancelTimer(2)
       .after(10 * 86_400_000)
       .fired(1);
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
     const [sleep, cancelled] = model.timers;
     expect(sleep).toMatchObject({ durationMs: 864_000_000, fireAt: T0 + 864_000_000 });
     expect(sleep?.end?.outcome).toBe("fired");
@@ -62,7 +62,7 @@ describe("buildRunModel", () => {
       .after(60_000)
       .signal("approval", { close: true })
       .cancelTimer(1);
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
     const wait = model.signals[0];
     expect(wait?.timeoutAt).toBe(T0 + 3 * 86_400_000);
     expect(wait?.end).toMatchObject({ outcome: "received", buffered: false, at: T0 + 60_000 });
@@ -74,7 +74,7 @@ describe("buildRunModel", () => {
 
   it("links the timeout timer when the wait is annotated before the timer starts", () => {
     const j = started().awaitSignal("approval", 10, 1).timer(1, 1_000, 10);
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
     expect(model.signals[0]?.timeoutAt).toBe(T0 + 1_000);
     expect(model.timers[0]?.timeoutOf).toBe(1);
   });
@@ -87,7 +87,7 @@ describe("buildRunModel", () => {
       .fired(1)
       .after(5_000)
       .signal("approval", { late: true });
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
     expect(model.signals[0]?.end).toMatchObject({ outcome: "timed_out", at: T0 + 1_000 });
     // The late signal stays in the mailbox.
     expect(model.received[0]?.waitIdx).toBeNull();
@@ -100,7 +100,7 @@ describe("buildRunModel", () => {
       .after(2_000)
       .awaitSignal("approval", 4)
       .awaitSignal("approval", 5);
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
     const [a, b] = model.signals;
     expect(a?.end).toMatchObject({ outcome: "received", buffered: true, idx: 3 });
     expect(a?.end?.outcome === "received" && a.end.payload.value).toEqual({ n: 1 });
@@ -112,7 +112,7 @@ describe("buildRunModel", () => {
       .log("info", "3 stale issues", 6)
       .log("warn", "no callsite", null)
       .timer(1, 100, null);
-    const model = buildRunModel(j.entries);
+    const model = buildRunModel(j.events);
     expect(model.logs.map((l) => l.message)).toEqual(["3 stale issues", "no callsite"]);
     expect(model.byLine.get(6)?.map((a) => a.kind)).toEqual(["log"]);
     expect(model.unattributed.map((a) => a.kind)).toEqual(["log", "timer"]);
@@ -120,15 +120,15 @@ describe("buildRunModel", () => {
 
   it("records how the run ended, and a cancellation", () => {
     const failed = buildRunModel(
-      started().cancelRequested("ttl").after(10).failRun("CancelledError", "run expired").entries,
+      started().cancelRequested("ttl").after(10).failRun("CancelledError", "run expired").events,
     );
     expect(failed.cancel).toMatchObject({ reason: "ttl", message: null });
     expect(failed.end).toMatchObject({ outcome: "failed", error: { name: "CancelledError" } });
 
-    const aborted = buildRunModel(started().abort("limit_exceeded", "CPU budget").entries);
+    const aborted = buildRunModel(started().abort("limit_exceeded", "CPU budget").events);
     expect(aborted.end).toMatchObject({ outcome: "aborted", reason: { kind: "limit_exceeded" } });
 
-    const done = buildRunModel(started().after(5).complete({ closed: 3 }).entries);
+    const done = buildRunModel(started().after(5).complete({ closed: 3 }).events);
     expect(done.end?.outcome === "completed" && done.end.output.value).toEqual({ closed: 3 });
     expect(done.firstAt).toBe(T0);
     expect(done.lastAt).toBe(T0 + 5);

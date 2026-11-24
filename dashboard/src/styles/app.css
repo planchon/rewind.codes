@@ -1280,15 +1280,52 @@ table.grid .row-link {
 }
 
 .status.cancelled .status-dot,
-.status.pending .status-dot,
+.status.queued .status-dot,
 .dot.cancelled,
-.dot.pending {
+.dot.queued {
   background: var(--neutral);
 }
 
+/* Running, and in a workflow's counts the runs not ended yet (queued, running or waiting). */
+.status.running .status-dot,
 .status.active .status-dot,
+.dot.running,
 .dot.active {
   background: var(--info);
+}
+
+/* Waiting on the outside world: a ring, still, where running is filled and breathes. */
+.status.waiting .status-dot,
+.dot.waiting {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--info);
+}
+
+/* A waiting run's status in a table: its chip opens what it waits for. */
+.status-trigger {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+.status-trigger .status-word {
+  text-decoration: underline dotted var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.status-card-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-body);
+  white-space: nowrap;
 }
 
 .status-dot.live {
@@ -2588,7 +2625,7 @@ table.grid .run-handle .h-origin {
   color: var(--tok-punct);
 }
 
-button.journal-row {
+button.history-row {
   width: 100%;
   border: 0;
   border-bottom: 1px solid var(--line);

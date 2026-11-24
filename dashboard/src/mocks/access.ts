@@ -18,8 +18,8 @@ import type {
   Organization,
   Permission,
   PermissionInfo,
+  Person,
   Role,
-  User,
 } from "../model/types";
 
 const MINUTE = 60_000;
@@ -27,22 +27,23 @@ const DAY = 24 * 60 * MINUTE;
 
 export const DESCRIPTIONS: Record<Permission, string> = {
   "runs:read":
-    "Read runs, their statistics and failure groups, a run's state, trace, entries, event stream and journal, the scripts, the tool statistics and payloads.",
-  "runs:start": "Start and fork runs, and check and test scripts (`/v1/check`, `/v1/test`).",
+    "Read runs, their statistics and fingerprints, a run's state, transcript, events, event stream and history, the change stream, the workflows with their versions, suites and tests, the action statistics and payloads.",
+  "runs:start": "Start and fork runs, and check and test workflows (`/v1/check`, `/v1/test`).",
   "runs:control": "Send signals to runs and cancel them.",
   "runs:quarantine": "Release a quarantined run, or give it up.",
   "runs:delete": "Erase a run, its payloads included.",
-  "toolsets:read": "List toolsets and workflows, read their declarations and search their tools.",
-  "toolsets:write": "Register a toolset, and save a workflow.",
-  "scripts:write": "Give a script a title and a description for the organization, or remove them.",
+  "actions:read": "List action sets, read their declarations and search their actions.",
+  "actions:write": "Register an action set.",
+  "workflows:write":
+    "Create a workflow; name it, describe it, give it a version or tests; promote a namespace's workflow to the organization; fork an organization's workflow into a namespace, and pull a fork's source.",
   "secrets:read":
     "List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids.",
   "secrets:write": "Put and delete secrets.",
-  "secrets:use": "Attach an organization's secret to a run or a workflow.",
-  "tasks:work": "Receive host-tool tasks on the task stream, and defer, complete or fail them.",
-  "tasks:approve": "Approve or reject a parked task.",
-  "subscriptions:read": "List the lifecycle webhooks.",
-  "subscriptions:write": "Create and delete lifecycle webhooks.",
+  "secrets:use": "Use an organization's secret in a run or a workflow.",
+  "calls:work": "Hold a call stream of harness calls, and defer, complete or fail them.",
+  "calls:approve": "Approve or reject a call that waits for the harness.",
+  "subscriptions:read": "List the webhooks.",
+  "subscriptions:write": "Create and delete webhooks.",
   "members:read": "List the members, their grants and the invitations.",
   "members:invite": "Invite people, and resend and revoke invitations.",
   "members:manage": "Change a member's grant, and remove a member.",
@@ -65,14 +66,14 @@ const HARNESS: Permission[] = [
   "runs:control",
   "runs:quarantine",
   "runs:delete",
-  "toolsets:read",
-  "toolsets:write",
-  "scripts:write",
+  "actions:read",
+  "actions:write",
+  "workflows:write",
   "secrets:read",
   "secrets:write",
   "secrets:use",
-  "tasks:work",
-  "tasks:approve",
+  "calls:work",
+  "calls:approve",
   "subscriptions:read",
   "subscriptions:write",
   "members:read",
@@ -93,22 +94,22 @@ export const BUILT_IN: Role[] = [
     name: "harness",
     builtIn: true,
     description:
-      "Runs, toolsets, secrets, tasks and subscriptions, and reading the members and roles: a harness and its agent tools.",
+      "Runs, action sets, secrets, calls and subscriptions, and reading the members and roles: a harness and its agent tools.",
     permissions: HARNESS,
   },
   {
     name: "worker",
     builtIn: true,
-    description: "Only the host-tool tasks: a harness's SDK worker.",
-    permissions: ["tasks:work"],
+    description: "Only the harness calls: a harness's SDK worker.",
+    permissions: ["calls:work"],
   },
   {
     name: "reader",
     builtIn: true,
-    description: "Reading runs, toolsets, subscriptions, members and roles: a dashboard.",
+    description: "Reading runs, action sets, subscriptions, members and roles: a dashboard.",
     permissions: [
       "runs:read",
-      "toolsets:read",
+      "actions:read",
       "secrets:read",
       "subscriptions:read",
       "members:read",
@@ -119,7 +120,7 @@ export const BUILT_IN: Role[] = [
 ];
 
 export interface MockUser {
-  user: User;
+  user: Person;
   /** WorkOS asks to verify the email at the next sign-in. */
   verified: boolean;
 }
@@ -183,7 +184,7 @@ export interface AccessWorld {
   invitations: MockInvitation[];
   /** The organizations' own roles, by tenant. */
   roles: Map<string, Role[]>;
-  /** Grants by tenant, then by principal (`user:<id>`, `key:<id>`, `invitation:<id>`). */
+  /** Grants by tenant, then by principal (`member:<id>`, `key:<id>`, `invitation:<id>`). */
   grants: Map<string, Map<string, Grant>>;
   keys: MockKey[];
   waitlist: string[];
@@ -303,7 +304,7 @@ export function createAccessWorld(options: AccessOptions = {}): AccessWorld {
   }
 
   const person = (id: string, first: string, last: string, verified = true) => {
-    const user: User = {
+    const user: Person = {
       id,
       email: `${first.toLowerCase()}@example.net`,
       firstName: first,
@@ -324,7 +325,7 @@ export function createAccessWorld(options: AccessOptions = {}): AccessWorld {
     { id: "org_01ACME", name: "Acme", defaultRole: "reader" },
     { id: "org_01GLOBEX", name: "Globex", defaultRole: "reader" },
   );
-  const member = (user: User, org: string, status: MembershipStatus = "active") =>
+  const member = (user: Person, org: string, status: MembershipStatus = "active") =>
     world.memberships.push({ userId: user.id, organizationId: org, status });
   member(ada, "org_01ACME");
   member(grace, "org_01ACME");
@@ -347,14 +348,14 @@ export function createAccessWorld(options: AccessOptions = {}): AccessWorld {
     {
       name: "on-call",
       builtIn: false,
-      description: "Reads runs, sends signals, cancels, approves parked tasks.",
-      permissions: ["runs:read", "runs:control", "tasks:approve", "toolsets:read"],
+      description: "Reads runs, sends signals, cancels, approves calls.",
+      permissions: ["runs:read", "runs:control", "calls:approve", "actions:read"],
       createdAt: iso(now - 4 * DAY),
       updatedAt: iso(now - 4 * DAY),
     },
   ]);
 
-  const by = (user: User) => `user:${user.id}`;
+  const by = (user: Person) => memberPrincipal(user.id);
   grant("org_01ACME", by(ada), {
     role: "owner",
     allowedLabels: {},
@@ -392,7 +393,7 @@ export function createAccessWorld(options: AccessOptions = {}): AccessWorld {
   const invite = (
     email: string,
     org: string,
-    inviter: User,
+    inviter: Person,
     role: string,
     ageMs: number,
     state: Invitation["state"] = "pending",
@@ -413,7 +414,7 @@ export function createAccessWorld(options: AccessOptions = {}): AccessWorld {
         role,
         allowedLabels: {},
         grantedAt: iso(inv.createdAt),
-        grantedBy: `user:${inviter.id}`,
+        grantedBy: memberPrincipal(inviter.id),
       });
     return inv;
   };
@@ -451,7 +452,7 @@ export function grantsOf(world: AccessWorld, tenant: string): Map<string, Grant>
   return map;
 }
 
-/** Whether the write leaves the tenant with a member (`user:`) holding `owner`. */
+/** Whether the write leaves the tenant with a member (`member:`) holding `owner`. */
 export function keepsOwner(
   world: AccessWorld,
   tenant: string,
@@ -461,9 +462,9 @@ export function keepsOwner(
   const grants = grantsOf(world, tenant);
   const before = grants.get(principal);
   if (before?.role !== "owner" || next?.role === "owner") return true;
-  if (!principal.startsWith("user:")) return true;
+  if (!principal.startsWith("member:")) return true;
   return [...grants].some(
-    ([p, g]) => p !== principal && p.startsWith("user:") && g.role === "owner",
+    ([p, g]) => p !== principal && p.startsWith("member:") && g.role === "owner",
   );
 }
 
@@ -474,11 +475,16 @@ export type Caller =
   /** The embedded server's socket: no token, the operator of the tenant `local`. */
   | { kind: "socket"; tenant: string }
   | { kind: "key"; tenant: string; key: MockKey }
-  | { kind: "user"; tenant: string | null; user: User; token: MockToken };
+  | { kind: "user"; tenant: string | null; user: Person; token: MockToken };
+
+/** A member's principal: `member:` and their person's id (was `user:`). */
+export function memberPrincipal(personId: string): string {
+  return `member:${personId}`;
+}
 
 export function principalOf(caller: Caller): string | null {
   if (caller.kind === "key") return `key:${caller.key.id}`;
-  if (caller.kind === "user") return `user:${caller.user.id}`;
+  if (caller.kind === "user") return memberPrincipal(caller.user.id);
   return null;
 }
 
@@ -542,11 +548,11 @@ export function whoami(world: AccessWorld, caller: Caller): Identity {
     operator: grant?.role === "operator",
     permissions: permissionsOf(world, caller),
     ...(grant ? { grant } : {}),
-    ...(caller.tenant ? { tenant: caller.tenant } : {}),
+    ...(caller.tenant ? { organizationId: caller.tenant } : {}),
   };
   if (caller.kind === "key") identity.principal = { kind: "key", id: caller.key.id };
   if (caller.kind === "user") {
-    identity.principal = { kind: "user", user: caller.user };
+    identity.principal = { kind: "member", person: caller.user };
     identity.organizations = organizationsOf(world, caller.user.id);
     const org = world.organizations.find((o) => o.id === caller.tenant);
     if (org) identity.organization = { id: org.id, name: org.name, defaultRole: org.defaultRole };
@@ -586,15 +592,15 @@ export function acceptInvitation(world: AccessWorld, inv: MockInvitation, userId
   const pending = grants.get(`invitation:${inv.id}`);
   grants.delete(`invitation:${inv.id}`);
   // A member who already has a grant keeps it.
-  if (pending && !grants.has(`user:${userId}`)) grants.set(`user:${userId}`, pending);
+  if (pending && !grants.has(memberPrincipal(userId))) grants.set(memberPrincipal(userId), pending);
 }
 
 /** A member's first grant in an organization: the default role, when nothing gave one. */
 function firstGrant(world: AccessWorld, organizationId: string, userId: string): void {
   const grants = grantsOf(world, organizationId);
-  if (grants.has(`user:${userId}`)) return;
+  if (grants.has(memberPrincipal(userId))) return;
   const org = world.organizations.find((o) => o.id === organizationId);
-  grants.set(`user:${userId}`, {
+  grants.set(memberPrincipal(userId), {
     role: org?.defaultRole ?? "reader",
     allowedLabels: {},
     grantedAt: iso(Date.now()),
@@ -603,7 +609,7 @@ function firstGrant(world: AccessWorld, organizationId: string, userId: string):
 
 export function authenticated(
   world: AccessWorld,
-  user: User,
+  user: Person,
   organizationId: string | null,
 ): AuthState {
   if (organizationId) firstGrant(world, organizationId, user.id);
@@ -613,7 +619,7 @@ export function authenticated(
     status: "authenticated",
     accessToken: token.token,
     expiresAt: iso(token.expiresAt),
-    user,
+    person: user,
     ...(organizationId ? { organizationId } : {}),
   };
 }
@@ -621,14 +627,14 @@ export function authenticated(
 /** Once the email is verified: the organization named, the only one, or a choice. */
 export function afterVerified(
   world: AccessWorld,
-  user: User,
+  user: Person,
   organizationId: string | null,
 ): AuthState {
   if (organizationId) return authenticated(world, user, organizationId);
   const organizations = organizationsOf(world, user.id);
   if (organizations.length <= 1) return authenticated(world, user, organizations[0]?.id ?? null);
   world.session = { step: "organization_selection_required", userId: user.id };
-  return { status: "organization_selection_required", user, organizations };
+  return { status: "organization_selection_required", person: user, organizations };
 }
 
 /**
@@ -688,7 +694,7 @@ export function sessionState(world: AccessWorld): AuthState | null {
         status: "authenticated",
         accessToken: token.token,
         expiresAt: iso(token.expiresAt),
-        user,
+        person: user,
         ...(session.organizationId ? { organizationId: session.organizationId } : {}),
       };
     }
@@ -697,7 +703,7 @@ export function sessionState(world: AccessWorld): AuthState | null {
       if (!user) return null;
       return {
         status: "organization_selection_required",
-        user,
+        person: user,
         organizations: organizationsOf(world, user.id),
       };
     }
@@ -718,7 +724,7 @@ export function apiKeyDto(world: AccessWorld, k: MockKey, withSecret = false): A
   return {
     id: k.id,
     name: k.name,
-    tenant: k.tenant,
+    organizationId: k.tenant,
     role: grant?.role ?? "",
     allowedLabels: grant?.allowedLabels ?? {},
     createdAt: iso(k.createdAt),
@@ -751,8 +757,8 @@ export function memberDtos(world: AccessWorld, organizationId: string): Member[]
     .flatMap((m): Member[] => {
       const user = userOf(world, m.userId)?.user;
       if (!user) return [];
-      const grant = grants.get(`user:${m.userId}`);
-      return [{ user, status: m.status, ...(grant ? { grant } : {}) }];
+      const grant = grants.get(memberPrincipal(m.userId));
+      return [{ person: user, status: m.status, ...(grant ? { grant } : {}) }];
     });
 }
 

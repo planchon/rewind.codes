@@ -135,7 +135,7 @@ function EndCard({ run, open }: { run: RunSummary; open: boolean }) {
         {kind === "cancelled" && (
           <>
             <dt>Cause</dt>
-            <dd>{why ?? (detail.isPending ? "…" : "Not said: open the run for its journal.")}</dd>
+            <dd>{why ?? (detail.isPending ? "…" : "Not said: open the run for its history.")}</dd>
           </>
         )}
         {failedCall && (
@@ -143,7 +143,7 @@ function EndCard({ run, open }: { run: RunSummary; open: boolean }) {
             <dt>Thrown by</dt>
             <dd>
               <span className="mono">
-                #{failedCall.seq} {failedCall.tool}
+                #{failedCall.seq} {failedCall.action}
               </span>
               : {failedCall.error.kind}, {failedCall.error.message}
             </dd>
@@ -152,7 +152,7 @@ function EndCard({ run, open }: { run: RunSummary; open: boolean }) {
         {line !== null && (
           <>
             <dt>Line</dt>
-            <dd className="mono">script.ts:{line}</dd>
+            <dd className="mono">workflow.ts:{line}</dd>
           </>
         )}
         {ended !== null && (

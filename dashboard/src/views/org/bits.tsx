@@ -72,7 +72,7 @@ export function RoleSelect({
   const chosen = roles.find((r) => r.name === value);
   const hint =
     value === OPERATOR_ROLE
-      ? "Every permission, and the keys of every tenant."
+      ? "Every permission, and the keys of every organization."
       : (chosen?.description ?? "");
   return (
     <Field label={label} hint={hint}>
@@ -271,16 +271,16 @@ export function ConfirmButton({
 }
 
 export function Person({ member, you }: { member: Member; you: boolean }) {
-  const { user } = member;
+  const { person } = member;
   return (
     <span className="person">
-      <Avatar user={user} />
+      <Avatar user={person} />
       <span className="person-text">
         <span className="person-name">
-          {displayName(user)}
+          {displayName(person)}
           {you && <span className="tag">you</span>}
         </span>
-        <span className="muted">{user.email}</span>
+        <span className="muted">{person.email}</span>
       </span>
     </span>
   );
@@ -291,13 +291,13 @@ export function useMemberNames(): Map<string, string> {
   const access = useAccess();
   const members = useMembers(access.can("members:read") && access.organization !== null);
   return useMemo(
-    () => new Map((members.data ?? []).map((m) => [m.user.id, displayName(m.user)])),
+    () => new Map((members.data ?? []).map((m) => [m.person.id, displayName(m.person)])),
     [members.data],
   );
 }
 
 /**
- * Who a principal's text (`user:<id>`, `key:<id>`, `connection:<id>`, or an end user's token,
+ * Who a principal's text (`member:<id>`, `key:<id>`, `connection:<id>`, or an end user's token,
  * `token:<namespace>`) is, as well as it is known.
  */
 export function PrincipalName({
@@ -311,7 +311,8 @@ export function PrincipalName({
 }) {
   if (!text) return <span className="muted">the server</span>;
   const { kind, id } = splitPrincipal(text);
-  if (kind === "user") {
+  // `user:` is how a member was written before the members were named so.
+  if (kind === "member" || kind === "user") {
     const name = names.get(id);
     return name ? <span title={id}>{name}</span> : <span className="mono">{id}</span>;
   }

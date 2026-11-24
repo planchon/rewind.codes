@@ -1,11 +1,11 @@
-// Observability: the runs, looked at and filtered (archi/05). Four views of the same query: every
-// run, the active ones, those waiting on the outside world (grouped by what they wait for), and
-// the failures (grouped by fingerprint). Its sidebar holds the views and the filters; the query
-// lives in the URL, and a filter is a term of it.
+// Runs: the runs, looked at and filtered (archi/05). Four views of the same query: every run, the
+// running ones, those waiting on the outside world (grouped by what they wait for), and the
+// failures (by fingerprint). Its sidebar holds the views and the filters; the query lives in the
+// URL, and a filter is a term of it.
 import { Menu } from "@base-ui/react/menu";
-import { Activity, ChevronDown, CircleAlert, Hourglass, List, RefreshCw } from "lucide-react";
+import { ChevronDown, CircleAlert, Hourglass, List, LoaderCircle, RefreshCw } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useSearchParams } from "react-router";
 import { RunsFrom } from "../../app/runLinks";
 import { useSettings } from "../../app/settings";
 import { PageSidebar } from "../../app/sidebar";
@@ -25,19 +25,18 @@ import {
   toggleFacet,
   withTerm,
 } from "../../model/query";
-import { waitingRuns } from "../../model/scope";
 import { readSort, withSort } from "../../model/sorts";
 import type { Facets, RunStats, RunStatus } from "../../model/types";
 import { useRunStats } from "../../state/aggregates";
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
 import { RunTable } from "../RunTable";
-import { BUCKETS, useRunQueryValues, useSearchQuery, useWindow } from "../search";
-import { FailureGroups } from "./FailureGroups";
+import { INTERVALS, useRunQueryValues, useSearchQuery, useWindow } from "../search";
 import { FilterGroups, TimelineSelect, timelineOf, withTimeline } from "./Filters";
+import { Fingerprints } from "./Fingerprints";
 import { WaitingRuns } from "./WaitingRuns";
 
-type ViewKey = "all" | "active" | "waiting" | "failures";
+type ViewKey = "all" | "running" | "waiting" | "failures";
 
 interface View {
   key: ViewKey;
@@ -51,28 +50,28 @@ interface View {
 const VIEWS: readonly View[] = [
   {
     key: "all",
-    path: "/observability",
-    label: "All runs",
+    path: "/runs",
+    label: "All",
     term: null,
     icon: <List size={14} />,
   },
   {
-    key: "active",
-    path: "/observability/active",
-    label: "Active",
-    term: "status:active",
-    icon: <Activity size={14} />,
+    key: "running",
+    path: "/runs/running",
+    label: "Running",
+    term: "status:running",
+    icon: <LoaderCircle size={14} />,
   },
   {
     key: "waiting",
-    path: "/observability/waiting",
+    path: "/runs/waiting",
     label: "Waiting",
-    term: "waiting:*",
+    term: "status:waiting",
     icon: <Hourglass size={14} />,
   },
   {
     key: "failures",
-    path: "/observability/failures",
+    path: "/runs/failures",
     label: "Failures",
     term: "status:failed,aborted,cancelled",
     icon: <CircleAlert size={14} />,
@@ -86,9 +85,9 @@ const VIEWS: readonly View[] = [
 function viewCount(view: ViewKey, stats: RunStats | undefined) {
   if (!stats) return undefined;
   const s = stats.statuses;
-  if (view === "waiting") return waitingRuns(stats.waiting);
   if (view === "all") return stats.runs;
-  if (view === "active") return s.active;
+  if (view === "running") return s.running;
+  if (view === "waiting") return s.waiting;
   return s.failed + s.aborted + s.cancelled;
 }
 
@@ -148,16 +147,16 @@ function ViewSelect({
 function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
   const { zone } = useSettings();
   const width = RANGES[win];
-  const { bucket, ms: bucketMs } = BUCKETS[win];
+  const { interval, ms: intervalMs } = INTERVALS[win];
   const base = withTimeline(q, null);
   // The runs over time of the query's namespace, or of the organization.
-  const stats = useRunStats(`obs-histogram|${win}|${base}`, () => {
+  const stats = useRunStats(`runs-histogram|${win}|${base}`, () => {
     const now = Date.now();
     return {
       ...(base ? { q: base } : {}),
       since: new Date(now - width).toISOString(),
       until: new Date(now).toISOString(),
-      bucket,
+      interval,
       top: 1,
     };
   });
@@ -166,7 +165,7 @@ function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
   const since = stats.data.since ? Date.parse(stats.data.since) : Date.now() - width;
   const buckets = (stats.data.series ?? []).map((b) => {
     const from = Date.parse(b.at);
-    return { from, to: from + bucketMs, counts: b.statuses };
+    return { from, to: from + intervalMs, counts: b.statuses };
   });
   if (buckets.length === 0) return null;
   const tick = (ms: number) => {
@@ -184,7 +183,7 @@ function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
         bucketLabel={(b) => `${formatTime(b.from, zone).slice(0, 16)} – ${tick(b.to)}`}
         href={(b, status: RunStatus) =>
           queryLink(
-            "/observability",
+            "/runs",
             joinQuery(
               base,
               `status:${status}`,
@@ -234,35 +233,35 @@ function RunsList({
         const at = pair.indexOf(":");
         add(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
       }}
-      onPickScript={(digest) => add(fieldTerm("script", digest))}
+      onPickWorkflow={(id) => add(fieldTerm("workflow", id))}
       showNamespace
       onPickNamespace={(namespace) => add(fieldTerm("namespace", namespace))}
       empty={
         q
           ? "No run matches this query."
-          : view.key === "active"
-            ? "No run is active now."
+          : view.key === "running"
+            ? "No run is running now."
             : "No run yet."
       }
     />
   );
 }
 
-export function ObservabilityView() {
-  const { view: raw } = useParams();
-  const view = VIEWS.find((v) => v.key === (raw ?? "all"));
+export function RunsView() {
+  const { pathname } = useLocation();
+  const view = VIEWS.find((v) => v.path === pathname.replace(/\/$/, ""));
   const { q, setQ } = useSearchQuery();
   const lookup = useRunQueryValues();
   const [win, setWin] = useWindow();
 
   // The counts of the views and the facets: the statistics of the query's namespace, or of the
   // organization.
-  const stats = useRunStats(`obs|${q}`, () => ({ ...(q ? { q } : {}), top: 10 }));
+  const stats = useRunStats(`runs|${q}`, () => ({ ...(q ? { q } : {}), top: 10 }));
   const [refreshing, setRefreshing] = useState(false);
   const counts = useMemo(
     () => ({
       all: viewCount("all", stats.data),
-      active: viewCount("active", stats.data),
+      running: viewCount("running", stats.data),
       waiting: viewCount("waiting", stats.data),
       failures: viewCount("failures", stats.data),
     }),
@@ -275,7 +274,7 @@ export function ObservabilityView() {
     [],
   );
 
-  if (!view) return <Navigate to="/observability" replace />;
+  if (!view) return <Navigate to="/runs" replace />;
   const searched = view.key !== "failures";
   const fault = (searched ? searchFault : null) ?? queryFault(stats.error);
   const timeline = view.key === "failures" ? win : timelineOf(q);
@@ -283,7 +282,7 @@ export function ObservabilityView() {
   return (
     <RunsFrom>
       <div className="page">
-        <PageSidebar title="Observability" back={null} backLabel="Show the views">
+        <PageSidebar title="Runs" back={null} backLabel="Show the views">
           <ViewSelect current={view} q={q} counts={counts} />
           <section className="pane-section" aria-label="Filters">
             <h2 className="pane-label">Filters</h2>
@@ -300,7 +299,7 @@ export function ObservabilityView() {
           </section>
         </PageSidebar>
         <PageHeader
-          crumbs="Observability"
+          crumbs="Runs"
           title={view.label}
           actions={
             <button
@@ -326,9 +325,9 @@ export function ObservabilityView() {
             values={lookup.values}
             onTyping={lookup.onTyping}
             fault={fault}
-            placeholder='@agent:triage status:failed tool:github.* error:timeout "rate limit"'
+            placeholder='@agent:triage status:failed action:github.* error:timeout "rate limit"'
           />
-          {(view.key === "all" || view.key === "active") && (
+          {(view.key === "all" || view.key === "running") && (
             <>
               {!fault && <RunsHistogram q={q} win={timeline ?? "24h"} />}
               <RunsList
@@ -344,7 +343,7 @@ export function ObservabilityView() {
           {view.key === "waiting" && (
             <WaitingRuns q={q} setQ={setQ} stats={stats.data} onFault={onFault} />
           )}
-          {view.key === "failures" && <FailureGroups q={q} setQ={setQ} win={win} />}
+          {view.key === "failures" && <Fingerprints q={q} setQ={setQ} win={win} />}
         </div>
       </div>
     </RunsFrom>

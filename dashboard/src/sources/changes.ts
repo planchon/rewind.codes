@@ -1,6 +1,6 @@
 // Follows what changes in the organization through `GET /v1/changes` (server-sent events), read
-// with `fetch` since `EventSource` cannot send the Authorization header. A `run` event carries a
-// run's whole summary, as `GET /v1/runs` lists it; `script`, `workflow`, `secret`, `namespace` and
+// with `fetch` since `EventSource` cannot send the Authorization header. A `run` change carries a
+// run's whole summary, as `GET /v1/runs` lists it; `workflow`, `secret`, `namespace` and
 // `connection` name what changed in the control plane; `resync` says that too much changed at once.
 //
 // There is no resume cursor: after a drop the stream is opened again (after 1 s, doubling up to
@@ -11,7 +11,7 @@ import { createParser } from "eventsource-parser";
 import type { ControlChange, RunSummary } from "../model/types";
 import type { Api } from "./client";
 
-/** A control-plane change from an event's name and data; `null` for one this tab does not know. */
+/** A control-plane change from its SSE name and data; `null` for one this tab does not know. */
 export function controlChange(event: string | undefined, data: string): ControlChange | null {
   let value: unknown;
   try {
@@ -23,14 +23,9 @@ export function controlChange(event: string | undefined, data: string): ControlC
   const v = value as Record<string, unknown>;
   const text = (key: string) => (typeof v[key] === "string" ? (v[key] as string) : null);
   switch (event) {
-    case "script": {
-      const digest = text("digest");
-      return digest === null ? null : { kind: "script", digest };
-    }
     case "workflow": {
-      const name = text("name");
-      const version = text("version");
-      return name === null || version === null ? null : { kind: "workflow", name, version };
+      const workflow = text("workflow");
+      return workflow === null ? null : { kind: "workflow", workflow };
     }
     case "secret": {
       const name = text("name");
@@ -62,7 +57,7 @@ export interface ChangeHandlers {
   onOpen(reopened: boolean): void;
   /** A run changed: its whole summary. */
   onRun(run: RunSummary): void;
-  /** A script, a workflow, a secret, a namespace or a connection changed. */
+  /** A workflow, a secret, a namespace or a connection changed. */
   onControl(change: ControlChange): void;
   /** Too much changed at once: read again what is shown. */
   onResync(): void;

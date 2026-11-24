@@ -1,4 +1,4 @@
-// API keys: the tenant's keys with their grant, who created them and when; whoever holds
+// API keys: the organization's keys with their grant, who created them and when; whoever holds
 // `api_keys:write` creates one (its secret is shown once) and revokes them.
 import { Check, Copy, KeyRound, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -83,7 +83,7 @@ function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
   const givable = roles.data ? givableRoles(roles.data, access.permissions) : null;
   const [name, setName] = useState("");
   const [role, setRole] = useState<string | null>(null);
-  const [tenant, setTenant] = useState("");
+  const [organizationId, setOrganizationId] = useState("");
   const labels = useLabels();
   const chosen = role ?? defaultRole(givable);
   const create = useCreateApiKey();
@@ -94,7 +94,9 @@ function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
         name: name.trim(),
         role: chosen,
         allowedLabels: labels.labels,
-        ...(access.operator && tenant.trim() ? { tenant: tenant.trim() } : {}),
+        ...(access.operator && organizationId.trim()
+          ? { organizationId: organizationId.trim() }
+          : {}),
       },
       onCreated,
     );
@@ -129,15 +131,18 @@ function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
       <div className="form-row">
         <LabelsField value={labels.text} onChange={labels.setText} error={labels.error} />
         {access.operator && (
-          <Field label="Tenant" hint="Another tenant's; it is created with its first key.">
+          <Field
+            label="Organization id"
+            hint="Another organization's; it is created with its first key."
+          >
             {(props) => (
               <input
                 {...props}
                 className="input mono"
-                placeholder={access.identity.tenant ?? ""}
-                value={tenant}
+                placeholder={access.identity.organizationId ?? ""}
+                value={organizationId}
                 spellCheck={false}
-                onChange={(e) => setTenant(e.target.value)}
+                onChange={(e) => setOrganizationId(e.target.value)}
               />
             )}
           </Field>

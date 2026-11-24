@@ -45,45 +45,46 @@
   color: var(--ink-2);
 }
 
-/* Scripts */
+/* Workflows */
 
-/* A script's title over its first line, both whole: the table scrolls sideways rather than cut
-   them. */
-table.grid td.script-cell {
+/* A workflow's label over the first line of its description, both whole: the table scrolls
+   sideways rather than cut them. */
+table.grid td.wf-cell {
   padding-top: 5px;
   padding-bottom: 5px;
   height: auto;
 }
 
-.script-cell > a,
-.script-cell > .copyable {
+.wf-cell-head {
   display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.script-cell .headline {
+.wf-cell .headline {
   display: block;
   color: var(--ink);
   white-space: nowrap;
 }
 
-.script-cell .script-title {
+.wf-cell .wf-name:not(.mono) {
   font-weight: var(--weight-medium);
 }
 
-.script-cell .cell-sub {
+/* The description's first line is prose: it wraps past a measure, so the label's column leaves
+   room for the counts. */
+.wf-cell .cell-sub {
   display: block;
+  min-width: 24ch;
+  max-width: 48ch;
+  white-space: normal;
 }
 
-/* A run's script in the table of runs: its title, whole. */
-.script-cell-title {
+/* A run's workflow and version in the table of runs, whole. */
+.workflow-cell {
   display: block;
   white-space: nowrap;
   text-align: left;
-}
-
-.script-cell .digest {
-  font-size: var(--text-small);
-  color: var(--ink-3);
 }
 
 .outcomes {
@@ -128,11 +129,16 @@ table.grid td.script-cell {
   background: var(--neutral);
 }
 
+.seg-running,
 .seg-active {
   background: var(--info);
 }
 
-.seg-pending {
+.seg-waiting {
+  background: var(--ds-blue-400);
+}
+
+.seg-queued {
   background: var(--line-strong);
 }
 
@@ -155,28 +161,28 @@ a.status:hover .num {
   text-decoration: underline;
 }
 
-/* Tools */
+/* Actions */
 
-.tools-table .group-row td {
+.actions-table .group-row td {
   background: var(--surface-2);
   font-weight: var(--weight-title);
   height: 32px;
   color: var(--ink-2);
 }
 
-table.grid.tools-table td.tool-name {
+table.grid.actions-table td.action-name {
   padding-left: 36px;
 }
 
-.tools-table .tool-name a {
+.actions-table .action-name a {
   color: var(--ink);
 }
 
-.tools-table td a.label {
+.actions-table td a.label {
   text-decoration: none;
 }
 
-/* A row that folds the rows under it: the tools of a namespace, the namespaces of the organization */
+/* A row that folds the rows under it: the actions of a group, the namespaces of the organization */
 .group-toggle {
   display: inline-flex;
   align-items: center;
@@ -211,7 +217,7 @@ table.grid.tools-table td.tool-name {
   text-align: right;
 }
 
-/* A second line under a cell's value: when a script first ran */
+/* A second line under a cell's value: when a workflow first ran */
 .cell-sub {
   display: block;
   font-size: var(--text-small);
@@ -237,26 +243,26 @@ table.grid.tools-table td.tool-name {
    the strips share the cell's padding, so a tick and its line are at the same x. */
 
 /* Eleven columns: closer than the other tables, so the strips keep their width at 1440 px */
-table.grid.tools-table th,
-table.grid.tools-table td {
+table.grid.actions-table th,
+table.grid.actions-table td {
   padding-left: 10px;
   padding-right: 10px;
 }
 
-table.grid.tools-table .latency-head,
-table.grid.tools-table .latency-cell {
+table.grid.actions-table .latency-head,
+table.grid.actions-table .latency-cell {
   width: 30%;
   padding-left: 16px;
   padding-right: 20px;
 }
 
-.tools-table thead th.latency-head {
+.actions-table thead th.latency-head {
   height: auto;
   padding-top: 6px;
   padding-bottom: 4px;
 }
 
-.tools-table .rate-bar {
+.actions-table .rate-bar {
   width: 32px;
 }
 
@@ -435,7 +441,7 @@ table.grid.tools-table .latency-cell {
 }
 
 .banner .hint,
-.waiting .hint {
+.waiting-list .hint {
   color: var(--ink-3);
   font-size: var(--text-small);
 }
@@ -549,7 +555,7 @@ table.grid.tools-table .latency-cell {
   border-left-color: var(--neutral);
 }
 
-.waiting {
+.waiting-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -558,7 +564,7 @@ table.grid.tools-table .latency-cell {
   gap: 3px;
 }
 
-.waiting li {
+.waiting-list li {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -604,7 +610,7 @@ table.grid.tools-table .latency-cell {
   }
 }
 
-/* Beside the journal, the logs and the runs started: the inspector stays in view as the list
+/* Beside the history, the logs and the runs started: the inspector stays in view as the list
    scrolls. The card scrolls itself, its header held, so its stroke and corners stay whole. */
 .run-side {
   position: sticky;
@@ -1053,8 +1059,8 @@ table.grid.tools-table .latency-cell {
   box-shadow: 0 0 0 3px var(--ink-2);
 }
 
-.tl-bar.kind-tool_call,
-.sw.kind-tool_call {
+.tl-bar.kind-call,
+.sw.kind-call {
   background: var(--series-call);
 }
 
@@ -1152,11 +1158,11 @@ table.grid.tools-table .latency-cell {
 
 /* Journal, logs, trace */
 
-.journal {
+.history {
   font-size: var(--text-small);
 }
 
-.journal-row {
+.history-row {
   display: grid;
   grid-template-columns: 56px 92px 170px minmax(0, 1fr) 48px;
   align-items: center;
@@ -1167,35 +1173,35 @@ table.grid.tools-table .latency-cell {
   cursor: pointer;
 }
 
-.journal-row:hover {
+.history-row:hover {
   background: var(--surface-2);
 }
 
-.journal-row.selected {
+.history-row.selected {
   background: var(--accent-soft);
 }
 
-.journal-head {
+.history-head {
   cursor: default;
   color: var(--ink-3);
   font-size: var(--text-small);
   background: var(--surface-2);
 }
 
-.journal-head:hover {
+.history-head:hover {
   background: var(--surface-2);
 }
 
-.journal-row > span:first-child,
-.journal-row > span:nth-child(2) {
+.history-row > span:first-child,
+.history-row > span:nth-child(2) {
   text-align: right;
 }
 
-.journal-row > span:last-child {
+.history-row > span:last-child {
   text-align: right;
 }
 
-.journal-scroll {
+.history-scroll {
   max-height: 360px;
   overflow-y: auto;
 }
@@ -1308,12 +1314,12 @@ table.grid.tools-table .latency-cell {
     --tl-label: 120px;
   }
 
-  .journal-row {
+  .history-row {
     grid-template-columns: 40px 72px minmax(0, 1fr);
   }
 
-  .journal-row > span:nth-child(3),
-  .journal-row > span:last-child {
+  .history-row > span:nth-child(3),
+  .history-row > span:last-child {
     display: none;
   }
 }
@@ -1589,11 +1595,15 @@ span.q-bad {
   fill: var(--neutral);
 }
 
-.chart-seg.seg-active {
+.chart-seg.seg-running {
   fill: var(--info);
 }
 
-.chart-seg.seg-pending {
+.chart-seg.seg-waiting {
+  fill: var(--ds-blue-400);
+}
+
+.chart-seg.seg-queued {
   fill: var(--line-strong);
 }
 
@@ -1716,8 +1726,11 @@ span.q-bad {
   min-height: 30px;
 }
 
+/* Each tab on one line; past the page's width, the tabs scroll sideways rather than wrap. */
 .view-tabs button {
+  flex: none;
   height: 30px;
+  white-space: nowrap;
 }
 
 table.grid tr.group-row td {
@@ -1736,14 +1749,26 @@ table.grid td.waiting-run {
   height: auto;
 }
 
-.waiting-run .headline {
+/* The workflow and version the run executes, beside its handle. */
+.waiting-run .waiting-workflow {
+  display: block;
   color: var(--ink-2);
   font-size: var(--text-small);
   white-space: nowrap;
 }
 
+/* A run's labels on one line, whole: the column grows to hold them, as the run's handle does. */
 .waiting-run > .labels:last-child {
   margin-top: 3px;
+  flex-wrap: nowrap;
+}
+
+/* The run's status and handle, on one line. */
+.waiting-run-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .wait-kind {
@@ -1766,7 +1791,8 @@ table.grid td.waiting-run {
 }
 
 .wait-kind.kind-approval,
-.wait-kind.kind-parked {
+.wait-kind.kind-parked,
+.wait-kind.kind-quarantined {
   background: var(--warning-soft);
   color: var(--warning);
 }
@@ -3126,6 +3152,9 @@ table.grid tr.row-defaults > * {
 
 .view-tabs {
   align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 /* The headers of the table of runs, each a menu: the order by its column and its filters
@@ -3972,7 +4001,7 @@ table.grid.compact th {
 }
 
 .cassette,
-.mocks {
+.handlers {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3980,7 +4009,7 @@ table.grid.compact th {
   min-width: 0;
 }
 
-.mocks > .code-view {
+.handlers > .code-view {
   align-self: stretch;
 }
 
@@ -4006,7 +4035,7 @@ table.grid.compact th {
   margin-bottom: 0;
 }
 
-/* Testing: the pickers in the header of a workflow's and a test's pages */
+/* Workflows: the pickers in the header of a workflow's and a test's pages */
 
 .version-picker {
   max-width: 300px;
@@ -4040,7 +4069,7 @@ table.grid.compact th {
   margin: 0;
 }
 
-/* JSON in Testing: a line that opens a dialog, a card, the dialog */
+/* JSON in Workflows: a line that opens a dialog, a card, the dialog */
 
 .json-peek {
   display: inline-flex;
@@ -4229,7 +4258,7 @@ table.grid.compact th {
   overflow-wrap: anywhere;
 }
 
-/* Testing: the breadcrumb's switchers, the sidebar's glyphs, the suite table */
+/* Workflows: the breadcrumb's switchers, the sidebar's glyphs, the suite table */
 
 .crumbs {
   display: inline-flex;
@@ -4293,7 +4322,7 @@ table.grid.compact th {
   color: var(--accent);
 }
 
-.origin.updated {
+.origin.replaced {
   color: var(--warning);
 }
 
@@ -4472,7 +4501,7 @@ table.grid.compact th {
   max-width: 72ch;
 }
 
-.toolset-list {
+.action-set-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -4482,7 +4511,7 @@ table.grid.compact th {
   overflow: clip;
 }
 
-.toolset-list li {
+.action-set-list li {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -4490,11 +4519,11 @@ table.grid.compact th {
   border-bottom: 1px solid var(--line);
 }
 
-.toolset-list li:last-child {
+.action-set-list li:last-child {
   border-bottom: 0;
 }
 
-.toolset-line {
+.action-set-line {
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -4502,7 +4531,7 @@ table.grid.compact th {
   font-size: var(--text-body);
 }
 
-.toolset-warning {
+.action-set-warning {
   margin: 0;
   display: flex;
   align-items: center;
@@ -4926,7 +4955,7 @@ table.grid .conn-orgs {
 }
 
 /* The run's controls: a menu of its header beside "Forks" (RunControls.tsx); what was sent or
-   asked shows before it until the run's journal or summary says it arrived. */
+   asked shows before it until the run's history or summary says it arrived. */
 .control-note {
   font-size: var(--text-small);
   white-space: nowrap;
@@ -5015,7 +5044,7 @@ table.grid .conn-orgs {
   gap: 8px;
 }
 
-.attached-by {
+.used-by {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5058,11 +5087,53 @@ a.tag:hover {
   overflow-wrap: anywhere;
 }
 
-.attached-secrets {
+.used-secrets {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* A workflow's Fork dialog: the namespaces, searched first, then those found, in one box as the
+   sidebar's filters are */
+
+.namespace-picker {
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.namespace-picker-list {
+  max-height: 256px;
+  overflow-y: auto;
+}
+
+.namespace-picker-list .filter-row {
+  cursor: pointer;
+}
+
+.namespace-picker-list input[type="radio"] {
+  flex: none;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.namespace-picker-empty {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* A workflow's Pull dialog: the tests of the fork's suite that did not pass */
+
+.pull-failures {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--text-body);
 }

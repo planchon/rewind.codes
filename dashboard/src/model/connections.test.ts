@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  actionSetTitle,
   arrivedSince,
   firstMessage,
+  harnessActions,
   hostOf,
-  hostTools,
   initialChoices,
   labelsText,
   namespaceProblem,
   snapshotOf,
-  toolsetTitle,
 } from "./connections";
 import type { Connection, ConsentRequest } from "./types";
 
@@ -28,44 +28,49 @@ function connection(id: string, createdAt: string, lastUsedAt: string | null): C
   };
 }
 
-describe("hostTools", () => {
-  it("keeps the tools of no server and no built-in", () => {
+describe("harnessActions", () => {
+  it("keeps the actions of no server, no API and no built-in", () => {
     expect(
-      hostTools({
+      harnessActions({
         id: "a".repeat(64),
-        servers: [{ name: "crm", tools: 2, transport: "http" }],
-        tools: [
+        servers: [{ name: "crm", actions: 2, transport: "http" }],
+        apis: [{ name: "billing", actions: 1, baseUrl: "https://billing.example.net" }],
+        actions: [
           "ask_user",
+          "billing.charge",
           "crm.find",
           "crm.update",
           "http",
           "llm.summarize",
+          "signalUrl",
           "workflows.triage.start",
         ],
       }),
     ).toEqual(["ask_user", "llm.summarize"]);
   });
 
-  it("names a toolset by its servers and host-tool groups", () => {
+  it("names an action set by its groups", () => {
     expect(
-      toolsetTitle({
+      actionSetTitle({
         id: "b".repeat(64),
-        servers: [{ name: "slack", tools: 1, transport: "http" }],
-        tools: ["llm.summarize", "slack.post_message"],
+        servers: [{ name: "slack", actions: 1, transport: "http" }],
+        actions: ["llm.summarize", "slack.post_message"],
       }),
     ).toBe("llm, slack");
   });
 });
 
 describe("firstMessage", () => {
-  it("names the organization, the toolset and the namespace", () => {
-    const text = firstMessage({ organization: "Acme", toolset: "3f9a", namespace: "demo" });
-    expect(text.startsWith("With Rewind, org Acme, toolset 3f9a, namespace demo: ")).toBe(true);
+  it("names the organization, the action set and the namespace", () => {
+    const text = firstMessage({ organization: "Acme", actionSet: "3f9a", namespace: "demo" });
+    expect(
+      text.startsWith("With Rewind, organization Acme, action set 3f9a, namespace demo: "),
+    ).toBe(true);
   });
 
-  it("leaves out a toolset not yet registered, and falls back to demo", () => {
-    expect(firstMessage({ organization: "Acme", toolset: null, namespace: " " })).toMatch(
-      /^With Rewind, org Acme, namespace demo: /,
+  it("leaves out an action set not yet registered, and falls back to demo", () => {
+    expect(firstMessage({ organization: "Acme", actionSet: null, namespace: " " })).toMatch(
+      /^With Rewind, organization Acme, namespace demo: /,
     );
   });
 

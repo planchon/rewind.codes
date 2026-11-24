@@ -3,8 +3,9 @@
 // precedence over its handlers.
 import { http } from "msw";
 import { changeEvent } from "../mocks/changes";
+import { historyMessage } from "../mocks/handlers";
 import { eventStream } from "../mocks/run-handlers";
-import type { ControlChange, Entry, RunSummary } from "../model/types";
+import type { ControlChange, HistoryEvent, RunSummary } from "../model/types";
 import { server } from "./server";
 
 interface Open {
@@ -81,7 +82,7 @@ export function changeStream() {
     resync() {
       w.send("event: resync\ndata: {}\n\n");
     },
-    /** A change of the control plane: a script, a workflow, a secret, a namespace, a connection. */
+    /** A change of the control plane: a workflow, a secret, a namespace, a connection. */
     control(change: ControlChange) {
       w.send(changeEvent(change));
     },
@@ -90,26 +91,19 @@ export function changeStream() {
   };
 }
 
-/** A run's event stream: the entries given at once, then those the test sends. */
-export function runEvents(runId: string, entries: () => Entry[]) {
+/** A run's event stream: the events given at once, then those the test sends. */
+export function runEvents(runId: string, events: () => HistoryEvent[]) {
   const w = writer();
   server.use(
     http.get(`*/v1/runs/${runId}/events`, ({ request }) => {
       const from = Number(new URL(request.url).searchParams.get("from") ?? 0);
-      const first = entries()
-        .slice(from)
-        .map(
-          (e) => `event: entry\nid: ${e.idx}\ndata: ${JSON.stringify({ type: "entry", ...e })}\n\n`,
-        )
-        .join("");
+      const first = events().slice(from).map(historyMessage).join("");
       return w.respond(request, first || ": open\n\n");
     }),
   );
   return {
-    send(entry: Entry) {
-      w.send(
-        `event: entry\nid: ${entry.idx}\ndata: ${JSON.stringify({ type: "entry", ...entry })}\n\n`,
-      );
+    send(event: HistoryEvent) {
+      w.send(historyMessage(event));
     },
   };
 }

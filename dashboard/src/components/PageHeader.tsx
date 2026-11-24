@@ -14,7 +14,7 @@ export function PageHeader({
 }: {
   /** The page's name: its heading. */
   title: ReactNode;
-  /** What leads to the page, before its name ("Observability / a run"). */
+  /** What leads to the page, before its name ("Runs / a run"). */
   crumbs?: ReactNode;
   /** What follows its name: a status, tags. */
   meta?: ReactNode;

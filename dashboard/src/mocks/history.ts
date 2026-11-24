@@ -1,13 +1,13 @@
-// Builds journal entries as the API serves them, for the mocked API and the tests.
+// Builds the events of a run's history as the API serves them, for the mocked API and the tests.
 import type {
   AbortReason,
+  ActionFailureKind,
   CancelReason,
-  Entry,
-  JournalEvent,
+  HistoryEvent,
+  HistoryEventBody,
   LogLevel,
   Payload,
   RunMode,
-  ToolFailureKind,
 } from "../model/types";
 
 /** Above this size the API leaves a payload's value out (`PAYLOAD_VALUE_LIMIT`). */
@@ -51,17 +51,18 @@ export function payload(value: unknown, limit = PAYLOAD_VALUE_LIMIT): Payload {
 }
 
 export interface StartOptions {
-  script: string;
-  toolset: string;
+  /** The code's digest. */
+  code: string;
+  actionSet: string;
   input?: unknown;
   mode?: RunMode;
   epoch?: number;
   ttlMs?: number;
 }
 
-/** Appends entries to a journal, with a clock that moves forward with `after`. */
-export class JournalBuilder {
-  readonly entries: Entry[] = [];
+/** Appends events to a history, with a clock that moves forward with `after`. */
+export class HistoryBuilder {
+  readonly events: HistoryEvent[] = [];
   /** Every payload written, by digest, for `GET /v1/payloads/{digest}`. */
   readonly payloads = new Map<string, unknown>();
   clock: number;
@@ -76,9 +77,9 @@ export class JournalBuilder {
     return this;
   }
 
-  push(event: JournalEvent): this {
-    this.entries.push({
-      idx: this.entries.length,
+  push(event: HistoryEventBody): this {
+    this.events.push({
+      idx: this.events.length,
       recordedAt: new Date(this.clock).toISOString(),
       event,
     });
@@ -94,8 +95,8 @@ export class JournalBuilder {
   started(o: StartOptions): this {
     return this.push({
       type: "run_started",
-      script: o.script,
-      toolset: o.toolset,
+      code: o.code,
+      actionSet: o.actionSet,
       input: this.value(o.input ?? {}),
       mode: o.mode ?? "live",
       epoch: o.epoch ?? 1,
@@ -103,23 +104,23 @@ export class JournalBuilder {
     });
   }
 
-  call(seq: number, tool: string, args: unknown, line: number, column = 3): this {
+  call(seq: number, action: string, args: unknown, line: number, column = 3): this {
     return this.push({
-      type: "schedule_tool_call",
+      type: "schedule_call",
       seq,
-      tool,
+      action,
       args: this.value(args),
       callsite: { line, column },
     });
   }
 
   ok(seq: number, result: unknown): this {
-    return this.push({ type: "tool_call_completed", seq, result: this.value(result) });
+    return this.push({ type: "call_completed", seq, result: this.value(result) });
   }
 
-  fail(seq: number, kind: ToolFailureKind, message: string, data?: unknown): this {
+  fail(seq: number, kind: ActionFailureKind, message: string, data?: unknown): this {
     return this.push({
-      type: "tool_call_failed",
+      type: "call_failed",
       seq,
       error: data === undefined ? { kind, message } : { kind, message, data },
     });

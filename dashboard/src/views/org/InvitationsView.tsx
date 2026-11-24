@@ -172,7 +172,7 @@ function Invitations() {
                     </td>
                     <td className="dim">
                       {inv.inviter ? (
-                        <PrincipalName text={`user:${inv.inviter}`} names={names} />
+                        <PrincipalName text={`member:${inv.inviter}`} names={names} />
                       ) : (
                         <span className="muted">the operator</span>
                       )}

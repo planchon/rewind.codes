@@ -1,4 +1,4 @@
-// Where a run was opened from: the list of Observability its "back" returns to, with its query
+// Where a run was opened from: the list of Runs its "back" returns to, with its query
 // and filters (archi/08, "The back of a run returns to the list it was opened from"). The list
 // names itself to the links of its runs; a run opened from anywhere else goes back to every run.
 import { createContext, type ReactNode, useContext } from "react";
@@ -46,11 +46,16 @@ export function isRunName(text: string): boolean {
   return UUID.test(text) || /^[\w.:@-]+\/[\w$-]+\/[0-9a-z]{12,25}$/i.test(text);
 }
 
+/** The Runs view's paths: `/runs`, `/runs/running`, `/runs/waiting`, `/runs/failures`. */
+export function isRunsView(pathname: string): boolean {
+  return /^\/runs(\/(running|waiting|failures))?\/?$/.test(pathname);
+}
+
 /** Where a run's "back" returns, from the state its link carried. */
 export function runBackPath(state: unknown): string {
   if (state && typeof state === "object" && "from" in state) {
     const from = (state as { from: unknown }).from;
-    if (typeof from === "string" && from.startsWith("/observability")) return from;
+    if (typeof from === "string" && isRunsView(from.split("?")[0] ?? "")) return from;
   }
-  return "/observability";
+  return "/runs";
 }

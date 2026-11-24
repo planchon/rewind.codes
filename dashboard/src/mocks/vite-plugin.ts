@@ -1,6 +1,6 @@
 // `pnpm dev:mock`: the Vite dev server answers /v1 and /auth with the mocked API, so the app runs
-// unchanged, sign-in and event stream included, with no server and no service worker in the
-// build. The codes and invitation links a deployment would email are printed here.
+// unchanged, sign-in, change stream and event streams included, with no server and no service
+// worker in the build. The codes and invitation links a deployment would email are printed here.
 //
 // - by default, members sign in as with WorkOS (a code by email, or GitHub simulated);
 // - REWIND_MOCK_KEY=rewind_sk_… asks for that key instead, as a server without WorkOS;
@@ -20,6 +20,10 @@ const ACCOUNTS = `
 [mock]   any other email       sign-ups are closed: the waitlist
 [mock] "Continue with GitHub" signs in as ada@example.net.
 [mock] Namespaces: bob is above his CPU quota, chen pays for more, erin is blocked.
+[mock] Workflows: the organization's triage (v1 to v3), digest, and two unnamed ones;
+[mock]   dana's fork of triage (at v2: pull v3), alice's triage_stale_issues, chen's daily digest.
+[mock] Runs: queued, running, and waiting on a signal, a timer, a harness action, an approval,
+[mock]   a parked call and a quarantine; chen's digest goes on live.
 [mock] Connections: Ada connected Claude (Acme, Globex) and Claude Code (Acme), Grace Claude (Acme).`;
 
 export function mockApi(): Plugin {

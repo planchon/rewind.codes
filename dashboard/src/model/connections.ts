@@ -1,14 +1,14 @@
-// Pure code of the Claude pages: what an access gives, the host tools of a toolset, the first
+// Pure code of the Claude pages: what an access gives, the harness actions of an action set, the first
 // message to send Claude, whether a connection arrived while Connect Claude was open, and the
 // choices the consent starts from.
 import { shortDigest } from "./format";
 import type {
+  ActionSetSummary,
   Connection,
   ConnectionAccess,
   ConsentOrganization,
   ConsentRequest,
   ServerInfo,
-  ToolsetSummary,
 } from "./types";
 
 /** The accesses a connection may have in an organization, the least first. */
@@ -28,54 +28,60 @@ export function mcpOf(server: ServerInfo): McpInfo {
 
 /** What each access lets the connection do (archi/06, "Connections"). */
 export const ACCESS_INFO: Record<ConnectionAccess, { title: string; gives: string }> = {
-  read: { title: "Read", gives: "runs, namespaces, toolsets and workflows" },
+  read: { title: "Read", gives: "runs, namespaces, action sets and workflows" },
   run: {
     title: "Run",
-    gives: "also check, test and start scripts, signal and cancel runs",
+    gives: "also check, test and run workflows, signal and cancel runs",
   },
 };
 
-/** The built-in tools a toolset holds without naming a server: they are not host tools. */
-const BUILT_INS = new Set(["http", "webhook", "workflows"]);
+/** The built-ins an action set holds without naming a server: they are not harness actions. */
+const BUILT_INS = new Set(["http", "signalUrl", "webhook", "workflows"]);
 
 /**
- * The host tools of a toolset: its tools that belong to none of its MCP servers nor to the
- * built-ins. A toolset's summary names its tools (`github.list_issues`, `ask_user`) and its
- * servers, not their routes.
+ * The harness actions of an action set: its actions that belong to none of its MCP servers or
+ * APIs nor to the built-ins. An action set's summary names its actions (`github.list_issues`,
+ * `ask_user`), its servers and its APIs, not their routes.
  */
-export function hostTools(toolset: ToolsetSummary): string[] {
-  const servers = new Set(toolset.servers.map((s) => s.name));
-  return toolset.tools.filter((tool) => {
-    const group = tool.includes(".") ? tool.slice(0, tool.indexOf(".")) : tool;
-    return !servers.has(group) && !BUILT_INS.has(group);
+export function harnessActions(actionSet: ActionSetSummary): string[] {
+  const groups = new Set([
+    ...actionSet.servers.map((s) => s.name),
+    ...(actionSet.apis ?? []).map((a) => a.name),
+  ]);
+  return actionSet.actions.filter((action) => {
+    const group = action.includes(".") ? action.slice(0, action.indexOf(".")) : action;
+    return !groups.has(group) && !BUILT_INS.has(group);
   });
 }
 
-/** How a toolset is told apart in a list: its servers and host-tool groups, or its id. */
-export function toolsetTitle(toolset: ToolsetSummary): string {
-  const groups = new Set(toolset.servers.map((s) => s.name));
-  for (const tool of hostTools(toolset)) groups.add(tool.split(".")[0] ?? tool);
-  if (toolset.tools.some((t) => t === "http" || t.startsWith("http."))) groups.add("http");
+/** How an action set is told apart in a list: its groups, or its id. */
+export function actionSetTitle(actionSet: ActionSetSummary): string {
+  const groups = new Set([
+    ...actionSet.servers.map((s) => s.name),
+    ...(actionSet.apis ?? []).map((a) => a.name),
+  ]);
+  for (const action of harnessActions(actionSet)) groups.add(action.split(".")[0] ?? action);
+  if (actionSet.actions.some((t) => t === "http" || t.startsWith("http."))) groups.add("http");
   const names = [...groups].sort();
-  return names.length > 0 ? names.join(", ") : shortDigest(toolset.id);
+  return names.length > 0 ? names.join(", ") : shortDigest(actionSet.id);
 }
 
 export interface FirstMessage {
   organization: string;
-  /** The toolset's id, as `list_toolsets` gives it; `null` before one exists. */
-  toolset: string | null;
+  /** The action set's id, as `list_action_sets` gives it; `null` before one exists. */
+  actionSet: string | null;
   namespace: string;
 }
 
 /**
- * The first message to send Claude: it names the organization, the toolset and the namespace, so
- * that Claude asks nothing before its first call.
+ * The first message to send Claude: it names the organization, the action set and the namespace,
+ * so that Claude asks nothing before its first call.
  */
-export function firstMessage({ organization, toolset, namespace }: FirstMessage): string {
-  const parts = [`org ${organization}`];
-  if (toolset) parts.push(`toolset ${toolset}`);
+export function firstMessage({ organization, actionSet, namespace }: FirstMessage): string {
+  const parts = [`organization ${organization}`];
+  if (actionSet) parts.push(`action set ${actionSet}`);
   parts.push(`namespace ${namespace.trim() || "demo"}`);
-  return `With Rewind, ${parts.join(", ")}: show me what this toolset can do, then write a short script that uses it. Check it and test it, and run it once I agree.`;
+  return `With Rewind, ${parts.join(", ")}: show me what this action set can do, then write a short workflow that uses it. Check it and test it, and run it once I agree.`;
 }
 
 /** A namespace's name (archi/06): 1 to 128 letters, digits, `-`, `_`, `.`, `:` and `@`. */
@@ -122,7 +128,7 @@ export interface ConsentChoice {
 
 /**
  * The organization open in the dashboard is ticked in advance, with the widest access the person
- * may give there: Claude is connected to run scripts, and the person sees what is given. An
+ * may give there: Claude is connected to run workflows, and the person sees what is given. An
  * organization the person may give nothing in cannot be ticked.
  */
 export function initialChoices(request: ConsentRequest): Map<string, ConsentChoice> {

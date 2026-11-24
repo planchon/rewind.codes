@@ -46,9 +46,9 @@ export function OrganizationView() {
           ) : (
             <div className="org-card-text">
               <strong>Access</strong>
-              {access.identity.tenant && (
+              {access.identity.organizationId && (
                 <span className="muted">
-                  tenant <span className="mono">{access.identity.tenant}</span>
+                  organization <span className="mono">{access.identity.organizationId}</span>
                 </span>
               )}
             </div>
@@ -100,7 +100,7 @@ export function SectionGate({ path, children }: { path: string; children: ReactN
         <h1>{section.title}: a member's view</h1>
         <p>
           Members, invitations, connections and settings are those of an organization, seen by its
-          members once signed in. An API key reaches its tenant's roles and keys.
+          members once signed in. An API key reaches its organization's roles and keys.
         </p>
       </div>
     );

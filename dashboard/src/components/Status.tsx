@@ -1,4 +1,5 @@
-// Run statuses and call outcomes: always a mark and a word, never color alone.
+// Run statuses and call outcomes: always a mark and a word, never color alone. A waiting run's
+// status says `waiting`; what it waits for shows on hover (archi/08, "Waiting is a status").
 import {
   Ban,
   CircleCheck,
@@ -12,14 +13,27 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { EndKind } from "../model/ending";
-import type { RunStatus } from "../model/types";
+import type { RunStatus, RunWait } from "../model/types";
+import { statusDetail } from "../model/waits";
+import { useNow } from "./bits";
+import { HoverCard } from "./HoverCard";
 
-/** A run's status: a dot in the status's color, then its word (Geist's status dot). */
-export function StatusGlyph({ status, size = 10 }: { status: RunStatus; size?: number }) {
+/**
+ * A run's status: a dot in the status's color, then its word (Geist's status dot). A running run's
+ * dot breathes; a waiting run's is a ring, still: it waits on the outside world.
+ */
+export function StatusGlyph({
+  status,
+  size = 10,
+}: {
+  /** A status, or `active` for the runs of a count that have not ended. */
+  status: RunStatus | "active";
+  size?: number;
+}) {
   const d = Math.max(6, Math.min(10, size - 2));
   return (
     <span
-      className={`status-dot${status === "active" ? " live" : ""}`}
+      className={`status-dot${status === "running" ? " live" : ""}`}
       style={{ width: d, height: d }}
       aria-hidden="true"
     />
@@ -32,6 +46,44 @@ export function StatusBadge({ status, large = false }: { status: RunStatus; larg
       <StatusGlyph status={status} size={large ? 12 : 10} />
       <span className="status-word">{status}</span>
     </span>
+  );
+}
+
+/**
+ * A run's status in a table: its chip and, for a waiting run, a card on hover, focus or tap that
+ * says what it waits for (`Waiting · signal approval, times out in 2d 23h`).
+ */
+export function RunStatusChip({
+  status,
+  waitingFor,
+}: {
+  status: RunStatus;
+  waitingFor?: readonly RunWait[] | null | undefined;
+}) {
+  const waits = status === "waiting" ? (waitingFor ?? []) : [];
+  if (waits.length === 0) return <StatusBadge status={status} />;
+  return <WaitingStatus status={status} waits={waits} />;
+}
+
+function WaitingStatus({ status, waits }: { status: RunStatus; waits: readonly RunWait[] }) {
+  const now = useNow(30_000);
+  const lines = statusDetail(status, waits, now);
+  return (
+    <HoverCard
+      label="What the run waits for"
+      className="status-card"
+      trigger={
+        <button type="button" className="status-trigger" aria-label={lines.join("; ")}>
+          <StatusBadge status={status} />
+        </button>
+      }
+    >
+      <ul className="status-card-lines">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    </HoverCard>
   );
 }
 
@@ -49,23 +101,23 @@ export function QuarantineTag({ title }: { title?: string }) {
   );
 }
 
-export function MockTag() {
+export function TestRunTag() {
   return (
     <span
       className="tag info"
-      title="Mock mode: tools answered by cassettes and mocks, time is virtual"
+      title="A test run: its calls answered by a test's world, in virtual time"
     >
       <span className="glyph" aria-hidden="true">
         <FlaskConical size={11} strokeWidth={2.5} />
       </span>
-      mock
+      test run
     </span>
   );
 }
 
 export function ForkTag({ children }: { children?: ReactNode }) {
   return (
-    <span className="tag" title="A fork: started from another run with a corrected script">
+    <span className="tag" title="A fork: started from another run with corrected code">
       <span className="glyph" aria-hidden="true">
         <GitFork size={11} strokeWidth={2.5} />
       </span>

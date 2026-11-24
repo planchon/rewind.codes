@@ -171,7 +171,7 @@ describe("the change stream", () => {
     stream.send(
       [
         'event: script\ndata: {"digest":"ab"}',
-        'event: workflow\ndata: {"name":"triage","version":"cd"}',
+        'event: workflow\ndata: {"workflow":"wf_7k2m9q4x8d1c"}',
         'event: secret\ndata: {"name":"github","namespace":"alice"}',
         'event: secret\ndata: {"name":"zendesk"}',
         'event: namespace\ndata: {"name":"bob"}',
@@ -186,8 +186,7 @@ describe("the change stream", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
     expect(r.controls).toEqual([
-      { kind: "script", digest: "ab" },
-      { kind: "workflow", name: "triage", version: "cd" },
+      { kind: "workflow", workflow: "wf_7k2m9q4x8d1c" },
       { kind: "secret", name: "github", namespace: "alice" },
       { kind: "secret", name: "zendesk" },
       { kind: "namespace", name: "bob" },
@@ -195,7 +194,9 @@ describe("the change stream", () => {
       { kind: "connection", id: "conn_1" },
     ]);
     expect(r.runs).toEqual([]);
+    // A change of earlier versions, or a workflow by its name: not known.
     expect(controlChange("workflow", '{"name":"triage"}')).toBeNull();
+    expect(controlChange("script", '{"digest":"ab"}')).toBeNull();
     expect(controlChange("connection", "not json")).toBeNull();
     changes.close();
   });

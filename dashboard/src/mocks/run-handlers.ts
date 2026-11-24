@@ -4,20 +4,21 @@
 // tell, `changes.ts`), and what changes them from the outside: a signal
 // (`POST /v1/runs/{id}/signals/{name}`) and a cancellation (`POST /v1/runs/{id}/cancel`).
 //
-// A run of the world goes on by itself, its entries recorded ahead of time. A signal or a
+// A run of the world goes on by itself, its events recorded ahead of time. A signal or a
 // cancellation rewrites what is still to come: a signal the run awaits is received now and the run
 // completes a moment later; a cancellation is requested now and the run ends cancelled a moment
 // later.
 import { HttpResponse, http } from "msw";
 import { buildRunModel } from "../model/run";
-import { isEnded, type RunSummary, type Workflow } from "../model/types";
+import { isEnded, type RunSummary, type WorkflowVersion } from "../model/types";
 import type { Caller } from "./access";
 import { guard, runsWorld } from "./access-handlers";
 import { changeEvent, onChange } from "./changes";
 import type { RunFixture, World } from "./fixtures";
 import { findRun } from "./handles";
 import { problem } from "./problem";
-import { deriveRun, publicSummary, summarize, visibleEntries } from "./readmodel";
+import { deriveRun, publicSummary, summarize, visibleEvents } from "./readmodel";
+import { type MockWorkflow, workflowLabelOf } from "./workflows";
 
 /** More changes than this in one pass: `resync`, as the server's loop does at its limit. */
 const RESYNC_AT = 500;
@@ -42,17 +43,20 @@ function keyUsed(fixture: RunFixture, key: string | null): boolean {
 
 /** Drops what the run would still have done after `now`: something new happens instead. */
 function rewriteFrom(fixture: RunFixture, now: number): void {
-  const journal = fixture.journal;
-  const first = journal.entries.findIndex((e) => Date.parse(e.recordedAt) > now);
-  if (first >= 0) journal.entries.splice(first);
-  journal.clock = Math.max(now, Date.parse(journal.entries.at(-1)?.recordedAt ?? "") || now);
+  const history = fixture.history;
+  const first = history.events.findIndex((e) => Date.parse(e.recordedAt) > now);
+  if (first >= 0) history.events.splice(first);
+  history.clock = Math.max(now, Date.parse(history.events.at(-1)?.recordedAt ?? "") || now);
 }
 
-/** The latest version of the run's workflow, if it runs one. */
-function workflowOf(world: World, fixture: RunFixture): Workflow | null {
-  if (!fixture.workflow) return null;
-  const versions = world.workflows.versions.filter((v) => v.name === fixture.workflow?.name);
-  return versions.find((v) => v.version === fixture.workflow?.version) ?? versions[0] ?? null;
+/** The run's workflow, and the version it executes. */
+function versionOf(
+  world: World,
+  fixture: RunFixture,
+): { workflow: MockWorkflow; version: WorkflowVersion } | null {
+  const workflow = world.workflows.workflows.find((w) => w.id === fixture.workflow?.id);
+  const version = workflow?.versions.find((v) => v.version === fixture.workflow?.version);
+  return workflow && version ? { workflow, version } : null;
 }
 
 /** What a payload breaks of its schema, read loosely: types, required properties, enumerations. */
@@ -108,7 +112,7 @@ function controlled(world: World, request: Request, id: string): RunFixture | Re
   if (caller instanceof Response) return caller;
   const found = findRun(world, id);
   const fixture = found && runsWorld(world, caller).runs.includes(found) ? found : undefined;
-  return fixture ?? problem(404, "not-found", `No run ${id} for this tenant.`);
+  return fixture ?? problem(404, "not-found", `No run ${id} in this organization.`);
 }
 
 export function runHandlers(world: World, now: () => number, changesMs: number) {
@@ -123,35 +127,38 @@ export function runHandlers(world: World, now: () => number, changesMs: number) 
         return problem(409, "run-ended", `The run ${run.id} has ended (${run.status}).`);
       const body = readBody(await request.text());
       if (body instanceof Response) return body;
-      const workflow = workflowOf(world, fixture);
-      if (workflow) {
-        const declared = Object.keys(workflow.signals);
+      // A version with an interface declares its signals; one without takes any name.
+      const ran = versionOf(world, fixture);
+      const signals = ran?.version.signals as Record<string, unknown> | null | undefined;
+      if (ran && signals) {
+        const which = `${workflowLabelOf(ran.workflow)} v${ran.version.version}`;
+        const declared = Object.keys(signals);
         if (!declared.includes(name))
           return problem(
             422,
             "invalid-signal",
-            `The workflow ${workflow.name} declares no signal "${name}": it declares ${declared.join(", ") || "none"}.`,
+            `The workflow ${which} declares no signal "${name}": it declares ${declared.join(", ") || "none"}.`,
           );
-        const fault = schemaFault(workflow.signals[name], body.value);
+        const fault = schemaFault(signals[name], body.value);
         if (fault)
           return problem(
             422,
             "invalid-signal",
-            `The payload of "${name}" does not match the schema the workflow ${workflow.name} declares: ${fault}.`,
+            `The payload of "${name}" does not match the schema the workflow ${which} declares: ${fault}.`,
           );
       }
       const duplicate = keyUsed(fixture, request.headers.get("Idempotency-Key"));
       if (!duplicate) {
-        const model = buildRunModel(visibleEntries(fixture, at));
+        const model = buildRunModel(visibleEvents(fixture, at));
         const wait = model.signals.find((s) => s.name === name && s.end === null);
         rewriteFrom(fixture, at);
-        const journal = fixture.journal;
-        journal.signal(name, body.value);
+        const history = fixture.history;
+        history.signal(name, body.value);
         if (wait) {
-          if (wait.timeoutSeq !== null) journal.cancelTimer(wait.timeoutSeq);
-          journal.after(1_500).complete({ received: name });
+          if (wait.timeoutSeq !== null) history.cancelTimer(wait.timeoutSeq);
+          history.after(1_500).complete({ received: name });
         }
-        for (const [digest, value] of journal.payloads) world.payloads.set(digest, value);
+        for (const [digest, value] of history.payloads) world.payloads.set(digest, value);
       }
       return HttpResponse.json({ runId: fixture.id, name, duplicate }, { status: 202 });
     }),
@@ -167,7 +174,7 @@ export function runHandlers(world: World, now: () => number, changesMs: number) 
       if (!cancelling.has(fixture)) {
         cancelling.add(fixture);
         rewriteFrom(fixture, at);
-        fixture.journal
+        fixture.history
           .cancelRequested("requested", "Cancelled from the dashboard")
           .after(800)
           .failRun("CancelledError", "The run was cancelled: Cancelled from the dashboard");
@@ -193,12 +200,12 @@ function changeStream(
 ): Response {
   const runs = runsWorld(world, caller).runs;
   const last = new Map<string, string>();
-  /** How many entries each run showed at the last pass: a summary changes with its journal. */
+  /** How many events each run showed at the last pass: a summary changes with its history. */
   const seen = new Map<string, number>();
   /** The runs that ended: nothing changes them any more. */
   const done = new Set<string>();
   const ended = (fixture: RunFixture, at: number) => {
-    const type = visibleEntries(fixture, at).at(-1)?.event.type;
+    const type = visibleEvents(fixture, at).at(-1)?.event.type;
     return type === "complete_run" || type === "fail_run" || type === "run_aborted";
   };
   const pass = (): RunSummary[] => {
@@ -206,7 +213,7 @@ function changeStream(
     const at = now();
     for (const fixture of runs) {
       if (done.has(fixture.id)) continue;
-      const length = visibleEntries(fixture, at).length;
+      const length = visibleEvents(fixture, at).length;
       if (length === 0 || seen.get(fixture.id) === length) continue;
       seen.set(fixture.id, length);
       if (!opened && ended(fixture, at)) {

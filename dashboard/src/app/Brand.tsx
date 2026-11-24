@@ -1,7 +1,7 @@
 // The brand of the gate pages, and the marks of the account menus.
 import { useState } from "react";
 import { displayName, initials } from "../model/access";
-import type { User } from "../model/types";
+import type { Person } from "../model/types";
 
 /** Rewind's mark: the rewind glyph, in the text's color (green says "completed" only). */
 export function Mark({ size = 16 }: { size?: number }) {
@@ -42,7 +42,7 @@ export function GithubMark({ size = 14 }: { size?: number }) {
  * person's own (GitHub's avatar): it is asked for without a referrer, and the initials stand in
  * when it cannot be loaded.
  */
-export function Avatar({ user, size = 22 }: { user: User; size?: number }) {
+export function Avatar({ user, size = 22 }: { user: Person; size?: number }) {
   const [failed, setFailed] = useState(false);
   const style = { width: size, height: size, fontSize: Math.round(size * 0.42) };
   return (

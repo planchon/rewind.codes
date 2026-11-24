@@ -1,15 +1,15 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { SCRIPTS, WORKFLOWS } from "../../mocks/fixtures";
+import { WORKFLOWS } from "../../mocks/fixtures";
 import { renderApp, search, signedIn } from "../../test/app";
 
-const v2 = WORKFLOWS.triage.version;
-const v2Ref = "triage v2";
+const triage = WORKFLOWS.triage;
+const page = `/workflows/${triage}`;
 
-/** The rows of the suite table, each as its text. */
-async function suiteRows(): Promise<string[]> {
-  const table = await screen.findByRole("table", { name: "Suite of triage" });
+/** The rows of the suite table of version `n` of triage, each as its text. */
+async function suiteRows(n: number): Promise<string[]> {
+  const table = await screen.findByRole("table", { name: `Suite of triage v${n}` });
   await waitFor(() => expect(within(table).queryByText("Loading…")).toBeNull());
   return within(table)
     .getAllByRole("row")
@@ -17,7 +17,7 @@ async function suiteRows(): Promise<string[]> {
     .map((row) => row.textContent ?? "");
 }
 
-/** The tests of the suite in Testing's sidebar. */
+/** The tests of the suite in the workflow's sidebar. */
 function sidebarTests(): string[] {
   const nav = screen.getByRole("navigation", { name: "Tests" });
   return within(nav)
@@ -25,84 +25,35 @@ function sidebarTests(): string[] {
     .map((a) => a.textContent ?? "");
 }
 
-describe("TestingView", () => {
-  it("lists each workflow with its latest version and the size of its suite", async () => {
-    renderApp("/testing");
-    expect(await screen.findByRole("heading", { name: "Testing" })).toBeInTheDocument();
-    const table = await screen.findByRole("table");
-    const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows.map((r) => within(r).getAllByRole("link")[0]?.textContent)).toEqual([
-      "digest",
-      "triage",
-    ]);
-    const triage = within(rows[1] as HTMLElement);
-    expect(triage.getByRole("link", { name: "triage" })).toHaveAttribute("href", "/testing/triage");
-    expect(
-      triage.getByText("Triage the stale issues of a repository, after approval."),
-    ).toBeVisible();
-    // The third version: two inherited tests and two recorded ones.
-    expect(triage.getByText("4")).toBeInTheDocument();
-  });
-
-  it("is in the sidebar as Testing, next to Scripts", async () => {
-    renderApp("/scripts");
-    const nav = await screen.findByRole("navigation", { name: "Views" });
-    const labels = within(nav)
-      .getAllByRole("link")
-      .map((a) => a.textContent);
-    expect(labels).not.toContain("Workflows");
-    expect(labels.indexOf("Testing")).toBe(labels.indexOf("Scripts") + 1);
-  });
-
-  it("has a sidebar of its own, with the workflows", async () => {
-    renderApp("/testing");
-    const pane = await screen.findByRole("region", { name: "Testing" });
-    const workflows = within(pane).getByRole("navigation", { name: "Workflows" });
-    await waitFor(() =>
-      expect(
-        within(workflows)
-          .getAllByRole("link")
-          .map((a) => a.textContent),
-      ).toEqual(["digest1", "triage4"]),
-    );
-  });
-
-  it("shows only the workflows carrying the labels a grant is limited to", async () => {
-    renderApp("/testing", { world: signedIn("alan@example.net", "org_01ACME") });
-    const table = await screen.findByRole("table");
-    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
-    expect(within(table).getByRole("link", { name: "triage" })).toBeInTheDocument();
-  });
-
-  it("is refused without toolsets:read", async () => {
-    renderApp("/testing", { world: signedIn("linus@example.net", "org_01ACME") });
-    expect(
-      await screen.findByText(/You cannot see the workflows and their tests/),
-    ).toBeInTheDocument();
-    expect(screen.getByText("toolsets:read")).toBeInTheDocument();
-  });
-});
-
 describe("WorkflowView", () => {
-  it("shows the latest version, its interface and its suite as a table", async () => {
-    renderApp("/testing/triage");
+  it("shows the latest version: its code, its interface and its suite as a table", async () => {
+    renderApp(page);
     const title = await screen.findByRole("heading", { level: 1 });
     await within(title).findByText("latest");
-    expect(await suiteRows()).toEqual([
+    expect(title).toHaveTextContent("v3");
+    expect(await screen.findByRole("region", { name: "Code" })).toHaveTextContent(
+      /workflow\.ts · \d+ lines/,
+    );
+    expect(await suiteRows(3)).toEqual([
       expect.stringMatching(/^closes nothing without approvalinherited/),
       expect.stringMatching(/^closes the open issues once approvedinherited/),
       expect.stringMatching(/^recorded [0-9a-f-]{36}added recorded\{"repo"/),
       expect.stringMatching(/^recorded [0-9a-f-]{36}added recorded You cannot read this test/),
     ]);
-    const table = screen.getByRole("table", { name: "Suite of triage" });
+    const table = screen.getByRole("table", { name: "Suite of triage v3" });
     // Each test's input, and the output it expects, open in a dialog.
     expect(within(table).getAllByRole("button", { name: /: input$/ }).length).toBeGreaterThan(0);
     const recorded = within(table).getAllByRole("link", { name: "recorded" })[0];
     expect(recorded?.getAttribute("href")).toMatch(/^\/runs\/[0-9a-f-]{36}$/);
-    // A recorded test the caller may not read says so in its row.
-    expect(within(table).getByText(/You cannot read this test/)).toBeInTheDocument();
 
-    // Its suite and its details in the sidebar.
+    // Its versions, its suite and its details in its own sidebar.
+    const pane = screen.getByRole("region", { name: "triage" });
+    const versions = within(pane).getByRole("navigation", { name: "Versions" });
+    expect(
+      within(versions)
+        .getAllByRole("link")
+        .map((a) => a.textContent),
+    ).toEqual(["v3 latest4", "v22", "v13"]);
     expect(sidebarTests()).toEqual([
       "All its tests4",
       "closes nothing without approval",
@@ -111,15 +62,16 @@ describe("WorkflowView", () => {
       expect.stringMatching(/^recorded /),
     ]);
     const details = screen.getByRole("region", { name: "Details" });
-    expect(within(details).getByRole("link", { name: v2.slice(0, 12) })).toHaveAttribute(
+    expect(within(details).getByText("Organization")).toBeInTheDocument();
+    expect(within(details).getByRole("link", { name: "v2" })).toHaveAttribute(
       "href",
-      `/testing/triage?version=${v2}`,
+      `${page}?version=2`,
     );
   });
 
   it("opens a schema of its interface in a dialog, colored", async () => {
     const user = userEvent.setup();
-    renderApp("/testing/triage");
+    renderApp(page);
     const iface = await screen.findByRole("region", { name: "Interface" });
     await user.click(within(iface).getByRole("button", { name: /input schema$/ }));
     const dialog = await screen.findByRole("dialog");
@@ -128,24 +80,24 @@ describe("WorkflowView", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("picks another version in the breadcrumb, with its updated and retired tests", async () => {
+  it("picks another version in the breadcrumb, with its replaced and retired tests", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp("/testing/triage");
+    const { router } = renderApp(page);
     await user.click(await screen.findByTitle("Version: pick another"));
     const versions = await screen.findAllByRole("menuitem");
     expect(versions.map((v) => v.textContent)).toEqual([
-      expect.stringMatching(/^[0-9a-f]{12}latest · 4 tests$/),
-      `${v2.slice(0, 12)}2 tests`,
-      expect.stringMatching(/^[0-9a-f]{12}3 tests$/),
+      "v3latest · 4 tests",
+      "v22 tests",
+      "v13 tests",
     ]);
     await user.click(versions[1] as HTMLElement);
-    await waitFor(() => expect(search(router).get("version")).toBe(v2));
+    await waitFor(() => expect(search(router).get("version")).toBe("2"));
 
-    const rows = await suiteRows();
+    const rows = await suiteRows(2);
     expect(rows[0]).toMatch(/^closes nothing without approvalinherited/);
     expect(rows[1]).toMatch(/^closes the open issues once approvedreplaces [0-9a-f]{12}/);
     expect(rows[1]).toContain("Why: only the issues untouched for 30 days are stale");
-    const retired = screen.getByRole("table", { name: "Retired from the suite of triage" });
+    const retired = screen.getByRole("table", { name: "Retired from the suite of triage v2" });
     expect(within(retired).getByText("lists the closed issues too")).toBeInTheDocument();
     expect(
       within(retired).getByText(/the workflow never reads closed issues any more/),
@@ -154,15 +106,17 @@ describe("WorkflowView", () => {
 
   it("opens a test on its own page, in the suite of the version shown", async () => {
     const user = userEvent.setup();
-    const { router } = renderApp(`/testing/triage?version=${v2}`);
-    const table = await screen.findByRole("table", { name: "Suite of triage" });
+    const { router } = renderApp(`${page}?version=2`);
+    const table = await screen.findByRole("table", { name: "Suite of triage v2" });
     await user.click(
       within(table).getByRole("link", { name: "closes the open issues once approved" }),
     );
     await waitFor(() =>
-      expect(router.state.location.pathname).toMatch(/^\/testing\/triage\/tests\/[0-9a-f]+$/),
+      expect(router.state.location.pathname).toMatch(
+        new RegExp(`^/workflows/${triage}/tests/[0-9a-f]+$`),
+      ),
     );
-    expect(search(router).get("version")).toBe(v2);
+    expect(search(router).get("version")).toBe("2");
     expect(
       await screen.findByRole("heading", {
         level: 1,
@@ -171,9 +125,142 @@ describe("WorkflowView", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a workflow without a name by its short id, in its namespace", async () => {
+    renderApp(`/workflows/${WORKFLOWS.chenDigest}`);
+    const pane = await screen.findByRole("region", {
+      name: `wf-${WORKFLOWS.chenDigest.slice(3, 9)}`,
+    });
+    const details = within(pane).getByRole("region", { name: "Details" });
+    expect(await within(details).findByText("Chen Logistics")).toBeInTheDocument();
+    expect(await screen.findByText("No test: this version's suite is empty.")).toBeVisible();
+    // No interface: it accepts any input, output and signal.
+    expect(screen.queryByRole("region", { name: "Interface" })).toBeNull();
+  });
+
+  it("names its page by its id and its version's number, from a link by name and digest", async () => {
+    const first = renderApp(`${page}?version=2`);
+    await screen.findByRole("table", { name: "Suite of triage v2" });
+    const v2 = first.world.workflows.workflows.find((w) => w.id === triage)?.versions[1]?.digest;
+    first.unmount();
+    // Testing's link named the workflow by its name, the version by its digest.
+    const { router, requested } = renderApp(`/testing/triage?version=${v2}`);
+    await waitFor(() => expect(router.state.location.pathname).toBe(page));
+    await waitFor(() => expect(search(router).get("version")).toBe("2"));
+    expect(requested("/v1/workflows/triage").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("table", { name: "Suite of triage v2" })).toBeVisible();
+  });
+
   it("answers a workflow that does not exist", async () => {
-    renderApp("/testing/nope");
-    expect(await screen.findByText("The workflow nope could not be read")).toBeInTheDocument();
+    renderApp("/workflows/nope");
+    expect(await screen.findByText("nope could not be read")).toBeInTheDocument();
+  });
+
+  it("is refused without runs:read", async () => {
+    renderApp(page, { world: signedIn("linus@example.net", "org_01ACME") });
+    expect(await screen.findByText(/runs:read/)).toBeInTheDocument();
+  });
+});
+
+describe("a workflow's controls", () => {
+  it("names and describes it, and says a name its scope has under the field", async () => {
+    const user = userEvent.setup();
+    const { callsTo } = renderApp(`/workflows/${WORKFLOWS.forecast}`);
+    const title = await screen.findByRole("region", {
+      name: "One-shot lookup started by the support agent.",
+    });
+    expect(title).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const form = await screen.findByRole("form", { name: "Name and description" });
+    const name = within(form).getByLabelText("Name");
+    await user.type(name, "digest");
+    await user.click(within(form).getByRole("button", { name: "Save" }));
+    expect(await within(form).findByText(/already has a workflow named digest/)).toHaveClass(
+      "tone-critical",
+    );
+    await user.clear(name);
+    await user.type(name, "weather");
+    await user.type(within(form).getByLabelText("Description"), "The forecast for a city.");
+    await user.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("form", { name: "Name and description" })).toBeNull(),
+    );
+    const patches = callsTo(`/v1/workflows/${WORKFLOWS.forecast}`, "PATCH");
+    expect(JSON.parse((await patches.at(-1)?.body) ?? "")).toEqual({
+      name: "weather",
+      description: "The forecast for a city.",
+    });
+    // The page and its sidebar show its name at once.
+    expect(await screen.findByRole("region", { name: "weather" })).toBeInTheDocument();
+  });
+
+  it("promotes a namespace's workflow to the organization", async () => {
+    const user = userEvent.setup();
+    renderApp(`/workflows/${WORKFLOWS.staleIssues}`);
+    const details = await screen.findByRole("region", { name: "Details" });
+    expect(within(details).getByText("alice")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Promote" }));
+    const form = await screen.findByRole("form", { name: "Promote triage_stale_issues?" });
+    await user.click(within(form).getByRole("button", { name: "Promote" }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Details" })).getByText("Organization"),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Fork" })).toBeInTheDocument();
+  });
+
+  it("forks an organization's workflow into a namespace picked in the dialog", async () => {
+    const user = userEvent.setup();
+    const { router, callsTo } = renderApp(`/workflows/${WORKFLOWS.digest}`);
+    await screen.findByRole("table", { name: "Suite of digest v1" });
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Fork" }));
+    const form = await screen.findByRole("form", { name: "Fork digest" });
+    expect(within(form).getByRole("button", { name: "Fork" })).toBeDisabled();
+    await user.type(within(form).getByRole("textbox", { name: "Find a namespace" }), "bo");
+    await user.click(await within(form).findByRole("radio", { name: /^bob/ }));
+    await user.click(within(form).getByRole("button", { name: "Fork" }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).not.toBe(`/workflows/${WORKFLOWS.digest}`),
+    );
+    const [post] = callsTo(`/v1/workflows/${WORKFLOWS.digest}/fork`, "POST");
+    expect(post?.headers.get("Rewind-Namespace")).toBe("bob");
+    // The fork, in bob's namespace, says its source.
+    expect(await screen.findByRole("link", { name: "digest v1" })).toHaveAttribute(
+      "href",
+      `/workflows/${WORKFLOWS.digest}?version=1`,
+    );
+    const details = screen.getByRole("region", { name: "Details" });
+    expect(within(details).getByText("bob")).toBeInTheDocument();
+  });
+
+  it("pulls into a fork its source's latest version", async () => {
+    const user = userEvent.setup();
+    renderApp(`/workflows/${WORKFLOWS.triageFork}`);
+    expect(await screen.findByRole("link", { name: "triage v2" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Pull v3" }));
+    const form = await screen.findByRole("form", { name: "Pull triage v3?" });
+    expect(form).toHaveTextContent("becomes this fork's next version once its own suite passes");
+    await user.click(within(form).getByRole("button", { name: "Pull" }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Details" })).getByRole("link", {
+          name: "triage v3",
+        }),
+      ).toBeInTheDocument(),
+    );
+    const title = screen.getByRole("heading", { level: 1 });
+    await waitFor(() => expect(title).toHaveTextContent("v2"));
+    expect(screen.queryByRole("button", { name: /^Pull/ })).toBeNull();
+  });
+
+  it("shows no control without workflows:write", async () => {
+    renderApp(page, { world: signedIn("alan@example.net", "org_01ACME") });
+    await screen.findByRole("table", { name: "Suite of triage v3" });
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
   });
 });
 
@@ -181,8 +268,8 @@ describe("TestView", () => {
   /** The page of the test at `index` of v2's suite, opened from the sidebar. */
   async function openTest(index: number) {
     const user = userEvent.setup();
-    const app = renderApp(`/testing/triage?version=${v2}`);
-    await screen.findByRole("table", { name: "Suite of triage" });
+    const app = renderApp(`${page}?version=2`);
+    await screen.findByRole("table", { name: "Suite of triage v2" });
     const nav = screen.getByRole("navigation", { name: "Tests" });
     await user.click(within(nav).getAllByRole("link")[index + 1] as HTMLElement);
     await screen.findByRole("region", { name: /^Test / });
@@ -196,14 +283,14 @@ describe("TestView", () => {
     const output = within(test).getByRole("region", { name: "Expected output" });
     expect(within(output).getByText('"closed":')).toHaveClass("j-key");
 
-    const rules = within(test).getByRole("table", { name: "Tool rules" });
+    const rules = within(test).getByRole("table", { name: "Rules" });
     expect(within(rules).getByText("github.list_issues")).toBeInTheDocument();
     expect(within(rules).getByText("rate limited")).toBeInTheDocument();
     expect(within(rules).getByText("unavailable")).toBeInTheDocument();
     expect(within(rules).getByText("1 call")).toBeInTheDocument();
 
     const signals = within(test).getByRole("region", { name: "Signals" });
-    expect(within(signals).getByText("once the run is blocked")).toBeInTheDocument();
+    expect(within(signals).getByText("once the run waits")).toBeInTheDocument();
     expect(within(signals).getByText("after 2h")).toBeInTheDocument();
 
     const expectations = within(test).getByRole("region", { name: "Expectations" });
@@ -239,14 +326,13 @@ describe("TestView", () => {
 
   it("says where the test stands in the suite, and why it changed", async () => {
     const { user, router } = await openTest(1);
-    expect(screen.getByText("Test 2 of 3 of", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/test 2 of 3 in the suite of/)).toBeInTheDocument();
     expect(screen.getByText(/Why: only the issues untouched for 30 days are stale/)).toBeVisible();
 
-    // The parent's test it replaced opens in the suite of the parent.
-    await user.click(screen.getByTitle("The parent's test"));
-    await waitFor(() => expect(search(router).get("version")).not.toBe(v2));
-    expect(await screen.findByText("Test 2 of 3 of", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("in the suite of", { exact: false })).toBeInTheDocument();
+    // The base's test it replaced opens in the suite of the base.
+    await user.click(screen.getByTitle("The test of the same name in v1"));
+    await waitFor(() => expect(search(router).get("version")).toBe("1"));
+    expect(await screen.findByText(/test 2 of 3 in the suite of/)).toBeInTheDocument();
   });
 
   it("goes to another test by the breadcrumb, or to the previous and next ones", async () => {
@@ -285,7 +371,7 @@ describe("TestView", () => {
 
     await user.click(screen.getByRole("button", { name: "Previous test" }));
     await waitFor(() => expect(path()).toBe(second));
-    expect(search(router).get("version")).toBe(v2);
+    expect(search(router).get("version")).toBe("2");
   });
 
   it("keeps the test of the same name when another version is picked", async () => {
@@ -293,30 +379,30 @@ describe("TestView", () => {
     await user.click(screen.getByTitle("Version: pick another"));
     const latest = (await screen.findAllByRole("menuitem"))[0] as HTMLElement;
     await user.click(latest);
-    await waitFor(() => expect(search(router).get("version")).not.toBe(v2));
-    expect(router.state.location.pathname).toMatch(/^\/testing\/triage\/tests\//);
+    await waitFor(() => expect(search(router).get("version")).toBeNull());
+    expect(router.state.location.pathname).toMatch(new RegExp(`^/workflows/${triage}/tests/`));
     expect(
       await screen.findByRole("heading", {
         level: 1,
         name: "closes the open issues once approved",
       }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Test 2 of 4 of", { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText(/test 2 of 4 in the suite of/)).toBeInTheDocument();
 
     // A recorded test, which the second version does not have: picking it leads to the version.
     await user.click(screen.getByRole("button", { name: "Next test" }));
     await user.click(screen.getByRole("button", { name: "Next test" }));
-    expect(await screen.findByText("Test 4 of 4 of", { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText(/test 4 of 4 in the suite of/)).toBeInTheDocument();
     await user.click(screen.getByTitle("Version: pick another"));
     await user.click((await screen.findAllByRole("menuitem"))[1] as HTMLElement);
-    await waitFor(() => expect(router.state.location.pathname).toBe("/testing/triage"));
-    expect(search(router).get("version")).toBe(v2);
+    await waitFor(() => expect(router.state.location.pathname).toBe(page));
+    expect(search(router).get("version")).toBe("2");
   });
 
   it("shows a recorded test with its cassette and the run it comes from", async () => {
     const user = userEvent.setup();
-    const { requested } = renderApp("/testing/triage");
-    await screen.findByRole("table", { name: "Suite of triage" });
+    const { requested } = renderApp(page);
+    await screen.findByRole("table", { name: "Suite of triage v3" });
     const nav = screen.getByRole("navigation", { name: "Tests" });
     const recorded = within(nav).getAllByRole("link", { name: /^recorded / })[0] as HTMLElement;
     const runId = (recorded.textContent ?? "").replace("recorded ", "");
@@ -324,7 +410,7 @@ describe("TestView", () => {
     const test = await screen.findByRole("region", { name: `Test recorded ${runId}` });
     const cassette = await within(test).findByLabelText("Cassette");
     expect(
-      within(cassette).getByText(/3 calls and 1 signal recorded, matched by tool and args/),
+      within(cassette).getByText(/3 calls and 1 signal recorded, matched by action and args/),
     ).toBeInTheDocument();
     expect(within(cassette).getByText("github.close_issue ×2")).toBeInTheDocument();
     await user.click(within(cassette).getByRole("button", { name: "Open the cassette" }));
@@ -337,15 +423,16 @@ describe("TestView", () => {
       .getAllByRole("link")
       .map((a) => a.getAttribute("href"));
     expect(links).toContain(`/runs/${runId}`);
-    expect(links).toContain(`/testing/triage?version=${v2}`);
+    expect(links).toContain(`${page}?version=2`);
+    expect(within(test).getByText("triage v2")).toBeInTheDocument();
     expect(within(test).getByText("alice")).toBeInTheDocument();
     expect(requested("/v1/runs")).toEqual([]);
   });
 
   it("says plainly when a recorded test cannot be read, and keeps the page", async () => {
     const user = userEvent.setup();
-    renderApp("/testing/triage");
-    await screen.findByRole("table", { name: "Suite of triage" });
+    renderApp(page);
+    await screen.findByRole("table", { name: "Suite of triage v3" });
     const nav = screen.getByRole("navigation", { name: "Tests" });
     await user.click(within(nav).getAllByRole("link", { name: /^recorded / })[1] as HTMLElement);
     expect(await screen.findByText("You cannot read this test")).toBeInTheDocument();
@@ -355,32 +442,18 @@ describe("TestView", () => {
   });
 
   it("says when the test is not in the suite of the version named", async () => {
-    const { router } = renderApp(`/testing/triage?version=${v2}`);
-    await screen.findByRole("table", { name: "Suite of triage" });
-    await router.navigate(`/testing/triage/tests/${"0".repeat(64)}?version=${v2}`);
+    const { router } = renderApp(`${page}?version=2`);
+    await screen.findByRole("table", { name: "Suite of triage v2" });
+    await router.navigate(`${page}/tests/${"0".repeat(64)}?version=2`);
     expect(await screen.findByText(/This test is not in the suite of/)).toHaveTextContent(
-      `This test is not in the suite of ${v2Ref}.`,
+      "This test is not in the suite of triage v2.",
     );
   });
-});
 
-describe("ScriptView", () => {
-  it("shows the suite of the workflow versions the script belongs to", async () => {
-    const { requested } = renderApp(`/scripts/${SCRIPTS.TRIAGE_REPO.digest}`);
-    const section = await screen.findByRole("region", { name: "Tests of this script" });
-    const suite = await within(section).findByRole("region", { name: /^Suite of triage v/ });
-    expect(await within(suite).findByText("latest")).toBeInTheDocument();
-    expect(within(suite).getByText(/also the script of 2 older versions/)).toBeInTheDocument();
-    expect(await within(suite).findByRole("table", { name: "Suite of triage" })).toBeVisible();
-    expect(
-      requested("/v1/workflows").some(
-        (u) => u.searchParams.get("script") === SCRIPTS.TRIAGE_REPO.digest,
-      ),
-    ).toBe(true);
-  });
-
-  it("says a script no workflow version has keeps no tests", async () => {
-    renderApp(`/scripts/${SCRIPTS.FORECAST.digest}`);
-    expect(await screen.findByText(/No workflow version has this script/)).toBeInTheDocument();
+  it("opens from an old link of Testing", async () => {
+    const { router } = renderApp(`/testing/triage/tests/${"0".repeat(64)}`);
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(`${page}/tests/${"0".repeat(64)}`),
+    );
   });
 });

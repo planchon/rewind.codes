@@ -14,8 +14,9 @@ export const STACK_ORDER: readonly RunStatus[] = [
   "failed",
   "aborted",
   "cancelled",
-  "active",
-  "pending",
+  "waiting",
+  "running",
+  "queued",
 ];
 
 export interface StackedBucket {
@@ -151,7 +152,7 @@ export function StackedBars({
           {present.map((s) => (
             <span key={s} className={`status ${s}`}>
               <StatusGlyph status={s} size={11} />
-              {s === "active" ? "still active" : s}
+              {s}
             </span>
           ))}
         </figcaption>

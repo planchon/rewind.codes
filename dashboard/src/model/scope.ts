@@ -1,5 +1,5 @@
 // The scope of the statistics (archi/05, "Statistics"): the routes that answer from the hourly
-// counters (`GET /v1/runs/stats`, `/v1/runs/failures`, `/v1/scripts`, `/v1/tools/stats`) take
+// counters (`GET /v1/runs/stats`, `/v1/runs/failures`, `/v1/workflows`, `/v1/actions/stats`) take
 // the tenant, or one namespace named by a single `namespace:` term of one value, and refuse any
 // other term (`invalid-query`). A view's query is cut down to that term before it is sent; its
 // other terms filter the runs its marks open.
@@ -14,11 +14,11 @@ export function waitingRuns(waiting: WaitCounts): number {
   return (
     waiting.signal +
     waiting.timer +
-    waiting.call +
-    waiting.host +
+    waiting.harness +
     waiting.approval +
+    waiting.deferred +
     waiting.parked +
-    waiting.deferred
+    waiting.quarantined
   );
 }
 

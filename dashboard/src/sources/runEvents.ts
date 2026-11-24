@@ -1,23 +1,23 @@
-// Follows a run's journal through `GET /v1/runs/{id}/events?follow=1` (server-sent events).
+// Follows a run's history through `GET /v1/runs/{id}/events?follow=1` (server-sent events).
 // `EventSource` cannot send the Authorization header, so the stream is read with `fetch` and
-// parsed with eventsource-parser. A dropped stream is resumed from the next entry, with the
+// parsed with eventsource-parser. A dropped stream is resumed from the next event, with the
 // current token: the server closes a stream opened with an access token when the token expires.
 import { createParser } from "eventsource-parser";
-import type { Entry, RunStatus, StreamEvent } from "../model/types";
+import type { HistoryEvent, RunStatus, StreamMessage } from "../model/types";
 import { type Api, ApiError } from "./client";
 
 export type StreamState = "connecting" | "live" | "retrying";
 
 export interface FollowHandlers {
-  /** New entries, in index order, once per chunk received. */
-  onEntries(entries: Entry[]): void;
+  /** New events, in the order of their position, once per chunk received. */
+  onEvents(events: HistoryEvent[]): void;
   /** The run has ended: the stream is over. */
   onEnd(status: RunStatus): void;
   onState?(state: StreamState, error?: unknown): void;
 }
 
 export interface FollowOptions {
-  /** The first entry to read. */
+  /** The position of the first event to read. */
   from?: number;
   /** Waits between reconnections, the last one repeated. */
   backoffMs?: readonly number[];
@@ -43,7 +43,7 @@ function isFatal(error: unknown): boolean {
 }
 
 /**
- * Reads the run's entries from `from`, then each new one as it is committed, until the run ends
+ * Reads the run's events from `from`, then each new one as it is committed, until the run ends
  * or `signal` aborts. Resolves when the stream is over; rejects only on a fatal error.
  */
 export async function followRun(
@@ -68,20 +68,20 @@ export async function followRun(
       handlers.onState?.("live");
 
       let ended: RunStatus | null = null;
-      let batch: Entry[] = [];
+      let batch: HistoryEvent[] = [];
       const parser = createParser({
         onEvent(message) {
           if (ended !== null) return;
-          const data = JSON.parse(message.data) as StreamEvent;
+          const data = JSON.parse(message.data) as StreamMessage;
           if (data.type === "end") {
             ended = data.status;
             return;
           }
-          const { type: _type, ...entry } = data;
+          const { type: _type, ...event } = data;
           // A reconnection may send again what was already read.
-          if (entry.idx < next) return;
-          next = entry.idx + 1;
-          batch.push(entry);
+          if (event.idx < next) return;
+          next = event.idx + 1;
+          batch.push(event);
         },
       });
       const reader = response.body.getReader();
@@ -92,7 +92,7 @@ export async function followRun(
           if (done) break;
           parser.feed(decoder.decode(value, { stream: true }));
           if (batch.length > 0) {
-            handlers.onEntries(batch);
+            handlers.onEvents(batch);
             batch = [];
             attempt = 0;
           }
@@ -105,7 +105,7 @@ export async function followRun(
         return;
       }
       // The server closed the stream before the end of the run: at the expiry of the access
-      // token it was opened with, or a proxy's timeout. Reconnect from the next entry, with the
+      // token it was opened with, or a proxy's timeout. Reconnect from the next event, with the
       // token the session holds now, after the shortest wait.
       attempt = 0;
     } catch (error) {

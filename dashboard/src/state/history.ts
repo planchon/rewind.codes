@@ -1,18 +1,18 @@
-// A run's journal, read from its event stream (`sources/runEvents.ts`) into a collection of its
-// entries, by index, and kept up to date while the run goes on. Entries are applied at most every
-// 80 ms, so a long history loads in a few renders. A journal kept after its page closed shows at
-// once when the page opens again, and its stream resumes from the next entry.
-import type { Entry, RunStatus } from "../model/types";
+// A run's history, read from its event stream (`sources/runEvents.ts`) into a collection of its
+// events, by position, and kept up to date while the run goes on. Events are applied at most every
+// 80 ms, so a long history loads in a few renders. A history kept after its page closed shows at
+// once when the page opens again, and its stream resumes from the next event.
+import type { HistoryEvent, RunStatus } from "../model/types";
 import { followRun, type StreamState } from "../sources/runEvents";
 import { type WritableCollection, writableCollection } from "./collections";
 import { Kept } from "./kept";
 import type { Store } from "./store";
 
-export type JournalState = StreamState | "ended" | "error";
+export type HistoryState = StreamState | "ended" | "error";
 
-export interface JournalSnapshot {
-  entries: Entry[];
-  state: JournalState;
+export interface HistorySnapshot {
+  events: HistoryEvent[];
+  state: HistoryState;
   /** The status the stream ended with. */
   endStatus: RunStatus | null;
   error: unknown;
@@ -20,16 +20,16 @@ export interface JournalSnapshot {
 
 const FLUSH_MS = 80;
 
-export class Journal extends Kept {
-  private snapshot: JournalSnapshot = {
-    entries: [],
+export class History extends Kept {
+  private snapshot: HistorySnapshot = {
+    events: [],
     state: "connecting",
     endStatus: null,
     error: null,
   };
-  private readonly entries: WritableCollection<Entry>;
+  private readonly events: WritableCollection<HistoryEvent>;
   private controller: AbortController | null = null;
-  private pending: Entry[] = [];
+  private pending: HistoryEvent[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -38,10 +38,10 @@ export class Journal extends Kept {
     gone: () => void,
   ) {
     super(gone);
-    this.entries = writableCollection<Entry>(`journal:${runId}`, (e) => String(e.idx));
+    this.events = writableCollection<HistoryEvent>(`history:${runId}`, (e) => String(e.idx));
   }
 
-  getSnapshot = (): JournalSnapshot => this.snapshot;
+  getSnapshot = (): HistorySnapshot => this.snapshot;
 
   protected override onRetained(): void {
     if (this.snapshot.state === "ended" || this.controller) return;
@@ -61,10 +61,10 @@ export class Journal extends Kept {
     clearTimeout(this.flushTimer);
     this.controller?.abort();
     this.controller = null;
-    void this.entries.collection.cleanup();
+    void this.events.collection.cleanup();
   }
 
-  private set(change: Partial<JournalSnapshot>): void {
+  private set(change: Partial<HistorySnapshot>): void {
     this.snapshot = { ...this.snapshot, ...change };
     this.notify();
   }
@@ -75,9 +75,9 @@ export class Journal extends Kept {
     const batch = this.pending;
     if (batch.length === 0) return;
     this.pending = [];
-    this.entries.upsert(batch);
-    this.set({ entries: this.snapshot.entries.concat(batch) });
-    // New entries change the run's state: its details are read again.
+    this.events.upsert(batch);
+    this.set({ events: this.snapshot.events.concat(batch) });
+    // New events change the run's state: its details are read again.
     this.store.runTouched(this.runId);
   };
 
@@ -88,7 +88,7 @@ export class Journal extends Kept {
       this.store.api,
       this.runId,
       {
-        onEntries: (batch) => {
+        onEvents: (batch) => {
           this.pending.push(...batch);
           this.flushTimer ??= setTimeout(this.flush, FLUSH_MS);
         },
@@ -103,7 +103,7 @@ export class Journal extends Kept {
         },
       },
       controller.signal,
-      { from: this.snapshot.entries.length + this.pending.length },
+      { from: this.snapshot.events.length + this.pending.length },
     ).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       this.controller = null;

@@ -59,8 +59,8 @@ describe("quotas", () => {
   });
 
   it("reads a namespace's use and limits per quota", () => {
-    const usage = { activeRuns: 10, runsStarted: 2_950, cpu: "3h12m", scripts: 412 };
-    const limits = { activeRuns: 10, runsPerMonth: 3_000, cpuPerMonth: "2h", scripts: 500 };
+    const usage = { activeRuns: 10, runsStarted: 2_950, cpu: "3h12m", workflows: 412 };
+    const limits = { activeRuns: 10, runsPerMonth: 3_000, cpuPerMonth: "2h", workflows: 500 };
     expect(usedOf(usage, "cpuPerMonth")).toBe(3 * HOUR + 12 * MINUTE);
     expect(usedOf(usage, "runsPerMonth")).toBe(2_950);
     expect(limitOf(limits, "cpuPerMonth")).toBe(2 * HOUR);
@@ -105,8 +105,8 @@ describe("quotas", () => {
     expect(texts.activeRuns).toBe("10");
     expect(texts.cpuPerMonth).toBe("2h");
     expect(texts.maxTtl).toBe("");
-    expect(parseQuotas({ ...texts, maxTtl: " 7d ", scripts: "0" })).toEqual({
-      quotas: { activeRuns: 10, cpuPerMonth: "2h", scripts: 0, maxTtl: "1w" },
+    expect(parseQuotas({ ...texts, maxTtl: " 7d ", workflows: "0" })).toEqual({
+      quotas: { activeRuns: 10, cpuPerMonth: "2h", workflows: 0, maxTtl: "1w" },
       errors: null,
     });
     const refused = parseQuotas({ ...texts, activeRuns: "ten", cpuPerMonth: "2" });

@@ -7,7 +7,7 @@ import { formatCount, formatDuration } from "./format";
 import type { DayUsage, Duration, QuotaKind, Quotas, QuotaUsage } from "./types";
 
 /** The quotas counted over the month or now, each shown as a meter. */
-export type Metered = "activeRuns" | "runsPerMonth" | "cpuPerMonth" | "scripts";
+export type Metered = "activeRuns" | "runsPerMonth" | "cpuPerMonth" | "workflows";
 /** Every quota, as `Quotas` names it. */
 export type QuotaKey = keyof Quotas;
 
@@ -25,7 +25,7 @@ export const METERED: readonly MeteredSpec[] = [
   { key: "activeRuns", kind: "active_runs", title: "Active runs", noun: "active runs" },
   { key: "runsPerMonth", kind: "runs_per_month", title: "Runs this month", noun: "runs" },
   { key: "cpuPerMonth", kind: "cpu_per_month", title: "CPU this month", noun: "CPU time" },
-  { key: "scripts", kind: "scripts", title: "Scripts", noun: "distinct scripts" },
+  { key: "workflows", kind: "workflows", title: "Workflows", noun: "workflows" },
 ];
 
 export interface QuotaField {
@@ -57,10 +57,10 @@ export const QUOTA_FIELDS: readonly QuotaField[] = [
     hint: "Never refused: alerts at 80 % and 100 %.",
   },
   {
-    key: "scripts",
-    label: "Scripts",
+    key: "workflows",
+    label: "Workflows",
     unit: "count",
-    hint: "Distinct scripts with a run kept; a new one above it is refused.",
+    hint: "Workflows with a run kept, the organization's included; a new one above it is refused.",
   },
   {
     key: "maxTtl",
@@ -69,10 +69,10 @@ export const QUOTA_FIELDS: readonly QuotaField[] = [
     hint: "The TTL a run may ask for; the default TTL is lowered to it.",
   },
   {
-    key: "maxScriptLines",
-    label: "Longest script",
+    key: "maxCodeLines",
+    label: "Longest code",
     unit: "count",
-    hint: "In lines; a longer script is refused (422).",
+    hint: "In lines; longer code is refused (422).",
   },
 ];
 
@@ -81,9 +81,9 @@ export const QUOTA_NAMES: Record<QuotaKind, string> = {
   cpu_per_month: "CPU",
   active_runs: "active runs",
   runs_per_month: "runs this month",
-  scripts: "scripts",
+  workflows: "workflows",
   max_ttl: "longest TTL",
-  max_script_lines: "longest script",
+  max_code_lines: "longest code",
 };
 
 /** The field of `Quotas` each quota is. */
@@ -91,9 +91,9 @@ export const QUOTA_KEYS: Record<QuotaKind, QuotaKey> = {
   cpu_per_month: "cpuPerMonth",
   active_runs: "activeRuns",
   runs_per_month: "runsPerMonth",
-  scripts: "scripts",
+  workflows: "workflows",
   max_ttl: "maxTtl",
-  max_script_lines: "maxScriptLines",
+  max_code_lines: "maxCodeLines",
 };
 
 const UNITS: Record<string, number> = {
@@ -162,8 +162,8 @@ export function usedOf(usage: QuotaUsage, key: Metered): number {
       return usage.runsStarted;
     case "cpuPerMonth":
       return durationMs(usage.cpu) ?? 0;
-    case "scripts":
-      return usage.scripts;
+    case "workflows":
+      return usage.workflows;
   }
 }
 
@@ -179,7 +179,7 @@ export function limitOf(quotas: Quotas | undefined, key: QuotaKey): number | nul
 export function formatQuota(key: QuotaKey, value: number): string {
   if (key === "cpuPerMonth") return formatCpu(value);
   if (key === "maxTtl") return formatDuration(value);
-  if (key === "maxScriptLines") return `${formatCount(value)} lines`;
+  if (key === "maxCodeLines") return `${formatCount(value)} lines`;
   return formatCount(value);
 }
 

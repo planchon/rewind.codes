@@ -1,103 +1,108 @@
 import { describe, expect, it } from "vitest";
 import {
+  actionsSearch,
+  legacyActionsQuery,
   legacyNamespacesQuery,
-  legacyScriptsQuery,
-  legacyToolsQuery,
+  legacyWorkflowsQuery,
   namespacesSearch,
-  scriptsSearch,
-  toolsSearch,
-  toToolStatsQuery,
+  toActionStatsQuery,
+  workflowsSearch,
 } from "./filters";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
 
-describe("the Scripts' search", () => {
-  it("sends one tool", () => {
-    expect(scriptsSearch("tool:github.close_issue")).toEqual({
-      query: { limit: 50, tool: "github.close_issue" },
-      namespace: null,
-      fault: null,
-    });
-    expect(scriptsSearch("")).toEqual({ query: { limit: 50 }, namespace: null, fault: null });
+describe("the Workflows' search", () => {
+  const keep = (q: string, actions: string[]) => workflowsSearch(q).keeps(actions);
+
+  it("asks for every workflow, and keeps those that called an action", () => {
+    const all = workflowsSearch("");
+    expect(all.query).toEqual({ limit: 50 });
+    expect(all.namespace).toBeNull();
+    expect(all.filtered).toBe(false);
+    expect(all.fault).toBeNull();
+    expect(keep("action:github.close_issue", ["github.close_issue", "slack.post_message"])).toBe(
+      true,
+    );
+    expect(keep("action:github.close_issue", ["github.list_issues"])).toBe(false);
+    expect(keep("action:github.*", ["github.list_issues"])).toBe(true);
+    expect(keep("-action:github.*", ["github.list_issues"])).toBe(false);
+    expect(keep("action:ask_user,crm.*", ["crm.provision"])).toBe(true);
+    expect(workflowsSearch("action:github.*").filtered).toBe(true);
   });
 
-  it("narrows to one namespace, which the header names", () => {
-    expect(scriptsSearch("namespace:alice tool:crm.provision")).toEqual({
-      query: { limit: 50, tool: "crm.provision" },
-      namespace: "alice",
-      fault: null,
-    });
-    expect(scriptsSearch('namespace:"user@example.com"').namespace).toBe("user@example.com");
-    expect(scriptsSearch("namespace:alice,bob").fault?.message).toMatch(/one end user/);
-    expect(scriptsSearch("namespace:ali*").fault?.message).toMatch(/one end user/);
-    expect(scriptsSearch('namespace:"a b"').fault?.message).toMatch(/letters, digits/);
-    expect(scriptsSearch("namespace:a namespace:b").fault).toMatchObject({ start: 12, end: 23 });
-    expect(scriptsSearch("-namespace:alice").fault?.message).toMatch(/excluded/);
+  it("narrows to one namespace, which the header names and the counts take", () => {
+    const search = workflowsSearch("namespace:alice action:crm.provision");
+    expect(search.query).toEqual({ limit: 50, q: "namespace:alice" });
+    expect(search.namespace).toBe("alice");
+    expect(workflowsSearch('namespace:"user@example.com"').namespace).toBe("user@example.com");
+    expect(workflowsSearch("namespace:alice,bob").fault?.message).toMatch(/one end user/);
+    expect(workflowsSearch("namespace:ali*").fault?.message).toMatch(/one end user/);
+    expect(workflowsSearch('namespace:"a b"').fault?.message).toMatch(/letters, digits/);
+    expect(workflowsSearch("namespace:a namespace:b").fault).toMatchObject({ start: 12, end: 23 });
+    expect(workflowsSearch("-namespace:alice").fault?.message).toMatch(/excluded/);
   });
 
   it("underlines what the list cannot read, in characters: labels among them", () => {
-    expect(scriptsSearch("tool:x status:failed").fault).toMatchObject({ start: 7, end: 20 });
-    expect(scriptsSearch("namespace:alice @agent:triage").fault).toMatchObject({
+    expect(workflowsSearch("action:x status:failed").fault).toMatchObject({ start: 9, end: 22 });
+    expect(workflowsSearch("namespace:alice @agent:triage").fault).toMatchObject({
       start: 16,
       end: 29,
       message: expect.stringMatching(/know no labels/),
     });
-    expect(scriptsSearch("é tool:x").fault).toMatchObject({ start: 0, end: 1 });
-    expect(scriptsSearch("-tool:x").fault?.message).toMatch(/excluded/);
-    expect(scriptsSearch("tool:github.*").fault?.message).toMatch(/one tool/);
-    expect(scriptsSearch("tool:a tool:b").fault).toMatchObject({ start: 7, end: 13 });
+    expect(workflowsSearch("é action:x").fault).toMatchObject({ start: 0, end: 1 });
+    expect(workflowsSearch("action:").fault?.message).toMatch(/needs an action/);
   });
 
-  it("reads the filters of older links as a query", () => {
-    expect(legacyScriptsQuery(new URLSearchParams("label=agent:triage&tool=x"))).toBe(
-      "@agent:triage tool:x",
+  it("reads the filters of older links as a query, a tool as an action", () => {
+    expect(legacyWorkflowsQuery(new URLSearchParams("label=agent:triage&tool=x"))).toBe(
+      "@agent:triage action:x",
     );
-    expect(legacyScriptsQuery(new URLSearchParams("q=tool:x"))).toBeNull();
+    expect(legacyWorkflowsQuery(new URLSearchParams("q=action:x"))).toBeNull();
   });
 });
 
-describe("the Tools' search", () => {
-  const keep = (q: string, tools: string[]) => tools.filter(toolsSearch(q).keeps);
-  const TOOLS = ["github.close_issue", "github.list_issues", "slack.post_message", "ask_user"];
+describe("the Actions' search", () => {
+  const keep = (q: string, actions: string[]) => actions.filter(actionsSearch(q).keeps);
+  const ACTIONS = ["github.close_issue", "github.list_issues", "slack.post_message", "ask_user"];
 
-  it("keeps the tools a query names, by name, pattern or text, or excludes them", () => {
-    expect(keep("", TOOLS)).toEqual(TOOLS);
-    expect(keep("tool:github.*", TOOLS)).toEqual(["github.close_issue", "github.list_issues"]);
-    expect(keep("tool:ask_user,slack.post_message", TOOLS)).toEqual([
+  it("keeps the actions a query names, by name, group or text, or excludes them", () => {
+    expect(keep("", ACTIONS)).toEqual(ACTIONS);
+    expect(keep("action:github.*", ACTIONS)).toEqual(["github.close_issue", "github.list_issues"]);
+    expect(keep("action:ask_user,slack.post_message", ACTIONS)).toEqual([
       "slack.post_message",
       "ask_user",
     ]);
-    expect(keep("-tool:github.*", TOOLS)).toEqual(["slack.post_message", "ask_user"]);
-    expect(keep("ISSUE", TOOLS)).toEqual(["github.close_issue", "github.list_issues"]);
-    expect(keep('"list_" -slack', TOOLS)).toEqual(["github.list_issues"]);
+    expect(keep("-action:github.*", ACTIONS)).toEqual(["slack.post_message", "ask_user"]);
+    expect(keep("ISSUE", ACTIONS)).toEqual(["github.close_issue", "github.list_issues"]);
+    expect(keep('"list_" -slack', ACTIONS)).toEqual(["github.list_issues"]);
   });
 
-  it("asks the server for one namespace, and the start of the tools' names", () => {
-    const search = toolsSearch("namespace:alice tool:github.*");
+  it("asks the server for one namespace, and one group", () => {
+    const search = actionsSearch("namespace:alice action:github.*");
     expect(search.namespace).toBe("alice");
-    expect(search.prefix).toBe("github.");
-    expect(toolsSearch("tool:github.close_issue").prefix).toBeNull();
-    expect(toolsSearch("tool:github.*,slack.*").prefix).toBeNull();
-    expect(toolsSearch("tool:github.* tool:slack.*").prefix).toBeNull();
-    expect(toolsSearch("-tool:github.*").prefix).toBeNull();
-    expect(toolsSearch("namespace:a,b").fault?.message).toMatch(/one end user/);
-    expect(toolsSearch("-namespace:a").fault?.message).toMatch(/excluded/);
-    expect(toolsSearch("@agent:triage").fault).toMatchObject({ start: 0, end: 13 });
-    // Counters keep no toolset: an older link says so.
-    expect(legacyToolsQuery(new URLSearchParams("toolset=079b3789"))).toBe("toolset:079b3789");
-    expect(toolsSearch("toolset:079b3789").fault?.message).toMatch(/not per toolset/);
+    expect(search.group).toBe("github");
+    expect(actionsSearch("action:github.close_issue").group).toBeNull();
+    expect(actionsSearch("action:github.*,slack.*").group).toBeNull();
+    expect(actionsSearch("action:github.* action:slack.*").group).toBeNull();
+    expect(actionsSearch("-action:github.*").group).toBeNull();
+    expect(actionsSearch("namespace:a,b").fault?.message).toMatch(/one end user/);
+    expect(actionsSearch("-namespace:a").fault?.message).toMatch(/excluded/);
+    expect(actionsSearch("@agent:triage").fault).toMatchObject({ start: 0, end: 13 });
+    // Counters keep no action set: an older link says so.
+    expect(legacyActionsQuery(new URLSearchParams("toolset=079b3789"))).toBe("action_set:079b3789");
+    expect(actionsSearch("action_set:079b3789").fault?.message).toMatch(/not per action set/);
   });
 
-  it("reads a window of the last 24 hours, of a namespace and a prefix", () => {
-    expect(toToolStatsQuery("24h", { namespace: null, prefix: null }, NOW)).toEqual({
+  it("reads a window of the last 24 hours, of a namespace and a group", () => {
+    expect(toActionStatsQuery("24h", { namespace: null, group: null }, NOW)).toEqual({
       since: "2026-11-11T10:00:00.000Z",
       until: "2026-11-12T10:00:00.000Z",
     });
-    expect(toToolStatsQuery("1h", { namespace: "alice", prefix: "github." }, NOW)).toEqual({
+    expect(toActionStatsQuery("1h", { namespace: "alice", group: "github" }, NOW)).toEqual({
       since: "2026-11-12T09:00:00.000Z",
       until: "2026-11-12T10:00:00.000Z",
       q: "namespace:alice",
-      prefix: "github.",
+      group: "github",
     });
   });
 });

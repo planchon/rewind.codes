@@ -1,4 +1,4 @@
-// The run's timeline: one row per tool call, timer and signal wait, on an axis where long idle
+// The run's timeline: one row per call, timer and signal wait, on an axis where long idle
 // gaps are compressed into marked breaks. Open spans end at "now" while the run goes on, with
 // their planned end (a timer's fire time, a wait's timeout) dashed beyond. Every row shows, with
 // no scroll of its own: the page scrolls them, and only those near the window are drawn.
@@ -30,7 +30,7 @@ export interface TimelineProps {
   cursor?: {
     steps: readonly Step[];
     n: number;
-    /** The last entry the cursor includes. */
+    /** The last event the cursor includes. */
     last: number;
     atHead: boolean;
     onSeek: (n: number) => void;
@@ -75,7 +75,7 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
   });
 
   if (rows.length === 0 && logs.length === 0) {
-    return <div className="empty">Nothing happened yet: no tool call, timer or signal wait.</div>;
+    return <div className="empty">Nothing happened yet: no call, timer or signal wait.</div>;
   }
 
   const pct = (t: number) => `${(scale.x(t) * 100).toFixed(3)}%`;
@@ -116,7 +116,7 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
           )}
           {r.planned !== null && (
             <>
-              <dt>{a.kind === "timer" ? "fires" : "gives up"}</dt>
+              <dt>{a.kind === "timer" ? "fires" : "times out"}</dt>
               <dd>{formatOffset(r.planned - t0)}</dd>
             </>
           )}
@@ -306,10 +306,10 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
       </div>
       <div className="tl-legend">
         <span>
-          <i className="sw kind-tool_call" /> tool call
+          <i className="sw kind-call" /> call
         </span>
         <span>
-          <i className="sw kind-tool_call outcome-failed" /> failed
+          <i className="sw kind-call outcome-failed" /> failed
         </span>
         <span>
           <i className="sw kind-timer" /> timer

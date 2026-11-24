@@ -22,43 +22,31 @@ function useViews(): Choice[] {
   const reads = access.can("runs:read");
   const views: (Choice | false)[] = [
     reads && { key: "overview", label: "Overview", to: "/overview", kind: "view" },
+    reads && { key: "runs", label: "Runs", detail: "All", to: "/runs", kind: "view" },
     reads && {
-      key: "obs",
-      label: "Observability",
-      detail: "All runs",
-      to: "/observability",
-      kind: "view",
-    },
-    reads && {
-      key: "active",
-      label: "Observability",
-      detail: "Active runs",
-      to: "/observability/active",
+      key: "running",
+      label: "Runs",
+      detail: "Running",
+      to: "/runs/running",
       kind: "view",
     },
     reads && {
       key: "waiting",
-      label: "Observability",
-      detail: "Waiting runs",
-      to: "/observability/waiting",
+      label: "Runs",
+      detail: "Waiting",
+      to: "/runs/waiting",
       kind: "view",
     },
     reads && {
       key: "failures",
-      label: "Observability",
+      label: "Runs",
       detail: "Failures",
-      to: "/observability/failures",
+      to: "/runs/failures",
       kind: "view",
     },
+    reads && { key: "workflows", label: "Workflows", to: "/workflows", kind: "view" },
     reads &&
-      access.statistics && { key: "scripts", label: "Scripts", to: "/scripts", kind: "view" },
-    access.can("toolsets:read") && {
-      key: "testing",
-      label: "Testing",
-      to: "/testing",
-      kind: "view",
-    },
-    reads && access.statistics && { key: "tools", label: "Tools", to: "/tools", kind: "view" },
+      access.statistics && { key: "actions", label: "Actions", to: "/actions", kind: "view" },
     access.can("namespaces:read") && {
       key: "namespaces",
       label: "Namespaces",
@@ -124,7 +112,7 @@ export function FindDialog({
       out.push({
         key: "query",
         label: `Search the runs for ${t}`,
-        to: queryLink("/observability", t),
+        to: queryLink("/runs", t),
         kind: "query",
       });
     return out;

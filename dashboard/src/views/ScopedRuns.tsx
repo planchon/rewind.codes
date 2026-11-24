@@ -1,5 +1,5 @@
-// Observability's table of runs within a scope a page forces (a namespace's runs of a month, a
-// script's runs): its headers order and filter the runs, the terms they add are chips above it,
+// The table of Runs within a scope a page forces (a namespace's runs of a month): its headers
+// order and filter the runs, the terms they add are chips above it,
 // and both are kept in the page's URL (`q`, `sort`). The scope is shown, and cannot be removed.
 import { Lock, X } from "lucide-react";
 import type { ReactNode } from "react";
@@ -78,7 +78,7 @@ export function ScopedRuns({
   scope,
   locked,
   limit = 20,
-  hideScript = false,
+  hideWorkflow = false,
   empty,
 }: {
   /** Names the scope's counts in the state: one per page and scope. */
@@ -90,7 +90,7 @@ export function ScopedRuns({
   scope: string;
   locked: readonly Locked[];
   limit?: number;
-  hideScript?: boolean;
+  hideWorkflow?: boolean;
   /** What the table says when the scope has no run (the filters aside). */
   empty: string;
 }) {
@@ -114,8 +114,8 @@ export function ScopedRuns({
     <section className="scoped-runs" aria-label={label}>
       <header className="scoped-runs-head">
         <h2>{title}</h2>
-        <Link to={queryLink("/observability", asked, sort !== "started" ? { sort } : {})}>
-          Open in Observability →
+        <Link to={queryLink("/runs", asked, sort !== "started" ? { sort } : {})}>
+          Open in Runs →
         </Link>
       </header>
       <QueryChips locked={locked} q={q} onQuery={setQ} />
@@ -125,14 +125,14 @@ export function ScopedRuns({
         <RunTable
           search={runs}
           controls={controls}
-          hideScript={hideScript}
+          hideWorkflow={hideWorkflow}
           onPickLabel={(pair) => {
             const at = pair.indexOf(":");
             add(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
           }}
-          {...(hideScript
+          {...(hideWorkflow
             ? {}
-            : { onPickScript: (digest: string) => add(fieldTerm("script", digest)) })}
+            : { onPickWorkflow: (id: string) => add(fieldTerm("workflow", id)) })}
           empty={q ? "No run matches these filters." : empty}
         />
       )}

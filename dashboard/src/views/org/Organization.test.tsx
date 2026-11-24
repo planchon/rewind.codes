@@ -15,7 +15,7 @@ function graceWithRole(name: string, permissions: string[]) {
   });
   world.access.grants
     .get("org_01ACME")
-    ?.set("user:user_01GRACE", { role: name, allowedLabels: {} });
+    ?.set("member:user_01GRACE", { role: name, allowedLabels: {} });
   return world;
 }
 
@@ -92,8 +92,8 @@ describe("the Organization view", () => {
     expect(within(editor).getByText(/lowercase letters, digits/i)).toHaveClass("tone-critical");
     await user.clear(name);
     await user.type(name, "deployer");
-    await user.type(within(editor).getByLabelText("Description"), "Ships toolsets");
-    await user.click(within(editor).getByRole("checkbox", { name: /toolsets:write/ }));
+    await user.type(within(editor).getByLabelText("Description"), "Ships action sets");
+    await user.click(within(editor).getByRole("checkbox", { name: /actions:write/ }));
     await user.click(within(editor).getByRole("checkbox", { name: /runs:start/ }));
     await user.click(within(editor).getByRole("button", { name: "Create the role" }));
 
@@ -102,8 +102,8 @@ describe("the Organization view", () => {
     const [put] = callsTo("/v1/roles/deployer", "PUT");
     // In the catalog's order, whatever the order of the clicks.
     expect(JSON.parse((await put?.body) ?? "")).toEqual({
-      description: "Ships toolsets",
-      permissions: ["runs:start", "toolsets:write"],
+      description: "Ships action sets",
+      permissions: ["runs:start", "actions:write"],
     });
   });
 
@@ -191,7 +191,7 @@ describe("the Organization view", () => {
     // Reading, and inviting: the roles within that are reader and this one.
     const world = graceWithRole("inviter", [
       "runs:read",
-      "toolsets:read",
+      "actions:read",
       "secrets:read",
       "subscriptions:read",
       "members:read",
@@ -308,7 +308,7 @@ describe("the Organization view", () => {
     });
   });
 
-  it("shows the roles and keys of a key's tenant, without WorkOS", async () => {
+  it("shows the roles and keys of a key's organization, without WorkOS", async () => {
     // The embedded server: the operator, every permission, no organization.
     renderApp("/organization", { world: createWorld({ now: NOW }) });
     const nav = await screen.findByRole("navigation", { name: "Organization" });

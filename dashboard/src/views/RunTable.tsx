@@ -1,4 +1,4 @@
-// The table of runs, shared by Observability, a namespace's page and a script's page. With
+// The table of runs, shared by Runs and a namespace's page. With
 // `controls`, each header is a menu that orders the runs by its column and filters what it
 // shows (RunColumns.tsx). A run opened from it returns to the page it was opened from
 // (`useRunLinkState`).
@@ -13,12 +13,14 @@ import { Link, useNavigate } from "react-router";
 import { runPath, useRunLinkState } from "../app/runLinks";
 import { Ago, Empty, Loading, ProblemView, RunHandle, useNow } from "../components/bits";
 import { NamespaceName, useNamespaceLabel } from "../components/NamespaceName";
-import { ForkTag, QuarantineTag, StatusBadge } from "../components/Status";
+import { ForkTag, QuarantineTag, RunStatusChip } from "../components/Status";
 import { TableScroll } from "../components/TableScroll";
 import { formatCount, formatDuration, formatRelative } from "../model/format";
-import { countTerms, fieldTerm, queryLink } from "../model/query";
+import { countTerms } from "../model/query";
 import type { RunSummary } from "../model/types";
+import { shortIdOf, versionLabel, workflowPath } from "../model/workflows";
 import type { RunSearchView } from "../state/runs";
+import { useWorkflowLabels } from "../state/workflows";
 import { RunEnd, RunLabels } from "./RunCells";
 import {
   CallsHeader,
@@ -27,10 +29,10 @@ import {
   NamespaceHeader,
   RunHeader,
   type RunTableControls,
-  ScriptHeader,
   StartedHeader,
   StatusHeader,
   WakesHeader,
+  WorkflowHeader,
 } from "./RunColumns";
 import { TableTop } from "./TableTop";
 
@@ -45,7 +47,7 @@ export type { RunTableControls } from "./RunColumns";
 const WIDTHS = {
   status: 120,
   namespace: 140,
-  script: 144,
+  workflow: 144,
   started: 96,
   duration: 100,
   calls: 104,
@@ -60,7 +62,7 @@ const LABEL_BUDGET = 44;
 /** The optional columns a row shows. */
 interface Cols {
   namespace: boolean;
-  script: boolean;
+  workflow: boolean;
   started: boolean;
   duration: boolean;
   calls: boolean;
@@ -71,12 +73,13 @@ interface Cols {
 export interface RunTableProps {
   search: RunSearchView;
   onPickLabel?: (pair: string) => void;
-  onPickScript?: (digest: string) => void;
+  /** Filters by a workflow, by its id; without it, a workflow's cell opens its page. */
+  onPickWorkflow?: (id: string) => void;
   /** Shows each run's namespace, when the views read every namespace. */
   showNamespace?: boolean;
   onPickNamespace?: (namespace: string) => void;
-  /** Hides the script column, on a script's own page. */
-  hideScript?: boolean;
+  /** Hides the workflow column, where the page forces one workflow. */
+  hideWorkflow?: boolean;
   /** Headers that order and filter the runs. */
   controls?: RunTableControls;
   empty?: string;
@@ -101,9 +104,14 @@ function Plain({
   );
 }
 
-/** What a run ran, by name: its script's title, else its workflow, else "Untitled script". */
-function scriptName(run: RunSummary): string {
-  return run.scriptTitle ?? run.workflow ?? "Untitled script";
+/**
+ * The workflow a run is a run of, and its version, as it shows (`triage v2`): its name, its
+ * comment's first line or its short id now, else its name when the run was created.
+ */
+function workflowName(run: RunSummary, labelOf: (id: string) => string | undefined): string {
+  const w = run.workflow;
+  if (!w) return "";
+  return versionLabel(labelOf(w.id) ?? w.name ?? shortIdOf(w.id), w.version);
 }
 
 function Duration({ run, now }: { run: RunSummary; now: number }) {
@@ -137,7 +145,7 @@ function useSticky(flag: boolean, resetKey: string): boolean {
 interface RowHandlers {
   open: (id: string) => void;
   pickLabel: ((pair: string) => void) | undefined;
-  pickScript: ((digest: string) => void) | undefined;
+  pickWorkflow: ((id: string) => void) | undefined;
   pickNamespace: ((namespace: string) => void) | undefined;
 }
 
@@ -148,10 +156,19 @@ interface RowProps {
   cols: Cols;
   linkState: { from: string } | undefined;
   handlers: RowHandlers;
+  /** What each workflow shows as, by id. */
+  workflowLabel: (id: string) => string | undefined;
 }
 
 /** One run: rendered again only when the run, or a column, changes. */
-const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: RowProps) {
+const RunRow = memo(function RunRow({
+  run,
+  now,
+  cols,
+  linkState,
+  handlers,
+  workflowLabel,
+}: RowProps) {
   const label = useNamespaceLabel();
   return (
     <tr
@@ -173,17 +190,9 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
               whole
             />
           </Link>
-          {run.parent && (
-            <Link to={`/runs/${run.parent}`} title={`Forked from ${run.parent}`}>
+          {run.source && (
+            <Link to={runPath(run.source)} title={`Forked from ${run.source}`}>
               <ForkTag />
-            </Link>
-          )}
-          {run.workflow && (
-            <Link
-              to={queryLink("/observability", fieldTerm("workflow", run.workflow))}
-              title={`A run of the workflow ${run.workflow}${run.startedBy ? `, started by the run ${run.startedBy}` : ""}`}
-            >
-              <span className="tag mono">{run.workflow}</span>
             </Link>
           )}
         </span>
@@ -191,7 +200,7 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
       </td>
       <td>
         <span className="labels">
-          <StatusBadge status={run.status} />
+          <RunStatusChip status={run.status} waitingFor={run.waitingFor} />
           {run.quarantined && <QuarantineTag />}
         </span>
       </td>
@@ -213,22 +222,27 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
           )}
         </td>
       )}
-      {cols.script && (
+      {cols.workflow && (
         <td>
-          {handlers.pickScript ? (
-            <button
-              type="button"
-              className="link-btn script-cell-title"
-              title={`Only runs of this script · ${run.script}`}
-              onClick={() => handlers.pickScript?.(run.script)}
-            >
-              {scriptName(run)}
-            </button>
-          ) : (
-            <span className="script-cell-title" title={run.script}>
-              {scriptName(run)}
-            </span>
-          )}
+          {run.workflow &&
+            (handlers.pickWorkflow ? (
+              <button
+                type="button"
+                className="link-btn workflow-cell"
+                title={`Only the runs of this workflow · ${run.workflow.id}`}
+                onClick={() => run.workflow && handlers.pickWorkflow?.(run.workflow.id)}
+              >
+                {workflowName(run, workflowLabel)}
+              </button>
+            ) : (
+              <Link
+                className="workflow-cell"
+                to={workflowPath(run.workflow.id, run.workflow.version)}
+                title={`The workflow, at this version · ${run.workflow.id}`}
+              >
+                {workflowName(run, workflowLabel)}
+              </Link>
+            ))}
         </td>
       )}
       {cols.started && (
@@ -243,9 +257,9 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
       )}
       {cols.calls && (
         <td className="right num">
-          {formatCount(run.toolCalls)}
+          {formatCount(run.calls)}
           {run.errors > 0 && (
-            <span className="tone-critical" title="Tool calls that failed">
+            <span className="tone-critical" title="Calls that failed">
               {" "}
               · {formatCount(run.errors)} failed
             </span>
@@ -269,10 +283,10 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
 export function RunTable({
   search,
   onPickLabel,
-  onPickScript,
+  onPickWorkflow,
   showNamespace = false,
   onPickNamespace,
-  hideScript = false,
+  hideWorkflow = false,
   controls,
   empty,
 }: RunTableProps) {
@@ -280,24 +294,25 @@ export function RunTable({
   const from = useRunLinkState()?.from;
   const linkState = useMemo(() => (from ? { from } : undefined), [from]);
   const now = useNow(5_000);
+  const workflowLabel = useWorkflowLabels();
 
   // The rows get handlers that never change, which call the latest ones.
-  const latest = useRef({ onPickLabel, onPickScript, onPickNamespace, navigate, linkState });
-  latest.current = { onPickLabel, onPickScript, onPickNamespace, navigate, linkState };
+  const latest = useRef({ onPickLabel, onPickWorkflow, onPickNamespace, navigate, linkState });
+  latest.current = { onPickLabel, onPickWorkflow, onPickNamespace, navigate, linkState };
   const hasLabel = Boolean(onPickLabel);
-  const hasScript = Boolean(onPickScript);
+  const hasWorkflow = Boolean(onPickWorkflow);
   const hasNamespace = Boolean(onPickNamespace);
   const handlers = useMemo<RowHandlers>(
     () => ({
       open: (handle) =>
         void latest.current.navigate(runPath(handle), { state: latest.current.linkState }),
       pickLabel: hasLabel ? (pair) => latest.current.onPickLabel?.(pair) : undefined,
-      pickScript: hasScript ? (digest) => latest.current.onPickScript?.(digest) : undefined,
+      pickWorkflow: hasWorkflow ? (id) => latest.current.onPickWorkflow?.(id) : undefined,
       pickNamespace: hasNamespace
         ? (namespace) => latest.current.onPickNamespace?.(namespace)
         : undefined,
     }),
-    [hasLabel, hasScript, hasNamespace],
+    [hasLabel, hasWorkflow, hasNamespace],
   );
 
   const runs = search.runs;
@@ -316,7 +331,7 @@ export function RunTable({
   const shown: Column[] = [
     "status",
     ...(showNamespace ? (["namespace"] as const) : []),
-    ...(hideScript ? [] : (["script"] as const)),
+    ...(hideWorkflow ? [] : (["workflow"] as const)),
     "started",
     "duration",
     "calls",
@@ -328,7 +343,7 @@ export function RunTable({
     const on = new Set(colsKey.split(","));
     return {
       namespace: on.has("namespace"),
-      script: on.has("script"),
+      workflow: on.has("workflow"),
       started: on.has("started"),
       duration: on.has("duration"),
       calls: on.has("calls"),
@@ -359,7 +374,7 @@ export function RunTable({
                 <RunHeader controls={controls} />
                 <StatusHeader controls={controls} />
                 {cols.namespace && <NamespaceHeader controls={controls} />}
-                {cols.script && <ScriptHeader controls={controls} />}
+                {cols.workflow && <WorkflowHeader controls={controls} />}
                 {cols.started && <StartedHeader controls={controls} />}
                 {cols.duration && <DurationHeader controls={controls} />}
                 {cols.calls && <CallsHeader controls={controls} />}
@@ -377,14 +392,14 @@ export function RunTable({
                     className="col-namespace"
                   />
                 )}
-                {cols.script && <Plain title="Script" className="col-script" />}
+                {cols.workflow && <Plain title="Workflow" className="col-workflow" />}
                 {cols.started && <Plain title="Started" className="col-started" />}
                 {cols.duration && <Plain title="Duration" right className="col-duration" />}
                 {cols.calls && (
                   <Plain
                     title="Calls"
                     right
-                    hint="Tool calls, and those that failed"
+                    hint="Calls, and those that failed"
                     className="col-calls"
                   />
                 )}
@@ -414,6 +429,7 @@ export function RunTable({
                 cols={cols}
                 linkState={linkState}
                 handlers={handlers}
+                workflowLabel={workflowLabel}
               />
             ))}
           </tbody>

@@ -1,6 +1,6 @@
 // The reads made through TanStack Query that the change stream makes stale (archi/05, "Live"):
-// the secrets' lists and usages, the signing keys, the namespaces' names and suggestions, a script
-// and the scripts' titles. The store reads again those on screen (TanStack Query's active queries)
+// the secrets' lists and usages, the signing keys, the namespaces' names and suggestions, and what
+// each workflow shows as. The store reads again those on screen (TanStack Query's active queries)
 // when a change touches them; none is read on a timer.
 import type { ControlChange } from "../model/types";
 
@@ -10,9 +10,8 @@ export const SIGNING_KEYS = ["signing-keys"] as const;
 /** The start of the keys of the namespaces' names and suggestions. */
 export const NAMESPACES = ["namespaces"] as const;
 
-/** The titles of the scripts, by digest; a script is `["script", digest]`. */
-export const SCRIPT_TITLES = ["script-titles"] as const;
-export const SCRIPT = ["script"] as const;
+/** What each workflow shows as, by id. */
+export const WORKFLOW_LABELS = ["workflow-labels"] as const;
 
 /** The scope of a secret in the keys: `*` for the organization's. */
 export const secretScope = (namespace: string | null | undefined) => namespace ?? "*";
@@ -24,8 +23,8 @@ export function staleOn(change: ControlChange): (readonly unknown[])[] {
       return [[...SECRETS, secretScope(change.namespace)]];
     case "namespace":
       return [NAMESPACES];
-    case "script":
-      return [SCRIPT_TITLES, [...SCRIPT, change.digest]];
+    case "workflow":
+      return [WORKFLOW_LABELS];
     default:
       return [];
   }
@@ -39,6 +38,5 @@ export const LIVE_QUERIES: readonly (readonly unknown[])[] = [
   SECRETS,
   SIGNING_KEYS,
   NAMESPACES,
-  SCRIPT_TITLES,
-  SCRIPT,
+  WORKFLOW_LABELS,
 ];

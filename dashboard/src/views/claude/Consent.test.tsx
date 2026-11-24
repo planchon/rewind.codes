@@ -49,10 +49,10 @@ describe("the consent", () => {
   it("cannot tick an organization where the person may give nothing, nor allow with none", async () => {
     const user = userEvent.setup();
     const { world, request } = adaWithRequest();
-    // In Globex, Ada now only works host-tool tasks: neither access.
+    // In Globex, Ada now only works harness actions' calls: neither access.
     world.access.grants
       .get("org_01GLOBEX")
-      ?.set("user:user_01ADA", { role: "worker", allowedLabels: {} });
+      ?.set("member:user_01ADA", { role: "worker", allowedLabels: {} });
     renderApp(`/connect/authorize?request=${request.id}`, { world });
     const globex = await screen.findByRole("checkbox", { name: /^Globex/ });
     expect(globex).toBeDisabled();

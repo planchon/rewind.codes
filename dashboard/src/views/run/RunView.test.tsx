@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { createWorld, type RunFixture, SCRIPTS, WORKFLOWS } from "../../mocks/fixtures";
+import { CODES, createWorld, type RunFixture, WORKFLOWS } from "../../mocks/fixtures";
 import { handleOf } from "../../mocks/handles";
 import { shortRunId } from "../../model/format";
 import { NOW, renderApp, search } from "../../test/app";
@@ -26,8 +26,10 @@ describe("RunView", () => {
     const handle = handleOf(world, run);
     // Not a run of a workflow: its origin is its script's title as a slug.
     expect(handle).toMatch(/^alice\/triage-stale-issues\/[0-9a-z]{12}$/);
-    const { requested } = renderApp(`/runs/${handle}/journal`, { world });
-    expect(await screen.findByRole("region", { name: "Journal" })).toBeInTheDocument();
+    // The journal of earlier versions opens the history.
+    const { requested, router } = renderApp(`/runs/${handle}/journal`, { world });
+    expect(await screen.findByRole("region", { name: "History" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe(`/runs/${handle}/history`);
     const title = screen.getByRole("heading", { level: 1 });
     expect(title).toHaveTextContent(handle.split("/").slice(1).join("/"));
     // The handle is read once, then the page follows the run by its id.
@@ -39,16 +41,16 @@ describe("RunView", () => {
   it("shows a failed run: the error, its line, and each call next to the line that made it", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
-    const run = find(world, (r) => r.labels.conversation === "c-39" && r.script === SCRIPTS.TRIAGE);
+    const run = find(world, (r) => r.labels.conversation === "c-39" && r.code === CODES.TRIAGE);
     const { router } = renderApp(`/runs/${run.id}`, { world });
 
     const banner = await screen.findByRole("region", { name: "How the run ended" });
     expect(within(banner).getByRole("heading", { name: "Failed" })).toBeVisible();
-    expect(within(banner).getByText("ToolError")).toBeVisible();
+    expect(within(banner).getByText("ActionError")).toBeVisible();
     expect(
       within(banner).getByText("github.close_issue: Resource not accessible by integration (403)"),
     ).toBeVisible();
-    // The journal arrives through the event stream.
+    // The history arrives through the event stream.
     await waitFor(() =>
       expect(within(notesOf(14)).getByRole("button")).toHaveTextContent(
         /github\.close_issue\s*×5\s*1 failed/,
@@ -68,7 +70,7 @@ describe("RunView", () => {
     await user.click(within(notesOf(14)).getByRole("button"));
     await waitFor(() => expect(search(router).get("line")).toBe("14"));
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
-    expect(within(inspector).getByText("script.ts:14")).toBeInTheDocument();
+    expect(within(inspector).getByText("workflow.ts:14")).toBeInTheDocument();
     await user.click(within(inspector).getByText("#6 github.close_issue"));
     await waitFor(() =>
       expect(
@@ -78,12 +80,12 @@ describe("RunView", () => {
     expect(within(inspector).getByRole("region", { name: "args" })).toHaveTextContent(
       '"number":4106',
     );
-    expect(search(router).get("entry")).not.toBeNull();
+    expect(search(router).get("event")).not.toBeNull();
   });
 
   it("tells a cancellation at the deadline as a cancellation, never as a failure", async () => {
     const world = createWorld({ now: NOW });
-    const run = find(world, (r) => r.script === SCRIPTS.DEV_NOTIFICATIONS);
+    const run = find(world, (r) => r.code === CODES.DEV_NOTIFICATIONS);
     renderApp(`/runs/${run.id}`, { world });
 
     const banner = await screen.findByRole("region", { name: "How the run ended" });
@@ -123,7 +125,7 @@ describe("RunView", () => {
   it("selects the failed call from the banner", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
-    const run = find(world, (r) => r.labels.conversation === "c-39" && r.script === SCRIPTS.TRIAGE);
+    const run = find(world, (r) => r.labels.conversation === "c-39" && r.code === CODES.TRIAGE);
     renderApp(`/runs/${run.id}`, { world });
     const banner = await screen.findByRole("region", { name: "How the run ended" });
     await waitFor(() =>
@@ -141,14 +143,14 @@ describe("RunView", () => {
     const { requested } = renderApp(`/runs/${run.id}?entry=1`, { world });
 
     expect(await screen.findByRole("region", { name: "Waiting for" })).toHaveTextContent(
-      /signal "approval", gives up in 2d/,
+      /signal "approval", times out in 2d/,
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
     const result = await within(inspector).findByRole("region", { name: "result" });
-    const completed = run.journal.entries[2]?.event;
-    if (completed?.type !== "tool_call_completed") throw new Error("entry 2 is not the completion");
+    const completed = run.history.events[2]?.event;
+    if (completed?.type !== "call_completed") throw new Error("event 2 is not the completion");
     const path = `/v1/payloads/${completed.result.digest}`;
-    // The entry streamed without the value: only its preview is shown.
+    // The event streamed without the value: only its preview is shown.
     expect(completed.result.value).toBeUndefined();
     expect(requested(path)).toHaveLength(0);
     await user.click(within(result).getByRole("button", { name: /Load the value \(\d+ KB\)/ }));
@@ -158,7 +160,7 @@ describe("RunView", () => {
     expect(requested(path)[0]?.searchParams.get("run")).toBe(run.id);
   });
 
-  it("follows a run live: new entries appear, then its end", async () => {
+  it("follows a run live: new events appear, then its end", async () => {
     let clock = NOW;
     const world = createWorld({ now: NOW, live: true });
     // The live run is the last of the world.
@@ -205,27 +207,27 @@ describe("RunView", () => {
     expect(screen.getByRole("link", { name: "Back to the runs" })).toBeInTheDocument();
   });
 
-  it("shows the journal and the logs", async () => {
+  it("shows the history and the logs", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
     const run = find(world, (r) => r.labels.conversation === "c-77");
     const { router } = renderApp(`/runs/${run.id}`, { world });
     const sections = await screen.findByRole("navigation", { name: "Run" });
     await waitFor(() =>
-      expect(within(sections).getByRole("link", { name: /Journal/ })).toHaveTextContent(
-        String(run.journal.entries.length),
+      expect(within(sections).getByRole("link", { name: /History/ })).toHaveTextContent(
+        String(run.history.events.length),
       ),
     );
-    await user.click(within(sections).getByRole("link", { name: /Journal/ }));
-    expect(router.state.location.pathname).toBe(`/runs/${run.id}/journal`);
-    expect((await screen.findAllByText("schedule_tool_call")).length).toBeGreaterThan(0);
+    await user.click(within(sections).getByRole("link", { name: /History/ }));
+    expect(router.state.location.pathname).toBe(`/runs/${run.id}/history`);
+    expect((await screen.findAllByText("schedule_call")).length).toBeGreaterThan(0);
     await user.click(within(sections).getByRole("link", { name: /Logs/ }));
     expect(screen.getAllByText("provision failed (1/3), retrying in 1m").length).toBeGreaterThan(0);
   });
 
   describe("workflows", () => {
     const world = createWorld({ now: NOW });
-    const parent = find(world, (r) => r.script === SCRIPTS.TRIAGE_ALL);
+    const parent = find(world, (r) => r.code === CODES.TRIAGE_ALL);
     const children = world.runs.filter((r) => r.startedBy?.run === parent.id);
 
     it("lists the runs a run started, with how each ended, and reads their calls naturally", async () => {
@@ -244,15 +246,15 @@ describe("RunView", () => {
       expect(within(panel).getByText("detached")).toBeInTheDocument();
       // The detached run ended after this one: its end never came back.
       expect(within(panel).getByText("not ended with this run")).toBeInTheDocument();
-      expect(within(panel).getByRole("link", { name: "In Observability" })).toHaveAttribute(
+      expect(within(panel).getByRole("link", { name: "In Runs" })).toHaveAttribute(
         "href",
-        `/observability?q=started_by%3A${parent.id}`,
+        `/runs?q=started_by%3A${parent.id}`,
       );
       const [first, second] = children as [RunFixture, RunFixture];
 
       // The end of a run, selected: the run it is the end of, and its status.
       await user.click(
-        within(panel).getAllByRole("button", { name: /end at entry/ })[0] as HTMLElement,
+        within(panel).getAllByRole("button", { name: /end at event/ })[0] as HTMLElement,
       );
       const inspector = screen.getByRole("complementary", { name: "Inspector" });
       expect(await within(inspector).findByText("Result of a run")).toBeInTheDocument();
@@ -281,8 +283,8 @@ describe("RunView", () => {
       expect(within(notesOf(7)).getByRole("button")).toHaveTextContent(
         /run\.result\(\)\s*×2\s*all ended/,
       );
-      // In the journal, the end signals read as the ends of those runs.
-      await router.navigate(`/runs/${parent.id}/journal`);
+      // In the history, the end signals read as the ends of those runs.
+      await router.navigate(`/runs/${parent.id}/history`);
       expect(
         await screen.findByText(`end of run ${shortRunId(first.id)}: completed`),
       ).toBeInTheDocument();
@@ -294,10 +296,12 @@ describe("RunView", () => {
     it("shows a run of a workflow: its version, and the run that started it", async () => {
       const [child] = children as [RunFixture];
       renderApp(`/runs/${child.id}`, { world });
-      const ref = `triage v${WORKFLOWS.triage.number}`;
-      expect(await screen.findByRole("link", { name: ref })).toHaveAttribute(
+      expect(child.workflow?.id).toBe(WORKFLOWS.triage);
+      const version = child.workflow?.version;
+      // Its workflow by its name, at its version, linking to that version's page.
+      expect(await screen.findByRole("link", { name: `triage v${version}` })).toHaveAttribute(
         "href",
-        "/observability?q=workflow%3Atriage",
+        `/workflows/${WORKFLOWS.triage}?version=${version}`,
       );
       // The run that started it, by its handle.
       const started = screen.getByRole("link", { name: handleOf(world, parent) });
@@ -312,7 +316,7 @@ describe("RunView", () => {
         await screen.findByRole("link", { name: `${handleOf(world, parent)} · detached` }),
       ).toHaveAttribute("href", `/runs/${handleOf(world, parent)}`);
       expect(
-        screen.getByRole("link", { name: `digest v${WORKFLOWS.digest.number}` }),
+        screen.getByRole("link", { name: `digest v${detached.workflow?.version}` }),
       ).toBeInTheDocument();
     });
   });

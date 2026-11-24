@@ -35,26 +35,26 @@ const FACETS: Facets = {
     },
     { key: "env", runs: 80, values: [{ value: "prod", runs: 75 }] },
   ],
-  tools: [
+  actions: [
     { value: "weather.forecast", runs: 64 },
     { value: "github.close_issue", runs: 4 },
   ],
-  errors: [{ value: "ToolError", runs: 6 }],
-  scripts: [],
+  errors: [{ value: "ActionError", runs: 6 }],
+  workflows: [],
   waiting: [{ value: "signal", runs: 1 }],
   signals: [{ value: "approval", runs: 1 }],
 };
 
 describe("the query", () => {
   it("splits into terms, a quoted text kept whole, with their positions", () => {
-    const q = '@agent:triage -status:completed "rate limit" tool:github.*';
+    const q = '@agent:triage -status:completed "rate limit" action:github.*';
     expect(
       splitTerms(q).map((t) => [t.kind, t.negated, t.field, t.operand, q.slice(t.start, t.end)]),
     ).toEqual([
       ["label", false, "agent", "triage", "@agent:triage"],
       ["field", true, "status", "completed", "-status:completed"],
       ["text", false, null, '"rate limit"', '"rate limit"'],
-      ["field", false, "tool", "github.*", "tool:github.*"],
+      ["field", false, "action", "github.*", "action:github.*"],
     ]);
   });
 
@@ -116,9 +116,12 @@ describe("suggestions", () => {
     expect(status?.items.map((i) => [i.insert, i.count])).toEqual([["status:failed", 7]]);
     const agent = suggest("@agent:", 7, FACETS);
     expect(agent?.items.map((i) => i.insert)).toEqual(["@agent:support", "@agent:triage"]);
-    const tool = suggest("x tool:gi", 9, FACETS);
-    expect(tool?.from).toBe(2);
-    expect(tool?.items.map((i) => i.insert)).toEqual(["tool:github.close_issue", "tool:github.*"]);
+    const action = suggest("x action:gi", 11, FACETS);
+    expect(action?.from).toBe(2);
+    expect(action?.items.map((i) => i.insert)).toEqual([
+      "action:github.close_issue",
+      "action:github.*",
+    ]);
     // After a comma, the next value; and after a minus, the term without it.
     const list = suggest("-waiting:signal,", 16, FACETS);
     expect(list?.from).toBe(1);
@@ -151,9 +154,9 @@ describe("suggestions", () => {
   });
 
   it("follow the language of the view, and offer values for free text", () => {
-    const language = { fields: [{ name: "tool", doc: "" }], labels: false };
-    expect(suggest("t", 1, FACETS, 12, undefined, language)?.items.map((i) => i.insert)).toEqual([
-      "tool:",
+    const language = { fields: [{ name: "action", doc: "" }], labels: false };
+    expect(suggest("a", 1, FACETS, 12, undefined, language)?.items.map((i) => i.insert)).toEqual([
+      "action:",
     ]);
     expect(suggest("@a", 2, FACETS, 12, undefined, language)).toBeNull();
     expect(suggest("status:f", 8, FACETS, 12, undefined, language)).toBeNull();
@@ -167,19 +170,20 @@ describe("suggestions", () => {
 });
 
 describe("older links", () => {
-  it("become a query", () => {
+  it("become a query, in the words of today", () => {
     const params = new URLSearchParams(
       "status=failed&label=agent:triage&label=team:data platform&tool=github.close_issue&error=timeout&quarantined=no&range=7d",
     );
     expect(legacyQuery(params)).toBe(
-      '@agent:triage @team:"data platform" status:failed tool:github.close_issue error:timeout quarantined:no started:>now-7d'.replace(
-        /^(.*?) (status:failed) (.*)$/,
-        "$2 $1 $3",
-      ),
+      'status:failed @agent:triage @team:"data platform" action:github.close_issue error:timeout -waiting:quarantined started:>now-7d',
     );
     expect(
       legacyQuery(new URLSearchParams("q=@env:prod&parent=x&after=2026-11-01T00:00:00Z")),
-    ).toBe("@env:prod parent:x started:>=2026-11-01T00:00:00Z");
+    ).toBe("@env:prod source:x started:>=2026-11-01T00:00:00Z");
+    expect(legacyQuery(new URLSearchParams("status=pending&quarantined=yes"))).toBe(
+      "status:queued waiting:quarantined",
+    );
+    expect(legacyQuery(new URLSearchParams("status=active"))).toBe("status:active");
     expect(legacyQuery(new URLSearchParams("q=@env:prod"))).toBeNull();
     expect(withQuery(new URLSearchParams("status=failed&step=3"), "status:failed").toString()).toBe(
       "step=3&q=status%3Afailed",
@@ -198,8 +202,8 @@ describe("a filter that takes one value at a time", () => {
   });
 
   it("counts the terms of a column's fields, every label for @", () => {
-    const q = '@agent:triage -status:completed status:failed "rate limit" quarantined:yes';
-    expect(countTerms(q, ["status", "quarantined"])).toBe(3);
+    const q = '@agent:triage -status:completed status:failed "rate limit" waiting:quarantined';
+    expect(countTerms(q, ["status", "waiting"])).toBe(3);
     expect(countTerms(q, ["@"])).toBe(1);
     expect(countTerms(q, ["duration"])).toBe(0);
   });

@@ -1,6 +1,6 @@
 // The secrets of the organization (`namespace` null) or of one namespace, as a table: each one's
 // labels, who wrote it and when, its reads over 30 days, its last read, and the runs and workflows
-// that attach it (archi/05, "Secrets"). A value is written in a dialog and never shown nor read
+// that use it (archi/05, "Secrets"). A value is written in a dialog and never shown nor read
 // back; a deletion is confirmed in a dialog that first says what it would stop, read from
 // `GET …/secrets/{name}/usage`. Writing needs `secrets:write`, and a namespace's secret a grant
 // that is not limited to labels.
@@ -27,9 +27,11 @@ import {
   stopsNothing,
   totalReads,
 } from "../../model/secrets";
-import type { Secret, SecretUsage } from "../../model/types";
+import type { Secret, SecretUsage, WorkflowSecrets } from "../../model/types";
+import { shortIdOf, versionLabel, workflowPath } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import { useDeleteSecret, usePutSecret, useSecrets, useSecretUsage } from "../../state/secrets";
+import { useWorkflowLabels, useWorkflowScopes } from "../../state/workflows";
 import { Field, LabelsInput, PrincipalName, useLabels, useMemberNames } from "../org/bits";
 
 /** Who may write here: `secrets:write`, and for a namespace's secret a grant without labels. */
@@ -110,7 +112,7 @@ export function SecretList({
       ) : list.data.length === 0 ? (
         <Empty>
           {org
-            ? "No secret yet: the runs attach none of the organization's."
+            ? "No secret yet: the runs use none of the organization's."
             : "No secret of this end user yet."}
         </Empty>
       ) : (
@@ -123,7 +125,7 @@ export function SecretList({
                 <th>Written</th>
                 <th>Reads, {READ_DAYS} days</th>
                 <th>Last read</th>
-                <th>Attached by</th>
+                <th>Used by</th>
                 {write && <th className="right">Actions</th>}
               </tr>
             </thead>
@@ -166,7 +168,7 @@ export function SecretList({
                     <LastRead secret={s} org={org} />
                   </td>
                   <td>
-                    <AttachedBy namespace={namespace} secret={s} />
+                    <UsedBy namespace={namespace} secret={s} />
                   </td>
                   {write && (
                     <td className="right">
@@ -211,14 +213,14 @@ export function SecretList({
 function LastRead({ secret, org }: { secret: Secret; org: boolean }) {
   const last = secret.lastRead;
   if (!last) return <span className="muted">never</span>;
-  // A toolset's registration reads it to list the tools of the server it is attached for, before
-  // any run exists: no run to link to.
+  // An action set's registration reads it to list the actions of the server it is used for,
+  // before any run exists: no run to link to.
   if (!last.run)
     return (
       <span className="two-lines">
         <Ago ms={Date.parse(last.at)} />
-        <span title="Read to list the tools of the MCP server it is attached for">
-          at a toolset's registration
+        <span title="Read to list the actions of the MCP server it is used for">
+          at an action set's registration
         </span>
       </span>
     );
@@ -245,19 +247,36 @@ function LastRead({ secret, org }: { secret: Secret; org: boolean }) {
   );
 }
 
-/** The runs and workflows that attach the secret now. */
-function AttachedBy({ namespace, secret }: { namespace: string | null; secret: Secret }) {
+/**
+ * How a workflow that uses a secret shows: its name, else what it shows as now; a namespace's
+ * workflow that shares its label with another of the list (a fork keeps its source's name) says
+ * its namespace too.
+ */
+function useWorkflowName(): (w: WorkflowSecrets, all?: readonly WorkflowSecrets[]) => string {
+  const labelOf = useWorkflowLabels();
+  const scopeOf = useWorkflowScopes();
+  const label = (w: WorkflowSecrets) => w.name || labelOf(w.workflow) || shortIdOf(w.workflow);
+  return (w, all = []) => {
+    const namespace = scopeOf(w.workflow);
+    const shared = all.some((o) => o.workflow !== w.workflow && label(o) === label(w));
+    return shared && namespace ? `${label(w)} · ${namespace}` : label(w);
+  };
+}
+
+/** The runs and workflows that use the secret now. */
+function UsedBy({ namespace, secret }: { namespace: string | null; secret: Secret }) {
   const usage = useSecretUsage(namespace, secret.name);
   const access = useAccess();
+  const nameOf = useWorkflowName();
   if (usage.isPending) return <span className="muted">…</span>;
   if (usage.isError) return <span className="muted">unknown</span>;
   const u = usage.data;
   if (stopsNothing(u)) return <span className="muted">nothing active</span>;
   return (
-    <span className="attached-by">
+    <span className="used-by">
       {u.activeTotal > 0 && (
         <HoverCard
-          label={`The active runs that attach ${secret.reference}`}
+          label={`The active runs that use ${secret.reference}`}
           trigger={
             <button type="button" className="link-btn">
               {plural(u.activeTotal, "active run")}
@@ -265,23 +284,23 @@ function AttachedBy({ namespace, secret }: { namespace: string | null; secret: S
             </button>
           }
         >
-          <p className="card-title">{plural(u.activeTotal, "active run")} attach it</p>
+          <p className="card-title">{plural(u.activeTotal, "active run")} use it</p>
           <RunList usage={u} />
         </HoverCard>
       )}
       {u.workflows.map((w) =>
-        access.can("toolsets:read") ? (
+        access.can("runs:read") ? (
           <Link
-            key={w.name}
+            key={w.workflow}
             className="tag"
-            to={`/testing/${encodeURIComponent(w.name)}?version=${w.version}`}
-            title={`Its latest version attaches it for ${w.servers.join(", ")}`}
+            to={workflowPath(w.workflow, w.version)}
+            title={`${versionLabel(nameOf(w, u.workflows), w.version)}, its latest version, uses it for ${w.servers.join(", ")}`}
           >
-            {w.name}
+            {nameOf(w, u.workflows)}
           </Link>
         ) : (
-          <span key={w.name} className="tag" title={`For ${w.servers.join(", ")}`}>
-            {w.name}
+          <span key={w.workflow} className="tag" title={`For ${w.servers.join(", ")}`}>
+            {nameOf(w, u.workflows)}
           </span>
         ),
       )}
@@ -342,16 +361,16 @@ function WriteSecret({
         existing ? (
           <>
             The value replaces the current one at once. The calls parked because it was missing or
-            refused, in the runs that attach it, are sent again with the same idempotency key.
+            refused, in the runs that use it, are sent again with the same idempotency key.
           </>
         ) : org ? (
           <>
-            A value the runs of every end user may attach, as <code>{reference}</code>. Only
-            Rewind's dispatcher reads it, for the runs that attach it.
+            A value the runs of every end user may use, as <code>{reference}</code>. Only Rewind's
+            dispatcher reads it, for the runs that use it.
           </>
         ) : (
           <>
-            This end user's own value, attached as <code>{reference}</code> by the runs of this
+            This end user's own value, used as <code>{reference}</code> by the runs of this
             namespace only.
           </>
         )
@@ -425,7 +444,7 @@ function WriteSecret({
           hint={
             access.limited
               ? `Your grant is limited to ${formatLabels(grantLabels)}: the secret takes them.`
-              : "Optional. Only the keys and grants limited to these labels see and attach it, with those without labels."
+              : "Optional. Only the keys and grants limited to these labels see and use it, with those without labels."
           }
         />
       )}
@@ -458,9 +477,9 @@ function DeleteSecret({
       onSubmit={() => void remove.run({ namespace, name: secret.name }, onDone)}
     >
       {usage.isPending ? (
-        <Loading>Reading what attaches it…</Loading>
+        <Loading>Reading what uses it…</Loading>
       ) : usage.isError ? (
-        <ErrorNote error={usage.error} title="What attaches it could not be read" />
+        <ErrorNote error={usage.error} title="What uses it could not be read" />
       ) : (
         <Impact namespace={namespace} usage={usage.data} />
       )}
@@ -470,19 +489,20 @@ function DeleteSecret({
 
 /** What deleting the secret stops, from its usage. */
 function Impact({ namespace, usage }: { namespace: string | null; usage: SecretUsage }) {
+  const nameOf = useWorkflowName();
   const reads = totalReads(usage.secret.reads);
   const last = usage.secret.lastRead;
   return (
     <div className="secret-impact" data-testid="impact">
       {stopsNothing(usage) ? (
-        <p className="dialog-text">No active run and no workflow attaches it.</p>
+        <p className="dialog-text">No active run and no workflow uses it.</p>
       ) : (
         <>
           {usage.activeTotal > 0 && (
             <div>
               <p className="dialog-text">
-                <strong>{plural(usage.activeTotal, "active run")}</strong> attach it: their next
-                call to the server it serves is parked until a secret of this name is put again.
+                <strong>{plural(usage.activeTotal, "active run")}</strong> use it: their next call
+                to the server it serves is parked until a secret of this name is put again.
                 {usage.waitingTotal > 0 && (
                   <>
                     {" "}
@@ -497,17 +517,17 @@ function Impact({ namespace, usage }: { namespace: string | null; usage: SecretU
             <div>
               <p className="dialog-text">
                 The latest version of <strong>{plural(usage.workflows.length, "workflow")}</strong>{" "}
-                attaches it:{" "}
+                uses it:{" "}
                 {namespace === null
                   ? "their runs start, and park their calls to the server it serves."
                   : "their runs in this namespace are refused at start (secret-required)."}
               </p>
               <ul className="plain-list">
                 {usage.workflows.map((w) => (
-                  <li key={w.name}>
-                    <span className="key-name">{w.name}</span>{" "}
-                    <span className="mono muted" title={w.version}>
-                      {w.version.slice(0, 12)}
+                  <li key={w.workflow}>
+                    <span className="key-name">{nameOf(w, usage.workflows)}</span>{" "}
+                    <span className="num muted" title={w.digest}>
+                      v{w.version}
                     </span>{" "}
                     for {w.servers.join(", ")}
                   </li>

@@ -136,11 +136,11 @@ export function resolveCall(
 
 /** The names a callsite of an activity can point at. */
 export function calleeNames(
-  activity: { kind: "tool_call"; tool: string } | { kind: "timer" | "signal" | "log" },
+  activity: { kind: "call"; action: string } | { kind: "timer" | "signal" | "log" },
 ): string[] {
   switch (activity.kind) {
-    case "tool_call":
-      return [activity.tool.slice(activity.tool.lastIndexOf(".") + 1)];
+    case "call":
+      return [activity.action.slice(activity.action.lastIndexOf(".") + 1)];
     case "timer":
       return ["sleep", "setTimeout", "signal"];
     case "signal":

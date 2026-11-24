@@ -31,50 +31,52 @@ describe("the session", () => {
     const world = signedIn("grace@example.net", undefined, { now: NOW, tokenTtlMs: 61_000 });
     const first = currentToken(world);
     const { callsTo, router } = renderApp("/runs", { world });
-    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All" })).toBeInTheDocument();
     await waitFor(() =>
       expect(callsTo("/v1/runs")[0]?.headers.get("Authorization")).toBe(`Bearer ${first}`),
     );
 
     await waitFor(() => expect(currentToken(world)).not.toBe(first), { timeout: 4_000 });
     const second = currentToken(world);
-    await router.navigate("/scripts");
+    await router.navigate("/workflows");
     await waitFor(() =>
-      expect(callsTo("/v1/scripts").at(-1)?.headers.get("Authorization")).toBe(`Bearer ${second}`),
+      expect(callsTo("/v1/workflows").at(-1)?.headers.get("Authorization")).toBe(
+        `Bearer ${second}`,
+      ),
     );
   });
 
   it("renews a refused token, and sends the request again with the new one", async () => {
     const world = signedIn("grace@example.net");
     const { callsTo, router } = renderApp("/runs", { world });
-    await screen.findByRole("heading", { name: "All runs" });
+    await screen.findByRole("heading", { name: "All" });
     const before = callsTo("/auth/session").length;
-    const already = callsTo("/v1/scripts").length;
+    const already = callsTo("/v1/workflows").length;
     const first = currentToken(world);
 
     // The token is refused (expired, say), but the session holds.
     world.access.tokens.clear();
-    await router.navigate("/scripts");
-    expect(await screen.findByRole("heading", { name: "Scripts" })).toBeInTheDocument();
+    await router.navigate("/workflows");
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
     expect(await screen.findByRole("table")).toBeInTheDocument();
-    // Whichever request of the page met the refusal first (the scripts, their counts, the change
+    // Whichever request of the page met the refusal first (the workflows, their counts, the change
     // stream) renewed the token; every refused one went again with the new one.
     expect(callsTo("/auth/session").length).toBeGreaterThan(before);
-    const scripts = callsTo("/v1/scripts").slice(already);
-    expect(scripts.at(-1)?.headers.get("Authorization")).toBe(`Bearer ${currentToken(world)}`);
+    const workflows = callsTo("/v1/workflows").slice(already);
+    expect(workflows.at(-1)?.headers.get("Authorization")).toBe(`Bearer ${currentToken(world)}`);
     expect(currentToken(world)).not.toBe(first);
-    const refused = scripts.filter((c) => c.headers.get("Authorization") === `Bearer ${first}`);
+    const refused = workflows.filter((c) => c.headers.get("Authorization") === `Bearer ${first}`);
     expect(refused.length).toBeLessThanOrEqual(1);
   });
 
   it("goes back to the sign-in page when the session has ended", async () => {
     const world = signedIn("grace@example.net");
     const { router } = renderApp("/runs", { world });
-    await screen.findByRole("heading", { name: "All runs" });
+    await screen.findByRole("heading", { name: "All" });
 
     world.access.tokens.clear();
     world.access.session = null;
-    await router.navigate("/scripts");
+    await router.navigate("/workflows");
     expect(await screen.findByRole("heading", { name: "Sign in to Rewind" })).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent(/session has ended/i);
   });
@@ -83,7 +85,7 @@ describe("the session", () => {
     const user = userEvent.setup();
     const world = signedIn("grace@example.net");
     const { callsTo } = renderApp("/runs", { world });
-    await screen.findByRole("heading", { name: "All runs" });
+    await screen.findByRole("heading", { name: "All" });
     await user.click(screen.getByLabelText("Account: Grace Hopper"));
     expect(await screen.findByText("grace@example.net")).toBeVisible();
     await user.click(screen.getByRole("menuitem", { name: "Sign out" }));

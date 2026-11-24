@@ -1,4 +1,4 @@
-// The run's status and actions (in its header), its details (in its sidebar), and its banners:
+// The run's tags and controls (in its header), its details (in its sidebar), and its banners:
 // how it ended (RunEnd.tsx), why it is quarantined, what it waits for.
 import { Download, GitFork } from "lucide-react";
 import { useState } from "react";
@@ -14,18 +14,19 @@ import {
   useNow,
 } from "../../components/bits";
 import { NamespaceName } from "../../components/NamespaceName";
-import { MockTag, OutcomeBadge, QuarantineTag } from "../../components/Status";
+import { OutcomeBadge, QuarantineTag, TestRunTag } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative, shortRunId } from "../../model/format";
 import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
-import type { Run, Waiting } from "../../model/types";
-import { endedRunOf, workflowRef } from "../../model/workflows";
+import { isActive, type Run, type Waiting } from "../../model/types";
+import { endedRunOf, workflowPath, workflowRef } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import { useRunExport } from "../../state/runs";
+import { useWorkflowLabels } from "../../state/workflows";
 import { RunControls } from "./RunControls";
 import { endingOf, RunEndBanner } from "./RunEnd";
 
-function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette" }) {
+function ExportButton({ runId, as }: { runId: string; as: "run" | "cassette" }) {
   const download = useRunExport();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -36,9 +37,9 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
       disabled={busy}
       title={
         failed ??
-        (as === "journal"
-          ? "The journal document, stored format v1"
-          : "A cassette of its tool calls, for rewind test")
+        (as === "run"
+          ? "The run export: its whole history, which replays on its own (rewind replay)"
+          : "A cassette of its calls and signals, to test against (rewind test)")
       }
       onClick={async () => {
         setBusy(true);
@@ -48,7 +49,7 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `${runId}.${as}.json`;
+          a.download = `${as}-${runId}.json`;
           a.click();
           setTimeout(() => URL.revokeObjectURL(url), 1_000);
         } catch (e) {
@@ -58,39 +59,39 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
         }
       }}
     >
-      <Download size={14} aria-hidden="true" /> {as === "journal" ? "Journal" : "Cassette"}
+      <Download size={14} aria-hidden="true" /> {as === "run" ? "Export run" : "Export cassette"}
     </button>
   );
 }
 
-/** The run's tags beside its handle, in its header, when they say something: a mock run, a
+/** The run's tags beside its handle, in its header, when they say something: a test run, a
  * quarantine. Not its status: its sections and banners say how it goes. */
 export function RunTags({ run }: { run: Run }) {
-  if (run.mode !== "mock" && !run.quarantine) return null;
+  if (run.mode !== "test" && !run.quarantine) return null;
   return (
     <span className="run-tags">
-      {run.mode === "mock" && <MockTag />}
+      {run.mode === "test" && <TestRunTag />}
       {run.quarantine && <QuarantineTag />}
     </span>
   );
 }
 
 /**
- * The actions of the run's page: its forks, the menu of its controls beside them, its journal and
- * its cassette.
+ * The header's controls of the run's page: its forks, the Controls menu beside them, its export
+ * and its cassette.
  */
-export function RunActions({ run }: { run: Run }) {
+export function RunHeaderControls({ run }: { run: Run }) {
   return (
     <>
       <Link
         className="btn"
-        to={queryLink("/observability", `parent:${run.id}`)}
+        to={queryLink("/runs", fieldTerm("source", run.id))}
         title="Runs forked from this one"
       >
         <GitFork size={14} aria-hidden="true" /> Forks
       </Link>
       <RunControls run={run} />
-      <ExportButton runId={run.id} as="journal" />
+      <ExportButton runId={run.id} as="run" />
       <ExportButton runId={run.id} as="cassette" />
     </>
   );
@@ -103,6 +104,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
   const started = Date.parse(run.createdAt);
   const ended = run.endedAt ? Date.parse(run.endedAt) : null;
   const failedCalls = model.calls.filter((c) => c.end?.outcome === "failed").length;
+  const labelOf = useWorkflowLabels();
   return (
     <dl className="run-details">
       <div>
@@ -127,7 +129,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         <dt>Namespace</dt>
         <dd>
           <Link
-            to={queryLink("/observability", fieldTerm("namespace", run.namespace))}
+            to={queryLink("/runs", fieldTerm("namespace", run.namespace))}
             title="The end user the run acts for: their runs"
           >
             <NamespaceName name={run.namespace} />
@@ -139,11 +141,10 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
           <dt>Workflow</dt>
           <dd>
             <Link
-              to={queryLink("/observability", fieldTerm("workflow", run.workflow.name))}
-              className="mono"
-              title={`Version ${run.workflow.version}. The runs of this workflow`}
+              to={workflowPath(run.workflow.id, run.workflow.version)}
+              title={`The workflow ${run.workflow.id}, at the version the run executes`}
             >
-              {workflowRef(run.workflow)}
+              {workflowRef(run.workflow, labelOf(run.workflow.id))}
             </Link>
           </dd>
         </div>
@@ -166,35 +167,33 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
           </dd>
         </div>
       )}
-      {run.parent && (
+      {run.source && (
         <div>
           <dt>Fork of</dt>
           <dd>
             <Link
-              to={runPath(run.parent.handle)}
-              title={`Forked from ${run.parent.run}${run.parent.at != null ? ` at entry ${run.parent.at}` : ""}`}
+              to={runPath(run.source.handle)}
+              title={`Forked from ${run.source.run}${run.source.at != null ? ` at event ${run.source.at}` : ""}`}
             >
-              <RunHandle handle={run.parent.handle} copy={false} />
+              <RunHandle handle={run.source.handle} copy={false} />
             </Link>
           </dd>
         </div>
       )}
       <div>
-        <dt>Script</dt>
+        <dt>Code</dt>
         <dd>
-          <Link to={`/scripts/${run.script}`} title={`The script's page · ${run.script}`}>
-            {run.scriptTitle ?? <span className="muted">Untitled script</span>}
-          </Link>
+          <Digest digest={run.codeDigest} />
         </dd>
       </div>
       <div>
-        <dt>Toolset</dt>
+        <dt>Action set</dt>
         <dd>
           <Link
-            to={queryLink("/tools", `toolset:${run.toolset}`)}
-            title="Statistics of this toolset's tools"
+            to={queryLink("/runs", fieldTerm("action_set", run.actionSet))}
+            title="The runs of this action set"
           >
-            <Digest digest={run.toolset} />
+            <Digest digest={run.actionSet} />
           </Link>
         </dd>
       </div>
@@ -206,7 +205,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         </dd>
       </div>
       <div>
-        <dt>Entries · epoch</dt>
+        <dt>Events · epoch</dt>
         <dd className="num">
           {formatCount(run.historyLen)} · {run.epoch}
         </dd>
@@ -232,7 +231,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         <div>
           <dt>Secrets</dt>
           <dd>
-            <AttachedSecrets run={run} />
+            <UsedSecrets run={run} />
           </dd>
         </div>
       )}
@@ -244,9 +243,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
               labels={run.labels}
               onPick={(pair) => {
                 const at = pair.indexOf(":");
-                void navigate(
-                  queryLink("/observability", labelTerm(pair.slice(0, at), pair.slice(at + 1))),
-                );
+                void navigate(queryLink("/runs", labelTerm(pair.slice(0, at), pair.slice(at + 1))));
               }}
             />
           </dd>
@@ -256,12 +253,12 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
   );
 }
 
-/** The secrets the run attached, by server: names, never values; each opens where it is listed. */
-function AttachedSecrets({ run }: { run: Run }) {
+/** The secrets the run uses, by server: names, never values; each opens where it is listed. */
+function UsedSecrets({ run }: { run: Run }) {
   const access = useAccess();
   const reads = access.can("secrets:read");
   return (
-    <ul className="attached-secrets">
+    <ul className="used-secrets">
       {Object.entries(run.secrets ?? {})
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([server, ref]) => {
@@ -287,17 +284,17 @@ function AttachedSecrets({ run }: { run: Run }) {
 
 function waitingText(w: Waiting, now: number): string {
   switch (w.kind) {
-    case "tool_call": {
-      const attempt = w.attempt > 1 ? `, attempt ${w.attempt}` : "";
+    case "call": {
+      const delivery = w.delivery > 1 ? `, delivery ${w.delivery}` : "";
       const state = {
         approval: "waits for the harness's approval",
-        ready: "is queued for a worker",
-        claimed: "is in flight",
+        ready: "is ready for a worker",
+        claimed: "is with a worker",
         deferred: "was deferred by its handler",
-        parked: `is parked (${(w.parked ?? "parked").replace("_", " ")})`,
+        parked: `is parked (${(w.parked ?? "parked").replaceAll("_", " ")})`,
         done: "is done",
       }[w.state];
-      return `#${w.seq} ${w.tool} ${state}${attempt}`;
+      return `#${w.seq} ${w.action} ${state}${delivery}`;
     }
     case "timer":
       return `timer #${w.seq} fires ${formatRelative(Date.parse(w.fireAt), now)}`;
@@ -305,20 +302,22 @@ function waitingText(w: Waiting, now: number): string {
       const ended = endedRunOf(w.name);
       const what =
         ended === null ? `signal "${w.name}"` : `the end of run ${shortRunId(ended)} (result())`;
-      return `${what}${w.timeoutAt ? `, gives up ${formatRelative(Date.parse(w.timeoutAt), now)}` : ", no timeout"}`;
+      return `${what}${w.timeoutAt ? `, times out ${formatRelative(Date.parse(w.timeoutAt), now)}` : ", no timeout"}`;
     }
+    case "quarantined":
+      return "a quarantine: an operator releases it, or gives it up";
   }
 }
 
 function waitingHint(w: Waiting): string | null {
-  if (w.kind === "tool_call" && w.state === "approval")
-    return `Approve: POST /v1/tasks/${w.taskId}/approve · reject: …/reject`;
-  if (w.kind === "tool_call" && w.parked === "schema_changed")
-    return `The tool no longer matches its pinned schema: approve or reject task ${w.taskId}, fork or cancel the run.`;
-  if (w.kind === "tool_call" && w.parked === "credentials_refused")
-    return "The server refused the call: put the secret the run attached again, or approve the call once the server accepts the key.";
-  if (w.kind === "tool_call" && w.parked === "secret_missing")
-    return "The secret the run attached no longer exists: put it again.";
+  if (w.kind === "call" && w.state === "approval")
+    return `Approve: POST /v1/calls/${w.callId}/approve · reject: …/reject`;
+  if (w.kind === "call" && w.parked === "schema_changed")
+    return `The action no longer matches its pinned schema: approve or reject call ${w.callId}, fork or cancel the run.`;
+  if (w.kind === "call" && w.parked === "credentials_refused")
+    return "The server refused the call: put the secret the run uses again, or approve the call once the server accepts the key.";
+  if (w.kind === "call" && w.parked === "secret_missing")
+    return "The secret the run uses no longer exists: put it again.";
   if (w.kind === "signal" && endedRunOf(w.name) !== null) return null;
   if (w.kind === "signal") return `Send it: POST /v1/runs/{id}/signals/${w.name}`;
   return null;
@@ -326,20 +325,22 @@ function waitingHint(w: Waiting): string | null {
 
 /** The activity a waiting item is about, to select it. */
 function waitingIdx(w: Waiting, model: RunModel): number | null {
-  if (w.kind === "tool_call") return model.calls.find((c) => c.seq === w.seq)?.idx ?? null;
+  if (w.kind === "call") return model.calls.find((c) => c.seq === w.seq)?.idx ?? null;
   if (w.kind === "timer") return model.timers.find((t) => t.seq === w.seq)?.idx ?? null;
-  return model.signals.find((s) => s.name === w.name && s.end === null)?.idx ?? null;
+  if (w.kind === "signal")
+    return model.signals.find((s) => s.name === w.name && s.end === null)?.idx ?? null;
+  return null;
 }
 
 export function RunBanners({
   run,
   model,
-  onSelectEntry,
+  onSelectEvent,
   onSelectLine,
 }: {
   run: Run;
   model: RunModel;
-  onSelectEntry: (idx: number) => void;
+  onSelectEvent: (idx: number) => void;
   onSelectLine: (line: number) => void;
 }) {
   const now = useNow(10_000);
@@ -351,8 +352,8 @@ export function RunBanners({
         <h3>
           <QuarantineTag />{" "}
           {run.quarantine.cause === "non_determinism"
-            ? "Its replay diverged from the journal"
-            : "Its activations kept failing"}
+            ? "Its replay diverged from its history"
+            : "Its steps kept failing"}
         </h3>
         <p className="mono">{run.quarantine.reason}</p>
         <p className="hint">
@@ -371,29 +372,31 @@ export function RunBanners({
         run={run}
         ending={ending}
         model={model}
-        onSelectEntry={onSelectEntry}
+        onSelectEvent={onSelectEvent}
         onSelectLine={onSelectLine}
       />,
     );
   }
 
-  const waiting = run.status === "active" ? (run.waitingFor ?? []) : [];
-  if (waiting.length > 0 || (model.cancel && run.status === "active")) {
+  const active = isActive(run.status);
+  // Its quarantine has a banner of its own, above.
+  const waiting = active ? (run.waitingFor ?? []).filter((w) => w.kind !== "quarantined") : [];
+  if (waiting.length > 0 || (model.cancel && active)) {
     banners.push(
       <section key="w" className="banner tone-info-banner" aria-label="Waiting for">
         <h3>Waiting for</h3>
-        <ul className="waiting">
+        <ul className="waiting-list">
           {waiting.map((w) => {
             const idx = waitingIdx(w, model);
             const hint = waitingHint(w);
             return (
-              <li key={`${w.kind}-${w.kind === "signal" ? w.name : w.seq}`}>
+              <li key={`${w.kind}-${w.kind === "signal" ? w.name : "seq" in w ? w.seq : ""}`}>
                 <OutcomeBadge outcome="open" word="" />
                 <button
                   type="button"
                   className="link-btn"
                   disabled={idx === null}
-                  onClick={() => idx !== null && onSelectEntry(idx)}
+                  onClick={() => idx !== null && onSelectEvent(idx)}
                 >
                   {waitingText(w, now)}
                 </button>
@@ -402,11 +405,10 @@ export function RunBanners({
               </li>
             );
           })}
-          {model.cancel && run.status === "active" && (
+          {model.cancel && active && (
             <li>
               <OutcomeBadge outcome="open" word="" />
-              Cancellation requested ({model.cancel.reason}): the script has one activation to clean
-              up.
+              Cancellation requested ({model.cancel.reason}): its code has one step to clean up.
             </li>
           )}
         </ul>

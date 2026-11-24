@@ -26,7 +26,7 @@ describe("a control-plane change", () => {
 
     // Another namespace's secret, a workflow, a namespace: the organization's list stays.
     changes.control({ kind: "secret", name: "github", namespace: "alice" });
-    changes.control({ kind: "workflow", name: "triage", version: "ab" });
+    changes.control({ kind: "workflow", workflow: "wf_7k2m9q4x8d1c" });
     changes.control({ kind: "namespace", name: "bob" });
     await settle();
     expect(secrets()).toBe(before + 1);
@@ -42,7 +42,7 @@ describe("a control-plane change", () => {
     const before = page();
 
     changes.control({ kind: "namespace", name: "alice" });
-    changes.control({ kind: "script", digest: "ab" });
+    changes.control({ kind: "workflow", workflow: "wf_7k2m9q4x8d1c" });
     await settle();
     expect(page()).toBe(before);
 
@@ -52,8 +52,8 @@ describe("a control-plane change", () => {
     await waitFor(() => expect(page()).toBe(before + 2));
   });
 
-  it("reads again the workflows when one has a new version", async () => {
-    const { requested } = renderApp("/testing");
+  it("reads again the workflows when one changes", async () => {
+    const { requested } = renderApp("/workflows");
     const changes = changeStream();
     await screen.findByRole("table");
     await waitFor(() => expect(changes.live).toBe(true));
@@ -62,26 +62,11 @@ describe("a control-plane change", () => {
     const before = workflows();
 
     changes.control({ kind: "secret", name: "slack" });
-    await settle();
-    expect(workflows()).toBe(before);
-    changes.control({ kind: "workflow", name: "triage", version: "ab" });
-    await waitFor(() => expect(workflows()).toBe(before + 1));
-  });
-
-  it("reads again the scripts when the runs ran a new one", async () => {
-    const { requested } = renderApp("/scripts");
-    const changes = changeStream();
-    await screen.findByRole("table");
-    await waitFor(() => expect(changes.live).toBe(true));
-    await settle();
-    const scripts = () => requested("/v1/scripts").length;
-    const before = scripts();
-
     changes.control({ kind: "connection", id: "conn_1" });
     await settle();
-    expect(scripts()).toBe(before);
-    changes.control({ kind: "script", digest: "ab" });
-    await waitFor(() => expect(scripts()).toBe(before + 1));
+    expect(workflows()).toBe(before);
+    changes.control({ kind: "workflow", workflow: "wf_7k2m9q4x8d1c" });
+    await waitFor(() => expect(workflows()).toBeGreaterThan(before));
   });
 
   it("reads again the connections of Connect Claude when one changes", async () => {

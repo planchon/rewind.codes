@@ -1,46 +1,54 @@
-// A test of a workflow, on its own page in Testing, in the suite of a version (the latest unless
-// `?version=` names another). The breadcrumb switches the version (to the test of the same name
-// in its suite, or to the version itself when it has none) and the test; previous and next go
-// through the suite, and the whole document opens as JSON. The page says where the test stands
-// in the suite (inherited, added, updated with the parent's test it replaced, retired) and why,
-// then its document.
+// A test of a workflow, on its own page (`/workflows/<id>/tests/<digest>`), in the suite of a
+// version (the latest unless `?version=` names another). The breadcrumb switches the version (to
+// the test of the same name in its suite, or to the version itself when it has none) and the
+// test; previous and next go through the suite, and the whole document opens as JSON. The page
+// says where the test stands in the suite (inherited, added, replacing its base's test, retired)
+// and why, then its document.
 import { ArrowRight, Braces, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { Loading, ProblemView } from "../../components/bits";
 import { JsonDialog } from "../../components/JsonPeek";
 import { PageHeader } from "../../components/PageHeader";
-import type { Workflow } from "../../model/types";
+import type { WorkflowVersion } from "../../model/types";
 import {
-  findVersion,
+  shortIdOf,
   suiteOf,
   suitePlaces,
   type TestPlace,
   testPath,
+  versionLabel,
+  workflowLabel,
   workflowPath,
-  workflowRef,
 } from "../../model/workflows";
-import { useTest, useWorkflowVersions } from "../../state/workflows";
+import { useTest } from "../../state/workflows";
+import { KIND_TAG, OriginGlyph, VersionSwitcher } from "./bits";
 import { CrumbLink, Crumbs, Switcher, type SwitchItem } from "./Crumbs";
+import { useShownWorkflow } from "./shown";
 import { TestDocument, Unreadable } from "./TestDocument";
-import { OriginGlyph, TestingSidebar } from "./TestingSidebar";
-import { TestingGate } from "./TestingView";
-import { KIND_TAG, useVersion, VersionSwitcher } from "./WorkflowView";
+import { WorkflowSidebar } from "./WorkflowSidebar";
 
 /** Where the test stands in the suite of the version, and why it changed. */
 function Place({
   place,
+  index,
+  count,
+  workflow,
+  label,
   version,
-  parent,
+  base,
 }: {
   place: TestPlace | null;
-  version: Workflow;
-  parent: Workflow | null;
+  /** Its position among the suite's tests, then the tests it retired; their number. */
+  index: number;
+  count: number;
+  workflow: string;
+  label: string;
+  version: WorkflowVersion;
+  base: WorkflowVersion | null;
 }) {
   const suite = (
-    <Link className="mono" to={workflowPath(version.name, version.version)}>
-      {workflowRef(version)}
-    </Link>
+    <Link to={workflowPath(workflow, version.version)}>{versionLabel(label, version.version)}</Link>
   );
   if (place === null) {
     return (
@@ -56,18 +64,19 @@ function Place({
         <span className={tag.className} title={tag.title}>
           {tag.label}
         </span>{" "}
+        test {index + 1} of {count}
         {place.kind === "retired" ? (
-          <>retired by {suite} from its parent</>
+          <>, retired by {suite} from its base</>
         ) : (
-          <>in the suite of {suite}</>
+          <> in the suite of {suite}</>
         )}
-        {place.kind === "updated" && place.from && (
+        {place.kind === "replaced" && place.from && (
           <>
             {" "}
             <span className="dim">replacing</span>{" "}
             <Link
-              to={testPath(version.name, place.from, parent?.version)}
-              title="The parent's test"
+              to={testPath(workflow, place.from, base?.version)}
+              title={`The test of the same name in v${base?.version ?? "?"}`}
             >
               <span className="digest">{place.from.slice(0, 12)}</span>
             </Link>{" "}
@@ -76,7 +85,7 @@ function Place({
           </>
         )}
       </p>
-      {(place.kind === "updated" || place.kind === "retired") && (
+      {(place.kind === "replaced" || place.kind === "retired") && (
         <p className="suite-reason">
           {place.reason ? (
             <>Why: {place.reason}</>
@@ -90,42 +99,40 @@ function Place({
 }
 
 export function TestView() {
-  const { name = "" } = useParams();
-  return (
-    <TestingGate>
-      {/* Another workflow is another page: it never shows the one before while it loads. */}
-      <TestPage key={name} name={name} />
-    </TestingGate>
-  );
+  const { id = "" } = useParams();
+  // Another workflow is another page: it never shows the one before while it loads.
+  return <TestPage key={id} reference={id} />;
 }
 
-function TestPage({ name }: { name: string }) {
+function TestPage({ reference }: { reference: string }) {
   const { digest = "" } = useParams();
   const navigate = useNavigate();
   const [json, setJson] = useState(false);
-  const versions = useWorkflowVersions(name);
+  const { read, workflow, versions, version, asked, latest } = useShownWorkflow(reference);
   const test = useTest(digest);
-  const list = versions.data ?? [];
-  const { version, asked } = useVersion(list);
-  const suite = version ? suiteOf(version, list) : null;
+  const id = workflow?.id ?? reference;
+  const label = workflow
+    ? workflowLabel({ ...workflow, comment: versions[0]?.comment })
+    : reference.startsWith("wf_")
+      ? shortIdOf(reference)
+      : reference;
+  const at = latest ? null : (version?.version ?? null);
+  const suite = version ? suiteOf(version, versions) : null;
   const places = suite ? suitePlaces(suite) : [];
   const index = places.findIndex((p) => p.digest === digest);
   const place = index >= 0 ? (places[index] ?? null) : null;
   const previous = index > 0 ? places[index - 1] : undefined;
   const next = index >= 0 ? places[index + 1] : undefined;
-  const open = (to: string) => navigate(testPath(name, to, version?.version));
+  const open = (to: string) => navigate(testPath(id, to, at));
   const title = place?.name ?? test.data?.name ?? digest.slice(0, 12);
 
   // Another version keeps the test of the same name when its suite has one.
-  const toVersion = (v: Workflow, latest: boolean) => {
-    const target = findVersion(list, v.version);
-    const same =
-      target && place
-        ? suitePlaces(suiteOf(target, list)).find((p) => p.name === place.name)
-        : undefined;
-    return same
-      ? testPath(name, same.digest, v.version)
-      : workflowPath(name, latest ? null : v.version);
+  const toVersion = (v: WorkflowVersion, isLatest: boolean) => {
+    const same = place
+      ? suitePlaces(suiteOf(v, versions)).find((p) => p.name === place.name)
+      : undefined;
+    const n = isLatest ? null : v.version;
+    return same ? testPath(id, same.digest, n) : workflowPath(id, n);
   };
   const item = (p: TestPlace): SwitchItem => ({
     key: p.digest,
@@ -135,22 +142,28 @@ function TestPage({ name }: { name: string }) {
         {p.name}
       </span>
     ),
-    to: testPath(name, p.digest, version?.version),
+    to: testPath(id, p.digest, at),
     current: p.digest === digest,
   });
 
   return (
     <div className="page">
-      <TestingSidebar workflow={name} version={version} versions={list} test={digest} />
+      <WorkflowSidebar
+        workflow={workflow}
+        version={version}
+        versions={versions}
+        latest={latest}
+        test={digest}
+      />
       <PageHeader
         crumbs={
           <Crumbs>
-            <CrumbLink to="/testing">Testing</CrumbLink>
-            <CrumbLink to={workflowPath(name)}>{name}</CrumbLink>
+            <CrumbLink to="/workflows">Workflows</CrumbLink>
+            <CrumbLink to={workflowPath(id)}>{label}</CrumbLink>
             {version ? (
-              <VersionSwitcher versions={list} current={version} to={toVersion} />
+              <VersionSwitcher versions={versions} current={version} to={toVersion} />
             ) : (
-              <span className="mono">{asked?.slice(0, 12) ?? ""}</span>
+              <span className="num">{asked ?? ""}</span>
             )}
           </Crumbs>
         }
@@ -161,7 +174,7 @@ function TestPage({ name }: { name: string }) {
               label={<span className="crumb-switch-text">{title}</span>}
               groups={[
                 {
-                  label: `Suite of ${workflowRef(version)}`,
+                  label: `Suite of ${versionLabel(label, version.version)}`,
                   items: places.filter((p) => p.kind !== "retired").map(item),
                 },
                 { label: "Retired", items: places.filter((p) => p.kind === "retired").map(item) },
@@ -213,29 +226,32 @@ function TestPage({ name }: { name: string }) {
       {test.data && (
         <JsonDialog title={`Test ${title}`} value={test.data} open={json} onOpenChange={setJson} />
       )}
-      {versions.isPending ? (
+      {read.isPending ? (
         <Loading>Loading the workflow…</Loading>
-      ) : versions.isError ? (
-        <ProblemView error={versions.error} title={`The workflow ${name} could not be read`} />
+      ) : read.isError ? (
+        <ProblemView error={read.error} title={`${label} could not be read`} />
       ) : version === null ? (
         <p className="page-intro">
-          No version {asked} among the {list.length} versions of {name}.{" "}
-          <Link to={testPath(name, digest)}>This test in its latest version</Link>
+          No version {asked} among the {versions.length} versions of {label}.{" "}
+          <Link to={testPath(id, digest)}>This test in its latest version</Link>
         </p>
       ) : (
         <div className="stack">
-          {index >= 0 && (
-            <p className="page-intro">
-              Test {index + 1} of {places.length} of {workflowRef(version)}.
-            </p>
-          )}
-          <Place place={place} version={version} parent={suite?.parent ?? null} />
+          <Place
+            place={place}
+            index={index}
+            count={places.length}
+            workflow={id}
+            label={label}
+            version={version}
+            base={suite?.base ?? null}
+          />
           {test.isPending ? (
             <Loading>Loading the test…</Loading>
           ) : test.isError ? (
             <Unreadable error={test.error} />
           ) : (
-            <TestDocument test={test.data} versions={list} />
+            <TestDocument test={test.data} workflow={id} label={label} versions={versions} />
           )}
         </div>
       )}

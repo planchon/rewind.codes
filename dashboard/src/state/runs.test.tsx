@@ -8,7 +8,7 @@ import { memo, type ReactNode, useEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorld, type RunFixture, runId, type World } from "../mocks/fixtures";
 import { createHandlers } from "../mocks/handlers";
-import { JournalBuilder } from "../mocks/journal";
+import { HistoryBuilder } from "../mocks/history";
 import { publicSummary, summarize } from "../mocks/readmodel";
 import type { RunSummary } from "../model/types";
 import { Api } from "../sources/client";
@@ -106,8 +106,8 @@ describe("the state of the runs", () => {
     );
     const every = screen.getByRole("list", { name: "every run" });
     const activeList = screen.getByRole("list", { name: "active runs" });
-    await waitFor(() => expect(rowOf(every, active.id)).toHaveTextContent("active"));
-    await waitFor(() => expect(rowOf(activeList, active.id)).toHaveTextContent("active"));
+    await waitFor(() => expect(rowOf(every, active.id)).toHaveTextContent("waiting"));
+    await waitFor(() => expect(rowOf(activeList, active.id)).toHaveTextContent("waiting"));
     await waitFor(() => expect(changes.live).toBe(true));
     const reads = log.urls.length;
 
@@ -250,12 +250,13 @@ function startRun(world: World, n: number): RunFixture {
   const fixture: RunFixture = {
     id: runId(start, 9_000 + n),
     namespace: base.namespace,
-    script: base.script,
-    toolset: base.toolset,
+    code: base.code,
+    actionSet: base.actionSet,
+    ...(base.workflow ? { workflow: base.workflow } : {}),
     labels: { agent: "triage", conversation: `new-${n}` },
-    journal: new JournalBuilder(start).started({
-      script: base.script.digest,
-      toolset: base.toolset,
+    history: new HistoryBuilder(start).started({
+      code: base.code.digest,
+      actionSet: base.actionSet,
       input: { repo: "acme/new" },
     }),
   };

@@ -12,7 +12,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { shortRunId } from "../../model/format";
 import { examplePayload } from "../../model/schema";
-import { isEnded, type Run } from "../../model/types";
+import { isActive, isEnded, type Run } from "../../model/types";
 import { endedRunOf } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import {
@@ -22,9 +22,9 @@ import {
   useWorkflowSignals,
 } from "../../state/runActions";
 
-/** The signals the run waits for now, those its script awaits (not the end of a run it started). */
+/** The signals the run waits for now, those its code awaits (not the end of a run it started). */
 function awaitedSignals(run: Run): string[] {
-  if (run.status !== "active") return [];
+  if (!isActive(run.status)) return [];
   const names = (run.waitingFor ?? []).flatMap((w) =>
     w.kind === "signal" && endedRunOf(w.name) === null ? [w.name] : [],
   );
@@ -84,9 +84,9 @@ function SignalForm({
       title={preset ? `Send ${preset}` : "Send a signal"}
       meta={<span className="mono">{shortRunId(run.id)}</span>}
       description={
-        run.workflow
-          ? `The run of ${run.workflow.name} receives it in its mailbox; the workflow declares the signals it takes and their payloads.`
-          : "The run receives it in its mailbox, now or the next time its script waits for that name."
+        declared.length > 0
+          ? "The run receives it in its mailbox; its workflow version declares the signals it takes and their payloads."
+          : "The run receives it in its mailbox, now or the next time its code waits for that name."
       }
       submit={
         <>
@@ -244,8 +244,8 @@ function Controls({ run }: { run: Run }) {
         title={`Cancel the run ${shortRunId(run.id)}?`}
         description={
           <>
-            Every pending await of its script rejects with <code>CancelledError</code>, and the
-            script gets one activation to clean up: the run ends cancelled.
+            Every pending await of its code rejects with <code>CancelledError</code>, and its code
+            gets one step to clean up: the run ends cancelled.
           </>
         }
         confirm="Cancel run"

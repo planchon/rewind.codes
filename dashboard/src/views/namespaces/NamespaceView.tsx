@@ -1,9 +1,9 @@
 // A namespace's page: one end user, shown by its display name when it has one (its id on hover).
 // Over a month: the alerts of the month first, when it has any; how its runs went (started,
-// completed, failed, waiting, durations, by day, what fails most, the tools they call), its CPU
+// completed, failed, waiting, durations, by day, what fails most, the actions they call), its CPU
 // time added up against its quota, its use of every limit, its tokens in use, its exceptions to
 // the defaults; then its runs
-// of the month, the scripts its runs ran, and its secrets (`secrets:read`). What the caller's
+// of the month, its workflows, and its secrets (`secrets:read`). What the caller's
 // permissions allow, each in a dialog: rename it and change its limits (`namespaces:write`), revoke
 // its tokens (`tokens:write`), write and delete its secrets (`secrets:write`), erase it
 // (`namespaces:write`, confirmed by typing its id). Each change of the namespace shows on the page
@@ -63,11 +63,11 @@ import {
   useRevokeNamespaceTokens,
   useSetNamespaceLimits,
 } from "../../state/namespaces";
-import { useScriptList } from "../../state/scripts";
+import { useWorkflowList } from "../../state/workflows";
 import { ConfirmButton } from "../org/bits";
 import { ScopedRuns } from "../ScopedRuns";
-import { ScriptTable } from "../ScriptsView";
 import { SecretList } from "../secrets/SecretList";
+import { WorkflowTable } from "../workflows/WorkflowsView";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm } from "./bits";
 
 const DAY_MS = 86_400_000;
@@ -224,8 +224,8 @@ function Erase({
       description={
         <>
           The end user leaves: their tokens are revoked and their active runs cancelled, then their
-          runs, journals, secrets and use are erased. This cannot be undone, and the namespace takes
-          no run or token meanwhile. The organization's totals keep what it used.
+          runs, histories, secrets and use are erased. This cannot be undone, and the namespace
+          takes no run or token meanwhile. The organization's totals keep what it used.
         </>
       }
       submit={`Erase ${label}`}
@@ -257,7 +257,7 @@ function Erase({
 
 /**
  * How the namespace's runs of the month went: figures, the runs started each day by outcome, what
- * fails most and the tools they call. Every figure, bar and row opens the runs behind it.
+ * fails most and the actions they call. Every figure, bar and row opens the runs behind it.
  *
  * The month going on is open-ended (`started:>=…`): its query does not change as time passes, so
  * the lists it keys keep their rows instead of loading again each minute.
@@ -274,7 +274,7 @@ function useMonthRuns(name: string, month: string, now: number) {
   const stats = useRunStats(`namespace|${key}`, () => ({
     q: scope,
     ...range,
-    bucket: "1d",
+    interval: "1d",
     top: 6,
   }));
   const failures = useFailures(`namespace-failures|${key}`, () => ({
@@ -298,7 +298,7 @@ function RunFigures({ runs, month }: { runs: MonthRuns; month: string }) {
   const failed = s.statuses.failed + s.statuses.aborted;
   const waiting = s.waiting;
   const durations = s.durations;
-  const link = (...terms: string[]) => queryLink("/observability", joinQuery(scope, ...terms));
+  const link = (...terms: string[]) => queryLink("/runs", joinQuery(scope, ...terms));
   return (
     <section className="tiles" aria-label={`Runs in ${monthLabel(month)}`}>
       <Tile
@@ -315,14 +315,14 @@ function RunFigures({ runs, month }: { runs: MonthRuns; month: string }) {
         tone="good"
       />
       <Tile
-        to={queryLink("/observability/failures", joinQuery(scope, started))}
+        to={queryLink("/runs/failures", joinQuery(scope, started))}
         label="Failed"
         value={formatCount(s.statuses.failed)}
         context={`+ ${formatCount(s.statuses.aborted)} aborted, ${formatCount(s.statuses.cancelled)} cancelled`}
         tone={failed > 0 ? "critical" : undefined}
       />
       <Tile
-        to={queryLink("/observability/waiting", scope)}
+        to={queryLink("/runs/waiting", scope)}
         label="Waiting now"
         value={formatCount(waitingRuns(waiting))}
         context={`${formatCount(waiting.signal)} on a signal, ${formatCount(waiting.approval)} on an approval`}
@@ -368,7 +368,7 @@ function RunsByDay({ runs, month }: { runs: MonthRuns; month: string }) {
             bucketLabel={(b) => dayLabel(month, new Date(b.from).getUTCDate())}
             href={(b, status: RunStatus) =>
               queryLink(
-                "/observability",
+                "/runs",
                 joinQuery(
                   runs.scope,
                   `status:${status}`,
@@ -384,29 +384,29 @@ function RunsByDay({ runs, month }: { runs: MonthRuns; month: string }) {
 }
 
 function FailsMost({ runs, month }: { runs: MonthRuns; month: string }) {
-  const groups = runs.failures.data?.groups ?? [];
+  const fingerprints = runs.failures.data?.fingerprints ?? [];
   const ended = `ended:${queryTime(runs.from)}..${queryTime(runs.until)}`;
   return (
     <section className="panel" aria-label="What fails most">
       <div className="panel-head">
         <h2>What fails most</h2>
         <span className="end">
-          <Link to={queryLink("/observability/failures", joinQuery(runs.scope, runs.started))}>
+          <Link to={queryLink("/runs/failures", joinQuery(runs.scope, runs.started))}>
             Every failure →
           </Link>
         </span>
       </div>
       {runs.failures.isPending ? (
         <Loading />
-      ) : groups.length === 0 ? (
+      ) : fingerprints.length === 0 ? (
         <Empty>Nothing failed in {monthLabel(month)}.</Empty>
       ) : (
         <ul className="rank-list">
-          {groups.map((g) => (
+          {fingerprints.map((g) => (
             <li key={g.fingerprint}>
               <Link
                 to={queryLink(
-                  "/observability",
+                  "/runs",
                   joinQuery(runs.scope, `fingerprint:${g.fingerprint}`, ended),
                 )}
                 title={g.signature}
@@ -414,7 +414,7 @@ function FailsMost({ runs, month }: { runs: MonthRuns; month: string }) {
                 <span className="rank-name mono">{g.signature}</span>
                 <Meter
                   value={g.runs}
-                  max={groups[0]?.runs ?? 1}
+                  max={fingerprints[0]?.runs ?? 1}
                   tone={isCancellation(g.error) ? "neutral" : "critical"}
                 />
                 <span className="num">{formatCount(g.runs)}</span>
@@ -427,31 +427,31 @@ function FailsMost({ runs, month }: { runs: MonthRuns; month: string }) {
   );
 }
 
-function ToolsUsed({ runs, month }: { runs: MonthRuns; month: string }) {
-  const tools = runs.stats.data?.facets.tools ?? [];
+function ActionsUsed({ runs, month }: { runs: MonthRuns; month: string }) {
+  const actions = runs.stats.data?.facets.actions ?? [];
   return (
-    <section className="panel" aria-label="Tools its runs call">
+    <section className="panel" aria-label="Actions its runs call">
       <div className="panel-head">
-        <h2>Tools its runs call</h2>
+        <h2>Actions its runs call</h2>
         <span className="end muted">runs that called each</span>
       </div>
       {!runs.stats.data ? (
         <Loading />
-      ) : tools.length === 0 ? (
-        <Empty>No run called a tool in {monthLabel(month)}.</Empty>
+      ) : actions.length === 0 ? (
+        <Empty>No run called an action in {monthLabel(month)}.</Empty>
       ) : (
         <ul className="rank-list">
-          {tools.map((t) => (
+          {actions.map((t) => (
             <li key={t.value}>
               <Link
                 to={queryLink(
-                  "/observability",
-                  joinQuery(runs.scope, runs.started, fieldTerm("tool", t.value)),
+                  "/runs",
+                  joinQuery(runs.scope, runs.started, fieldTerm("action", t.value)),
                 )}
                 title={`${t.runs} runs called ${t.value}`}
               >
                 <span className="rank-name mono">{t.value}</span>
-                <Meter value={t.runs} max={tools[0]?.runs ?? 1} tone="info" />
+                <Meter value={t.runs} max={actions[0]?.runs ?? 1} tone="info" />
                 <span className="num">{formatCount(t.runs)}</span>
               </Link>
             </li>
@@ -463,7 +463,7 @@ function ToolsUsed({ runs, month }: { runs: MonthRuns; month: string }) {
 }
 
 /**
- * Its runs started in the month, in Observability's table forced to the namespace and the month:
+ * Its runs started in the month, in the Runs table forced to the namespace and the month:
  * its headers order and filter them, in the page's URL.
  */
 function MonthRunList({ runs, month, label }: { runs: MonthRuns; month: string; label: string }) {
@@ -482,30 +482,30 @@ function MonthRunList({ runs, month, label }: { runs: MonthRuns; month: string; 
   );
 }
 
-/** The scripts its runs ran, the most recently run first. */
-function ScriptList({ name, scope, count }: { name: string; scope: string; count: number }) {
+/** Its workflows and the organization's its runs executed, the most recently run first. */
+function WorkflowList({ name, scope, count }: { name: string; scope: string; count: number }) {
   const navigate = useNavigate();
-  const scripts = useScriptList({ query: { limit: 10 }, namespace: name });
-  const open = (term: string) => void navigate(queryLink("/scripts", joinQuery(scope, term)));
+  const workflows = useWorkflowList({ query: { limit: 10, q: scope }, namespace: name });
+  const open = (term: string) => void navigate(queryLink("/workflows", joinQuery(scope, term)));
   return (
-    <section className="ns-section" aria-label="Its scripts">
+    <section className="ns-section" aria-label="Its workflows">
       <header className="ns-section-head">
         <h2>
-          Scripts <span className="muted num">{formatCount(count)}</span>
+          Workflows <span className="muted num">{formatCount(count)}</span>
         </h2>
-        <Link to={queryLink("/scripts", scope)}>Open in Scripts →</Link>
+        <Link to={queryLink("/workflows", scope)}>See its workflows →</Link>
       </header>
-      <ScriptTable
-        scripts={scripts}
+      <WorkflowTable
+        workflows={workflows}
         scope={scope}
-        onPickTool={(tool) => open(fieldTerm("tool", tool))}
-        empty="No script ran in this namespace yet."
+        onPickAction={(action) => open(fieldTerm("action", action))}
+        empty="No workflow ran in this namespace yet."
       />
     </section>
   );
 }
 
-/** The end user's own secrets, which its runs attach as `ns/<name>`. */
+/** The end user's own secrets, which its runs use as `ns/<name>`. */
 function NamespaceSecrets({ name }: { name: string }) {
   const access = useAccess();
   return (
@@ -516,7 +516,7 @@ function NamespaceSecrets({ name }: { name: string }) {
           <InfoCard label="About its secrets">
             <p>
               This end user's own values, such as their GitHub token: only the runs of this
-              namespace attach them, as <code>ns/&lt;name&gt;</code>, and nothing falls back on the
+              namespace use them, as <code>ns/&lt;name&gt;</code>, and nothing falls back on the
               organization's.
               {access.can("secrets:write") && access.limited
                 ? " Your grant is limited to labels: it reads them, and never writes one."
@@ -773,11 +773,11 @@ function NamespacePage({ name }: { name: string }) {
                     </dd>
                   </div>
                 ))}
-                {(["maxTtl", "maxScriptLines"] as const).map((key) => {
+                {(["maxTtl", "maxCodeLines"] as const).map((key) => {
                   const limit = limitOf(ns.limits, key);
                   return (
                     <div key={key}>
-                      <dt>{key === "maxTtl" ? "Longest TTL" : "Longest script"}</dt>
+                      <dt>{key === "maxTtl" ? "Longest TTL" : "Longest code"}</dt>
                       <dd className="num">
                         {limit === null ? (
                           <span className="muted">no limit</span>
@@ -793,7 +793,7 @@ function NamespacePage({ name }: { name: string }) {
           </section>
 
           <FailsMost runs={runs} month={month} />
-          <ToolsUsed runs={runs} month={month} />
+          <ActionsUsed runs={runs} month={month} />
 
           <section className="panel" aria-label="Access">
             <div className="panel-head">
@@ -828,7 +828,7 @@ function NamespacePage({ name }: { name: string }) {
       </div>
 
       <MonthRunList runs={runs} month={month} label={label} />
-      <ScriptList name={ns.name} scope={runs.scope} count={ns.usage.scripts} />
+      <WorkflowList name={ns.name} scope={runs.scope} count={ns.usage.workflows} />
       {access.can("secrets:read") && <NamespaceSecrets name={ns.name} />}
     </div>
   );

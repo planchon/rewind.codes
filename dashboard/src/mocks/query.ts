@@ -5,13 +5,18 @@
 import { FIELDS, operandValues, splitTerms } from "../model/query";
 import { namespaceNameProblem } from "../model/quotas";
 import type { RunMode, RunStatus, RunSummary, WaitKind } from "../model/types";
-import { RUN_STATUSES, WAIT_KINDS } from "../model/types";
+import { isActive, RUN_STATUSES, WAIT_KINDS } from "../model/types";
 
 /** A run summary with what the read model's other tables know of it. */
 export interface MockRun extends RunSummary {
-  tools: string[];
+  /** The actions it called. */
+  actions: string[];
   failedKinds: string[];
   mode: RunMode;
+  /** The first line of its code's top comment, for the free-text search; empty without one. */
+  headline: string;
+  /** Its workflow's name now, which `workflow:` matches as its name at the run's creation. */
+  workflowName: string | null;
 }
 
 export class QueryError extends Error {
@@ -186,7 +191,7 @@ function splitValues(operand: string): { value: string; quoted: boolean }[] {
   const values = operandValues(operand);
   return raw.map((r, i) => {
     if (r.includes('"') && !(r.startsWith('"') && r.endsWith('"')))
-      throw new Error('a quote inside a value: quote the whole value, as tool:"a b"');
+      throw new Error('a quote inside a value: quote the whole value, as action:"a b"');
     const value = values[i] ?? "";
     if (value === "" && !r.startsWith('"'))
       throw new Error("an empty value: write a value between the commas");
@@ -258,12 +263,13 @@ function field(name: string, operand: string, now: number): Predicate {
       return (r) => names.includes(r.namespace);
     }
     case "status": {
-      const statuses = enumerated<RunStatus>(name, operand, RUN_STATUSES);
-      return (r) => statuses.includes(r.status);
+      const statuses = enumerated<RunStatus | "active">(name, operand, [...RUN_STATUSES, "active"]);
+      return (r) =>
+        statuses.includes(r.status) || (statuses.includes("active") && isActive(r.status));
     }
-    case "tool": {
+    case "action": {
       const ps = patterns(operand);
-      return (r) => r.tools.some((t) => ps.some((p) => matchPattern(t, p)));
+      return (r) => r.actions.some((t) => ps.some((p) => matchPattern(t, p)));
     }
     case "signal": {
       const ps = patterns(operand);
@@ -280,7 +286,7 @@ function field(name: string, operand: string, now: number): Predicate {
     case "waiting": {
       const kinds = operand === "*" ? [] : enumerated<WaitKind>(name, operand, WAIT_KINDS);
       return (r) =>
-        r.status === "active" &&
+        r.status === "waiting" &&
         (r.waitingFor ?? []).length > 0 &&
         (kinds.length === 0 || (r.waitingFor ?? []).some((w) => kinds.includes(w.kind)));
     }
@@ -326,28 +332,30 @@ function field(name: string, operand: string, now: number): Predicate {
         },
         "exact",
       );
-      return (r) => within(name === "calls" ? r.toolCalls : r.errors, range);
+      return (r) => within(name === "calls" ? r.calls : r.errors, range);
     }
-    case "script":
-    case "toolset": {
+    case "action_set": {
       const prefixes = hexPrefixes(name, operand, false);
-      return (r) => prefixes.some((p) => (name === "script" ? r.script : r.toolset).startsWith(p));
+      return (r) => prefixes.some((p) => r.actionSet.startsWith(p));
     }
     case "id": {
       const prefixes = hexPrefixes(name, operand, true);
       return (r) => prefixes.some((p) => r.id.replaceAll("-", "").startsWith(p));
     }
-    case "parent":
+    case "source":
     case "started_by": {
       const id = operand.toLowerCase();
       const digits = id.replaceAll("-", "");
       if (digits.length !== 32 || !/^[0-9a-f]+$/.test(digits))
         throw new Error(`${name}: "${operand}" is not a run id`);
-      return (r) => (name === "parent" ? r.parent : r.startedBy)?.replaceAll("-", "") === digits;
+      return (r) => (name === "source" ? r.source : r.startedBy)?.replaceAll("-", "") === digits;
     }
     case "workflow": {
-      const names = exact(name, operand);
-      return (r) => r.workflow != null && names.includes(r.workflow);
+      // A name, as the run's workflow had it when it was created or has it now, or an id.
+      const values = exact(name, operand);
+      return (r) =>
+        r.workflow != null &&
+        values.some((v) => v === r.workflow?.id || v === r.workflow?.name || v === r.workflowName);
     }
     case "fingerprint": {
       const values = exact(name, operand).map((v) => {
@@ -357,14 +365,8 @@ function field(name: string, operand: string, now: number): Predicate {
       });
       return (r) => r.fingerprint != null && values.includes(r.fingerprint);
     }
-    case "quarantined": {
-      const yes = operand === "yes" || operand === "true";
-      if (!yes && operand !== "no" && operand !== "false")
-        throw new Error(`quarantined: expected yes or no, not "${operand}"`);
-      return (r) => r.quarantined === yes;
-    }
     case "mode": {
-      const modes = enumerated<RunMode>(name, operand, ["live", "mock"]);
+      const modes = enumerated<RunMode>(name, operand, ["live", "test"]);
       return (r) => modes.includes(r.mode);
     }
     default:
@@ -410,7 +412,7 @@ function term(body: string, now: number): Predicate {
     return textPredicate(body);
   }
   const name = body.slice(0, colon);
-  if (!/^[a-z]+$/.test(name) || !FIELDS.some((f) => f.name === name)) {
+  if (!/^[a-z_]+$/.test(name) || !FIELDS.some((f) => f.name === name)) {
     throw new Error(
       `unknown field "${name}": the fields are ${FIELDS.map((f) => f.name).join(", ")}; a label is written @key:value; quote text that contains a colon`,
     );

@@ -129,7 +129,7 @@ function ConsentForm({ request, consent }: { request: string; consent: ConsentRe
   const busy = answer.pending || leaving !== null;
   const client = consent.client;
   const site = hostOf(client.uri ?? null);
-  const user = phase.kind === "member" ? phase.state.user : null;
+  const user = phase.kind === "member" ? phase.state.person : null;
 
   if (leaving) {
     return (

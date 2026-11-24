@@ -7,7 +7,7 @@ import { createContext, type ReactNode, useContext, useEffect, useRef, useState 
 import type { RunSummary } from "../model/types";
 import { type Api, ApiError } from "../sources/client";
 import { type WritableCollection, writableCollection } from "./collections";
-import { Journal } from "./journal";
+import { History } from "./history";
 import type { Kept } from "./kept";
 import { Live, type LiveOptions } from "./live";
 import { LIVE_QUERIES, MOVED_BY_RUNS, staleOn } from "./queries";
@@ -26,7 +26,7 @@ export class Store {
   readonly live: Live;
   private readonly searches = new Map<string, RunSearch>();
   private readonly resources = new Map<string, Resource<unknown>>();
-  private readonly journals = new Map<string, Journal>();
+  private readonly histories = new Map<string, History>();
   private readonly kept = new Map<string, Kept>();
   /** The runs whose page is open: their changes are kept even when no search holds them. */
   private readonly followed = new Map<string, number>();
@@ -93,7 +93,7 @@ export class Store {
       for (const [id, at] of this.streamedAt) if (now - at > 5 * 60_000) this.streamedAt.delete(id);
   }
 
-  /** A run's journal grew or ended: its details are read again. */
+  /** A run's history grew or ended: its details are read again. */
   runTouched(runId: string): void {
     for (const resource of this.resources.values())
       if (resource.held && resource.touches(runId)) resource.refresh();
@@ -160,13 +160,13 @@ export class Store {
     return this.kept.get(key) as K | undefined;
   }
 
-  journal(runId: string): Journal {
-    let journal = this.journals.get(runId);
-    if (!journal) {
-      journal = new Journal(this, runId, () => this.journals.delete(runId));
-      this.journals.set(runId, journal);
+  history(runId: string): History {
+    let history = this.histories.get(runId);
+    if (!history) {
+      history = new History(this, runId, () => this.histories.delete(runId));
+      this.histories.set(runId, history);
     }
-    return journal;
+    return history;
   }
 
   /** Drops the summaries no search holds and no open page follows. */
@@ -185,11 +185,11 @@ export class Store {
     this.live.dispose();
     for (const s of this.searches.values()) s.dispose();
     for (const r of this.resources.values()) r.dispose();
-    for (const j of this.journals.values()) j.dispose();
+    for (const h of this.histories.values()) h.dispose();
     for (const k of this.kept.values()) k.dispose();
     this.searches.clear();
     this.resources.clear();
-    this.journals.clear();
+    this.histories.clear();
     this.kept.clear();
     void this.runs.collection.cleanup();
   }

@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { JournalBuilder, payload } from "../mocks/journal";
+import { HistoryBuilder, payload } from "../mocks/history";
 import { buildRunModel } from "./run";
-import type { Workflow } from "./types";
+import type { WorkflowVersion } from "./types";
 import {
   callName,
   endedRunOf,
   expectedTimes,
   findVersion,
+  isNamed,
   readRunEnd,
   recordedRunOf,
   rulesOf,
   ruleTimes,
+  shortIdOf,
   signalTargetOf,
   signalWhen,
   startedRuns,
@@ -19,7 +21,9 @@ import {
   suitePlaces,
   summarizeCassette,
   testPath,
+  versionLabel,
   workflowCallOf,
+  workflowLabel,
   workflowPath,
   workflowRef,
 } from "./workflows";
@@ -27,8 +31,8 @@ import {
 const CHILD = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10";
 const OTHER = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e11";
 
-describe("workflows in a journal", () => {
-  it("names the calls of a workflow's built-ins as the script writes them", () => {
+describe("workflows in a history", () => {
+  it("names the calls of a workflow's built-ins as the code writes them", () => {
     expect(workflowCallOf("workflows.triage.start")).toEqual({ workflow: "triage", op: "start" });
     expect(workflowCallOf("workflows.triage.signal")).toEqual({ workflow: "triage", op: "signal" });
     expect(workflowCallOf("github.list_issues")).toBeNull();
@@ -37,9 +41,24 @@ describe("workflows in a journal", () => {
     expect(callName("workflows.triage.signal", signal)).toBe('run.signal("approval", …)');
     expect(signalTargetOf(signal)).toBe(CHILD);
     expect(callName("github.list_issues", signal)).toBe("github.list_issues");
-    expect(workflowRef({ name: "triage", version: "9f2c4e1a07b3d5f8a1c2e3b4" })).toBe(
-      "triage@9f2c4e1a07b3",
+  });
+
+  it("shows a workflow by its name, its comment or its short id, and a version by its number", () => {
+    const id = "wf_7k2m9q4x8d1c";
+    expect(shortIdOf(id)).toBe("wf-7k2m9q");
+    expect(workflowLabel({ id, name: "triage", comment: { title: "Triage" } })).toBe("triage");
+    expect(workflowLabel({ id, comment: { title: "Triage new issues" } })).toBe(
+      "Triage new issues",
     );
+    expect(workflowLabel({ id, shortId: "wf-7k2m9q" })).toBe("wf-7k2m9q");
+    expect(workflowLabel({ id })).toBe("wf-7k2m9q");
+    expect(isNamed({ name: null })).toBe(false);
+    expect(versionLabel("triage", 12)).toBe("triage v12");
+    expect(workflowRef({ id, name: "triage", version: 12, digest: "d" })).toBe("triage v12");
+    expect(workflowRef({ id, version: 3, digest: "d" }, "Triage new issues")).toBe(
+      "Triage new issues v3",
+    );
+    expect(workflowRef({ id, version: 1, digest: "d" })).toBe("wf-7k2m9q v1");
   });
 
   it("reads the signal name from a preview when the args were left out", () => {
@@ -56,8 +75,8 @@ describe("workflows in a journal", () => {
       message: null,
     });
     expect(
-      readRunEnd(payload({ status: "failed", error: { name: "ToolError", message: "403" } })),
-    ).toEqual({ status: "failed", message: "ToolError: 403" });
+      readRunEnd(payload({ status: "failed", error: { name: "ActionError", message: "403" } })),
+    ).toEqual({ status: "failed", message: "ActionError: 403" });
     expect(
       readRunEnd(
         payload({ status: "aborted", reason: { kind: "limit_exceeded", message: "CPU" } }),
@@ -82,8 +101,8 @@ describe("workflows in a journal", () => {
   });
 
   it("lists the runs a run started, with their ends once they came back", () => {
-    const journal = new JournalBuilder(Date.parse("2026-11-12T10:00:00Z"))
-      .started({ script: "s", toolset: "t" })
+    const journal = new HistoryBuilder(Date.parse("2026-11-12T10:00:00Z"))
+      .started({ code: "s", actionSet: "t" })
       .call(1, "workflows.triage.start", { input: { repo: "acme/api" } }, 4)
       .call(2, "workflows.digest.start", { detached: true, input: { repos: [] } }, 5)
       .call(3, "workflows.triage.start", { input: { repo: "acme/web" } }, 4)
@@ -93,9 +112,9 @@ describe("workflows in a journal", () => {
       .awaitSignal(`rewind:ended:${CHILD}`, 6)
       .signal(`rewind:ended:${CHILD}`, {
         status: "failed",
-        error: { name: "ToolError", message: "github.close_issue: 403" },
+        error: { name: "ActionError", message: "github.close_issue: 403" },
       });
-    const runs = startedRuns(buildRunModel(journal.entries));
+    const runs = startedRuns(buildRunModel(journal.events));
     expect(
       runs.map((r) => ({ runId: r.runId, workflow: r.workflow, detached: r.detached })),
     ).toEqual([
@@ -104,32 +123,30 @@ describe("workflows in a journal", () => {
     ]);
     expect(runs[0]?.end).toMatchObject({
       status: "failed",
-      message: "ToolError: github.close_issue: 403",
+      message: "ActionError: github.close_issue: 403",
       idx: 8,
     });
     expect(runs[1]?.end).toBeNull();
   });
 });
 
-function version(id: string, overrides: Partial<Workflow> = {}): Workflow {
+function version(n: number, overrides: Partial<WorkflowVersion> = {}): WorkflowVersion {
   return {
-    name: "triage",
-    number: 1,
-    version: id.repeat(64).slice(0, 64),
-    toolset: "t",
-    script: "s",
+    version: n,
+    digest: String(n).repeat(64).slice(0, 64),
+    codeDigest: "c".repeat(64),
+    actionSet: "t",
     input: {},
     output: {},
     signals: {},
     labels: {},
     createdAt: "2026-11-01T00:00:00Z",
-    declarations: { dts: "", prompt: "" },
     ...overrides,
   };
 }
 
 describe("a version's suite", () => {
-  const first = version("1", {
+  const first = version(1, {
     tests: [
       { name: "a", digest: "da" },
       { name: "b", digest: "db" },
@@ -137,24 +154,24 @@ describe("a version's suite", () => {
     ],
   });
   const recorded = `recorded ${CHILD}`;
-  const second = version("2", {
-    parent: first.version,
+  const second = version(2, {
+    base: first.digest,
     tests: [
       { name: "a", digest: "da" },
       { name: "b", digest: "db2" },
       { name: recorded, digest: "dr" },
     ],
-    updated: [{ name: "b", from: "db", to: "db2", reason: "the message changed" }],
+    replaced: [{ name: "b", old: "db", new: "db2", reason: "the message changed" }],
     retired: [{ name: "c", digest: "dc", reason: "deprecated" }],
   });
 
-  it("says which tests were inherited, added, updated and retired", () => {
+  it("says which tests were inherited, added, replaced and retired", () => {
     const suite = suiteOf(second, [second, first]);
-    expect(suite.parent).toBe(first);
-    expect(suite.parentMissing).toBe(false);
+    expect(suite.base).toBe(first);
+    expect(suite.baseMissing).toBe(false);
     expect(suite.tests.map((t) => [t.name, t.kind, t.from, t.reason])).toEqual([
       ["a", "inherited", null, null],
-      ["b", "updated", "db", "the message changed"],
+      ["b", "replaced", "db", "the message changed"],
       [recorded, "added", null, null],
     ]);
     expect(suite.tests[2]?.recordedFrom).toBe(CHILD);
@@ -162,7 +179,7 @@ describe("a version's suite", () => {
     expect(suiteCounts(suite)).toEqual({
       inherited: 1,
       added: 1,
-      updated: 1,
+      replaced: 1,
       kept: 0,
       retired: 1,
     });
@@ -172,17 +189,19 @@ describe("a version's suite", () => {
     const places = suitePlaces(suiteOf(second, [second, first]));
     expect(places.map((t) => [t.name, t.kind, t.digest, t.reason])).toEqual([
       ["a", "inherited", "da", null],
-      ["b", "updated", "db2", "the message changed"],
+      ["b", "replaced", "db2", "the message changed"],
       [recorded, "added", "dr", null],
       ["c", "retired", "dc", "deprecated"],
     ]);
   });
 
-  it("names the pages of Testing: a workflow, a test, at a version or the latest", () => {
-    expect(workflowPath("triage")).toBe("/testing/triage");
-    expect(workflowPath("a b", "v2")).toBe("/testing/a%20b?version=v2");
-    expect(testPath("triage", "dc")).toBe("/testing/triage/tests/dc");
-    expect(testPath("triage", "dc", "v2")).toBe("/testing/triage/tests/dc?version=v2");
+  it("names the pages of a workflow and of a test, at a version or the latest", () => {
+    expect(workflowPath("wf_7k2m9q4x8d1c")).toBe("/workflows/wf_7k2m9q4x8d1c");
+    expect(workflowPath("wf_7k2m9q4x8d1c", 2)).toBe("/workflows/wf_7k2m9q4x8d1c?version=2");
+    expect(testPath("wf_7k2m9q4x8d1c", "dc")).toBe("/workflows/wf_7k2m9q4x8d1c/tests/dc");
+    expect(testPath("wf_7k2m9q4x8d1c", "dc", 2)).toBe(
+      "/workflows/wf_7k2m9q4x8d1c/tests/dc?version=2",
+    );
   });
 
   it("adds every test of a first version", () => {
@@ -193,25 +212,28 @@ describe("a version's suite", () => {
     ]);
   });
 
-  it("cannot tell inherited from added when the parent is not among the versions", () => {
+  it("cannot tell inherited from added when the base is not among the versions", () => {
     const suite = suiteOf(second, [second]);
-    expect(suite.parent).toBeNull();
-    expect(suite.parentMissing).toBe(true);
-    expect(suite.tests.map((t) => t.kind)).toEqual(["kept", "updated", "kept"]);
+    expect(suite.base).toBeNull();
+    expect(suite.baseMissing).toBe(true);
+    expect(suite.tests.map((t) => t.kind)).toEqual(["kept", "replaced", "kept"]);
   });
 
-  it("shows a test replaced without a reason as an update", () => {
-    const silent = version("3", { parent: first.version, tests: [{ name: "a", digest: "da2" }] });
+  it("shows a test changed without a reason as replaced", () => {
+    const silent = version(3, { base: first.digest, tests: [{ name: "a", digest: "da2" }] });
     expect(suiteOf(silent, [silent, first]).tests[0]).toMatchObject({
-      kind: "updated",
+      kind: "replaced",
       from: "da",
       reason: null,
     });
   });
 
-  it("finds a version by its digest or its first 12 digits", () => {
-    expect(findVersion([second, first], first.version)).toBe(first);
-    expect(findVersion([second, first], first.version.slice(0, 12))).toBe(first);
+  it("finds a version by its number, its digest or its first 12 digits", () => {
+    expect(findVersion([second, first], "1")).toBe(first);
+    expect(findVersion([second, first], "v2")).toBe(second);
+    expect(findVersion([second, first], "v9")).toBeNull();
+    expect(findVersion([second, first], first.digest)).toBe(first);
+    expect(findVersion([second, first], first.digest.slice(0, 12))).toBe(first);
     expect(findVersion([second, first], "111")).toBeNull();
   });
 
@@ -228,12 +250,12 @@ describe("a test, in words", () => {
     expect(ruleTimes(undefined)).toBe("every call");
     expect(ruleTimes(1)).toBe("1 call");
     expect(ruleTimes(3)).toBe("3 calls");
-    expect(expectedTimes({ tool: "a" })).toBe("at least once");
-    expect(expectedTimes({ tool: "a", times: 0 })).toBe("never");
-    expect(expectedTimes({ tool: "a", times: 1 })).toBe("exactly once");
-    expect(expectedTimes({ tool: "a", times: 4 })).toBe("exactly 4 times");
-    expect(signalWhen(undefined)).toBe("once the run is blocked");
-    expect(signalWhen("blocked")).toBe("once the run is blocked");
+    expect(expectedTimes({ action: "a" })).toBe("at least once");
+    expect(expectedTimes({ action: "a", times: 0 })).toBe("never");
+    expect(expectedTimes({ action: "a", times: 1 })).toBe("exactly once");
+    expect(expectedTimes({ action: "a", times: 4 })).toBe("exactly 4 times");
+    expect(signalWhen(undefined)).toBe("once the run waits");
+    expect(signalWhen("waiting")).toBe("once the run waits");
     expect(signalWhen("2h")).toBe("after 2h");
   });
 
@@ -243,8 +265,8 @@ describe("a test, in words", () => {
         v: 1,
         matching: "by_args",
         calls: [
-          { tool: "github.close_issue", args: {}, outcome: { result: {} } },
-          { tool: "github.list_issues", args: {}, outcome: { result: [] } },
+          { action: "github.close_issue", args: {}, outcome: { result: {} } },
+          { action: "github.list_issues", args: {}, outcome: { result: [] } },
           { tool: "github.close_issue", args: {}, outcome: { result: {} } },
         ],
         signals: [{ name: "approval", payload: true, elapsed_ms: 60_000 }],
@@ -252,9 +274,9 @@ describe("a test, in words", () => {
     ).toEqual({
       matching: "by_args",
       calls: 3,
-      byTool: [
-        { tool: "github.close_issue", count: 2 },
-        { tool: "github.list_issues", count: 1 },
+      byAction: [
+        { action: "github.close_issue", count: 2 },
+        { action: "github.list_issues", count: 1 },
       ],
       signals: [{ name: "approval", at: 60_000 }],
     });

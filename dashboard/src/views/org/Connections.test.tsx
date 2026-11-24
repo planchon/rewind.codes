@@ -84,7 +84,7 @@ describe("Organization › Connections", () => {
     });
     world.access.grants
       .get("org_01ACME")
-      ?.set("user:user_01GRACE", { role: "runner", allowedLabels: {} });
+      ?.set("member:user_01GRACE", { role: "runner", allowedLabels: {} });
     renderApp("/organization/connections", { world });
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /your role, runner, does not give the permission members:read/i,

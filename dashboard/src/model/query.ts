@@ -13,32 +13,30 @@ export interface FieldSpec {
 
 /** The fields of the language, in the order the server lists them. */
 export const FIELDS: readonly FieldSpec[] = [
-  { name: "status", doc: "status:failed,aborted" },
-  { name: "tool", doc: "called a tool: tool:github.close_issue, tool:github.*" },
+  { name: "status", doc: "status:failed,aborted, status:active" },
+  { name: "action", doc: "called an action: action:github.close_issue, action:github.*" },
   { name: "error", doc: "a call's error kind or the run's error name" },
-  { name: "waiting", doc: "active and waiting: waiting:*, waiting:signal" },
+  { name: "waiting", doc: "waiting for: waiting:*, waiting:signal" },
   { name: "signal", doc: "waiting for this signal" },
   { name: "started", doc: "started:>now-24h, started:2026-11-01" },
   { name: "ended", doc: "ended:<now-1h" },
   { name: "activity", doc: "last activity: activity:>now-1h" },
   { name: "duration", doc: "ended runs: duration:>5m" },
-  { name: "calls", doc: "tool calls: calls:>=20" },
+  { name: "calls", doc: "calls:>=20" },
   { name: "errors", doc: "failed calls: errors:>0" },
-  { name: "script", doc: "a script digest, 8 hex digits at least" },
-  { name: "toolset", doc: "a toolset digest, 8 hex digits at least" },
+  { name: "workflow", doc: "runs of a workflow: workflow:triage, workflow:wf_7k2m9q4x8d1c" },
+  { name: "action_set", doc: "an action set digest, 8 hex digits at least" },
   { name: "id", doc: "a run id prefix, 8 hex digits at least" },
-  { name: "parent", doc: "forks of this run" },
-  { name: "workflow", doc: "runs of a workflow: workflow:triage" },
+  { name: "source", doc: "forks of this run" },
   { name: "started_by", doc: "the runs this run started" },
-  { name: "fingerprint", doc: "a failure group" },
-  { name: "quarantined", doc: "quarantined:yes or no" },
-  { name: "mode", doc: "mode:live or mock" },
+  { name: "fingerprint", doc: "runs with this fingerprint" },
+  { name: "mode", doc: "mode:live or test" },
   { name: "namespace", doc: "the end user: namespace:alice,bob" },
 ];
 
 /**
  * What a query bar reads: the runs' language, or the part of it a list that is not of runs
- * understands (Scripts, Tools, Namespaces), which the view turns into its endpoint's parameters.
+ * understands (Workflows, Actions, Namespaces), which the view turns into its endpoint's parameters.
  */
 export interface QueryLanguage {
   /** The fields a term may name. */
@@ -394,11 +392,14 @@ function facetValuesOf(field: string, facets: Facets | undefined): Suggestion[] 
   switch (field) {
     case "status": {
       const counts = counted(facets?.statuses);
-      return RUN_STATUSES.map((s: RunStatus) => ({
-        insert: s,
-        label: s,
-        ...(counts.has(s) ? { count: counts.get(s) } : {}),
-      }));
+      return [
+        ...RUN_STATUSES.map((s: RunStatus) => ({
+          insert: s,
+          label: s,
+          ...(counts.has(s) ? { count: counts.get(s) } : {}),
+        })),
+        { insert: "active", label: "active", detail: "queued, running or waiting", raw: true },
+      ];
     }
     case "waiting": {
       const counts = counted(facets?.waiting);
@@ -411,16 +412,16 @@ function facetValuesOf(field: string, facets: Facets | undefined): Suggestion[] 
         })),
       ];
     }
-    case "tool": {
-      const tools = from(facets?.tools);
-      const namespaces = [
+    case "action": {
+      const actions = from(facets?.actions);
+      const groups = [
         ...new Set(
-          (facets?.tools ?? []).flatMap((t) =>
+          (facets?.actions ?? []).flatMap((t) =>
             t.value.includes(".") ? [`${t.value.slice(0, t.value.indexOf("."))}.*`] : [],
           ),
         ),
-      ].map((ns) => ({ insert: ns, label: ns, detail: "every tool of the namespace", raw: true }));
-      return [...tools, ...namespaces];
+      ].map((g) => ({ insert: g, label: g, detail: "every action of the group", raw: true }));
+      return [...actions, ...groups];
     }
     case "error":
       return from(facets?.errors);
@@ -428,21 +429,12 @@ function facetValuesOf(field: string, facets: Facets | undefined): Suggestion[] 
       return from(facets?.signals);
     case "namespace":
       return from(facets?.namespaces);
-    case "script":
-      return (facets?.scripts ?? []).map((v) => ({
-        insert: v.value,
-        label: v.value.slice(0, 12),
-        count: v.runs,
-      }));
-    case "quarantined":
-      return [
-        { insert: "yes", label: "yes" },
-        { insert: "no", label: "no" },
-      ];
+    case "workflow":
+      return from(facets?.workflows);
     case "mode":
       return [
         { insert: "live", label: "live" },
-        { insert: "mock", label: "mock" },
+        { insert: "test", label: "test" },
       ];
     case "started":
     case "ended":
@@ -583,6 +575,7 @@ const RANGE_TERMS: Record<string, string> = {
 
 /**
  * The query an older link means (`?status=failed&label=agent:triage&tool=…`), joined to its `q`;
+ * a status it named that is no longer one (`pending`, `active`) reads as what it meant now;
  * `null` when the link has none of those parameters.
  */
 export function legacyQuery(params: URLSearchParams): string | null {
@@ -590,17 +583,25 @@ export function legacyQuery(params: URLSearchParams): string | null {
   const terms: string[] = [];
   const one = (name: string) => params.get(name)?.trim() || null;
   const status = one("status");
-  if (status && RUN_STATUSES.includes(status as RunStatus)) terms.push(`status:${status}`);
+  if (status === "pending") terms.push("status:queued");
+  else if (status === "active") terms.push("status:active");
+  else if (status && RUN_STATUSES.includes(status as RunStatus)) terms.push(`status:${status}`);
   for (const pair of params.getAll("label")) {
     const at = pair.indexOf(":");
     if (at > 0) terms.push(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
   }
-  for (const name of ["tool", "script", "error", "parent"]) {
+  // Their names then: a tool is an action, a fork's parent its source.
+  for (const [name, field] of [
+    ["tool", "action"],
+    ["error", "error"],
+    ["parent", "source"],
+  ] as const) {
     const value = one(name);
-    if (value) terms.push(fieldTerm(name, value));
+    if (value) terms.push(fieldTerm(field, value));
   }
   const quarantined = one("quarantined");
-  if (quarantined === "yes" || quarantined === "no") terms.push(`quarantined:${quarantined}`);
+  if (quarantined === "yes") terms.push("waiting:quarantined");
+  if (quarantined === "no") terms.push("-waiting:quarantined");
   const range = one("range");
   if (range && Object.hasOwn(RANGE_TERMS, range)) terms.push(RANGE_TERMS[range] as string);
   else {
@@ -621,7 +622,7 @@ export function withQuery(params: URLSearchParams, q: string): URLSearchParams {
   return next;
 }
 
-/** `/observability?q=…`, and the same for the other views that take a query. */
+/** `/runs?q=…`, and the same for the other views that take a query. */
 export function queryLink(path: string, q: string, extra: Record<string, string> = {}): string {
   const params = new URLSearchParams();
   if (q.trim()) params.set("q", q.trim());

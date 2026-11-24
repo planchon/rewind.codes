@@ -5,7 +5,7 @@ import { Lock } from "lucide-react";
 import { Link } from "react-router";
 import { JsonPeek } from "../../components/JsonPeek";
 import { StatusBadge } from "../../components/Status";
-import type { Expectations, Test, Workflow } from "../../model/types";
+import type { Expectations, Test, WorkflowVersion } from "../../model/types";
 import {
   rulesOf,
   suiteOf,
@@ -16,11 +16,10 @@ import {
 } from "../../model/workflows";
 import { ApiError } from "../../state/errors";
 import { useTest } from "../../state/workflows";
-import { OriginGlyph } from "./TestingSidebar";
-import { KIND_TAG } from "./WorkflowView";
+import { KIND_TAG, OriginGlyph } from "./bits";
 
 /** The calls a test checks, in short: "2 checked · 1 never". */
-export function callsLine(expect: Expectations | undefined): string {
+export function callsLine(expect: Expectations | null | undefined): string {
   const calls = expect?.calls ?? [];
   if (calls.length === 0) return "–";
   const never = calls.filter((c) => c.times === 0).length;
@@ -30,16 +29,16 @@ export function callsLine(expect: Expectations | undefined): string {
     .join(" · ");
 }
 
-/** The world of a test, in short: its rules, its mock handlers, its cassette, its signals. */
+/** The world of a test, in short: its rules, its handlers, its cassette, its signals. */
 export function worldLine(test: Test): string {
   const world = test.world ?? {};
-  const tools = Object.values(world.tools ?? {});
-  const rules = tools.reduce((n, rules) => n + rulesOf(rules).length, 0);
+  const actions = Object.values(world.actions ?? {});
+  const rules = actions.reduce((n, rules) => n + rulesOf(rules).length, 0);
   const cassette = summarizeCassette(world.cassette);
   const signals = test.signals?.length ?? 0;
   const parts = [
     rules > 0 && `${rules} rule${rules === 1 ? "" : "s"}`,
-    world.mocks && "mocks",
+    world.handlers && "handlers",
     cassette && `cassette of ${cassette.calls} call${cassette.calls === 1 ? "" : "s"}`,
     signals > 0 && `${signals} signal${signals === 1 ? "" : "s"}`,
   ].filter(Boolean);
@@ -69,11 +68,15 @@ function Expects({ test }: { test: Test }) {
 function Row({
   place,
   workflow,
-  parent,
+  at,
+  base,
 }: {
   place: TestPlace;
-  workflow: Workflow;
-  parent: Workflow | null;
+  /** The workflow's id. */
+  workflow: string;
+  /** The version shown, `null` for its latest. */
+  at: number | null;
+  base: WorkflowVersion | null;
 }) {
   const test = useTest(place.digest);
   const doc = test.data;
@@ -84,14 +87,18 @@ function Row({
       <td className="wrap suite-cell">
         <span className="suite-cell-name">
           <OriginGlyph place={place} />
-          <Link to={testPath(workflow.name, place.digest, workflow.version)}>{place.name}</Link>
+          <Link to={testPath(workflow, place.digest, at)}>{place.name}</Link>
         </span>
-        {place.kind === "updated" && (
+        {place.kind === "replaced" && (
           <span className="suite-cell-reason">
             {place.from && (
               <>
                 replaces{" "}
-                <Link to={testPath(workflow.name, place.from, parent?.version)} className="mono">
+                <Link
+                  to={testPath(workflow, place.from, base?.version)}
+                  className="mono"
+                  title={`The test of the same name in v${base?.version ?? "?"}`}
+                >
                   {place.from.slice(0, 12)}
                 </Link>
                 {" · "}
@@ -105,9 +112,9 @@ function Row({
         <span className={tag.className} title={tag.title}>
           {tag.label}
         </span>{" "}
-        {(doc?.origin || place.recordedFrom) && (
+        {(doc?.from || place.recordedFrom) && (
           <Link
-            to={`/runs/${doc?.origin?.run ?? place.recordedFrom}`}
+            to={`/runs/${doc?.from?.run ?? place.recordedFrom}`}
             className="tag info"
             title="Recorded from this run"
           >
@@ -142,13 +149,21 @@ function Row({
   );
 }
 
-function Retired({ place, workflow }: { place: TestPlace; workflow: Workflow }) {
+function Retired({
+  place,
+  workflow,
+  at,
+}: {
+  place: TestPlace;
+  workflow: string;
+  at: number | null;
+}) {
   return (
     <tr>
       <td className="wrap suite-cell">
         <span className="suite-cell-name">
           <OriginGlyph place={place} />
-          <Link to={testPath(workflow.name, place.digest, workflow.version)}>{place.name}</Link>
+          <Link to={testPath(workflow, place.digest, at)}>{place.name}</Link>
         </span>
       </td>
       <td className="wrap">{place.reason ?? <span className="muted">No reason recorded.</span>}</td>
@@ -162,12 +177,21 @@ function Retired({ place, workflow }: { place: TestPlace; workflow: Workflow }) 
 }
 
 export function SuiteTable({
+  workflow,
+  label,
   version,
   versions,
+  latest,
 }: {
-  version: Workflow;
-  versions: readonly Workflow[];
+  /** The workflow's id. */
+  workflow: string;
+  /** How the workflow shows: `triage`. */
+  label: string;
+  version: WorkflowVersion;
+  versions: readonly WorkflowVersion[];
+  latest: boolean;
 }) {
+  const at = latest ? null : version.version;
   const suite = suiteOf(version, versions);
   const places = suitePlaces(suite);
   const tests = places.filter((p) => p.kind !== "retired");
@@ -175,10 +199,10 @@ export function SuiteTable({
   return (
     <>
       {tests.length === 0 ? (
-        <p className="muted">No test: this version was saved with an empty suite.</p>
+        <p className="muted">No test: this version's suite is empty.</p>
       ) : (
         <div className="table-wrap">
-          <table className="grid suite-table" aria-label={`Suite of ${version.name}`}>
+          <table className="grid suite-table" aria-label={`Suite of ${label} v${version.version}`}>
             <thead>
               <tr>
                 <th>Test</th>
@@ -191,7 +215,7 @@ export function SuiteTable({
             </thead>
             <tbody>
               {tests.map((place) => (
-                <Row key={place.name} place={place} workflow={version} parent={suite.parent} />
+                <Row key={place.name} place={place} workflow={workflow} at={at} base={suite.base} />
               ))}
             </tbody>
           </table>
@@ -199,11 +223,11 @@ export function SuiteTable({
       )}
       {retired.length > 0 && (
         <>
-          <h3 className="section-subhead">Retired from its parent</h3>
+          <h3 className="section-subhead">Retired from its base</h3>
           <div className="table-wrap">
             <table
               className="grid suite-table"
-              aria-label={`Retired from the suite of ${version.name}`}
+              aria-label={`Retired from the suite of ${label} v${version.version}`}
             >
               <thead>
                 <tr>
@@ -214,7 +238,7 @@ export function SuiteTable({
               </thead>
               <tbody>
                 {retired.map((place) => (
-                  <Retired key={place.name} place={place} workflow={version} />
+                  <Retired key={place.name} place={place} workflow={workflow} at={at} />
                 ))}
               </tbody>
             </table>

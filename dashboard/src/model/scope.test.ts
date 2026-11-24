@@ -7,13 +7,13 @@ describe("the runs waiting now", () => {
       waitingRuns({
         signal: 2,
         timer: 1,
-        call: 0,
-        host: 3,
+        harness: 3,
         approval: 1,
-        parked: 0,
         deferred: 1,
+        parked: 0,
+        quarantined: 1,
       }),
-    ).toBe(8);
+    ).toBe(9);
   });
 });
 

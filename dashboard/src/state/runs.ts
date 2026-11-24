@@ -1,16 +1,16 @@
-// Runs: the searches of runs and their tables, one run's details and journal, and the values its
-// journal holds. A run's new summary, from the change stream, shows at once in every table that
+// Runs: the searches of runs and their tables, one run's details and history, and the values its
+// history holds. A run's new summary, from the change stream, shows at once in every table that
 // shows it; the searches are read again a second after the last change.
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import type { Entry, Run, RunSort, RunSummary } from "../model/types";
-import type { JournalSnapshot } from "./journal";
+import type { HistoryEvent, Run, RunSort, RunSummary } from "../model/types";
+import type { HistorySnapshot } from "./history";
 import { type Read, useQueryRead, useResource } from "./read";
 import type { ReadStatus } from "./resource";
 import type { PendingAnswer, RunSearch, SearchSnapshot } from "./search";
 import { useStore } from "./store";
 
-export type { JournalSnapshot as RunJournal, JournalState } from "./journal";
+export type { HistorySnapshot as RunHistory, HistoryState } from "./history";
 export type { PendingAnswer } from "./search";
 
 export interface RunSearchOptions {
@@ -85,7 +85,7 @@ export function useRunSearch(options: RunSearchOptions): RunSearchView {
 
 /**
  * One run's details; `enabled` false until they are needed (a card that opens). Read again when
- * the run changes on the change stream, and as its journal grows.
+ * the run changes on the change stream, and as its history grows.
  */
 export function useRun(id: string, enabled = true): Read<Run> {
   const store = useStore();
@@ -113,28 +113,28 @@ export function useRunSummary(id: string): RunSummary | undefined {
   return useSyncExternalStore(subscribe, get, get);
 }
 
-/** The run's journal, from its event stream, kept up to date while the run goes on. */
-export function useRunJournal(id: string): JournalSnapshot {
+/** The run's history, from its event stream, kept up to date while the run goes on. */
+export function useRunHistory(id: string): HistorySnapshot {
   const store = useStore();
-  const journal = store.journal(id);
-  useEffect(() => journal.retain(), [journal]);
-  return useSyncExternalStore(journal.subscribe, journal.getSnapshot, journal.getSnapshot);
+  const history = store.history(id);
+  useEffect(() => history.retain(), [history]);
+  return useSyncExternalStore(history.subscribe, history.getSnapshot, history.getSnapshot);
 }
 
-/** One entry of the journal, whole (every value, whatever its size). */
-export function useRunEntry(id: string, idx: number, enabled: boolean): Read<Entry> {
+/** One event of the history, whole (every value, whatever its size). */
+export function useRunEvent(id: string, idx: number, enabled: boolean): Read<HistoryEvent> {
   const { api } = useStore();
   return useQueryRead(
     useQuery({
-      queryKey: ["entry", id, idx],
-      queryFn: ({ signal }) => api.entry(id, idx, signal),
+      queryKey: ["event", id, idx],
+      queryFn: ({ signal }) => api.event(id, idx, signal),
       enabled,
       staleTime: Number.POSITIVE_INFINITY,
     }),
   );
 }
 
-/** A payload's value, read through the run whose journal holds it; a digest names one value. */
+/** A payload's value, read through the run whose history holds it; a digest names one value. */
 export function usePayloadValue(digest: string, run: string, enabled: boolean): Read<unknown> {
   const { api } = useStore();
   return useQueryRead(
@@ -147,8 +147,8 @@ export function usePayloadValue(digest: string, run: string, enabled: boolean): 
   );
 }
 
-/** The run's journal as a file to save: the journal document, or a cassette of its calls. */
-export function useRunExport(): (id: string, as: "journal" | "cassette") => Promise<Blob> {
+/** The run as a file to save: its run export, or a cassette of its calls and signals. */
+export function useRunExport(): (id: string, as: "run" | "cassette") => Promise<Blob> {
   const { api } = useStore();
-  return (id, as) => api.journal(id, as);
+  return (id, as) => api.exportRun(id, as);
 }

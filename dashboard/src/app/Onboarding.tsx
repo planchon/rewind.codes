@@ -20,7 +20,7 @@ export function Onboarding() {
   const open = useSwitchOrganization();
   const [name, setName] = useState("");
   if (phase.kind !== "member") return null;
-  const user = phase.state.user;
+  const user = phase.state.person;
   const pending = join.pending || create.pending || open.pending;
   const organizations = whoami.data?.organizations ?? [];
 
@@ -42,7 +42,7 @@ export function Onboarding() {
         <div className="onboarding-head">
           <h1>Welcome, {displayName(user)}</h1>
           <p className="dim">
-            Runs, scripts and keys belong to an organization. Join one you were invited to, or
+            Runs, workflows and keys belong to an organization. Join one you were invited to, or
             create your own: you will be its owner.
           </p>
         </div>

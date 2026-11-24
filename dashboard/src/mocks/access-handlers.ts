@@ -19,6 +19,7 @@ import {
   keepsOwner,
   type MockKey,
   memberDtos,
+  memberPrincipal,
   newId,
   permissionsOf,
   principalOf,
@@ -86,7 +87,7 @@ export function guard(
 /** The runs the caller reaches: its tenant's, carrying its grant's allowed labels. */
 export function runsWorld(world: World, caller: Caller): World {
   if (caller.tenant !== world.access.tenant) {
-    return { ...world, runs: [], scripts: [], payloads: new Map() };
+    return { ...world, runs: [], codes: [], payloads: new Map() };
   }
   const grant =
     caller.kind === "socket"
@@ -283,7 +284,7 @@ export function accessHandlers(world: World) {
       const org = { id: newId("org"), name, defaultRole: "reader" };
       access.organizations.push(org);
       access.memberships.push({ userId: caller.user.id, organizationId: org.id, status: "active" });
-      grantsOf(access, org.id).set(`user:${caller.user.id}`, {
+      grantsOf(access, org.id).set(memberPrincipal(caller.user.id), {
         role: "owner",
         allowedLabels: {},
         grantedAt: iso(Date.now()),
@@ -344,11 +345,11 @@ export function accessHandlers(world: World) {
       return HttpResponse.json({ members: caller.tenant ? memberDtos(access, caller.tenant) : [] });
     }),
 
-    http.put("*/v1/organization/members/:user/grant", async ({ request, params }) => {
+    http.put("*/v1/organization/members/:member/grant", async ({ request, params }) => {
       const caller = guard(world, request, "members:manage");
       if (caller instanceof Response) return caller;
       const tenant = caller.tenant ?? "";
-      const userId = String(params.user);
+      const userId = String(params.member);
       if (!access.memberships.some((m) => m.userId === userId && m.organizationId === tenant))
         return problem(404, "not-found", `No member ${userId} in this organization.`);
       const body = await json<{ role?: string; allowedLabels?: Labels }>(request);
@@ -356,7 +357,7 @@ export function accessHandlers(world: World) {
       const role = body.role ?? "";
       if (!roleExists(tenant, role))
         return problem(404, "not-found", `No role ${role} in this organization.`);
-      const principal = `user:${userId}`;
+      const principal = memberPrincipal(userId);
       const current = grantsOf(access, tenant).get(principal);
       const why =
         exceeds(caller, tenant, role) ?? (current ? exceeds(caller, tenant, current.role) : null);
@@ -377,16 +378,16 @@ export function accessHandlers(world: World) {
       return HttpResponse.json(next);
     }),
 
-    http.delete("*/v1/organization/members/:user", ({ request, params }) => {
+    http.delete("*/v1/organization/members/:member", ({ request, params }) => {
       const caller = guard(world, request, "members:manage");
       if (caller instanceof Response) return caller;
       const tenant = caller.tenant ?? "";
-      const userId = String(params.user);
+      const userId = String(params.member);
       const at = access.memberships.findIndex(
         (m) => m.userId === userId && m.organizationId === tenant,
       );
       if (at < 0) return problem(404, "not-found", `No member ${userId} in this organization.`);
-      const principal = `user:${userId}`;
+      const principal = memberPrincipal(userId);
       const current = grantsOf(access, tenant).get(principal);
       const why = current ? exceeds(caller, tenant, current.role) : null;
       if (why) return problem(403, "forbidden", why);
@@ -578,13 +579,17 @@ export function accessHandlers(world: World) {
         name?: string;
         role?: string;
         allowedLabels?: Labels;
-        tenant?: string | null;
+        organizationId?: string | null;
       }>(request);
       if (body instanceof Response) return body;
       const operator = isOperator(access, caller);
-      if (body.tenant && !operator)
-        return problem(403, "forbidden", "Only the operator creates a key for another tenant.");
-      const tenant = body.tenant || caller.tenant || "";
+      if (body.organizationId && !operator)
+        return problem(
+          403,
+          "forbidden",
+          "Only the operator creates a key for another organization.",
+        );
+      const tenant = body.organizationId || caller.tenant || "";
       const name = body.name?.trim();
       if (!name) return problem(400, "invalid-request", "Give the key a name.");
       const role = body.role ?? "";

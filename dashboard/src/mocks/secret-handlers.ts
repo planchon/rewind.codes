@@ -3,8 +3,9 @@
 // labels sees, writes and deletes only the organization's secrets carrying them, and the secrets
 // it writes take them; it never writes a namespace's secret. No answer holds a value.
 import { HttpResponse, http } from "msw";
-import type { Labels, PutSecret, Secret, SecretUsage, WorkflowAttaching } from "../model/types";
-import { type Caller, grantOf } from "./access";
+import type { Labels, PutSecret, Secret, SecretUsage, WorkflowSecrets } from "../model/types";
+import { isEnded } from "../model/types";
+import { type Caller, grantOf, memberPrincipal } from "./access";
 import { guard, json, runsWorld } from "./access-handlers";
 import { told } from "./changes";
 import type { World } from "./fixtures";
@@ -12,7 +13,6 @@ import { handleOf } from "./handles";
 import { problem } from "./problem";
 import { deriveRun } from "./readmodel";
 import {
-  attaches,
   emptySecretWorld,
   type MockSecret,
   newKid,
@@ -20,7 +20,9 @@ import {
   type SecretWorld,
   secretDto,
   signingKeyDto,
+  uses,
 } from "./secrets";
+import { latestVersion, workflowLabelOf } from "./workflows";
 
 const NAME_RULE = "1 to 64 lowercase letters, digits, - and _, starting with a letter";
 const MAX_VALUE_BYTES = 16 * 1024;
@@ -78,43 +80,48 @@ function nameProblem(name: string): Response | null {
       );
 }
 
-/** What reads the secret: the active runs that attach it, those waiting on a call it serves. */
+/** What reads the secret: the active runs that use it, those waiting on a call it serves. */
 function usageOf(world: World, caller: Caller, s: MockSecret, now: number): SecretUsage {
   const active: string[] = [];
   const waiting: string[] = [];
   for (const fixture of runsWorld(world, caller).runs) {
-    if (!attaches(fixture, s)) continue;
+    if (!uses(fixture, s)) continue;
     const run = deriveRun(world, fixture, now);
-    if (run.status !== "active") continue;
+    if (isEnded(run.status)) continue;
     active.push(run.id);
     const servers = Object.entries(fixture.secrets ?? {})
       .filter(([, ref]) => refersTo(ref, s, fixture.namespace))
       .map(([server]) => server);
     const waits = (run.waitingFor ?? []).some(
-      (w) => w.kind === "tool_call" && servers.includes(w.tool.split(".")[0] ?? ""),
+      (w) => w.kind === "call" && servers.includes(w.action.split(".")[0] ?? ""),
     );
     if (waits) waiting.push(run.id);
   }
-  // The latest version of each workflow.
-  const latest = new Map<string, (typeof world.workflows.versions)[number]>();
-  for (const v of world.workflows.versions) {
-    const seen = latest.get(v.name);
-    if (!seen || seen.createdAt < v.createdAt) latest.set(v.name, v);
-  }
-  const workflows: WorkflowAttaching[] = [];
-  for (const v of latest.values()) {
+  // The workflows whose latest version uses it.
+  const workflows: WorkflowSecrets[] = [];
+  for (const w of world.workflows.workflows) {
+    const v = latestVersion(w);
     const servers = Object.entries(v.secrets ?? {})
-      .filter(([, ref]) => refersTo(ref, s, null))
+      .filter(([, ref]) => refersTo(ref, s, w.namespace))
       .map(([server]) => server);
-    if (servers.length > 0) workflows.push({ name: v.name, version: v.version, servers });
+    if (servers.length > 0)
+      workflows.push({
+        workflow: w.id,
+        ...(w.name ? { name: w.name } : {}),
+        version: v.version,
+        digest: v.digest,
+        servers,
+      });
   }
+  const label = (w: WorkflowSecrets) =>
+    workflowLabelOf(world.workflows.workflows.find((x) => x.id === w.workflow));
   return {
     secret: withRunHandle(world, secretDto(s, now)),
     activeRuns: active.slice(0, USAGE_LIMIT),
     activeTotal: active.length,
     waitingRuns: waiting.slice(0, USAGE_LIMIT),
     waitingTotal: waiting.length,
-    workflows: workflows.sort((a, b) => a.name.localeCompare(b.name)),
+    workflows: workflows.sort((a, b) => label(a).localeCompare(label(b))),
   };
 }
 
@@ -151,7 +158,7 @@ export function secretHandlers(world: World, now: () => number) {
     const store = secretsOf(world, caller);
     const by =
       caller.kind === "user"
-        ? `user:${caller.user.id}`
+        ? memberPrincipal(caller.user.id)
         : caller.kind === "key"
           ? `key:${caller.key.id}`
           : "operator";
