@@ -50,7 +50,7 @@ pub struct Test {
     pub signals: Vec<TestSignal>,
     pub expect: Expectations,
     /// Where a recorded test comes from.
-    pub origin: Option<TestOrigin>,
+    pub from: Option<TestFromRun>,
 }
 
 /// What answers a run's calls during a test. A call is answered by the first source that has an
@@ -197,7 +197,7 @@ impl CallOrder {
 
 /// Where a recorded test comes from: it holds that run's data, and is read like the run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TestOrigin {
+pub struct TestFromRun {
     pub run: RunId,
     /// The workflow version the run executed.
     pub version: Digest,
@@ -247,7 +247,7 @@ impl Test {
             world: World::default(),
             signals: Vec::new(),
             expect: Expectations::default(),
-            origin: None,
+            from: None,
         }
     }
 
@@ -309,7 +309,7 @@ impl Test {
     /// expectation its status, its output or its error, and how many times it called each action
     /// (`archi/05-testing-and-observability.md`, "Tests recorded from runs"). Every payload of
     /// the history must be loaded.
-    pub fn record(history: &[HistoryEvent], origin: TestOrigin) -> Result<Self, RecordError> {
+    pub fn record(history: &[HistoryEvent], origin: TestFromRun) -> Result<Self, RecordError> {
         let started = validate_history(history)?;
         let input = loaded(0, &started.input)?;
         let state = RunState::from_history(history)?;
@@ -357,7 +357,7 @@ impl Test {
             },
             signals: Vec::new(),
             expect,
-            origin: Some(origin),
+            from: Some(origin),
         })
     }
 }
@@ -744,8 +744,8 @@ mod tests {
         ]
     }
 
-    fn origin() -> TestOrigin {
-        TestOrigin {
+    fn origin() -> TestFromRun {
+        TestFromRun {
             run: RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0000_0001),
             version: Digest::of(b"version"),
             namespace: "alice".into(),
@@ -793,7 +793,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(test.origin, Some(origin()));
+        assert_eq!(test.from, Some(origin()));
         test.check().unwrap();
         // The run passes its own recorded expectations.
         let history = triage();

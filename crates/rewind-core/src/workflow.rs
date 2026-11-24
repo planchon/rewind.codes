@@ -6,7 +6,7 @@
 //! ├── name, description?
 //! ├── code, action set            digests: what its runs execute
 //! ├── schemas                    { input, output, signals: { <name>: schema } }
-//! ├── suite                      base?, tests, retired, updated: the tests it passed
+//! ├── suite                      base?, tests, retired, replaced: the tests it passed
 //! ├── labels                     the scope it was saved under; {} for a tenant-wide save
 //! └── secrets                    its attachments: { <server>: org/<name> | ns/<name> }
 //!
@@ -115,7 +115,7 @@ pub struct Suite {
     /// The base's tests it does not keep.
     pub retired: Vec<RetiredTest>,
     /// The base's tests it replaced.
-    pub updated: Vec<UpdatedTest>,
+    pub replaced: Vec<ReplacedTest>,
 }
 
 impl Suite {
@@ -123,7 +123,7 @@ impl Suite {
         self.base.is_none()
             && self.tests.is_empty()
             && self.retired.is_empty()
-            && self.updated.is_empty()
+            && self.replaced.is_empty()
     }
 
     /// The digest of the test named `name`.
@@ -139,7 +139,7 @@ impl Suite {
     fn normalize(mut self) -> Result<Self, InvalidWorkflow> {
         self.tests.sort_by(|a, b| a.name.cmp(&b.name));
         self.retired.sort_by(|a, b| a.name.cmp(&b.name));
-        self.updated.sort_by(|a, b| a.name.cmp(&b.name));
+        self.replaced.sort_by(|a, b| a.name.cmp(&b.name));
         for pair in self.tests.windows(2) {
             if pair[0].name == pair[1].name {
                 return Err(InvalidWorkflow::DuplicateTest(pair[0].name.clone()));
@@ -150,9 +150,9 @@ impl Suite {
             .iter()
             .map(|retired| (&retired.name, &retired.reason))
             .chain(
-                self.updated
+                self.replaced
                     .iter()
-                    .map(|updated| (&updated.name, &updated.reason)),
+                    .map(|replaced| (&replaced.name, &replaced.reason)),
             );
         for (name, reason) in reasons {
             if reason.trim().is_empty() {
@@ -188,20 +188,20 @@ impl Suite {
                 .collect();
             object.insert("retired".into(), Value::Array(retired));
         }
-        if !self.updated.is_empty() {
-            let updated: Vec<Value> = self
-                .updated
+        if !self.replaced.is_empty() {
+            let replaced: Vec<Value> = self
+                .replaced
                 .iter()
-                .map(|updated| {
+                .map(|replaced| {
                     json!({
-                        "name": updated.name,
-                        "from": updated.from.to_hex(),
-                        "to": updated.to.to_hex(),
-                        "reason": updated.reason,
+                        "name": replaced.name,
+                        "old": replaced.old.to_hex(),
+                        "new": replaced.new.to_hex(),
+                        "reason": replaced.reason,
                     })
                 })
                 .collect();
-            object.insert("updated".into(), Value::Array(updated));
+            object.insert("replaced".into(), Value::Array(replaced));
         }
     }
 }
@@ -223,10 +223,10 @@ pub struct RetiredTest {
 
 /// A test of the base a version replaced, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UpdatedTest {
+pub struct ReplacedTest {
     pub name: String,
-    pub from: Digest,
-    pub to: Digest,
+    pub old: Digest,
+    pub new: Digest,
     pub reason: String,
 }
 
@@ -251,7 +251,7 @@ pub enum InvalidWorkflow {
     Schema(String),
     #[error("the suite has two tests named {0:?}: names are unique in a suite")]
     DuplicateTest(String),
-    #[error("the test {0:?} is retired or updated without a reason: say why")]
+    #[error("the test {0:?} is retired or replaced without a reason: say why")]
     NoReason(String),
 }
 

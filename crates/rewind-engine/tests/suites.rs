@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use rewind_core::{
     ActionOutcome, ActionRule, ActionSet, Code, ERASED_TEST_REASON, Expectations, ExpectedCall,
-    RunStatus, Test, TestOrigin, TestSignal, WorkflowSchemas,
+    RunStatus, Test, TestFromRun, TestSignal, WorkflowSchemas,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::{RecordFrom, RecordingError};
@@ -20,7 +20,7 @@ use rewind_engine::ports::{
     WorkflowDeclarations,
 };
 use rewind_engine::suites::{
-    Recorder, SuiteChanges, SuiteError, TestInput, TestRetirement, TestUpdate, UpdateWith,
+    Recorder, ReplaceWith, SuiteChanges, SuiteError, TestInput, TestReplacement, TestRetirement,
 };
 use rewind_engine::testing::TestProblem;
 use rewind_engine::{RegisterError, RegisterWorkflow};
@@ -202,10 +202,10 @@ async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
             save(
                 "v2",
                 SuiteChanges {
-                    update: vec![TestUpdate {
+                    replace: vec![TestReplacement {
                         name: "closes one".into(),
                         reason: "closed issues are counted elsewhere now".into(),
-                        with: UpdateWith::Expect(updated.clone()),
+                        with: ReplaceWith::Expect(updated.clone()),
                     }],
                     ..SuiteChanges::default()
                 },
@@ -217,11 +217,11 @@ async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
         .unwrap();
     let suite = v2.workflow.suite();
     assert_eq!(suite.base, Some(v1.workflow.version()));
-    assert_eq!(suite.updated.len(), 1);
-    assert_eq!(suite.updated[0].from, digest);
-    assert_eq!(suite.updated[0].to, suite.tests[0].test);
+    assert_eq!(suite.replaced.len(), 1);
+    assert_eq!(suite.replaced[0].old, digest);
+    assert_eq!(suite.replaced[0].new, suite.tests[0].test);
     assert_eq!(
-        suite.updated[0].reason,
+        suite.replaced[0].reason,
         "closed issues are counted elsewhere now"
     );
     let replaced = world
@@ -262,7 +262,7 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
                 retire: vec![retire(&["closes one"], " ")],
                 ..SuiteChanges::default()
             },
-            "the test \"closes one\" is retired or updated without a reason: say why",
+            "the test \"closes one\" is retired or replaced without a reason: say why",
         ),
         (
             SuiteChanges {
@@ -278,19 +278,19 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
                 ..SuiteChanges::default()
             },
             "the suite already has a test named \"closes one\": give the new test another name, \
-             or update the inherited one with a reason",
+             or replace the inherited one with a reason",
         ),
         (
             SuiteChanges {
                 retire: vec![retire(&["closes one"], "gone")],
-                update: vec![TestUpdate {
+                replace: vec![TestReplacement {
                     name: "closes one".into(),
                     reason: "changed".into(),
-                    with: UpdateWith::Expect(Expectations::default()),
+                    with: ReplaceWith::Expect(Expectations::default()),
                 }],
                 ..SuiteChanges::default()
             },
-            "the test \"closes one\" is both retired and updated: do one",
+            "the test \"closes one\" is both retired and replaced: do one",
         ),
     ];
     for (changes, message) in cases {
@@ -422,7 +422,7 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
     let checker = StaticTypeChecker::default();
     let mut recorded = closes();
     recorded.name = "recorded".into();
-    recorded.origin = Some(TestOrigin {
+    recorded.from = Some(TestFromRun {
         run: rewind_core::RunId::from_u128(7),
         version: rewind_core::Digest::of(b"v0"),
         namespace: "alice".into(),
@@ -453,7 +453,7 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
                     tests: vec![
                         TestInput::Stored(digests[0]),
                         TestInput::From {
-                            from: digests[0],
+                            test: digests[0],
                             expect: Expectations::default(),
                         },
                     ],
@@ -612,7 +612,7 @@ async fn recording_keeps_the_newest_run_of_each_path() {
         let history = world.history(run).await;
         recorder.offer(
             &history,
-            TestOrigin {
+            TestFromRun {
                 run: run.id,
                 version: rewind_core::Digest::of(b"closer"),
                 namespace: "alice".into(),
@@ -743,7 +743,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         .unwrap()
         .unwrap();
     assert_eq!(stored, recording.recorded[0].test);
-    let origin = stored.origin.unwrap();
+    let origin = stored.from.unwrap();
     assert_eq!(origin.version, version.workflow.version());
     assert_eq!(origin.namespace, "alice");
     assert_eq!(

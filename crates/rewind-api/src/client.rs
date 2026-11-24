@@ -267,7 +267,7 @@ impl Client {
     }
 
     /// `POST /v1/test`.
-    pub async fn test(&self, test: &TestRequest) -> Result<crate::testing::TestRun, Error> {
+    pub async fn test(&self, test: &TestRequest) -> Result<crate::testing::TestReport, Error> {
         let request = self.request(Method::POST, routes::TEST, &[])?.json(test);
         self.json(request).await
     }

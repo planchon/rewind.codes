@@ -677,7 +677,7 @@ pub fn describe_save_refused(
         ),
         describe_test_results(results, limits),
         format!(
-            "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
+            "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or replace it in `replace` (its state or its expected result is out of date), with a reason.",
             args(&[("code", json!("…")), ("workflow", json!(workflow))])
         ),
     ]
@@ -713,7 +713,7 @@ pub fn describe_retry_refused(
         ),
         describe_test_results(results, limits),
         format!(
-            "A fix must keep every behavior {suite} pins: there is no way around it. Fix the code, and check it with {check} before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it."
+            "A fix must keep every behavior {suite} pins: there is no way around it. Fix the code, and check it with {check} before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or replacing its tests with a reason, and start a new run of it."
         ),
     ]
     .join("\n")
@@ -835,7 +835,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
         lines.push("Its suite is empty: it has no test.".to_owned());
     } else {
         lines.push(format!(
-            "Its suite, {}, which every version derived from it must pass (give a digest in save_workflow's `tests` or `update` to reuse a test):",
+            "Its suite, {}, which every version derived from it must pass (give a digest in save_workflow's `tests` or `replace` to reuse a test):",
             plural(details.tests.len(), "test")
         ));
         let room = (limits.output / details.tests.len()).max(limits.value);
@@ -856,7 +856,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
                 continue;
             };
             let origin = test
-                .origin
+                .from
                 .as_ref()
                 .map(|origin| {
                     format!(
@@ -883,11 +883,11 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
             version.created_at,
             plural(version.tests.len(), "test")
         ));
-        for updated in &version.updated {
+        for replaced in &version.replaced {
             lines.push(format!(
-                "  updated {}: {}",
-                quoted(&truncate_end(&updated.name, limits.line)),
-                truncate_end(&updated.reason, limits.value)
+                "  replaced {}: {}",
+                quoted(&truncate_end(&replaced.name, limits.line)),
+                truncate_end(&replaced.reason, limits.value)
             ));
         }
         for retired in &version.retired {
@@ -1680,7 +1680,7 @@ mod tests {
                 "  Transcript:",
                 "#0 run_started\n#1 signal approval\n#2 call github.close_issue",
                 "PASS \"closes once approved\"",
-                "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
+                "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or replace it in `replace` (its state or its expected result is out of date), with a reason.",
             ]
             .join("\n")
         );
@@ -1715,7 +1715,7 @@ mod tests {
                 "  Calls: github.close_issue ×1, github.list_issues ×1",
                 "  Transcript:",
                 "#0 run_started\n#1 call github.close_issue",
-                "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the code, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.",
+                "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the code, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or replacing its tests with a reason, and start a new run of it.",
             ]
             .join("\n")
         );
@@ -1759,8 +1759,8 @@ mod tests {
                 { "name": format!("recorded {RUN_ID}"), "digest": recorded_digest },
                 { "name": "recorded 0193a5c4-0000-7000-8000-000000000000", "digest": foreign }
             ],
-            "updated": [{
-                "name": "closes nothing without approval", "from": "3e".repeat(32), "to": inline_digest,
+            "replaced": [{
+                "name": "closes nothing without approval", "old": "3e".repeat(32), "new": inline_digest,
                 "reason": "the message names the repository"
             }],
             "retired": [{
@@ -1799,7 +1799,7 @@ mod tests {
                 "signals": [{ "name": "approval", "payload": { "close": true }, "elapsed_ms": 3_600_000 }]
             } },
             "expect": { "status": "completed", "output": { "closed": 2 } },
-            "origin": { "run": RUN_ID, "version": parent_version, "namespace": "user_2fQ81" }
+            "from": { "run": RUN_ID, "version": parent_version, "namespace": "user_2fQ81" }
         });
         let details = WorkflowDetails {
             versions: vec![latest.clone(), parent, first],
@@ -1841,7 +1841,7 @@ mod tests {
                 format!("- \"approval\": {}", json(&latest.signals["approval"])),
                 "Source:".to_owned(),
                 "export default async () => ({ closed: 0 });".to_owned(),
-                "Its suite, 3 tests, which every version derived from it must pass (give a digest in save_workflow's `tests` or `update` to reuse a test):".to_owned(),
+                "Its suite, 3 tests, which every version derived from it must pass (give a digest in save_workflow's `tests` or `replace` to reuse a test):".to_owned(),
                 format!("Test \"closes nothing without approval\" ({inline_digest}):"),
                 // `JSON.stringify` keeps the order the server writes a test's fields in.
                 "{\"name\":\"closes nothing without approval\",\"input\":{\"repo\":\"acme/api\"},\"world\":{\"actions\":{\"github.list_issues\":[{\"returns\":[{\"number\":4}]}]}},\"signals\":[{\"name\":\"approval\",\"payload\":{\"close\":false}}],\"expect\":{\"output\":{\"closed\":0},\"calls\":[{\"action\":\"github.close_issue\",\"times\":0}]}}".to_owned(),
@@ -1850,13 +1850,13 @@ mod tests {
                     short(&parent_version)
                 ),
                 format!(
-                    "{{\"name\":\"recorded {RUN_ID}\",\"input\":{{\"repo\":\"acme/api\"}},\"seed\":\"{}\",\"world\":{{\"cassette\":{{\"summary\":\"3 recorded calls matched by_args (github.list_issues ×1, github.close_issue ×2), 1 signal (approval)\"}}}},\"expect\":{{\"status\":\"completed\",\"output\":{{\"closed\":2}}}},\"origin\":{{\"run\":\"{RUN_ID}\",\"version\":\"{parent_version}\",\"namespace\":\"user_2fQ81\"}}}}",
+                    "{{\"name\":\"recorded {RUN_ID}\",\"input\":{{\"repo\":\"acme/api\"}},\"seed\":\"{}\",\"world\":{{\"cassette\":{{\"summary\":\"3 recorded calls matched by_args (github.list_issues ×1, github.close_issue ×2), 1 signal (approval)\"}}}},\"expect\":{{\"status\":\"completed\",\"output\":{{\"closed\":2}}}},\"from\":{{\"run\":\"{RUN_ID}\",\"version\":\"{parent_version}\",\"namespace\":\"user_2fQ81\"}}}}",
                     "07".repeat(32)
                 ),
                 format!("Test \"recorded 0193a5c4-0000-7000-8000-000000000000\" ({foreign}): it cannot be read: reading this test needs runs:read in the namespace it was recorded from"),
                 "Lineage, newest first:".to_owned(),
                 format!("- triage@4be1c07a9d3e, saved 2026-11-12T10:00:00Z, from triage@{}: 3 tests.", short(&parent_version)),
-                "  updated \"closes nothing without approval\": the message names the repository".to_owned(),
+                "  replaced \"closes nothing without approval\": the message names the repository".to_owned(),
                 "  retired \"asks before closing\": under 5 stale issues, it closes without asking".to_owned(),
                 format!(
                     "- triage@{}, saved 2026-11-11T10:00:00Z, from triage@{}: 1 test.",

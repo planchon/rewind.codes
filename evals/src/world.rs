@@ -20,8 +20,8 @@ use std::time::Duration;
 use rewind_check::TsgoChecker;
 use rewind_core::{
     Action, ActionRoute, ActionSet, Builtin, Code, Command, Completion, Digest, Event,
-    HistoryEvent, McpServer, McpTransport, RetiredTest, RunId, RunOutcome, RunState, RunStatus,
-    Seq, Timestamp, UpdatedTest,
+    HistoryEvent, McpServer, McpTransport, ReplacedTest, RetiredTest, RunId, RunOutcome, RunState,
+    RunStatus, Seq, Timestamp,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -633,7 +633,7 @@ impl World {
                         .unwrap_or_default(),
                     tests,
                     retired: workflow.suite().retired.clone(),
-                    updated: workflow.suite().updated.clone(),
+                    replaced: workflow.suite().replaced.clone(),
                 });
             }
         }
@@ -974,7 +974,7 @@ pub struct WorkflowReport {
     /// The tests of its suite, in its order, each loaded.
     pub tests: Vec<LoadedTest>,
     pub retired: Vec<RetiredTest>,
-    pub updated: Vec<UpdatedTest>,
+    pub replaced: Vec<ReplacedTest>,
 }
 
 impl WorkflowReport {

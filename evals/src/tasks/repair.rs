@@ -322,12 +322,12 @@ fn new_version<'o>(
     ))
 }
 
-/// Every test a version updated or retired says why.
+/// Every test a version replaced or retired says why.
 fn reasons_given(outcome: &Outcome, workflow: &str) -> Result<(), String> {
     for version in outcome.versions(workflow) {
-        for updated in &version.updated {
-            ensure(!updated.reason.trim().is_empty(), || {
-                format!("the update of {:?} gives no reason", updated.name)
+        for replaced in &version.replaced {
+            ensure(!replaced.reason.trim().is_empty(), || {
+                format!("the replacement of {:?} gives no reason", replaced.name)
             })?;
         }
         for retired in &version.retired {
@@ -351,7 +351,7 @@ fn check_regression(outcome: &Outcome) -> Result<(), String> {
         loaded
             .test
             .as_ref()
-            .and_then(|test| test.origin.as_ref())
+            .and_then(|test| test.from.as_ref())
             .is_some_and(|origin| origin.run == failed)
     });
     ensure(regression, || {
@@ -501,7 +501,7 @@ pub(super) fn tasks() -> Vec<Task> {
             features: &[
                 "get_workflow",
                 "stale tests",
-                "update with a reason",
+                "replace with a reason",
                 "retire with a reason",
                 "pagination",
             ],

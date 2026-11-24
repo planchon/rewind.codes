@@ -15,7 +15,8 @@ use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::scripts::TestRequest;
 use rewind_api::testing::{
-    Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
+    Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem,
+    TestReport as ApiTestReport, TestResult,
 };
 use rewind_api::workflows::{RecordTests, RecordedTest, RecordedTests, SkippedRun};
 use rewind_core::{ActionSet, Cassette, Code, Digest, Test, WorkflowSchemas};
@@ -67,11 +68,11 @@ pub(crate) fn input(input: ApiTestInput) -> Result<TestInput, ApiError> {
     match input {
         ApiTestInput::Digest(digest) => Ok(TestInput::Stored(test_digest(&digest)?)),
         ApiTestInput::From(from) => Ok(TestInput::From {
-            from: test_digest(&from.from)?,
+            test: test_digest(&from.test)?,
             expect: from.expect.into_core(),
         }),
         ApiTestInput::Inline(test) => {
-            if test.origin.is_some() {
+            if test.from.is_some() {
                 return Err(ApiError::new(
                     ProblemType::InvalidTest,
                     format!(
@@ -137,7 +138,7 @@ pub(crate) fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
     ApiError(Box::new(rewind_api::Problem::tests_failed(
         format!(
             "{} of {} tests of {suite} did not pass: {}. Fix the code, or retire a test that is \
-             deprecated or update one whose state or result is out of date, each with a reason",
+             deprecated or replace one whose state or result is out of date, each with a reason",
             failed.len(),
             reports.len(),
             failed.join("; ")
@@ -220,7 +221,7 @@ pub(super) async fn test(
     State(app): State<Arc<App>>,
     caller: Caller,
     Body(request): Body<TestRequest>,
-) -> Result<Json<TestRun>, ApiError> {
+) -> Result<Json<ApiTestReport>, ApiError> {
     caller.require(Permission::RunsStart)?;
     let bounds = super::scripts::bounds(&app, &caller).await?;
     let tenant = &caller.tenant;
@@ -278,7 +279,7 @@ pub(super) async fn test(
         &options,
     )
     .await?;
-    Ok(Json(TestRun {
+    Ok(Json(ApiTestReport {
         passed: reports.iter().all(|report| report.passed),
         tests: reports.iter().map(result).collect(),
     }))

@@ -520,7 +520,7 @@ fn namespace_of(
 /// `http/workflows.rs`, `view`): its declaration generated as an action set that pins it alone
 /// generates it.
 pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
-    use rewind_api::workflows::{RetiredTest, SuiteTest, UpdatedTest};
+    use rewind_api::workflows::{ReplacedTest, RetiredTest, SuiteTest};
 
     let workflow = &stored.workflow;
     let declarations = rewind_core::ActionSet::empty()
@@ -576,15 +576,15 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
                 reason: retired.reason.clone(),
             })
             .collect(),
-        updated: workflow
+        replaced: workflow
             .suite()
-            .updated
+            .replaced
             .iter()
-            .map(|updated| UpdatedTest {
-                name: updated.name.clone(),
-                from: updated.from.to_hex(),
-                to: updated.to.to_hex(),
-                reason: updated.reason.clone(),
+            .map(|replaced| ReplacedTest {
+                name: replaced.name.clone(),
+                old: replaced.old.to_hex(),
+                new: replaced.new.to_hex(),
+                reason: replaced.reason.clone(),
             })
             .collect(),
     }

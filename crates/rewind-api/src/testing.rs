@@ -57,7 +57,7 @@ pub struct Test {
     pub expect: Expectations,
     /// Where a recorded test comes from; set by recording, refused in a test given inline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<TestOrigin>,
+    pub from: Option<TestFromRun>,
 }
 
 fn empty_object() -> Value {
@@ -211,7 +211,7 @@ pub enum CallOrder {
 /// The run a recorded test comes from. The test holds that run's data, and is read like it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TestOrigin {
+pub struct TestFromRun {
     pub run: String,
     /// The workflow version the run executed.
     pub version: String,
@@ -235,7 +235,7 @@ pub enum TestInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestFrom {
     /// The digest of the stored test.
-    pub from: String,
+    pub test: String,
     pub expect: Expectations,
 }
 
@@ -285,7 +285,7 @@ pub struct TestResult {
 /// `POST /v1/test`: what the tests ran against, and their outcomes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct TestRun {
+pub struct TestReport {
     /// Every test passed.
     pub passed: bool,
     /// In the order given, then the suite's.
@@ -365,15 +365,15 @@ impl Test {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let origin = self
-            .origin
+            .from
             .map(|origin| {
-                Ok::<_, String>(rewind_core::TestOrigin {
+                Ok::<_, String>(rewind_core::TestFromRun {
                     run: origin
                         .run
                         .parse()
-                        .map_err(|error| format!("test {name:?}: origin.run: {error}"))?,
+                        .map_err(|error| format!("test {name:?}: from.run: {error}"))?,
                     version: Digest::from_hex(&origin.version)
-                        .map_err(|error| format!("test {name:?}: origin.version: {error}"))?,
+                        .map_err(|error| format!("test {name:?}: from.version: {error}"))?,
                     namespace: origin.namespace,
                 })
             })
@@ -390,7 +390,7 @@ impl Test {
             },
             signals,
             expect: self.expect.into_core(),
-            origin,
+            from: origin,
         };
         test.check().map_err(|error| error.to_string())?;
         Ok(test)
@@ -436,7 +436,7 @@ impl Test {
                 })
                 .collect(),
             expect: Expectations::from_core(&test.expect),
-            origin: test.origin.as_ref().map(|origin| TestOrigin {
+            from: test.from.as_ref().map(|origin| TestFromRun {
                 run: origin.run.to_string(),
                 version: origin.version.to_hex(),
                 namespace: origin.namespace.clone(),
@@ -566,7 +566,7 @@ mod tests {
     fn a_test_reads_inline_by_digest_or_from_a_stored_one() {
         let inputs: Vec<TestInput> = serde_json::from_value(json!([
             "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
-            { "from": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+            { "test": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
               "expect": { "status": "failed" } },
             { "name": "t", "world": { "actions": { "a.b": { "returns": null } } } },
         ]))

@@ -15,7 +15,7 @@ use rewind_api::runs::{ForkRun, StartRun};
 use rewind_api::scripts::TestRequest;
 use rewind_api::testing::{Test, TestFrom, TestInput, TestProblem};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, TestRetirement, TestUpdate, WorkflowQuery,
+    CreateWorkflow, RecordTests, TestReplacement, TestRetirement, WorkflowQuery,
 };
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
@@ -72,7 +72,7 @@ fn triage(action_set: &str, code: &str) -> CreateWorkflow {
         )]),
         base: None,
         tests: Vec::new(),
-        update: Vec::new(),
+        replace: Vec::new(),
         retire: Vec::new(),
         secrets: Default::default(),
     }
@@ -134,10 +134,10 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
 
     // Updating the expectation with a reason saves it, its base the first version.
     let mut second = triage(&action_set.id, TWO);
-    second.update = vec![TestUpdate {
+    second.replace = vec![TestReplacement {
         name: "closes three once approved".into(),
         reason: "two issues are kept open for the next sprint".into(),
-        test: None,
+        new: None,
         expect: Some(
             serde_json::from_value(json!({ "status": "completed", "output": { "closed": 2 } }))
                 .unwrap(),
@@ -145,9 +145,9 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     }];
     let v2 = harness.create_workflow(&second).await.unwrap();
     assert_eq!(v2.base.as_deref(), Some(v1.digest.as_str()));
-    assert_eq!(v2.updated.len(), 1);
-    assert_eq!(v2.updated[0].from, v1.tests[0].digest);
-    assert_eq!(v2.updated[0].to, v2.tests[0].digest);
+    assert_eq!(v2.replaced.len(), 1);
+    assert_eq!(v2.replaced[0].old, v1.tests[0].digest);
+    assert_eq!(v2.replaced[0].new, v2.tests[0].digest);
 
     // Retiring needs a reason, and names an inherited test.
     let mut retired = triage(&action_set.id, TRIAGE);
@@ -182,7 +182,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     let mut forged = triage(&action_set.id, TRIAGE);
     let mut test = closes_three();
     test.name = "forged".into();
-    test.origin = Some(rewind_api::testing::TestOrigin {
+    test.from = Some(rewind_api::testing::TestFromRun {
         run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10".into(),
         version: v1.digest.clone(),
         namespace: "alice".into(),
@@ -309,7 +309,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     assert_eq!(recorded.tests[0].path, "signal approval → completed");
     let test = harness.get_test(&recorded.tests[0].digest).await.unwrap();
     assert_eq!(test.input, json!({ "repo": "acme/db" }));
-    assert_eq!(test.origin.as_ref().unwrap().run, runs[2]);
+    assert_eq!(test.from.as_ref().unwrap().run, runs[2]);
     assert!(test.world.cassette.is_some());
 
     // Named runs are recorded whatever their path.
@@ -341,7 +341,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
             code: Some(TWO.into()),
             action_set: Some(action_set.id.clone()),
             tests: vec![TestInput::From(TestFrom {
-                from: named.tests[0].digest.clone(),
+                test: named.tests[0].digest.clone(),
                 expect: serde_json::from_value(json!({ "output": { "closed": 2 } })).unwrap(),
             })],
             workflow: None,

@@ -51,7 +51,7 @@ pub fn labels(episode: &str) -> BTreeMap<String, String> {
 }
 
 /// The tests a tool call gives: `test_workflow`'s and `save_workflow`'s `tests`, and the tests
-/// `save_workflow` updates.
+/// `save_workflow` replacements.
 fn tests_given(name: &str, input: &serde_json::Value) -> usize {
     let input = match input {
         serde_json::Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
@@ -65,7 +65,7 @@ fn tests_given(name: &str, input: &serde_json::Value) -> usize {
     };
     match name {
         "test_workflow" => count("tests"),
-        "save_workflow" => count("tests") + count("update"),
+        "save_workflow" => count("tests") + count("replace"),
         _ => 0,
     }
 }
@@ -98,7 +98,7 @@ pub struct EpisodeRecord {
     /// Workflows refused by the checks.
     pub refused: usize,
     /// Tests the model wrote, unprompted or not: those it gave `test_workflow` and
-    /// `save_workflow`, updates included.
+    /// `save_workflow`, replacements included.
     pub tests_written: usize,
     /// Fixes the gate refused because a test of a workflow's suite did not pass
     /// (`save_workflow`, `retry_run`).

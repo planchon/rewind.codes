@@ -1920,6 +1920,13 @@
             "description": "JSON Schema of what `main` returns.",
             "type": "object"
           },
+          "replace": {
+            "description": "Inherited tests replaced, each with a reason: their state or result is out of date.",
+            "items": {
+              "$ref": "#/components/schemas/TestReplacement"
+            },
+            "type": "array"
+          },
           "retire": {
             "description": "Inherited tests dropped, with a reason: they are deprecated.",
             "items": {
@@ -1939,13 +1946,6 @@
             "description": "New tests: inline, by the digest of a recorded test, or a recorded test with a new\nexpectation.",
             "items": {
               "$ref": "#/components/schemas/TestInput"
-            },
-            "type": "array"
-          },
-          "update": {
-            "description": "Inherited tests replaced, each with a reason: their state or result is out of date.",
-            "items": {
-              "$ref": "#/components/schemas/TestUpdate"
             },
             "type": "array"
           }
@@ -5221,6 +5221,30 @@
         },
         "type": "object"
       },
+      "ReplacedTest": {
+        "description": "A test of the base a version replaced.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "new": {
+            "type": "string"
+          },
+          "old": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "old",
+          "new",
+          "reason"
+        ],
+        "type": "object"
+      },
       "Resync": {
         "description": "The data of a `resync` event: an empty object.",
         "type": "object"
@@ -7110,23 +7134,23 @@
           "expect": {
             "$ref": "#/components/schemas/Expectations"
           },
-          "input": {
-            "description": "The run's input. `{}` when absent."
-          },
-          "name": {
-            "description": "Unique within a suite.",
-            "type": "string"
-          },
-          "origin": {
+          "from": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/TestOrigin",
+                "$ref": "#/components/schemas/TestFromRun",
                 "description": "Where a recorded test comes from; set by recording, refused in a test given inline."
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "input": {
+            "description": "The run's input. `{}` when absent."
+          },
+          "name": {
+            "description": "Unique within a suite.",
+            "type": "string"
           },
           "seed": {
             "description": "The run's seed, 64 lowercase hex digits; the same fixed seed for every test when absent.",
@@ -7166,33 +7190,18 @@
           "expect": {
             "$ref": "#/components/schemas/Expectations"
           },
-          "from": {
+          "test": {
             "description": "The digest of the stored test.",
             "type": "string"
           }
         },
         "required": [
-          "from",
+          "test",
           "expect"
         ],
         "type": "object"
       },
-      "TestInput": {
-        "description": "A test given to `POST /v1/test` or to a save: inline, by the digest of a stored test (one\nrecorded from a run), or as a stored test with a new expectation.",
-        "oneOf": [
-          {
-            "description": "The digest of a stored test.",
-            "type": "string"
-          },
-          {
-            "$ref": "#/components/schemas/TestFrom"
-          },
-          {
-            "$ref": "#/components/schemas/Test"
-          }
-        ]
-      },
-      "TestOrigin": {
+      "TestFromRun": {
         "additionalProperties": false,
         "description": "The run a recorded test comes from. The test holds that run's data, and is read like it.",
         "properties": {
@@ -7214,6 +7223,21 @@
         ],
         "type": "object"
       },
+      "TestInput": {
+        "description": "A test given to `POST /v1/test` or to a save: inline, by the digest of a stored test (one\nrecorded from a run), or as a stored test with a new expectation.",
+        "oneOf": [
+          {
+            "description": "The digest of a stored test.",
+            "type": "string"
+          },
+          {
+            "$ref": "#/components/schemas/TestFrom"
+          },
+          {
+            "$ref": "#/components/schemas/Test"
+          }
+        ]
+      },
       "TestProblem": {
         "description": "Why a test did not pass.",
         "enum": [
@@ -7222,6 +7246,67 @@
           "failed"
         ],
         "type": "string"
+      },
+      "TestReplacement": {
+        "additionalProperties": false,
+        "description": "An inherited test replaced: by a whole new test, which takes its name, or by itself with a\nnew expectation.",
+        "properties": {
+          "expect": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Expectations",
+                "description": "Or only a new expectation for the test of the suite."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "new": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestInput",
+                "description": "A whole new test, which takes the name."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "description": "Why: kept in the lineage.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "TestReport": {
+        "description": "`POST /v1/test`: what the tests ran against, and their outcomes.",
+        "properties": {
+          "passed": {
+            "description": "Every test passed.",
+            "type": "boolean"
+          },
+          "tests": {
+            "description": "In the order given, then the suite's.",
+            "items": {
+              "$ref": "#/components/schemas/TestResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "passed",
+          "tests"
+        ],
+        "type": "object"
       },
       "TestRequest": {
         "additionalProperties": false,
@@ -7388,27 +7473,6 @@
         ],
         "type": "object"
       },
-      "TestRun": {
-        "description": "`POST /v1/test`: what the tests ran against, and their outcomes.",
-        "properties": {
-          "passed": {
-            "description": "Every test passed.",
-            "type": "boolean"
-          },
-          "tests": {
-            "description": "In the order given, then the suite's.",
-            "items": {
-              "$ref": "#/components/schemas/TestResult"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "passed",
-          "tests"
-        ],
-        "type": "object"
-      },
       "TestSignal": {
         "additionalProperties": false,
         "description": "A signal sent during a test.",
@@ -7427,44 +7491,6 @@
         },
         "required": [
           "name"
-        ],
-        "type": "object"
-      },
-      "TestUpdate": {
-        "additionalProperties": false,
-        "description": "An inherited test replaced: by a whole new test, which takes its name, or by itself with a\nnew expectation.",
-        "properties": {
-          "expect": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Expectations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "reason": {
-            "description": "Why: kept in the lineage.",
-            "type": "string"
-          },
-          "test": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/TestInput"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "name",
-          "reason"
         ],
         "type": "object"
       },
@@ -7741,30 +7767,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "UpdatedTest": {
-        "description": "A test of the base a version replaced.",
-        "properties": {
-          "from": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "to": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "from",
-          "to",
-          "reason"
-        ],
         "type": "object"
       },
       "WaitCounts": {
@@ -8272,6 +8274,12 @@
           "output": {
             "type": "object"
           },
+          "replaced": {
+            "items": {
+              "$ref": "#/components/schemas/ReplacedTest"
+            },
+            "type": "array"
+          },
           "retired": {
             "items": {
               "$ref": "#/components/schemas/RetiredTest"
@@ -8289,12 +8297,6 @@
             "description": "Its suite: the tests it passed when it was saved, by name.",
             "items": {
               "$ref": "#/components/schemas/SuiteTest"
-            },
-            "type": "array"
-          },
-          "updated": {
-            "items": {
-              "$ref": "#/components/schemas/UpdatedTest"
             },
             "type": "array"
           },
@@ -19532,7 +19534,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TestRun"
+                  "$ref": "#/components/schemas/TestReport"
                 }
               }
             },

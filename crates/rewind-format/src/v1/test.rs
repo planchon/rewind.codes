@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use rewind_core::{
     ActionFailure, ActionFailureKind, ActionOutcome, ActionRule, CallOrder, Expectations,
-    ExpectedCall, ExpectedError, RunId, RunStatus, Seed, SignalWhen, Test, TestOrigin, TestSignal,
+    ExpectedCall, ExpectedError, RunId, RunStatus, Seed, SignalWhen, Test, TestFromRun, TestSignal,
     Timestamp, World,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -48,7 +48,7 @@ struct TestV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expect: Option<ExpectV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    origin: Option<OriginV1>,
+    from: Option<FromRunV1>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -174,7 +174,7 @@ enum OrderV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OriginV1 {
+struct FromRunV1 {
     run: String,
     version: String,
     namespace: String,
@@ -195,10 +195,10 @@ pub(crate) fn test_document(test: &Test) -> Value {
         world: (!test.world.is_empty()).then(|| world_dto(&test.world)),
         signals: test.signals.iter().map(signal_dto).collect(),
         expect: (!test.expect.is_empty()).then(|| expect_dto(&test.expect)),
-        origin: test.origin.as_ref().map(|origin| OriginV1 {
-            run: origin.run.to_string(),
-            version: origin.version.to_hex(),
-            namespace: origin.namespace.clone(),
+        from: test.from.as_ref().map(|from| FromRunV1 {
+            run: from.run.to_string(),
+            version: from.version.to_hex(),
+            namespace: from.namespace.clone(),
         }),
     };
     let mut document = serde_json::to_value(dto).expect("test DTOs always serialize");
@@ -237,16 +237,16 @@ pub(crate) fn decode_test(document: Value) -> Result<Test, String> {
             .map(signal_from_dto)
             .collect::<Result<_, _>>()?,
         expect: dto.expect.map(expect_from_dto).unwrap_or_default(),
-        origin: dto
-            .origin
-            .map(|origin| {
-                Ok::<_, String>(TestOrigin {
-                    run: origin
+        from: dto
+            .from
+            .map(|from| {
+                Ok::<_, String>(TestFromRun {
+                    run: from
                         .run
                         .parse::<RunId>()
-                        .map_err(|err| format!("\"origin.run\": {err}"))?,
-                    version: digest(&origin.version)?,
-                    namespace: origin.namespace,
+                        .map_err(|err| format!("\"from.run\": {err}"))?,
+                    version: digest(&from.version)?,
+                    namespace: from.namespace,
                 })
             })
             .transpose()?,

@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rewind_core::{ActionSet, Code, Digest, Epoch, RunId, RunStatus, Test, TestOrigin};
+use rewind_core::{ActionSet, Code, Digest, Epoch, RunId, RunStatus, Test, TestFromRun};
 
 use super::{Edge, EdgeError, Gateway, unavailable};
 use crate::plane::{InstanceOf, Plane};
@@ -128,7 +128,7 @@ impl<P: Plane> Edge<P> {
                 .map_err(|error| RecordingError::Edge(unavailable(error)))?;
             recorder.offer(
                 &history,
-                TestOrigin {
+                TestFromRun {
                     run: run.id,
                     version,
                     namespace: head.namespace.to_string(),

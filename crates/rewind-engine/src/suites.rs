@@ -5,7 +5,7 @@
 //! ```text
 //! base's suite ── load (blobs) ── erased? → retired ─┐
 //!                                  retire (reason) ────┤
-//!                                  update (reason) ────┼─► suite ─► run_tests ─► all pass?
+//!                                  replace (reason) ───┼─► suite ─► run_tests ─► all pass?
 //!                                  tests (inline,      │                          │
 //!                                    digest, from) ────┘                 reserve rows, put blobs,
 //!                                                                         put_workflow
@@ -19,8 +19,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    Digest, ERASED_TEST_REASON, Expectations, HistoryEvent, RecordError, RetiredTest, RunId,
-    RunPath, Suite, SuiteTest, Test, TestOrigin, Timestamp, UpdatedTest, Workflow,
+    Digest, ERASED_TEST_REASON, Expectations, HistoryEvent, RecordError, ReplacedTest, RetiredTest,
+    RunId, RunPath, Suite, SuiteTest, Test, TestFromRun, Timestamp, Workflow,
 };
 
 use crate::ports::{
@@ -72,21 +72,21 @@ pub enum TestInput {
     Stored(Digest),
     /// A stored test with a new expectation.
     From {
-        from: Digest,
+        test: Digest,
         expect: Expectations,
     },
 }
 
 /// An inherited test replaced, and why.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TestUpdate {
+pub struct TestReplacement {
     pub name: String,
     pub reason: String,
-    pub with: UpdateWith,
+    pub with: ReplaceWith,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum UpdateWith {
+pub enum ReplaceWith {
     /// A whole new test, which takes the inherited test's name.
     Test(TestInput),
     /// The inherited test with a new expectation.
@@ -107,7 +107,7 @@ pub struct SuiteChanges {
     /// caller's labels when `None`.
     pub base: Option<Digest>,
     pub tests: Vec<TestInput>,
-    pub update: Vec<TestUpdate>,
+    pub replace: Vec<TestReplacement>,
     pub retire: Vec<TestRetirement>,
 }
 
@@ -115,7 +115,7 @@ impl SuiteChanges {
     pub fn is_empty(&self) -> bool {
         self.base.is_none()
             && self.tests.is_empty()
-            && self.update.is_empty()
+            && self.replace.is_empty()
             && self.retire.is_empty()
     }
 }
@@ -131,12 +131,12 @@ pub enum SuiteError {
         name: String,
         known: String,
     },
-    #[error("the test {0:?} is retired or updated without a reason: say why")]
+    #[error("the test {0:?} is retired or replaced without a reason: say why")]
     NoReason(String),
-    #[error("the test {0:?} is both retired and updated: do one")]
-    RetiredAndUpdated(String),
+    #[error("the test {0:?} is both retired and replaced: do one")]
+    RetiredAndReplaced(String),
     #[error(
-        "the suite already has a test named {0:?}: give the new test another name, or update \
+        "the suite already has a test named {0:?}: give the new test another name, or replace \
          the inherited one with a reason"
     )]
     Duplicate(String),
@@ -252,11 +252,14 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
                 .load_test(tenant, *digest)
                 .await?
                 .ok_or(SuiteError::UnknownTest(*digest))?,
-            TestInput::From { from, expect } => {
+            TestInput::From {
+                test: stored,
+                expect,
+            } => {
                 let mut test = self
-                    .load_test(tenant, *from)
+                    .load_test(tenant, *stored)
                     .await?
-                    .ok_or(SuiteError::UnknownTest(*from))?;
+                    .ok_or(SuiteError::UnknownTest(*stored))?;
                 test.expect = expect.clone();
                 test
             }
@@ -267,7 +270,7 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
     }
 
     /// Composes the suite of a new version: the base's tests, those of an erased namespace
-    /// left out, minus `retire`, with `update` applied, plus `tests`.
+    /// left out, minus `retire`, with `replace` applied, plus `tests`.
     pub async fn compose_suite(
         &self,
         tenant: &TenantId,
@@ -275,7 +278,7 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
         changes: &SuiteChanges,
     ) -> Result<ComposedSuite, SuiteLoadError> {
         let mut retired = Vec::new();
-        let mut updated = Vec::new();
+        let mut replaced = Vec::new();
         // name → (digest, test)
         let mut suite: BTreeMap<String, (Digest, Test)> = BTreeMap::new();
         if let Some(parent) = parent {
@@ -330,37 +333,37 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
                 });
             }
         }
-        for update in &changes.update {
-            if update.reason.trim().is_empty() {
-                return Err(SuiteError::NoReason(update.name.clone()).into());
+        for given in &changes.replace {
+            if given.reason.trim().is_empty() {
+                return Err(SuiteError::NoReason(given.name.clone()).into());
             }
-            if retiring.contains(&update.name) {
-                return Err(SuiteError::RetiredAndUpdated(update.name.clone()).into());
+            if retiring.contains(&given.name) {
+                return Err(SuiteError::RetiredAndReplaced(given.name.clone()).into());
             }
-            let Some((from, inherited_test)) = suite.remove(&update.name) else {
+            let Some((old, inherited_test)) = suite.remove(&given.name) else {
                 return Err(SuiteError::NotInherited {
-                    verb: "update names",
-                    name: update.name.clone(),
+                    verb: "replace names",
+                    name: given.name.clone(),
                     known: known(),
                 }
                 .into());
             };
-            let mut replacement = match &update.with {
-                UpdateWith::Expect(expect) => Test {
+            let mut replacement = match &given.with {
+                ReplaceWith::Expect(expect) => Test {
                     expect: expect.clone(),
                     ..inherited_test
                 },
-                UpdateWith::Test(input) => self.resolve_test(tenant, input).await?,
+                ReplaceWith::Test(input) => self.resolve_test(tenant, input).await?,
             };
-            replacement.name = update.name.clone();
-            let (to, _) = self.format.document(&replacement);
-            updated.push(UpdatedTest {
-                name: update.name.clone(),
-                from,
-                to,
-                reason: update.reason.clone(),
+            replacement.name = given.name.clone();
+            let (new, _) = self.format.document(&replacement);
+            replaced.push(ReplacedTest {
+                name: given.name.clone(),
+                old,
+                new,
+                reason: given.reason.clone(),
             });
-            suite.insert(update.name.clone(), (to, replacement));
+            suite.insert(given.name.clone(), (new, replacement));
         }
         for input in &changes.tests {
             let test = self.resolve_test(tenant, input).await?;
@@ -391,7 +394,7 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
                 base: parent.map(Workflow::version),
                 tests: entries,
                 retired,
-                updated,
+                replaced,
             },
         })
     }
@@ -476,7 +479,7 @@ fn documents(tests: &[Test], format: TestFormat) -> Vec<(Digest, String, Option<
         .map(|test| {
             let (digest, document) = format.document(test);
             let namespace = test
-                .origin
+                .from
                 .as_ref()
                 .and_then(|origin| NamespaceName::new(&origin.namespace).ok());
             (digest, document, namespace)
@@ -542,7 +545,7 @@ impl Recorder {
 
     /// Offers a run, its history with every payload loaded. A run whose path a newer run
     /// already stands for adds nothing.
-    pub fn offer(&mut self, history: &[HistoryEvent], origin: TestOrigin) {
+    pub fn offer(&mut self, history: &[HistoryEvent], origin: TestFromRun) {
         if self.is_full() {
             return;
         }

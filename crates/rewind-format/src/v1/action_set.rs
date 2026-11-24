@@ -47,8 +47,8 @@ use std::time::Duration;
 use rewind_core::{
     Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, ApiOperation, ApiParameter,
     Attachments, Builtin, Digest, HttpMethod, McpServer, McpTransport, ParameterLocation,
-    PinnedWorkflow, RetiredTest, SecretEncoding, SecretPlacement, SecretRef, Suite, SuiteTest,
-    UpdatedTest, Workflow, WorkflowSchemas,
+    PinnedWorkflow, ReplacedTest, RetiredTest, SecretEncoding, SecretPlacement, SecretRef, Suite,
+    SuiteTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -98,7 +98,7 @@ struct WorkflowV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     retired: Vec<RetiredTestV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    updated: Vec<UpdatedTestV1>,
+    replaced: Vec<ReplacedTestV1>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<String, String>,
     /// `org/<name>` or `ns/<name>`, by server or API.
@@ -123,10 +123,10 @@ struct RetiredTestV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpdatedTestV1 {
+struct ReplacedTestV1 {
     name: String,
-    from: String,
-    to: String,
+    old: String,
+    new: String,
     reason: String,
 }
 
@@ -386,14 +386,14 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
                 reason: retired.reason.clone(),
             })
             .collect(),
-        updated: suite
-            .updated
+        replaced: suite
+            .replaced
             .iter()
-            .map(|updated| UpdatedTestV1 {
-                name: updated.name.clone(),
-                from: updated.from.to_hex(),
-                to: updated.to.to_hex(),
-                reason: updated.reason.clone(),
+            .map(|replaced| ReplacedTestV1 {
+                name: replaced.name.clone(),
+                old: replaced.old.to_hex(),
+                new: replaced.new.to_hex(),
+                reason: replaced.reason.clone(),
             })
             .collect(),
         labels: workflow.labels().clone(),
@@ -448,15 +448,15 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
                 })
             })
             .collect::<Result<_, String>>()?,
-        updated: dto
-            .updated
+        replaced: dto
+            .replaced
             .into_iter()
-            .map(|updated| {
-                Ok(UpdatedTest {
-                    from: digest(&updated.from, "an updated test's \"from\"")?,
-                    to: digest(&updated.to, "an updated test's \"to\"")?,
-                    name: updated.name,
-                    reason: updated.reason,
+            .map(|replaced| {
+                Ok(ReplacedTest {
+                    old: digest(&replaced.old, "a replaced test's \"old\"")?,
+                    new: digest(&replaced.new, "a replaced test's \"new\"")?,
+                    name: replaced.name,
+                    reason: replaced.reason,
                 })
             })
             .collect::<Result<_, String>>()?,

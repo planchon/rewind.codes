@@ -17,14 +17,14 @@ use rewind_api::access::Permission;
 use rewind_api::action_sets::Declarations;
 use rewind_api::common::{Labels, timestamp};
 use rewind_api::workflows::{
-    CreateWorkflow, RetiredTest, SuiteTest, UpdatedTest, Workflow as ApiWorkflow, WorkflowPage,
+    CreateWorkflow, ReplacedTest, RetiredTest, SuiteTest, Workflow as ApiWorkflow, WorkflowPage,
     WorkflowQuery, WorkflowVersions,
 };
 use rewind_core::{ActionSet, Code, Digest, WorkflowSchemas};
 use rewind_engine::ports::{
     CatalogStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
 };
-use rewind_engine::suites::{SuiteChanges, TestKit, TestRetirement, TestUpdate, UpdateWith};
+use rewind_engine::suites::{ReplaceWith, SuiteChanges, TestKit, TestReplacement, TestRetirement};
 use rewind_engine::testing::TestOptions;
 use rewind_engine::{RegisterError, RegisterWorkflow};
 use rewind_runtime::TsHandlerLoader;
@@ -67,22 +67,22 @@ pub(super) async fn create(
     for given in request.tests {
         tests.push(testing::input(given)?);
     }
-    let mut update = Vec::with_capacity(request.update.len());
-    for given in request.update {
-        let with = match (given.test, given.expect) {
-            (Some(test), None) => UpdateWith::Test(testing::input(test)?),
-            (None, Some(expect)) => UpdateWith::Expect(expect.into_core()),
+    let mut replace = Vec::with_capacity(request.replace.len());
+    for given in request.replace {
+        let with = match (given.new, given.expect) {
+            (Some(test), None) => ReplaceWith::Test(testing::input(test)?),
+            (None, Some(expect)) => ReplaceWith::Expect(expect.into_core()),
             _ => {
                 return Err(ApiError::new(
                     ProblemType::InvalidTest,
                     format!(
-                        "the update of {:?} gives `test` or `expect`: one of them",
+                        "the replacement of {:?} gives `new` or `expect`: one of them",
                         given.name
                     ),
                 ));
             }
         };
-        update.push(TestUpdate {
+        replace.push(TestReplacement {
             name: given.name,
             reason: given.reason,
             with,
@@ -91,7 +91,7 @@ pub(super) async fn create(
     let suite = SuiteChanges {
         base,
         tests,
-        update,
+        replace,
         retire: request
             .retire
             .into_iter()
@@ -362,15 +362,15 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
                 reason: retired.reason.clone(),
             })
             .collect(),
-        updated: workflow
+        replaced: workflow
             .suite()
-            .updated
+            .replaced
             .iter()
-            .map(|updated| UpdatedTest {
-                name: updated.name.clone(),
-                from: updated.from.to_hex(),
-                to: updated.to.to_hex(),
-                reason: updated.reason.clone(),
+            .map(|replaced| ReplacedTest {
+                name: replaced.name.clone(),
+                old: replaced.old.to_hex(),
+                new: replaced.new.to_hex(),
+                reason: replaced.reason.clone(),
             })
             .collect(),
     }

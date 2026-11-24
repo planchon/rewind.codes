@@ -1042,7 +1042,7 @@ async fn a_namespace_erased_has_its_runs_cancelled_and_erased_then_is_dropped() 
     // What the control plane keeps of the end user: a test recorded from its runs, a secret.
     let tenant = TenantId::local();
     let mut recorded = rewind_core::Test::new("recorded");
-    recorded.origin = Some(rewind_core::TestOrigin {
+    recorded.from = Some(rewind_core::TestFromRun {
         run: ended.id,
         version: rewind_core::Digest::of(b"v1"),
         namespace: "gone".into(),

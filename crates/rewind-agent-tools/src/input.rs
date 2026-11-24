@@ -129,13 +129,13 @@ fn is_test_input(value: &Value) -> bool {
     matches!(value, Value::String(text) if !text.is_empty()) || value.is_object()
 }
 
-pub(crate) fn optional_updates(values: &Values) -> Result<Option<Vec<Value>>, InputError> {
+pub(crate) fn optional_replacements(values: &Values) -> Result<Option<Vec<Value>>, InputError> {
     let invalid = || {
         InputError::new(
-            "`update` must be an array of { name, reason, test?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
+            "`replace` must be an array of { name, reason, new?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
         )
     };
-    let items = match values.get("update") {
+    let items = match values.get("replace") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(items)) => items,
         Some(_) => return Err(invalid()),
@@ -146,7 +146,7 @@ pub(crate) fn optional_updates(values: &Values) -> Result<Option<Vec<Value>>, In
             && item["reason"]
                 .as_str()
                 .is_some_and(|reason| !reason.trim().is_empty())
-            && item.get("test").is_none_or(is_test_input)
+            && item.get("new").is_none_or(is_test_input)
             && item.get("expect").is_none_or(Value::is_object)
     });
     if valid {

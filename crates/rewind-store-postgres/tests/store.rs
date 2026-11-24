@@ -820,7 +820,7 @@ fn version_with_tests(tests: &[TestRecord]) -> Workflow {
             })
             .collect(),
         retired: Vec::new(),
-        updated: Vec::new(),
+        replaced: Vec::new(),
     })
     .expect("a valid suite")
 }

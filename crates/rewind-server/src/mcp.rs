@@ -33,7 +33,7 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
-use rewind_api::testing::{Test, TestRun};
+use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -273,7 +273,7 @@ impl Api for ServerApi {
     }
 
     /// Tests run model-written code: on a worker.
-    async fn test(&self, test: &TestRequest) -> Result<TestRun, ToolError> {
+    async fn test(&self, test: &TestRequest) -> Result<TestReport, ToolError> {
         Api::test(&self.local, test).await
     }
 

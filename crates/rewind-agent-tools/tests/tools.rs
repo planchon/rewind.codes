@@ -19,7 +19,7 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
-use rewind_api::testing::{Test, TestRun};
+use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -232,7 +232,7 @@ impl Api for Fake {
         })
     }
 
-    async fn test(&self, test: &TestRequest) -> Result<TestRun, ApiError> {
+    async fn test(&self, test: &TestRequest) -> Result<TestReport, ApiError> {
         self.saw("test", test, None);
         Err(problem(
             ProblemType::InvalidTest,
@@ -285,7 +285,7 @@ impl Api for Fake {
             "name": workflow.name, "digest": "9f2c4e1a07b3".repeat(5) + "9f2c", "version": 1,
             "actionSet": workflow.action_set,
             "codeDigest": sha256(&workflow.code), "input": workflow.input, "output": workflow.output,
-            "signals": {}, "tests": [], "retired": [], "updated": [],
+            "signals": {}, "tests": [], "retired": [], "replaced": [],
             "labels": { "agent": "triage" }, "createdAt": "2026-11-19T10:00:00Z",
             "declarations": { "dts": "", "prompt": "" }
         }))

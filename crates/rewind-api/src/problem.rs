@@ -63,7 +63,7 @@ pub enum ProblemType {
     /// 422: the input of a run of a workflow does not match the workflow's input schema.
     InvalidInput,
     /// 422: a test, or a suite, was refused: a test that is not valid, a stored test that does
-    /// not exist, a retired or updated test that is not inherited or has no reason, two tests
+    /// not exist, a retired or replaced test that is not inherited or has no reason, two tests
     /// of the same name.
     InvalidTest,
     /// 422: tests did not pass: the version was not saved, the fork not created; `tests` lists

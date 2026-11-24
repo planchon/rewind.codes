@@ -166,11 +166,11 @@ fn bug(number: u64, title: &str) -> Value {
 fn upgraded_suite() -> Value {
     let posted = json!({ "returns": { "content": [{ "type": "text", "text": "{\"ok\":true}" }] } });
     json!({
-        "update": [
+        "replace": [
             {
                 "name": "posts the open bugs",
                 "reason": "the tracker renamed `labels` to `label`, and its issues now carry their reporter",
-                "test": {
+                "new": {
                     "name": "posts the open bugs",
                     "input": { "repo": "acme/api" },
                     "world": { "actions": {
@@ -190,7 +190,7 @@ fn upgraded_suite() -> Value {
             {
                 "name": "posts nothing without open bugs",
                 "reason": "the tracker renamed `labels` to `label`",
-                "test": {
+                "new": {
                     "name": "posts nothing without open bugs",
                     "input": { "repo": "acme/web" },
                     "world": { "actions": {
@@ -281,7 +281,7 @@ fn reference(id: &'static str) -> Model {
                         "save_workflow",
                         ship_orders(
                             &solution(id),
-                            json!({ "tests": [{ "from": digest, "expect": expect }] }),
+                            json!({ "tests": [{ "test": digest, "expect": expect }] }),
                         ),
                     ))
                 }
@@ -668,7 +668,7 @@ async fn a_fix_run_anew_instead_of_finishing_the_failed_run_fails_the_task() {
                 "save_workflow",
                 ship_orders(
                     &solution("fix_workflow_regression"),
-                    json!({ "tests": [{ "from": digest_in(&last?)?, "expect": { "status": "completed" } }] }),
+                    json!({ "tests": [{ "test": digest_in(&last?)?, "expect": { "status": "completed" } }] }),
                 ),
             )),
             3 => Some(call(
@@ -699,7 +699,7 @@ async fn a_stale_test_cannot_be_updated_by_its_expectation_alone() {
                 bug_digest(
                     &solution("upgrade_workflow_suite"),
                     json!({
-                        "update": [{
+                        "replace": [{
                             "name": "posts the open bugs",
                             "reason": "the server changed",
                             "expect": { "status": "completed" }
@@ -755,7 +755,7 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
                 ("save_workflow", with("retire", json!([{ "names": ["a"] }]))),
                 (
                     "save_workflow",
-                    with("update", json!([{ "name": "a", "expect": {} }])),
+                    with("replace", json!([{ "name": "a", "expect": {} }])),
                 ),
                 ("save_workflow", with("base", json!(4))),
                 (
@@ -799,7 +799,7 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
         "save_workflow: `input` must be a JSON Schema: an object.",
         "save_workflow: `signals` must be an object of JSON Schemas by signal name.",
         "save_workflow: `retire` must be an array of { names, reason }: the names of inherited tests, and why they no longer hold.",
-        "save_workflow: `update` must be an array of { name, reason, test?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
+        "save_workflow: `replace` must be an array of { name, reason, new?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
         "save_workflow: `base` must be a non-empty string.",
         "The workflow was not saved: retire names \"asks first\", which the base's suite does not have (it has \"buys no label without orders\", \"fails when the carrier refuses a label\", \"ships every order with its tracking number\")",
         "get_workflow failed: no workflow nope for this API key: save it with POST /v1/workflows, or list them with GET /v1/workflows",

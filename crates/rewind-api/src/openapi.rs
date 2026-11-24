@@ -560,7 +560,7 @@ mod operations {
     use crate::secrets::{
         Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
     };
-    use crate::testing::{Test, TestRun};
+    use crate::testing::{Test, TestReport};
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
     use crate::workflows::{
         CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowPage, WorkflowQuery,
@@ -730,7 +730,7 @@ mod operations {
         params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = TestRequest,
         responses(
-            (status = 200, description = "Each test's outcome, and the expectations that do not hold.", body = TestRun),
+            (status = 200, description = "Each test's outcome, and the expectations that do not hold.", body = TestReport),
             (status = 404, description = "No such action set, workflow or stored test.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The code was refused at start (`invalid-code`), or a test (`invalid-test`).", body = Problem, content_type = "application/problem+json"),
         )

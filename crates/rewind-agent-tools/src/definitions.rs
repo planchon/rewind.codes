@@ -250,10 +250,10 @@ fn test() -> Value {
                 "type": "object",
                 "description": "A stored test with a new expectation: the same world (a recorded run's input, calls and signals), checked against `expect`. It turns a failed run into a regression test without reading its calls.",
                 "properties": {
-                    "from": { "type": "string", "description": "The digest of the stored test." },
+                    "test": { "type": "string", "description": "The digest of the stored test." },
                     "expect": expect()
                 },
-                "required": ["from", "expect"],
+                "required": ["test", "expect"],
                 "additionalProperties": false
             }
         ]
@@ -263,7 +263,7 @@ fn test() -> Value {
 fn tests() -> Value {
     json!({
         "type": "array",
-        "description": "Tests, each written in full, the digest of a recorded test, or { from: <digest>, expect } for a recorded test with a new expectation.",
+        "description": "Tests, each written in full, the digest of a recorded test, or { test: <digest>, expect } for a recorded test with a new expectation.",
         "items": test()
     })
 }
@@ -402,7 +402,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "save_workflow" => ToolDefinition {
             name: "save_workflow",
-            description: "Save a code as a workflow: a named code with JSON Schemas for its input, its output and the signals it accepts. The code is type-checked against your actions and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`base`, by default the latest version of this name), minus those you `retire`, with those you `update` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or update it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_workflow({ code, workflow }) first. Once saved, your later workflows can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another code, other schemas or other tests saves a new version, which your later workflows use.",
+            description: "Save a code as a workflow: a named code with JSON Schemas for its input, its output and the signals it accepts. The code is type-checked against your actions and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`base`, by default the latest version of this name), minus those you `retire`, with those you `replace` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or replace it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_workflow({ code, workflow }) first. Once saved, your later workflows can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another code, other schemas or other tests saves a new version, which your later workflows use.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -424,17 +424,17 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                     },
                     "tests": with_description(
                         tests(),
-                        "New tests added to the suite: each written in full, the digest of a test record_tests recorded, or { from: <digest>, expect } for a recorded test with the expectation it should have met."
+                        "New tests added to the suite: each written in full, the digest of a test record_tests recorded, or { test: <digest>, expect } for a recorded test with the expectation it should have met."
                     ),
-                    "update": {
+                    "replace": {
                         "type": "array",
-                        "description": "Inherited tests to replace because their state or their expected result is out of date: by a whole new `test`, which takes the name, or by the same test with a new `expect`.",
+                        "description": "Inherited tests to replace because their state or their expected result is out of date: by a whole `new` test, which takes the name, or by the same test with a new `expect`.",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "name": { "type": "string", "description": "The name of an inherited test." },
                                 "reason": { "type": "string", "description": "Why it changes: kept in the lineage." },
-                                "test": with_description(test(), "The test that replaces it."),
+                                "new": with_description(test(), "The test that replaces it."),
                                 "expect": with_description(expect(), "Its new expectation; the rest of the test is kept.")
                             },
                             "required": ["name", "reason"],
@@ -466,7 +466,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "get_workflow" => ToolDefinition {
             name: "get_workflow",
-            description: "Read a workflow: the source of its latest version, its input, output and signal schemas, its suite with every test in full, and its lineage: for each version, the tests it retired or updated, and why. Read it before you repair or extend a workflow you did not write: its tests say which behaviors it must keep, and its lineage which changes were made on purpose.",
+            description: "Read a workflow: the source of its latest version, its input, output and signal schemas, its suite with every test in full, and its lineage: for each version, the tests it retired or replaced, and why. Read it before you repair or extend a workflow you did not write: its tests say which behaviors it must keep, and its lineage which changes were made on purpose.",
             input_schema: json!({
                 "type": "object",
                 "properties": { "name": { "type": "string", "description": "The workflow's name, such as triage." } },
@@ -1006,7 +1006,7 @@ mod tests {
         );
         assert_eq!(digest["type"], "string");
         assert_eq!(from["type"], "object");
-        assert_eq!(from["required"], json!(["from", "expect"]));
+        assert_eq!(from["required"], json!(["test", "expect"]));
 
         let save = definition("save_workflow").unwrap();
         assert_eq!(
@@ -1019,7 +1019,7 @@ mod tests {
                 "output",
                 "signals",
                 "tests",
-                "update",
+                "replace",
                 "retire",
                 "base",
                 "secrets",
@@ -1032,7 +1032,7 @@ mod tests {
         );
         assert!(
             save.description
-                .contains("update it when its state or its expected result is out of date")
+                .contains("replace it when its state or its expected result is out of date")
         );
     }
 }

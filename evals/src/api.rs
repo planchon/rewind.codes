@@ -29,7 +29,8 @@ use rewind_api::runs::{
 use rewind_api::scripts::{CheckRequest, CheckResult, RunCounts, Script as ApiScript, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{
-    Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
+    Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem,
+    TestReport as ApiTestReport, TestResult,
 };
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTest, RecordedTests, SkippedRun, Workflow,
@@ -47,8 +48,8 @@ use rewind_engine::ports::{
     WorkflowDeclarations,
 };
 use rewind_engine::suites::{
-    DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, SuiteChanges, SuiteError,
-    SuiteLoadError, TestInput, TestRetirement, TestUpdate, UpdateWith,
+    DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, ReplaceWith, SuiteChanges,
+    SuiteError, SuiteLoadError, TestInput, TestReplacement, TestRetirement,
 };
 use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
 use rewind_engine::{ForkError, RegisterError, RegisterWorkflow, StartError};
@@ -261,7 +262,7 @@ fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
     Problem::tests_failed(
         format!(
             "{} of {} tests of {suite} did not pass: {}. Fix the code, or retire a test that is \
-             deprecated or update one whose state or result is out of date, each with a reason",
+             deprecated or replace one whose state or result is out of date, each with a reason",
             failed.len(),
             reports.len(),
             failed.join("; ")
@@ -297,11 +298,11 @@ fn test_input(input: ApiTestInput) -> Result<TestInput, ApiError> {
     match input {
         ApiTestInput::Digest(digest) => Ok(TestInput::Stored(test_digest(&digest)?)),
         ApiTestInput::From(from) => Ok(TestInput::From {
-            from: test_digest(&from.from)?,
+            test: test_digest(&from.test)?,
             expect: from.expect.into_core(),
         }),
         ApiTestInput::Inline(test) => {
-            if test.origin.is_some() {
+            if test.from.is_some() {
                 return Err(problem(
                     ProblemType::InvalidTest,
                     format!(
@@ -889,7 +890,7 @@ impl Api for World {
         Ok(view::check_result(&diagnostics))
     }
 
-    async fn test(&self, test: &TestRequest) -> Result<TestRun, ApiError> {
+    async fn test(&self, test: &TestRequest) -> Result<ApiTestReport, ApiError> {
         let tenant = TenantId::local();
         let version = match &test.workflow {
             Some(reference) => Some(self.resolve(reference).await?),
@@ -934,7 +935,7 @@ impl Api for World {
             )
             .await?;
         let results: Vec<TestResult> = reports.iter().map(test_result).collect();
-        Ok(TestRun {
+        Ok(ApiTestReport {
             passed: results.iter().all(|result| result.passed),
             tests: results,
         })
@@ -1105,22 +1106,22 @@ impl Api for World {
         for given in workflow.tests.iter().cloned() {
             tests.push(test_input(given)?);
         }
-        let mut update = Vec::with_capacity(workflow.update.len());
-        for given in workflow.update.iter().cloned() {
-            let with = match (given.test, given.expect) {
-                (Some(test), None) => UpdateWith::Test(test_input(test)?),
-                (None, Some(expect)) => UpdateWith::Expect(expect.into_core()),
+        let mut replace = Vec::with_capacity(workflow.replace.len());
+        for given in workflow.replace.iter().cloned() {
+            let with = match (given.new, given.expect) {
+                (Some(test), None) => ReplaceWith::Test(test_input(test)?),
+                (None, Some(expect)) => ReplaceWith::Expect(expect.into_core()),
                 _ => {
                     return Err(problem(
                         ProblemType::InvalidTest,
                         format!(
-                            "the update of {:?} gives `test` or `expect`: one of them",
+                            "the replacement of {:?} gives `new` or `expect`: one of them",
                             given.name
                         ),
                     ));
                 }
             };
-            update.push(TestUpdate {
+            replace.push(TestReplacement {
                 name: given.name,
                 reason: given.reason,
                 with,
@@ -1163,7 +1164,7 @@ impl Api for World {
                     suite: SuiteChanges {
                         base: parent,
                         tests,
-                        update,
+                        replace,
                         retire,
                     },
                 },

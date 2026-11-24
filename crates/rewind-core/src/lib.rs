@@ -78,13 +78,13 @@ pub use shape::{Field, Shape};
 pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};
 pub use test::{
     ActionRule, CallOrder, Expectations, ExpectedCall, ExpectedError, InvalidTest, Observed,
-    ObservedCall, PathStep, RecordError, RunPath, SignalWhen, StepKind, Test, TestOrigin,
+    ObservedCall, PathStep, RecordError, RunPath, SignalWhen, StepKind, Test, TestFromRun,
     TestSignal, World, contains,
 };
 pub use time::{DurationError, Timestamp, parse_duration};
 pub use workflow::{
-    ERASED_TEST_REASON, InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, RetiredTest,
-    RunEnd, Suite, SuiteTest, UpdatedTest, WORKFLOWS_GROUP, Workflow, WorkflowOp, WorkflowSchemas,
+    ERASED_TEST_REASON, InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, ReplacedTest,
+    RetiredTest, RunEnd, Suite, SuiteTest, WORKFLOWS_GROUP, Workflow, WorkflowOp, WorkflowSchemas,
     end_signal_name, ended_run, is_reserved_signal, starter_ended,
 };
 

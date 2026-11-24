@@ -17,15 +17,17 @@ use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{CancelRun, ForkRun, Run, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::testing::{TestInput, TestResult};
-use rewind_api::workflows::{CreateWorkflow, RecordTests, TestRetirement, TestUpdate, Workflow};
+use rewind_api::workflows::{
+    CreateWorkflow, RecordTests, TestReplacement, TestRetirement, Workflow,
+};
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
 
 use crate::api::{Api, ApiError};
 use crate::definitions::{AGENT_TOOLS, NEEDS_ACTION_SET, ToolDefinition, definition};
 use crate::input::{
-    InputError, Values, optional_attachments, optional_index, optional_retirements,
-    optional_string, optional_strings, optional_tests, optional_updates, require_object,
+    InputError, Values, optional_attachments, optional_index, optional_replacements,
+    optional_retirements, optional_string, optional_strings, optional_tests, require_object,
     require_string,
 };
 use crate::keys::{idempotency_key, run_key, sha256_hex};
@@ -536,7 +538,7 @@ impl<A: Api> Session<'_, A> {
             }
         };
         let tests = optional_tests(input, "tests")?;
-        let update = optional_updates(input)?;
+        let replace = optional_replacements(input)?;
         let retire = optional_retirements(input)?;
         let base = optional_string(input, "base")?;
         let secrets = optional_attachments(input)?;
@@ -552,7 +554,7 @@ impl<A: Api> Session<'_, A> {
             signals,
             base,
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
-            update: from_values::<TestUpdate>(update.unwrap_or_default())?,
+            replace: from_values::<TestReplacement>(replace.unwrap_or_default())?,
             retire: from_values::<TestRetirement>(retire.unwrap_or_default())?,
             secrets: secrets.unwrap_or_default(),
         };

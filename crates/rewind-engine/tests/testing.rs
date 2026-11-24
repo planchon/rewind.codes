@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rewind_core::{
     ActionOutcome, ActionRule, ActionSet, CallOrder, Code, Expectations, ExpectedCall,
-    ExpectedError, Matching, RunStatus, SignalWhen, Test, TestOrigin, TestSignal,
+    ExpectedError, Matching, RunStatus, SignalWhen, Test, TestFromRun, TestSignal,
 };
 use rewind_engine::ports::Delivery;
 use rewind_engine::testing::{
@@ -219,7 +219,7 @@ async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
     let original = world.history(&run).await;
     let recorded = Test::record(
         &original,
-        TestOrigin {
+        TestFromRun {
             run: run.id,
             version: rewind_core::Digest::of(b"sleepy@1"),
             namespace: "alice".into(),

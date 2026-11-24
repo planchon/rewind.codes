@@ -132,7 +132,7 @@ fn with_tests(workflow: Workflow, tests: &[&TestRecord]) -> Workflow {
                 })
                 .collect(),
             retired: Vec::new(),
-            updated: Vec::new(),
+            replaced: Vec::new(),
         })
         .expect("a valid suite")
 }

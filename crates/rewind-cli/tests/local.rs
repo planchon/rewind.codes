@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rewind_api::scripts::CheckResult;
-use rewind_api::testing::TestRun;
+use rewind_api::testing::TestReport;
 use rewind_cli::{Console, Exit};
 use serde_json::{Value, json};
 
@@ -219,7 +219,7 @@ async fn test_runs_tests_with_static_responses_and_handlers() {
     assert!(run.out.contains("1 of 1 tests passed"), "{}", run.out);
 
     let run = rewind(&["--json", "test", code.to_str().unwrap()]).await;
-    let result: TestRun = serde_json::from_str(&run.out).unwrap();
+    let result: TestReport = serde_json::from_str(&run.out).unwrap();
     assert!(result.passed);
     assert_eq!(
         result.tests[0].output,
@@ -334,7 +334,7 @@ async fn test_replays_a_recorded_cassette() {
     let code = dir.path().join("workflow.ts");
     let run = rewind(&["--json", "test", code.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
-    let result: TestRun = serde_json::from_str(&run.out).unwrap();
+    let result: TestReport = serde_json::from_str(&run.out).unwrap();
     assert!(result.passed, "{:?}", result.tests[0].failures);
     // The recorded answer: the cassette echoes the args the run sent.
     assert!(
@@ -525,7 +525,7 @@ async fn the_corpus_runs_through_rewind_test() {
             ran.push(name);
             continue;
         }
-        let run_result: TestRun = serde_json::from_str(&run.out)
+        let run_result: TestReport = serde_json::from_str(&run.out)
             .unwrap_or_else(|error| panic!("{name}: {error}: {}{}", run.out, run.err));
         let result = &run_result.tests[0];
         assert!(

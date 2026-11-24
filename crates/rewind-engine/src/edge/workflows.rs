@@ -152,7 +152,7 @@ impl<P: Plane> Edge<P> {
         if let Some(parent) = &parent
             && same_content(parent, &workflow)
             && request.suite.tests.is_empty()
-            && request.suite.update.is_empty()
+            && request.suite.replace.is_empty()
             && request.suite.retire.is_empty()
             && let Some(stored) = catalog
                 .get_workflow(&tenant, parent.version())

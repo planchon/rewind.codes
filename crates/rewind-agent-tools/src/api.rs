@@ -22,7 +22,7 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
-use rewind_api::testing::{Test, TestRun};
+use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -129,7 +129,8 @@ pub trait Api: Send + Sync {
     ) -> impl Future<Output = Result<CheckResult, ApiError>> + Send;
 
     /// `POST /v1/test`.
-    fn test(&self, test: &TestRequest) -> impl Future<Output = Result<TestRun, ApiError>> + Send;
+    fn test(&self, test: &TestRequest)
+    -> impl Future<Output = Result<TestReport, ApiError>> + Send;
 
     /// `GET /v1/scripts/{digest}`.
     fn get_script(&self, digest: &str) -> impl Future<Output = Result<Script, ApiError>> + Send;
@@ -278,7 +279,10 @@ impl<A: Api> Api for &A {
         (**self).check(check)
     }
 
-    fn test(&self, test: &TestRequest) -> impl Future<Output = Result<TestRun, ApiError>> + Send {
+    fn test(
+        &self,
+        test: &TestRequest,
+    ) -> impl Future<Output = Result<TestReport, ApiError>> + Send {
         (**self).test(test)
     }
 

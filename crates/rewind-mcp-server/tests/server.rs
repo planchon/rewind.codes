@@ -26,7 +26,7 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
-use rewind_api::testing::{Test, TestRun};
+use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -189,7 +189,7 @@ impl Api for FakeApi {
         })
     }
 
-    async fn test(&self, _test: &TestRequest) -> Result<TestRun, ApiError> {
+    async fn test(&self, _test: &TestRequest) -> Result<TestReport, ApiError> {
         Err(unused("test"))
     }
 

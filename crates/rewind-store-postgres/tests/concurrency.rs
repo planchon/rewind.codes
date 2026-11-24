@@ -42,7 +42,7 @@ fn version_with_test(n: usize, test: Digest) -> Workflow {
             test,
         }],
         retired: Vec::new(),
-        updated: Vec::new(),
+        replaced: Vec::new(),
     })
     .expect("a valid suite")
 }

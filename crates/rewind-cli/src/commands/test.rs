@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use rewind_api::scripts::TestRequest;
-use rewind_api::testing::{Test as ApiTest, TestInput, TestResult, TestRun};
+use rewind_api::testing::{Test as ApiTest, TestInput, TestReport, TestResult};
 use rewind_core::{Code, Test};
 use rewind_engine::StartError;
 use rewind_engine::testing::{Subject, TestError, TestOptions, run_tests};
@@ -171,7 +171,7 @@ async fn remote(
     action_set: Option<String>,
     tests: Vec<ApiTest>,
     workflow: Option<String>,
-) -> Result<TestRun, CliError> {
+) -> Result<TestReport, CliError> {
     let client = server.client().await?;
     Ok(client
         .test(&TestRequest {
@@ -192,7 +192,7 @@ async fn local(
     action_set_file: Option<&Path>,
     tests: Vec<ApiTest>,
     statics: Option<Value>,
-) -> Result<TestRun, CliError> {
+) -> Result<TestReport, CliError> {
     let tests: Vec<Test> = tests
         .into_iter()
         .map(|test| {
@@ -310,14 +310,14 @@ async fn local(
             transcript: report.transcript.clone(),
         })
         .collect();
-    Ok(TestRun {
+    Ok(TestReport {
         passed: results.iter().all(|result| result.passed),
         tests: results,
     })
 }
 
 /// One line per test, its failures under it, and the transcript of each test that did not pass.
-fn print(run: &TestRun, console: &mut Console) {
+fn print(run: &TestReport, console: &mut Console) {
     for test in &run.tests {
         let verdict = if test.passed { "PASS" } else { "FAIL" };
         let state = match (&test.problem, &test.status) {

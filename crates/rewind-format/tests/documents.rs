@@ -11,9 +11,9 @@ use rewind_core::{
     Action, ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionPolicy, ActionRoute,
     ActionRule, ActionSet, Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest,
     Expectations, ExpectedCall, ExpectedError, HttpMethod, Matching, McpServer, McpTransport,
-    ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus, SecretPlacement,
-    SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp,
-    UpdatedTest, Workflow, WorkflowSchemas, World,
+    ParameterLocation, RecordedCall, RecordedSignal, ReplacedTest, RetiredTest, RunStatus,
+    SecretPlacement, SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestFromRun, TestSignal,
+    Timestamp, Workflow, WorkflowSchemas, World,
 };
 use rewind_format::{
     FormatError, decode_action_set, decode_cassette, decode_test, decode_workflow,
@@ -647,10 +647,10 @@ fn workflow_with_suite() -> Workflow {
                 test: digest_of("c"),
                 reason: "under 5 stale issues, it closes without asking".into(),
             }],
-            updated: vec![UpdatedTest {
+            replaced: vec![ReplacedTest {
                 name: "closes nothing without approval".into(),
-                from: digest_of("b"),
-                to: digest_of("b2"),
+                old: digest_of("b"),
+                new: digest_of("b2"),
                 reason: "the message names the repository".into(),
             }],
         })
@@ -755,7 +755,7 @@ fn test_document() -> Test {
             ],
             order: CallOrder::Listed,
         },
-        origin: Some(TestOrigin {
+        from: Some(TestFromRun {
             run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10".parse().unwrap(),
             version: digest_of("version"),
             namespace: "alice".into(),

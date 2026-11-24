@@ -60,7 +60,7 @@ pub struct CreateWorkflow {
     pub tests: Vec<TestInput>,
     /// Inherited tests replaced, each with a reason: their state or result is out of date.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub update: Vec<TestUpdate>,
+    pub replace: Vec<TestReplacement>,
     /// Inherited tests dropped, with a reason: they are deprecated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retire: Vec<TestRetirement>,
@@ -75,12 +75,14 @@ pub struct CreateWorkflow {
 /// new expectation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TestUpdate {
+pub struct TestReplacement {
     pub name: String,
     /// Why: kept in the lineage.
     pub reason: String,
+    /// A whole new test, which takes the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub test: Option<TestInput>,
+    pub new: Option<TestInput>,
+    /// Or only a new expectation for the test of the suite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect: Option<Expectations>,
 }
@@ -115,10 +117,10 @@ pub struct RetiredTest {
 /// A test of the base a version replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdatedTest {
+pub struct ReplacedTest {
     pub name: String,
-    pub from: String,
-    pub to: String,
+    pub old: String,
+    pub new: String,
     pub reason: String,
 }
 
@@ -213,7 +215,7 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired: Vec<RetiredTest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub updated: Vec<UpdatedTest>,
+    pub replaced: Vec<ReplacedTest>,
 }
 
 /// `GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every
