@@ -75,7 +75,7 @@ npx -y @modelcontextprotocol/server-everything@2.2.1 stdio </dev/null >/dev/null
 # Criterion 2, the part the CLI's own end-to-end tests prove through the binary: a run that
 # sleeps, is interrupted and resumes in another process; signals across processes; kill -9.
 if selected 2; then
-  step 2 "cli-across-processes" cargo test -p rewind --test cli
+  step 2 "cli-across-processes" cargo test -p rewind --test integration cli::
 fi
 
 # Criterion 6: the operations' load and limit tests.

@@ -10,7 +10,7 @@ use rewind_engine::{CacheConfig, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
-mod support;
+use crate::support;
 
 use support::{T0, World};
 

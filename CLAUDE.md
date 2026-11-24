@@ -30,7 +30,7 @@ Build time and disk come first: this machine has 8 cores, 16 GiB and a tight dis
 
 - One worktree per feature. Every step of a feature (contract, engine, API, dashboard, docs,
   review, fixes) works in that worktree, one agent after the other. A new worktree is a cold
-  build (about 4 minutes and 25 GB).
+  build (about 4 minutes and 15 GB).
 - A review that only reads code needs no worktree.
 - At most four Rust builds at once on this machine.
 

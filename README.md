@@ -43,7 +43,7 @@ cargo nextest run -p rewind-engine                           # one crate's tests
 cargo nextest run --workspace                                # every test (cargo install cargo-nextest)
 cargo test -p rewind-e2e                                     # the end-to-end corpus
 cargo test -p rewind-e2e red::deadlock                       # one case
-REWIND_E2E_RECORD=1 cargo test -p rewind-e2e --test corpus   # record the journals again, then review the diff
+REWIND_E2E_RECORD=1 cargo test -p rewind-e2e --test integration corpus::   # record the journals again, then review the diff
 cargo run -p rewind-e2e -- replay epoch-1/blue/triage_workflow [--script other.ts]
 cargo run -p evals -- list                                   # the eval tasks
 cargo run -p evals -- run --model claude-opus-5-5            # run models on them (costs tokens)

@@ -7,6 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 build = "build.rs"
+# Every file of tests/ is a module of one test binary, tests/integration.rs.
+autotests = false
 
 [dependencies]
 rewind-core.workspace = true
@@ -27,6 +29,10 @@ rewind-codegen.workspace = true
 name = "rewind-e2e"
 path = "src/bin/rewind-e2e.rs"
 test = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lints]
 workspace = true

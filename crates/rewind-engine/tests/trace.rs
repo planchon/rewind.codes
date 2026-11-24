@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use rewind_engine::ports::Delivery;
 use serde_json::json;

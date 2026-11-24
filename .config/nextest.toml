@@ -19,5 +19,5 @@ path = "junit.xml"
 # partition 0": a loaded machine reveals that race. The test runs alone until the embedded server
 # waits for its partition before `ready`.
 [[profile.default.overrides]]
-filter = 'binary_id(rewind::cli) & test(=a_run_sleeps_is_interrupted_and_resumes_in_another_process)'
+filter = 'binary_id(rewind::integration) & test(=cli::a_run_sleeps_is_interrupted_and_resumes_in_another_process)'
 threads-required = "num-test-threads"

@@ -3,7 +3,7 @@
 //! marked for deletion and the version refused. A version never references a test whose blob may
 //! be deleted. Versions of one workflow saved at once take distinct numbers.
 
-mod support;
+use crate::support;
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};

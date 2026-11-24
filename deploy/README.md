@@ -340,9 +340,9 @@ and recreate a holder whose image was rebuilt under its node. The numbers measur
 `archi/09-roadmap.md`.
 
 The limits of `archi/03-execution.md` are tested through the API by
-`cargo test -p rewind-server --test limits` (CPU per call, heap, commands per activation, history
-cap, payload sizes, TTL), the quota's 429 by `--test api`, and the 256 KiB bound of the agent
-tools' `run_script` against a live deployment by the SDK:
+`cargo test -p rewind-server --test integration limits::` (CPU per call, heap, commands per
+activation, history cap, payload sizes, TTL), the quota's 429 by `api::`, and the 256 KiB bound of
+the agent tools' `run_script` against a live deployment by the SDK:
 
 ```sh
 . ./.env

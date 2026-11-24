@@ -7,6 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 build = "build.rs"
+# Every file of tests/ is a module of one test binary, tests/integration.rs.
+autotests = false
 
 # A composition root: the only kind of crate, with rewind-cli, that knows every adapter
 # (archi/07-code-architecture.md, "Dependency rules"). Each adapter is wired in its own module of
@@ -65,6 +67,10 @@ rmcp = { workspace = true, features = ["server", "transport-streamable-http-serv
 tempfile.workspace = true
 # The logs of the process, captured by the end-to-end tests of secrets to look for a value.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lints]
 workspace = true

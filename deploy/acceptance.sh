@@ -65,8 +65,8 @@ trap 'exit 130' INT TERM
 # 1. The limits, through the HTTP API of a server on Turso: CPU per call, heap, commands per
 #    activation, the history cap, payload sizes, the TTL; the quota's 429.
 limits() {
-  (cd "$ROOT" && cargo test -p rewind-server --test limits &&
-    cargo test -p rewind-server --test api a_tenant_above_its_quota_is_refused_with_429)
+  (cd "$ROOT" && cargo test -p rewind-server --test integration limits:: &&
+    cargo test -p rewind-server --test integration api::a_tenant_above_its_quota_is_refused_with_429)
 }
 step "limits through the API" limits
 

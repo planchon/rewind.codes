@@ -4,7 +4,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::collections::BTreeMap;
 use std::time::Duration;

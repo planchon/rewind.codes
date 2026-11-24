@@ -8,6 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "cluster/mod.rs"]
 mod cluster;
 
 use std::collections::BTreeSet;

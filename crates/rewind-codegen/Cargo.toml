@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+# Every file of tests/ is a module of one test binary, tests/integration.rs.
+autotests = false
 
 [dependencies]
 rewind-core.workspace = true
@@ -14,6 +16,10 @@ serde_json.workspace = true
 [dev-dependencies]
 # Parses the generated declarations in tests: they must be valid TypeScript.
 deno_ast.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lints]
 workspace = true
