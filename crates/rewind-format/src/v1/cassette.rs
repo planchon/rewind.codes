@@ -1,4 +1,4 @@
-//! The cassette document, v1 (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! The cassette document, v1 (`archi/05-testing-and-observability.md`, "Test runs").
 //!
 //! ```json
 //! {"v":1,"matching":"sequential","calls":[

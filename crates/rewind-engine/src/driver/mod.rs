@@ -1,6 +1,6 @@
-//! The driver: the run plane in tests and mock mode, on one thread
+//! The driver: the run plane in tests and test runs, on one thread
 //! (`archi/07-code-architecture.md`, "Inside a node"; `archi/05-testing-and-observability.md`,
-//! "Mock mode").
+//! "Test runs").
 //!
 //! It steps every actor of every node one message at a time, in the order they were sent; when
 //! no message is left it runs the oldest job to its end; when no job is left it fires the timers

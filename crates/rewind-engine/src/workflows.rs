@@ -12,7 +12,7 @@
 //! a fork's copied starts ──► the fork watches the runs they started, their end if it is there
 //! ```
 //!
-//! In mock mode, a start is answered by the mock sources: their answer is the child's end, which
+//! In a test run, a start is answered by the test sources: their answer is the child's end, which
 //! follows the start at once, and no child runs.
 
 use std::collections::{BTreeMap, BTreeSet};

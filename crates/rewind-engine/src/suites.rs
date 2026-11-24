@@ -55,7 +55,7 @@ impl TestFormat {
     }
 }
 
-/// What running a suite needs besides the engine: the mock handlers' loader, the stored format
+/// What running a suite needs besides the engine: the handlers' loader, the stored format
 /// of tests, and the options of the runs.
 #[derive(Debug)]
 pub struct TestKit<'a, L> {

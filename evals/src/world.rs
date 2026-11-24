@@ -42,7 +42,7 @@ use rewind_engine::testing::TestOptions;
 use rewind_engine::{ForkError, ForkRun, StartError, StartRun, StartWorkflow};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
 use rewind_outbound::ActionEgress;
-use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
+use rewind_runtime::{SandboxLimits, TsHandlerLoader, V8Executor};
 use serde_json::Value;
 
 use crate::clock::{DAY, SharedClock, T0};
@@ -381,9 +381,9 @@ impl World {
         request
     }
 
-    /// What running a suite takes: the TypeScript mock handlers' loader, and the stored format
+    /// What running a suite takes: the TypeScript handlers' loader, and the stored format
     /// of tests.
-    pub fn test_kit<'a>(&self, loader: &'a TsMockLoader) -> TestKit<'a, TsMockLoader> {
+    pub fn test_kit<'a>(&self, loader: &'a TsHandlerLoader) -> TestKit<'a, TsHandlerLoader> {
         TestKit {
             loader,
             format: test_format(),

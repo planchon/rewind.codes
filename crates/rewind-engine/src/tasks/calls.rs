@@ -7,11 +7,11 @@
 //! outcome to the owner, which commits it:
 //!
 //! ```text
-//! Dispatch ─► job: prepare ─┬─ MCP, API, `http`, harness actions in mock mode ─► dispatcher ─► Dispatched
+//! Dispatch ─► job: prepare ─┬─ MCP, API, `http`, harness actions in a test run ─► dispatcher ─► Dispatched
 //!                           ├─ `webhook` (live) ─────────────────────────────────────────► Webhook
 //!                           ├─ `workflows.<name>.start` (live) ─ checks, the child's start ► Child
 //!                           ├─ `workflows.<name>.signal` (live) ─ checks ────────────────► Signal
-//!                           ├─ `workflows.<name>.start` (mock) ─ the mocks' answer, the end ► MockStart
+//!                           ├─ `workflows.<name>.start` (test) ─ the handlers' answer, the end ► TestStart
 //!                           └─ a harness action for an SDK stream ─ the hand-out ─────────────► HarnessReady
 //! ```
 //!
@@ -98,9 +98,9 @@ pub(crate) enum CallOutcome {
     Child(Box<ChildStart>),
     /// `workflows.<name>.signal` of a live run, checked.
     Signal(Box<ChildSignal>),
-    /// `workflows.<name>.start` in mock mode: the mocks' answer stands for the child, whose end
+    /// `workflows.<name>.start` in a test run: the handlers' answer stands for the child, whose end
     /// follows the start at once.
-    MockStart {
+    TestStart {
         dispatched: Dispatched,
         end: Option<(RunId, JsonValue)>,
     },
@@ -203,7 +203,7 @@ async fn call<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>) -> Ca
     );
     let outcome =
         tracing::Instrument::instrument(attempt_of(plane, config, work), span.clone()).await;
-    if let CallOutcome::Dispatched(dispatched) | CallOutcome::MockStart { dispatched, .. } =
+    if let CallOutcome::Dispatched(dispatched) | CallOutcome::TestStart { dispatched, .. } =
         &outcome
     {
         span.record(
@@ -347,7 +347,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
             ..
         }) => {
             let answered = plane.dispatcher().dispatch(call, CallAuth::None).await;
-            return mock_start(plane, partition, answered);
+            return test_start(plane, partition, answered);
         }
         _ => {}
     }
@@ -550,29 +550,29 @@ fn webhook(config: &NodeConfig, call: &Call) -> CallOutcome {
     }
 }
 
-/// `workflows.<name>.start` in mock mode: the mocks' answer is the child's end, and the start
+/// `workflows.<name>.start` in a test run: the handlers' answer is the child's end, and the start
 /// resolves with a run id drawn from the engine's entropy (`archi/03-execution.md`, "Workflows
 /// across runs").
-fn mock_start<P: Plane>(
+fn test_start<P: Plane>(
     plane: &P,
     partition: rewind_core::PartitionId,
     answered: Dispatched,
 ) -> CallOutcome {
     let end = match answered {
-        Dispatched::Result(output) => RunEnd::from_mock(ActionOutcome::Result(output)),
-        Dispatched::Failed(failure) => RunEnd::from_mock(ActionOutcome::Failure(failure)),
+        Dispatched::Result(output) => RunEnd::from_test(ActionOutcome::Result(output)),
+        Dispatched::Failed(failure) => RunEnd::from_test(ActionOutcome::Failure(failure)),
         transient @ Dispatched::Transient(_) => {
-            return CallOutcome::MockStart {
+            return CallOutcome::TestStart {
                 dispatched: transient,
                 end: None,
             };
         }
         Dispatched::Deferred | Dispatched::Park(_) => {
-            return failed("a mock cannot answer the start of a workflow later".into());
+            return failed("a handler cannot answer the start of a workflow later".into());
         }
     };
     let child = plane.entropy().run_id_in(partition);
-    CallOutcome::MockStart {
+    CallOutcome::TestStart {
         dispatched: Dispatched::Result(json!({ "runId": child.to_string() })),
         end: Some((child, end.to_json())),
     }

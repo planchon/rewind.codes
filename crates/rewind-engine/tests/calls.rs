@@ -230,7 +230,7 @@ async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
     let request = StartRun::new(Code::new("hooked"), action_set(), json!({}));
     let live = world.run(request.clone()).await;
     let mut mock = request;
-    mock.mode = RunMode::Mock;
+    mock.mode = RunMode::Test;
     let mock = world.run(mock).await;
 
     let made = first_result(&mut world, &live).await;
@@ -253,7 +253,7 @@ async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
     assert_eq!(
         first_result(&mut world, &mock).await,
         json!({ "url": "mock://hook" }),
-        "in mock mode, the mocks answer"
+        "in a test run, the handlers answer"
     );
     assert_eq!(world.plane.dispatcher.calls().len(), 1);
 }

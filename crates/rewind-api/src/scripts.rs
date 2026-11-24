@@ -1,4 +1,4 @@
-//! Workflows: type-checking (`POST /v1/check`), scenarios in mock mode (`POST /v1/test`), and
+//! Workflows: type-checking (`POST /v1/check`), scenarios in a test run (`POST /v1/test`), and
 //! the distinct workflows executed on the platform (`GET /v1/scripts`).
 
 use std::fmt;
@@ -113,7 +113,7 @@ pub struct Location {
 // -------------------------------------------------------------------------------------------
 // Tests
 
-/// `POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,
+/// `POST /v1/test`: runs tests in a test run, in virtual time (`archi/05-testing-and-observability.md`,
 /// "Running tests"). The given tests run against the code; with `workflow`, that version's
 /// suite runs too, and its interface checks every test. This is how a candidate is checked
 /// before it is saved: a corrected code, or the version on a new action set.

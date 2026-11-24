@@ -408,10 +408,10 @@ fn decode_test(document: &str) -> Result<rewind_core::Test, String> {
         .ok_or_else(|| "not a document of this test format".to_owned())
 }
 
-/// What a save needs to run a suite, without TypeScript mock handlers.
-pub fn kit() -> rewind_engine::suites::TestKit<'static, rewind_engine::testing::NoMockLoader> {
+/// What a save needs to run a suite, without TypeScript handlers.
+pub fn kit() -> rewind_engine::suites::TestKit<'static, rewind_engine::testing::NoHandlerLoader> {
     rewind_engine::suites::TestKit {
-        loader: &rewind_engine::testing::NoMockLoader,
+        loader: &rewind_engine::testing::NoHandlerLoader,
         format: test_format(),
         options: rewind_engine::testing::TestOptions::default(),
     }

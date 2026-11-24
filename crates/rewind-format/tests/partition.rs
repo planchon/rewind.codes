@@ -220,7 +220,7 @@ fn summary() -> Summary {
         headline: "export default async () => {".into(),
         action_set: digest("action_set"),
         status: Status::Failed,
-        mode: Some(Mode::Mock),
+        mode: Some(Mode::Test),
         labels: BTreeMap::from([("agent".into(), "triage".into())]),
         parent: Some(run(9)),
         workflow: Some("triage".into()),

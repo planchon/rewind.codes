@@ -10,7 +10,7 @@
 //! - [`SecretRef`] and [`Attachments`]: the secrets a run or a workflow version attaches, by
 //!   name, never by value (`archi/04-tools.md`, "Secrets").
 //! - [`RunExport`]: a run's history with its code and action set, replayable on its own.
-//! - [`Cassette`]: the mocks recorded from a run, derived from its history.
+//! - [`Cassette`]: the handlers recorded from a run, derived from its history.
 //! - [`Shape`]: the type of an action's results, as observed in histories.
 //! - [`RunId`] and [`PartitionId`]: a run id names the partition its run lives in.
 //! - [`Workflow`]: a code with a name and a typed interface, that workflows start and signal;

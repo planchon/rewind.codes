@@ -30,7 +30,7 @@ struct State {
     keys: BTreeMap<TenantId, Vec<SigningKey>>,
 }
 
-/// `SecretStore` in memory, for engine tests, mock mode and the embedded server without a
+/// `SecretStore` in memory, for engine tests, test runs and the embedded server without a
 /// database. Nothing is at rest, so nothing is encrypted and no master key is in use. It passes
 /// the conformance suite. A secret put or deleted, and each secret a namespace's erasure
 /// deletes, sends its `ControlPlaneChange::Secret` through the changes it was given; reads and

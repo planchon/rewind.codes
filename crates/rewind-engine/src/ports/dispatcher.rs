@@ -50,7 +50,7 @@ pub struct Call {
 /// nowhere else: never in a log, a span or an outcome.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallAuth {
-    /// The server's `auth` is none, or the call has no server (built-ins, mocks).
+    /// The server's `auth` is none, or the call has no server (built-ins, handlers).
     None,
     /// The secret the run attached for the server, read for this delivery, and where it goes.
     Secret {
@@ -130,7 +130,7 @@ pub enum Dispatched {
     Park(ParkReason),
 }
 
-/// Executes calls outside the sandbox: MCP servers, APIs and built-ins, or mocks in mock
+/// Executes calls outside the sandbox: MCP servers, APIs and built-ins, or handlers in test
 /// mode (`archi/07-code-architecture.md`, "The other ports"). Harness actions have no dispatcher:
 /// their tasks are handed to the SDK workers' streams.
 ///

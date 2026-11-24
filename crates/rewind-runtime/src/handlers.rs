@@ -1,12 +1,12 @@
-//! TypeScript mock handlers (`archi/05-testing-and-observability.md`, "Testing and mocks"), as a
-//! [`ActionDispatcher`] for mock mode.
+//! TypeScript handlers (`archi/05-testing-and-observability.md`, "Test runs"), as a
+//! [`ActionDispatcher`] for test runs.
 //!
 //! The handlers run in an isolate of their own, on a thread of their own: nothing they do can
 //! reach the code's isolate, so they cannot break its determinism, and what they return is
 //! recorded like any action result. Their isolate is the sandbox of the latest epoch: the same
 //! globals, randomness seeded with zeros, and the time of the clock the dispatcher is given.
 //!
-//! A module of mock handlers imports nothing, and default-exports its handlers, by full action
+//! A module of handlers imports nothing, and default-exports its handlers, by full action
 //! name or by namespace:
 //!
 //! ```ts
@@ -23,7 +23,7 @@
 //! message, its `data`, and its `kind`: `error` (the default), `unavailable`, `timeout` or
 //! `outcome_unknown`. A handler cannot wait for anything (no timer, signal or action): a promise
 //! still pending once its microtasks are drained fails the call. An action without a handler fails
-//! with `unavailable`; [`TsMocks::handles`] lets mock mode try another source first. `console`
+//! with `unavailable`; [`TsMocks::handles`] lets test runs try another source first. `console`
 //! goes to `tracing`, at the debug level.
 
 use std::collections::BTreeSet;
@@ -35,44 +35,44 @@ use rewind_core::{
     ActionFailure, ActionFailureKind, ActionSet, Annotation, Code, RunId, Seed, Timestamp,
 };
 use rewind_engine::adapters::VirtualClock;
-use rewind_engine::mock::Mocks as Answering;
 use rewind_engine::ports::{ActionDispatcher, Call, CallAuth, Clock, Dispatched, Emitted};
-use rewind_engine::testing::{MockLoadError, MockLoader};
+use rewind_engine::testing::{HandlerLoadError, HandlerLoader};
+use rewind_engine::world::Handlers as Answering;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::compile;
 use crate::epochs;
 use crate::isolate::{Isolate, SandboxLimits};
-use crate::loader::{Loader, MOCKS_SPECIFIER};
+use crate::loader::{HANDLERS_SPECIFIER, Loader};
 use crate::memory;
 use crate::ops::ExecState;
 
-/// The glue of the mock isolate.
-const MOCKS_JS: &str = include_str!("js/mocks.js");
+/// The glue of the test isolate.
+const HANDLERS_JS: &str = include_str!("js/handlers.js");
 
-/// A module of mock handlers that cannot be used.
-/// Loads the TypeScript mock handlers of a test, for [`rewind_engine::testing`]: each test's
+/// A module of handlers that cannot be used.
+/// Loads the TypeScript handlers of a test, for [`rewind_engine::testing`]: each test's
 /// handlers in an isolate of their own, whose clock starts at the test's start.
 #[derive(Debug, Clone, Default)]
-pub struct TsMockLoader {
+pub struct TsHandlerLoader {
     pub limits: SandboxLimits,
 }
 
-impl MockLoader for TsMockLoader {
-    type Handlers = TsMocks;
+impl HandlerLoader for TsHandlerLoader {
+    type Handlers = TsHandlers;
 
     async fn load(
         &self,
         source: &str,
         start: Timestamp,
-    ) -> Result<Answering<TsMocks>, MockLoadError> {
+    ) -> Result<Answering<TsHandlers>, HandlerLoadError> {
         let clock: Arc<dyn Clock> = Arc::new(VirtualClock::new(start));
-        let handlers = TsMocks::new(&Code::new(source), clock, self.limits.clone())
+        let handlers = TsHandlers::new(&Code::new(source), clock, self.limits.clone())
             .await
             .map_err(|error| match error {
-                MockError::Invalid(message) => MockLoadError::Invalid(message),
-                MockError::Internal(message) => MockLoadError::Internal(message),
+                HandlerError::Invalid(message) => HandlerLoadError::Invalid(message),
+                HandlerError::Internal(message) => HandlerLoadError::Internal(message),
             })?;
         let actions = handlers.actions().clone();
         Ok(Answering { handlers, actions })
@@ -80,24 +80,24 @@ impl MockLoader for TsMockLoader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum MockError {
+pub enum HandlerError {
     /// A syntax error, an import, a default export that is not an object of handlers, an
-    /// error thrown while the module loads. Written for the developer of the mocks.
-    #[error("invalid mock handlers: {0}")]
+    /// error thrown while the module loads. Written for the developer of the handlers.
+    #[error("invalid handlers: {0}")]
     Invalid(String),
     /// A fault of the runtime itself.
-    #[error("internal error of the mock handlers: {0}")]
+    #[error("internal error of the handlers: {0}")]
     Internal(String),
 }
 
-/// TypeScript mock handlers, in an isolate of their own. Dropping it stops their thread.
-pub struct TsMocks {
+/// TypeScript handlers, in an isolate of their own. Dropping it stops their thread.
+pub struct TsHandlers {
     // `mpsc::Sender` is `Send` but not `Sync`; the mutex makes the dispatcher `Sync`.
     requests: Mutex<mpsc::Sender<Request>>,
     actions: BTreeSet<String>,
 }
 
-impl std::fmt::Debug for TsMocks {
+impl std::fmt::Debug for TsHandlers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TsMocks")
             .field("actions", &self.actions)
@@ -112,27 +112,29 @@ struct Request {
     reply: oneshot::Sender<Dispatched>,
 }
 
-impl TsMocks {
-    /// Compiles and loads a module of mock handlers. `clock` is the time the handlers see;
+impl TsHandlers {
+    /// Compiles and loads a module of handlers. `clock` is the time the handlers see;
     /// `limits` bound each call (CPU time) and the isolate (heap).
     pub async fn new(
         source: &Code,
         clock: Arc<dyn Clock>,
         limits: SandboxLimits,
-    ) -> Result<Self, MockError> {
-        let compiled = compile::transpile(source, MOCKS_SPECIFIER)
-            .map_err(|invalid| MockError::Invalid(invalid.message))?;
+    ) -> Result<Self, HandlerError> {
+        let compiled = compile::transpile(source, HANDLERS_SPECIFIER)
+            .map_err(|invalid| HandlerError::Invalid(invalid.message))?;
         let (requests, inbox) = mpsc::channel();
         let (loaded, actions) = oneshot::channel();
         let started_at = clock.now();
         std::thread::Builder::new()
-            .name("rewind-mocks".into())
+            .name("rewind-handlers".into())
             .stack_size(memory::ISOLATE_THREAD_STACK)
             .spawn(move || serve(compiled, limits, started_at, clock, loaded, inbox))
-            .map_err(|err| MockError::Internal(format!("cannot spawn the mock thread: {err}")))?;
+            .map_err(|err| {
+                HandlerError::Internal(format!("cannot spawn the test thread: {err}"))
+            })?;
         let actions = actions
             .await
-            .map_err(|_| MockError::Internal("the mock thread has stopped".into()))??;
+            .map_err(|_| HandlerError::Internal("the test thread has stopped".into()))??;
         Ok(Self {
             requests: Mutex::new(requests),
             actions,
@@ -150,7 +152,7 @@ impl TsMocks {
     }
 }
 
-impl ActionDispatcher for TsMocks {
+impl ActionDispatcher for TsHandlers {
     /// The handler's result or failure. An action without a handler fails with `unavailable`, for
     /// good: retrying would not make one appear.
     async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
@@ -158,7 +160,7 @@ impl ActionDispatcher for TsMocks {
         if !self.handles(&action) {
             return failed(
                 ActionFailureKind::Unavailable,
-                format!("no mock handler for {action}"),
+                format!("no handler for {action}"),
             );
         }
         let context = json!({
@@ -201,17 +203,17 @@ fn failed(kind: ActionFailureKind, message: String) -> Dispatched {
 fn stopped() -> Dispatched {
     failed(
         ActionFailureKind::Error,
-        "the mock handlers have stopped: a previous call exceeded a limit".into(),
+        "the handlers have stopped: a previous call exceeded a limit".into(),
     )
 }
 
-/// The mock thread: load the handlers, then answer calls until the dispatcher is dropped.
+/// The test thread: load the handlers, then answer calls until the dispatcher is dropped.
 fn serve(
     compiled: compile::Transpiled,
     limits: SandboxLimits,
     started_at: Timestamp,
     clock: Arc<dyn Clock>,
-    loaded: oneshot::Sender<Result<BTreeSet<String>, MockError>>,
+    loaded: oneshot::Sender<Result<BTreeSet<String>, HandlerError>>,
     inbox: mpsc::Receiver<Request>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -220,24 +222,24 @@ fn serve(
     {
         Ok(runtime) => runtime,
         Err(err) => {
-            let _ = loaded.send(Err(MockError::Internal(err.to_string())));
+            let _ = loaded.send(Err(HandlerError::Internal(err.to_string())));
             return;
         }
     };
     let _context = runtime.enter();
-    let mut mocks = match runtime.block_on(Mocks::load(compiled, limits, started_at)) {
-        Ok(mocks) => mocks,
+    let mut handlers = match runtime.block_on(Handlers::load(compiled, limits, started_at)) {
+        Ok(handlers) => handlers,
         Err(err) => {
             let _ = loaded.send(Err(err));
             return;
         }
     };
-    if loaded.send(Ok(mocks.actions.clone())).is_err() {
+    if loaded.send(Ok(handlers.actions.clone())).is_err() {
         return;
     }
     while let Ok(request) = inbox.recv() {
-        let answer = mocks.call(&request, clock.now());
-        let alive = !mocks.dead;
+        let answer = handlers.call(&request, clock.now());
+        let alive = !handlers.dead;
         let _ = request.reply.send(answer);
         if !alive {
             return;
@@ -245,23 +247,23 @@ fn serve(
     }
 }
 
-struct Mocks {
+struct Handlers {
     isolate: Isolate,
     call: v8::Global<v8::Function>,
     actions: BTreeSet<String>,
     dead: bool,
 }
 
-impl Mocks {
+impl Handlers {
     async fn load(
         compiled: compile::Transpiled,
         limits: SandboxLimits,
         started_at: Timestamp,
-    ) -> Result<Self, MockError> {
+    ) -> Result<Self, HandlerError> {
         let internal =
-            |err: rewind_engine::ports::ExecutorError| MockError::Internal(err.to_string());
-        let invalid = |err: &dyn std::fmt::Display| MockError::Invalid(err.to_string());
-        let loader = Rc::new(Loader::mocks(
+            |err: rewind_engine::ports::ExecutorError| HandlerError::Internal(err.to_string());
+        let invalid = |err: &dyn std::fmt::Display| HandlerError::Invalid(err.to_string());
+        let loader = Rc::new(Loader::handlers(
             compiled.javascript,
             compiled.source_map.into_bytes(),
         ));
@@ -275,11 +277,11 @@ impl Mocks {
             Isolate::new(epochs::latest(), limits, loader, state).map_err(internal)?;
         let setup = isolate
             .runtime()
-            .execute_script("rewind:mocks", MOCKS_JS)
-            .map_err(|err| MockError::Internal(err.to_string()))?;
+            .execute_script("rewind:handlers", HANDLERS_JS)
+            .map_err(|err| HandlerError::Internal(err.to_string()))?;
 
-        let specifier = ModuleSpecifier::parse(MOCKS_SPECIFIER)
-            .map_err(|err| MockError::Internal(err.to_string()))?;
+        let specifier = ModuleSpecifier::parse(HANDLERS_SPECIFIER)
+            .map_err(|err| HandlerError::Internal(err.to_string()))?;
         isolate.begin().map_err(internal)?;
         let evaluated = async {
             let runtime = isolate.runtime();
@@ -295,12 +297,12 @@ impl Mocks {
             evaluation.await.map_err(|err| invalid(&err))?;
             runtime
                 .get_module_namespace(module)
-                .map_err(|err| MockError::Internal(err.to_string()))
+                .map_err(|err| HandlerError::Internal(err.to_string()))
         }
         .await;
         isolate
             .end()
-            .map_err(|err| MockError::Invalid(err.to_string()))?;
+            .map_err(|err| HandlerError::Invalid(err.to_string()))?;
         let namespace = evaluated?;
 
         let (call, actions) = {
@@ -309,33 +311,33 @@ impl Mocks {
             v8::tc_scope!(let scope, scope);
             let namespace = v8::Local::new(scope, namespace);
             let key = v8::String::new(scope, "default")
-                .ok_or_else(|| MockError::Internal("cannot create a string".into()))?;
+                .ok_or_else(|| HandlerError::Internal("cannot create a string".into()))?;
             let handlers = namespace
                 .get(scope, key.into())
                 .unwrap_or_else(|| v8::undefined(scope).into());
             let setup = v8::Local::new(scope, setup);
             let setup = v8::Local::<v8::Function>::try_from(setup)
-                .map_err(|err| MockError::Internal(err.to_string()))?;
+                .map_err(|err| HandlerError::Internal(err.to_string()))?;
             let receiver = v8::undefined(scope).into();
-            let Some(mocks) = setup.call(scope, receiver, &[handlers]) else {
+            let Some(handlers) = setup.call(scope, receiver, &[handlers]) else {
                 let message = scope.exception().map_or_else(
                     || "the default export cannot be read".into(),
                     |e| e.to_rust_string_lossy(scope),
                 );
-                return Err(MockError::Invalid(message));
+                return Err(HandlerError::Invalid(message));
             };
-            let mocks = v8::Local::<v8::Object>::try_from(mocks)
-                .map_err(|err| MockError::Internal(err.to_string()))?;
-            let call = crate::isolate::function(scope, mocks, "call").map_err(internal)?;
+            let handlers = v8::Local::<v8::Object>::try_from(handlers)
+                .map_err(|err| HandlerError::Internal(err.to_string()))?;
+            let call = crate::isolate::function(scope, handlers, "call").map_err(internal)?;
             let key = v8::String::new(scope, "actions")
-                .ok_or_else(|| MockError::Internal("cannot create a string".into()))?;
-            let actions = mocks
+                .ok_or_else(|| HandlerError::Internal("cannot create a string".into()))?;
+            let actions = handlers
                 .get(scope, key.into())
                 .and_then(|actions| v8::json::stringify(scope, actions))
                 .map(|json| json.to_rust_string_lossy(scope))
-                .ok_or_else(|| MockError::Internal("the mock actions cannot be read".into()))?;
+                .ok_or_else(|| HandlerError::Internal("the test actions cannot be read".into()))?;
             let actions: BTreeSet<String> = serde_json::from_str(&actions)
-                .map_err(|err| MockError::Internal(err.to_string()))?;
+                .map_err(|err| HandlerError::Internal(err.to_string()))?;
             (call, actions)
         };
         Ok(Self {
@@ -362,14 +364,14 @@ impl Mocks {
         if let Err(limit) = self.isolate.end() {
             self.dead = true;
             return Err(format!(
-                "the mock handler of {} {}",
+                "the handler of {} {}",
                 request.action,
                 limit.to_string().trim_start_matches("the code ")
             ));
         }
         let json = settled?.ok_or_else(|| {
             format!(
-                "the mock handler of {} did not settle: mock handlers cannot wait for timers, \
+                "the handler of {} did not settle: handlers cannot wait for timers, \
                  signals or actions",
                 request.action
             )
@@ -414,7 +416,7 @@ impl Mocks {
         }
         let promise = promise
             .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())
-            .ok_or("the mock glue did not return a promise")?;
+            .ok_or("the test glue did not return a promise")?;
         match promise.state() {
             v8::PromiseState::Pending => Ok(None),
             v8::PromiseState::Fulfilled => {
@@ -427,7 +429,7 @@ impl Mocks {
     fn forward_logs(&mut self, action: &str) {
         for emitted in self.isolate.state(ExecState::take_emitted) {
             if let Emitted::Annotation(Annotation::Log { message, .. }) = emitted {
-                tracing::debug!(target: "rewind_runtime::mocks", action, "{message}");
+                tracing::debug!(target: "rewind_runtime::handlers", action, "{message}");
             }
         }
     }

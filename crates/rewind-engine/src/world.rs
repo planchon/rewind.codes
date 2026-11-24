@@ -1,12 +1,12 @@
-//! Mock mode (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! Test runs (`archi/05-testing-and-observability.md`, "Test runs").
 //!
-//! Mock mode is not a separate system: it is the same engine wired with in-memory adapters, a
-//! virtual clock, and a dispatcher that answers from mocks. A call is answered by the first
+//! Test runs is not a separate system: it is the same engine wired with in-memory adapters, a
+//! virtual clock, and a dispatcher that answers from handlers. A call is answered by the first
 //! source that has an answer:
 //!
 //! 1. the **rules** a test writes per action ([`RulesDispatcher`]), matched by args;
-//! 2. **mock handlers** ([`Mocks`]): any [`ActionDispatcher`], for the actions it handles. The
-//!    TypeScript mock handlers run in a separate isolate, behind that port (`rewind-runtime`);
+//! 2. **handlers** ([`Handlers`]): any [`ActionDispatcher`], for the actions it handles. The
+//!    TypeScript handlers run in a separate isolate, behind that port (`rewind-runtime`);
 //! 3. a **cassette** recorded from a real run ([`CassetteDispatcher`]): `sequential` hands the
 //!    recorded calls out in order, `by_args` by action and canonical args;
 //! 4. **static responses** per action, as `rewind.actions.json` holds them;
@@ -208,56 +208,56 @@ fn no_response(call: &Call) -> ActionFailure {
     }
 }
 
-/// Mock handlers: any dispatcher, for the actions it handles. The TypeScript mock handlers of a
+/// Handlers: any dispatcher, for the actions it handles. The TypeScript handlers of a
 /// test (`rewind-runtime`, in a separate isolate) are one.
 #[derive(Debug)]
-pub struct Mocks<M> {
+pub struct Handlers<M> {
     pub handlers: M,
     /// The actions the handlers answer; the others go to the next source.
     pub actions: BTreeSet<String>,
 }
 
-/// The dispatcher of mock mode: rules, then mock handlers, then a cassette, then static
+/// The dispatcher of test runs: rules, then handlers, then a cassette, then static
 /// responses.
 #[derive(Debug)]
-pub struct MockDispatcher<M> {
+pub struct WorldDispatcher<M> {
     rules: Option<RulesDispatcher>,
-    mocks: Option<Mocks<M>>,
+    handlers: Option<Handlers<M>>,
     cassette: Option<CassetteDispatcher>,
     statics: StaticDispatcher,
     static_actions: BTreeSet<String>,
     unanswered: UnansweredCalls,
 }
 
-/// No mock handlers.
+/// No handlers.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoMocks;
+pub struct NoHandlers;
 
-impl ActionDispatcher for NoMocks {
+impl ActionDispatcher for NoHandlers {
     async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
         Dispatched::Failed(no_response(&call))
     }
 }
 
-impl MockDispatcher<NoMocks> {
+impl WorldDispatcher<NoHandlers> {
     /// A dispatcher that answers nothing until sources are added.
     pub fn new() -> Self {
-        Self::without_mocks()
+        Self::without_handlers()
     }
 }
 
-impl Default for MockDispatcher<NoMocks> {
+impl Default for WorldDispatcher<NoHandlers> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<M> MockDispatcher<M> {
-    /// A dispatcher whose mock handlers would be of type `M`, without any yet.
-    pub fn without_mocks() -> Self {
+impl<M> WorldDispatcher<M> {
+    /// A dispatcher whose handlers would be of type `M`, without any yet.
+    pub fn without_handlers() -> Self {
         Self {
             rules: None,
-            mocks: None,
+            handlers: None,
             cassette: None,
             statics: StaticDispatcher::new(),
             static_actions: BTreeSet::new(),
@@ -277,10 +277,10 @@ impl<M> MockDispatcher<M> {
         self
     }
 
-    pub fn with_mocks<N>(self, mocks: Mocks<N>) -> MockDispatcher<N> {
-        MockDispatcher {
+    pub fn with_handlers<N>(self, handlers: Handlers<N>) -> WorldDispatcher<N> {
+        WorldDispatcher {
             rules: self.rules,
-            mocks: Some(mocks),
+            handlers: Some(handlers),
             cassette: self.cassette,
             statics: self.statics,
             static_actions: self.static_actions,
@@ -315,15 +315,15 @@ impl<M> MockDispatcher<M> {
     }
 }
 
-impl<M: ActionDispatcher> ActionDispatcher for MockDispatcher<M> {
+impl<M: ActionDispatcher> ActionDispatcher for WorldDispatcher<M> {
     async fn dispatch(&self, call: Call, auth: CallAuth) -> Dispatched {
         if let Some(outcome) = self.rules.as_ref().and_then(|rules| rules.answer(&call)) {
             return dispatched(outcome);
         }
-        if let Some(mocks) = &self.mocks
-            && mocks.actions.contains(&call.action.name)
+        if let Some(handlers) = &self.handlers
+            && handlers.actions.contains(&call.action.name)
         {
-            return mocks.handlers.dispatch(call, auth).await;
+            return handlers.handlers.dispatch(call, auth).await;
         }
         if let Some(outcome) = self
             .cassette
@@ -335,7 +335,7 @@ impl<M: ActionDispatcher> ActionDispatcher for MockDispatcher<M> {
         if self.static_actions.contains(&call.action.name) {
             return self.statics.dispatch(call, auth).await;
         }
-        // A signal to a mocked run has nowhere to go: it is accepted (`archi/03-execution.md`,
+        // A signal to a answered run has nowhere to go: it is accepted (`archi/03-execution.md`,
         // "Workflows across runs").
         if matches!(
             rewind_core::WorkflowOp::of_action(&call.action.name),
@@ -436,17 +436,17 @@ mod tests {
 
     #[tokio::test]
     async fn sources_are_tried_in_order() {
-        let mocks = Mocks {
-            handlers: StaticDispatcher::from_json(&json!({ "b": "from the mocks" })).unwrap(),
+        let handlers = Handlers {
+            handlers: StaticDispatcher::from_json(&json!({ "b": "from the handlers" })).unwrap(),
             actions: BTreeSet::from(["b".to_owned()]),
         };
-        let dispatcher = MockDispatcher::new()
+        let dispatcher = WorldDispatcher::new()
             .with_cassette(cassette(Matching::ByArgs))
             .with_static_responses(
                 &json!({ "a": "static", "b": "static", "c": { "$error": "nope" } }),
             )
             .unwrap()
-            .with_mocks(mocks);
+            .with_handlers(handlers);
         let answer = |call| dispatcher.dispatch(call, CallAuth::None);
         assert_eq!(
             answer(call(1, "a", json!({ "n": 1 }))).await,
@@ -457,10 +457,10 @@ mod tests {
             answer(call(2, "a", json!({ "n": 9 }))).await,
             Dispatched::Result(json!("static"))
         );
-        // The mocks come before the static responses.
+        // The handlers come before the static responses.
         assert_eq!(
             answer(call(3, "b", json!({}))).await,
-            Dispatched::Result(json!("from the mocks"))
+            Dispatched::Result(json!("from the handlers"))
         );
         assert!(matches!(
             answer(call(4, "c", json!({}))).await,
@@ -489,7 +489,7 @@ mod tests {
                 ActionRule::always(ActionOutcome::Result(json!("rule, always"))),
             ],
         )]);
-        let dispatcher = MockDispatcher::new()
+        let dispatcher = WorldDispatcher::new()
             .with_cassette(cassette(Matching::ByArgs))
             .with_rules(rules);
         let answer = |call| dispatcher.dispatch(call, CallAuth::None);
@@ -509,7 +509,7 @@ mod tests {
             Dispatched::Result(json!("rule, always"))
         );
         assert!(dispatcher.unanswered().list().is_empty());
-        // A signal to a mocked run is accepted, and not listed as unanswered.
+        // A signal to a answered run is accepted, and not listed as unanswered.
         assert_eq!(
             answer(call(3, "workflows.triage.signal", json!({}))).await,
             Dispatched::Result(json!({}))

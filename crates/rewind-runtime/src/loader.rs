@@ -2,7 +2,7 @@
 //!
 //! A code may only import `rewind`, `rewind:actions` and `rewind:workflows`; `rewind:internal`
 //! is reserved to the runtime's own modules; there is no dynamic `import()`, no npm, no relative
-//! import. A module of mock handlers imports nothing.
+//! import. A module of handlers imports nothing.
 //!
 //! Code written before actions were named imports `rewind:tools`: it resolves to the module
 //! `rewind:actions` itself, so that both names give the same exports, and nothing declares it
@@ -22,8 +22,8 @@ use crate::epochs::Glue;
 pub(crate) const ENTRY_SPECIFIER: &str = "rewind:event";
 /// The name `rewind:actions` had, which code already written imports (R1).
 pub(crate) const OLD_ACTIONS_SPECIFIER: &str = "rewind:tools";
-/// Specifier of a module of mock handlers.
-pub(crate) const MOCKS_SPECIFIER: &str = "file:///mocks.ts";
+/// Specifier of a module of handlers.
+pub(crate) const HANDLERS_SPECIFIER: &str = "file:///handlers.ts";
 
 pub(crate) struct Loader {
     modules: Modules,
@@ -37,7 +37,7 @@ enum Modules {
         actions: String,
         workflows: String,
     },
-    Mocks {
+    Handlers {
         javascript: String,
     },
 }
@@ -63,10 +63,10 @@ impl Loader {
         }
     }
 
-    /// One module of mock handlers.
-    pub(crate) fn mocks(javascript: String, source_map: Vec<u8>) -> Self {
+    /// One module of handlers.
+    pub(crate) fn handlers(javascript: String, source_map: Vec<u8>) -> Self {
         Self {
-            modules: Modules::Mocks { javascript },
+            modules: Modules::Handlers { javascript },
             source_map,
         }
     }
@@ -74,7 +74,7 @@ impl Loader {
     fn file_name(&self) -> &'static str {
         match self.modules {
             Modules::Code { .. } => CODE_SPECIFIER,
-            Modules::Mocks { .. } => MOCKS_SPECIFIER,
+            Modules::Handlers { .. } => HANDLERS_SPECIFIER,
         }
     }
 }
@@ -113,10 +113,10 @@ impl ModuleLoader for Loader {
                      \"rewind:actions\" and \"rewind:workflows\""
                 )));
             }
-            (Modules::Mocks { .. }, _, MOCKS_SPECIFIER) if main => specifier,
-            (Modules::Mocks { .. }, MOCKS_SPECIFIER, other) => {
+            (Modules::Handlers { .. }, _, HANDLERS_SPECIFIER) if main => specifier,
+            (Modules::Handlers { .. }, HANDLERS_SPECIFIER, other) => {
                 return Err(JsErrorBox::type_error(format!(
-                    "cannot import {other:?}: mock handlers cannot import modules"
+                    "cannot import {other:?}: handlers cannot import modules"
                 )));
             }
             _ => {
@@ -141,7 +141,7 @@ impl ModuleLoader for Loader {
             (Modules::Code { actions, .. }, "rewind:actions") => actions.clone(),
             (Modules::Code { workflows, .. }, "rewind:workflows") => workflows.clone(),
             (Modules::Code { code, .. }, CODE_SPECIFIER) => code.clone(),
-            (Modules::Mocks { javascript }, MOCKS_SPECIFIER) => javascript.clone(),
+            (Modules::Handlers { javascript }, HANDLERS_SPECIFIER) => javascript.clone(),
             (_, other) => {
                 return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
                     "module not found: {other}"

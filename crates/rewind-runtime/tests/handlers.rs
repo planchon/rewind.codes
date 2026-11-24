@@ -1,5 +1,5 @@
-//! TypeScript mock handlers (`archi/05-testing-and-observability.md`, "Testing and mocks"): an
-//! `ActionDispatcher` for mock mode, running the handlers in an isolate of their own.
+//! TypeScript handlers (`archi/05-testing-and-observability.md`, "Test runs"): an
+//! `ActionDispatcher` for test runs, running the handlers in an isolate of their own.
 
 #![allow(clippy::unwrap_used)]
 
@@ -14,7 +14,7 @@ use rewind_engine::ports::{
     ActionDispatcher, Call, CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId,
 };
 use rewind_engine::{ReplayVerdict, StartRun};
-use rewind_runtime::{MockError, SandboxLimits, TsMocks, V8Executor};
+use rewind_runtime::{HandlerError, SandboxLimits, TsHandlers, V8Executor};
 use serde_json::{Value, json};
 
 mod support;
@@ -70,8 +70,8 @@ fn clock() -> Arc<dyn Clock> {
     Arc::new(FixedClock(T0))
 }
 
-async fn mocks(source: &str) -> Result<TsMocks, MockError> {
-    TsMocks::new(&Code::new(source), clock(), SandboxLimits::default()).await
+async fn handlers(source: &str) -> Result<TsHandlers, HandlerError> {
+    TsHandlers::new(&Code::new(source), clock(), SandboxLimits::default()).await
 }
 
 fn call(action: &str, args: Value) -> Call {
@@ -93,8 +93,8 @@ fn call(action: &str, args: Value) -> Call {
     }
 }
 
-async fn dispatch(mocks: &TsMocks, action: &str, args: Value) -> Dispatched {
-    mocks.dispatch(call(action, args), CallAuth::None).await
+async fn dispatch(handlers: &TsHandlers, action: &str, args: Value) -> Dispatched {
+    handlers.dispatch(call(action, args), CallAuth::None).await
 }
 
 fn failure(dispatched: Dispatched) -> ActionFailure {
@@ -106,8 +106,8 @@ fn failure(dispatched: Dispatched) -> ActionFailure {
 
 #[tokio::test]
 async fn handlers_answer_by_action_name_or_group() {
-    let mocks = mocks(MOCKS).await.unwrap();
-    let actions: Vec<&str> = mocks.actions().iter().map(String::as_str).collect();
+    let handlers = handlers(MOCKS).await.unwrap();
+    let actions: Vec<&str> = handlers.actions().iter().map(String::as_str).collect();
     assert_eq!(
         actions,
         [
@@ -122,17 +122,17 @@ async fn handlers_answer_by_action_name_or_group() {
             "waits"
         ]
     );
-    assert!(mocks.handles("github.get_issue"));
-    assert!(!mocks.handles("github"));
+    assert!(handlers.handles("github.get_issue"));
+    assert!(!handlers.handles("github"));
 
     assert_eq!(
-        dispatch(&mocks, "github.get_issue", json!({ "number": 4 })).await,
+        dispatch(&handlers, "github.get_issue", json!({ "number": 4 })).await,
         Dispatched::Result(json!({ "number": 4, "title": "issue 4" }))
     );
     // Module state persists across calls; the handler sees the call.
     for closed in 1..=2 {
         assert_eq!(
-            dispatch(&mocks, "github.close_issue", json!({ "number": 4 })).await,
+            dispatch(&handlers, "github.close_issue", json!({ "number": 4 })).await,
             Dispatched::Result(json!({
                 "number": 4,
                 "closed": closed,
@@ -143,20 +143,20 @@ async fn handlers_answer_by_action_name_or_group() {
         );
     }
     assert_eq!(
-        dispatch(&mocks, "github.reopen_issue", json!({})).await,
+        dispatch(&handlers, "github.reopen_issue", json!({})).await,
         Dispatched::Result(json!({ "tool": "github.reopen_issue", "attempt": 2 }))
     );
     assert_eq!(
-        dispatch(&mocks, "logs", json!({ "a": 1 })).await,
+        dispatch(&handlers, "logs", json!({ "a": 1 })).await,
         Dispatched::Result(Value::Null)
     );
 }
 
 #[tokio::test]
 async fn failures_carry_their_kind_message_and_data() {
-    let mocks = mocks(MOCKS).await.unwrap();
+    let handlers = handlers(MOCKS).await.unwrap();
     assert_eq!(
-        failure(dispatch(&mocks, "fails", json!({})).await),
+        failure(dispatch(&handlers, "fails", json!({})).await),
         ActionFailure {
             kind: ActionFailureKind::Unavailable,
             message: "rate limited".into(),
@@ -164,29 +164,29 @@ async fn failures_carry_their_kind_message_and_data() {
         }
     );
     assert_eq!(
-        failure(dispatch(&mocks, "rejects", json!({})).await),
+        failure(dispatch(&handlers, "rejects", json!({})).await),
         ActionFailure {
             kind: ActionFailureKind::Error,
             message: "plain failure".into(),
             data: None,
         }
     );
-    let missing = failure(dispatch(&mocks, "slack.post", json!({})).await);
+    let missing = failure(dispatch(&handlers, "slack.post", json!({})).await);
     assert_eq!(missing.kind, ActionFailureKind::Unavailable);
-    assert_eq!(missing.message, "no mock handler for slack.post");
-    let waits = failure(dispatch(&mocks, "waits", json!({})).await);
+    assert_eq!(missing.message, "no handler for slack.post");
+    let waits = failure(dispatch(&handlers, "waits", json!({})).await);
     assert_eq!(
         waits.message,
-        "the mock handler of waits did not settle: mock handlers cannot wait for timers, \
+        "the handler of waits did not settle: handlers cannot wait for timers, \
          signals or actions"
     );
 }
 
-/// Mocks see the dispatcher's clock and seeded randomness: two dispatchers answer alike.
+/// Handlers see the dispatcher's clock and seeded randomness: two dispatchers answer alike.
 #[tokio::test]
 async fn handlers_are_deterministic() {
-    let a = dispatch(&mocks(MOCKS).await.unwrap(), "clock", json!({})).await;
-    let b = dispatch(&mocks(MOCKS).await.unwrap(), "clock", json!({})).await;
+    let a = dispatch(&handlers(MOCKS).await.unwrap(), "clock", json!({})).await;
+    let b = dispatch(&handlers(MOCKS).await.unwrap(), "clock", json!({})).await;
     assert_eq!(a, b);
     let Dispatched::Result(result) = a else {
         panic!("{a:?}");
@@ -195,8 +195,8 @@ async fn handlers_are_deterministic() {
 }
 
 #[tokio::test]
-async fn a_handler_that_spins_is_stopped_and_the_mocks_stop() {
-    let mocks = TsMocks::new(
+async fn a_handler_that_spins_is_stopped_and_the_handlers_stop() {
+    let handlers = TsHandlers::new(
         &Code::new(MOCKS),
         clock(),
         SandboxLimits {
@@ -206,12 +206,12 @@ async fn a_handler_that_spins_is_stopped_and_the_mocks_stop() {
     )
     .await
     .unwrap();
-    let spun = failure(dispatch(&mocks, "spins", json!({})).await);
+    let spun = failure(dispatch(&handlers, "spins", json!({})).await);
     assert_eq!(
         spun.message,
-        "the mock handler of spins used more than 100ms of CPU time reacting to one trigger"
+        "the handler of spins used more than 100ms of CPU time reacting to one trigger"
     );
-    let after = failure(dispatch(&mocks, "github.get_issue", json!({ "number": 1 })).await);
+    let after = failure(dispatch(&handlers, "github.get_issue", json!({ "number": 1 })).await);
     assert!(after.message.contains("have stopped"), "{after:?}");
 }
 
@@ -221,7 +221,7 @@ async fn a_handler_that_spins_is_stopped_and_the_mocks_stop() {
 async fn a_handler_that_floods_its_logs_is_stopped() {
     let source = "export default { noisy: () => { const big = \"x\".repeat(1 << 20); \
                   for (;;) console.log(big); } };";
-    let mocks = TsMocks::new(
+    let handlers = TsHandlers::new(
         &Code::new(source),
         clock(),
         SandboxLimits {
@@ -231,10 +231,10 @@ async fn a_handler_that_floods_its_logs_is_stopped() {
     )
     .await
     .unwrap();
-    let flooded = failure(dispatch(&mocks, "noisy", json!({})).await);
+    let flooded = failure(dispatch(&handlers, "noisy", json!({})).await);
     assert_eq!(
         flooded.message,
-        "the mock handler of noisy emitted more than 4 MiB of commands and logs reacting to one \
+        "the handler of noisy emitted more than 4 MiB of commands and logs reacting to one \
          trigger"
     );
 }
@@ -242,10 +242,10 @@ async fn a_handler_that_floods_its_logs_is_stopped() {
 #[tokio::test]
 async fn invalid_modules_are_refused() {
     for (source, expected) in [
-        ("export default {", "mocks.ts"),
+        ("export default {", "handlers.ts"),
         (
             "import { sleep } from \"rewind\";\nexport default { a: sleep };",
-            "mock handlers cannot import modules",
+            "handlers cannot import modules",
         ),
         (
             "export default 42;",
@@ -257,12 +257,12 @@ async fn invalid_modules_are_refused() {
         ),
         (
             "export default { a: 1 };",
-            "the mock handler a is not a function",
+            "the handler a is not a function",
         ),
         ("throw new Error(\"boom\");\nexport default {};", "boom"),
     ] {
-        match mocks(source).await {
-            Err(MockError::Invalid(message)) => {
+        match handlers(source).await {
+            Err(HandlerError::Invalid(message)) => {
                 assert!(message.contains(expected), "{source}: {message}");
             }
             other => panic!("{source}: expected an invalid module, got {other:?}"),
@@ -270,13 +270,13 @@ async fn invalid_modules_are_refused() {
     }
 }
 
-/// Mock mode: the run plane in the driver, with memory adapters, virtual time, and the mocks
+/// Test runs: the run plane in the driver, with memory adapters, virtual time, and the handlers
 /// as dispatcher.
 #[tokio::test]
-async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
+async fn a_test_run_is_answered_by_the_handlers_and_replays() {
     let world = World::new(
         V8Executor::new(SandboxLimits::default()).unwrap(),
-        mocks(MOCKS).await.unwrap(),
+        handlers(MOCKS).await.unwrap(),
         1,
         |_| {},
     )
@@ -305,7 +305,7 @@ export default async function main() {
         action_set,
         json!({}),
     );
-    request.mode = RunMode::Mock;
+    request.mode = RunMode::Test;
     let run = world.start(request).await.unwrap();
     world.idle().await;
     let history = world.history(&run).await;

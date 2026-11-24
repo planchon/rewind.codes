@@ -1,5 +1,5 @@
 {
-  "description": "In mock mode no run of a workflow is created: the mocks answer its start with the run's output, its end follows at once, and its signals are accepted.",
+  "description": "In a test run no run of a workflow is created: the world answers its start with the run's output, its end follows at once, and its signals are accepted.",
   "actions": {
     "workflows.triage.start": { "closed": 5 },
     "workflows.triage.signal": {}

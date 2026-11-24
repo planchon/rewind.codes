@@ -1,7 +1,7 @@
 //! What committed events project, in the driver (`archi/05-testing-and-observability.md`,
 //! "The projector", "Span model"): a run's snapshot and headline, and the spans a run exports
 //! through its partition's outbox, joined to the harness's trace, unless it is unsampled or a
-//! mock run.
+//! test run.
 
 #![allow(clippy::unwrap_used)]
 
@@ -88,13 +88,13 @@ async fn a_run_started_with_a_traceparent_joins_the_harness_s_trace() {
 }
 
 #[tokio::test]
-async fn unsampled_and_mock_runs_export_nothing() {
+async fn unsampled_and_test_runs_export_nothing() {
     let mut node = config("node-a", 1);
     node.telemetry.sampled_per_million = 0;
     let mut world = world_with(node).await;
     let run = world.run(request("flow", json!({}))).await;
     let mut mock = request("flow", json!({}));
-    mock.mode = RunMode::Mock;
+    mock.mode = RunMode::Test;
     world.run(mock).await;
     world.signal(&run, "go", json!(null), None).await.unwrap();
     world.idle().await;
@@ -105,10 +105,10 @@ async fn unsampled_and_mock_runs_export_nothing() {
         "its summary is kept"
     );
 
-    // Mock runs are not exported even when every run is sampled.
+    // Test runs are not exported even when every run is sampled.
     let mut world = world_with(config("node-a", 1)).await;
     let mut mock = request("flow", json!({}));
-    mock.mode = RunMode::Mock;
+    mock.mode = RunMode::Test;
     world.run(mock).await;
     assert!(world.plane.spans.spans().is_empty());
 }

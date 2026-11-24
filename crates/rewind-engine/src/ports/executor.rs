@@ -150,7 +150,7 @@ pub trait CodeInstance: Send {
     }
 }
 
-/// An executor can be shared: an engine may borrow it, as mock mode does to run scenarios with
+/// An executor can be shared: an engine may borrow it, as test runs does to run scenarios with
 /// the executor of its host.
 impl<X: CodeExecutor> CodeExecutor for &X {
     type Instance = X::Instance;

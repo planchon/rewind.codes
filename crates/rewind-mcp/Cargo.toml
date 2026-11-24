@@ -1,6 +1,6 @@
 [package]
 name = "rewind-mcp"
-description = "Tool dispatcher of Rewind outside mock mode: the MCP client (discovery, dispatch, the attached secret or the signature in the transport) and the built-in http tool with its allow-list."
+description = "Tool dispatcher of Rewind outside test runs: the MCP client (discovery, dispatch, the attached secret or the signature in the transport) and the built-in http tool with its allow-list."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

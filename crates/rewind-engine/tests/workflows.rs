@@ -691,14 +691,14 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
 }
 
 #[tokio::test]
-async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
+async fn in_a_test_run_the_world_answers_a_start_with_the_child_s_end() {
     let dispatcher = RecordingDispatcher::new(|call| match call.action.name.as_str() {
         "workflows.triage.start" => Ok(json!({ "closed": 7 })),
         other => panic!("unexpected call of {other}"),
     });
     let (mut world, _, action_set) = registered_with(dispatcher).await;
     let mut request = StartRun::new(Code::new("starter"), action_set, json!({}));
-    request.mode = RunMode::Mock;
+    request.mode = RunMode::Test;
     let parent = world.run(request).await;
     assert_eq!(status(&mut world, &parent).await, RunStatus::Completed);
     assert_eq!(
@@ -714,7 +714,7 @@ async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
             .await
             .unwrap()
             .is_none(),
-        "no child runs in mock mode"
+        "no child runs in a test run"
     );
     assert_eq!(world.plane.dispatcher.calls().len(), 1);
     assert_eq!(

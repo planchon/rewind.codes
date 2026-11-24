@@ -4,7 +4,7 @@ use rewind_core::{ActionFailure, ActionFailureKind, JsonValue};
 
 use crate::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 
-/// Answers every call to an action with the same response: the static responses of mock mode,
+/// Answers every call to an action with the same response: the static responses of test runs,
 /// as the CLI reads them from `rewind.actions.json`.
 ///
 /// In JSON, an action maps to its result, or to `{"$error": "message"}` for a failure:

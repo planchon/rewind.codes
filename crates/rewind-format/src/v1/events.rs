@@ -128,7 +128,7 @@ impl<'de> Deserialize<'de> for CanonicalJson {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RunModeV1 {
     Live,
-    Mock,
+    Test,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -375,7 +375,7 @@ impl From<RunMode> for RunModeV1 {
     fn from(mode: RunMode) -> Self {
         match mode {
             RunMode::Live => RunModeV1::Live,
-            RunMode::Mock => RunModeV1::Mock,
+            RunMode::Test => RunModeV1::Test,
         }
     }
 }
@@ -561,7 +561,7 @@ impl From<RunModeV1> for RunMode {
     fn from(mode: RunModeV1) -> Self {
         match mode {
             RunModeV1::Live => RunMode::Live,
-            RunModeV1::Mock => RunMode::Mock,
+            RunModeV1::Test => RunMode::Test,
         }
     }
 }

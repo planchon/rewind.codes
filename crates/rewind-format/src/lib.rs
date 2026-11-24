@@ -15,7 +15,7 @@
 //!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
 //!   action set document and its events, written with one event per line so that diffs stay
 //!   readable. It replays on its own;
-//! - a **cassette** (mocks recorded from a run, replayed by `rewind test`):
+//! - a **cassette** (the calls and signals recorded from a run, replayed by `rewind test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
 //! - a **pinned action set** (the `action_sets` table): `{"servers":[…],"actions":[…],"v":1}`, with
 //!   `"apis":[…]` when it calls APIs, a server's or an API's `"auth":{…}` when its calls carry a

@@ -42,8 +42,8 @@ pub struct TelemetryConfig {
     /// The run labels exported as span attributes (`rewind.label.<key>`). Labels may name end
     /// users: the others are never exported. None by default.
     pub exported_labels: BTreeSet<String>,
-    /// Export the telemetry of mock runs. Off by default: their timestamps are virtual.
-    pub export_mock_runs: bool,
+    /// Export the telemetry of test runs. Off by default: their timestamps are virtual.
+    pub export_test_runs: bool,
 }
 
 impl Default for TelemetryConfig {
@@ -51,7 +51,7 @@ impl Default for TelemetryConfig {
         Self {
             sampled_per_million: 1_000_000,
             exported_labels: BTreeSet::new(),
-            export_mock_runs: false,
+            export_test_runs: false,
         }
     }
 }
@@ -173,7 +173,7 @@ pub(crate) struct RunTelemetry<'a> {
 }
 
 impl RunTelemetry<'_> {
-    /// Whether this run's spans and logs are exported: sampled, and not a mock run unless the
+    /// Whether this run's spans and logs are exported: sampled, and not a test run unless the
     /// configuration asks for it.
     pub(crate) fn exported(&self, history: &[HistoryEvent]) -> bool {
         self.measured(history) && sampled(self.trace().0, self.config)
@@ -184,14 +184,14 @@ impl RunTelemetry<'_> {
         trace_of(self.head.run.id, &self.head.metadata)
     }
 
-    /// Whether this run's metrics are recorded: not a mock run, whose times are virtual, unless
+    /// Whether this run's metrics are recorded: not a test run, whose times are virtual, unless
     /// the configuration exports them. Metrics are never sampled.
     pub(crate) fn measured(&self, history: &[HistoryEvent]) -> bool {
         let mock = history.first().is_some_and(|entry| {
             matches!(&entry.event, Event::Lifecycle(Lifecycle::RunStarted(started))
-                if started.mode == RunMode::Mock)
+                if started.mode == RunMode::Test)
         });
-        !mock || self.config.export_mock_runs
+        !mock || self.config.export_test_runs
     }
 
     /// What the events within `from..to` measure, given the history up to `to` at least and
@@ -1024,13 +1024,13 @@ mod tests {
             measure(&telemetry, &events, 6, 7)
         );
 
-        // Mock runs are not measured unless their telemetry is exported; sampling does not
+        // Test runs are not measured unless their telemetry is exported; sampling does not
         // matter.
-        let mock = history(RunMode::Mock, Vec::new());
+        let mock = history(RunMode::Test, Vec::new());
         assert!(!telemetry.measured(&mock));
         let sampled_out = TelemetryConfig {
             sampled_per_million: 0,
-            export_mock_runs: true,
+            export_test_runs: true,
             ..TelemetryConfig::default()
         };
         let telemetry = RunTelemetry {

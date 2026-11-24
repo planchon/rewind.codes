@@ -580,7 +580,7 @@ impl ActionSet {
     }
 
     /// Harness actions with these names, the default policy, and an input schema that accepts any
-    /// value: what mock mode and tests use when the action set does not matter. A name
+    /// value: what test runs and tests use when the action set does not matter. A name
     /// `group.action` puts the action in the group of harness actions `group`. Duplicates are
     /// ignored.
     pub fn from_harness_actions<S: Into<String>>(

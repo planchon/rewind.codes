@@ -3,7 +3,7 @@
 //! link between the nodes of one process; in-memory telemetry and webhooks; a fake identity
 //! provider; static action responses, routing of calls by route, and type-checking; system
 //! and virtual time; system and seeded entropy; the set-aside runs `migrate-runs` moves.
-//! Wired together with a virtual clock, they make the engine's mock mode and its test harness
+//! Wired together with a virtual clock, they make the engine's test runs and its test harness
 //! (`archi/07-code-architecture.md`, principle 6), and the server's tests. Each adapter of a
 //! port with a conformance suite passes it: they are the reference implementations of the
 //! contracts.

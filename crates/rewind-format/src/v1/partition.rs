@@ -888,14 +888,14 @@ impl From<Status> for RunStatus {
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     Live,
-    Mock,
+    Test,
 }
 
 impl From<RunMode> for Mode {
     fn from(mode: RunMode) -> Self {
         match mode {
             RunMode::Live => Mode::Live,
-            RunMode::Mock => Mode::Mock,
+            RunMode::Test => Mode::Test,
         }
     }
 }
@@ -904,7 +904,7 @@ impl From<Mode> for RunMode {
     fn from(mode: Mode) -> Self {
         match mode {
             Mode::Live => RunMode::Live,
-            Mode::Mock => RunMode::Mock,
+            Mode::Test => RunMode::Test,
         }
     }
 }

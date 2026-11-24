@@ -47,11 +47,11 @@ pub struct Scenario {
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
     /// The actions are harness actions answered by a harness's worker, handed their tasks on an SDK
-    /// stream and answering through their tokens, instead of mocks called by the engine. A
+    /// stream and answering through their tokens, instead of handlers called by the engine. A
     /// `$crash` response is a worker that dies with the call: its stream closes.
     #[serde(default)]
     pub harness_worker: bool,
-    /// The run is live rather than in mock mode: its actions still answer from `actions`, but the
+    /// The run is live rather than in a test run: its actions still answer from `actions`, but the
     /// engine serves its built-ins itself, so the runs of `workflows` it starts really run.
     #[serde(default)]
     pub live: bool,

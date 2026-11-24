@@ -1,5 +1,5 @@
 //! Tests: the world a run meets and what the outside must see at the end
-//! (`archi/05-testing-and-observability.md`, "Testing and mocks"). `POST /v1/test` runs them,
+//! (`archi/05-testing-and-observability.md`, "Test runs"). `POST /v1/test` runs them,
 //! a workflow version carries them as its suite, and `POST /v1/workflows/{name}/record` records
 //! them from past runs.
 //!
@@ -64,7 +64,7 @@ fn empty_object() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-/// What answers the run's calls: the rules, then the mock handlers, then the cassette. A call
+/// What answers the run's calls: the rules, then the handlers, then the cassette. A call
 /// no source answers fails, and fails the test.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -73,10 +73,10 @@ pub struct World {
     /// (`workflows.<name>.start`) is answered with the child's output, or its failure.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub actions: BTreeMap<String, ActionRules>,
-    /// TypeScript mock handlers, run in a separate isolate: a module default-exporting its
+    /// TypeScript handlers, run in a separate isolate: a module default-exporting its
     /// handlers by action name or by namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mocks: Option<String>,
+    pub handlers: Option<String>,
     /// Calls and signals recorded from a run: a cassette document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
@@ -85,7 +85,7 @@ pub struct World {
 
 impl World {
     pub fn is_empty(&self) -> bool {
-        self.actions.is_empty() && self.mocks.is_none() && self.cassette.is_none()
+        self.actions.is_empty() && self.handlers.is_none() && self.cassette.is_none()
     }
 }
 
@@ -385,7 +385,7 @@ impl Test {
             seed,
             world: rewind_core::World {
                 actions,
-                mocks: self.world.mocks,
+                handlers: self.world.handlers,
                 cassette,
             },
             signals,
@@ -418,7 +418,7 @@ impl Test {
                         )
                     })
                     .collect(),
-                mocks: test.world.mocks.clone(),
+                handlers: test.world.handlers.clone(),
                 cassette: test.world.cassette.as_ref().map(encode_cassette),
             },
             signals: test

@@ -23,7 +23,7 @@
 //! | `rewind.delivery.redeliveries` | counter | `rewind.action` | transient failures delivered again after a backoff |
 //!
 //! Run metrics, derived from an activation's new events and recorded by the run's owner once
-//! the batch that commits them is durable, for every run (sampling is for traces), mock runs
+//! the batch that commits them is durable, for every run (sampling is for traces), test runs
 //! aside unless their telemetry is exported:
 //!
 //! | Instrument | Kind | Attributes | Measures |

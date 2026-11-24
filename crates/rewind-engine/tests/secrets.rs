@@ -408,7 +408,7 @@ async fn the_organization_s_secrets_need_secrets_use_within_the_caller_s_labels(
 }
 
 #[tokio::test]
-async fn mock_mode_checks_no_attachment_and_reads_no_secret() {
+async fn a_test_run_checks_no_attachment_and_reads_no_secret() {
     let mut world = world().await;
     let mut request = start(
         "caller",
@@ -417,7 +417,7 @@ async fn mock_mode_checks_no_attachment_and_reads_no_secret() {
         &[],
         &RightsTo::Namespace,
     );
-    request.mode = RunMode::Mock;
+    request.mode = RunMode::Test;
     let run = world.run(request).await;
     assert_eq!(output(&mut world, &run).await, json!({ "result": {} }));
     assert_eq!(world.plane.dispatcher.auth(), [CallAuth::None]);

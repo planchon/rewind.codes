@@ -178,7 +178,7 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
                 .into_iter()
                 .map(|mode| match mode {
                     rewind_api::common::RunMode::Live => RunMode::Live,
-                    rewind_api::common::RunMode::Mock => RunMode::Mock,
+                    rewind_api::common::RunMode::Test => RunMode::Test,
                 })
                 .collect(),
         ),

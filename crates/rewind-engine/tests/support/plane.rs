@@ -79,7 +79,7 @@ pub fn node(id: &str) -> NodeId {
     NodeId::new(id).unwrap()
 }
 
-/// The configuration of a node of the tests: harness actions dispatched as in mock mode, a horizon
+/// The configuration of a node of the tests: harness actions dispatched as in a test run, a horizon
 /// past every timer.
 pub fn config(id: &str, partitions: u16) -> NodeConfig {
     let mut config = NodeConfig::new(node(id), NonZeroU16::new(partitions).unwrap());

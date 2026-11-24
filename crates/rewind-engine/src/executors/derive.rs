@@ -549,7 +549,7 @@ pub(crate) fn projections_of(
 }
 
 /// What the new events measure: the run metrics recorded once their batch is durable, for
-/// every run but a mock run whose telemetry is not exported.
+/// every run but a test run whose telemetry is not exported.
 pub(crate) fn measurements_of(
     head: &RunHead,
     new: NewEvents<'_>,

@@ -52,7 +52,7 @@ use rewind_engine::suites::{
 };
 use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
 use rewind_engine::{ForkError, RegisterError, RegisterWorkflow, StartError};
-use rewind_runtime::TsMockLoader;
+use rewind_runtime::TsHandlerLoader;
 use serde_json::Value;
 
 use crate::view;
@@ -582,7 +582,7 @@ impl World {
         subject: &Subject<'_>,
         tests: &[Test],
     ) -> Result<Vec<TestReport>, ApiError> {
-        let loader = TsMockLoader::default();
+        let loader = TsHandlerLoader::default();
         self.edge
             .run_tests(&loader, subject, tests, &TestOptions::default())
             .await
@@ -1140,7 +1140,7 @@ impl Api for World {
             signals: workflow.signals.clone(),
         };
         let generated = rewind_codegen::workflow_declarations(&workflow.name, &schemas);
-        let loader = TsMockLoader::default();
+        let loader = TsHandlerLoader::default();
         let saved = self
             .edge
             .register_workflow(

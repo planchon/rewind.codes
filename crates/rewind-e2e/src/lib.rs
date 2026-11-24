@@ -199,7 +199,7 @@ impl Case {
 
     /// The scenario's actions: harness actions, MCP actions, and the built-ins `http` and
     /// `webhook`, with the pinned schemas of `schemas` and `output_schemas` and the policies of
-    /// `policies` (the default otherwise). In mock mode every call goes to the scenario's
+    /// `policies` (the default otherwise). In a test run every call goes to the scenario's
     /// responses, whatever its route.
     pub fn action_set(&self) -> ActionSet {
         let workflows = self
@@ -314,7 +314,7 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
         .collect::<Result<_, String>>()?;
     let mut actions = Vec::new();
     for (name, response) in &scenario.actions {
-        // The built-ins of a workflow come from `workflows`; in mock mode, their answers are
+        // The built-ins of a workflow come from `workflows`; in a test run, their answers are
         // here.
         if rewind_core::WorkflowOp::of_action(name).is_some() {
             continue;

@@ -14,7 +14,7 @@ use crate::ports::{
     namespace_partition,
 };
 
-/// `CatalogStore` in memory: engine tests and mock mode. Every write sends its change through
+/// `CatalogStore` in memory: engine tests and test runs. Every write sends its change through
 /// the [`ControlPlaneChanges`] it was given, under the lock of the write, so the changes leave
 /// in commit order. It passes the conformance suite: it is the reference implementation of the
 /// contract.

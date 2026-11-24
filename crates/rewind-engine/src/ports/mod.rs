@@ -17,7 +17,7 @@
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
 //! | [`BlobStore`] | memory, `rewind-blob` (files, S3) |
 //! | [`CodeExecutor`] / [`CodeInstance`] | `rewind-runtime` (V8) |
-//! | [`ActionDispatcher`] | static responses (memory), mocks, `rewind-mcp`, `rewind-openapi` |
+//! | [`ActionDispatcher`] | static responses (memory), handlers, `rewind-mcp`, `rewind-openapi` |
 //! | [`TypeChecker`] | static (memory), `rewind-check` (tsgo) |
 //! | [`SpanExporter`] | memory, `rewind-otel` |
 //! | [`SecretStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |

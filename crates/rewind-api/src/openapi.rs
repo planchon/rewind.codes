@@ -722,9 +722,9 @@ mod operations {
     )]
     pub(super) fn check_workflow() {}
 
-    /// Run tests in mock mode (`test_workflow`)
+    /// Run tests in a test run (`test_workflow`)
     ///
-    /// In virtual time, each test against its world: rules, mock handlers and a cassette. No
+    /// In virtual time, each test against its world: rules, handlers and a cassette. No
     /// action is really called. With `workflow`, the suite of that version runs too, against the
     /// given code or action set. Served by a server with the worker role.
     #[utoipa::path(

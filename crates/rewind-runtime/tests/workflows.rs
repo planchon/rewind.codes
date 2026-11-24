@@ -486,7 +486,7 @@ async fn importing_a_workflow_the_action_set_does_not_pin_is_refused_at_start() 
 }
 
 #[tokio::test]
-async fn in_mock_mode_the_mocks_answer_with_the_end_of_the_run() {
+async fn in_a_test_run_the_world_answers_with_the_end_of_the_run() {
     let harness = harness_with(|call| match call.action.name.as_str() {
         "workflows.triage.start" => {
             Ok(json!({ "closed": call.args["input"]["repo"].as_str().unwrap().len() }))
@@ -505,7 +505,7 @@ export default async function main() {
 }
 "#,
             json!({}),
-            RunMode::Mock,
+            RunMode::Test,
         )
         .await
         .unwrap();

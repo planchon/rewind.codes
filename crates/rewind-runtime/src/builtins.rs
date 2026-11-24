@@ -32,7 +32,7 @@
 //!
 //! `body` is the text when the body is UTF-8, and its bytes in base64 with
 //! `"bodyEncoding": "base64"` otherwise; `url` is the URL after redirects. Reading a result,
-//! only `status` is required: a mock may leave out the rest, which defaults to empty. A status
+//! only `status` is required: a handler may leave out the rest, which defaults to empty. A status
 //! outside 2xx is a response, not a failure: a request the dispatcher refuses or cannot send
 //! fails the call, and the code gets an `ActionError`.
 

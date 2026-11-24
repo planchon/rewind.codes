@@ -1,6 +1,6 @@
 //! Workflow test suites over HTTP, on Turso: the gate on save, `POST /v1/test` with a workflow's
 //! suite, tests recorded from past runs, and the suite a fork of a run of a workflow passes
-//! first (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! first (`archi/05-testing-and-observability.md`, "Test runs").
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

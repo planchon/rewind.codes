@@ -1,5 +1,5 @@
 //! Action sets pinned in the CLI process, for the local commands (`rewind check`, `rewind test`):
-//! from an action set file, or from the actions a scenario's mocks answer.
+//! from an action set file, or from the actions a scenario's handlers answer.
 //!
 //! An action set file is the body of `POST /v1/action-sets` (`CreateActionSet`), pinned as a server
 //! pins it: the actions of each MCP server are discovered by connecting to it (`rewind-mcp`), each
@@ -240,14 +240,14 @@ fn webhook() -> Action {
     )
 }
 
-/// The action set of a scenario that names none: a harness action for each action its mocks answer
-/// (a name `group.action` puts it in a group), and `webhook`. In mock mode every call goes to the
-/// mocks, whatever its route. The `http` action needs its allow-list: a scenario whose mocks
+/// The action set of a scenario that names none: a harness action for each action its handlers answer
+/// (a name `group.action` puts it in a group), and `webhook`. In a test run every call goes to the
+/// handlers, whatever its route. The `http` action needs its allow-list: a scenario whose handlers
 /// answer it names an action set file.
-pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<ActionSet, CliError> {
+pub(crate) fn of_handlers(names: &BTreeSet<String>) -> Result<ActionSet, CliError> {
     if names.contains("http") {
         return Err(CliError::usage(
-            "the mocks answer the http action: name an action set file with its allow-list \
+            "the handlers answer the http action: name an action set file with its allow-list \
              (--action-set, with \"http\": {\"allow\": [hosts]} in the file)",
         ));
     }
@@ -261,7 +261,7 @@ pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<ActionSet, CliError> 
         .collect();
     actions.push(webhook());
     ActionSet::new([], actions)
-        .map_err(|error| CliError::usage(format!("the mocked actions: {error}")))
+        .map_err(|error| CliError::usage(format!("the answered actions: {error}")))
 }
 
 #[cfg(test)]
@@ -370,12 +370,12 @@ mod tests {
     }
 
     #[test]
-    fn the_mocked_actions_are_harness_actions() {
+    fn the_answered_actions_are_harness_actions() {
         let mut names: BTreeSet<String> = ["github.list_issues", "ask_user", "webhook"]
             .into_iter()
             .map(String::from)
             .collect();
-        let action_set = of_mocks(&names).unwrap();
+        let action_set = of_handlers(&names).unwrap();
         let routes: Vec<(&str, &ActionRoute)> = action_set
             .actions()
             .iter()
@@ -398,7 +398,7 @@ mod tests {
             ActionRoute::Builtin(Builtin::Webhook)
         ));
         names.insert("http".into());
-        let error = of_mocks(&names).unwrap_err();
+        let error = of_handlers(&names).unwrap_err();
         assert!(error.to_string().contains("allow-list"), "{error}");
         assert_eq!(short_name("github", "github.list_issues"), "list_issues");
     }

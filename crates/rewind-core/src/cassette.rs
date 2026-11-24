@@ -1,13 +1,13 @@
-//! Cassettes: the mocks recorded from a real run (`archi/05-testing-and-observability.md`,
-//! "Testing and mocks").
+//! Cassettes: the handlers recorded from a real run (`archi/05-testing-and-observability.md`,
+//! "Test runs").
 //!
 //! A cassette holds a run's calls with their args and outcomes, and the timeline of its
-//! signals. It is derived from the run's history, a pure function of it, and replayed in mock
+//! signals. It is derived from the run's history, a pure function of it, and replayed in test
 //! mode: `sequential` hands the calls out in `seq` order, `by_args` by action and canonical args.
 //! Its stored form is a document of the stored format v1 (`rewind-format`).
 //!
 //! The start of a workflow run is recorded with the outcome of that run, read from the
-//! `rewind:ended:` signal that brought its end, as mock mode answers a start; those signals stay
+//! `rewind:ended:` signal that brought its end, as test runs answers a start; those signals stay
 //! out of the timeline (`archi/03-execution.md`, "Workflows across runs").
 
 use std::collections::BTreeMap;
@@ -168,7 +168,7 @@ fn started_run_outcome(outcome: ActionOutcome, ends: &BTreeMap<RunId, Value>) ->
         return outcome;
     };
     match ends.get(&run).and_then(RunEnd::from_json) {
-        Some(end) => end.to_mock(),
+        Some(end) => end.to_test(),
         None => ActionOutcome::Failure(ActionFailure {
             kind: ActionFailureKind::Error,
             message: format!("the run {run} had not ended when the cassette was recorded"),

@@ -376,20 +376,20 @@ impl From<rewind_core::RunStatus> for RunStatus {
     }
 }
 
-/// `live`: actions are really called and time is real. `mock`: actions are answered by cassettes
-/// and mocks, and time is virtual.
+/// `live`: actions are really called and time is real. `test`: actions are answered by cassettes
+/// and handlers, and time is virtual.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunMode {
     Live,
-    Mock,
+    Test,
 }
 
 impl From<rewind_core::RunMode> for RunMode {
     fn from(mode: rewind_core::RunMode) -> Self {
         match mode {
             rewind_core::RunMode::Live => RunMode::Live,
-            rewind_core::RunMode::Mock => RunMode::Mock,
+            rewind_core::RunMode::Test => RunMode::Test,
         }
     }
 }

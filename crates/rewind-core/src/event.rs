@@ -131,8 +131,8 @@ pub struct RunStarted {
 pub enum RunMode {
     /// Actions are really called and time is real.
     Live,
-    /// Actions are answered by cassettes and mocks, and time is virtual.
-    Mock,
+    /// Actions are answered by cassettes and handlers, and time is virtual.
+    Test,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

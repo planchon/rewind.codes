@@ -1,10 +1,10 @@
 //! Tests: the world a run meets, and what the outside must see at the end
-//! (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! (`archi/05-testing-and-observability.md`, "Test runs").
 //!
 //! ```text
 //! Test                    never names its code: the code under test is a parameter
 //! ├── name, input, start?, seed?
-//! ├── world               actions { <action>: [ActionRule] }, mocks?, cassette?
+//! ├── world               actions { <action>: [ActionRule] }, handlers?, cassette?
 //! ├── signals             [{ name, payload, when }]
 //! ├── expect              status?, output?, error?, calls [{ action, args?, times? }], order
 //! └── origin?             run, version, namespace: a test recorded from a run
@@ -54,20 +54,20 @@ pub struct Test {
 }
 
 /// What answers a run's calls during a test. A call is answered by the first source that has an
-/// answer: the rules, then the mock handlers, then the cassette.
+/// answer: the rules, then the handlers, then the cassette.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct World {
     /// By action, the rules tried in order.
     pub actions: BTreeMap<String, Vec<ActionRule>>,
-    /// TypeScript mock handlers, run in a separate isolate.
-    pub mocks: Option<String>,
+    /// TypeScript handlers, run in a separate isolate.
+    pub handlers: Option<String>,
     /// Calls and signals recorded from a run.
     pub cassette: Option<Cassette>,
 }
 
 impl World {
     pub fn is_empty(&self) -> bool {
-        self.actions.is_empty() && self.mocks.is_none() && self.cassette.is_none()
+        self.actions.is_empty() && self.handlers.is_none() && self.cassette.is_none()
     }
 }
 
@@ -352,7 +352,7 @@ impl Test {
             seed: Some(started.seed),
             world: World {
                 actions: BTreeMap::new(),
-                mocks: None,
+                handlers: None,
                 cassette: Some(cassette),
             },
             signals: Vec::new(),

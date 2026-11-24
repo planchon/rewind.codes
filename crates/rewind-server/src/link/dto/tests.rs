@@ -130,7 +130,7 @@ fn started() -> RunStarted {
         seed: Seed::from_bytes([7; 32]),
         epoch: Epoch(1),
         expires_at: at(86_400_000),
-        mode: RunMode::Mock,
+        mode: RunMode::Test,
     }
 }
 
@@ -699,7 +699,7 @@ fn every_predicate() -> Vec<Predicate> {
         Predicate::StartedBy(run_id(8)),
         Predicate::Fingerprint(vec!["0123456789abcdef".into()]),
         Predicate::Quarantined,
-        Predicate::Mode(vec![RunMode::Live, RunMode::Mock]),
+        Predicate::Mode(vec![RunMode::Live, RunMode::Test]),
         Predicate::Text("undefined".into()),
     ]
 }
@@ -1158,7 +1158,7 @@ fn activations_round_trip() {
             children: vec![(Seq(1), run_id(4), true), (Seq(2), run_id(5), false)],
             copied: true,
             cpu: Duration::new(0, 1_234_567),
-            mode: Some(RunMode::Mock),
+            mode: Some(RunMode::Test),
             measurements: vec![
                 RunMeasurement::Started,
                 RunMeasurement::Ended {

@@ -23,7 +23,7 @@ use crate::suites::{
     MAX_RECORDED, MAX_RECORDING_CANDIDATES, RecordedTest, Recorder, SkippedRun, SuiteLoadError,
     TestFormat,
 };
-use crate::testing::{MockLoader, Subject, TestError, TestOptions, TestReport};
+use crate::testing::{HandlerLoader, Subject, TestError, TestOptions, TestReport};
 use crate::{payloads, testing};
 
 /// Where a recording takes its runs from.
@@ -65,7 +65,7 @@ pub enum RecordingError {
 impl<P: Plane> Edge<P> {
     /// Runs tests against a subject on this node's executor: [`testing::run_tests`], each test
     /// on a run plane of its own.
-    pub async fn run_tests<L: MockLoader>(
+    pub async fn run_tests<L: HandlerLoader>(
         &self,
         loader: &L,
         subject: &Subject<'_>,

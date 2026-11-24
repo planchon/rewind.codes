@@ -1,5 +1,5 @@
-//! Tests run in virtual time against rules, mocks, cassettes and static responses
-//! (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! Tests run in virtual time against rules, handlers, cassettes and static responses
+//! (`archi/05-testing-and-observability.md`, "Test runs").
 
 #![allow(clippy::unwrap_used)]
 
@@ -13,7 +13,7 @@ use rewind_core::{
 };
 use rewind_engine::ports::Delivery;
 use rewind_engine::testing::{
-    DEFAULT_START, NoMockLoader, Subject, TestOptions, TestProblem, run_test, run_tests,
+    DEFAULT_START, NoHandlerLoader, Subject, TestOptions, TestProblem, run_test, run_tests,
 };
 use serde_json::json;
 use support::plane::World;
@@ -76,7 +76,7 @@ async fn run(test: &Test) -> rewind_engine::testing::TestReport {
     };
     run_test(
         &sleepy(),
-        &NoMockLoader,
+        &NoHandlerLoader,
         &subject,
         test,
         &TestOptions::default(),
@@ -283,7 +283,7 @@ async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
     last.expect.status = Some(RunStatus::Completed);
     let reports = run_tests(
         &sleepy(),
-        &NoMockLoader,
+        &NoHandlerLoader,
         &subject,
         &[first, stale, last],
         &TestOptions::default(),
@@ -297,21 +297,21 @@ async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
     assert_eq!(reports[1].status, None);
     assert_eq!(reports[1].failures, ["the action set has no action c"]);
 
-    // A test with mock handlers where none can run fails, alone.
-    let mut mocked = test();
-    mocked.world.mocks = Some("export default {};".into());
+    // A test with handlers where none can run fails, alone.
+    let mut answered = test();
+    answered.world.handlers = Some("export default {};".into());
     let report = run_test(
         &sleepy(),
-        &NoMockLoader,
+        &NoHandlerLoader,
         &subject,
-        &mocked,
+        &answered,
         &TestOptions::default(),
     )
     .await
     .unwrap();
     assert_eq!(
         report.failures,
-        ["the mock handlers cannot load: TypeScript mock handlers cannot run here"]
+        ["the handlers cannot load: TypeScript handlers cannot run here"]
     );
 }
 
@@ -338,7 +338,7 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
         ttl: None,
         statics: Some(json!({ "a": { "static": true } })),
     };
-    let report = run_test(&sleepy(), &NoMockLoader, &subject, &test, &options)
+    let report = run_test(&sleepy(), &NoHandlerLoader, &subject, &test, &options)
         .await
         .unwrap();
     assert!(report.passed, "{report:#?}");
@@ -363,6 +363,6 @@ fn a_run_of_tests_is_a_future_a_server_can_spawn() {
     let tests = [test()];
     let executor = sleepy();
     let options = TestOptions::default();
-    let run = run_tests(&executor, &NoMockLoader, &subject, &tests, &options);
+    let run = run_tests(&executor, &NoHandlerLoader, &subject, &tests, &options);
     spawnable(&run);
 }

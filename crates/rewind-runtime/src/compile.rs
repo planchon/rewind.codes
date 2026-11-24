@@ -124,7 +124,7 @@ pub(crate) struct Transpiled {
     pub(crate) source_map: String,
 }
 
-/// Compiles a module without the checks of a code: a module of mock handlers.
+/// Compiles a module without the checks of a code: a module of handlers.
 pub(crate) fn transpile(source: &Code, specifier: &str) -> Result<Transpiled, InvalidCode> {
     emit(parse(source, specifier)?)
 }

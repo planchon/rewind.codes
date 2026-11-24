@@ -299,7 +299,7 @@ impl Views<'_> {
             script_title,
             action_set: head.action_set.to_hex(),
             epoch: head.epoch.0,
-            // Only live runs are stored: mock runs live in memory (`POST /v1/test`).
+            // Only live runs are stored: test runs live in memory (`POST /v1/test`).
             mode: started.map_or(RunMode::Live, |started| started.mode.into()),
             labels: Labels::from(head.metadata.labels.clone()),
             secrets: head

@@ -569,10 +569,10 @@ impl RunEnd {
         }
     }
 
-    /// What a cassette records for the start of a run that ended so, and what mock mode makes
+    /// What a cassette records for the start of a run that ended so, and what test runs makes
     /// of it again ([`from_mock`](Self::from_mock)): its output, or a failure that says how it
     /// ended.
-    pub fn to_mock(&self) -> ActionOutcome {
+    pub fn to_test(&self) -> ActionOutcome {
         let failure = |message: String| {
             ActionOutcome::Failure(ActionFailure {
                 kind: ActionFailureKind::Error,
@@ -590,9 +590,9 @@ impl RunEnd {
         }
     }
 
-    /// The end of a run that mock mode answered in place of starting it: a result is its
+    /// The end of a run that test runs answered in place of starting it: a result is its
     /// output, a failure its error (`archi/03-execution.md`, "Workflows across runs").
-    pub fn from_mock(outcome: ActionOutcome) -> Self {
+    pub fn from_test(outcome: ActionOutcome) -> Self {
         match outcome {
             ActionOutcome::Result(output) => RunEnd::Completed { output },
             ActionOutcome::Failure(failure) => RunEnd::Failed {
@@ -830,15 +830,15 @@ mod tests {
     }
 
     #[test]
-    fn mock_outcomes_are_ends() {
-        let end = RunEnd::from_mock(ActionOutcome::Result(json!({ "closed": 1 })));
+    fn test_outcomes_are_ends() {
+        let end = RunEnd::from_test(ActionOutcome::Result(json!({ "closed": 1 })));
         assert_eq!(
             end,
             RunEnd::Completed {
                 output: json!({ "closed": 1 })
             }
         );
-        assert_eq!(end.to_mock(), ActionOutcome::Result(json!({ "closed": 1 })));
+        assert_eq!(end.to_test(), ActionOutcome::Result(json!({ "closed": 1 })));
         let failed = RunEnd::Failed {
             error: ScriptError {
                 name: "TypeError".into(),
@@ -846,12 +846,12 @@ mod tests {
                 stack: None,
             },
         };
-        let ActionOutcome::Failure(failure) = failed.to_mock() else {
+        let ActionOutcome::Failure(failure) = failed.to_test() else {
             panic!("a failed run is a failure");
         };
         assert_eq!(failure.message, "TypeError: x");
         assert_eq!(
-            RunEnd::from_mock(ActionOutcome::Failure(failure)).status(),
+            RunEnd::from_test(ActionOutcome::Failure(failure)).status(),
             "failed"
         );
     }

@@ -1,4 +1,4 @@
-//! The action dispatcher of Rewind outside mock mode (`archi/07-code-architecture.md`, "Crates";
+//! The action dispatcher of Rewind outside test runs (`archi/07-code-architecture.md`, "Crates";
 //! `archi/04-tools.md`, "Routes").
 //!
 //! | Route | Dispatcher | What it does |

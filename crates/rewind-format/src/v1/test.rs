@@ -1,4 +1,4 @@
-//! The test document, v1 (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! The test document, v1 (`archi/05-testing-and-observability.md`, "Test runs").
 //!
 //! ```json
 //! {"expect":{"calls":[{"times":1,"action":"github.close_issue"}],"output":{"closed":1},
@@ -57,7 +57,7 @@ struct WorldV1 {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     actions: BTreeMap<String, RulesV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    mocks: Option<String>,
+    handlers: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cassette: Option<CassetteBodyV1>,
 }
@@ -267,7 +267,7 @@ fn world_dto(world: &World) -> WorldV1 {
                 )
             })
             .collect(),
-        mocks: world.mocks.clone(),
+        handlers: world.handlers.clone(),
         cassette: world.cassette.as_ref().map(CassetteBodyV1::from),
     }
 }
@@ -291,7 +291,7 @@ fn world_from_dto(world: WorldV1) -> Result<World, String> {
     }
     Ok(World {
         actions,
-        mocks: world.mocks,
+        handlers: world.handlers,
         cassette: world.cassette.map(Into::into),
     })
 }

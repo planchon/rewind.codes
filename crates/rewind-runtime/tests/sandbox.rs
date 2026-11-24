@@ -197,7 +197,7 @@ impl Harness {
         action_set: ActionSet,
     ) -> Result<RunRef, StartError> {
         let mut request = StartRun::new(Code::new(source), action_set, input);
-        request.mode = rewind_core::RunMode::Mock;
+        request.mode = rewind_core::RunMode::Test;
         self.world.start(request).await
     }
 

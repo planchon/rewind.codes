@@ -22,7 +22,7 @@ use crate::ports::{
 };
 use crate::schema::Validator;
 use crate::suites::{SuiteChanges, SuiteError, Suites, TestFormat, TestKit};
-use crate::testing::{MockLoader, Subject};
+use crate::testing::{HandlerLoader, Subject};
 use crate::text;
 use crate::workflows::{RegisterError, RegisterWorkflow, same_content};
 
@@ -42,7 +42,7 @@ impl<P: Plane> Edge<P> {
     /// parent's, runs against it, and the version is stored only if every test passes. Saving
     /// a version again under the same labels changes nothing; under other labels, it is another
     /// version, carrying them.
-    pub async fn register_workflow<K: TypeChecker, L: MockLoader>(
+    pub async fn register_workflow<K: TypeChecker, L: HandlerLoader>(
         &self,
         request: RegisterWorkflow,
         checker: &K,

@@ -1,5 +1,4 @@
-// The glue of TypeScript mock handlers (archi/05-testing-and-observability.md, "Testing and
-// mocks"). It belongs to no epoch: nothing a mock does reaches a code but its result, which is
+// The glue of TypeScript handlers (archi/05-testing-and-observability.md, "Test runs"). It belongs to no epoch: nothing a handler does reaches a code but its result, which is
 // recorded.
 //
 // Evaluates to setup(handlers), which takes the module's default export and returns
@@ -37,7 +36,7 @@
   return function setup(handlers) {
     if (handlers === null || typeof handlers !== "object") {
       throw new TypeError(
-        "a module of mock handlers must `export default` an object of handlers, by action name or by group",
+        "a module of handlers must `export default` an object of handlers, by action name or by group",
       );
     }
     const table = new Map();
@@ -47,12 +46,12 @@
       } else if (value !== null && typeof value === "object") {
         for (const [name, handler] of entries(value)) {
           if (typeof handler !== "function") {
-            throw new TypeError(`the mock handler ${key}.${name} is not a function`);
+            throw new TypeError(`the handler ${key}.${name} is not a function`);
           }
           table.set(`${key}.${name}`, handler);
         }
       } else {
-        throw new TypeError(`the mock handler ${key} is not a function`);
+        throw new TypeError(`the handler ${key} is not a function`);
       }
     }
 
@@ -60,7 +59,7 @@
       const value = await table.get(action)(parse(argsJson), parse(callJson));
       const json = stringify(value === undefined ? null : value);
       if (json === undefined) {
-        throw new TypeError(`the mock handler of ${action} returned a value that is not JSON`);
+        throw new TypeError(`the handler of ${action} returned a value that is not JSON`);
       }
       return json;
     }

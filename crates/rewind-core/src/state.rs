@@ -330,7 +330,7 @@ mod tests {
             seed: Seed::from_bytes([7; 32]),
             epoch: Epoch(1),
             expires_at: Timestamp(9_999),
-            mode: RunMode::Mock,
+            mode: RunMode::Test,
         }))
     }
 

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::ports::{Subscription, WebhookError, WebhookEvent, WebhookSender};
 
-/// `WebhookSender` in memory: records every delivery instead of sending it, for tests and mock
+/// `WebhookSender` in memory: records every delivery instead of sending it, for tests and test
 /// mode. Clones share their deliveries. A URL marked with [`refuse`](Self::refuse) refuses
 /// every delivery, as a receiver that is down.
 #[derive(Debug, Default, Clone)]

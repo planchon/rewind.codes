@@ -438,7 +438,7 @@ const WAITS: [(&str, WaitKind); 7] = [
     ("deferred", WaitKind::Deferred),
 ];
 
-const MODES: [(&str, RunMode); 2] = [("live", RunMode::Live), ("mock", RunMode::Mock)];
+const MODES: [(&str, RunMode); 2] = [("live", RunMode::Live), ("test", RunMode::Test)];
 
 /// The values of a list, split on commas outside quotes.
 fn values(operand: &str) -> Result<Vec<(String, bool)>, String> {
@@ -854,11 +854,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            filters("quarantined:yes -quarantined:no mode:mock"),
+            filters("quarantined:yes -quarantined:no mode:test"),
             vec![
                 (false, Filter::Quarantined(true)),
                 (true, Filter::Quarantined(false)),
-                (false, Filter::Mode(vec![RunMode::Mock])),
+                (false, Filter::Mode(vec![RunMode::Test])),
             ]
         );
     }

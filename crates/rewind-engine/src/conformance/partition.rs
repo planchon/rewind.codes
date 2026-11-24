@@ -181,7 +181,7 @@ fn started() -> RunStarted {
         seed: Seed::from_bytes([9; 32]),
         epoch: Epoch(1),
         expires_at: later(T0, DAY),
-        mode: RunMode::Mock,
+        mode: RunMode::Test,
     }
 }
 
@@ -259,7 +259,7 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         } else {
             status
         },
-        mode: Some(RunMode::Mock),
+        mode: Some(RunMode::Test),
         labels: BTreeMap::new(),
         parent: None,
         workflow: None,

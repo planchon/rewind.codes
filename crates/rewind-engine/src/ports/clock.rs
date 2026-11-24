@@ -5,7 +5,7 @@ pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
-/// A clock the driver may move forward: in virtual time (tests, mock mode), the clock jumps
+/// A clock the driver may move forward: in virtual time (tests, test runs), the clock jumps
 /// straight to the next timer, so a 10-day sleep takes no wall-clock time.
 pub trait VirtualTime: Clock {
     /// Moves the clock to `at`. A clock never goes backwards: an earlier `at` is ignored.

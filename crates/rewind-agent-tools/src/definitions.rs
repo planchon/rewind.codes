@@ -209,9 +209,9 @@ fn inline_test() -> Value {
                         "description": "By action name, such as \"github.list_issues\": one rule answering every call, or a list of rules tried in order. A start of a workflow, \"workflows.<name>.start\", is answered the same way: `returns` is the child's output, `error` its failure.",
                         "additionalProperties": { "anyOf": [rule(), { "type": "array", "items": rule() }] }
                     },
-                    "mocks": {
+                    "handlers": {
                         "type": "string",
-                        "description": "TypeScript mock handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { \"github.get_issue\": ({ number }) => ({ number, state: \"open\" }) }`. What a handler throws fails the call. Tried after `tools`."
+                        "description": "TypeScript handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { \"github.get_issue\": ({ number }) => ({ number, state: \"open\" }) }`. What a handler throws fails the call. Tried after `tools`."
                     }
                 },
                 "additionalProperties": false
@@ -983,7 +983,7 @@ mod tests {
         );
         assert_eq!(
             keys(&inline["properties"]["world"]["properties"]),
-            sorted(&["actions", "mocks"])
+            sorted(&["actions", "handlers"])
         );
         let rule = &inline["properties"]["world"]["properties"]["actions"]["additionalProperties"]
             ["anyOf"][0];

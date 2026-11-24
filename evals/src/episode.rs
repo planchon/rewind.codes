@@ -11,7 +11,7 @@ use rewind_core::{Code, RunId, WorkflowSchemas};
 use rewind_engine::RegisterWorkflow;
 use rewind_engine::ports::{TenantId, WorkflowDeclarations};
 use rewind_engine::suites::{SuiteChanges, TestInput};
-use rewind_runtime::TsMockLoader;
+use rewind_runtime::TsHandlerLoader;
 use serde::Serialize;
 use serde_json::json;
 
@@ -367,7 +367,7 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
         signals: workflow.signals.clone(),
     };
     let generated = rewind_codegen::workflow_declarations(workflow.name, &schemas);
-    let loader = TsMockLoader::default();
+    let loader = TsHandlerLoader::default();
     world
         .edge
         .register_workflow(

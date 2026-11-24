@@ -1,5 +1,5 @@
 //! `rewind test [workflow.ts] [--tests file] [--workflow name] [--action-set id|file]`: runs tests in
-//! mock mode, in virtual time (`archi/05-testing-and-observability.md`, "Running tests").
+//! test runs, in virtual time (`archi/05-testing-and-observability.md`, "Running tests").
 //!
 //! A tests file is a JSON array of tests, `workflow.tests.json` next to `workflow.ts` by default:
 //!
@@ -9,7 +9,7 @@
 //!   "input": { "repo": "acme/api" },
 //!   "world": {
 //!     "actions": { "github.close_issue": { "returns": {} } },
-//!     "mocks": "triage.mocks.ts",
+//!     "handlers": "triage.handlers.ts",
 //!     "cassette": "cassettes/triage.json"
 //!   },
 //!   "signals": [{ "name": "approval", "payload": { "close": true } }],
@@ -17,7 +17,7 @@
 //! }]
 //! ```
 //!
-//! `world.cassette` given as a string, and `world.mocks` as the name of a `.ts` or `.js` file,
+//! `world.cassette` given as a string, and `world.handlers` as the name of a `.ts` or `.js` file,
 //! are read from files relative to the tests file. The tests run in this process, the actions'
 //! static responses of `rewind.actions.json` tried last, against the action set file `--action-set`
 //! names, or else the actions the tests answer, as harness actions. They run on the server
@@ -32,7 +32,7 @@ use rewind_api::testing::{Test as ApiTest, TestInput, TestResult, TestRun};
 use rewind_core::{Code, Test};
 use rewind_engine::StartError;
 use rewind_engine::testing::{Subject, TestError, TestOptions, run_tests};
-use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
+use rewind_runtime::{SandboxLimits, TsHandlerLoader, V8Executor};
 use serde_json::Value;
 
 use super::Server;
@@ -132,7 +132,7 @@ pub(super) async fn test(
     })
 }
 
-/// The tests of a file, with the cassettes and mock handlers it names read in.
+/// The tests of a file, with the cassettes and handlers it names read in.
 fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
     let base = path.parent().map(Path::to_owned).unwrap_or_default();
     let mut tests: Vec<Value> = match input::read_json::<Value>(path)? {
@@ -152,12 +152,12 @@ fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
             let cassette: Value = input::read_json(&base.join(file))?;
             world.insert("cassette".into(), cassette);
         }
-        if let Some(Value::String(mocks)) = world.get("mocks")
-            && !mocks.contains('\n')
-            && (mocks.ends_with(".ts") || mocks.ends_with(".js"))
+        if let Some(Value::String(handlers)) = world.get("handlers")
+            && !handlers.contains('\n')
+            && (handlers.ends_with(".ts") || handlers.ends_with(".js"))
         {
-            let source = input::read_text(&base.join(mocks))?;
-            world.insert("mocks".into(), Value::String(source));
+            let source = input::read_text(&base.join(handlers))?;
+            world.insert("handlers".into(), Value::String(source));
         }
     }
     serde_json::from_value(Value::Array(tests))
@@ -228,27 +228,30 @@ async fn local(
             if let Some(Value::Object(statics)) = &statics {
                 answered.extend(statics.keys().cloned());
             }
-            let loader = TsMockLoader::default();
+            let loader = TsHandlerLoader::default();
             for test in &tests {
-                if let Some(source) = &test.world.mocks {
-                    let mocks = rewind_engine::testing::MockLoader::load(
+                if let Some(source) = &test.world.handlers {
+                    let handlers = rewind_engine::testing::HandlerLoader::load(
                         &loader,
                         source,
                         rewind_engine::testing::DEFAULT_START,
                     )
                     .await
                     .map_err(|error| match error {
-                        rewind_engine::testing::MockLoadError::Invalid(message) => {
-                            CliError::usage(format!("test {:?}: the mocks: {message}", test.name))
+                        rewind_engine::testing::HandlerLoadError::Invalid(message) => {
+                            CliError::usage(format!(
+                                "test {:?}: the handlers: {message}",
+                                test.name
+                            ))
                         }
-                        rewind_engine::testing::MockLoadError::Internal(message) => {
+                        rewind_engine::testing::HandlerLoadError::Internal(message) => {
                             CliError::internal(message)
                         }
                     })?;
-                    answered.extend(mocks.actions);
+                    answered.extend(handlers.actions);
                 }
             }
-            action_set::of_mocks(&answered)?
+            action_set::of_handlers(&answered)?
         }
     };
     let executor = V8Executor::new(SandboxLimits::default())
@@ -256,7 +259,7 @@ async fn local(
     let code = Code::new(source);
     let reports = run_tests(
         &executor,
-        &TsMockLoader::default(),
+        &TsHandlerLoader::default(),
         &Subject {
             code: &code,
             action_set: &action_set,
@@ -280,7 +283,7 @@ async fn local(
         TestError::Unavailable(message) => {
             CliError::internal(format!("the tests could not run: {message}"))
         }
-        TestError::Mocks(message) => CliError::internal(message),
+        TestError::Handlers(message) => CliError::internal(message),
     })?;
     let results: Vec<TestResult> = reports
         .iter()
@@ -363,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tests_file_reads_its_cassettes_and_mocks_from_files() {
+    fn a_tests_file_reads_its_cassettes_and_handlers_from_files() {
         let dir = std::env::temp_dir().join(format!("rewind-cli-tests-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -371,16 +374,16 @@ mod tests {
             r#"{"v":1,"matching":"by_args","calls":[],"signals":[]}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("mocks.ts"), "export default {};\n").unwrap();
+        std::fs::write(dir.join("handlers.ts"), "export default {};\n").unwrap();
         std::fs::write(
             dir.join("t.tests.json"),
-            r#"[{"name":"t","world":{"cassette":"cassette.json","mocks":"mocks.ts"}},
-               {"name":"inline","world":{"mocks":"export default { a: () => 1 };"}}]"#,
+            r#"[{"name":"t","world":{"cassette":"cassette.json","handlers":"handlers.ts"}},
+               {"name":"inline","world":{"handlers":"export default { a: () => 1 };"}}]"#,
         )
         .unwrap();
         let tests = read_tests(&dir.join("t.tests.json")).unwrap();
         assert_eq!(
-            tests[0].world.mocks.as_deref(),
+            tests[0].world.handlers.as_deref(),
             Some("export default {};\n")
         );
         assert_eq!(
@@ -388,7 +391,7 @@ mod tests {
             "by_args"
         );
         assert_eq!(
-            tests[1].world.mocks.as_deref(),
+            tests[1].world.handlers.as_deref(),
             Some("export default { a: () => 1 };")
         );
         assert!(

@@ -3,14 +3,14 @@ use rewind_core::{ActionFailure, ActionFailureKind, ActionRoute};
 use crate::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 
 /// Sends each call to the dispatcher of its route, so that a composition root plugs a real
-/// adapter or a mock per route (`archi/04-tools.md`, "Routes"):
+/// adapter or a handler per route (`archi/04-tools.md`, "Routes"):
 ///
 /// | Route | Dispatcher |
 /// | --- | --- |
-/// | MCP actions | `mcp`: `rewind-mcp`, or mocks |
-/// | API actions | `api`: `rewind-openapi`'s `ApiDispatcher`, or mocks |
-/// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpAction`, or mocks |
-/// | Harness actions | `harness`: mocks, in mock mode only. Outside it, harness actions are handed to the SDK workers' streams and never dispatched |
+/// | MCP actions | `mcp`: `rewind-mcp`, or handlers |
+/// | API actions | `api`: `rewind-openapi`'s `ApiDispatcher`, or handlers |
+/// | Built-ins (`http`, and `webhook` in a test run: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpAction`, or handlers |
+/// | Harness actions | `harness`: handlers, in a test run only. Outside it, harness actions are handed to the SDK workers' streams and never dispatched |
 ///
 /// [`Unrouted`] stands for a route without a dispatcher. A call's [`CallAuth`] goes only to the
 /// dispatcher of its route.

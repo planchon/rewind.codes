@@ -1,5 +1,5 @@
 //! One isolate, started from its epoch's snapshot, with its limits. It lives on its own thread
-//! (V8 objects cannot change threads): see `executor.rs` for workflows and `mocks.rs` for mock
+//! (V8 objects cannot change threads): see `executor.rs` for workflows and `handlers.rs` for test
 //! handlers.
 
 use std::cell::Cell;

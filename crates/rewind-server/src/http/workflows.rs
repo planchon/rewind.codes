@@ -27,7 +27,7 @@ use rewind_engine::ports::{
 use rewind_engine::suites::{SuiteChanges, TestKit, TestRetirement, TestUpdate, UpdateWith};
 use rewind_engine::testing::TestOptions;
 use rewind_engine::{RegisterError, RegisterWorkflow};
-use rewind_runtime::TsMockLoader;
+use rewind_runtime::TsHandlerLoader;
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -105,7 +105,7 @@ pub(super) async fn create(
         .store
         .workflow_versions(&caller.tenant, &request.name, &caller.labels)
         .await?;
-    let loader = TsMockLoader::default();
+    let loader = TsHandlerLoader::default();
     let registered = app
         .edge
         .register_workflow(

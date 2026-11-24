@@ -168,7 +168,7 @@ export default async function main(input: { repo: string }) {
 "#;
 
 #[tokio::test]
-async fn test_runs_tests_with_static_responses_and_mocks() {
+async fn test_runs_tests_with_static_responses_and_handlers() {
     let dir = tempfile::tempdir().unwrap();
     let code = write(dir.path(), "triage.ts", TRIAGE);
     // rewind.actions.json next to the tests: tried after each test's own world.
@@ -179,7 +179,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
     );
     write(
         dir.path(),
-        "triage.mocks.ts",
+        "triage.handlers.ts",
         "export default { github: { close_issue: ({ number }) => ({ number, closed: true }) } };\n",
     );
     // triage.tests.json next to the code, found by default.
@@ -194,7 +194,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
                     "github.list_issues": { "returns": [{ "number": 4 }, { "number": 7 }, { "number": 9 }] },
                     "notify": { "returns": { "ok": true } }
                 },
-                "mocks": "triage.mocks.ts"
+                "handlers": "triage.handlers.ts"
             },
             "signals": [{ "name": "approval", "payload": { "close": true } }],
             "expect": {
@@ -502,8 +502,8 @@ async fn the_corpus_runs_through_rewind_test() {
         let work = dir.path().join(name.replace('/', "_"));
         std::fs::create_dir_all(&work).unwrap();
         std::fs::copy(case.join("workflow.ts"), work.join("workflow.ts")).unwrap();
-        if let Some(mocks) = &translated.mocks {
-            write(&work, "mocks.ts", mocks);
+        if let Some(handlers) = &translated.handlers {
+            write(&work, "handlers.ts", handlers);
         }
         write(
             &work,
@@ -578,7 +578,7 @@ async fn the_corpus_runs_through_rewind_test() {
             "blue/triage_workflow",
             "blue/workflow_attached_run_ends_first",
             "blue/workflow_detached_run_lives_on",
-            "blue/workflow_start_answered_by_mocks",
+            "blue/workflow_start_answered_in_a_test_run",
             "blue/workflow_version_reads_its_secrets",
             "blue/workflows_started_signalled_and_awaited",
             "red/approval_rejected",
@@ -630,11 +630,11 @@ fn cases() -> Vec<(String, PathBuf)> {
 
 struct Translated {
     test: Value,
-    mocks: Option<String>,
+    handlers: Option<String>,
 }
 
 /// A corpus scenario as a test of `rewind test`, when it can be one: plain values and `$error`
-/// become rules; `$echo`, `$sequence` and failures with a kind or data become TypeScript mock
+/// become rules; `$echo`, `$sequence` and failures with a kind or data become TypeScript
 /// handlers; signals are sent once the run is blocked, without their idempotency keys unless a
 /// key is sent twice. A test has no TTL: a scenario that sets one stays with the corpus harness.
 fn translate(scenario: &Value) -> Option<Translated> {
@@ -687,7 +687,7 @@ fn translate(scenario: &Value) -> Option<Translated> {
             Handler::Code(body) => handlers.push(format!("  {}: {body},", json!(action))),
         }
     }
-    let mocks = (!handlers.is_empty()).then(|| {
+    let handlers = (!handlers.is_empty()).then(|| {
         format!(
             "const counters: Record<string, number> = {{}};\nfunction next(action: string): number {{\n  counters[action] = (counters[action] ?? 0) + 1;\n  return counters[action] - 1;\n}}\nfunction fail(failure: {{ message: string; kind?: string; data?: unknown }}): never {{\n  throw failure;\n}}\nexport default {{\n{}\n}};\n",
             handlers.join("\n")
@@ -708,8 +708,8 @@ fn translate(scenario: &Value) -> Option<Translated> {
         expected.insert("calls".to_owned(), Value::Array(calls));
     }
     let mut world = json!({ "actions": rules });
-    if mocks.is_some() {
-        world["mocks"] = json!("mocks.ts");
+    if handlers.is_some() {
+        world["handlers"] = json!("handlers.ts");
     }
     let test = json!({
         "name": "corpus",
@@ -718,7 +718,7 @@ fn translate(scenario: &Value) -> Option<Translated> {
         "signals": signals,
         "expect": expected,
     });
-    Some(Translated { test, mocks })
+    Some(Translated { test, handlers })
 }
 
 enum Handler {
@@ -726,7 +726,7 @@ enum Handler {
     Code(String),
 }
 
-/// How a mock answers one corpus response; `None` for the responses only the corpus's own
+/// How a handler answers one corpus response; `None` for the responses only the corpus's own
 /// actions give (transient failures, deferrals, crashes, refused credentials).
 fn handler(response: &Value) -> Option<Handler> {
     let Some(fields) = response.as_object() else {

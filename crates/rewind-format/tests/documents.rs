@@ -698,7 +698,7 @@ fn test_document() -> Test {
         seed: Some(Seed::from_bytes([7; 32])),
         world: World {
             actions,
-            mocks: Some("export default {};\n".into()),
+            handlers: Some("export default {};\n".into()),
             cassette: Some(Cassette {
                 calls: vec![RecordedCall {
                     action: "github.close_issue".into(),

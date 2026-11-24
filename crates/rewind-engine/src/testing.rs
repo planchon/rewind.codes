@@ -1,4 +1,4 @@
-//! Running tests (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! Running tests (`archi/05-testing-and-observability.md`, "Test runs").
 //!
 //! ```text
 //! check_test ── stale? incompatible? ── no isolate started ──────────────► report (not run)
@@ -14,7 +14,7 @@
 //! entropy giving the test's seed; harness actions are dispatched to the test's world as every
 //! other call. Its result is a function of the code, the action set, the test and the epoch. The
 //! code under test is a parameter ([`Subject`]).
-//! TypeScript mock handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
+//! TypeScript handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
 //! isolate of their own.
 
 use std::collections::BTreeMap;
@@ -37,11 +37,11 @@ use crate::adapters::{
 };
 use crate::driver::{DriveError, Driver, PlaneClock, Steps};
 use crate::edge::Edge;
-use crate::mock::{MockDispatcher, Mocks, NoMocks};
 use crate::plane::{HarnessActions, NodeConfig, Wiring};
 use crate::ports::{ActionDispatcher, CodeExecutor, Enqueued, Entropy, NodeId, QuarantineKind};
 use crate::schema::{Refused, Validator};
 use crate::start::{StartError, StartRun};
+use crate::world::{Handlers, NoHandlers, WorldDispatcher};
 
 /// When a test starts when it does not say: 2026-01-01T00:00:00Z, so that a report is the same
 /// on every run.
@@ -138,46 +138,46 @@ pub enum TestError {
     /// The run plane a test runs on failed, for a reason that is not the test's.
     #[error("the test could not run: {0}")]
     Unavailable(String),
-    /// The mock handlers could not be run, for a reason that is not the test's.
-    #[error("the mock handlers could not run: {0}")]
-    Mocks(String),
+    /// The handlers could not be run, for a reason that is not the test's.
+    #[error("the handlers could not run: {0}")]
+    Handlers(String),
 }
 
-/// Why mock handlers cannot be loaded.
+/// Why handlers cannot be loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MockLoadError {
+pub enum HandlerLoadError {
     /// The test's module is at fault: the test fails with this message.
     Invalid(String),
     /// The platform is at fault.
     Internal(String),
 }
 
-/// Loads the TypeScript mock handlers of a test. `rewind-runtime` runs them in an isolate of
+/// Loads the TypeScript handlers of a test. `rewind-runtime` runs them in an isolate of
 /// their own, with the sandbox's globals and the time of a clock started at `start`.
-pub trait MockLoader: Sync {
+pub trait HandlerLoader: Sync {
     type Handlers: ActionDispatcher + 'static;
 
     fn load(
         &self,
         source: &str,
         start: Timestamp,
-    ) -> impl Future<Output = Result<Mocks<Self::Handlers>, MockLoadError>> + Send;
+    ) -> impl Future<Output = Result<Handlers<Self::Handlers>, HandlerLoadError>> + Send;
 }
 
-/// Where mock handlers cannot run: a test that has some fails.
+/// Where handlers cannot run: a test that has some fails.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoMockLoader;
+pub struct NoHandlerLoader;
 
-impl MockLoader for NoMockLoader {
-    type Handlers = NoMocks;
+impl HandlerLoader for NoHandlerLoader {
+    type Handlers = NoHandlers;
 
     async fn load(
         &self,
         _source: &str,
         _start: Timestamp,
-    ) -> Result<Mocks<NoMocks>, MockLoadError> {
-        Err(MockLoadError::Invalid(
-            "TypeScript mock handlers cannot run here".into(),
+    ) -> Result<Handlers<NoHandlers>, HandlerLoadError> {
+        Err(HandlerLoadError::Invalid(
+            "TypeScript handlers cannot run here".into(),
         ))
     }
 }
@@ -321,7 +321,7 @@ pub async fn run_tests<X, L>(
 ) -> Result<Vec<TestReport>, TestError>
 where
     X: CodeExecutor<Instance: 'static> + Clone + 'static,
-    L: MockLoader,
+    L: HandlerLoader,
 {
     if tests.is_empty() {
         return Ok(Vec::new());
@@ -344,7 +344,7 @@ where
         .collect()
 }
 
-/// Runs one test: checks it, then runs the subject in mock mode and virtual time against the
+/// Runs one test: checks it, then runs the subject in a test run and virtual time against the
 /// test's world, and checks its expectations against what left the run.
 pub async fn run_test<X, L>(
     executor: &X,
@@ -355,14 +355,14 @@ pub async fn run_test<X, L>(
 ) -> Result<TestReport, TestError>
 where
     X: CodeExecutor<Instance: 'static> + Clone + 'static,
-    L: MockLoader,
+    L: HandlerLoader,
 {
     if let Some((problem, failures)) = check_test(test, subject) {
         return Ok(TestReport::not_run(test, problem, failures));
     }
     let start = test.start.unwrap_or(DEFAULT_START);
     let mut dispatcher =
-        MockDispatcher::<L::Handlers>::without_mocks().with_rules(test.world.actions.clone());
+        WorldDispatcher::<L::Handlers>::without_handlers().with_rules(test.world.actions.clone());
     if let Some(cassette) = &test.world.cassette {
         dispatcher = dispatcher.with_cassette(cassette.clone());
     }
@@ -378,17 +378,17 @@ where
             }
         };
     }
-    if let Some(source) = &test.world.mocks {
+    if let Some(source) = &test.world.handlers {
         match loader.load(source, start).await {
-            Ok(mocks) => dispatcher = dispatcher.with_mocks(mocks),
-            Err(MockLoadError::Invalid(message)) => {
+            Ok(handlers) => dispatcher = dispatcher.with_handlers(handlers),
+            Err(HandlerLoadError::Invalid(message)) => {
                 return Ok(TestReport::not_run(
                     test,
                     TestProblem::Failed,
-                    vec![format!("the mock handlers cannot load: {message}")],
+                    vec![format!("the handlers cannot load: {message}")],
                 ));
             }
-            Err(MockLoadError::Internal(message)) => return Err(TestError::Mocks(message)),
+            Err(HandlerLoadError::Internal(message)) => return Err(TestError::Handlers(message)),
         }
     }
     let unanswered = dispatcher.unanswered();
@@ -415,7 +415,7 @@ where
         subject.action_set.clone(),
         test.input.clone(),
     );
-    request.mode = RunMode::Mock;
+    request.mode = RunMode::Test;
     request.ttl = options.ttl;
     let run = {
         let mut gateway = world.driver.gateway(&world.node);
@@ -554,7 +554,7 @@ type TestPlane<X, M> = Wiring<
     MemoryArchive,
     MemoryBlobs,
     X,
-    MockDispatcher<M>,
+    WorldDispatcher<M>,
     MemorySecrets,
     MemorySpanExporter,
     MemoryWebhooks,
@@ -580,7 +580,7 @@ where
 {
     async fn new(
         executor: X,
-        dispatcher: MockDispatcher<M>,
+        dispatcher: WorldDispatcher<M>,
         start: Timestamp,
         seed: Option<Seed>,
     ) -> Result<Self, TestError> {

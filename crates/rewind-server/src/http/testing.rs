@@ -1,4 +1,4 @@
-//! Tests (`archi/05-testing-and-observability.md`, "Testing and mocks"): `POST /v1/test`,
+//! Tests (`archi/05-testing-and-observability.md`, "Test runs"): `POST /v1/test`,
 //! `POST /v1/workflows/{name}/record`, `GET /v1/tests/{digest}`, and the suite a fork of a run
 //! of a workflow passes first.
 //!
@@ -26,7 +26,7 @@ use rewind_engine::suites::{
     DEFAULT_RECORDED, MAX_RECORDED, SuiteError, SuiteLoadError, TestFormat, TestInput,
 };
 use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
-use rewind_runtime::TsMockLoader;
+use rewind_runtime::TsHandlerLoader;
 use serde_json::Value;
 
 use crate::app::App;
@@ -163,7 +163,7 @@ pub(crate) fn test_error(error: TestError) -> ApiError {
     match error {
         TestError::Start(error) => error.into(),
         TestError::Unavailable(message) => ApiError::unavailable(message),
-        TestError::Mocks(message) => ApiError::internal(message),
+        TestError::Handlers(message) => ApiError::internal(message),
     }
 }
 
@@ -174,7 +174,7 @@ pub(crate) async fn run(
     tests: &[Test],
     options: &TestOptions,
 ) -> Result<Vec<TestReport>, ApiError> {
-    let loader = TsMockLoader::default();
+    let loader = TsHandlerLoader::default();
     match tokio::time::timeout(
         TESTS_TIMEOUT,
         app.edge.run_tests(&loader, subject, tests, options),

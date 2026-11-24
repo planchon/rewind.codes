@@ -298,7 +298,7 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     request.mode = if case.scenario.live {
         RunMode::Live
     } else {
-        RunMode::Mock
+        RunMode::Test
     };
     if let Some(ttl) = &case.scenario.ttl {
         request.ttl = Some(parse_duration(ttl).map_err(|err| format!("ttl {ttl:?}: {err}"))?);

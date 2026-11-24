@@ -5688,10 +5688,10 @@
         "type": "object"
       },
       "RunMode": {
-        "description": "`live`: actions are really called and time is real. `mock`: actions are answered by cassettes\nand mocks, and time is virtual.",
+        "description": "`live`: actions are really called and time is real. `test`: actions are answered by cassettes\nand handlers, and time is virtual.",
         "enum": [
           "live",
-          "mock"
+          "test"
         ],
         "type": "string"
       },
@@ -7211,7 +7211,7 @@
       },
       "TestRequest": {
         "additionalProperties": false,
-        "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the code; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected code, or the version on a new action set.",
+        "description": "`POST /v1/test`: runs tests in a test run, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the code; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected code, or the version on a new action set.",
         "example": {
           "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
           "tests": [
@@ -8427,7 +8427,7 @@
       },
       "World": {
         "additionalProperties": false,
-        "description": "What answers the run's calls: the rules, then the mock handlers, then the cassette. A call\nno source answers fails, and fails the test.",
+        "description": "What answers the run's calls: the rules, then the handlers, then the cassette. A call\nno source answers fails, and fails the test.",
         "properties": {
           "actions": {
             "additionalProperties": {
@@ -8446,8 +8446,8 @@
               "null"
             ]
           },
-          "mocks": {
-            "description": "TypeScript mock handlers, run in a separate isolate: a module default-exporting its\nhandlers by action name or by namespace.",
+          "handlers": {
+            "description": "TypeScript handlers, run in a separate isolate: a module default-exporting its\nhandlers by action name or by namespace.",
             "type": [
               "string",
               "null"
@@ -19513,7 +19513,7 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven code or action set. Served by a server with the worker role.",
+        "description": "In virtual time, each test against its world: rules, handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven code or action set. Served by a server with the worker role.",
         "operationId": "testWorkflow",
         "parameters": [
           {
@@ -19630,7 +19630,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Run tests in mock mode (`test_workflow`)",
+        "summary": "Run tests in a test run (`test_workflow`)",
         "tags": [
           "checks"
         ]

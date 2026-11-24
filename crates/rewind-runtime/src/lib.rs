@@ -20,7 +20,7 @@
 //!
 //! [`sandbox_lib`] holds the declarations the type-checker gives workflows: exactly what the
 //! sandbox has. [`builtins`] holds what the glue sends to the built-in actions. [`TsMocks`] runs
-//! TypeScript mock handlers in an isolate of their own, as the dispatcher of mock mode.
+//! TypeScript handlers in an isolate of their own, as the dispatcher of test runs.
 
 // Denied, not forbidden: `memory` alone allows it, for what V8 offers only through raw
 // pointers (archi/07-code-architecture.md, "Dependency rules").
@@ -30,11 +30,11 @@ pub mod builtins;
 mod compile;
 mod epochs;
 mod executor;
+mod handlers;
 mod instance;
 mod isolate;
 mod loader;
 mod memory;
-mod mocks;
 mod ops;
 pub mod sandbox_lib;
 mod snapshot;
@@ -42,5 +42,5 @@ mod vendored;
 mod watchdog;
 
 pub use executor::{SetupError, V8Executor, V8Instance};
+pub use handlers::{HandlerError, TsHandlerLoader, TsHandlers};
 pub use isolate::SandboxLimits;
-pub use mocks::{MockError, TsMockLoader, TsMocks};

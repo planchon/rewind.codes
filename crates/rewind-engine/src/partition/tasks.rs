@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! ready ─ per-run limit ─┬─ MCP, API: a slot of the organization ─ SlotGranted ─► call executor
-//!                        ├─ built-ins, mock mode ───────────────────────────────► call executor
+//!                        ├─ built-ins, test runs ───────────────────────────────► call executor
 //!                        └─ harness action: prepared, then offered to the organization ─► an SDK stream
 //! outcome ─► done (a completion in the inbox), ready after a backoff (delivery + 1), deferred
 //!            with a deadline, parked; then the slot is freed
@@ -379,7 +379,7 @@ impl<P: Plane> Owner<P> {
                 self.finish_in(&mut unit, &task, &record, Ok(json!({})));
                 self.push(unit);
             }
-            CallOutcome::MockStart { dispatched, end } => match (dispatched, end) {
+            CallOutcome::TestStart { dispatched, end } => match (dispatched, end) {
                 (Dispatched::Result(result), Some((child, end))) => {
                     let mut unit = Unit::new();
                     self.finish_in(&mut unit, &task, &record, Ok(result));

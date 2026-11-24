@@ -68,7 +68,7 @@ fn create(run: &RunRef) -> Change {
         headline: "export default async () => {".into(),
         action_set: head.action_set,
         status: RunStatus::Pending,
-        mode: Some(RunMode::Mock),
+        mode: Some(RunMode::Test),
         labels: BTreeMap::new(),
         parent: None,
         workflow: None,
@@ -105,7 +105,7 @@ fn started(id: u64) -> InboxItem {
             seed: Seed::from_bytes([1; 32]),
             epoch: Epoch(1),
             expires_at: Timestamp(T0.0 + 86_400_000),
-            mode: RunMode::Mock,
+            mode: RunMode::Test,
         }),
         received_at: T0,
     }

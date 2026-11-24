@@ -8,7 +8,7 @@
 //!
 //! Three commands run in this process, without a server, wiring the adapters themselves:
 //! `rewind check` (the runtime's checks at start, tsgo and the checker's rules), `rewind test` (a
-//! scenario in mock mode, with in-memory adapters and virtual time) and `rewind replay` of an
+//! scenario in a test run, with in-memory adapters and virtual time) and `rewind replay` of an
 //! run export (a run's history is also replayed here, once the server exported it).
 //!
 //! Every command takes `--json`, and exits with one code per outcome ([`Exit`]). A first Ctrl-C

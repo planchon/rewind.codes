@@ -143,8 +143,8 @@ pub enum HarnessActions {
     /// To the SDK streams of the harness, through the organization actor: a server.
     #[default]
     Streams,
-    /// To the dispatcher, as every other call: mock mode and the engine's tests, where the
-    /// mocks answer every action.
+    /// To the dispatcher, as every other call: test runs and the engine's tests, where the
+    /// handlers answer every action.
     Dispatched,
 }
 
