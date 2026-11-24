@@ -1,49 +1,49 @@
 ---
 title: "The sandbox"
-description: "What a script can do, what it cannot, and why every run is deterministic."
+description: "What a workflow's code can do, what it cannot, and why every run is deterministic."
 ---
 
-Scripts run in a V8 isolate that Rewind controls entirely. Every way the script could observe the world goes through
-the journal, so the same script, input and journal always give the same execution.
+A workflow's code runs in a V8 isolate that Rewind controls entirely. Every way the code could observe the world goes
+through the run's history, so the same code, input and history always give the same execution.
 
 ## What exists in the sandbox
 
 | Global | Behavior |
 | --- | --- |
-| `Date.now()`, `new Date()`, `performance.now()`, `Temporal.Now`, `Intl.DateTimeFormat` | [Logical time](/concepts/journal#logical-time): moves only when an event is delivered to the run |
+| `Date.now()`, `new Date()`, `performance.now()`, `Temporal.Now`, `Intl.DateTimeFormat` | [Logical time](/concepts/history#logical-time): moves only when something from outside reaches the run |
 | `Math.random()` | A pseudo-random generator seeded per run |
-| `crypto.getRandomValues()`, `crypto.randomUUID()` | A cryptographic generator seeded per run: tokens a script makes are not predictable, and replay identically |
+| `crypto.getRandomValues()`, `crypto.randomUUID()` | A cryptographic generator seeded per run: tokens the code makes are not predictable, and replay identically |
 | `setTimeout`, `setInterval` | Durable timers, like `sleep` |
-| `console.*` | Journaled as log lines, shown in the dashboard and returned with the run |
+| `console.*` | Recorded as log lines, shown in the dashboard and returned with the run |
 | `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic |
-| `ArrayBuffer`, typed arrays | Present, within a memory budget (128 MiB by default). Past it, an allocation throws `RangeError`, which the script can catch |
-| `fetch` | Only when the toolset enables the [`http` tool](/concepts/tools#the-http-tool), for its allowed hosts. Each request is a journaled tool call, sent by Rewind |
+| `ArrayBuffer`, typed arrays | Present, within a memory budget (128 MiB by default). Past it, an allocation throws `RangeError`, which the code can catch |
+| `fetch` | Only when the action set enables the [`http` action](/concepts/actions#the-http-action), for its allowed hosts. Each request is a recorded call, sent by Rewind |
 | `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics`, `WebAssembly` | Removed: they expose garbage collection or threads, or run code the sandbox cannot see |
 | File system, environment, processes, network, Node and Deno APIs | Absent |
 
-Scripts run with `TZ=UTC` and the `en-US` locale, so `Intl` output does not depend on the host.
+The code runs with `TZ=UTC` and the `en-US` locale, so `Intl` output does not depend on the machine.
 
-## What a script can import
+## What the code can import
 
 | Module | Holds |
 | --- | --- |
-| `rewind:tools` | Generated for the toolset: one namespace per MCP server or group of host tools |
-| `rewind:workflows` | Generated for the toolset: one export per workflow it pins |
-| `rewind` | The standard library: `sleep`, `signal`, `webhook`, `run`, `ToolError`, `CancelledError`, `WorkflowError` |
+| `rewind:actions` | Generated for the action set: one object per group, an MCP server, an API or a group of harness actions |
+| `rewind:workflows` | Generated for the action set: one export per organization workflow it pins |
+| `rewind` | The standard library: `sleep`, `signal`, `signalUrl`, `run`, `ActionError`, `CancelledError`, `RunError` |
 
 Nothing else: no npm packages, no relative imports, no dynamic `import()`. See the
-[script reference](/sdk/script-reference).
+[workflow reference](/sdk/workflow-reference).
 
 ## What type-checks is what exists
 
-Before a run starts, its script is type-checked in strict mode by the TypeScript 7 compiler against exactly these
-globals and the toolset's declarations. A name a model reaches for by habit but that does not exist (`fetch` without the
-`http` tool, `require`, `process`, `Buffer`) is refused with a hint that says what to use instead. Rewind also flags two
-mistakes the compiler does not catch:
+Before a run starts, its code is type-checked in strict mode by the TypeScript 7 compiler against exactly these globals
+and the action set's declarations. A name a model reaches for by habit but that does not exist (`fetch` without the
+`http` action, `require`, `process`, `Buffer`) is refused with a hint that says what to use instead. Rewind also flags
+two mistakes the compiler does not catch:
 
 | Rule | Flags |
 | --- | --- |
-| Floating promise | A tool call, a `rewind` function or an async function used as a statement: neither awaited, returned nor assigned |
+| Floating promise | A call to an action, to a `rewind` function or to an async function, used as a statement: neither awaited, returned nor assigned |
 | Ignored async callback | An `async` function passed to `forEach` and the like, which ignore its result |
 
 Diagnostics are written for a model: location, message and a short code frame.
@@ -59,23 +59,23 @@ error TS2322 Type 'number' is not assignable to type 'string'.
 
 | Limit | Default | When exceeded |
 | --- | --- | --- |
-| CPU time per call into the script (`main`, or the delivery of one event) | 5 s | The run is aborted (`limit_exceeded`) |
+| CPU time per call into the code (`main`, or one trigger handed to it) | 5 s | The run is aborted (`limit_exceeded`) |
 | Heap | 128 MiB | The run is aborted |
 | Array buffers | 128 MiB | The allocation throws `RangeError` |
-| Tool calls in flight per run | 16 | The next calls wait for a slot |
+| Calls in flight per run | 16 | The next calls wait for a slot |
 | A run's lifetime (TTL) | 30 days | The run is cancelled |
 
-The CPU budget applies to each call into the script, not to a whole activation, so replaying a long history never
+The CPU budget applies to each call into the code, not to a whole activation, so replaying a long history never
 exhausts it. CPU time is also counted per end user each month, for [quotas](/concepts/end-users#quotas).
 
 ## Security
 
-- **Secrets never enter the sandbox.** A run attaches them by name at start; the dispatcher injects each into the
-  request to its server, and none appears in the journal, a cassette or a trace. Calls to your own APIs carry a
+- **Secrets never enter the sandbox.** A run names the secrets it uses at start; the dispatcher injects each into the
+  request to its server, and none appears in the history, a cassette or a trace. Calls to your own APIs carry a
   signature of your organization's key instead.
-- **No network of its own.** The `http` tool sends requests from the dispatcher, only to the toolset's allowed
+- **No network of its own.** The `http` action sends requests from the dispatcher, only to the action set's allowed
   hosts, and refuses private, loopback, link-local and cloud-metadata addresses, at every redirect.
-- **Your permission gates stay yours.** A tool with the `approval` policy is not sent until your harness approves
+- **Your permission gates stay yours.** An action with the `approval` policy is not called until your harness approves
   that exact call.
-- **The nodes are sandboxed too.** In production, the nodes that run scripts reach the network only through an egress
-  proxy and run under gVisor, and an organization that needs it gets its own pool of nodes.
+- **The nodes are sandboxed too.** In production, the nodes that run workflows reach the network only through an
+  egress proxy and run under gVisor, and an organization that needs it gets its own pool of nodes.

@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
   "name": "Rewind",
-  "description": "Rewind runs the TypeScript scripts your model writes to call your tools, in a deterministic sandbox that journals every step: runs wait for days, survive crashes, and replay identically.",
+  "description": "Rewind runs the TypeScript workflows your model writes to call your actions, in a deterministic sandbox that records every step in its history: runs wait for days, survive crashes, and replay identically.",
   "colors": {
     "primary": "#059669",
     "light": "#34D399",
@@ -31,11 +31,12 @@
             "group": "How it works",
             "pages": [
               "concepts/how-it-works",
-              "concepts/journal",
+              "concepts/history",
               "concepts/sandbox",
-              "concepts/tools",
+              "concepts/actions",
               "concepts/workflows",
-              "concepts/end-users"
+              "concepts/end-users",
+              "glossary"
             ]
           },
           {
@@ -55,22 +56,21 @@
           {
             "group": "Build a harness",
             "pages": [
-              "sdk/toolsets",
+              "sdk/action-sets",
               "sdk/secrets",
               "sdk/signed-calls",
               "sdk/agent-tools",
               "sdk/runs",
-              "sdk/host-tools",
+              "sdk/harness-actions",
               "sdk/human-in-the-loop",
-              "sdk/workflows",
               "sdk/end-users",
               "sdk/webhooks",
               "sdk/testing"
             ]
           },
           {
-            "group": "What the model writes",
-            "pages": ["sdk/scripts", "sdk/script-reference"]
+            "group": "Workflows",
+            "pages": ["sdk/workflows", "sdk/workflow-reference"]
           },
           {
             "group": "Reference",
@@ -88,17 +88,11 @@
           },
           {
             "group": "Runs",
-            "pages": ["dashboard/overview", "dashboard/observability", "dashboard/query-language", "dashboard/run"]
+            "pages": ["dashboard/overview", "dashboard/runs", "dashboard/query-language", "dashboard/run"]
           },
           {
-            "group": "Code, tools and end users",
-            "pages": [
-              "dashboard/scripts",
-              "dashboard/testing",
-              "dashboard/tools",
-              "dashboard/namespaces",
-              "dashboard/secrets"
-            ]
+            "group": "Workflows, actions and end users",
+            "pages": ["dashboard/workflows", "dashboard/actions", "dashboard/namespaces", "dashboard/secrets"]
           },
           {
             "group": "Your organization",
@@ -122,6 +116,18 @@
       ]
     }
   },
+  "redirects": [
+    { "source": "/concepts/journal", "destination": "/concepts/history" },
+    { "source": "/concepts/tools", "destination": "/concepts/actions" },
+    { "source": "/sdk/toolsets", "destination": "/sdk/action-sets" },
+    { "source": "/sdk/host-tools", "destination": "/sdk/harness-actions" },
+    { "source": "/sdk/scripts", "destination": "/sdk/workflows" },
+    { "source": "/sdk/script-reference", "destination": "/sdk/workflow-reference" },
+    { "source": "/dashboard/observability", "destination": "/dashboard/runs" },
+    { "source": "/dashboard/scripts", "destination": "/dashboard/workflows" },
+    { "source": "/dashboard/testing", "destination": "/dashboard/workflows" },
+    { "source": "/dashboard/tools", "destination": "/dashboard/actions" }
+  ],
   "icons": {
     "library": "lucide"
   },

@@ -1,11 +1,11 @@
 ---
 title: "The dashboard"
-description: "Every run, all the code executed, and the tools and end users behind them: where to find what, and how to sign in."
+description: "Every run, every workflow, and the actions and end users behind them: where to find what, and how to sign in."
 ---
 
-The dashboard shows what every script did: each run with its source, its calls and its history, the failures grouped
-across the many scripts models write, the tools' latency and errors, and the use of each end user. It reads the same API
-as the SDK, so what the dashboard shows is what your harness and your model see.
+The dashboard shows what every workflow did: each run with its code, its calls and its history, the failures grouped
+across the many workflows models write, the actions' latency and errors, and the use of each end user. It reads the
+same API as the SDK, so what the dashboard shows is what your harness and your model see.
 
 | Where | |
 | --- | --- |
@@ -31,14 +31,14 @@ A server of your own without WorkOS asks for an API key instead, kept for the ta
 The dashboard has one sidebar:
 
 - **At its top**: the organization picker, and **Find** (press <kbd>F</kbd>): a run by its handle or its id, a view, the runs a query matches.
-- **The views**: [Overview](/dashboard/overview), [Observability](/dashboard/observability), [Scripts](/dashboard/scripts),
-  [Testing](/dashboard/testing), [Tools](/dashboard/tools) and [Namespaces](/dashboard/namespaces); then
-  [Connect Claude](/claude), to use Rewind from Claude.
+- **The views**: [Overview](/dashboard/overview), [Runs](/dashboard/runs), [Workflows](/dashboard/workflows),
+  [Actions](/dashboard/actions) and [Namespaces](/dashboard/namespaces); then [Connect Claude](/claude), to use Rewind
+  from Claude.
 - **At its bottom**, the account menu: your [organization](/dashboard/organization) (members, roles, API keys,
   connections), your [connections](/claude#change-or-revoke-a-connection), the theme, the time zone (UTC or local), the
   server, and sign out.
 
-Observability, a run and the organization turn the sidebar into their own, under a **back** arrow: from a run, back
+Runs, a run, a workflow and the organization turn the sidebar into their own, under a **back** arrow: from a run, back
 returns to the list it was opened from.
 
 <Frame caption="Find: press F anywhere, then type a run's handle, a view or a query">
@@ -48,9 +48,10 @@ returns to the list it was opened from.
 
 ## What you see depends on your role
 
-The dashboard shows what your role allows. The run views need `runs:read`, Testing `toolsets:read`, the namespace
-views `namespaces:read`, and each part of the organization its own permission. A member limited to labels
-(`agent:triage`) sees only the runs carrying them. See [Roles](/dashboard/organization#roles).
+The dashboard shows what your role allows. The run and workflow views need `runs:read`, the namespace views
+`namespaces:read`, and each part of the organization its own permission; naming, describing, promoting, forking and
+pulling a workflow need `workflows:write`. A member limited to labels (`agent:triage`) sees only the runs carrying
+them. See [Roles](/dashboard/organization#roles).
 
 The dashboard never picks an end user: it reads every namespace of your organization. A run's namespace is a column, a
 filter and the term `namespace:` of the [query language](/dashboard/query-language).
@@ -59,7 +60,9 @@ filter and the term `namespace:` of the [query language](/dashboard/query-langua
 
 The dashboard follows your organization's runs as they change: a run that completes, fails or starts waiting shows it
 in every table and panel at once, the lists and counts follow within seconds, and a run that is still going follows its
-event stream as each step is committed. While the dashboard reconnects, the views read again every 10 to 30 seconds.
+event stream as each step is committed. A workflow named, described, given a version, promoted, forked or pulled
+refreshes the views that show it. While the dashboard reconnects, the views keep what they show, and read it again once
+it is back.
 
 Nothing on the screen moves on its own. A row changes its values in place; when new runs arrive or the order changes
 while you are scrolled down a table, they wait behind **N new · Show** at the top of the table, and enter at once when

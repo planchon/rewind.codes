@@ -1,0 +1,116 @@
+---
+title: "The history and replay"
+description: "Every interaction of a run with the outside world is an event of its history. Durability, replay, tests and observability all come from it."
+---
+
+## What the history records
+
+A run's history is the ordered list of everything that crossed the sandbox's walls. Each item is an **event**, and its
+index is its position in the history (`0, 1, 2, …`):
+
+| Event | Records |
+| --- | --- |
+| `run_started` | The input, the digests of the code and of the action set, the run's random seed, its deadline |
+| `schedule_call`, `call_completed`, `call_failed` | A call to an action and its arguments, then its result or failure |
+| `start_timer`, `timer_fired` | A `sleep`, a `setTimeout`, a signal's timeout |
+| `signal_awaited`, `signal_received` | A wait for a signal, and the signal that resolved it |
+| `log` | A `console.*` line |
+| `complete_run`, `fail_run`, `run_aborted` | How the run ended |
+
+The history is a list of **steps**: a step is one thing from outside (the start, a call's result, a timer, a signal, a
+cancellation) and everything the code did in response, committed together. A history therefore holds complete steps
+and nothing else, which is what lets the dashboard step through a run like a debugger.
+
+Each event the code caused carries its **callsite**, the line of the code that caused it, which is how the dashboard
+puts each call beside its line. Values (arguments, results, signals, the input and output) are identified by the
+SHA-256 of their canonical JSON; values above 64 KiB are stored apart, as objects of the run in object storage. When a
+run ends, its history is sealed into the archive, where it never changes.
+
+<Note>
+  **The history is the only source of truth.** The dashboard, the OpenTelemetry traces, the metrics and the webhooks
+  are projections of it. No feature has a side channel.
+</Note>
+
+## Replay
+
+What runs inside the sandbox is computed again; what came from outside is read from the history. To rebuild a run, an
+executor starts the code from the beginning with the run's input and seed. Each `await` that has a recorded outcome
+returns it immediately. When the code reaches the end of the history, it continues live.
+
+This is how a run survives a crash, a deploy, or ten days of `sleep`: nothing but the history is needed. Each node
+keeps recently active runs in memory, so most steps need no replay at all; replay is what makes losing that memory
+harmless.
+
+It also means that **any run can be re-executed**, anywhere, with the same result:
+
+- `rewind replay <run>` re-executes a run locally and checks that it matches its history.
+- `rewind replay <run> --code fixed.ts` tells whether corrected code is compatible with that history, and if not,
+  where it diverges.
+
+## Forks: fix a run without repeating its effects
+
+A **fork** is a new run started from an existing one, its **source**, with corrected code. Rewind replays the new code
+against the source's history: while its calls match the source's, the recorded results are reused and **no action is
+called again**. At the first difference, or at the end of the source's history, the fork continues live.
+
+An agent fixes step 7 of a failed run without redoing the side effects of steps 1 to 6. The model does it with the
+agent tool `retry_run`; your code with [`runs.fork`](/sdk/runs#fork-a-run-with-corrected-code).
+
+```ts
+const fixed = await rewind.runs.fork(failed.id, { code: correctedCode, wait: "30s" });
+```
+
+A fork keeps its source's seed, input, action set, secrets and namespace, and has its own id and TTL. Its corrected
+code does not become a version of the source's workflow: the fork is a run of the workflow its code already is in the
+namespace, or of a new one.
+
+## Tests from real runs
+
+A run's calls and signals become the world of a test, which answers each call with what the real action answered, in
+virtual time, without calling anything. A workflow records tests from its runs this way, one per path they took. See
+[Testing](/sdk/testing#test-against-a-real-run).
+
+```ts
+const cassette = await rewind.runs.export(run.id, { as: "cassette" });
+```
+
+## Logical time
+
+Inside a workflow, `Date.now()` returns the time of the last trigger handed to the run: its start, an action's result,
+a timer, a signal. Time only moves when the outside world speaks, and it moves identically on replay. After
+`await sleep("10d")`, `Date.now()` is at least ten days after the start.
+
+In a test run, time is **virtual**: the clock jumps straight to the next timer, so a ten-day workflow runs in
+milliseconds.
+
+## Determinism epochs
+
+A replay only works if the code computes exactly what it computed the first time. The code cannot be
+non-deterministic: the sandbox controls time, randomness and every input. What can change is Rewind itself: a new V8,
+a new version of the `rewind` library, a new sandbox global.
+
+These components are versioned together by one number, the **determinism epoch**, recorded in each run. A build of
+Rewind keeps the versions of every epoch that may still have live runs, and CI replays a corpus of recorded histories
+for each one.
+
+If a replay ever diverges from its history, that is a fault of the platform, never of the code. The run is not
+failed: it is **quarantined**, a `waiting` run, and an operator releases it after a fix, or gives up on it. Quarantined
+runs appear on the [Overview](/dashboard/overview) of the dashboard.
+
+## How a run ends
+
+| The code | The run |
+| --- | --- |
+| `main` returns | `completed`, with the returned value as output |
+| `main` throws, or a promise is rejected without a handler | `failed`, with the error, its line and code frame |
+| Waits for nothing that can still happen (no call, timer or signal pending) | `failed` with `DeadlockError` |
+| Is cancelled | `cancelled`: every pending `await` rejects with `CancelledError`, and the code gets one grace step to clean up |
+| Exceeds a limit (CPU per call, heap, history length) | `aborted` |
+| Reaches its deadline (TTL, 30 days by default) | `cancelled` with the reason `ttl` |
+
+Until then the run is **active**: `queued` before its first step is committed, `running` while a step is in progress
+or Rewind is making one of its calls, and `waiting` when nothing Rewind does can move it until something arrives.
+
+A run never ends while a call is in flight: a forgotten `await` still lets the call finish and records its outcome. So
+when a run ends by itself, every call it made has a recorded outcome, which is what lets a fork know which effects
+happened.

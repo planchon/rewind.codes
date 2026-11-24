@@ -38,16 +38,17 @@ A role is a set of permissions. The built-in roles never change; your organizati
 | Built-in role | For |
 | --- | --- |
 | `owner` | Every permission: administers the organization |
-| `harness` | A harness and its agent tools: runs, toolsets, secrets, tasks, subscriptions, namespaces and tokens |
-| `worker` | A host-tool worker only: `tasks:work` |
-| `reader` | Reading runs, toolsets, the secrets' metadata, subscriptions, members and roles: a dashboard |
+| `harness` | A harness and its agent tools: runs, action sets, workflows, secrets, calls, subscriptions, namespaces and tokens |
+| `worker` | A worker of harness actions only: `calls:work` |
+| `reader` | Reading runs, workflows, action sets, the secrets' metadata, subscriptions, members and roles: a dashboard |
 
 | Permissions | Allow |
 | --- | --- |
-| `runs:read`, `runs:start`, `runs:control`, `runs:quarantine`, `runs:delete` | Reading runs; starting them; signalling, cancelling and forking them; releasing them from quarantine; erasing them |
-| `toolsets:read`, `toolsets:write` | Reading and registering toolsets and workflows |
-| `secrets:read`, `secrets:write`, `secrets:use` | Listing the [secrets](/dashboard/secrets) and their usage (never a value) and the signing keys; putting and deleting secrets; attaching an organization's secret to a run or a workflow |
-| `tasks:work`, `tasks:approve` | Executing host tools; approving and rejecting calls |
+| `runs:read`, `runs:start`, `runs:control`, `runs:quarantine`, `runs:delete` | Reading runs and workflows; starting and forking runs, checking and testing code; signalling and cancelling them; releasing them from quarantine; erasing them |
+| `actions:read`, `actions:write` | Reading action sets and searching their actions; registering action sets |
+| `workflows:write` | Creating workflows; naming, describing and versioning them, adding tests; promoting, forking and pulling them |
+| `secrets:read`, `secrets:write`, `secrets:use` | Listing the [secrets](/dashboard/secrets) and their usage (never a value) and the signing keys; putting and deleting secrets; naming an organization's secret for a run or a workflow version to use |
+| `calls:work`, `calls:approve` | Answering the calls of harness actions; approving and rejecting calls |
 | `subscriptions:read`, `subscriptions:write` | Webhook subscriptions |
 | `namespaces:read`, `namespaces:write`, `tokens:write` | The end users: reading them; their limits and erasure; minting and revoking their tokens |
 | `members:read`, `members:invite`, `members:manage` | The members: reading, inviting, changing and removing them |
@@ -70,7 +71,7 @@ before you close the panel.
 **Revoke** refuses the key from then on.
 
 <Tip>
-  Give each process the smallest role it needs: `harness` for your backend, `worker` for a host-tool worker, a key
+  Give each process the smallest role it needs: `harness` for your backend, `worker` for a worker, a key
   limited to an agent's labels for that agent's tools. End users' agents get [tokens](/sdk/end-users#tokens), not keys.
 </Tip>
 
@@ -106,4 +107,5 @@ removes their connections from the organization too.
 
 ## Settings
 
-The organization's name, and the default role of the people who join it.
+The organization's name, its **Organization id** (what `rewindIssuer` and the operator's `organizationId` take), and the
+default role of the people who join it.

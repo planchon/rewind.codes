@@ -1,15 +1,16 @@
 ---
 title: "What is Rewind"
-description: "Your model writes one TypeScript script that calls your tools. Rewind runs it durably, and remembers every step."
+description: "Your model writes one TypeScript workflow that calls your actions. Rewind runs it durably, and records every step in its history."
 ---
 
-Rewind is a runtime for **programmatic tool calling**, built for the developers of agent harnesses. Instead of
-calling your tools one at a time through the conversation, the model writes a TypeScript script that calls them: your
-MCP servers, your own functions, other workflows. Rewind type-checks the script against your tools, runs it in a
-deterministic V8 sandbox, and records every interaction with the outside world in a **journal**.
+Rewind runs durable workflows written by a model, built for the developers of agent harnesses. Instead of calling your
+tools one at a time through the conversation, the model writes a **workflow**: TypeScript code that calls your
+**actions**, the tools of your MCP servers, the operations of your APIs, your own functions and other workflows.
+Rewind type-checks the code against your actions, runs it in a deterministic V8 sandbox, and records every interaction
+with the outside world in the run's **history**.
 
 ```ts The model writes this
-import { github, slack } from "rewind:tools";
+import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -29,56 +30,57 @@ export default async function main(input: { repo: string }) {
 }
 ```
 
-One script, one tool call from the model's point of view. It lists the issues, filters them in code, waits three days
+One workflow, one tool call from the model's point of view. It lists the issues, filters them in code, waits three days
 for a human, closes the stale ones in parallel, sleeps ten days and checks again. Only the last line comes back into
 the model's context.
 
-## Everything comes from the journal
+## Everything comes from the history
 
-Every tool call, timer, signal and log line is an entry in the run's journal, linked to the line of TypeScript that
-caused it. The journal is the only source of truth: every feature of Rewind is derived from it.
+Every call, timer, signal and log line is an event of the run's history, linked to the line of TypeScript that caused
+it. The history is the only source of truth: every feature of Rewind is derived from it.
 
 <Columns cols={2}>
   <Card title="Durable execution" icon="hourglass">
-    `await sleep("10d")` or wait for a signal. The run survives crashes and deploys, and resumes by re-executing the
-    script against its journal.
+    `await sleep("10d")` or wait for a signal. The run survives crashes and deploys, and resumes by re-executing its
+    code against its history.
   </Card>
   <Card title="Replay" icon="rewind">
-    Any run re-executes from its journal with identical results. Fix a failed run with a fork: the calls it already
+    Any run re-executes from its history with identical results. Fix a failed run with a fork: the calls it already
     made are not made again.
   </Card>
   <Card title="Testing" icon="flask-conical">
-    A recorded run becomes a cassette of mocks. Time is virtual, so a ten-day workflow is tested in milliseconds.
+    A recorded run becomes a test that answers its calls as the real world did. Time is virtual, so a ten-day workflow
+    is tested in milliseconds.
   </Card>
   <Card title="Observability" icon="activity">
-    OpenTelemetry traces projected from the journal, and a dashboard of every run and all the code executed, with a
-    debugger that steps through each run.
+    OpenTelemetry traces projected from the history, and a dashboard of every run and every workflow, with a debugger
+    that steps through each run.
   </Card>
 </Columns>
 
 ## Who it is for
 
 Rewind is for teams that build agents: a coding agent, a support agent, an operations agent, any product where a model
-calls tools for your users. Your harness keeps its model loop and its prompts. It adds Rewind through the
-[TypeScript SDK](/sdk/overview) (or the HTTP API `/v1`), and gives the model a few ready-made tools: `run_script`,
+acts for your users. Your harness keeps its model loop and its prompts. It adds Rewind through the
+[TypeScript SDK](/sdk/overview) (or the HTTP API `/v1`), and gives the model a few ready-made tools: `run_workflow`,
 `get_run`, `signal_run`, `retry_run` and others.
 
-Each of your users gets a [namespace](/concepts/end-users): their runs, scripts, secrets and quotas, isolated from
+Each of your users gets a [namespace](/concepts/end-users): their runs, workflows, secrets and quotas, isolated from
 everyone else's.
 
 ## Where to go next
 
 <Columns cols={2}>
   <Card title="Quickstart" icon="rocket" href="/quickstart">
-    Register a toolset, run a script and read its result in five minutes.
+    Register an action set, run a workflow and read its result in five minutes.
   </Card>
   <Card title="Why Rewind" icon="lightbulb" href="/why-rewind">
     What changes when the model writes code instead of calling tools one by one.
   </Card>
   <Card title="How it works" icon="workflow" href="/concepts/how-it-works">
-    The harness, the API, the nodes and the journal, end to end.
+    The harness, the API, the nodes and the history, end to end.
   </Card>
-  <Card title="The dashboard" icon="layout-dashboard" href="/dashboard/introduction">
-    Every run, all the code executed, and a debugger that steps through history.
+  <Card title="Glossary" icon="book-a" href="/glossary">
+    Every word Rewind uses, in one place, with the page that explains it.
   </Card>
 </Columns>

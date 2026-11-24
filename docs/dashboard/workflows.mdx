@@ -1,0 +1,96 @@
+---
+title: "Workflows"
+description: "Every workflow of your organization and of its namespaces, with its runs and actions; each workflow's versions, code, interface and suite, and every test on its own page."
+---
+
+Workflows lists every [workflow](/concepts/workflows) of your organization and of its namespaces, the most recently
+run first. It needs `runs:read`.
+
+<Frame>
+  <img src="/images/dashboard/scripts-light.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="block dark:hidden" />
+  <img src="/images/dashboard/scripts-dark.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="hidden dark:block" />
+</Frame>
+
+Each row shows the workflow as it is shown everywhere, its scope (its namespace, or the organization), its runs in the
+window and their outcomes, the actions it called, and when it last and first ran. A workflow shows as its name, else
+the first line of the comment at the top of its latest version's code, else its short id (`wf-7k2m9q`); hover it for
+its id and its code's digest.
+
+```ts
+/**
+ * Triage new GitHub issues
+ *
+ * Labels each new issue, and asks for an approval before closing a duplicate.
+ */
+import { github } from "rewind:actions";
+```
+
+Your agents write that comment when they write the code; the rest of it is the workflow's description until one is
+given.
+
+Search with the same query bar as the runs, over a window (the last hour, 24 hours, 7 or 30 days), which reads an end
+user and an action here: `namespace:alice` shows the workflows of Alice's namespace and the organization's workflows
+her runs executed, counted over her runs only; `action:github.close_issue` the workflows that closed issues. Click an
+action in a row to add it to the query. An end user's page opens the same list with **See its workflows**. The counts
+come from hourly counters, which carry no labels: the counts are not available to a member limited to labels.
+
+## A workflow
+
+A workflow's page, at `/workflows/<id>`, has a sidebar of its own: its versions, the suite of the version you are
+looking at, each test a click away, and that version's details (when it was made, the version it derives from, its
+code's digest, its action set, the secrets its runs use and its labels).
+
+It opens on the latest version. The breadcrumb names it, `Workflows / triage / v12`: click the version to switch to
+another one, each with the size of its suite. The page shows the version's **code**, its **interface** (its input,
+output and signal schemas) and its **suite**, the tests it passed when it was made, as a table:
+
+| Column | What |
+| --- | --- |
+| **Test** | Its name, a link to its page, and how it joined the suite: **inherited** from the version before as it was, **added** by this version (written by hand or [recorded from a run](/sdk/workflows#record-tests-from-runs), a link to that run), or **updated**, with the test it replaces and why |
+| **Input** | The run's input |
+| **Expects** | How the run must end: its status, and what its output must contain or the error it fails with |
+| **Calls** | How many calls the test checks, and how many must never happen |
+| **World** | Its rules, handlers, cassette and signals |
+
+The tests the version **retired** follow, each with the reason given. The reasons are what changed on purpose: read
+them before you change a behavior a test pins.
+
+The page does not show test results: every test of a suite passed when it joined it.
+
+A fork shows its **source**, the organization's workflow it copies, and the version it last pulled.
+
+## Name, promote, fork, pull
+
+For whoever holds `workflows:write`, the workflow's header holds its controls:
+
+- **Name** and **describe** it: the workflow keeps its id and its versions, and the handles of its past runs keep
+  theirs.
+- **Promote** a namespace's workflow to the organization: every namespace's runs may then execute it.
+- **Fork** an organization's workflow into a namespace you pick, to change it for that end user: the fork keeps the
+  workflow's name, so that namespace's runs that name it get the fork.
+- **Pull** into a fork its source's latest version, which becomes the fork's next version once the fork's own suite
+  passes.
+
+## A test
+
+Each test has its own page, at `/workflows/<id>/tests/<digest>`, in the suite of a version. The breadcrumb switches the
+version (to the test of the same name in that version, or to the version itself when it has none) and the test;
+previous and next go through the suite. The page says where the test stands in the suite and why it changed; for an
+updated test, the test it replaced opens in the suite of the version before. Then:
+
+- **Input** and **expected output**: what the run begins with, and what its output must contain.
+- **World**: the rules each action answers with (the args they match, what they return or the error, how many times),
+  the handlers, and the cassette (its calls and signals).
+- **Signals**: the signals sent to the run, and when.
+- **Expectations**: the status, the output or the error, and the calls that must or must not happen.
+- **Run**: its start and seed, and for a recorded test the run it was recorded from, which opens on its
+  [Run](/dashboard/run) page.
+
+Every JSON value opens whole, colored, in a dialog, with a copy button; **JSON** opens the whole test document. Its
+objects and arrays fold: click the arrow beside one, or fold and unfold them all from the dialog's header.
+
+A recorded test holds its run's data, so it is read like the run: it needs `runs:read` in the namespace it was recorded
+from. When you cannot read it, the page says so in place of the document.
+
+Use Workflows to see what your models actually write: which workflows run most, which fail, which actions they reach
+for, and what each version promises through its suite.

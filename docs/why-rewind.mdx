@@ -1,6 +1,6 @@
 ---
 title: "Why Rewind"
-description: "What changes when the model writes a script instead of calling tools one at a time, and why that script needs a durable, deterministic runtime."
+description: "What changes when the model writes a workflow instead of calling tools one at a time, and why that workflow needs a durable, deterministic runtime."
 ---
 
 ## The problem with one tool call at a time
@@ -20,47 +20,47 @@ call a new turn. That has costs that grow with the task:
 
 <Steps>
   <Step title="The model writes the whole procedure">
-    One script calls every tool the task needs, with loops, `Promise.all`, filters and error handling written in
+    One workflow calls every action the task needs, with loops, `Promise.all`, filters and error handling written in
     TypeScript. Only its output goes back into the context, bounded to 256 KiB, with a call that reads the rest.
   </Step>
   <Step title="Rewind checks it before it runs">
-    Your tools are compiled into TypeScript declarations. The script is type-checked against them in strict mode, so
+    Your actions are compiled into TypeScript declarations. The code is type-checked against them in strict mode, so
     `github.list_issues({ repo: 42 })` is refused with a diagnostic written for the model, before any run exists.
   </Step>
   <Step title="The run is durable">
-    A script can `await sleep("10d")` or wait for a signal for days. Nothing holds it in memory meanwhile: when the
-    awaited event arrives, Rewind rebuilds the run from its journal and continues. Crashes and deploys are harmless.
+    A workflow can `await sleep("10d")` or wait for a signal for days. Nothing holds it in memory meanwhile: when what
+    it waits for arrives, Rewind rebuilds the run from its history and continues. Crashes and deploys are harmless.
   </Step>
   <Step title="Every run can be replayed, tested and debugged">
-    The journal is enough to re-execute a run locally, to turn it into a test fixture, to step through it in the
-    dashboard, or to fork it with a corrected script that does not repeat the calls already made.
+    The history is enough to re-execute a run locally, to turn it into a test, to step through it in the dashboard, or
+    to fork it with corrected code that does not repeat the calls already made.
   </Step>
 </Steps>
 
 ## Deterministic by construction
 
-Replaying a run only works if the script computes the same thing every time. Workflow engines ask developers to keep
+Replaying a run only works if the code computes the same thing every time. Workflow engines ask developers to keep
 their code deterministic, and to version it when it changes. Rewind owns the runtime, so it guarantees determinism
 itself:
 
 - `Date.now()`, `new Date()` and `performance.now()` return **logical time**, which only moves when the outside world
   speaks, identically on replay.
 - `Math.random()` and `crypto.randomUUID()` are seeded per run.
-- There is no file system, no network outside your tools, no environment, nothing that could differ between two
+- There is no file system, no network outside your actions, no environment, nothing that could differ between two
   executions.
-- Scripts are immutable and content-addressed: a run always replays the exact script it started with, so there is no
-  workflow versioning problem.
+- Code is immutable and content-addressed: a run always replays the exact code it started with, and a new version of
+  its workflow never changes it.
 
-What still changes is Rewind itself, and a [determinism epoch](/concepts/journal#determinism-epochs) versions it.
+What still changes is Rewind itself, and a [determinism epoch](/concepts/history#determinism-epochs) versions it.
 
 ## Built for products with many users
 
-- **Namespaces.** Each end user of your product has one: their runs, scripts, secrets and use, invisible to
-  everyone else. An agent acting for one user holds a token of their namespace only.
-- **Quotas.** Active runs, runs and CPU per month, distinct scripts, the longest TTL and script, per end user, so one
-  user cannot exhaust your platform.
-- **Permission gates.** A tool with the `approval` policy waits for your harness before each call. Scripts never see
-  a secret: a run attaches secrets by name at start, and only the dispatcher reads them.
+- **Namespaces.** Each end user of your product has one: their runs, workflows, secrets and use, invisible to everyone
+  else. An agent acting for one end user holds a token of their namespace only.
+- **Quotas.** Active runs, runs and CPU per month, distinct workflows, the longest TTL and the longest code, per end
+  user, so one end user cannot exhaust your platform.
+- **Permission gates.** An action with the `approval` policy waits for your harness before each call. Workflows never
+  see a secret: a run names the secrets it uses at start, and only the dispatcher reads them.
 - **Calls your backend can trust.** Rewind signs each call to your own APIs with your organization's key, naming the
   end user: your backend checks it with [`verifyRewindCall`](/sdk/signed-calls), and Rewind keeps no secret of yours.
 
@@ -69,17 +69,17 @@ What still changes is Rewind itself, and a [determinism epoch](/concepts/journal
 |  | Tools through the conversation | A code sandbox | A workflow engine | Rewind |
 | --- | --- | --- | --- | --- |
 | Who writes the procedure | The model, one call per turn | The model | Your engineers, deployed ahead of time | The model |
-| Calls your MCP servers and functions | Yes | You wire them in | Through activities you write | Yes: typed `rewind:tools` |
-| Checked before it runs | Schema per call | Rarely | At build time | Type-checked against your tools |
+| Calls your MCP servers, APIs and functions | Yes | You wire them in | Through activities you write | Yes: typed `rewind:actions` |
+| Checked before it runs | Schema per call | Rarely | At build time | Type-checked against your actions |
 | Waits days, survives restarts | No | No | Yes | Yes |
 | Determinism | Not applicable | Not guaranteed | By developer discipline | By construction |
-| Replay, cassettes, forks | No | No | Replay | Yes |
+| Replay, recorded tests, forks | No | No | Replay | Yes |
 | Isolation per end user | Yours to build | Yours to build | Yours to build | Namespaces, tokens, quotas |
 
 ## When Rewind is not the right tool
 
 - A single tool call answers the task: calling the tool directly is simpler.
-- The script needs a file system, a shell or npm packages. A script imports only `rewind`, `rewind:tools` and
-  `rewind:workflows`. Give it a tool that does the work instead: a host tool runs anywhere you want.
-- Heavy computation. Each call into a script has a CPU budget (5 seconds by default), and its heap is bounded
-  (128 MiB by default). Scripts orchestrate; tools compute.
+- The code needs a file system, a shell or npm packages. A workflow imports only `rewind`, `rewind:actions` and
+  `rewind:workflows`. Give it an action that does the work instead: a harness action runs anywhere you want.
+- Heavy computation. Each call into a workflow's code has a CPU budget (5 seconds by default), and its heap is bounded
+  (128 MiB by default). Workflows orchestrate; actions compute.

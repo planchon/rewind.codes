@@ -36,8 +36,8 @@ after its release.
     ```
 
     The server listens on `127.0.0.1:8080`. It is one node: it serves the API and the dashboard, owns the one
-    partition its runs live in, and runs their scripts. It keeps the control plane (organizations, keys, toolsets,
-    workflows, secrets) in `data/control.db`, and the runs in the directory next to it: the partition, the journals of
+    partition its runs live in, and runs their workflows. It keeps the control plane (organizations, keys, action sets,
+    workflows, secrets) in `data/control.db`, and the runs in the directory next to it: the partition, the archive of
     ended runs and the large payloads.
   </Step>
   <Step title="Point the SDK at it">
@@ -60,9 +60,9 @@ edge, which serves the API, the dashboard and `/mcp`, and a **node**, which runs
 
 | Piece | Holds |
 | --- | --- |
-| Postgres (`--store postgres://…`) | The control plane only: organizations, keys, roles, end users, toolsets, workflows, secrets, subscriptions, and which node owns which partition. It never holds a run |
-| A bucket on AWS S3 or any S3-compatible service (`--bucket s3://…`) | The runs: the partitions, the archive of the journals of ended runs, and the payloads above 64 KiB |
-| The nodes | Nothing of their own: each holds some partitions while it lives, runs their scripts, sends their tool calls and fires their timers |
+| Postgres (`--store postgres://…`) | The control plane only: organizations, keys, roles, end users, action sets, workflows, secrets, subscriptions, and which node owns which partition. It never holds a run |
+| A bucket on AWS S3 or any S3-compatible service (`--bucket s3://…`) | The runs: the partitions, the archive of ended runs, and the payloads above 64 KiB |
+| The nodes | Nothing of their own: each holds some partitions while it lives, runs their workflows, sends their calls and fires their timers |
 
 - **Partitions.** The runs of a deployment are spread over 64 partitions (`--partitions`). Every run of an end user
   lives in the partition of its namespace. One node owns each partition at a time; the nodes share them out, and a
@@ -102,9 +102,9 @@ limit, and let it reach the outside only through an egress proxy. Two options ch
 | --- | --- |
 | `rewind server` | The HTTP edge, the owners of its partitions, and executors |
 | `rewind server --executors-only` | Executors only: the activations other nodes send it, for the determinism epochs of its build. No HTTP route but the node link |
-| `rewind server --pool <name>` | A pool of executors of its own, for an organization that needs one: the owners send that organization's activations there, as `--tenant-pool <organization>=<name>` given to every node says. The other organizations share the default pool |
+| `rewind server --pool <name>` | A pool of executors of its own, for an organization that needs one: the owners send that organization's activations there, as `--organization-pool <organization>=<name>` given to every node says. The other organizations share the default pool |
 
-After an upgrade that changes the [determinism epoch](/concepts/journal#determinism-epochs), keep a few nodes of the
+After an upgrade that changes the [determinism epoch](/concepts/history#determinism-epochs), keep a few nodes of the
 previous build up with `--executors-only`: the runs of that epoch are executed there, until they end, at their TTL
 (`--max-ttl`, 365 days at most).
 
@@ -128,21 +128,21 @@ Every option of `rewind server` also reads an environment variable. `rewind serv
 | `--node-id` | `REWIND_NODE_ID` | This node's id, letters, digits, `-`, `_` and `.`: the host name and the process id by default |
 | `--executors-only` | `REWIND_EXECUTORS_ONLY` | Run the activations other nodes send, and own no partition ([sandboxed nodes](#sandboxed-nodes-and-pools)) |
 | `--pool` | `REWIND_POOL` | The pool of executors this node belongs to; the shared pool without it |
-| `--tenant-pool` | `REWIND_TENANT_POOLS` | An organization whose activations run on a pool of its own, `<organization>=<pool>`; repeat it, or separate pairs with commas. Give every node the same list: while the pool has no node, that organization's runs wait |
+| `--organization-pool` | `REWIND_ORGANIZATION_POOLS` | An organization whose activations run on a pool of its own, `<organization>=<pool>`; repeat it, or separate pairs with commas. Give every node the same list: while the pool has no node, that organization's runs wait |
 | `--executors` | `REWIND_EXECUTORS` | Activations run at once on this node: the machine's cores by default |
-| `--calls` | `REWIND_CALLS` | Tool calls this node sends at once: 256 by default |
+| `--calls` | `REWIND_CALLS` | Calls this node sends at once: 256 by default |
 | `--master-key` | `REWIND_MASTER_KEY` | 32 random bytes in base64. Required |
 | `--previous-master-keys` | `REWIND_PREVIOUS_MASTER_KEYS` | Master keys replaced, which only decrypt: while [rotating the master key](#rotate-the-master-key) |
-| `--admin-key`, `--admin-tenant` | `REWIND_ADMIN_KEY`, `REWIND_ADMIN_TENANT` | The first API key, registered at start, and its organization (`default`) |
-| `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, scripts cannot get a `webhook(name)` URL, and `/mcp` has no OAuth sign-in |
-| `--retention` | `REWIND_RETENTION` | How long an ended run (its summary, its journals, its payloads) is kept, for the organizations this server creates: 365 days by default |
+| `--admin-key`, `--admin-organization` | `REWIND_ADMIN_KEY`, `REWIND_ADMIN_ORGANIZATION` | The first API key, registered at start, and its organization (`default`) |
+| `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, workflows cannot get a `signalUrl(name)` URL, and `/mcp` has no OAuth sign-in |
+| `--retention` | `REWIND_RETENTION` | How long an ended run (its summary, its history, its payloads) is kept, for the organizations this server creates: 365 days by default |
 | `--default-ttl`, `--max-ttl` | `REWIND_DEFAULT_TTL`, `REWIND_MAX_TTL` | The TTL of a run started without one (30 days), and the longest one a run may ask for (365 days) |
-| `--cache-instances`, `--cache-memory` | `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | The scripts a node keeps in memory after their activation, so the next one needs no replay: 500 and `4GiB` by default |
+| `--cache-instances`, `--cache-memory` | `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | The runs a node keeps in memory after their activation, so the next one needs no replay: 500 and `4GiB` by default |
 | `--virtual-time`, `--real-time` | | Timers fire as soon as nothing else can advance, for tests and demos; kept until `--real-time`. A single node on Turso only |
-| `--allow-private-webhooks` | `REWIND_ALLOW_PRIVATE_WEBHOOKS` | Deliver lifecycle webhooks to private addresses and `http://`, for local development |
-| `--allow-internal-tools` | `REWIND_ALLOW_INTERNAL_TOOLS` | Let toolsets reach MCP servers and APIs on these internal hosts (`mcp.internal.example`, `*.svc.cluster.local`) or networks (`10.20.0.0/16`); never the whole private network. What such a server answers is never quoted to the tenant: an error gives its status, not its body |
-| `--allow-stdio` | `REWIND_ALLOW_STDIO` | Accept toolsets with stdio MCP servers: processes the server starts |
-| `--quota-*` | `REWIND_QUOTA_*` | The ceiling of the tenants this server creates: active runs, runs and CPU per month, scripts, TTL, script length |
+| `--allow-private-webhooks` | `REWIND_ALLOW_PRIVATE_WEBHOOKS` | Post webhooks to private addresses and `http://`, for local development |
+| `--allow-internal-tools` | `REWIND_ALLOW_INTERNAL_TOOLS` | Let action sets reach MCP servers and APIs on these internal hosts (`mcp.internal.example`, `*.svc.cluster.local`) or networks (`10.20.0.0/16`); never the whole private network. What such a server answers is never quoted to the organization: an error gives its status, not its body |
+| `--allow-stdio` | `REWIND_ALLOW_STDIO` | Accept action sets with stdio MCP servers: processes the server starts |
+| `--quota-*` | `REWIND_QUOTA_*` | The ceiling of the organizations this server creates: active runs, runs and CPU per month, workflows (`--quota-workflows`), TTL, the longest code (`--quota-max-code-lines`) |
 | `--otlp-endpoint`, `--otlp-protocol` | `REWIND_OTLP_ENDPOINT`, `REWIND_OTLP_PROTOCOL` | Export traces, metrics and logs over OTLP, `http` (the default) or `grpc` |
 | `--log` | `REWIND_LOG` | What is logged on standard error, as `RUST_LOG` writes it: `info` by default |
 
@@ -192,10 +192,29 @@ per run and exits 0 once every run moved, 70 when one did not (`legacy` is kept 
 already moved is skipped. A moved run keeps its id. `--blobs` (`REWIND_BLOBS`) says where the server kept its blobs
 before, a directory or `s3://<bucket>`: the bucket by default.
 
-A task that was handed to a worker before the move is handed again, as its next attempt: its old token is refused.
+A call that was handed to a worker before the move is handed again, as its next delivery: its old token is refused.
 
 The embedded server moves its directory's runs the same way: `rewind server migrate-runs --embedded` in the project,
-once; `rewind` refuses to start the embedded server on a `.rewind/` that still holds a `journal.db`.
+once; `rewind` refuses to start the embedded server on a `.rewind/` that still holds runs of the previous design.
+
+## Rewrite the stored names
+
+The release that gave Rewind the words of these pages (workflows, action sets, histories, events, deliveries…) rewrites
+the stored data once, in place: the format and the API version do not change. Stop every node, then run, once, with
+the nodes' variables:
+
+```bash
+rewind server rename-data
+```
+
+It rewrites the partitions and the archive in the bucket, the control plane, the roles' and tokens' permissions and
+the webhook subscriptions, recomputes the digest of each pinned action set and workflow version and rewrites every
+reference to it, and gives every workflow its id and its scope. Workflow names and version numbers (`triage`,
+`triage@v12`) keep naming what they named; an old digest no longer resolves. Then start the new build. Rehearse it
+first on a copy of your Postgres database and bucket.
+
+Code already written keeps running and replaying, and so do the runs waiting on it; signal URLs, call tokens and run
+handles already handed out keep working.
 
 ## Production
 
@@ -213,9 +232,9 @@ docker compose up -d --build    # builds the image from the repository
 | Piece | Role |
 | --- | --- |
 | An edge proxy | The only published port, in front of the nodes' API |
-| The nodes | `rewind server`, each the HTTP API, the dashboard and each organization's public keys (`/organizations/{tenant}/jwks.json`, without authentication), and a node: the owners of its partitions, script execution, tool calls (with the secrets the runs attach, and the signature of signed calls), timers, webhooks. Their only way out is the egress proxy |
+| The nodes | `rewind server`, each the HTTP API, the dashboard and each organization's public keys (`/organizations/{organization}/jwks.json`, without authentication), and a node: the owners of its partitions, the execution of workflows, calls (with the secrets the runs use, and the signature of signed calls), timers, webhooks. Their only way out is the egress proxy |
 | The egress proxy | Forwards the nodes' traffic to the addresses of allowed names only |
-| Postgres | The control plane: organizations, keys, toolsets, workflows, the encrypted secrets, the partitions' owners |
+| Postgres | The control plane: organizations, keys, action sets, workflows, the encrypted secrets, the partitions' owners |
 | MinIO | The bucket: the partitions, the archive and the large payloads (S3 or any S3-compatible service in your platform) |
 | An OpenTelemetry Collector | Traces, metrics and logs of the nodes |
 
@@ -235,7 +254,7 @@ Claude as [Use Rewind from Claude](/claude) explains, with your URL. Every node 
     --header "Authorization: Bearer $REWIND_ADMIN_KEY"
   ```
 
-  Then ask Claude Code to list your organizations, check a script or run one. A key acts with its role in its
+  Then ask Claude Code to list your organizations, check a workflow or run one. A key acts with its role in its
   organization; give a key of its own to each client, with the least role that works.
 - **With each person's own sign-in.** Claude's connectors and Claude Code sign in through Rewind's OAuth, which needs
   `--public-url` and [WorkOS](https://workos.com) for the dashboard's sign-in and the consent page: `WORKOS_API_KEY`,
@@ -248,5 +267,5 @@ Claude as [Use Rewind from Claude](/claude) explains, with your URL. Every node 
 
 The `rewind` CLI also starts a server of its own for local work, on demand, in a `.rewind/` directory: one node with
 one partition, the same code as a deployment's, on local files, with its API on a unix socket and no key.
-`rewind run script.ts` uses it when no `--url` is given. It stops after 10 minutes without work; a sleeping run resumes
-at the next command. See [the CLI](/sdk/cli#the-embedded-server).
+`rewind run workflow.ts` uses it when no `--url` is given. It stops after 10 minutes without work; a sleeping run
+resumes at the next command. See [the CLI](/sdk/cli#the-embedded-server).

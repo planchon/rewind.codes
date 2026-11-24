@@ -3,12 +3,12 @@ title: "Signed calls"
 description: "Your own APIs and MCP servers check that a call comes from Rewind, and for which end user, with verifyRewindCall: no secret of yours stored in Rewind."
 ---
 
-With `auth: { type: "rewind" }` on an API or an MCP server of a [toolset](/sdk/toolsets#how-calls-prove-who-calls),
+With `auth: { type: "rewind" }` on an API or an MCP server of an [action set](/sdk/action-sets#how-calls-prove-who-calls),
 Rewind signs each request with your organization's Ed25519 key. Your server checks the signature with the public key,
 and learns the end user from the signature, not from an argument the model wrote. Rewind keeps no secret of yours.
 
 ```ts
-const toolset = await rewind.toolsets.create({
+const actionSet = await rewind.actionSets.create({
   apis: [{ name: "dax", openapi: "https://api.dax.example/openapi.json", auth: { type: "rewind" } }],
 });
 ```
@@ -23,9 +23,9 @@ const toolset = await rewind.toolsets.create({
 | `aud` | The API's `baseUrl`, or the MCP server's URL |
 | `sub` | The run's namespace: the end user the call acts for |
 | `labels` | The run's labels |
-| `run`, `tool` | The run's id, and the tool called (`dax.createMeasure`) |
-| `idempotency_key` | `{run_id}/{seq}`: the same on every attempt of the call |
-| `jti` | `{run_id}/{seq}/{attempt}`: one per request |
+| `run`, `action` | The run's id, and the action called (`dax.createMeasure`) |
+| `idempotency_key` | `{run_id}/{seq}`: the same on every delivery of the call |
+| `jti` | `{run_id}/{seq}/{delivery}`: one per request |
 | `htm`, `htu`, `body` | The method, the URL, and the SHA-256 of the body in base64url (absent without a body) |
 | `iat`, `exp` | Now, and 60 seconds later |
 
@@ -40,13 +40,14 @@ const toolset = await rewind.toolsets.create({
 - `htm`, `htu` and `body` match the request: a JWT replayed on another method, URL or body is refused;
 - the run carries `labels`, when you give them.
 
-It answers `{ namespace, labels, run, tool, idempotencyKey }`, or throws a `RewindSignatureError` whose `check` names
+It answers `{ namespace, labels, run, action, idempotencyKey }`, or throws a `RewindSignatureError` whose `check` names
 what failed (`signature`, `kid`, `iss`, `aud`, `exp`, `iat`, `htm`, `htu`, `body`, `labels`, `token`). Answer it with a
 **401**: Rewind parks the call. When the public keys cannot be fetched, it throws a `RewindConnectionError`: answer a
-**503**, which Rewind retries.
+**503**, which Rewind treats as a transient failure and delivers again.
 
-Your issuer is in the dashboard, under Organization › [Signing keys](/dashboard/organization#signing-keys), and in
-`(await rewind.signingKeys.list()).issuer`.
+Your issuer is in the dashboard, under Organization › [Signing keys](/dashboard/organization#signing-keys), in
+`(await rewind.signingKeys.list()).issuer`, and `rewindIssuer(url, organizationId)` builds it from your server's URL and
+your organization's id.
 
 <Tabs>
   <Tab title="Fetch (Hono, Next.js, Bun)">
@@ -144,16 +145,16 @@ Your issuer is in the dashboard, under Organization › [Signing keys](/dashboar
   path and query), as above; a URL rewritten on its way fails the `htu` check.
 - **The body is the raw bytes.** A body parsed as JSON cannot be hashed: keep the raw one (`express.raw()`,
   `express.json({ verify })`, NestJS's `rawBody: true`).
-- **`call.idempotencyKey`** is the same on every attempt of a call. Store it with the effect, and a call sent again
-  after a timeout does not act twice.
+- **`call.idempotencyKey`** is the same on every delivery of a call. Store it with the effect, and a call delivered
+  again after a timeout does not act twice.
 
 ## Check `labels` when environments share an organization
 
 One key signs every run of the organization, whatever its labels. When development and production share an
-organization, a key limited to `env=dev` may still register a toolset that names your production server, and its
+organization, a key limited to `env=dev` may still register an action set that names your production server, and its
 runs would reach it with a valid signature. Give your production server `labels: { env: "prod" }`: it then refuses the
 calls of every run not labelled `env=prod`. A run's labels are set by whoever starts it and by the key's grant, never
-by the script.
+by the workflow's code.
 
 ## Replays
 
@@ -163,8 +164,8 @@ already done for the same `idempotencyKey` if that matters to you.
 
 ## MCP servers
 
-Each HTTP request of an MCP session is signed. Those of a call carry `sub`, `labels`, `run`, `tool` and
-`idempotency_key`; the others (`initialize`, the listing of the tools when the toolset is registered) only `iss`,
+Each HTTP request of an MCP session is signed. Those of a call carry `sub`, `labels`, `run`, `action` and
+`idempotency_key`; the others (`initialize`, the listing of the tools when the action set is registered) only `iss`,
 `aud`, `jti`, `htm`, `htu`, `body`, `iat` and `exp`. Pass `session: true`: such a request is answered `null` rather than
 refused.
 

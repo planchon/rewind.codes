@@ -12,14 +12,14 @@ Your backend holds an API key and names the end user of each request:
 
 ```ts
 const asAda = rewind.namespace("user_ada");
-const run = await asAda.runs.start({ toolset: toolset.id, script, wait: "30s" });
+const run = await asAda.runs.start({ actionSet: actionSet.id, code, wait: "30s" });
 const runs = await asAda.runs.list({ status: "failed" }); // Ada's runs only
 ```
 
 ## Tokens
 
 An agent acting for one end user should hold a token of their namespace rather than your key: with it, the agent, and
-every script its model writes, reaches that namespace only.
+every workflow its model writes, reaches that namespace and your organization's workflows only.
 
 <Tabs>
   <Tab title="Minted by Rewind">
@@ -27,13 +27,13 @@ every script its model writes, reaches that namespace only.
     // In your backend, with your key:
     const { token, id } = await rewind.namespaces.tokens.create(user.id, {
       ttl: "1h", // 1 hour by default, 30 days at most
-      permissions: ["runs:read", "runs:start", "runs:control", "toolsets:read"], // the default
+      permissions: ["runs:read", "runs:start", "runs:control", "actions:read"], // the default
       labels: { conversation: conversation.id }, // optional: it then reaches only the runs carrying them
     });
 
-    // In the agent acting for that user:
-    const asUser = new Rewind({ url: process.env.REWIND_URL, token });
-    const agentTools = asUser.agentTools({ toolset: toolset.id });
+    // In the agent acting for that end user:
+    const asEndUser = new Rewind({ url: process.env.REWIND_URL, token });
+    const agentTools = asEndUser.agentTools({ actionSet: actionSet.id });
     ```
 
     The token, `rewind_nt_…`, is only in this answer.
@@ -64,13 +64,14 @@ every script its model writes, reaches that namespace only.
   </Tab>
 </Tabs>
 
-With a token, another end user's run answers 404:
+A token creates workflows only through the runs it starts: it never holds `workflows:write`, so it never names,
+versions, promotes or forks one. With a token, another end user's run or workflow answers 404:
 
 ```ts
 import { isProblem } from "@rewind.codes/sdk";
 
 try {
-  await asUser.runs.get(someoneElsesRun.id);
+  await asEndUser.runs.get(someoneElsesRun.id);
 } catch (error) {
   if (isProblem(error, "not-found")) console.log("not visible to this end user");
 }
@@ -103,19 +104,19 @@ await rewind.namespaces.rename("user_2fQ81", "Acme Corp");
 
 | Quota | Counts | Over it |
 | --- | --- | --- |
-| `activeRuns` | Runs not yet ended | Refused |
+| `activeRuns` | Runs not yet ended: queued, running or waiting | Refused |
 | `runsPerMonth` | Runs started this calendar month (UTC), forks included | Refused |
-| `cpuPerMonth` | CPU time of the end user's scripts this month, replays excluded | Never refused: alerts at 80 % and 100 % |
-| `scripts` | Distinct scripts | Refused |
+| `cpuPerMonth` | CPU time of the end user's runs this month, replays excluded | Never refused: alerts at 80 % and 100 % |
+| `workflows` | Distinct workflows with a run kept in the namespace, its own and the organization's | A run of a workflow that has none there is refused |
 | `maxTtl` | The longest TTL a run may ask for | Refused above it; the default TTL is lowered to it |
-| `maxScriptLines` | The longest script | Refused |
+| `maxCodeLines` | The longest code | Refused |
 
 A refused start throws `quota-exceeded`, whose `quota` says which limit, at which scope, its value, the use and when it
 frees. The agent tools return it to the model in words it can relay.
 
 ```ts
 try {
-  await rewind.namespace("user_erin").runs.start({ toolset: toolset.id, script });
+  await rewind.namespace("user_erin").runs.start({ actionSet: actionSet.id, code });
 } catch (error) {
   if (isProblem(error, "quota-exceeded")) console.log(error.quota);
   // { quota: "active_runs", scope: "namespace", limit: 0, used: 0 }
@@ -126,7 +127,7 @@ try {
 
 ```ts
 const ada = await rewind.namespaces.get("user_ada"); // limits, use per day, alerts, tokens in use
-ada.namespace.usage; // { cpu: "2ms", activeRuns: 0, runsStarted: 2, scripts: 2 }
+ada.namespace.usage; // { cpu: "2ms", activeRuns: 0, runsStarted: 2, workflows: 2 }
 
 const near = await rewind.namespaces.list({ above: 0.8, order: "runs" }); // at 80 % of a limit or more
 const { alerts } = await rewind.namespaces.alerts({ month: "2026-11" });
@@ -137,13 +138,14 @@ Crossing 80 % and 100 % of a limit also sends the webhook [`quota.alert`](/sdk/w
 ## Secrets and erasure
 
 ```ts
-// An end user's own secret (their GitHub token), which their runs attach as ns/github:
+// An end user's own secret (their GitHub token), which their runs use as ns/github:
 await rewind.namespaces.secrets.put(user.id, "github", { value: theirToken });
-await rewind.namespace(user.id).runs.start({ toolset: toolset.id, script, secrets: { github: "ns/github" } });
+await rewind.namespace(user.id).runs.start({ actionSet: actionSet.id, code, secrets: { github: "ns/github" } });
 
-// Erase an end user, in the background: their tokens, runs, secrets and use.
+// Erase an end user, in the background: their tokens, runs, workflows, secrets and use.
 await rewind.namespaces.delete(user.id);
 ```
 
-An end user's token holding `secrets:write` writes its own namespace's secrets, so your product can store a token the
-end user connects without passing it through your backend's key. See [Secrets](/sdk/secrets).
+Erasing an end user erases the workflows of their namespace, its forks included; your organization's workflows its runs
+executed stay. An end user's token holding `secrets:write` writes its own namespace's secrets, so your product can store
+a token the end user connects without passing it through your backend's key. See [Secrets](/sdk/secrets).

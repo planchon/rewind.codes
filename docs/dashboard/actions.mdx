@@ -1,0 +1,39 @@
+---
+title: "Actions"
+description: "Latency, error rate and redeliveries of every action your workflows call."
+---
+
+The Actions view measures the actions behind your runs over a window: the last hour, 24 hours, 7 or 30 days, for the
+organization or one end user.
+
+<Frame>
+  <img src="/images/dashboard/tools-light.webp" alt="The Actions view: calls, failures, redeliveries and latency percentiles per action, by group" className="block dark:hidden" />
+  <img src="/images/dashboard/tools-dark.webp" alt="The Actions view: calls, failures, redeliveries and latency percentiles per action, by group" className="hidden dark:block" />
+</Frame>
+
+Search with the same query bar as the runs, which reads here:
+
+| Term | Keeps |
+| --- | --- |
+| `namespace:alice` | The calls of one end user's runs |
+| `action:github.close_issue`, `action:github.*` | This action, or the actions of a group |
+| `close_issue` | The actions whose name holds this text |
+
+The figures come from hourly counters: one end user or the organization, and the actions whose name starts with what an
+`action:` term names.
+
+At the top: the calls completed, how many failed, the redeliveries, and the slowest action. Then each action, by its
+**group** (an MCP server, an API, a group of harness actions) and the built-ins; a group folds under its row:
+
+| Column | What |
+| --- | --- |
+| **Calls**, **Failed** | How many calls completed, and how many failed, with their share |
+| **By kind** | The failures by kind: an error, a timeout, an unavailable server, an unknown outcome |
+| **Redeliveries** | Deliveries beyond the first: calls delivered again after a transient failure or an interruption |
+| **p50**, **p95**, **p99**, **max** | Latency, from the call to its result |
+| **Latency** | The same on one log scale for every action: a dot at p50, a bar to p95, a tick at p99, a line to the slowest call |
+
+A slow or failing action slows or fails every workflow that calls it: this is where to look when the Overview's
+**Failing actions** lights up. The SDK reads the same figures with `rewind.actions.stats()`.
+
+The Actions view is not available to a member limited to labels.

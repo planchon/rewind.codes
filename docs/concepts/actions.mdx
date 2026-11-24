@@ -1,0 +1,181 @@
+---
+title: "Actions and action sets"
+description: "MCP servers, APIs from OpenAPI, harness actions and built-ins; how an action set pins them, how each call is made, authenticated, delivered and protected."
+---
+
+## Four kinds of actions
+
+What a workflow calls is an **action**. The tools of your MCP servers, the operations of your APIs and the functions of
+your harness all become actions of an action set:
+
+| Kind | Called by | For |
+| --- | --- | --- |
+| **MCP actions** | Rewind's dispatcher, an MCP client over streamable HTTP | Every tool of the MCP servers you list |
+| **API actions** | Rewind's dispatcher, from the API's OpenAPI document | Every operation of your backend's API, or another's: Rewind calls it, your backend runs no worker |
+| **Harness actions** | Your [worker](/sdk/harness-actions), which holds a call stream open and is handed their calls | Functions that live in your harness: ask the end user, call another model, query your database |
+| **Built-ins** | Rewind itself | `http` (the code's only network), `signalUrl(name)`, and `workflows.<name>.start` and `.signal` for each workflow the action set pins |
+
+An action's prefix is its **group**: `github.list_issues` is the action `list_issues` of the group `github`, an MCP
+server, an API or a set of harness actions.
+
+Results go back to the workflow's code, never to the model. Your harness is on the path only for its harness actions.
+
+## An action set pins its actions
+
+An **action set** is the list of what workflows may call: MCP servers, APIs, harness actions, the `http` action and its
+allowed hosts, and the organization's workflows the code may start, with a policy per action and, for each server and
+API, how its calls authenticate. Registering it connects to the servers, lists their tools, reads the APIs' OpenAPI
+documents (one action per operation) and **pins** their schemas. An action set holds no secret.
+
+- An action set is **content-addressed**: its id is the digest of what it pins. Registering the same action set twice
+  returns the same id, and every run records the action set it started with.
+- A run keeps its action set for its whole life, even if the server changes during a ten-day sleep (see below).
+- An action set can be **derived** from another (`base`): same servers and actions, other workflows.
+
+## Declarations
+
+From the pinned schemas, Rewind generates the declarations of the `rewind:actions` module, in two renderings:
+
+<Tabs>
+  <Tab title="For the type-checker">
+    ```ts rewind-actions.d.ts
+    declare module "rewind:actions" {
+      /** Actions of the group `github`. */
+      export const github: {
+        /** List the issues of a repository. */
+        list_issues(args: { repo: string; state?: "open" | "closed" }): Promise<{ number: number; title: string; updated_at: string }[]>;
+      };
+    }
+    ```
+  </Tab>
+  <Tab title="For the model's prompt">
+    ```text
+    import { github } from "rewind:actions";
+    github.list_issues({ repo: string, state?: "open" | "closed" }) → { number: number, title: string, updated_at: string }[] · List the issues of a repository.
+    signalUrl(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
+    ```
+  </Tab>
+</Tabs>
+
+Action names stay as the server names its tools, so they match the descriptions the model reads. Arguments are
+validated against the action's JSON Schema twice: by the type-checker before the run starts, and at run time before
+the call is recorded.
+
+**Observed result types.** Most MCP servers declare no output schema, so the model would write code against a result
+it cannot see. Rewind infers the shape of each action's results from the results already recorded (keys and types,
+never values), and uses it in the declarations, marked `@observed`.
+
+## Every call has an idempotency key
+
+Each **call** carries a key, `{run_id}/{seq}`, the same on every **delivery** (each try of the call): in MCP `_meta`
+(`codes.rewind/idempotency-key`), in an API's `Idempotency-Key` header when its operation declares one, in a signed
+call's `idempotency_key`, and in your worker's context (`ctx.idempotencyKey`). An action that recognizes it does not
+repeat its effect when a call is delivered again after an interruption. Calls also carry the W3C trace context, so your
+server's spans join the run's trace.
+
+## Policies
+
+Each action has a policy, set when the action set is registered:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `idempotent` | `true`: an interrupted call is delivered again with the same key, up to 5 deliveries. `false`: a call is delivered once at most, and fails with `outcomeUnknown` if that delivery was cut off | `true` |
+| `approval` | The call waits for your harness to approve it before it is sent | Off |
+| `timeout` | How long one delivery may take | 5 minutes for MCP and API actions |
+| `reconnectTimeout` | For a harness action: how long a call handed on a worker's stream that closed waits for that worker to come back | 60 seconds |
+| `concurrency` | Calls of this action in flight per run | The run's limit, 16 |
+
+The calls to one MCP server or API are also bounded across your organization: 8 in flight, or an API's own
+`concurrency`. Limits are invisible to the history: a call waiting for a slot just waits.
+
+Declare `idempotent: false` for an action that ignores the idempotency key and must not run twice: sending an email, a
+payment without a key. An API's `POST` and `PATCH` are `idempotent: false` unless the operation declares an
+`Idempotency-Key` header; its other methods, which HTTP defines as idempotent, are `idempotent: true`. The code sees
+every failure as an `ActionError`, and decides what to do.
+
+## How calls prove who calls
+
+Each MCP server and API of an action set says, in its `auth`, how its calls authenticate. `auth` is pinned with the
+action set; no value is.
+
+| `auth` | The request carries | For |
+| --- | --- | --- |
+| none | Nothing | Public servers |
+| `rewind` | A JWT signed with your organization's key | Your own APIs and MCP servers: they check the signature and learn the end user |
+| `secret` | The secret the run uses, in a header (`Authorization: Bearer {secret}`) or, for a stdio server, an environment variable | Other servers: GitHub, Linear, an API with a key |
+
+### Secrets
+
+A **secret** is a named value, encrypted at rest, that only the dispatcher reads, for the runs that use it. It belongs
+to the organization (`org/zendesk`, shared by every end user) or to one [end user](/concepts/end-users) (`ns/github`:
+Alice's GitHub token in Alice's runs, Bob's in Bob's).
+
+- **Named at start, never in the code.** A run reads a secret only if the request that starts it names it, server by
+  server: `secrets: { github: "ns/github", zendesk: "org/zendesk" }`. A workflow version names its own, checked when
+  the version is made. Who reads what is known: the secrets a run uses are run metadata.
+- **Checked before any run exists.** Code that imports a server whose `auth` takes a secret, with none named for it,
+  or a secret the caller may not use, is refused at start (`secret-required`), with the secrets it may use instead.
+- **Write-only.** No answer of the API holds a value. Secrets never enter the sandbox, the history, a cassette or a
+  trace.
+- **Nothing falls back.** Alice's run that uses `ns/github` never calls with the organization's token, nor with Bob's.
+
+If a token expires during a long pause, the call is **parked** and your harness gets the webhook `secret.expired`; put
+the secret again under the same name, and the call is delivered again with the same key. See [Secrets](/sdk/secrets).
+
+### Signed calls
+
+With `auth: rewind`, Rewind signs each request with your organization's Ed25519 key: a JWT naming the end user
+(`sub`), the run, its labels, the action, the idempotency key, and the request's method, URL and body. Your server
+checks it with the public keys Rewind publishes, as any JWT library does with a JWKS, and the SDK's
+[`verifyRewindCall`](/sdk/signed-calls) does every check for you. Rewind then keeps no secret of yours, and your server
+learns the end user from a signature, not from an argument.
+
+## Your backend: called, or pulling its calls
+
+An action that lives in your backend can reach it two ways, and both are first-class:
+
+| | API actions | Harness actions |
+| --- | --- | --- |
+| Who connects | Rewind calls your API, from its OpenAPI document | Your [worker](/sdk/harness-actions) holds a call stream open to Rewind and is handed its calls |
+| Your backend | Exposes HTTPS, and checks the signature | Opens no port: it only makes outgoing requests |
+| How long a call may take | Within the action's timeout | Days: a worker may hand a call to a person and answer later |
+| For | Your product's API, called as any client calls it | What lives in the harness: the end user's answer, Claude Code, a call that waits |
+
+Choose action set by action set. A backend that cannot be reached from outside, or that already runs a worker, keeps
+its harness actions.
+
+## When a server changes during a run
+
+A run can pause for days while the MCP server behind it changes. The dispatcher checks each call against the server's
+current schema. A call that no longer matches is not failed silently: it is **parked**, and your harness gets the
+webhook `action.schema_changed`. You then approve it (continue against the new schema), reject it (the code gets an
+`ActionError`), cancel the run, or fork it with corrected code.
+
+An API has no listing to ask: its pinned OpenAPI document is the contract, and a call the API no longer accepts fails
+with its 4xx.
+
+## The `http` action
+
+An action set enables the built-in `http` action with a list of allowed hosts (`api.github.com`, `*.example.com`).
+Workflows then have `fetch`. Without it, there is no `fetch` and no network at all.
+
+Each request is a recorded call, sent by the dispatcher, never from the sandbox:
+
+1. The host must be in the allow-list.
+2. The name is resolved once; private, loopback, link-local and cloud-metadata addresses are refused.
+3. The connection goes to the address that was checked.
+4. Each redirect is checked again, up to 5.
+5. The response is bounded to 5 MB and 30 seconds.
+
+A refused request rejects with an `ActionError`.
+
+The `http` action carries no secret and no signature: a call that needs one is an API action.
+
+## Where MCP servers and APIs may be
+
+Rewind connects to the URLs your action sets name: at registration, to list a server's tools or read an OpenAPI
+document, and at each call. On a deployed server these connections go through the same checks: a name resolved once,
+private, loopback, link-local and cloud-metadata addresses refused, the connection to the checked address. A redirect
+is followed only within the server's origin (307 or 308), since the secret or the signature would follow it. A
+self-hosted server lets chosen internal hosts and networks through with
+[`--allow-internal-tools`](/self-hosting#options); the embedded server reaches any address.

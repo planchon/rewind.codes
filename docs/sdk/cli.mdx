@@ -1,19 +1,19 @@
 ---
 title: "The CLI"
-description: "rewind: run, check, test, replay and fork scripts from a terminal, against a server or locally."
+description: "rewind: run, check, test, replay and fork workflows from a terminal, against a server or locally."
 ---
 
 The `rewind` binary is also a command-line client of the API. It talks to a remote server, or to an **embedded server**
 it starts on demand in a `.rewind/` directory, for local work without any setup. `rewind check`, `rewind test` and the
-replay of an exported journal run in the CLI's own process, without a server; `rewind test --workflow` only reads the
-workflow's suite from it.
+replay of an exported run run in the CLI's own process, without a server; `rewind test --workflow` runs on the server,
+which holds the workflow's suite.
 
 ```bash
 export REWIND_URL=https://api.rewind.codes     # leave it unset to use the embedded server
 export REWIND_API_KEY=rewind_sk_...
 export REWIND_NAMESPACE=user_ada               # the end user; "local" on the embedded server
 
-rewind run triage.ts --toolset toolset.json --input '{"repo":"acme/api"}' --wait 30s
+rewind run triage.ts --action-set action-set.json --input '{"repo":"acme/api"}' --wait 30s
 ```
 
 The binary is built from the [repository](https://github.com/planchon/rewind.codes): see
@@ -23,40 +23,42 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 
 | Command | Does |
 | --- | --- |
-| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d] [--label k=v] [--secret <server>=<scope>/<name>]…` | Starts a run and waits for it, up to `--wait`; `--secret github=ns/github` attaches a [secret](/sdk/secrets) |
-| `rewind check script.ts [--toolset …]` | Type-checks a script against the sandbox and a toolset's declarations |
-| `rewind test [script.ts] [--tests file] [--workflow name] [--toolset file]` | Runs [tests](/sdk/testing#in-ci-without-a-server) in virtual time, in the CLI's process: those of `--tests` (`script.tests.json` next to the script by default), and with `--workflow` the suite of that workflow, read from the server, against the script or the version's own |
-| `rewind workflows record <name> [--query …] [--run <id>…] [--limit n]` | [Records tests](/sdk/workflows#record-tests-from-runs) from a workflow's past runs, one per path; prints their digests, names and paths |
+| `rewind run workflow.ts [--input …] [--wait 30s] [--ttl 30d] [--label k=v] [--secret <server>=<scope>/<name>]…` | Starts a run of the code and waits for it, up to `--wait`; `--secret github=ns/github` names a [secret](/sdk/secrets) the run uses |
+| `rewind check workflow.ts [--action-set …]` | Type-checks code against the sandbox and an action set's declarations; creates nothing |
+| `rewind test [workflow.ts] [--tests file] [--workflow <workflow>] [--action-set id\|file]` | Runs [tests](/sdk/testing#in-ci-without-a-server) as test runs, in virtual time: those of `--tests` (`workflow.tests.json` next to the code by default), in the CLI's process; with `--workflow`, that workflow's suite too, on the server, against the code or the version's own. Creates nothing |
+| `rewind workflows list\|show\|create\|update\|promote\|fork\|pull` | The workflows of the namespace and of the organization; one workflow, its versions and its suite; creates one from a file (`--name`, `--description`, `--action-set`, `--interface`, `--tests`); names or describes one, adds tests to its suite, or makes its next version (`--code`, `--interface`, `--tests`); promotes one to the organization; forks an organization's workflow into the namespace; pulls its source's latest version into a fork |
+| `rewind workflows record <workflow> [--query …] [--run <id>…] [--limit n]` | [Records tests](/sdk/workflows#record-tests-from-runs) from a workflow's past runs, one per path; prints their digests, names and paths |
 | `rewind signal <run> <name> [payload]` | Sends a signal |
 | `rewind cancel <run>` | Cancels a run |
-| `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
-| `rewind trace <run> [--entry n]` | The run's trace, as a model reads it; one entry in full |
-| `rewind runs '<query>'` | Lists runs matching a [query](/dashboard/query-language): `rewind runs '@agent:triage status:failed'` |
-| `rewind replay <run or journal.json> [--script fixed.ts]` | Re-executes a run and checks determinism; with `--script`, tells whether a corrected script is compatible with that history |
-| `rewind fork <run> --script fixed.ts [--at <index>] [--input …] [--secret …]` | Starts a fork with a corrected script, with the parent's secrets unless `--secret` gives others |
-| `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
+| `rewind status <run> [--wait 30s]` | A run's status and what it waits for, waiting up to `--wait` for it to end |
+| `rewind transcript <run> [--event n]` | The run's transcript, for a model; with `--event`, one event of its history in full |
+| `rewind runs '<query>'` | Lists runs matching a [query](/dashboard/query-language): `rewind runs '@agent:triage status:failed'`; filters `--status`, `--workflow`, `--action`, `--source`, `--waiting quarantined`…, and `--sort` |
+| `rewind replay <run or run.json> [--code fixed.ts]` | Re-executes a run and checks determinism; with `--code`, tells whether corrected code is compatible with that history |
+| `rewind fork <run> --code fixed.ts [--at <position>] [--input …] [--secret …]` | Starts a fork with corrected code, with its source's secrets unless `--secret` gives others |
+| `rewind export <run> [--as run\|cassette] [-o file]` | The run export, or a cassette of its calls and signals |
 | `rewind release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
-| `rewind toolsets add\|declarations\|search` | Registers a toolset file, prints its declarations, searches its tools |
+| `rewind action-sets add\|declarations\|search` | Registers an action set file, prints its declarations, searches its actions |
 | `rewind secrets list\|put\|delete\|usage [name] [--namespace <name>]` | The organization's [secrets](/sdk/secrets), or a namespace's: `put` reads the value from standard input, never from an argument (`rewind secrets put github --namespace user_2fQ81 < token.txt`); `usage` says what deleting one would stop |
-| `rewind namespaces list\|show\|rename\|quotas\|delete` | The end users and their use, one end user, its display name (`rename user_2fQ81 "Acme Corp"`; without one, removes it), their limits (or the defaults with `--defaults`), erasure |
+| `rewind namespaces list\|show\|rename\|quotas\|delete` | The end users and their use, one end user, its display name (`rename user_2fQ81 "Acme Corp"`; without one, removes it), their limits (`--workflows`, `--max-code-lines`…, or the defaults with `--defaults`), erasure |
 | `rewind server [--embedded] [--executors-only] [--pool name] [--virtual-time]` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
 | `rewind server migrate-runs` | Once, at the deploy that moves runs to partitions: see [Self-hosting](/self-hosting#move-runs-into-partitions) |
+| `rewind server rename-data` | Once, with the nodes stopped, at the release that renamed the stored data: see [Self-hosting](/self-hosting#rewrite-the-stored-names) |
 | `rewind mcp` | Serves the [agent tools](/sdk/agent-tools) over MCP on standard input and output, against the embedded server: to debug them with an MCP client, such as the MCP Inspector or Claude Code on this machine. Never a remote server: Claude reaches those [over HTTP](/claude) |
 
-A toolset file holds what `rewind.toolsets.create` takes, as JSON. A tests file is a JSON array of
-[tests](/sdk/testing#tests), whose `world.mocks` and `world.cassette` may name files relative to it; without a toolset,
-`rewind test` takes the tools the tests answer as host tools. Every command takes `--json`: the result as JSON on
-standard output, errors as problem+json on standard error.
+An action set file holds what `rewind.actionSets.create` takes, as JSON. A tests file is a JSON array of
+[tests](/sdk/testing#tests), whose `world.handlers` and `world.cassette` may name files relative to it; without an
+action set, `rewind test` takes the actions the tests answer as harness actions. Every command takes `--json`: the
+result as JSON on standard output, errors as problem+json on standard error.
 
 ```bash
 $ rewind runs 'namespace:ci status:failed'
-RUN                                   STATUS            STARTED                   CALLS  ERRORS  SCRIPT
-01a1e137-7cb0-724e-8ef7-1d0ddee39f8e  failed TypeError  2026-11-15T21:57:52.461Z  2      0       // The first version of triage.ts…
+RUN                          STATUS            STARTED                   CALLS  ERRORS  WORKFLOW
+ci/wf-4m8q2k/06h0p2xq9d1c    failed TypeError  2026-11-15T21:57:52.461Z  2      0       The first version of triage.ts…
 ```
 
 ## Exit codes
 
-Scripts in CI branch on the exit code:
+CI jobs branch on the exit code:
 
 | Code | Meaning |
 | --- | --- |
@@ -64,11 +66,11 @@ Scripts in CI branch on the exit code:
 | 1 | The run failed (a test does not pass) |
 | 2 | The run was cancelled |
 | 3 | The run was aborted |
-| 4 | The run is still waiting: `--wait` elapsed, or it waits for the outside world |
-| 5 | The run is quarantined |
+| 4 | The run has not ended: `--wait` elapsed while it was queued, running or waiting, or it waits for the outside world |
+| 5 | The run is waiting, quarantined |
 | 6 | Refused: an unknown run, or a signal to a run that has ended |
 | 64 | Usage error |
-| 65 | The script was refused at start |
+| 65 | The code was refused at start |
 | 70 | Internal error |
 | 130 | Interrupted by a second Ctrl-C |
 
@@ -81,15 +83,15 @@ progress; a sleeping run resumes at the next command.
 
 ```text
 project/
-  script.ts
-  script.tests.json   the tests of script.ts, for rewind test
-  rewind.tools.json   static responses per tool, answered last in tests
-  .rewind/            created by the first command
-    server.sock       the API, mode 0600
-    control.db        the control plane: toolsets, workflows, secrets, end users
-    master.key        the key the secrets are encrypted with, made at the first start
-    partitions/0/     the partition: every run's records
-    runs/             the journals of ended runs
-    blobs/            payloads above 64 KiB
-    tests/            stored tests
+  workflow.ts
+  workflow.tests.json   the tests of workflow.ts, for rewind test
+  rewind.actions.json   the project's default rules, per action, answered last in tests
+  .rewind/              created by the first command
+    server.sock         the API, mode 0600
+    control.db          the control plane: action sets, workflows, secrets, end users
+    master.key          the key the secrets are encrypted with, made at the first start
+    partitions/0/       the partition: every run's records
+    runs/               the archive of ended runs
+    blobs/              payloads above 64 KiB
+    tests/              stored tests
 ```

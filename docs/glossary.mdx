@@ -1,0 +1,482 @@
+---
+title: "Glossary"
+description: "Every word Rewind uses, one meaning each: first the words you meet building on Rewind, then the engine's, under the hood."
+---
+
+Rewind gives each thing one word, and each word one meaning, everywhere: these pages, the API, the SDK, the CLI, the
+agent tools and the dashboard. The words you meet building on Rewind come first, in five groups; each links to the page
+that explains it. The engine's own words follow, folded, [under the hood](#under-the-hood).
+
+## Who
+
+### Organization
+
+The company that uses Rewind, and what it shares: its members, keys and roles, its action sets, its workflows and
+secrets, its webhook subscriptions. [Organization](/dashboard/organization)
+
+### Harness
+
+Your product that runs a model: its model loop, its prompts, its end users. It embeds Rewind through the API or the
+SDK, gives the model the agent tools, and runs the worker of its harness actions. [How it works](/concepts/how-it-works)
+
+### End user
+
+One of your product's users, the person an agent acts for. Each end user has a namespace.
+[End users and namespaces](/concepts/end-users)
+
+### Namespace
+
+One end user's space: their runs, the workflows those runs created or the namespace forked, their secrets, tokens and
+use. Nothing of one namespace is visible from another. [End users and namespaces](/concepts/end-users)
+
+### Member
+
+A person in an organization, who signs in to the dashboard. What a member may do comes from their grant.
+[Members](/dashboard/organization#members)
+
+### API key
+
+A key, `rewind_sk_…`, for your backend, your worker or the CLI. It reaches every namespace of its organization, within
+its grant. [API keys](/dashboard/organization#api-keys)
+
+### End user's token
+
+A token that reaches one namespace only, for an agent acting for one end user: opaque (`rewind_nt_…`), minted by
+Rewind, or a JWT your backend signs. [Tokens](/sdk/end-users#tokens)
+
+### Connection
+
+What a person creates by connecting Claude, or another MCP client, to Rewind: it opens the organizations they tick,
+each with the access Read or Run, never more than the person holds. [Use Rewind from Claude](/claude)
+
+### Grant
+
+What gives one principal (a member, an API key, an invitation or a connection) a role in one organization, and
+optionally allowed labels. [Roles](/dashboard/organization#roles)
+
+### Role
+
+A named set of permissions. `owner`, `harness`, `worker` and `reader` are built in; an organization adds its own.
+[Roles](/dashboard/organization#roles)
+
+### Permission
+
+One kind of thing the API lets a caller do, such as `runs:start`, `workflows:write` or `calls:work`. Every endpoint
+requires one. [Roles](/dashboard/organization#roles)
+
+### Allowed labels
+
+The labels a grant or a token is limited to: it sees only the runs carrying all of them, and what it creates carries
+them. [Members](/dashboard/organization#members)
+
+### Quotas
+
+The limits of each namespace: CPU and runs per month, active runs, workflows, the longest TTL and the longest code.
+Defaults apply to every end user, exceptions to one, all under the organization's ceiling.
+[Quotas](/concepts/end-users#quotas)
+
+## What you write
+
+### Workflow
+
+The template of its runs: the TypeScript the model writes, with an id (`wf_7k2m9q4x8d1c`), an optional name and versions
+1, 2, 3. Running it gives a run. [Workflows](/concepts/workflows)
+
+### Code
+
+A workflow's TypeScript text: one ES module whose default export is the entry point, identified by its digest. The same
+code sent again in a namespace is the same workflow. [What the model writes](/sdk/workflows#what-the-model-writes)
+
+### Name
+
+An optional identifier for a workflow (`triage`), unique in its scope, by which callers start it and code imports it. A
+description, and the first line of the code's top comment, are display only.
+[Name and description](/concepts/workflows#its-name-and-description)
+
+### Version
+
+One immutable state of a workflow: its code, interface, pinned action set and secrets. Its `version` is its number, its
+`digest` its hash; `triage@v12` names it. [Versions](/concepts/workflows#its-versions)
+
+### Interface
+
+A version's JSON Schemas for its input, its output and each signal it accepts, checked against its code.
+[Interface](/concepts/workflows#its-interface)
+
+### Scope
+
+Whose a workflow is: the namespace whose run created it, or the organization once a member promotes it. The
+organization's workflows are generic: every namespace's runs execute them. [Scope](/concepts/workflows#its-scope)
+
+### Fork
+
+A copy that diverges from its source. A fork of a run re-executes corrected code against its source's history without
+calling again what was called (`retry_run`); a fork of an organization's workflow is a namespace's copy that keeps its
+name and pulls its source's new versions. [Forks of a run](/concepts/history#forks-fix-a-run-without-repeating-its-effects),
+[forks of a workflow](/concepts/workflows#its-forks)
+
+### Test
+
+The world a workflow's code meets (its input, the answers to its calls, its signals) and what its run must show at the
+end. It never names the code, so it runs unchanged against every version. [Tests](/sdk/testing#tests)
+
+### Test run
+
+A run whose calls a test's world answers, in virtual time (mode `test`): nothing is called, and a ten-day sleep passes
+at once. [Tests](/sdk/testing#tests)
+
+### Rules
+
+The answers a test's world gives per action (`world.actions`): the args a call must contain, its result or its error,
+how many times. [The world](/sdk/testing#the-world)
+
+### Handlers
+
+TypeScript functions that answer a test's calls (`world.handlers`), for answers that compute.
+[The world](/sdk/testing#the-world)
+
+### Cassette
+
+A run's calls and signals, exported to answer a test's calls as the real world did (`world.cassette`).
+[Test against a real run](/sdk/testing#test-against-a-real-run)
+
+### Expectation
+
+What must hold when a test's run ends (`expect`): its status, its output or its error, the calls it made and their
+order. [Expectations](/sdk/testing#expectations)
+
+### Suite
+
+A workflow's tests, which every new version must pass. Each version records the suite it passed.
+[Versions and the gate](/sdk/workflows#versions-and-the-gate)
+
+### Gate
+
+The check every new version goes through: its suite runs against it, and it is stored only if every test passes. A
+test leaves the suite only when it is retired or updated with a reason.
+[Versions and the gate](/sdk/workflows#versions-and-the-gate)
+
+### Recorded test
+
+A test made from a past run of a workflow: its real input, the real answers to its calls, and its outcome as the
+expectation; its `from` names the run. Recording keeps one run per path.
+[Record tests from runs](/sdk/workflows#record-tests-from-runs)
+
+## What runs
+
+### Run
+
+One execution of one version of a workflow, for one end user: its id, its input, its history. [Runs](/sdk/runs)
+
+### Handle
+
+A run's name for people, `namespace/origin/suffix` (`dana/triage/06bqx3k9f2mt`): its origin is its workflow's name,
+else the workflow's short id. The API takes it wherever it takes a run's id. [Run](/dashboard/run)
+
+### Status
+
+Where a run is: `queued`, `running` or `waiting` while it is active, then `completed`, `failed`, `cancelled` or
+`aborted` once it has ended. [Read a run](/sdk/runs#read-a-run)
+
+### Waiting
+
+The status of a run that nothing Rewind does can move until something arrives: a signal, a timer, a harness action, an
+approval, a deferred answer, a parked call, a release from quarantine. Its `waitingFor` says which.
+[Read a run](/sdk/runs#read-a-run)
+
+### History
+
+A run's append-only record of everything that crossed the sandbox's walls, as a list of steps: the only source of
+truth. [The history](/concepts/history)
+
+### Step
+
+One thing from outside (the start, a call's result, a timer, a signal, a cancellation) and everything the code did in
+response, committed whole. The dashboard's time cursor walks a run step by step.
+[The history](/concepts/history#what-the-history-records)
+
+### Event
+
+One item of a history, such as `run_started`, `schedule_call` or `call_completed`; its index is its position. A run's
+event stream follows them live. [The history](/concepts/history#what-the-history-records)
+
+### Signal
+
+A named message sent to a run from outside, kept in the run's mailbox for that name until its code reads it with
+`signal(name)`. [Signals](/sdk/human-in-the-loop#signals)
+
+### Signal URL
+
+A URL bound to a run and one of its signals, from `signalUrl(name)`: anything posted to it becomes that signal.
+[Signal URLs](/sdk/human-in-the-loop#signal-urls-for-external-systems)
+
+### Child run
+
+A run started by another run's code, through `rewind:workflows`; the run that started it is its parent. An attached
+child ends before its parent; a detached one lives on its own. [Started by code](/concepts/workflows#started-by-code)
+
+### Cancellation
+
+A request that ends a run: every pending `await` rejects with `CancelledError`, and the code gets one grace step to
+clean up. [Cancel a run](/sdk/runs#cancel-a-run)
+
+### TTL
+
+A run's time to live, 30 days by default: at its deadline, the run is cancelled. [Start a run](/sdk/runs#start-a-run)
+
+### Labels
+
+Your string map on a run (an agent, a conversation, an environment): it filters runs and scopes the agent tools, keys,
+tokens and webhook subscriptions. The code never sees it. [Start a run](/sdk/runs#start-a-run)
+
+### Replay
+
+Re-executing a run's code against its history: what came from outside is read back, what ran inside is computed again,
+identically. [Replay](/concepts/history#replay)
+
+### Quarantine
+
+Where a run is set aside when its replay diverges or its activations keep failing, a fault of the platform: it is
+`waiting` until an operator releases it or gives it up. [Determinism epochs](/concepts/history#determinism-epochs)
+
+### Sandbox
+
+The deterministic V8 isolate a workflow's code runs in: logical time, seeded randomness, no file system, and no network
+but its actions. [The sandbox](/concepts/sandbox)
+
+## What it calls
+
+### Action
+
+What a workflow calls: a tool of an MCP server, an operation of an API, a harness action, or a built-in (`http`,
+`signalUrl`, a workflow's `start` and `signal`). [Actions and action sets](/concepts/actions)
+
+### Action set
+
+The list of what workflows may call (MCP servers, APIs, harness actions, the `http` action's allowed hosts, the
+organization's workflows), with a policy per action, pinned and content-addressed. Every run records its action set.
+[Action sets](/sdk/action-sets)
+
+### Group
+
+An action's prefix: `github.list_issues` is the action `list_issues` of the group `github`, an MCP server, an API or a
+set of harness actions. [Four kinds of actions](/concepts/actions#four-kinds-of-actions)
+
+### Declarations
+
+The TypeScript an action set generates: `rewind-actions.d.ts`, which code is type-checked against, and a compact
+rendering for the model's prompt. [Declarations](/concepts/actions#declarations)
+
+### Call
+
+One invocation of an action by a run, numbered by its `seq` (`#3`). Its state is `approval`, `ready`, `claimed`,
+`deferred`, `parked` or `done`, and only its outcome enters the history.
+[Every call has an idempotency key](/concepts/actions#every-call-has-an-idempotency-key)
+
+### Delivery
+
+One try of a call. Under `idempotent: true`, a call interrupted or failed by a transient error is delivered again, a
+redelivery, with the same idempotency key. [Policies](/concepts/actions#policies)
+
+### Policy
+
+An action's settings, pinned in its action set: `idempotent`, `approval`, `timeout`, `reconnectTimeout`,
+`concurrency`. [Policies](/sdk/action-sets#policies)
+
+### Approval
+
+A policy under which each call waits, with its exact arguments, for your harness to approve or reject it before it is
+sent. [Approve a call](/sdk/human-in-the-loop#approve-a-call)
+
+### Idempotency key
+
+A key that makes a repeated request harmless: every delivery of a call carries `{run_id}/{seq}`, and a start or a
+signal sent twice with the same `Idempotency-Key` happens once.
+[Every call has an idempotency key](/concepts/actions#every-call-has-an-idempotency-key)
+
+### Harness action
+
+An action whose function lives in your harness: Rewind hands its calls to your worker, which may answer days later.
+[Harness actions](/sdk/harness-actions)
+
+### Worker
+
+Your process that holds a call stream open and answers the calls of your harness actions (`rewind.worker()`).
+[Harness actions](/sdk/harness-actions)
+
+### Secret
+
+A named value, encrypted and write-only, that only Rewind's dispatcher reads, for the runs that use it: the
+organization's (`org/<name>`) or a namespace's (`ns/<name>`). [Secrets](/sdk/secrets)
+
+### Signed call
+
+A call to your own API or MCP server carrying a JWT signed with your organization's key, which names the end user;
+`verifyRewindCall` checks it. [Signed calls](/sdk/signed-calls)
+
+## How you see it
+
+### Agent tools
+
+The ready-made tools your model calls to drive Rewind: `run_workflow`, `check_workflow`, `test_workflow`, `get_run`,
+`retry_run` and more; Claude reaches them over MCP. [Agent tools](/sdk/agent-tools)
+
+### Transcript
+
+A run as text for a model: a header, then one line per event with its line, its outcome and its timing. `get_run`
+returns it. [The transcript](/sdk/runs#the-transcript-for-a-model-or-a-human)
+
+### Run export
+
+A run's code, action set and history in one document, which replays on its own. [Export a run](/sdk/runs#export-a-run)
+
+### Trace
+
+OpenTelemetry's: one trace per run, with a span per call, delivery, timer and signal wait, under your harness's span
+when the run is started with its `traceparent`. [Start a run](/sdk/runs#start-a-run)
+
+### Webhook
+
+What Rewind posts, signed, to your subscriptions when something happens; each has a type, such as `run.completed`,
+`run.waiting` or `secret.expired`. [Webhooks](/sdk/webhooks)
+
+### Change stream
+
+The stream of what changes in your organization (`GET /v1/changes`): runs, workflows, secrets, namespaces and
+connections. The dashboard follows it live. [Live](/dashboard/introduction#live)
+
+### Query language
+
+The one language that searches runs, in the dashboard, the SDK, the API and the CLI: `@agent:triage status:failed`.
+[Query language](/dashboard/query-language)
+
+### Fingerprint
+
+A failure's error, with its numbers, ids, times and quoted strings replaced, so the same failure across many workflows
+counts as one. [Failures](/dashboard/runs#failures)
+
+### Dashboard views
+
+[Overview](/dashboard/overview), [Runs](/dashboard/runs) (All, Running, Waiting, Failures), a [Run](/dashboard/run)'s
+page, [Workflows](/dashboard/workflows), [Actions](/dashboard/actions), [Namespaces](/dashboard/namespaces),
+[Secrets](/dashboard/secrets) and [Organization](/dashboard/organization). [The dashboard](/dashboard/introduction)
+
+## Under the hood
+
+The engine's words. You meet them in Rewind's specification, in its service telemetry and in a self-hosted deployment;
+building on Rewind needs none of them.
+
+<AccordionGroup>
+  <Accordion title="The engine and its nodes">
+    - **Engine**: Rewind's side: it runs workflows, records their histories and makes their calls.
+    - **Tenant**: an organization, as the engine and the storage call it; every storage key starts with it.
+    - **Tenant actor**: one per tenant; it admits the tenant's starts, counts its CPU, holds its MCP and API slots, and
+      hands its harness actions' calls to workers.
+    - **Node**: one `rewind server` process: the HTTP edge, the owner of some partitions, and executors.
+    - **Edge**: the part of every node that serves the API and routes each request about a run to its partition's owner.
+    - **Node link**: HTTP/2 between nodes, on the private network.
+    - **Partition**: one SlateDB database on object storage, holding the runs of the namespaces assigned to it; 64 in
+      production.
+    - **Partition owner**: the one node that writes a partition at a time.
+    - **Generation**: a partition's counter, raised each time the partition moves to another node.
+    - **Batch**: one atomic write of a partition, holding the changes of many runs, durable once its commit returns.
+    - **Executor**: a thread of a node that runs V8 isolates.
+    - **Pool**: a set of nodes that runs one organization's activations apart from the others'.
+    - **Executors-only node**: a node that owns no partition and runs the activations others send it, such as those of
+      a previous determinism epoch.
+    - **Control plane**: what customers and operators configure (organizations, keys, grants, action sets, workflows,
+      secrets, subscriptions), in Postgres or Turso.
+    - **Run plane**: what runs record: the partitions, the archive and the blobs, on object storage.
+  </Accordion>
+  <Accordion title="Inside a history">
+    - **Trigger**: what wakes a run's code: `run_started` and every completion.
+    - **Command**: what the code emits in response: `schedule_call`, `start_timer`, `cancel_timer`, `complete_run`,
+      `fail_run`.
+    - **Completion**: what reaches the code from outside: `call_completed`, `call_failed`, `timer_fired`,
+      `signal_received`, `cancel_requested`.
+    - **Annotation**: an event kept for observability and never checked on replay: `log`, `signal_awaited`.
+    - **seq**: a run's counter of commands, in the order the code emits them (`#1`, `#2`…).
+    - **idx**: an event's position in its history.
+    - **Callsite**: the line of TypeScript that emitted a command, from the source map.
+    - **Commit invariant**: a trigger is committed in one batch with everything the code emitted in response, so a
+      history holds complete steps and nothing else.
+    - **Inbox**: a run's queue of completions waiting to be moved into its history.
+    - **Mailbox**: a run's first-in, first-out queue of the unread signals of one name.
+    - **Payload**: a JSON value of a run (its input, a call's args or result, its output, a signal's payload),
+      identified by its digest.
+    - **Canonical JSON**: RFC 8785's form of a JSON value, on which its digest is computed.
+    - **Digest**: the SHA-256 of a content-addressed document: code, a pinned action set, a workflow version, a test, a
+      payload.
+    - **Stored format**: the versioned JSON (`"v": 1`) of events, run exports, cassettes, pinned action sets, workflow
+      versions, tests and partition records.
+  </Accordion>
+  <Accordion title="Execution">
+    - **Activation**: one turn of a run on an executor: it hands the code the triggers of its inbox and commits one or
+      more steps.
+    - **Ready queue**: a node's queue of runnable runs, fair across tenants.
+    - **Instance cache**: the isolates a node keeps after an activation, so the run's next one needs no replay (sticky
+      execution).
+    - **Glue**: the JavaScript inside the isolate that turns commands into promises and hands completions to them.
+    - **Logical time**: the time the code reads: when the last trigger handed to it was recorded.
+    - **Virtual time**: in a test run, a clock that jumps straight to the next timer.
+    - **Timer wheel**: a partition's timers due within the next hour, held by its owner: the run plane's only loop.
+    - **Determinism epoch**: one number that versions everything that could change what code computes: V8, ICU, the
+      glue, the `rewind` library, the code generation.
+    - **Grace step**: the step in which a cancelled run's code may still clean up and end by itself.
+    - **Deadlock**: code that waits for nothing that can still happen; the run fails with `DeadlockError`.
+    - **Watcher**: a run that waits for another run's end, which reaches it as the signal `rewind:ended:<run id>`.
+    - **Run head**: a partition record of a run's state outside its history: its status, waits, quarantine and
+      metadata.
+    - **Run metadata**: what a run carries outside its history: its namespace, labels, trace context, idempotency key,
+      workflow and version, parent or source, and the secrets it uses.
+    - **Unfinished activations**: the activations of a run that a node started without seeing their end; past 5, the
+      run is quarantined.
+  </Accordion>
+  <Accordion title="Calls and the dispatcher">
+    - **Dispatcher**: the part of Rewind that makes the calls it makes itself (MCP, API, `http`), with the secrets and
+      signatures they carry.
+    - **Task**: the dispatcher's record of a call: its state, its delivery, its token, its next delivery.
+    - **Call stream**: the stream of server-sent events (`GET /v1/calls/stream`) a worker holds open to be handed
+      calls.
+    - **Call token**: what a worker answers a call with, valid while the call waits for that answer.
+    - **Transient failure**: a failure that a later delivery may not meet, such as a 503, or a harness action's failure
+      marked `retryable`.
+    - **Outcome unknown**: a call interrupted under `idempotent: false`, which may or may not have taken effect.
+    - **Redelivery backoff**: the growing delay before a call is delivered again.
+    - **Pinned**: fixed when an action set is registered: its actions' schemas, its workflows' versions.
+    - **Derived action set**: an action set made from a pinned one (`base`), with other workflows.
+    - **Observed result type**: the shape inferred from an action's recorded results, used in its declaration when its
+      server declares none.
+    - **Egress checks**: the checks on every outgoing connection: an allowed host, one DNS resolution, no private
+      address, the connection to the checked address.
+  </Accordion>
+  <Accordion title="Workflows and tests">
+    - **Short id**: `wf-` and the first 6 characters of a workflow's id (`wf-7k2m9q`), shown where it has no name.
+    - **Origin**: the middle part of a run's handle: its workflow's name, else its short id, frozen when the run is
+      created.
+    - **Source**: what a fork copies: a run, or an organization's workflow and one of its versions.
+    - **Base**: the version a new version derives from; a workflow's versions form its lineage.
+    - **Promote**: move a namespace's workflow to the organization, with the same id, versions and suite.
+    - **Pull**: make a fork's next version from its source's latest, once the fork's suite passes.
+    - **Retire, update**: take a test out of a suite, or replace it, with a reason kept in the lineage.
+    - **Path**: the actions a run called in order, the signals it waited for and how it ended; recording keeps one run
+      per path.
+  </Accordion>
+  <Accordion title="Storage, retention and telemetry">
+    - **Attempt**: one try of a run; every run has one for now, sealed when it ends.
+    - **Seal**: write an ended attempt's run export to the archive, then delete it from the partition.
+    - **Archive**: the sealed attempts, on object storage; immutable.
+    - **Blob**: a payload above 64 KiB, or a test document, stored apart on object storage.
+    - **Run summary**: what lists, searches and the change stream show of a run, kept in its partition's run index.
+    - **Counters, gauges**: hourly counts per namespace, and the active runs now, written with the facts they count;
+      the statistics read them.
+    - **Outbox**: what waits to leave a partition (spans, webhooks, `quota.alert`), written with the fact that causes
+      it.
+    - **Retention**: how long an ended run is kept, a year by default.
+    - **Data key, master key**: an organization's secrets are encrypted with its data key, itself encrypted with the
+      deployment's master key.
+    - **Projector**: what turns durable batches into OpenTelemetry spans and logs, and webhooks.
+    - **Span**: Run, Call, Delivery, Timer and Signal wait, projected from the history; Activation, from the engine.
+    - **Service telemetry, run telemetry**: what the platform itself did, and what each run's code did.
+  </Accordion>
+</AccordionGroup>

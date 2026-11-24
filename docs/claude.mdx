@@ -1,20 +1,20 @@
 ---
 title: "Use Rewind from Claude"
-description: "Add Rewind to claude.ai, Claude Desktop, the mobile apps or Claude Code as a connector: Claude writes, tests and runs the scripts, and follows their runs."
+description: "Add Rewind to claude.ai, Claude Desktop, the mobile apps or Claude Code as a connector: Claude writes, tests and runs the workflows, and follows their runs."
 ---
 
 Rewind is an MCP server at `https://api.rewind.codes/mcp`. Add it to Claude as a custom connector and Claude becomes
-the harness: it writes TypeScript scripts against your toolsets, checks and tests them, starts them, follows their runs
-and answers their signals, with the same [agent tools](/sdk/agent-tools) your own harness would give a model. Every run
-is journaled as any other, so you look at it in the [dashboard](/dashboard/introduction) like the rest.
+the harness: it writes TypeScript workflows against your action sets, checks and tests them, runs them, follows their
+runs and answers their signals, with the same [agent tools](/sdk/agent-tools) your own harness would give a model. Every
+run is recorded as any other, so you look at it in the [dashboard](/dashboard/introduction) like the rest.
 
 You connect with your own Rewind account. Claude then acts for you, in the organizations you choose, never with more
 rights than you hold. On a server of your own, the URL is your server's followed by `/mcp`: see
 [Self-hosting](/self-hosting#connect-claude-to-your-server).
 
 <Frame>
-  <img src="/images/dashboard/connect-light.webp" alt="Connect Claude: a toolset, the connector's URL and the steps per client, the authorization, the connection seen arriving, a first message" className="block dark:hidden" />
-  <img src="/images/dashboard/connect-dark.webp" alt="Connect Claude: a toolset, the connector's URL and the steps per client, the authorization, the connection seen arriving, a first message" className="hidden dark:block" />
+  <img src="/images/dashboard/connect-light.webp" alt="Connect Claude: an action set, the connector's URL and the steps per client, the authorization, the connection seen arriving, a first message" className="block dark:hidden" />
+  <img src="/images/dashboard/connect-dark.webp" alt="Connect Claude: an action set, the connector's URL and the steps per client, the authorization, the connection seen arriving, a first message" className="hidden dark:block" />
 </Frame>
 
 The dashboard's **Connect Claude** page, in the account menu at the bottom of the sidebar, walks through the steps below
@@ -22,13 +22,13 @@ and sees your connection arrive.
 
 ## Before you start
 
-Claude writes scripts against a [toolset](/sdk/toolsets): the MCP servers and host tools the scripts may call. Your
-organization needs at least one; Connect Claude lists them. Register one with the SDK (`rewind.toolsets.create`) or the
-CLI (`rewind toolsets add toolset.json`).
+Claude writes workflows against an [action set](/sdk/action-sets): the MCP servers, APIs and harness actions the
+workflows may call. Your organization needs at least one; Connect Claude lists them. Register one with the SDK
+(`rewind.actionSets.create`) or the CLI (`rewind action-sets add action-set.json`).
 
 <Warning>
-  Host tools run in your own worker. Claude reaches them only while that worker runs: a script calling one waits for
-  it otherwise.
+  Harness actions run in your own worker. Claude reaches them only while that worker runs: a workflow calling one waits
+  for it otherwise.
 </Warning>
 
 ## Add the connector
@@ -74,9 +74,9 @@ Claude opens Rewind's page in your browser. Sign in if asked, then choose what C
 
 - **The organizations.** Tick each organization Claude may reach. The one open in the dashboard is ticked already;
   an organization where your role gives neither access cannot be ticked.
-- **An access for each.** **Read** lets Claude read runs, namespaces, toolsets and workflows, and list the secrets'
-  names. **Run** also lets it check, test and start scripts, attach the organization's secrets to them, and signal and
-  cancel runs. An access your role does not give is not offered.
+- **An access for each.** **Read** lets Claude read runs, namespaces, action sets and workflows, and list the secrets'
+  names. **Run** also lets it check, test and run workflows, name the organization's secrets for their runs to use, and
+  signal and cancel runs. An access your role does not give is not offered.
 - **Only what Claude starts.** The runs Claude starts carry the label `via: claude`, and Claude sees only the runs
   carrying it. Untick it to let Claude read and steer the organization's other runs too, to debug them for instance.
 
@@ -86,62 +86,64 @@ Claude opens Rewind's page in your browser. Sign in if asked, then choose what C
 </Frame>
 
 **Allow** sends you back to Claude, connected. Claude never gets more than your own role gives, at every call: if your
-role shrinks, so does Claude's reach. It never administers anything: no members, roles, keys, secrets, toolsets
-nor workflows. It never reads a secret's value: it attaches a secret by its name.
+role shrinks, so does Claude's reach. It never administers anything: no members, roles, keys, secrets, action sets nor
+workflows' names, versions or forks. It never reads a secret's value: it names a secret for a run to use.
 
 The page names where it returns. When it returns to a program on your computer (`localhost`, as Claude Code does),
 allow it only if you started that program yourself.
 
 ## In the conversation
 
-Nothing is pinned when you connect: the organization, the namespace and the toolset are chosen in the conversation.
-Name them in your message, or let Claude find them with `list_orgs`, `list_namespaces` and `list_toolsets`:
+Nothing is pinned when you connect: the organization, the namespace and the action set are chosen in the conversation.
+Name them in your message, or let Claude find them with `list_organizations`, `list_namespaces` and
+`list_action_sets`:
 
 ```text
-With Rewind, org Acme, toolset 079b37894847…, namespace demo: show me what this toolset can do, then write a short
-script that uses it. Check it and test it, and run it once I agree.
+With Rewind, organization Acme, action set 079b37894847…, namespace demo: show me what this action set can do, then
+write a short workflow that uses it. Check it and test it, and run it once I agree.
 ```
 
-The toolset is named by its id, as `list_toolsets` gives it. The namespace is the [end user](/concepts/end-users) the
-runs act for: a new name creates it at its first run. Connect Claude writes this message for you, with your
-organization and a toolset of it.
+The action set is named by its id, as `list_action_sets` gives it. The namespace is the [end user](/concepts/end-users)
+the runs act for: a new name creates it at its first run. Connect Claude writes this message for you, with your
+organization and an action set of it.
 
 ## The tools
 
 | Tool | Does | Access |
 | --- | --- | --- |
-| `list_orgs` | The organizations the connection opens, with their access | Read |
+| `list_organizations` | The organizations the connection opens, with their access | Read |
 | `list_namespaces` | The namespaces of an organization, by prefix | Read |
-| `list_toolsets` | The toolsets of an organization, with their servers and tools | Read |
-| `search_tools` | The declarations of a toolset's tools that match a query | Read |
-| `list_secrets` | The secrets Claude may attach, the organization's and a namespace's, by name: never a value | Read |
-| `get_workflow` | A [workflow](/sdk/workflows)'s source, schemas, suite and lineage | Read |
-| `check_script` | Type-checks a script against the toolset | Run |
-| `test_script` | Runs [tests](/sdk/testing) against a script, in mock mode and virtual time | Run |
-| `get_run` | A run's state and trace, or one journal entry in full | Read |
+| `list_action_sets` | The action sets of an organization, with their servers and actions | Read |
+| `search_actions` | The declarations of an action set's actions that match a query | Read |
+| `list_secrets` | The secrets Claude may name for a run, the organization's and a namespace's, by name: never a value | Read |
+| `get_workflow` | A [workflow](/concepts/workflows)'s code, schemas, versions, suite and source | Read |
+| `check_workflow` | Type-checks code against the action set; gives the workflow's id and version when the namespace already has that code | Run |
+| `test_workflow` | Runs [tests](/sdk/testing) against code or a workflow's version, as test runs in virtual time | Run |
+| `get_run` | A run's status and transcript, or one event of its history in full | Read |
 | `list_runs` | The runs the connection sees: those Claude started, unless you unticked the label | Read |
 | `record_tests` | Records tests from a workflow's past runs | Read |
-| `run_script` | Type-checks a script and starts a run with the secrets it attaches (`secrets`); returns its output, its error, or what it waits for | Run |
-| `retry_run` | Starts a new run from a failed one with a corrected script, reusing the calls already made | Run |
+| `run_workflow` | Runs a workflow, given its code or its id or name, with the secrets its run uses (`secrets`); returns its output, its error, or what it waits for | Run |
+| `retry_run` | Starts a new run from a failed one with corrected code, reusing the calls already made | Run |
 | `signal_run` | Sends a signal to a run | Run |
 | `cancel_run` | Cancels a run | Run |
 
-The tools take the organization (`org`, its name or id, left out when the connection opens one only), and the
-namespace and the toolset where they need them. They are the SDK's [agent tools](/sdk/agent-tools) but
-`save_workflow`: Claude does not save workflows. A result holds at most 80,000 characters, the rest read page by page,
-and `run_script` waits for the run's end 30 seconds by default, 200 at most, before it returns the run's state.
+The tools take the organization (`organization`, its name or id, left out when the connection opens one only), and the
+namespace and the action set where they need them. They are the SDK's [agent tools](/sdk/agent-tools) but
+`update_workflow`: Claude does not name, describe or version workflows. A result holds at most 80,000 characters, the
+rest read page by page, and `run_workflow` waits for the run's end 30 seconds by default, 200 at most, before it
+returns the run's state.
 
 ## Good practices
 
 - **One connection per person.** Everyone connects with their own Rewind account, never a shared one.
-- **Name the organization, the namespace and the toolset** in your message: Claude asks nothing before it starts.
+- **Name the organization, the namespace and the action set** in your message: Claude asks nothing before it starts.
 - **The least access that works.** Read to look at runs; Run only where Claude should start them.
-- **Keep Claude's confirmation** on `run_script`, `retry_run`, `signal_run` and `cancel_run`. The read-only tools
-  (`list_*`, `search_tools`, `get_workflow`, `check_script`, `test_script`, `get_run`, `list_runs`) may be "Always
-  allow".
+- **Keep Claude's confirmation** on `run_workflow`, `retry_run`, `signal_run` and `cancel_run`. The read-only tools
+  (`list_*`, `search_actions`, `get_workflow`, `check_workflow`, `test_workflow`, `get_run`, `list_runs`) may be
+  "Always allow".
 - **Secrets stay in Rewind.** Write their values in the dashboard's [Secrets](/dashboard/secrets) or with the SDK,
-  never in the chat. Claude attaches a secret to a run by its name (`ns/github`, `org/zendesk`), for the servers that
-  need one: the script never sees it, and a refused attachment tells Claude what it may attach instead.
+  never in the chat. Claude names the secret a run uses (`ns/github`, `org/zendesk`), for the servers that need one:
+  the workflow never sees it, and a refused secret tells Claude which ones it may use instead.
 - **Revoke** a connection you no longer use.
 
 ## Change or revoke a connection
@@ -163,8 +165,8 @@ an organization removes it from your connections.
 
 `/mcp` also takes an [API key](/dashboard/organization#api-keys) or an [end user's token](/sdk/end-users#tokens) as
 `Authorization: Bearer`, for what cannot sign in through a browser: CI, a headless agent, the Claude API's MCP
-connector. A key acts in its organization with its role, and a token in its namespace with its permissions: `org` and
-`namespace` may repeat them, not name others.
+connector. A key acts in its organization with its role, and a token in its namespace with its permissions:
+`organization` and `namespace` may repeat them, not name others.
 
 <CodeGroup>
 ```bash Claude Code
@@ -191,7 +193,7 @@ const message = await anthropic.beta.messages.create({
     },
   ],
   tools: [{ type: "mcp_toolset", mcp_server_name: "rewind" }],
-  messages: [{ role: "user", content: "With Rewind, toolset 079b37894847…, namespace demo: …" }],
+  messages: [{ role: "user", content: "With Rewind, action set 079b37894847…, namespace demo: …" }],
 });
 ```
 </CodeGroup>

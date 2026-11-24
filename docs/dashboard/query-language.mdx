@@ -13,7 +13,7 @@ Terms are separated by spaces, and **all must hold**. A comma inside a term mean
 ```
 
 The failed or aborted runs of the triage agent, outside the test environment, started in the last 24 hours, whose
-error, first line or labels mention "rate limit".
+error, workflow's first comment line or labels mention "rate limit".
 
 ## Terms
 
@@ -23,31 +23,30 @@ error, first line or labels mention "rate limit".
 | `@agent:triage` | Carrying the label `agent` with the value `triage` |
 | `@customer:acme*` | With a label value starting with `acme` |
 | `@conversation:*` | With the label set, whatever its value |
-| `status:failed,aborted` | With one of these statuses: `pending`, `active`, `completed`, `failed`, `cancelled`, `aborted` |
-| `tool:github.close_issue`, `tool:github.*` | That called this tool, or a tool starting with `github.` |
+| `status:failed,aborted` | With one of these statuses: `queued`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `aborted` |
+| `status:active` | Not ended yet: queued, running or waiting |
+| `action:github.close_issue`, `action:github.*` | That called this action, or an action of the group `github` |
 | `error:timeout`, `error:TypeError` | With a call that failed with this kind, or that ended with this error name (or abort kind) |
-| `waiting:*` | Active and waiting for the outside world |
-| `waiting:signal,approval` | Waiting for: `signal`, `timer`, `call` (a tool Rewind calls), `host` (a host tool), `approval`, `parked`, `deferred` |
+| `waiting:*` | Waiting on the outside world |
+| `waiting:signal,approval` | Waiting for: `signal`, `timer`, `harness` (a harness action's call), `approval`, `deferred`, `parked`, `quarantined` |
 | `signal:approval` | Waiting for this signal |
 | `started:>2026-11-01`, `started:>now-24h` | By start: a date, a time, or `now` minus a duration |
 | `ended:<…`, `activity:>…` | By end, or by last activity |
 | `duration:>5m` | By duration, for ended runs |
-| `calls:>=20`, `errors:>0` | By number of tool calls, or of failed calls |
-| `script:9f2c4e1a` | Of this script, by digest prefix (8 hexadecimal digits at least) |
-| `toolset:…`, `id:0193a5c4` | By toolset digest or run id prefix |
-| `parent:<run id>` | Forks of this run |
-| `workflow:triage` | Runs of this workflow |
-| `started_by:<run id>` | Runs this run started |
-| `fingerprint:<fingerprint>` | In this failure group |
-| `quarantined:yes`, `quarantined:no` | Quarantined or not |
-| `mode:mock` | By mode: `live` or `mock` |
-| `rate`, `"rate limit"` | Containing this text, case-insensitive, in the error's message, the script's first line, a label's value or the run's id |
+| `calls:>=20`, `errors:>0` | By number of calls, or of failed calls |
+| `workflow:triage`, `workflow:wf_7k2m9q4x8d1c` | Runs of this workflow, by its name or its id |
+| `action_set:…`, `id:0193a5c4` | By action set digest or run id prefix (8 hexadecimal digits at least) |
+| `source:<run id>` | Forks of this run |
+| `started_by:<run id>` | Child runs this run started |
+| `fingerprint:<fingerprint>` | With this fingerprint |
+| `mode:test` | By mode: `live` or `test` |
+| `rate`, `"rate limit"` | Containing this text, case-insensitive, in the error's message, the first line of its code's top comment, a label's value or the run's id |
 
 Comparisons are `>`, `>=`, `<`, `<=`, or a range `a..b`. Field names are case-sensitive.
 
 ## What is never searched
 
-Logs and payloads (arguments, results, inputs, outputs) are never searched: they may hold what your tools returned,
+Logs and payloads (arguments, results, inputs, outputs) are never searched: they may hold what your actions returned,
 which Rewind does not index.
 
 ## Scope
@@ -61,8 +60,9 @@ A query only ever sees what its caller may see: your organization; one end user'
 | --- | --- |
 | What failed in production today? | `status:failed @env:prod started:>now-24h` |
 | Which runs wait for an approval? | `waiting:approval` |
-| Which runs called the payment tool and failed a call? | `tool:payments.* errors:>0` |
+| Which runs are quarantined? | `waiting:quarantined` |
+| Which runs called the payment action and failed a call? | `action:payments.* errors:>0` |
 | Everything one end user ran this week | `namespace:user_2fQ81 started:>now-7d` |
 | Long runs of the triage workflow | `workflow:triage duration:>1h` |
 | Runs of one conversation | `@conversation:c-42` |
-| Timeouts, outside tests | `error:timeout -mode:mock` |
+| Timeouts, outside tests | `error:timeout -mode:test` |

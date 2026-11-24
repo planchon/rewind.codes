@@ -1,6 +1,6 @@
 ---
-title: "Errors and retries"
-description: "How the SDK reports errors, which requests it repeats, and how it waits."
+title: "Errors and redeliveries"
+description: "How the SDK reports errors, which requests it sends again, and how it waits."
 ---
 
 ## Errors
@@ -12,9 +12,9 @@ The API answers errors as `application/problem+json`. The SDK throws them as `Re
 import { isProblem, RewindConnectionError } from "@rewind.codes/sdk";
 
 try {
-  await rewind.namespace(user.id).runs.start({ toolset: toolset.id, script });
+  await rewind.namespace(user.id).runs.start({ actionSet: actionSet.id, code });
 } catch (error) {
-  if (isProblem(error, "invalid-script")) {
+  if (isProblem(error, "invalid-code")) {
     for (const d of error.diagnostics) console.log(d.message, d.frame);
   } else if (isProblem(error, "quota-exceeded")) {
     console.log(error.quota); // { quota, scope, limit, used, resetsAt }
@@ -29,53 +29,54 @@ try {
 | `status` | The HTTP status |
 | `slug` | The kind of problem, below |
 | `detail` | What went wrong, written for a model |
-| `diagnostics` | For a refused script: the type-checker's findings, with location and code frame |
+| `diagnostics` | For refused code: the type-checker's findings, with location and code frame |
 | `query` | For a query that cannot be read: where the term at fault is, in characters |
 | `quota` | For `quota-exceeded`: which quota, at which scope, its limit, the use, and when it frees |
 | `tests` | For `tests-failed`: each test's outcome, those that did not pass with their problem and failures |
-| `attachments` | For `secret-required`: each attachment at fault (`server`, `problem`, `secret`) and the secrets the caller may attach for that server (`attachable`) |
+| `secrets` | For `secret-required`: each server at fault (`server`, `problem`, `secret`) and the secrets the caller may use for it |
 
 | Slug | Means |
 | --- | --- |
 | `invalid-request` | A malformed request |
-| `invalid-title` | A script's title or description out of bounds: a title is 1 to 120 characters, a description at most 2,000 |
-| `invalid-script` | The script was refused by the checks: see `diagnostics` |
-| `invalid-toolset`, `invalid-workflow` | The toolset or workflow cannot be registered |
-| `invalid-test` | A test or a suite was refused: an invalid test, a stored test that does not exist, a retired or updated test that is not inherited or has no reason, two tests of the same name |
-| `tests-failed` | Tests did not pass: the workflow version was not saved, or the fork not created; see `tests` |
+| `invalid-code` | The code was refused by the checks: see `diagnostics` |
+| `invalid-action-set`, `invalid-workflow` | The action set cannot be registered; a workflow's name, a signal's name or a schema cannot be used |
+| `name-taken` | The workflow's scope already has a workflow of that name |
+| `not-forkable`, `not-a-fork` | Only an organization's workflow is forked; only a fork pulls |
+| `invalid-test` | A test or a suite was refused: an invalid test, a stored test that does not exist, a retired or updated test that is not in the suite or has no reason, two tests of the same name |
+| `tests-failed` | Tests did not pass: the workflow version was not made, the tests not added, or the fork not created; see `tests` |
 | `invalid-input` | A workflow's input does not match its schema |
-| `secret-required` | A run, a fork or a workflow version was refused before it existed: a server that takes a secret has none attached, an attachment names a server that takes none or a secret that does not exist, or the caller may not attach it; see `attachments` and [Secrets](/sdk/secrets#when-an-attachment-is-refused) |
-| `invalid-signal` | A reserved signal name, or a signal a workflow does not declare or whose payload does not match |
+| `secret-required` | A run, a fork or a workflow version was refused before it existed: a server that takes a secret has none named, a secret is named for a server that takes none or does not exist, or the caller may not use it; see `secrets` and [Secrets](/sdk/secrets#when-a-secret-is-refused) |
+| `invalid-signal` | A reserved signal name, or a signal a version does not declare or whose payload does not match |
 | `invalid-query` | A query that cannot be read |
 | `unauthorized`, `forbidden` | No valid key or token; or the caller lacks a permission |
-| `not-found` | Missing, or not visible to the caller: another end user's run answers this |
+| `not-found` | Missing, or not visible to the caller: another end user's run or workflow answers this |
 | `run-ended` | The run has ended: it takes no signal or cancellation |
 | `quota-exceeded` | An end user's limit, or your organization's ceiling, is reached |
-| `task-gone`, `task-not-waiting` | A tool task that no longer exists, or that is not waiting for this answer |
-| `toolset-unavailable` | An MCP server or an API of the toolset could not be reached or refused, or its OpenAPI document could not be read |
+| `call-gone`, `call-not-waiting` | A call that no longer waits for this answer, or that waits for no approval |
+| `action-set-unavailable` | An MCP server or an API of the action set could not be reached or refused, or its OpenAPI document could not be read |
 | `payload-too-large` | A value above the size the API takes |
 | `namespace-deleting` | The end user is being erased |
 | `unavailable`, `internal` | A fault of the service |
 
 Two more errors come from the SDK itself:
 
-- **`NamespaceRequiredError`**: a key's client started a run, or checked or tested a script, without naming the end user
+- **`NamespaceRequiredError`**: a key's client started a run, or checked or tested code, without naming the end user
   (`rewind.namespace(name)`).
 - **`RewindConnectionError`**: the server could not be reached.
 
 All of them extend `RewindError`.
 
-## Retries
+## Redeliveries
 
-A request that is safe to repeat is sent again after a network error or a 503, twice by default (`maxRetries`): reads,
-`PUT`, `DELETE`, toolset registration and workflow saves (both content-addressed), checks and tests, and every request
-that carries an idempotency key.
+A request that is safe to repeat is sent again after a network error or a 503, twice by default (`maxRetries`):
+reads, `PUT`, `DELETE`, action set registration and workflow creation (both find what they already made), checks and
+tests, and every request that carries an idempotency key.
 
-Starting a run, forking it or sending a signal **without** an idempotency key is never repeated, nor is minting a
-token. Give them a key, and they become safe to retry:
+Starting a run, forking it or sending a signal **without** an idempotency key is never sent again, nor is minting a
+token. Give them a key, and they become safe to send again:
 
 ```ts
-await rewind.runs.start({ toolset: toolset.id, script, idempotencyKey: toolCall.id });
+await rewind.runs.start({ actionSet: actionSet.id, code, idempotencyKey: toolCall.id });
 await rewind.runs.signal(runId, "approval", { close: true }, { idempotencyKey: `approval-${decision.id}` });
 ```
 
@@ -85,5 +86,5 @@ await rewind.runs.signal(runId, "approval", { close: true }, { idempotencyKey: `
 whichever comes first. A wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never
 cut it. Every call also takes an `AbortSignal` as `signal`.
 
-The event stream (`runs.events(id, { follow: true })`) reconnects after a dropped connection, from the next entry, up
+The event stream (`runs.events(id, { follow: true })`) reconnects after a dropped connection, from the next event, up
 to 5 times by default (`maxReconnects`).

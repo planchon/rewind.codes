@@ -1,31 +1,32 @@
 ---
 title: "Webhooks"
-description: "Receive signed lifecycle events: a run completed, failed or waits; a tool changed; a secret was refused or is missing; an end user nears a limit."
+description: "Receive signed webhooks: a run completed, failed or waits; an action changed; a secret was refused or is missing; an end user nears a limit."
 ---
 
-Rewind tells your harness when something happens to a run, so it can resume a conversation when a long run ends,
-show a pending approval, or warn about a quota. Deliveries follow [Standard Webhooks](https://www.standardwebhooks.com):
-an HMAC-SHA256 signature over `{id}.{timestamp}.{body}`, with 5 minutes of tolerance on the timestamp.
+Rewind posts a webhook to your harness when something happens to a run, so it can resume a conversation when a long
+run ends, show a pending approval, or warn about a quota. Webhooks follow
+[Standard Webhooks](https://www.standardwebhooks.com): an HMAC-SHA256 signature over `{id}.{timestamp}.{body}`, with
+5 minutes of tolerance on the timestamp.
 
 ## Subscribe
 
 ```ts
 const subscription = await rewind.subscriptions.create({
-  url: "https://harness.example.com/rewind-events",
-  events: ["run.completed", "run.failed", "run.suspended", "quota.alert"], // every event when empty
+  url: "https://harness.example.com/rewind-webhooks",
+  types: ["run.completed", "run.failed", "run.waiting", "quota.alert"], // every type when empty
   labels: { agent: "triage" }, // optional: only runs carrying these labels
 });
 
 subscription.secret; // whsec_…: only in this answer, keep it
 ```
 
-Subscriptions belong to your organization: one receives the events of every end user, each naming its namespace.
-Deliveries go to public `https://` URLs.
+Subscriptions belong to your organization: one receives the webhooks of every end user, each naming its namespace.
+Webhooks are posted to public `https://` URLs.
 
 ## Verify and handle
 
-Pass the body exactly as received, before any JSON parsing. Answer fast, then work. A retried delivery keeps its
-`webhook-id` header: deduplicate on it.
+Pass the body exactly as received, before any JSON parsing. Answer fast, then work. A webhook your endpoint did not
+accept is posted again with backoff, with the same `webhook-id` header: deduplicate on it.
 
 <CodeGroup>
 ```ts Express
@@ -34,10 +35,10 @@ import { verifyWebhook, WebhookVerificationFailed } from "@rewind.codes/sdk";
 
 const app = express();
 
-app.post("/rewind-events", express.raw({ type: "application/json" }), (req, res) => {
-  let event;
+app.post("/rewind-webhooks", express.raw({ type: "application/json" }), (req, res) => {
+  let webhook;
   try {
-    event = verifyWebhook(req.body, req.headers, process.env.REWIND_WEBHOOK_SECRET!);
+    webhook = verifyWebhook(req.body, req.headers, process.env.REWIND_WEBHOOK_SECRET!);
   } catch (error) {
     if (error instanceof WebhookVerificationFailed) return res.sendStatus(400);
     throw error;
@@ -45,51 +46,51 @@ app.post("/rewind-events", express.raw({ type: "application/json" }), (req, res)
   res.sendStatus(204);
   if (alreadySeen(req.headers["webhook-id"])) return;
 
-  if (event.type === "run.completed") resumeConversation(event.data.run); // event.data.run.namespace: the end user
-  if (event.type === "run.suspended") showWhatItWaitsFor(event.data.run.waitingFor);
-  if (event.type === "quota.alert") warnCustomer(event.data); // namespace (null: the ceiling), quota, threshold
+  if (webhook.type === "run.completed") resumeConversation(webhook.data.run); // webhook.data.run.namespace: the end user
+  if (webhook.type === "run.waiting") showWhatItWaitsFor(webhook.data.run.waitingFor);
+  if (webhook.type === "quota.alert") warnCustomer(webhook.data); // namespace (null: the ceiling), quota, threshold
 });
 ```
 
 ```ts Node http
 import { createServer } from "node:http";
-import { verifyWebhook, WebhookVerificationFailed, type WebhookEvent } from "@rewind.codes/sdk";
+import { verifyWebhook, WebhookVerificationFailed, type Webhook } from "@rewind.codes/sdk";
 
 createServer(async (req, res) => {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
 
-  let event: WebhookEvent;
+  let webhook: Webhook;
   try {
-    event = verifyWebhook(Buffer.concat(chunks), req.headers, secret);
+    webhook = verifyWebhook(Buffer.concat(chunks), req.headers, secret);
   } catch (error) {
     if (error instanceof WebhookVerificationFailed) return void res.writeHead(400).end();
     throw error;
   }
   res.writeHead(204).end();
-  handle(event);
+  handle(webhook);
 }).listen(3000);
 ```
 </CodeGroup>
 
-`event.type` narrows `event.data` to the right shape. The complete program, with a run that suspends and completes, is in
-[`examples/webhooks`](https://github.com/planchon/rewind.codes/tree/main/examples/webhooks).
+`webhook.type` narrows `webhook.data` to the right shape. The complete program, with a run that waits and completes, is
+in [`examples/webhooks`](https://github.com/planchon/rewind.codes/tree/main/examples/webhooks).
 
-## Events
+## Types
 
-| Event | When | `data` |
+| Type | When | `data` |
 | --- | --- | --- |
 | `run.completed` | The run completed | `run`, with its `output` |
-| `run.failed` | The script failed | `run`, with its `error` |
+| `run.failed` | The workflow's code failed | `run`, with its `error` |
 | `run.cancelled` | The run ended cancelled | `run` |
-| `run.aborted` | The host ended the run: a limit, a deadlock past grace | `run`, with its `abort` |
-| `run.suspended` | An activation left the run waiting for something else than its calls in flight: a signal, a timer, an approval | `run`, with its `waitingFor` |
+| `run.aborted` | The engine ended the run: a limit, a cleanup past its grace step | `run`, with its `abort` |
+| `run.waiting` | A step left the run waiting on the outside world: a signal, an approval, a harness action, a parked call. A timer alone sends nothing | `run`, with its `waitingFor` |
 | `run.quarantined` | The run was quarantined: release it or give it up | `run`, with its `quarantine` |
-| `tool.schema_changed` | A call was parked because the tool's schema changed during the run | The run, the call and the change |
-| `credentials.expired` | A call was parked: its server refused the secret or the signature (`reason: "refused"`), or the secret the run attached no longer exists (`"missing"`, nothing was sent). Put the [secret](/sdk/secrets) again, or approve a refused signed call | The run, the call, the server, the `secret` attached (`org/…`, `ns/…`; absent for a signed call), the `reason` and the server's answer |
+| `action.schema_changed` | A call was parked because the action's schema changed during the run | The run, the call and the change |
+| `secret.expired` | A call was parked: its server refused the secret or the signature (`reason: "refused"`), or the secret the run uses no longer exists (`"missing"`, nothing was sent). Put the [secret](/sdk/secrets) again, or approve a refused signed call | The run, the call, the server, the `secret` the run uses (`org/…`, `ns/…`; absent for a signed call), the `reason` and the server's answer |
 | `quota.alert` | An end user, or your organization, crossed 80 % or 100 % of a limit | `namespace` (`null` for the ceiling), `quota`, `threshold`, `used`, `limit`, `period` |
 
-Every event about a run carries the run's state as the event left it, its `namespace` and its `labels`.
+Every webhook about a run carries the run's state as the step left it, its `namespace` and its `labels`.
 
 ## Manage subscriptions
 

@@ -1,0 +1,194 @@
+---
+title: "Action sets"
+description: "Register what workflows may call: MCP servers, APIs from their OpenAPI documents, harness actions, the http action and the organization's workflows, with how each server authenticates and a policy per action."
+---
+
+An action set lists what workflows may call. Registering it connects to its MCP servers, reads its APIs' OpenAPI
+documents, pins the schemas of their actions, and returns the generated declarations. See
+[Actions and action sets](/concepts/actions) for how calls are made.
+
+```ts
+const actionSet = await rewind.actionSets.create({
+  mcp: [
+    {
+      name: "github",
+      url: "https://api.githubcopilot.com/mcp/",
+      auth: { type: "secret", header: "Authorization", format: "Bearer {secret}" },
+    },
+    {
+      name: "stripe",
+      url: "https://mcp.example.com/stripe",
+      auth: { type: "secret", header: "Authorization", format: "Bearer {secret}" },
+      policies: { create_refund: { approval: true, idempotent: false } },
+    },
+  ],
+  apis: [{ name: "dax", openapi: "https://api.dax.example/openapi.json", auth: { type: "rewind" } }],
+  harness: [
+    {
+      name: "ask_user",
+      description: "Ask the end user a question and return their answer.",
+      inputSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
+      outputSchema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] },
+      policy: { idempotent: false },
+    },
+  ],
+  http: { allow: ["api.github.com", "*.example.com"] },
+});
+```
+
+An action set holds no secret: each server says in its `auth` how its calls prove who calls, and each run names the
+[secrets](/sdk/secrets) it uses.
+
+<ParamField body="mcp" type="McpServer[]">
+  MCP servers over streamable HTTP (`url`). `name` is the group of their actions in `rewind:actions`
+  (`github.list_issues`); `policies` sets the policy of some of their actions, by the name the server gives its tools;
+  `auth` says how their calls authenticate ([below](#how-calls-prove-who-calls)).
+</ParamField>
+
+<ParamField body="apis" type="Api[]">
+  APIs described by OpenAPI 3.0 or 3.1: one action per operation, called by Rewind. `openapi` is the document in JSON,
+  or its URL, read once at registration (at most 2 MiB); `baseUrl` is where the calls go (the document's first
+  `servers[]` by default); `operations` keeps some `operationId`s only, for an API too large for the prompt;
+  `concurrency` bounds its calls in flight across your organization (8 by default). See [API actions](#api-actions).
+</ParamField>
+
+<ParamField body="harness" type="HarnessAction[]">
+  Your own actions, executed by your [worker](/sdk/harness-actions). A name `group.action` puts the action in that
+  group (`crm.find_customer`). `inputSchema` is required and validated before each call; `outputSchema` types the
+  result in the declarations, and is not validated.
+</ParamField>
+
+<ParamField body="http" type="{ allow: string[]; policy?: ActionPolicy }">
+  Enables the built-in `http` action, and `fetch` in workflows, for these hosts only. `*.example.com` allows the
+  subdomains. It carries no secret and no signature: a call that needs one is an API action.
+</ParamField>
+
+<ParamField body="workflows" type="string[]">
+  The organization's [workflows](/sdk/workflows) the code may start, by id or name: `"triage"` pins its latest version,
+  `"triage@v12"` one version.
+</ParamField>
+
+<ParamField body="base" type="string">
+  Derives the action set from a registered one: its servers, APIs, actions and workflows are kept as pinned, and
+  `workflows` adds or pins workflows again. `mcp`, `apis`, `harness` and `http` must then be empty.
+</ParamField>
+
+<ParamField body="secrets" type="Record<string, string>">
+  Organization's secrets used only to list the tools of an MCP server whose `auth` takes one, by server:
+  `{ github: "org/github" }`. No run keeps them, and they are not part of the action set's id. Needs `secrets:use`.
+</ParamField>
+
+An action set is content-addressed: registering the same action set again returns the same `id`, so registering it at
+every start of your harness is fine.
+
+## How calls prove who calls
+
+Each MCP server and API says in its `auth` how its calls authenticate. `auth` is pinned with the action set; no value
+is.
+
+| `auth` | The request carries | For |
+| --- | --- | --- |
+| none | Nothing | Public servers |
+| `{ type: "rewind" }` | A JWT signed with your organization's key, in `Authorization: Bearer` | Your own APIs and MCP servers: they check it with [`verifyRewindCall`](/sdk/signed-calls) and learn the end user |
+| `{ type: "secret", header: "Authorization", format: "Bearer {secret}" }` | The secret the run uses, in that header; the value alone without `format` | Other servers: GitHub, Linear, an API with a key |
+| `{ type: "secret", env: "GITHUB_TOKEN" }` | The secret the run uses, in that environment variable | A stdio MCP server |
+
+A secret never goes in a URL. Without `auth`, an API follows its document's security requirement: `http` `bearer`,
+`oauth2` and `openIdConnect` send `Authorization: Bearer {secret}`, `http` `basic` sends the secret (`user:password`)
+in base64, an `apiKey` in a header sends that header. An `apiKey` in the query or a cookie, or several schemes at once,
+need an explicit `auth`; `{ type: "none" }` sets the document's requirement aside.
+
+## API actions
+
+Rewind calls your backend itself, from the action set's OpenAPI document: your backend runs no worker.
+
+```ts
+const actionSet = await rewind.actionSets.create({
+  apis: [
+    {
+      name: "dax",
+      openapi: "https://api.dax.example/openapi.json",
+      baseUrl: "https://api.dax.example",
+      auth: { type: "rewind" },
+      operations: ["createMeasure", "listModels"],
+      policies: { createMeasure: { approval: true } },
+    },
+  ],
+});
+actionSet.skipped; // the operations left out, each with why
+```
+
+- **One action per operation**, named by its `operationId` (`dax.createMeasure`), or from its method and path without
+  one (`post_v1_measures`).
+- **Its arguments** are the path, query and header parameters by name, and the JSON body under `body`. Rewind adds the
+  `Idempotency-Key` header (`{run_id}/{seq}`) when the operation declares it, the trace context, and the
+  authentication.
+- **Its result** is the JSON of the answer, typed by the operation's first `2xx` response.
+- An operation whose body is not JSON, or with a cookie parameter, is left out and listed in `skipped`.
+
+| The answer | The call |
+| --- | --- |
+| `2xx` | Succeeds: the JSON body, `null` when empty, `{ contentType, text }` for another type; at most 5 MB |
+| `401` | Is parked: [put the secret again](/sdk/secrets#when-a-server-refuses-a-secret), or approve the call |
+| `408`, `429`, `5xx`, a failed connection | Is redelivered with backoff under `idempotent: true`, never before its `Retry-After` |
+| Another status | Fails with an `ActionError` holding the status, and the problem's `title` and `detail` |
+
+The default policy follows the method: `idempotent: true` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`;
+`idempotent: false` for `POST` and `PATCH`, unless the operation declares an `Idempotency-Key` header. An API suits
+calls answered within the action's timeout: a call that waits days for a person is a
+[harness action](/sdk/harness-actions), or the workflow waits for a signal.
+
+<Tip>
+  APIs and harness actions are both first-class. With an API, Rewind calls your backend and signs each call; with
+  [harness actions](/sdk/harness-actions), your backend's worker holds a call stream open and is handed its calls, and
+  nothing reaches it from outside. Choose action set by action set.
+</Tip>
+
+## Policies
+
+Each action has a policy. Every field is optional.
+
+| Field | Default | What |
+| --- | --- | --- |
+| `idempotent` | `true` (`false` for an API's `POST` and `PATCH` without `Idempotency-Key`) | `true`: a call interrupted mid-flight is delivered again with the same idempotency key, up to 5 deliveries. `false`: a call is delivered once at most, and fails with `outcomeUnknown` if that delivery was cut off |
+| `approval` | `false` | Each call waits for your harness's approval before it is sent. See [Human in the loop](/sdk/human-in-the-loop#approve-a-call) |
+| `timeout` | `"5m"` for MCP and API actions | How long one delivery may take |
+| `reconnectTimeout` | `"60s"` for harness actions | How long a call handed on a worker's stream that closed waits for that worker to open it again, before it is handed to another (see [the call stream](/sdk/harness-actions#the-call-stream)) |
+| `concurrency` | | Calls of this action in flight per run, under the run's limit of 16 |
+
+## Declarations for the model
+
+`actionSet.declarations` holds two renderings of the action set's `rewind:actions` and `rewind:workflows` modules:
+`prompt`, one compact line per action for the model's system prompt, and `dts`, the TypeScript declarations the code
+is checked against.
+
+```ts
+const system = [
+  "Solve each task by writing one TypeScript workflow and running it with run_workflow.",
+  "What workflows can use:",
+  actionSet.declarations.prompt,
+].join("\n");
+```
+
+An action set too large for the prompt can be searched instead: give the model the agent tool `search_actions`, or
+search yourself:
+
+```ts
+const { actions } = await rewind.actionSets.search(actionSet.id, "close an issue", { limit: 5 }); // best first: name, prompt, dts
+const text = await rewind.actionSets.declarations(actionSet.id, { format: "prompt" });
+```
+
+## Secrets
+
+An action set holds no secret, and the secrets a run reads do not depend on its action set: an action set registered
+again with one more action keeps calling with the same secrets. A run names the secrets it uses at start, by server:
+
+```ts
+await rewind.namespace(user.id).runs.start({
+  actionSet: actionSet.id,
+  code,
+  secrets: { github: "ns/github", stripe: "org/stripe" },
+});
+```
+
+See [Secrets](/sdk/secrets).

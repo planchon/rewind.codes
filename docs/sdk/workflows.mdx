@@ -1,20 +1,163 @@
 ---
 title: "Workflows"
-description: "Register named, typed scripts; let scripts start, signal and wait for their runs; keep their behavior with a suite of tests; start them from your harness."
+description: "What the model writes and how to prompt for it; then naming, versioning and testing workflows, letting code start them, and promoting, forking and pulling them from your harness."
 ---
 
-A workflow is a script with a name and JSON Schemas for its input, its output and the signals it accepts. See
-[Workflows](/concepts/workflows) for the model behind them. The complete program of this page is in
+A workflow is what the model writes and Rewind runs: its code is one TypeScript module whose default export is the
+entry point, and running it gives a run. The first half of this page is for you, to prompt the model well and to read
+its code; the agent tools already describe the format to the model. The second half manages workflows from your
+harness. See [Workflows](/concepts/workflows) for the model behind them; the complete program of the second half is in
 [`examples/workflows`](https://github.com/planchon/rewind.codes/tree/main/examples/workflows).
 
-## Register a workflow
+## What the model writes
+
+```ts
+/** Close the stale issues of a repository, once someone approves. */
+import { github, slack } from "rewind:actions";
+import { signal, ActionError } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  // ...
+  return { closed: 3 };
+}
+```
+
+- **One module.** Its default export is `async function main(input)`. Input and output are JSON.
+- **Three imports.** `rewind:actions` (the action set's actions), `rewind:workflows` (the organization's workflows it
+  pins) and `rewind` (the [standard library](/sdk/workflow-reference)). No npm packages, no relative imports, no dynamic
+  `import()`.
+- **Strict TypeScript.** The code is type-checked against the action set's declarations before it runs.
+- **A comment at the top.** Its first line is how the workflow shows until it has a name, and the rest its
+  description.
+
+## Prompting the model
+
+Put the action set's declarations in the system prompt, and say how you want the model to work:
+
+```ts
+const system = [
+  "Solve each task by writing one TypeScript workflow and running it with run_workflow: its code",
+  "makes every call the task needs, in loops and in parallel, and returns only the answer.",
+  "If a run fails, read the error, fix the code and call retry_run: calls already made are reused.",
+  "",
+  "What workflows can use:",
+  actionSet.declarations.prompt,
+].join("\n");
+```
+
+What helps in practice:
+
+- **Ask for one workflow per task**, which returns only what the conversation needs. Intermediate data stays in the
+  run.
+- **Mention `retry_run`.** A failed run is fixed by a fork that does not repeat its calls, rather than by a new run
+  that does.
+- **Describe your harness actions well.** Their `description` is the model's only documentation, and so are your MCP
+  servers' tool descriptions.
+- **Give output schemas** to harness actions. MCP actions without one get [observed types](/concepts/actions#declarations)
+  after their first results.
+
+## Patterns
+
+<AccordionGroup>
+  <Accordion title="Calls in parallel">
+    Calls are promises: run independent ones together. A run has at most 16 calls in flight; the others wait for a
+    slot.
+
+    ```ts
+    const details = await Promise.all(ids.map((id) => crm.get_customer({ id })));
+    ```
+  </Accordion>
+
+  <Accordion title="Handle an action's failure">
+    A failed call throws an `ActionError`. Catch it where the code can do something better than fail.
+
+    ```ts
+    import { ActionError } from "rewind";
+
+    const results = await Promise.allSettled(stale.map((i) => github.close_issue({ repo, number: i.number })));
+    const failed = results.filter((r) => r.status === "rejected").map((r) => (r.reason as ActionError).message);
+    ```
+
+    `error.outcomeUnknown` is `true` when the call was interrupted and may have taken effect: check before calling
+    again.
+  </Accordion>
+
+  <Accordion title="Wait for a person">
+    ```ts
+    import { signal } from "rewind";
+
+    const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
+    if (decision === undefined) return { closed: 0, why: "no answer in 3 days" };
+    ```
+
+    The harness, or the model with `signal_run`, sends the signal. See [Human in the loop](/sdk/human-in-the-loop).
+  </Accordion>
+
+  <Accordion title="Wait for time to pass">
+    ```ts
+    import { sleep } from "rewind";
+
+    await sleep("10d"); // durable: nothing runs meanwhile
+    const reopened = await github.list_issues({ repo, state: "open", labels: "reopened" });
+    ```
+  </Accordion>
+
+  <Accordion title="Poll until something is ready">
+    ```ts
+    import { sleep } from "rewind";
+
+    let deployment = await vercel.get_deployment({ id });
+    while (deployment.state === "BUILDING") {
+      await sleep("30s");
+      deployment = await vercel.get_deployment({ id });
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Log what matters">
+    `console.log` lines are recorded in the history, shown in the dashboard next to their line, and returned with the
+    run: the model sees the last ones.
+
+    ```ts
+    console.log(`${stale.length} of ${issues.length} open issues are stale`);
+    ```
+  </Accordion>
+
+  <Accordion title="Fan out over a workflow">
+    ```ts
+    import { triage } from "rewind:workflows";
+
+    const runs = await Promise.all(repos.map((repo) => triage.start({ repo })));
+    const results = await Promise.all(runs.map((run) => run.result()));
+    ```
+
+    See [Let code start it](#let-code-start-it).
+  </Accordion>
+</AccordionGroup>
+
+## Mistakes Rewind catches
+
+| Mistake | What happens |
+| --- | --- |
+| A wrong argument type, a missing field, an unknown action | Refused before the run starts, with a diagnostic and a code frame |
+| `fetch`, `require`, `process`, `Buffer` used by habit | Refused, with a hint that says what to use instead |
+| A forgotten `await` on a call | Flagged by the checker. At run time, the call still completes before the run ends |
+| An `async` callback passed to `forEach` | Flagged: use `for … of` with `await`, or `Promise.all` over `map` |
+| Waiting for something that can never happen | The run fails with `DeadlockError` instead of hanging |
+| An infinite loop | The call into the code exceeds its CPU budget (5 s), and the run is aborted |
+
+## Create a workflow
+
+Every code a namespace runs is already a workflow of that namespace. Create one yourself to give it a name, an
+interface and a suite from its first version, or to make it the organization's:
 
 ```ts
 const repoCheck = await rewind.workflows.create({
   name: "repo_check",
   description: "The stars and open issues of a GitHub repository, once someone acknowledges it.",
-  toolset: base.id,
-  script: repoCheckSource,
+  actionSet: base.id,
+  code: repoCheckCode,
   input: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] },
   output: {
     type: "object",
@@ -31,13 +174,18 @@ const repoCheck = await rewind.workflows.create({
   },
 });
 
-repoCheck.version; // its digest: repo_check@9fbd13f4bb9b
+repoCheck.id; // "wf_3n7d0q5x2k8c"
+repoCheck.version; // 1: its number; repoCheck.digest, the hash of the version's document
 ```
 
-The script is checked against the toolset and the schemas: `main` must take the input and return the output, and
+Without a namespace, the workflow is your organization's: generic, and every namespace's runs may execute it. Created
+from `rewind.namespace(name)`, it is that namespace's. Creating needs `workflows:write`.
+
+The code is checked against the action set and the schemas: `main` must take the input and return the output, and
 `signal()` only takes the declared names. Inside it, signals are typed by the declaration:
 
-```ts The workflow's script
+```ts The workflow's code
+/** The stars and open issues of a GitHub repository, once someone acknowledges it. */
 import { signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -52,23 +200,32 @@ export default async function main(input: { repo: string }) {
 }
 ```
 
-Saving the same workflow again returns the version saved first. Each different save is a new immutable version. A key
-limited to labels saves a version of its own, carrying its labels, even if the same workflow was saved under other
-labels: each environment of an organization (`env: "dev"`, `env: "prod"`) sees, pins and starts its own.
+Without a name, a code its scope already has answers that code's workflow, unchanged. A name its scope already has is
+refused with `name-taken`; an invalid name, signal name or schema with `invalid-workflow`. A key limited to labels
+creates workflows that carry its labels: the same code sent under other labels is another workflow.
+
+## Find, name and describe it
 
 ```ts
-const versions = await rewind.workflows.versions("repo_check"); // newest first
-for await (const workflow of rewind.workflows.listAll()) console.log(workflow.name, workflow.version); // the latest of each
-const sharing = await rewind.workflows.list({ script: repoCheck.script }); // every version whose script it is
+const workflow = await rewind.workflows.get("repo_check"); // by id or name; "repo_check@v2" for one version
+workflow.versions; // newest first, each with its version, digest, interface, action set and suite
+for await (const w of rewind.workflows.listAll()) console.log(w.id, w.name, w.version); // the latest version of each
+const sharing = await rewind.workflows.list({ code: run.codeDigest }); // the workflows one of whose versions has this code
+
+await rewind.workflows.update(workflow.id, { name: "repo_stats", description: "…" }); // same id, no new version
 ```
 
-## Let scripts start it
+A name is an identifier that does not start with `wf_`, unique among its namespace's workflows or among the
+organization's. A name, a description, or `null` to remove one, keeps the workflow's id and versions; the handles of
+its past runs keep the origin they were given.
 
-A toolset lists the workflows its scripts may start. Derive one from the toolset you already have, without listing its
-servers again:
+## Let code start it
+
+An action set lists the organization's workflows its code may start. Derive one from the action set you already have,
+without listing its servers again:
 
 ```ts
-const toolset = await rewind.toolsets.create({ base: base.id, workflows: ["repo_check"] });
+const actionSet = await rewind.actionSets.create({ base: base.id, workflows: ["repo_check"] });
 ```
 
 Its declarations now tell the model how to use the workflow:
@@ -78,7 +235,7 @@ import { repo_check } from "rewind:workflows";
 repo_check.start({ repo: string }) → run · run.signal("acknowledge", { by: string }) · run.result() → { openIssues: number, repo: string, stars: number, acknowledgedBy?: string } · The stars and open issues of a GitHub repository, once someone acknowledges it.
 ```
 
-A script of this toolset fans out over the workflow:
+Code run with this action set fans out over the workflow:
 
 ```ts
 import { repo_check } from "rewind:workflows";
@@ -91,9 +248,10 @@ export default async function main(input: { repos: string[] }) {
 }
 ```
 
-`result()` rejects with a `WorkflowError` when the child failed, was cancelled or aborted: `error.status` says which,
-and `error.runId` names the run. The runs a script starts run in its namespace and inherit its labels; list them with
-`runs.list({ startedBy: parent.id })`.
+`result()` rejects with a `RunError` when the child run failed, was cancelled or aborted: `error.status` says which, and
+`error.runId` names the run. The child runs start in the namespace of the run that started them and inherit its labels;
+list them with `runs.list({ startedBy: parent.id })`. A child started this way runs the version the action set pins,
+even in a namespace that has forked the workflow since.
 
 ## Start it from your harness
 
@@ -105,45 +263,45 @@ await team.runs.signal(run.id, "acknowledge", { by: "the harness" });
 const done = await team.runs.get(run.id, { wait: "30s" });
 ```
 
-`workflow: "repo_check"` starts its latest version; `"repo_check@9fbd13f4bb9b"` one version (12 hexadecimal digits at
-least). An input that does not match the schema is refused with `invalid-input`, and a signal the workflow does not
-declare, or whose payload does not match, with `invalid-signal`.
+`workflow: "repo_check"` starts its latest version; `"repo_check@v2"` or `"repo_check@<digest>"` one version. A name
+resolves in the namespace first, then among the organization's workflows. An input that does not match the schema is
+refused with `invalid-input`, and a signal the version does not declare, or whose payload does not match, with
+`invalid-signal`.
 
-## Tests and the gate
+## Versions and the gate
 
-A version carries a **suite**: the [tests](/sdk/testing#tests) it passed, which every version derived from it must pass
-too. Give the first version its tests when you save it:
+A workflow carries a **suite**: the [tests](/sdk/testing#tests) every new version must pass. Give the first version
+its tests when you create it:
 
 ```ts
 const triage = {
-  name: "triage",
-  description: "Triage the stale issues of a repository, after approval.",
-  toolset: toolset.id,
+  actionSet: actionSet.id,
   input,
   output,
   signals,
 };
 const v1 = await rewind.workflows.create({
   ...triage,
-  script: triageV1,
+  name: "triage",
+  description: "Triage the stale issues of a repository, after approval.",
+  code: triageV1,
   tests: [closesOnceApproved, closesNothingWithoutApproval],
 });
 
 v1.tests; // [{ name: "closes nothing without approval", digest: "…" }, { name: "closes the stale issues once approved", … }]
 ```
 
-Saving a version goes through a gate:
+New code, a new interface, another action set or other secrets make the workflow's next version, through the gate:
 
-1. Its parent is the version named by `parent` (`"triage@4be1c07a9d3e"`), or the latest version of the same name saved
-   with your key's labels, or none.
-2. Its suite is the parent's tests, minus those `retire` names, with those `update` names replaced, plus `tests`.
-3. Every test is checked, then runs against the version's script and toolset.
-4. The version is stored only if every test passes. Otherwise nothing is stored, and `create` throws a `tests-failed`
-   error whose `tests` holds each test's outcome, with its problem and its failures.
+1. Its base is the workflow's latest version made under your key's labels, or none for a first version.
+2. Its suite is the workflow's suite, minus those `retire` names, with those `update` names replaced, plus `tests`.
+3. Every test is checked, then runs against the version's code and action set.
+4. The version is stored only if every test passes, with the next number. Otherwise nothing is stored, and the call
+   throws a `tests-failed` error whose `tests` holds each test's outcome, with its problem and its failures.
 
 ```ts
 try {
-  await rewind.workflows.create({ ...triage, script: triageV2 });
+  await rewind.workflows.createVersion("triage", { ...triage, code: triageV2 });
 } catch (error) {
   if (!isProblem(error, "tests-failed")) throw error;
   for (const test of error.tests.filter((t) => !t.passed)) {
@@ -152,44 +310,50 @@ try {
 }
 ```
 
-There is no way around the gate. To save a behavior an inherited test refuses, the new version **retires** the test,
+There is no way around the gate. To keep a behavior a test of the suite refuses, the new version **retires** the test,
 because it is deprecated, or **updates** it, because its state or its result is out of date, and says why:
 
 ```ts
-await rewind.workflows.create({
+await rewind.workflows.createVersion("triage", {
   ...triage,
-  script: triageV2,
+  code: triageV2,
   retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
   update: [
     {
       name: "closes nothing without approval",
       reason: "the message names the repository",
-      expect: { calls: [{ tool: "slack.post_message", args: { text: "acme/api: 3 stale issues" }, times: 1 }] },
+      expect: { calls: [{ action: "slack.post_message", args: { text: "acme/api: 3 stale issues" }, times: 1 }] },
     },
   ],
 });
 ```
 
-An update gives a whole new test (`test`), or only a new `expect` for the inherited one. `retire` and `update` name
-inherited tests, each with a reason; names are unique in a suite. A refused suite (a test that is not valid, a retired
-or updated test that is not inherited or has no reason, two tests of the same name) is `invalid-test`.
+An update gives a whole new test (`test`), or only a new `expect` for the one in the suite. `retire` and `update` name
+tests of the suite, each with a reason; names are unique in a suite. A refused suite (a test that is not valid, a
+retired or updated test that is not in the suite or has no reason, two tests of the same name) is `invalid-test`.
 
-The reasons stay in the lineage: each version of `rewind.workflows.versions(name)` has its `parent`, its suite
-(`tests`), the parent's tests it `retired` and those it `updated` (`from` and `to` digests), each with its reason. A
-person reading a version learns what changed on purpose. The dashboard's [Testing](/dashboard/testing) view shows
+Tests added on their own go through the same gate against the latest version, and make no version:
+
+```ts
+await rewind.workflows.addTests("triage", { tests: [reopensNothing] });
+```
+
+The reasons stay in the lineage: each version of `rewind.workflows.get(name).versions` has its `base`, the suite it
+passed (`tests`), the tests it `retired` and those it `updated` (`old` and `new` digests), each with its reason. A
+person reading a version learns what changed on purpose. The dashboard's [Workflows](/dashboard/workflows) view shows
 them.
 
-A test is given to a save inline, by the digest of a stored test, or as `{ from: "<digest>", expect: { … } }`: a stored
-test with a new expectation. Read a stored test with `rewind.tests.get(digest)`.
+A test is given to the gate inline, by the digest of a stored test, or as `{ test: "<digest>", expect: { … } }`: a
+stored test with a new expectation. Read a stored test with `rewind.tests.get(digest)`.
 
-Check a candidate before saving it with [`scripts.test({ workflow })`](/sdk/testing#workflow-suites), which runs the
-version's suite against the given script or toolset. The fork of a run of a workflow runs its version's suite too, and
-is refused with `tests-failed` when a test does not pass.
+Check a candidate before making it a version with [`workflows.test({ workflow })`](/sdk/testing#workflow-suites),
+which runs the version's suite against the given code or action set. The fork of a run of a workflow runs its
+version's suite too, and is refused with `tests-failed` when a test does not pass.
 
 ## Record tests from runs
 
-Past runs of a workflow have met the real world: real inputs, real tool answers, real signal timings. Recording turns
-them into tests, so a new version must keep doing what the old one did on those inputs.
+Past runs of a workflow have met the real world: real inputs, real answers to their calls, real signal timings.
+Recording turns them into tests, so a new version must keep doing what the old one did on those inputs.
 
 ```ts
 const recorded = await rewind.workflows.record("triage", { query: "status:completed", limit: 20 });
@@ -197,12 +361,12 @@ const recorded = await rewind.workflows.record("triage", { query: "status:comple
 for (const test of recorded.tests) console.log(test.digest, test.name, test.path, test.run);
 for (const skipped of recorded.skipped) console.log(skipped.run, skipped.reason);
 
-await rewind.workflows.create({ ...triage, script: triageV2, tests: recorded.tests.map((test) => test.digest) });
+await rewind.workflows.createVersion("triage", { ...triage, code: triageV2, tests: recorded.tests.map((test) => test.digest) });
 ```
 
 Recording takes the completed and failed runs of the workflow, of any version, that you can see: those `runs` names, or
 those `query` selects in the [query language](/dashboard/query-language), the 1,000 newest at most. It groups them by
-**path**: the tools a run called in order, the signals it waited for, and how it ended, with consecutive repeats
+**path**: the actions a run called in order, the signals it waited for, and how it ended, with consecutive repeats
 collapsed (`github.close_issue×2` and `×9` are one path). It keeps the newest run of each path, up to `limit` tests (20
 by default, 100 at most). A few hundred runs usually follow a handful of paths.
 
@@ -211,27 +375,57 @@ by default, 100 at most). A few hundred runs usually follow a handful of paths.
 | `name` | `recorded <run id>` |
 | `input` | Its input |
 | `start`, `seed` | Its start time and its seed, so `Date.now()` and random values are what they were |
-| `world.cassette` | Its calls, matched by tool and args, the outcomes of the children it started included, and its signals at the time they arrived |
-| `expect` | Its status, its output or its error, and how many times it called each tool |
-| `origin` | The run, its version and its namespace |
+| `world.cassette` | Its calls, matched by action and args, the outcomes of the children it started included, and its signals at the time they arrived |
+| `expect` | Its status, its output or its error, and how many times it called each action |
+| `from` | The run, the workflow version it ran and its namespace |
 
 A recorded test says: on this real input, the new version makes the same calls with the same args and returns the same
 output. Any difference fails it. For a failed run, give the expectation it should have met,
-`{ from: digest, expect: { status: "completed", … } }`, and the run becomes a regression test. After an intended
+`{ test: digest, expect: { status: "completed", … } }`, and the run becomes a regression test. After an intended
 change, retire the recorded tests it affects, with one reason, and record again from the new version's runs.
 
-Recording stores the tests and adds them to no suite: a test joins a suite only when a save names it, through the gate.
-A run whose test would be larger than 4 MiB is skipped, and named in `skipped`. A recorded test holds its run's data,
-so it is read like the run: `tests.get` answers only a caller who may read the runs of its namespace. The gate runs it
-whoever saves.
+Recording stores the tests and adds them to no suite: a test joins a suite only through the gate. A run whose test
+would be larger than 4 MiB is skipped, and named in `skipped`. A recorded test holds its run's data, so it is read like
+the run: `tests.get` answers only a caller who may read the runs of its namespace. The gate runs it whoever makes the
+version.
 
-Tests are stored by the digest of their content. A test lives as long as a version references it; one that no version
-references is deleted a day after it was stored. A recorded test is erased with the namespace it came from, and the
-next save leaves it out, listed as retired with the reason `recorded from an erased namespace`.
+Tests are stored by the digest of their content. A test lives as long as a suite or a version references it; one that
+nothing references is deleted a day after it was stored. A recorded test is erased with the namespace it came from,
+and the gate then leaves it out, listed as retired with the reason `recorded from an erased namespace`.
 
-## Workflows the model writes
+## Scope: promote, fork and pull
 
-Give the model the agent tool `save_workflow`, and it saves procedures it wrote as workflows of its own. The agent tools
-then derive a toolset that pins the new version, and its later scripts import it from `rewind:workflows`. The same gate
-applies: the model reads a workflow's suite and lineage with `get_workflow`, records tests with `record_tests`, and
-retires or updates tests with a reason. See [Agent tools](/sdk/agent-tools#tests-and-suites).
+A workflow belongs to the namespace whose run created it, or to the organization. Each of these needs
+`workflows:write`, which members and API keys hold and an end user's token never does:
+
+```ts
+// A namespace's workflow becomes the organization's, with the same id, versions and suite:
+await rewind.workflows.promote(workflow.id);
+
+// A namespace forks an organization's workflow, to change it for that end user:
+const ada = rewind.namespace("user_ada");
+const fork = await ada.workflows.fork("triage"); // its latest version; "triage@v12" for another
+fork.source; // the organization's workflow and the version it copies
+
+// Later, the fork takes its source's latest version, once its own suite passes:
+await ada.workflows.pull(fork.id);
+```
+
+- **A fork keeps its source's name.** A name resolves in the namespace first, so that namespace's runs and harness get
+  the fork when they name `triage`, and every other namespace keeps the organization's.
+- **A fork starts with a copy of its source's suite**, without the tests recorded from another namespace's runs, and
+  the suite then evolves on its own: `createVersion` and `addTests` work on a fork as on any workflow.
+- **Pulling is gated.** The source's latest version (its code, interface and action set) becomes the fork's next version
+  only once the fork's own suite passes against it, else nothing changes (`tests-failed`). Nothing to pull answers the
+  fork unchanged.
+
+Promoting a workflow whose name the organization already has is refused with `name-taken`, and so is forking into a
+namespace that has a workflow of that name. A namespace's workflow is not forkable (`not-forkable`), and pulling into a
+workflow that is not a fork is refused with `not-a-fork`.
+
+## Workflows the model changes
+
+Give the model the agent tool `update_workflow`, and it names, describes and versions the workflows it wrote: a
+procedure it wrote once becomes a workflow its later calls run by name. The same gate applies: the model reads a
+workflow's suite and lineage with `get_workflow`, records tests with `record_tests`, and retires or updates tests with a
+reason. See [Agent tools](/sdk/agent-tools#workflows-the-model-changes).
