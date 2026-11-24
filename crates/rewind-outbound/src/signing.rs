@@ -6,6 +6,7 @@
 //! | `iss` | `{public-url}/organizations/{tenant}` | The engine |
 //! | `aud` | The API's `baseUrl`, or the MCP server's URL | The dispatcher |
 //! | `sub`, `labels`, `run`, `action`, `idempotency_key` | The run's namespace and labels, the run, the action, `{run_id}/{seq}` | The engine, for the request of a call only |
+//! | `tool` | The action again, under its old name: verifiers on SDK 0.3.0 read it (`archi/08-decisions.md`) | The engine, for the request of a call only |
 //! | `jti` | `{run_id}/{seq}/{delivery}` for the request of a call; a random id for the other requests of an MCP session | The engine; the signer |
 //! | `htm`, `htu`, `body` | The method, the URL (without a fragment), the SHA-256 of the body in base64url (absent without a body) | The request |
 //! | `iat`, `exp` | Now, and [`TOKEN_LIFETIME`] later, in seconds, by the wall clock | The signer |
@@ -145,6 +146,8 @@ impl Signer {
                 claims.insert("sub".into(), json!(call.subject));
                 claims.insert("labels".into(), json!(call.labels));
                 claims.insert("run".into(), json!(call.run));
+                claims.insert("action".into(), json!(call.action));
+                // The claim's old name, which verifiers written before actions were named check.
                 claims.insert("tool".into(), json!(call.action));
                 claims.insert("idempotency_key".into(), json!(call.idempotency_key));
                 claims.insert("jti".into(), json!(call.jti));
@@ -314,7 +317,8 @@ mod tests {
         assert_eq!(claims["sub"], "alice");
         assert_eq!(claims["labels"], json!({ "env": "prod" }));
         assert_eq!(claims["run"], "run-1");
-        assert_eq!(claims["tool"], "dax.createMeasure");
+        assert_eq!(claims["action"], "dax.createMeasure");
+        assert_eq!(claims["tool"], claims["action"]);
         assert_eq!(claims["idempotency_key"], "run-1/3");
         assert_eq!(claims["jti"], "run-1/3/2");
         assert_eq!(claims["htm"], "POST");

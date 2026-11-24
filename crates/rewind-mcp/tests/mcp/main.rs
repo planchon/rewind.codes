@@ -644,7 +644,8 @@ async fn signed_sessions_sign_every_request() {
     assert_eq!(called.claims["sub"], "alice");
     assert_eq!(called.claims["labels"], json!({ "env": "prod" }));
     assert_eq!(called.claims["run"], run.as_str());
-    assert_eq!(called.claims["tool"], "fx.lookup");
+    assert_eq!(called.claims["action"], "fx.lookup");
+    assert_eq!(called.claims["tool"], called.claims["action"]);
     assert_eq!(called.claims["idempotency_key"], format!("{run}/3"));
     assert_eq!(called.claims["jti"], format!("{run}/3/2"));
     assert_eq!(called.claims["aud"], server.url.as_str());

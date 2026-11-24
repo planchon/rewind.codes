@@ -347,7 +347,11 @@ async fn signed_calls_check_against_the_jwks() {
     assert_eq!(claims["sub"], "alice");
     assert_eq!(claims["labels"], json!({ "env": "prod" }));
     assert_eq!(claims["run"], run.as_str());
-    assert_eq!(claims["tool"], "fake.getMeasure");
+    assert_eq!(claims["action"], "fake.getMeasure");
+    assert_eq!(
+        claims["tool"], claims["action"],
+        "the old name, for verifiers on SDK 0.3.0"
+    );
     assert_eq!(claims["idempotency_key"], format!("{run}/7"));
     assert_eq!(claims["jti"], format!("{run}/7/1"));
     assert_eq!(claims["aud"], base.as_str());

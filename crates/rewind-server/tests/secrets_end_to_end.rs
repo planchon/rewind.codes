@@ -1364,7 +1364,11 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
         json!({ "env": "prod", "team": "support" })
     );
     assert_eq!(claims["run"], run.id.as_str());
-    assert_eq!(claims["tool"], "crm.whoami");
+    assert_eq!(claims["action"], "crm.whoami");
+    assert_eq!(
+        claims["tool"], claims["action"],
+        "the old name, for verifiers on SDK 0.3.0"
+    );
     assert_eq!(claims["idempotency_key"], key.as_str());
     assert_eq!(claims["jti"], format!("{key}/1"));
     assert_eq!(
@@ -1530,7 +1534,7 @@ async fn a_signed_api_learns_the_end_user_from_the_signature() {
                         "verbose": query.get("verbose"),
                         "namespace": claims["sub"],
                         "labels": claims["labels"],
-                        "tool": claims["tool"],
+                        "action": claims["action"],
                     }))
                 },
             ),
@@ -1588,7 +1592,7 @@ async fn a_signed_api_learns_the_end_user_from_the_signature() {
     assert_eq!(
         output(&run),
         json!({
-            "me": { "id": "a b/c", "verbose": "true", "namespace": "alice", "labels": { "env": "prod" }, "tool": "notes.whoAmI" },
+            "me": { "id": "a b/c", "verbose": "true", "namespace": "alice", "labels": { "env": "prod" }, "action": "notes.whoAmI" },
             "added": { "text": "hello", "namespace": "alice", "same_key": true }
         })
     );
