@@ -97,7 +97,7 @@ interface Acme {
   tenant: Tenant;
   actionSet: string;
   waiting: string;
-  completed: { id: string; outputDigest: string; script: string };
+  completed: { id: string; outputDigest: string; workflow: string };
   shared: { id: string; outputDigest: string };
   failed: string;
   approval: { runId: string; callId: string };
@@ -178,7 +178,7 @@ test.beforeAll(async () => {
     tenant,
     actionSet: actionSetId,
     waiting,
-    completed: { id: completed.json.id, outputDigest: completed.json.output.digest, script: completed.json.codeDigest },
+    completed: { id: completed.json.id, outputDigest: completed.json.output.digest, workflow: completed.json.workflow.id },
     shared: { id: shared.json.id, outputDigest: shared.json.output.digest },
     failed: failed.json.id,
     approval: { runId: approvalRun.json.id, callId: approval.callId },
@@ -208,6 +208,7 @@ function expectNothingOf(reply: Reply, what: string): void {
     acme.failed,
     acme.actionSet,
     acme.completed.outputDigest,
+    acme.completed.workflow,
     acme.subscription,
     acme.key.id,
     acme.kid,
@@ -296,7 +297,6 @@ test("another tenant's lists, statistics and failure groups hold nothing of it",
     ["failed runs", "/v1/runs", { status: "failed" }],
     ["stats", "/v1/runs/stats"],
     ["failure groups", "/v1/runs/failures"],
-    ["scripts", "/v1/scripts"],
     ["tool statistics", "/v1/actions/stats"],
     ["actionSets", "/v1/action-sets"],
     ["workflows", "/v1/workflows"],
@@ -320,12 +320,12 @@ test("another tenant's lists, statistics and failure groups hold nothing of it",
   // acme's own failure groups do hold its failure: the check above is not vacuous.
   const own = await acme.tenant.api.get("/v1/runs/failures");
   expect(own.text).toContain(MARK);
-  evidence(`${queries.length} lists of globex (runs, stats, failures, scripts, tool stats, actionSets, namespaces, subscriptions, keys, roles, token keys, alerts, secrets, signing keys) hold no id, digest or name of acme's`);
+  evidence(`${queries.length} lists of globex (runs, stats, failures, workflows, tool stats, actionSets, namespaces, subscriptions, keys, roles, token keys, alerts, secrets, signing keys) hold no id, digest or name of acme's`);
 });
 
-test("another tenant's script and action set are not found, and its action set starts nothing", { tag: "@attack" }, async () => {
+test("another tenant's workflow and action set are not found, and its action set starts nothing", { tag: "@attack" }, async () => {
   const runs = async () => (await globex.api.get("/v1/runs", { query: { limit: 100 } })).json.runs.length;
-  expectProblem(await globex.api.get(`/v1/scripts/${acme.completed.script}`), 404, "not-found");
+  expectProblem(await globex.api.get(`/v1/workflows/${acme.completed.workflow}`), 404, "not-found");
   expectProblem(await globex.api.get(`/v1/action-sets/${acme.actionSet}/declarations`), 404, "not-found");
   expectProblem(await globex.api.get(`/v1/action-sets/${acme.actionSet}/search`, { query: { query: "refund" } }), 404, "not-found");
   // acme's secrets: their usage and their deletion are another tenant's, not found.
@@ -343,9 +343,9 @@ test("another tenant's script and action set are not found, and its action set s
   const derived = await globex.api.post("/v1/action-sets", { base: acme.actionSet, harness: [] });
   expectProblem(derived, 404, "not-found");
   // acme still reads them.
-  expectOk(await acme.tenant.api.get(`/v1/scripts/${acme.completed.script}`), 200);
+  expectOk(await acme.tenant.api.get(`/v1/workflows/${acme.completed.workflow}`), 200);
   expectOk(await acme.tenant.api.get(`/v1/action-sets/${acme.actionSet}/declarations`), 200);
-  evidence("globex: acme's script, actionSet declarations, search, secrets' usage and deletion (the organization's and a namespace's), a run, a check and a derived actionSet from acme's actionSet id → 404; acme still reads them and keeps its secrets");
+  evidence("globex: acme's workflow, actionSet declarations, search, secrets' usage and deletion (the organization's and a namespace's), a run, a check and a derived actionSet from acme's actionSet id → 404; acme still reads them and keeps its secrets");
 });
 
 test("another tenant's workflow is not found, and starts nothing", { tag: "@attack" }, async () => {

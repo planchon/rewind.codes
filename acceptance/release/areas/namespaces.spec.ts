@@ -521,7 +521,7 @@ export default async function main(input: { id: string }) {
     { what: "GET /v1/runs/{bob}/export", send: () => alice.get(`/v1/runs/${bob.waiting.id}/export`) },
     { what: "GET /v1/runs/{bob}/export?as=cassette", send: () => alice.get(`/v1/runs/${bob.waiting.id}/export`, { query: { as: "cassette" } }) },
     { what: "GET /v1/runs/{bob}/events", send: () => alice.get(`/v1/runs/${bob.waiting.id}/events`) },
-    { what: "GET /v1/scripts/{bob's script}", send: () => alice.get(`/v1/scripts/${bob.waiting.codeDigest}`) },
+    { what: "GET /v1/workflows/{bob's workflow}", send: () => alice.get(`/v1/workflows/${bob.waiting.workflow.id}`) },
     { what: "GET /v1/payloads/{bob's input}?run={bob}", send: () => alice.get(`/v1/payloads/${bob.waiting.input.digest}`, { query: { run: bob.waiting.id } }) },
     { what: "POST /v1/runs/{bob}/signals/approval", send: () => alice.post(`/v1/runs/${bob.waiting.id}/signals/approval`, { ok: true }) },
     { what: "POST /v1/runs/{bob}/cancel", send: () => alice.post(`/v1/runs/${bob.waiting.id}/cancel`, { reason: "mallory" }) },
@@ -583,14 +583,14 @@ export default async function main(input: { id: string }) {
     const stats = await alice.get("/v1/runs/stats");
     expectOk(stats, 200);
     // Her statistics are her namespace's counters: another namespace's are refused.
-    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/actions/stats"]) {
+    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/workflows", "/v1/actions/stats"]) {
       expectProblem(await alice.get(path, { query: { q: "namespace:bob" } }), 403, "forbidden");
     }
-    const scripts = await alice.get("/v1/scripts");
-    expectOk(scripts, 200);
-    const digests = scripts.json.scripts.map((s: any) => s.digest);
-    expect(digests).not.toContain(bob.waiting.codeDigest);
-    expect(digests).not.toContain(bob.asking.codeDigest);
+    const workflows = await alice.get("/v1/workflows");
+    expectOk(workflows, 200);
+    const ids = workflows.json.workflows.map((w: any) => w.id);
+    expect(ids).not.toContain(bob.waiting.workflow.id);
+    expect(ids).not.toContain(bob.asking.workflow.id);
     const failures = await alice.get("/v1/runs/failures");
     expectOk(failures, 200);
     expect(JSON.stringify(failures.json)).not.toContain(bob.waiting.id);

@@ -176,7 +176,7 @@ for (const setup of SETUPS) {
         (id: string) => ["GET", `/v1/runs/${id}`],
         (id: string) => ["GET", `/v1/runs/${id}/export`],
         (id: string) => ["POST", `/v1/runs/${id}/signals/approval`],
-        (id: string) => ["GET", `/v1/scripts/${id}`],
+        (id: string) => ["GET", `/v1/workflows/${id}`],
         (id: string) => ["GET", `/v1/payloads/${id}`],
         (id: string) => ["GET", `/v1/action-sets/${id}/declarations`],
         (id: string) => ["DELETE", `/v1/api-keys/${id}`],

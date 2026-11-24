@@ -118,13 +118,9 @@ const PROBES: Probe[] = [
   { op: "GET /v1/api-keys", need: p("api_keys:read"), path: "/v1/api-keys" },
   { op: "POST /v1/api-keys", need: p("api_keys:write"), path: "/v1/api-keys", body: { name: "matrix", role: "no-such-role" } },
   { op: "DELETE /v1/api-keys/{id}", need: p("api_keys:write"), path: `/v1/api-keys/${NO_DIGEST}` },
-  // Scripts.
+  // Checks.
   { op: "POST /v1/check", need: p("runs:start"), path: "/v1/check", body: { code: "export default async function main( {" }, namespaced: true },
   { op: "POST /v1/test", need: p("runs:start"), path: "/v1/test", body: { code: "export default async function main( {" }, namespaced: true },
-  // Scripts and statistics come from counters, which carry no labels: not for a grant limited to them.
-  { op: "GET /v1/scripts", need: p("runs:read"), path: "/v1/scripts", refusedTo: ["labels"] },
-  { op: "GET /v1/scripts/{digest}", need: p("runs:read"), path: `/v1/scripts/${NO_DIGEST}` },
-  { op: "PATCH /v1/scripts/{digest}", need: p("scripts:write"), path: `/v1/scripts/${NO_DIGEST}`, body: { title: "matrix" } },
   // Onboarding: a member only.
   { op: "GET /v1/invitations", need: "member", path: "/v1/invitations" },
   { op: "POST /v1/invitations/{id}/accept", need: "member", path: "/v1/invitations/invitation_unknown/accept" },
@@ -253,16 +249,22 @@ const PROBES: Probe[] = [
   // Who calls.
   { op: "GET /v1/whoami", need: "any", path: "/v1/whoami" },
   // Workflows.
-  { op: "GET /v1/workflows", need: p("actions:read"), path: "/v1/workflows" },
+  { op: "GET /v1/workflows", need: p("runs:read"), path: "/v1/workflows" },
   {
     op: "POST /v1/workflows",
-    need: p("actions:write"),
+    need: p("workflows:write"),
     path: "/v1/workflows",
     body: { name: "matrix", actionSet: NO_DIGEST, code: "export default async function main() {}", input: {}, output: {} },
   },
-  { op: "GET /v1/workflows/{name}", need: p("actions:read"), path: "/v1/workflows/matrix-never-saved" },
-  { op: "POST /v1/workflows/{name}/record", need: p("runs:read"), path: "/v1/workflows/matrix-never-saved/record", body: {} },
-  { op: "GET /v1/tests/{digest}", need: p("actions:read"), path: `/v1/tests/${NO_DIGEST}` },
+  { op: "GET /v1/workflows/{id}", need: p("runs:read"), path: "/v1/workflows/matrix_never_made" },
+  { op: "PATCH /v1/workflows/{id}", need: p("workflows:write"), path: "/v1/workflows/matrix_never_made", body: { name: "matrix" } },
+  { op: "POST /v1/workflows/{id}/versions", need: p("workflows:write"), path: "/v1/workflows/matrix_never_made/versions", body: {} },
+  { op: "POST /v1/workflows/{id}/tests", need: p("workflows:write"), path: "/v1/workflows/matrix_never_made/tests", body: {} },
+  { op: "POST /v1/workflows/{id}/promote", need: p("workflows:write"), path: "/v1/workflows/matrix_never_made/promote" },
+  { op: "POST /v1/workflows/{id}/fork", need: p("workflows:write"), path: "/v1/workflows/matrix_never_made/fork", namespaced: true },
+  { op: "POST /v1/workflows/{id}/pull", need: p("workflows:write"), path: "/v1/workflows/matrix_never_made/pull" },
+  { op: "POST /v1/workflows/{id}/record", need: p("runs:read"), path: "/v1/workflows/matrix_never_made/record", body: {} },
+  { op: "GET /v1/tests/{digest}", need: p("runs:read"), path: `/v1/tests/${NO_DIGEST}` },
 ];
 
 /** Every operation of `api/openapi.json`, as `METHOD /path`. */
@@ -777,16 +779,16 @@ test.describe("keys limited to labels", () => {
     evidence("a role without secrets:use: org/shared-crm for a listing → 403 naming secrets:use; for a run → 422 secret-required (forbidden), no run");
   });
 
-  test("a key limited to labels reads no statistics, no scripts, and no payload without its run", { tag: "@attack" }, async () => {
+  test("a key limited to labels reads no statistics, and no payload without its run", { tag: "@attack" }, async () => {
     // Statistics come from hourly counters, which carry no labels: none would be the key's alone.
-    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/actions/stats"]) {
+    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/actions/stats"]) {
       const reply = await red.get(path);
       expectProblem(reply, 403, "forbidden");
       expect(reply.text).not.toContain(blueRun);
     }
     // A payload belongs to its run: no caller reads one without naming it.
     expectProblem(await red.get(`/v1/payloads/${NO_DIGEST}`), 400, "invalid-request");
-    evidence("GET /v1/runs/stats, /v1/runs/failures, /v1/scripts and /v1/actions/stats → 403 for a key limited to labels; a payload without its run → 400");
+    evidence("GET /v1/runs/stats, /v1/runs/failures and /v1/actions/stats → 403 for a key limited to labels; a payload without its run → 400");
   });
 
   test("a worker key limited to labels is handed and answers the harness calls of its runs only", { tag: "@attack" }, async () => {

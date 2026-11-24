@@ -191,80 +191,81 @@ test("failures are grouped by fingerprint, numbers and quoted strings set aside"
   evidence(`signature: ${orders.signature}`);
 });
 
-test("scripts are listed once per source, with their runs and tools, and read whole", { tag: "@success" }, async () => {
+test("a code's runs are runs of one workflow, listed with its runs and actions, and read whole", { tag: "@success" }, async () => {
   const c = unique("sc");
-  const namespace = `scripts-${c}`;
+  const namespace = `workflows-${c}`;
   const own = t.api.ns(namespace);
   const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const runs = await Promise.all([1, 2].map(() => startRun(own, { actionSet, code: source, labels: { case: c } })));
-  for (const run of runs) expect((await ended(own, run.id)).status).toBe("completed");
+  const first = await startRun(own, { actionSet, code: source, labels: { case: c } });
+  expect((await ended(own, first.id)).status).toBe("completed");
+  const second = await startRun(own, { actionSet, code: source, labels: { case: c } });
+  expect((await ended(own, second.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
-  expect(runs[0]!.codeDigest).toBe(digest);
-  // The scripts of one namespace, from its counters.
+  expect(first.codeDigest).toBe(digest);
+  expect(second.workflow.id).toBe(first.workflow.id);
+  // The workflow of the code, with what its runs did, from the namespace's counters.
   const listed = await eventually(
-    "the script is listed with both runs",
+    "the workflow is listed with both runs",
     async () => {
-      const reply = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}` } });
+      const reply = await t.api.get("/v1/workflows", { query: { q: `namespace:${namespace}`, code: digest } });
       expectOk(reply);
-      const found = (reply.json.scripts as any[]).find((s) => s.digest === digest);
-      return found?.runs.completed === 2 ? reply.json.scripts : undefined;
+      const found = (reply.json.workflows as any[]).find((w) => w.id === first.workflow.id);
+      return found?.runs.completed === 2 ? reply.json.workflows : undefined;
     },
     60_000,
   );
   expect(listed).toHaveLength(1);
   expect(listed[0].actions).toEqual(["fx.lookup"]);
-  expect(listed[0].headline).toBe(`import { fx } from "rewind:actions";`);
-  // Filtered by a tool it called, and not by one it did not.
-  const byTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, action: "fx.lookup" } });
-  expectOk(byTool);
-  expect((byTool.json.scripts as any[]).map((s) => s.digest)).toEqual([digest]);
-  const otherTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, action: "fx.fail" } });
-  expectOk(otherTool);
-  expect(otherTool.json.scripts).toEqual([]);
-  const one = await t.api.get(`/v1/scripts/${digest}`);
+  expect(listed[0].namespace).toBe(namespace);
+  expect(listed[0].latest).toMatchObject({ version: 1, codeDigest: digest });
+  const one = await t.api.get(`/v1/workflows/${first.workflow.id}`);
   expectOk(one);
-  expect(one.json.source).toBe(source);
+  expect(one.json.code).toBe(source);
 });
 
-test("a script is titled by its top comment, then by a person's title and description, on its runs too", { tag: "@success" }, async () => {
+test("a workflow shows the comment at the top of its code; named, its runs take its name", { tag: "@success" }, async () => {
   const c = unique("ti");
   const own = t.api.ns(`titles-${c}`);
   const source = `// Look up ${c}\nimport { fx } from "rewind:actions";\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
   const run = await startRun(own, { actionSet, code: source, labels: { case: c } });
   expect((await ended(own, run.id)).status).toBe("completed");
-  const digest = createHash("sha256").update(source).digest("hex");
-  // The comment at the top of the source titles it.
-  const read = await t.api.get(`/v1/scripts/${digest}`);
+  const id = run.workflow.id as string;
+  // Without a name, its runs show its short id, and the comment at its top says what it does.
+  expect(run.handle.split("/")[1]).toBe(`wf-${id.slice(3, 9)}`);
+  const read = await t.api.get(`/v1/workflows/${id}`);
   expectOk(read);
-  expect(read.json).toMatchObject({ title: `Look up ${c}`, titleSource: "comment" });
-  expect((await own.get(`/v1/runs/${run.id}`)).json.scriptTitle).toBe(`Look up ${c}`);
-  // A person's title and description win, for the whole organization.
-  const titled = await t.api.patch(`/v1/scripts/${digest}`, { title: `Tier of ${c}`, description: "Reads a customer's tier." });
-  expectOk(titled);
-  expect(titled.json).toMatchObject({ title: `Tier of ${c}`, description: "Reads a customer's tier.", titleSource: "person" });
-  await eventually("the run carries the person's title", async () => {
-    const reply = await own.get(`/v1/runs/${run.id}`);
-    return reply.json.scriptTitle === `Tier of ${c}` ? reply : undefined;
-  });
-  // Removed, the comment's title comes back.
-  const removed = await t.api.patch(`/v1/scripts/${digest}`, { title: null });
+  expect(read.json.name ?? null).toBeNull();
+  expect(read.json.version.comment).toMatchObject({ title: `Look up ${c}` });
+  // Named, without a new version; the next runs show the name.
+  const name = `tier_${c.replace(/[^0-9a-z]/gi, "")}`;
+  const named = await t.api.patch(`/v1/workflows/${id}`, { name, description: "Reads a customer's tier." });
+  expectOk(named);
+  expect(named.json).toMatchObject({ id, name, description: "Reads a customer's tier.", version: { version: 1 } });
+  const again = await startRun(own, { actionSet, code: source, labels: { case: c } });
+  expect(again.workflow).toMatchObject({ id, name });
+  expect(again.handle.split("/")[1]).toBe(name);
+  // Removed, the name is gone; the runs keep their handles.
+  const removed = await t.api.patch(`/v1/workflows/${id}`, { name: null });
   expectOk(removed);
-  expect(removed.json).toMatchObject({ title: `Look up ${c}`, titleSource: "comment" });
-  evidence(`script ${digest.slice(0, 12)}: comment, person, comment`);
+  expect(removed.json.name ?? null).toBeNull();
+  expect((await own.get(`/v1/runs/${again.id}`)).json.handle).toBe(again.handle);
+  evidence(`workflow ${id}: its comment, then ${name}, then no name`);
 });
 
-test("a title or a description out of bounds is refused as invalid-title", { tag: "@failure" }, async () => {
+test("a name or a description out of bounds is refused as invalid-workflow", { tag: "@failure" }, async () => {
   const c = unique("tb");
   const own = t.api.ns(`titles-${c}`);
   const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
   const run = await startRun(own, { actionSet, code: source });
   expect((await ended(own, run.id)).status).toBe("completed");
-  const digest = createHash("sha256").update(source).digest("hex");
-  for (const body of [{ title: "" }, { title: "t".repeat(121) }, { title: "Fine", description: "d".repeat(2001) }]) {
-    expectProblem(await t.api.patch(`/v1/scripts/${digest}`, body), 422, "invalid-title");
+  const id = run.workflow.id as string;
+  for (const body of [{ name: "" }, { name: "t".repeat(65) }, { name: "not-an-identifier" }, { description: "d".repeat(2001) }]) {
+    expectProblem(await t.api.patch(`/v1/workflows/${id}`, body), 422, "invalid-workflow");
   }
   // Nothing was kept.
-  expect((await t.api.get(`/v1/scripts/${digest}`)).json.titleSource ?? null).not.toBe("person");
+  const read = await t.api.get(`/v1/workflows/${id}`);
+  expect(read.json.name ?? null).toBeNull();
+  expect(read.json.description ?? null).toBeNull();
 });
 
 test("tool statistics count each tool's calls, errors and their kinds", { tag: "@success" }, async () => {
@@ -457,7 +458,7 @@ test("statistics and failures refuse the same unreadable query", { tag: "@failur
 });
 
 test("statistics take one namespace: term and nothing else: counters know no label nor status", { tag: "@failure" }, async () => {
-  for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/actions/stats"]) {
+  for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/workflows", "/v1/actions/stats"]) {
     for (const q of ["@agent:triage", "status:failed", "namespace:alice namespace:bob", "namespace:alice,bob", "-namespace:alice"]) {
       const reply = await t.api.get(path, { query: { q } });
       expectProblem(reply, 400, "invalid-query");
