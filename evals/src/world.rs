@@ -482,11 +482,11 @@ impl World {
         self.edge.cancel(&mut gateway, run, message).await
     }
 
-    /// The run's LLM trace.
-    pub async fn trace(&self, run: &RunRef) -> Result<String, EdgeError> {
+    /// The run's transcript.
+    pub async fn transcript(&self, run: &RunRef) -> Result<String, EdgeError> {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
-        self.edge.trace(&mut gateway, run).await
+        self.edge.transcript(&mut gateway, run).await
     }
 
     /// Records tests from these runs of `workflow`, in this order, and stores them.

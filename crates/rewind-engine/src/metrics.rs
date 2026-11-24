@@ -1,4 +1,4 @@
-//! What the engine measures (`archi/05-testing-and-observability.md`, "LLM trace and metrics").
+//! What the engine measures (`archi/05-testing-and-observability.md`, "Transcript and metrics").
 //!
 //! The engine never names OpenTelemetry: it measures through the `tracing` facade, and the
 //! composition root's subscriber (`rewind-otel`) records the measurements with OpenTelemetry

@@ -831,7 +831,7 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
             format!("/v1/runs/{run}"),
             format!("/v1/runs/{run}/export"),
             format!("/v1/runs/{run}/export?as=cassette"),
-            format!("/v1/runs/{run}/trace"),
+            format!("/v1/runs/{run}/transcript"),
             format!("/v1/runs/{run}/events"),
         ]);
         paths.extend((0..events).map(|idx| format!("/v1/runs/{run}/events/{idx}")));

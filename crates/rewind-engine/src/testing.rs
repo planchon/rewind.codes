@@ -106,8 +106,8 @@ pub struct TestReport {
     pub abort: Option<AbortReason>,
     /// How many times each action was called.
     pub calls: BTreeMap<String, u64>,
-    /// The LLM trace of the run; empty for a test that was not run.
-    pub trace: String,
+    /// The run's transcript; empty for a test that was not run.
+    pub transcript: String,
     /// The run's history, every payload loaded.
     pub history: Vec<HistoryEvent>,
 }
@@ -124,7 +124,7 @@ impl TestReport {
             error: None,
             abort: None,
             calls: BTreeMap::new(),
-            trace: String::new(),
+            transcript: String::new(),
             history: Vec::new(),
         }
     }
@@ -463,9 +463,9 @@ where
         .await
         .map_err(unavailable)?
         .events;
-    let trace = world
+    let transcript = world
         .edge
-        .trace(&mut gateway, &run)
+        .transcript(&mut gateway, &run)
         .await
         .map_err(unavailable)?;
     let state = RunState::from_history(&history).map_err(|error| {
@@ -537,7 +537,7 @@ where
         error,
         abort,
         calls: counts,
-        trace,
+        transcript,
         history,
     })
 }

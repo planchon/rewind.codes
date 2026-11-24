@@ -19,7 +19,7 @@ use rewind_api::common::{Callsite, Labels, Payload, RunMode, RunStatus, Timestam
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{
     CancelRun, ForkParent, ForkRun, Run, RunError, RunPage, RunSummary, SignalAccepted, StartRun,
-    Trace, TraceFormat, Waiting,
+    Transcript, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_cli::{Console, Exit};
@@ -395,13 +395,12 @@ async fn list(
     .into_response()
 }
 
-async fn trace(State(stub): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+async fn transcript(State(stub): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
     if !stub.lock().unwrap().runs.contains_key(&id) {
         return problem(ProblemType::NotFound, &format!("no run {id}"));
     }
-    axum::Json(Trace {
+    axum::Json(Transcript {
         run_id: id,
-        format: TraceFormat::Llm,
         text: "run completed\n#1 0ms workflow.ts:3 github.get_issue({number:4}) → {…}\n".into(),
     })
     .into_response()
@@ -498,7 +497,7 @@ fn app(stub: Shared) -> Router {
         .route("/v1/runs/{id}/signals/{name}", post(signal))
         .route("/v1/runs/{id}/cancel", post(cancel))
         .route("/v1/runs/{id}/fork", post(fork))
-        .route("/v1/runs/{id}/trace", get(trace))
+        .route("/v1/runs/{id}/transcript", get(transcript))
         .route("/v1/runs/{id}/release", post(release))
         .route("/v1/runs/{id}/export", get(export))
         .route("/v1/action-sets", post(create_action_set))
@@ -774,7 +773,7 @@ async fn signals_and_cancellations() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn status_runs_trace_fork_and_release() {
+async fn status_runs_transcript_fork_and_release() {
     let server = Embedded::start().await;
     let code = server.write("hello.ts", "export default async () => 1;\n");
     server
@@ -827,10 +826,10 @@ async fn status_runs_trace_fork_and_release() {
     );
     assert_eq!(list.query.get("sort").map(String::as_str), Some("wakes"));
 
-    let (exit, out, _) = server.rewind(&["trace", "run-1"]).await;
+    let (exit, out, _) = server.rewind(&["transcript", "run-1"]).await;
     assert_eq!(exit, Exit::Success);
     assert!(out.contains("github.get_issue"), "{out}");
-    let (exit, _, _) = server.rewind(&["trace", "nobody"]).await;
+    let (exit, _, _) = server.rewind(&["transcript", "nobody"]).await;
     assert_eq!(exit, Exit::Refused);
 
     let fixed = server.write("fixed.ts", "export default async () => 2;\n");

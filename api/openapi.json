@@ -7341,8 +7341,8 @@
               }
             ]
           },
-          "trace": {
-            "description": "The LLM trace of the run; empty for a test that was not run.",
+          "transcript": {
+            "description": "The run's transcript; empty for a test that was not run.",
             "type": "string"
           }
         },
@@ -7677,11 +7677,9 @@
         ],
         "type": "object"
       },
-      "Trace": {
+      "Transcript": {
+        "description": "`GET /v1/runs/{id}/transcript`: the run as text for a model\n(`archi/05-testing-and-observability.md`, \"Transcript and metrics\"): a header, then one line\nper call, timer and signal, with its line in `workflow.ts`; payloads truncated.",
         "properties": {
-          "format": {
-            "$ref": "#/components/schemas/TraceFormat"
-          },
           "runId": {
             "type": "string"
           },
@@ -7691,16 +7689,9 @@
         },
         "required": [
           "runId",
-          "format",
           "text"
         ],
         "type": "object"
-      },
-      "TraceFormat": {
-        "enum": [
-          "llm"
-        ],
-        "type": "string"
       },
       "UpdateConnection": {
         "additionalProperties": false,
@@ -18196,9 +18187,9 @@
         ]
       }
     },
-    "/v1/runs/{id}/trace": {
+    "/v1/runs/{id}/transcript": {
       "get": {
-        "operationId": "getRunTrace",
+        "operationId": "getRunTranscript",
         "parameters": [
           {
             "description": "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).",
@@ -18206,18 +18197,6 @@
             "name": "id",
             "required": true,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "`llm` by default.",
-            "in": "query",
-            "name": "format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "llm"
-              ],
               "type": "string"
             }
           },
@@ -18245,11 +18224,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Trace"
+                  "$ref": "#/components/schemas/Transcript"
                 }
               }
             },
-            "description": "The trace."
+            "description": "The transcript."
           },
           "400": {
             "content": {
@@ -18312,7 +18291,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "The run's trace, for a model",
+        "summary": "The run's transcript, for a model",
         "tags": [
           "runs"
         ]

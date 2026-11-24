@@ -79,8 +79,8 @@ pub(crate) enum Command {
     Replay(ReplayArgs),
     /// Start a fork of a run with a corrected code.
     Fork(ForkArgs),
-    /// The LLM-readable trace of a run, or one event in full.
-    Trace(TraceArgs),
+    /// The run's transcript, for a model, or one event in full.
+    Transcript(TranscriptArgs),
     /// List runs, most recently started first.
     Runs(RunsArgs),
     /// Take a run out of quarantine, or give it up.
@@ -290,7 +290,7 @@ pub(crate) struct ForkArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct TraceArgs {
+pub(crate) struct TranscriptArgs {
     /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// One event in full, its payload included.

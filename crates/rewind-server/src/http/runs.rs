@@ -1,4 +1,4 @@
-//! Runs: start, list, state, trace, events, signals, cancellation, forks, export, quarantine,
+//! Runs: start, list, state, transcript, events, signals, cancellation, forks, export, quarantine,
 //! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 //! Each goes through the edge to the owner of the run's partition.
 
@@ -14,7 +14,7 @@ use rewind_api::common::Payload;
 use rewind_api::events::HistoryEvent as EventView;
 use rewind_api::runs::{
     CancelRun, ExportAs, ExportQuery, ForkRun, GetRunQuery, Run, RunFilter, RunPage,
-    SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
+    SignalAccepted, StartRun, Transcript,
 };
 use rewind_core::{Attachments, Code, Matching, RunHandle, RunMode, SecretRef, canonical_json};
 use rewind_engine::attachments::AttachRights;
@@ -241,19 +241,20 @@ pub(super) async fn erase(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /v1/runs/{id}/trace`.
-pub(super) async fn trace(
+/// `GET /v1/runs/{id}/transcript`.
+pub(super) async fn transcript(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(id): Path<String>,
-    Query(query): Query<TraceQuery>,
-) -> Result<Json<Trace>, ApiError> {
+) -> Result<Json<Transcript>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let view = app.run(&caller, &id).await?;
-    let text = app.edge.trace(&mut app.gateway(), &view.head.run).await?;
-    Ok(Json(Trace {
+    let text = app
+        .edge
+        .transcript(&mut app.gateway(), &view.head.run)
+        .await?;
+    Ok(Json(Transcript {
         run_id: view.head.run.id.to_string(),
-        format: query.format.unwrap_or(TraceFormat::Llm),
         text,
     }))
 }

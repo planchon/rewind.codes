@@ -18,12 +18,12 @@
 //! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_run`], [`Edge::call_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its organization actor |
-//! | [`Edge::trace`], [`Edge::trace_event`] | | the run's head and history |
+//! | [`Edge::trace`], [`Edge::transcript_event`] | | the run's head and history |
 //! | [`Edge::record_tests`] | the tests stored in the control plane | the runs searched, their history |
 //! | [`Edge::register_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
 
 mod test_runs;
-mod trace;
+mod transcript;
 mod workflows;
 
 pub use test_runs::{RecordFrom, Recording, RecordingError};

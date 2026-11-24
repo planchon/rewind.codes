@@ -177,7 +177,7 @@ impl Permission {
     pub fn description(self) -> &'static str {
         match self {
             Permission::RunsRead => {
-                "Read runs, their statistics and failure groups, a run's state, trace, events, \
+                "Read runs, their statistics and failure groups, a run's state, transcript, events, \
                  event stream and history, the workflows, the action statistics and payloads."
             }
             Permission::RunsStart => {

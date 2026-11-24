@@ -267,7 +267,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
         "{}",
         run.out
     );
-    // The trace of a test that did not pass is printed.
+    // The transcript of a test that did not pass is printed.
     assert!(run.out.contains("github.list_issues"), "{}", run.out);
 
     let broken = write(
@@ -338,9 +338,9 @@ async fn test_replays_a_recorded_cassette() {
     assert!(result.passed, "{:?}", result.tests[0].failures);
     // The recorded answer: the cassette echoes the args the run sent.
     assert!(
-        result.tests[0].trace.contains("get_issue"),
+        result.tests[0].transcript.contains("get_issue"),
         "{}",
-        result.tests[0].trace
+        result.tests[0].transcript
     );
 }
 
@@ -531,7 +531,7 @@ async fn the_corpus_runs_through_rewind_test() {
         assert!(
             result.passed,
             "{name}: {:?}\n{}",
-            result.failures, result.trace
+            result.failures, result.transcript
         );
         // A test whose expectations hold passes, however its run ended.
         assert_eq!(

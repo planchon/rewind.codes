@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::CreateActionSet;
 use rewind_api::common::RunStatus;
-use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun, TraceFormat};
+use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{ScriptFilter, SetScriptTitle, TitleSource};
 use rewind_api::workflows::{CreateWorkflow, WorkflowQuery};
 use rewind_api::{Problem, ProblemType};
@@ -63,16 +63,13 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     assert_eq!(run.handle.len(), prefix.len() + SUFFIX_LEN);
     assert_eq!(run.script_title.as_deref(), Some("Wait for approval"));
 
-    // Its state, its trace and a signal, by its handle.
+    // Its state, its transcript and a signal, by its handle.
     let read = harness.get_run(&run.handle, None).await.unwrap();
     assert_eq!(
         (read.id.as_str(), read.handle.as_str()),
         (run.id.as_str(), run.handle.as_str())
     );
-    let trace = harness
-        .run_trace(&run.handle, TraceFormat::Llm)
-        .await
-        .unwrap();
+    let trace = harness.run_transcript(&run.handle).await.unwrap();
     assert_eq!(trace.run_id, run.id);
     let accepted = harness
         .signal_run(&run.handle, "approval", &json!({ "ok": true }), None)

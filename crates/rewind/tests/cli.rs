@@ -3,7 +3,7 @@
 //! processes.
 //!
 //! - A run sleeps, its server is killed, and it resumes in another process: `rewind run`, `rewind
-//!   signal`, `rewind status`, `rewind trace`, `rewind replay`.
+//!   signal`, `rewind status`, `rewind transcript`, `rewind replay`.
 //! - A signal sent from another process while `rewind run` waits.
 //! - `kill -9` of the embedded server in the middle of an activation: the next command starts a
 //!   new server, and the run finishes once its lease expires.
@@ -210,7 +210,7 @@ fn a_run_sleeps_is_interrupted_and_resumes_in_another_process() {
     assert_eq!(code, 0, "completed: {run}");
     assert_eq!(run["output"]["value"], json!({"total": 42}));
 
-    let ran = project.rewind(&["trace", &id]);
+    let ran = project.rewind(&["transcript", &id]);
     assert_eq!(ran.code, 0, "{ran:?}");
     assert!(ran.stdout.contains("\"go\""), "{}", ran.stdout);
     assert!(ran.stdout.contains("slept"), "{}", ran.stdout);

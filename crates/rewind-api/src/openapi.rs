@@ -75,7 +75,7 @@ use crate::webhooks::{
         operations::list_run_failures,
         operations::get_run,
         operations::delete_run,
-        operations::get_run_trace,
+        operations::get_run_transcript,
         operations::get_run_event,
         operations::stream_run_events,
         operations::stream_changes,
@@ -554,7 +554,7 @@ mod operations {
     use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
     use crate::runs::{
         CancelRun, ExportQuery, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, Run,
-        RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
+        RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Transcript,
     };
     use crate::scripts::{
         CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, SetScriptTitle, TestRequest,
@@ -889,16 +889,16 @@ mod operations {
     )]
     pub(super) fn delete_run() {}
 
-    /// The run's trace, for a model
+    /// The run's transcript, for a model
     #[utoipa::path(
-        get, path = "/v1/runs/{id}/trace", tag = "runs", operation_id = "getRunTrace",
-        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), TraceQuery),
+        get, path = "/v1/runs/{id}/transcript", tag = "runs", operation_id = "getRunTranscript",
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).")),
         responses(
-            (status = 200, description = "The trace.", body = Trace),
+            (status = 200, description = "The transcript.", body = Transcript),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn get_run_trace() {}
+    pub(super) fn get_run_transcript() {}
 
     /// One event in full
     ///

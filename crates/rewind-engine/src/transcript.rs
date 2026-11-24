@@ -1,5 +1,5 @@
-//! The LLM trace of a run (`archi/05-testing-and-observability.md`, "LLM trace and metrics"):
-//! `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--event n]`, and the trace of a
+//! The transcript of a run (`archi/05-testing-and-observability.md`, "transcript and metrics"):
+//! `GET /v1/runs/{id}/transcript?format=llm`, `rewind transcript <run> [--event n]`, and the transcript of a
 //! scenario's report. It is rendered from the history alone, to be read by a model: one line per
 //! call, timer, signal and log, with its line in `workflow.ts` and its outcome folded in;
 //! payloads are truncated, and any event can be shown in full.
@@ -23,16 +23,16 @@ use rewind_core::{
 
 use crate::ports::{ForkParent, PayloadRecord, Quarantine, RunHead};
 
-/// Characters of a payload in a trace line.
+/// Characters of a payload in a transcript line.
 const PREVIEW_CHARS: usize = 60;
-/// Characters of a log message in a trace line.
+/// Characters of a log message in a transcript line.
 const MESSAGE_CHARS: usize = 100;
 /// Width of the event column.
 const EVENT_WIDTH: usize = 58;
 
-/// What a trace is rendered from.
+/// What a transcript is rendered from.
 #[derive(Debug, Clone, Copy)]
-pub struct TraceInput<'a> {
+pub struct TranscriptInput<'a> {
     pub head: &'a RunHead,
     /// The history of the run's attempt.
     pub history: &'a [HistoryEvent],
@@ -42,9 +42,9 @@ pub struct TraceInput<'a> {
     pub now: Timestamp,
 }
 
-/// The trace of a run, from its head and the history of its attempt.
-pub fn render_trace(input: TraceInput<'_>) -> String {
-    let TraceInput {
+/// The transcript of a run, from its head and the history of its attempt.
+pub fn render_transcript(input: TranscriptInput<'_>) -> String {
+    let TranscriptInput {
         head,
         history,
         payloads,
@@ -61,7 +61,7 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
     render(&shown, history, payloads, now)
 }
 
-/// What a trace shows of a run besides its history.
+/// What a transcript shows of a run besides its history.
 struct Shown<'a> {
     run: RunId,
     code: Digest,

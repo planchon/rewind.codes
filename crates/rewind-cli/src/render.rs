@@ -142,7 +142,7 @@ pub(crate) fn payload(payload: &Payload) -> String {
     match &payload.value {
         Some(value) => value.to_string(),
         None => format!(
-            "{} ({} bytes, `rewind trace` --event shows it; digest {})",
+            "{} ({} bytes, `rewind transcript --event` shows it; digest {})",
             payload.preview, payload.bytes, payload.digest
         ),
     }

@@ -225,9 +225,9 @@ impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
             .unwrap()
     }
 
-    pub async fn trace(&mut self, run: &RunRef) -> String {
+    pub async fn transcript(&mut self, run: &RunRef) -> String {
         let mut gateway = self.driver.gateway(&self.at);
-        self.edge.trace(&mut gateway, run).await.unwrap()
+        self.edge.transcript(&mut gateway, run).await.unwrap()
     }
 
     pub async fn events(&mut self, run: &RunRef) -> Vec<&'static str> {

@@ -304,7 +304,7 @@ async fn local(
             error: report.error.as_ref().map(Into::into),
             abort: report.abort.as_ref().map(Into::into),
             calls: report.calls.clone(),
-            trace: report.trace.clone(),
+            transcript: report.transcript.clone(),
         })
         .collect();
     Ok(TestRun {
@@ -313,7 +313,7 @@ async fn local(
     })
 }
 
-/// One line per test, its failures under it, and the trace of each test that did not pass.
+/// One line per test, its failures under it, and the transcript of each test that did not pass.
 fn print(run: &TestRun, console: &mut Console) {
     for test in &run.tests {
         let verdict = if test.passed { "PASS" } else { "FAIL" };
@@ -330,12 +330,12 @@ fn print(run: &TestRun, console: &mut Console) {
     let failed: Vec<&TestResult> = run
         .tests
         .iter()
-        .filter(|test| !test.passed && !test.trace.is_empty())
+        .filter(|test| !test.passed && !test.transcript.is_empty())
         .collect();
     for test in failed {
         console.line("");
         console.line(format!("{}:", test.name));
-        console.text(&test.trace);
+        console.text(&test.transcript);
     }
     let passed = run.tests.iter().filter(|test| test.passed).count();
     console.line("");

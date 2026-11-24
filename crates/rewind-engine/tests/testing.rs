@@ -112,8 +112,16 @@ async fn a_test_runs_in_virtual_time_and_checks_its_expectations() {
     // Ten days of sleep took no time: the signal came once the run was blocked.
     let at = report.output.as_ref().unwrap()["at"].as_u64().unwrap();
     assert_eq!(at, DEFAULT_START.0 + 10 * DAY);
-    assert!(report.trace.contains("timer #2 10d"), "{}", report.trace);
-    assert!(report.trace.contains("completed"), "{}", report.trace);
+    assert!(
+        report.transcript.contains("timer #2 10d"),
+        "{}",
+        report.transcript
+    );
+    assert!(
+        report.transcript.contains("completed"),
+        "{}",
+        report.transcript
+    );
 }
 
 #[tokio::test]

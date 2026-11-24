@@ -116,7 +116,7 @@ pub(crate) fn result(report: &TestReport) -> TestResult {
         error: report.error.as_ref().map(Into::into),
         abort: report.abort.as_ref().map(Into::into),
         calls: report.calls.clone(),
-        trace: report.trace.clone(),
+        transcript: report.transcript.clone(),
     }
 }
 

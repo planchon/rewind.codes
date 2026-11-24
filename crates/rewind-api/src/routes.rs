@@ -22,7 +22,7 @@ pub const RUNS: &str = "/v1/runs";
 pub const RUN_STATS: &str = "/v1/runs/stats";
 pub const RUN_FAILURES: &str = "/v1/runs/failures";
 pub const RUN: &str = "/v1/runs/{id}";
-pub const RUN_TRACE: &str = "/v1/runs/{id}/trace";
+pub const RUN_TRANSCRIPT: &str = "/v1/runs/{id}/transcript";
 pub const RUN_EVENT: &str = "/v1/runs/{id}/events/{idx}";
 pub const RUN_EVENTS: &str = "/v1/runs/{id}/events";
 pub const RUN_SIGNAL: &str = "/v1/runs/{id}/signals/{name}";
@@ -146,7 +146,7 @@ pub const OPERATIONS: [(&str, &str); 114] = [
     ("GET", RUN_FAILURES),
     ("GET", RUN),
     ("DELETE", RUN),
-    ("GET", RUN_TRACE),
+    ("GET", RUN_TRANSCRIPT),
     ("GET", RUN_EVENT),
     ("GET", RUN_EVENTS),
     ("GET", CHANGES),

@@ -25,8 +25,8 @@ pub const OUTPUT_LIMIT: usize = 256 * 1024;
 pub struct Limits {
     /// A run's output, and each page of `get_run`.
     pub output: usize,
-    /// A run's LLM trace.
-    pub trace: usize,
+    /// A run's transcript.
+    pub transcript: usize,
     /// A value shown in passing: a failed call's arguments, a test's output.
     pub value: usize,
     /// One log line, a stack.
@@ -36,15 +36,15 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// The SDK's bounds: a page of output of `output` bytes, and room around it for a trace.
+    /// The SDK's bounds: a page of output of `output` bytes, and room around it for a transcript.
     pub fn for_output(output: usize) -> Self {
-        let trace = (output / 2).max(4096);
+        let transcript = (output / 2).max(4096);
         Self {
             output,
-            trace,
+            transcript,
             value: (output / 64).max(1024),
             line: 2048,
-            total: output + trace + 64 * 1024,
+            total: output + transcript + 64 * 1024,
         }
     }
 }
@@ -61,12 +61,12 @@ pub const MCP_RESULT_LIMIT: usize = 80_000;
 
 impl Limits {
     /// Bounds whose whole result is `total` bytes: half for a page of output, a quarter for a
-    /// trace, the rest for the parts around them.
+    /// transcript, the rest for the parts around them.
     pub fn for_total(total: usize) -> Self {
         let output = total / 2;
         Self {
             output,
-            trace: total / 4,
+            transcript: total / 4,
             value: (output / 64).max(1024),
             line: 2048,
             total,
@@ -109,7 +109,7 @@ pub fn slice_utf8(text: &str, start: usize, limit: usize) -> Slice<'_> {
 }
 
 /// A text cut to at most `limit` bytes by leaving out its middle: a quarter of the room for
-/// its start, the rest for its end, where the most recent lines of a trace are.
+/// its start, the rest for its end, where the most recent lines of a transcript are.
 pub fn truncate_middle(text: &str, limit: usize) -> String {
     let total = text.len();
     if total <= limit {
@@ -146,8 +146,8 @@ pub fn truncate_end(text: &str, limit: usize) -> String {
 pub struct RunExtras {
     /// The output as compact JSON, when the run completed.
     pub output: Option<String>,
-    /// The LLM trace.
-    pub trace: Option<String>,
+    /// The transcript.
+    pub transcript: Option<String>,
 }
 
 /// A run's state for the model: its outcome, or what it waits for.
@@ -167,16 +167,16 @@ pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
         RunStatus::Active => lines.extend(waiting_section(run)),
         RunStatus::Aborted | RunStatus::Pending => {}
     }
-    if let Some(trace) = &extras.trace {
+    if let Some(transcript) = &extras.transcript {
         lines.push(
             if run.status == RunStatus::Failed {
-                "Trace up to the failure:"
+                "Transcript up to the failure:"
             } else {
-                "Trace:"
+                "Transcript:"
             }
             .to_owned(),
         );
-        lines.push(truncate_middle(trace.trim_end(), limits.trace));
+        lines.push(truncate_middle(transcript.trim_end(), limits.transcript));
     } else if !run.logs.is_empty() {
         lines.push("Last log lines:".to_owned());
         for log in &run.logs {
@@ -519,7 +519,7 @@ pub fn describe_refusal(detail: &str, diagnostics: &[Diagnostic], limits: &Limit
     }
 }
 
-/// The diagnostics, in order, as many as the room of a trace holds.
+/// The diagnostics, in order, as many as the room of a transcript holds.
 pub fn diagnostics_text(diagnostics: &[Diagnostic], limits: &Limits) -> String {
     let mut shown: Vec<String> = Vec::new();
     let mut bytes = 0;
@@ -542,7 +542,7 @@ pub fn diagnostics_text(diagnostics: &[Diagnostic], limits: &Limits) -> String {
         }
         let text = lines.join("\n");
         bytes += text.len() + 2;
-        if bytes > limits.trace && !shown.is_empty() {
+        if bytes > limits.transcript && !shown.is_empty() {
             shown.push(format!(
                 "… and {}.",
                 plural(diagnostics.len() - shown.len(), "more diagnostic")
@@ -555,8 +555,8 @@ pub fn diagnostics_text(diagnostics: &[Diagnostic], limits: &Limits) -> String {
 }
 
 /// The outcome of tests: a line per test that passed; for each one that did not, its problem,
-/// its failures, how its run ended, its calls and its trace. The traces share the room of one
-/// trace.
+/// its failures, how its run ended, its calls and its transcript. The transcripts share the room of one
+/// transcript.
 pub fn describe_test_results(results: &[TestResult], limits: &Limits) -> String {
     if results.is_empty() {
         return "No test ran.".to_owned();
@@ -575,11 +575,11 @@ pub fn describe_test_results(results: &[TestResult], limits: &Limits) -> String 
             plural(results.len(), "test")
         )
     }];
-    let traced = failing
+    let transcribed = failing
         .iter()
-        .filter(|result| !result.trace.trim().is_empty())
+        .filter(|result| !result.transcript.trim().is_empty())
         .count();
-    let trace_room = (limits.trace / traced.max(1)).max(limits.line);
+    let transcript_room = (limits.transcript / transcribed.max(1)).max(limits.line);
     for result in results {
         let name = quoted(&truncate_end(&result.name, limits.line));
         if result.passed {
@@ -633,10 +633,10 @@ pub fn describe_test_results(results: &[TestResult], limits: &Limits) -> String 
                 .collect();
             lines.push(format!("  Calls: {}", calls.join(", ")));
         }
-        let trace = result.trace.trim_end();
-        if !trace.trim().is_empty() {
-            lines.push("  Trace:".to_owned());
-            lines.push(truncate_middle(trace, trace_room));
+        let transcript = result.transcript.trim_end();
+        if !transcript.trim().is_empty() {
+            lines.push("  Transcript:".to_owned());
+            lines.push(truncate_middle(transcript, transcript_room));
         }
     }
     lines.join("\n")
@@ -734,7 +734,7 @@ pub fn describe_workflow(workflow: &Workflow, limits: &Limits) -> String {
     let dts = workflow.declarations.dts.trim();
     if !dts.is_empty() {
         lines.push("Its declaration:".to_owned());
-        lines.push(truncate_end(dts, limits.trace));
+        lines.push(truncate_end(dts, limits.transcript));
     }
     lines.join("\n")
 }
@@ -825,7 +825,10 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
         }
     }
     lines.push("Source:".to_owned());
-    lines.push(truncate_middle(details.source.trim_end(), limits.trace));
+    lines.push(truncate_middle(
+        details.source.trim_end(),
+        limits.transcript,
+    ));
 
     if details.tests.is_empty() {
         lines.push("Its suite is empty: it has no test.".to_owned());
@@ -1413,7 +1416,7 @@ mod tests {
     }
 
     #[test]
-    fn truncation_keeps_the_end_of_a_trace() {
+    fn truncation_keeps_the_end_of_a_transcript() {
         let text = "x".repeat(10_000);
         let cut = truncate_middle(&text, 1_000);
         assert!(cut.len() <= 1_000, "{}", cut.len());
@@ -1462,7 +1465,7 @@ mod tests {
 
         let test: TestResult = serde_json::from_value(json!({
             "name": long, "passed": false, "problem": "failed", "failures": [long], "status": "failed",
-            "error": { "name": long, "message": long }, "calls": {}, "trace": ""
+            "error": { "name": long, "message": long }, "calls": {}, "transcript": ""
         }))
         .unwrap();
         assert!(describe_test_results(&[test], &limits).len() < 4 * limits.value + 3 * limits.line);
@@ -1477,12 +1480,12 @@ mod tests {
         };
         let refusal = describe_refusal(&long, &[diagnostic("bad")], &limits);
         assert!(refusal.len() < 3 * limits.value + limits.line + 100);
-        // Diagnostics take the room of a trace, then say how many are left out.
+        // Diagnostics take the room of a transcript, then say how many are left out.
         let many: Vec<Diagnostic> = (0..1000)
             .map(|n| diagnostic(&format!("error {n}")))
             .collect();
         let text = diagnostics_text(&many, &limits);
-        assert!(text.len() <= limits.trace + limits.value + limits.line + 100);
+        assert!(text.len() <= limits.transcript + limits.value + limits.line + 100);
         assert!(
             text.ends_with("more diagnostics."),
             "{}",
@@ -1550,28 +1553,28 @@ mod tests {
                 {
                     "name": "closes the stale issues once approved", "passed": true, "status": "completed",
                     "output": { "closed": 1 }, "calls": { "github.close_issue": 1 }, "failures": [],
-                    "trace": "#0 run_started (a passing test's trace is not shown)"
+                    "transcript": "#0 run_started (a passing test's transcript is not shown)"
                 },
                 {
                     "name": format!("recorded {RUN_ID}"), "passed": false, "problem": "failed", "status": "completed",
                     "output": { "closed": 2 }, "calls": { "github.close_issue": 2, "github.list_issues": 1 },
                     "failures": ["the output's closed is 2, expected 3", "github.delete_repo has no recorded response"],
-                    "trace": "#0 run_started\n#1 call github.list_issues"
+                    "transcript": "#0 run_started\n#1 call github.list_issues"
                 },
                 {
                     "name": "posts to slack", "passed": false, "problem": "stale", "calls": {},
-                    "failures": ["slack.post_message is not one of the actions"], "trace": ""
+                    "failures": ["slack.post_message is not one of the actions"], "transcript": ""
                 },
                 {
                     "name": "refuses a bad repo", "passed": false, "problem": "incompatible", "calls": {},
-                    "failures": ["the input does not match the input schema of triage: repo must be a string"], "trace": ""
+                    "failures": ["the input does not match the input schema of triage: repo must be a string"], "transcript": ""
                 },
                 {
                     "name": "fails when GitHub is down", "passed": false, "problem": "failed", "status": "failed",
                     "error": { "name": "ActionError", "message": "GitHub is down" },
                     "calls": { "github.list_issues": 1 },
                     "failures": ["the run failed with ActionError, expected completed"],
-                    "trace": "#0 run_started\n#1 call github.list_issues → error"
+                    "transcript": "#0 run_started\n#1 call github.list_issues → error"
                 }
             ])),
             &limits,
@@ -1587,7 +1590,7 @@ mod tests {
                 "  The run completed.",
                 "  Output: {\"closed\":2}",
                 "  Calls: github.close_issue ×2, github.list_issues ×1",
-                "  Trace:",
+                "  Transcript:",
                 "#0 run_started\n#1 call github.list_issues",
                 "FAIL \"posts to slack\" (stale): it names actions, answers or args the action set no longer has; it was not run.",
                 "  - slack.post_message is not one of the actions",
@@ -1598,14 +1601,14 @@ mod tests {
                 "  The run failed.",
                 "  ActionError: GitHub is down",
                 "  Calls: github.list_issues ×1",
-                "  Trace:",
+                "  Transcript:",
                 "#0 run_started\n#1 call github.list_issues → error",
             ]
             .join("\n")
         );
         let passed = results(json!([
-            { "name": "a", "passed": true, "status": "completed", "calls": {}, "failures": [], "trace": "#0" },
-            { "name": "b", "passed": true, "status": "active", "calls": {}, "failures": [], "trace": "#0" }
+            { "name": "a", "passed": true, "status": "completed", "calls": {}, "failures": [], "transcript": "#0" },
+            { "name": "b", "passed": true, "status": "active", "calls": {}, "failures": [], "transcript": "#0" }
         ]));
         assert_eq!(
             describe_test_results(&passed, &limits),
@@ -1654,9 +1657,9 @@ mod tests {
                 "name": "closes nothing without approval", "passed": false, "problem": "failed",
                 "status": "completed", "output": { "closed": 1 }, "calls": { "github.close_issue": 1 },
                 "failures": ["github.close_issue was called 1 time, expected 0"],
-                "trace": "#0 run_started\n#1 signal approval\n#2 call github.close_issue"
+                "transcript": "#0 run_started\n#1 signal approval\n#2 call github.close_issue"
             },
-            { "name": "closes once approved", "passed": true, "status": "completed", "calls": {}, "failures": [], "trace": "#0" }
+            { "name": "closes once approved", "passed": true, "status": "completed", "calls": {}, "failures": [], "transcript": "#0" }
         ]));
         assert_eq!(
             describe_save_refused(
@@ -1673,7 +1676,7 @@ mod tests {
                 "  The run completed.",
                 "  Output: {\"closed\":1}",
                 "  Calls: github.close_issue ×1",
-                "  Trace:",
+                "  Transcript:",
                 "#0 run_started\n#1 signal approval\n#2 call github.close_issue",
                 "PASS \"closes once approved\"",
                 "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
@@ -1682,13 +1685,13 @@ mod tests {
         );
 
         let tests = results(json!([
-            { "name": "closes once approved", "passed": true, "status": "completed", "calls": {}, "failures": [], "trace": "#0 ok" },
+            { "name": "closes once approved", "passed": true, "status": "completed", "calls": {}, "failures": [], "transcript": "#0 ok" },
             {
                 "name": "closes nothing without approval", "passed": false, "problem": "failed",
                 "status": "completed", "output": { "closed": 1 },
                 "calls": { "github.close_issue": 1, "github.list_issues": 1 },
                 "failures": ["github.close_issue was called 1 time, expected 0"],
-                "trace": "#0 run_started\n#1 call github.close_issue"
+                "transcript": "#0 run_started\n#1 call github.close_issue"
             }
         ]));
         let workflow = workflow_ref("triage", VERSION);
@@ -1709,7 +1712,7 @@ mod tests {
                 "  The run completed.",
                 "  Output: {\"closed\":1}",
                 "  Calls: github.close_issue ×1, github.list_issues ×1",
-                "  Trace:",
+                "  Transcript:",
                 "#0 run_started\n#1 call github.close_issue",
                 "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the code, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.",
             ]

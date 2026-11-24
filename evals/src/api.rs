@@ -24,7 +24,7 @@ use rewind_api::common::{Duration, RunStatus as ApiRunStatus, timestamp};
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
-    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace, TraceFormat,
+    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, RunCounts, Script as ApiScript, TestRequest};
 use rewind_api::secrets::SecretList;
@@ -287,7 +287,7 @@ fn test_result(report: &TestReport) -> TestResult {
         error: report.error.as_ref().map(Into::into),
         abort: report.abort.as_ref().map(Into::into),
         calls: report.calls.clone(),
-        trace: report.trace.clone(),
+        transcript: report.transcript.clone(),
     }
 }
 
@@ -763,12 +763,11 @@ impl Api for World {
         })
     }
 
-    async fn run_trace(&self, run: &str) -> Result<Trace, ApiError> {
+    async fn run_transcript(&self, run: &str) -> Result<Transcript, ApiError> {
         let (run, _) = self.visible_run(run).await?;
-        let text = self.trace(&run).await.map_err(edge_error)?;
-        Ok(Trace {
+        let text = self.transcript(&run).await.map_err(edge_error)?;
+        Ok(Transcript {
             run_id: run.id.to_string(),
-            format: TraceFormat::Llm,
             text,
         })
     }

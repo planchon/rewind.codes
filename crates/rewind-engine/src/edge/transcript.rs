@@ -1,10 +1,10 @@
-//! The LLM trace of a run at the edge (`archi/05-testing-and-observability.md`, "LLM trace and
-//! metrics"): `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--event n]`, and the
-//! trace of a test's report.
+//! The transcript of a run at the edge (`archi/05-testing-and-observability.md`, "transcript and
+//! metrics"): `GET /v1/runs/{id}/transcript?format=llm`, `rewind transcript <run> [--event n]`, and the
+//! transcript of a test's report.
 //!
 //! The run's head and the history of its attempt come from its owner, from the partition while
 //! the attempt is live, from its sealed attempt once it is sealed; every payload up to 64 KiB is
-//! a value there. A payload above is a blob of the run: the trace shows its size and preview,
+//! a value there. A payload above is a blob of the run: the transcript shows its size and preview,
 //! and an event shown in full loads its value.
 
 use std::collections::BTreeMap;
@@ -16,11 +16,11 @@ use crate::executors::activation::Carried;
 use crate::plane::Plane;
 use crate::ports::link::Refusal;
 use crate::ports::{BlobOwner, BlobStore, PayloadRecord, RunRef};
-use crate::{payloads, trace};
+use crate::{payloads, transcript};
 
 impl<P: Plane> Edge<P> {
-    /// The run's LLM trace.
-    pub async fn trace<G: Gateway>(
+    /// The run's transcript.
+    pub async fn transcript<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
@@ -29,9 +29,9 @@ impl<P: Plane> Edge<P> {
             .get_run(gateway, run)
             .await?
             .ok_or(Refusal::RunNotFound(run.id))?;
-        let history = self.traced_history(gateway, run).await?;
+        let history = self.transcript_history(gateway, run).await?;
         let rows = self.blob_rows(run, &history).await?;
-        Ok(trace::render_trace(trace::TraceInput {
+        Ok(transcript::render_transcript(transcript::TranscriptInput {
             head: &view.head,
             history: &history,
             payloads: &rows,
@@ -39,15 +39,15 @@ impl<P: Plane> Edge<P> {
         }))
     }
 
-    /// One event of the run's history in full, its payload loaded (`rewind trace <run> --event
+    /// One event of the run's history in full, its payload loaded (`rewind transcript <run> --event
     /// n`). `None` past the end of the history.
-    pub async fn trace_event<G: Gateway>(
+    pub async fn transcript_event<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
         index: u64,
     ) -> Result<Option<String>, EdgeError> {
-        let history = self.traced_history(gateway, run).await?;
+        let history = self.transcript_history(gateway, run).await?;
         let Some(entry) = history.iter().find(|entry| entry.index == index) else {
             return Ok(None);
         };
@@ -62,11 +62,15 @@ impl<P: Plane> Edge<P> {
         let started_at = history
             .first()
             .map_or(entry.recorded_at, |first| first.recorded_at);
-        Ok(Some(trace::render_event(entry, value.as_ref(), started_at)))
+        Ok(Some(transcript::render_event(
+            entry,
+            value.as_ref(),
+            started_at,
+        )))
     }
 
     /// The history of the run's attempt, the payloads up to 64 KiB as values.
-    async fn traced_history<G: Gateway>(
+    async fn transcript_history<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,

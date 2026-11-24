@@ -18,7 +18,7 @@ use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::{NamespaceList, NamespaceListQuery};
 use rewind_api::runs::{
-    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
+    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
@@ -85,8 +85,11 @@ pub trait Api: Send + Sync {
         filter: &RunFilter,
     ) -> impl Future<Output = Result<RunPage, ApiError>> + Send;
 
-    /// `GET /v1/runs/{id}/trace?format=llm`.
-    fn run_trace(&self, run: &str) -> impl Future<Output = Result<Trace, ApiError>> + Send;
+    /// `GET /v1/runs/{id}/transcript`.
+    fn run_transcript(
+        &self,
+        run: &str,
+    ) -> impl Future<Output = Result<Transcript, ApiError>> + Send;
 
     /// `GET /v1/runs/{id}/events/{idx}`.
     fn run_event(
@@ -226,8 +229,11 @@ impl<A: Api> Api for &A {
         (**self).list_runs(filter)
     }
 
-    fn run_trace(&self, run: &str) -> impl Future<Output = Result<Trace, ApiError>> + Send {
-        (**self).run_trace(run)
+    fn run_transcript(
+        &self,
+        run: &str,
+    ) -> impl Future<Output = Result<Transcript, ApiError>> + Send {
+        (**self).run_transcript(run)
     }
 
     fn run_event(

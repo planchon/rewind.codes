@@ -32,7 +32,7 @@
 //! - [`testing`]: tests run in virtual time against a code, several at once, each on a run
 //!   plane of its own in the driver; the checks of a test against its action set and its
 //!   workflow's interface.
-//! - [`trace`]: the LLM trace of a run.
+//! - [`transcript`]: the transcript of a run.
 //! - [`migrate`]: `rewind server migrate-runs`, the runs of the set-aside tables moved into their
 //!   partitions and the archive, once.
 //! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions),
@@ -81,7 +81,7 @@ mod tasks;
 pub mod telemetry;
 pub mod testing;
 pub mod text;
-pub mod trace;
+pub mod transcript;
 mod workflows;
 
 pub use batch::EngineError;

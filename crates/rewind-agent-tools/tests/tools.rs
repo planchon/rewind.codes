@@ -15,7 +15,7 @@ use rewind_api::common::Duration;
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
-    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
+    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
@@ -156,7 +156,7 @@ impl Api for Fake {
         })
     }
 
-    async fn run_trace(&self, run: &str) -> Result<Trace, ApiError> {
+    async fn run_transcript(&self, run: &str) -> Result<Transcript, ApiError> {
         self.saw("run_trace", json!({ "run": run }), None);
         Ok(serde_json::from_value(
             json!({ "runId": run, "format": "llm", "text": "[0] run_started" }),

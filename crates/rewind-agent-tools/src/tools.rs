@@ -662,15 +662,15 @@ impl<A: Api> Session<'_, A> {
         ))
     }
 
-    /// A run's report: its output when it completed, its trace when asked.
-    async fn report(&self, run: Run, error_when_failed: bool, trace: bool) -> Handled {
+    /// A run's report: its output when it completed, its transcript when asked.
+    async fn report(&self, run: Run, error_when_failed: bool, transcript: bool) -> Handled {
         let output = if run.status == RunStatus::Completed {
             Some(self.output_of(&run).await?)
         } else {
             None
         };
-        let trace = if trace {
-            Some(self.api.run_trace(&run.id).await?.text)
+        let transcript = if transcript {
+            Some(self.api.run_transcript(&run.id).await?.text)
         } else {
             None
         };
@@ -678,7 +678,7 @@ impl<A: Api> Session<'_, A> {
             run.status,
             RunStatus::Failed | RunStatus::Cancelled | RunStatus::Aborted
         );
-        let content = describe_run(&run, &RunExtras { output, trace }, &self.limits);
+        let content = describe_run(&run, &RunExtras { output, transcript }, &self.limits);
         Ok(AgentToolResult {
             run: Some(run),
             ..result(content, error_when_failed && ended)

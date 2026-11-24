@@ -1,18 +1,18 @@
 //! The commands about runs, all through the API: `run`, `status`, `signal`, `cancel`, `fork`,
-//! `trace`, `runs`, `release`, `export`.
+//! `transcript`, `runs`, `release`, `export`.
 
 use std::time::{Duration as StdDuration, Instant};
 
 use rewind_api::Client;
 use rewind_api::common::Duration;
 use rewind_api::headers::IdempotencyKey;
-use rewind_api::runs::{CancelRun, ExportAs, ForkRun, Run, RunFilter, StartRun, TraceFormat};
+use rewind_api::runs::{CancelRun, ExportAs, ForkRun, Run, RunFilter, StartRun};
 use serde_json::Value;
 
 use super::Server;
 use crate::args::{
     CancelArgs, ExportArgs, ExportFormat, ForkArgs, ReleaseArgs, RunArgs, RunsArgs, SignalArgs,
-    StatusArgs, TraceArgs,
+    StatusArgs, TranscriptArgs,
 };
 use crate::error::CliError;
 use crate::exit::Exit;
@@ -202,9 +202,9 @@ pub(super) async fn release(
     Ok(Exit::Success)
 }
 
-pub(super) async fn trace(
+pub(super) async fn transcript(
     server: &Server<'_>,
-    args: TraceArgs,
+    args: TranscriptArgs,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let client = server.client().await?;
@@ -214,11 +214,11 @@ pub(super) async fn trace(
             console.print_json(&entry)?;
         }
         None => {
-            let trace = client.run_trace(&args.run, TraceFormat::Llm).await?;
+            let transcript = client.run_transcript(&args.run).await?;
             if console.json() {
-                console.print_json(&trace)?;
+                console.print_json(&transcript)?;
             } else {
-                console.text(&trace.text);
+                console.text(&transcript.text);
             }
         }
     }

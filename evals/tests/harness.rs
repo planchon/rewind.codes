@@ -489,7 +489,7 @@ async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
     );
     assert!(text.contains("{\"id\":\"O-504\"}"), "{text}");
     assert!(text.contains("error: not_found: no order O-504"), "{text}");
-    assert!(text.contains("Trace up to the failure:"), "{text}");
+    assert!(text.contains("Transcript up to the failure:"), "{text}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

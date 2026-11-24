@@ -34,7 +34,7 @@ pub(crate) async fn execute(
         Command::Status(args) => runs::status(&server, args, console).await,
         Command::Replay(args) => replay::replay(&server, args, console).await,
         Command::Fork(args) => runs::fork(&server, args, console).await,
-        Command::Trace(args) => runs::trace(&server, args, console).await,
+        Command::Transcript(args) => runs::transcript(&server, args, console).await,
         Command::Runs(args) => runs::list(&server, args, console).await,
         Command::Release(args) => runs::release(&server, args, console).await,
         Command::Export(args) => runs::export(&server, args, console).await,

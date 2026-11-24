@@ -23,7 +23,7 @@ use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
     CancelRun, ExportAs, FailureQuery, ForkRun, RunFilter, RunSort, RunStatsQuery, StartRun,
-    TraceFormat, WaitKind, Waiting,
+    WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
 use rewind_api::webhooks::{
@@ -118,7 +118,7 @@ async fn a_run_starts_waits_and_is_read_back() {
 
     let read = harness.get_run(&run.id, None).await.unwrap();
     assert_eq!(read.history_len, run.history_len);
-    let trace = harness.run_trace(&run.id, TraceFormat::Llm).await.unwrap();
+    let trace = harness.run_transcript(&run.id).await.unwrap();
     assert!(trace.text.contains("completed"), "{}", trace.text);
     let entry = harness.run_event(&run.id, 0).await.unwrap();
     assert!(matches!(entry.event, Event::RunStarted { .. }));

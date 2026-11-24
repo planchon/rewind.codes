@@ -44,8 +44,7 @@ use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
 use crate::routes;
 use crate::runs::{
     CancelRun, ExportAs, ExportQuery, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, Run,
-    RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
-    TraceQuery,
+    RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Transcript,
 };
 use crate::scripts::{
     CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, SetScriptTitle, TestRequest,
@@ -358,12 +357,9 @@ impl Client {
         self.empty(request).await
     }
 
-    /// `GET /v1/runs/{id}/trace`.
-    pub async fn run_trace(&self, run: &str, format: TraceFormat) -> Result<Trace, Error> {
-        let query = TraceQuery {
-            format: Some(format),
-        };
-        let request = self.request_with(Method::GET, routes::RUN_TRACE, &[run], &query)?;
+    /// `GET /v1/runs/{id}/transcript`.
+    pub async fn run_transcript(&self, run: &str) -> Result<Transcript, Error> {
+        let request = self.request(Method::GET, routes::RUN_TRANSCRIPT, &[run])?;
         self.json(request).await
     }
 

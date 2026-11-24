@@ -1,4 +1,4 @@
-//! The LLM trace of a run, and one event in full (`rewind trace <run> [--event n]`).
+//! The transcript of a run, and one event in full (`rewind transcript <run> [--event n]`).
 
 #![allow(clippy::unwrap_used)]
 
@@ -29,7 +29,7 @@ fn triage() -> FakeExecutor {
 }
 
 #[tokio::test]
-async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
+async fn the_transcript_folds_each_call_with_its_outcome_and_truncates_payloads() {
     let mut world = World::new(
         triage(),
         RecordingDispatcher::new(|_| {
@@ -44,8 +44,8 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
         .run;
     world.settle().await;
     world.advance(HOUR);
-    let trace = world.trace(&run).await;
-    let lines: Vec<&str> = trace.lines().collect();
+    let transcript = world.transcript(&run).await;
+    let lines: Vec<&str> = transcript.lines().collect();
     assert_eq!(
         lines[0],
         format!(
@@ -55,18 +55,18 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     );
     assert!(
         lines[1].ends_with("· started 2026-01-01T00:00:00Z"),
-        "{trace}"
+        "{transcript}"
     );
     assert_eq!(lines[2], "");
     assert!(
         lines[5].contains("#1 a({\"repo\":\"acme/api\",\"state\":\"open\"})")
             && lines[5].contains("L1")
             && lines[5].ends_with("→ 3 items · 40 B · 0.0s · event 2"),
-        "{trace}"
+        "{transcript}"
     );
     assert!(
         lines[7].contains("timer #2 3d") && lines[7].ends_with("→ pending"),
-        "{trace}"
+        "{transcript}"
     );
 
     world
@@ -74,8 +74,8 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
         .await
         .unwrap();
     world.settle().await;
-    let trace = world.trace(&run).await;
-    let lines: Vec<&str> = trace.lines().collect();
+    let transcript = world.transcript(&run).await;
+    let lines: Vec<&str> = transcript.lines().collect();
     assert_eq!(
         lines[0],
         format!(
@@ -83,24 +83,24 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
             run.id
         )
     );
-    assert!(lines[7].ends_with("→ dropped with the run"), "{trace}");
+    assert!(lines[7].ends_with("→ dropped with the run"), "{transcript}");
     assert!(
         lines[8].ends_with("→ received after 1h00m · event 6"),
-        "{trace}"
+        "{transcript}"
     );
-    // A payload is truncated in the trace.
+    // A payload is truncated in the transcript.
     assert!(
         lines[9].contains("signal \"approval\" ← {\"close\":\"xxx"),
-        "{trace}"
+        "{transcript}"
     );
-    assert!(lines[9].ends_with("…"), "{trace}");
+    assert!(lines[9].ends_with("…"), "{transcript}");
     assert!(lines[10].contains("failed · TypeError: decision.close is undefined"));
 
     // One event in full.
     let mut gateway = world.driver.gateway(&world.at.clone());
     let entry = world
         .edge
-        .trace_event(&mut gateway, &run, 6)
+        .transcript_event(&mut gateway, &run, 6)
         .await
         .unwrap()
         .unwrap();
@@ -109,7 +109,7 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     assert_eq!(
         world
             .edge
-            .trace_event(&mut gateway, &run, 99)
+            .transcript_event(&mut gateway, &run, 99)
             .await
             .unwrap(),
         None

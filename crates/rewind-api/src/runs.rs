@@ -1,4 +1,4 @@
-//! Runs: start with the secrets they attach, state, list, trace, signals, cancellation, forks,
+//! Runs: start with the secrets they attach, state, list, transcript, signals, cancellation, forks,
 //! run export, quarantine, deletion (`archi/01-product.md`, `archi/03-execution.md`).
 //!
 //! The events and the event stream of a run are in [`crate::events`].
@@ -836,38 +836,13 @@ impl ForkRun {
     }
 }
 
-/// `GET /v1/runs/{id}/trace`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct TraceQuery {
-    /// `llm` by default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[param(inline)]
-    pub format: Option<TraceFormat>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TraceFormat {
-    /// A compact text trace for a model: one line per call, timer and signal, with its
-    /// line in `workflow.ts`; payloads truncated (`archi/05-testing-and-observability.md`).
-    #[default]
-    Llm,
-}
-
-impl TraceFormat {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TraceFormat::Llm => "llm",
-        }
-    }
-}
-
+/// `GET /v1/runs/{id}/transcript`: the run as text for a model
+/// (`archi/05-testing-and-observability.md`, "Transcript and metrics"): a header, then one line
+/// per call, timer and signal, with its line in `workflow.ts`; payloads truncated.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Trace {
+pub struct Transcript {
     pub run_id: String,
-    pub format: TraceFormat,
     pub text: String,
 }
 

@@ -277,9 +277,9 @@ pub struct TestResult {
     /// How many times each action was called.
     #[serde(default)]
     pub calls: BTreeMap<String, u64>,
-    /// The LLM trace of the run; empty for a test that was not run.
+    /// The run's transcript; empty for a test that was not run.
     #[serde(default)]
-    pub trace: String,
+    pub transcript: String,
 }
 
 /// `POST /v1/test`: what the tests ran against, and their outcomes.

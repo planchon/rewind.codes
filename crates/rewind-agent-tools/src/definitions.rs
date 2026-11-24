@@ -274,7 +274,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         "run_workflow" => ToolDefinition {
             name: "run_workflow",
             description: concat!(
-                "Type-check a TypeScript code and run it. The code calls the actions declared in `rewind:actions` and runs durably: it can sleep for days and wait for signals. A code that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
+                "Type-check a TypeScript code and run it. The code calls the actions declared in `rewind:actions` and runs durably: it can sleep for days and wait for signals. A code that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the transcript up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
                 title_comment!()
             ),
             input_schema: json!({
@@ -304,7 +304,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "test_workflow" => ToolDefinition {
             name: "test_workflow",
-            description: "Run tests against a code, end to end, in virtual time: no action is really called and sleeps take no time. Each test gives the world the run meets (its input, the answers of the actions it may call, the signals sent to it) and what must hold at the end (its status, its output or error, the calls it made). A call the world does not answer fails the test. With `workflow`, that workflow's suite runs too, against your code: this is how you check a fix or a change of a workflow before save_workflow. Returns whether each test passed and, for those that did not, why: stale (it names tools, answers or args your tools no longer have; not run), incompatible (the workflow's input or signal schemas refuse it; not run) or failed (an expectation does not hold), with the run's outcome and its trace.",
+            description: "Run tests against a code, end to end, in virtual time: no action is really called and sleeps take no time. Each test gives the world the run meets (its input, the answers of the actions it may call, the signals sent to it) and what must hold at the end (its status, its output or error, the calls it made). A call the world does not answer fails the test. With `workflow`, that workflow's suite runs too, against your code: this is how you check a fix or a change of a workflow before save_workflow. Returns whether each test passed and, for those that did not, why: stale (it names tools, answers or args your tools no longer have; not run), incompatible (the workflow's input or signal schemas refuse it; not run) or failed (an expectation does not hold), with the run's outcome and its transcript.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -321,12 +321,12 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "get_run" => ToolDefinition {
             name: "get_run",
-            description: "Read a run: its status, what it waits for or how it ended, and its trace. With `event`, one event in full instead. With `offset`, the next page of an output (or event) too large for one answer.",
+            description: "Read a run: its status, what it waits for or how it ended, and its transcript. With `event`, one event in full instead. With `offset`, the next page of an output (or event) too large for one answer.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "run_id": run_id(),
-                    "event": { "type": "integer", "minimum": 0, "description": "The index of an event of the history, as the trace shows it." },
+                    "event": { "type": "integer", "minimum": 0, "description": "The index of an event of the history, as the transcript shows it." },
                     "offset": { "type": "integer", "minimum": 0, "description": "Where the page starts, in bytes, as the previous answer said." },
                     "wait": { "type": "string", "description": "Wait up to this long for the run to end first, such as \"30s\"." }
                 },

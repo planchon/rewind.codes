@@ -260,11 +260,7 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         (404, Some(ProblemType::NotFound))
     );
     assert_eq!(
-        refused(
-            alice
-                .run_trace(&his.id, rewind_api::runs::TraceFormat::Llm)
-                .await
-        ),
+        refused(alice.run_transcript(&his.id).await),
         (404, Some(ProblemType::NotFound))
     );
     assert_eq!(

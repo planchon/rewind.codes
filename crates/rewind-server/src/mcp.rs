@@ -29,7 +29,7 @@ use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
-    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
+    CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
@@ -236,8 +236,8 @@ impl Api for ServerApi {
         Api::list_runs(&self.local, filter).await
     }
 
-    async fn run_trace(&self, run: &str) -> Result<Trace, ToolError> {
-        Api::run_trace(&self.local, run).await
+    async fn run_transcript(&self, run: &str) -> Result<Transcript, ToolError> {
+        Api::run_transcript(&self.local, run).await
     }
 
     async fn run_event(&self, run: &str, idx: u64) -> Result<HistoryEvent, ToolError> {
