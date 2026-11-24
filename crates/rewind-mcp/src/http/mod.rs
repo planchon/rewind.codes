@@ -245,9 +245,9 @@ impl ActionDispatcher for HttpAction {
                     }
                 }
             }
-            ActionRoute::Builtin(Builtin::Webhook) => Failure::permanent(
+            ActionRoute::Builtin(Builtin::SignalUrl) => Failure::permanent(
                 ActionFailureKind::Unavailable,
-                "webhook is answered by the engine, which holds the webhook tokens",
+                "webhook is answered by the engine, which holds the signal URL tokens",
                 None,
             )
             .into_dispatched(),

@@ -66,7 +66,7 @@ pub(crate) fn action(export: &Export<'_>, signature: &Signature<'_>) -> String {
     line
 }
 
-/// The line of a built-in: `fetch` for `http`, `webhook` from `rewind`.
+/// The line of a built-in: `fetch` for `http`, `signalUrl` from `rewind`.
 pub(crate) fn builtin(builtin: &Builtin) -> String {
     match builtin {
         Builtin::Http { allowed_hosts } => format!(
@@ -74,9 +74,11 @@ pub(crate) fn builtin(builtin: &Builtin) -> String {
              HTTP requests to these hosts only: {}.",
             allowed_hosts.join(", ")
         ),
-        Builtin::Webhook => "webhook(name) → { url: string } · From \"rewind\": a URL bound to \
+        Builtin::SignalUrl => {
+            "signalUrl(name) → { url: string } · From \"rewind\": a URL bound to \
                              this run; what is posted to it becomes the signal `name`."
-            .to_owned(),
+                .to_owned()
+        }
         // Never listed: a workflow's built-ins are reached through `rewind:workflows`.
         Builtin::Workflow { workflow, .. } => format!("{workflow}.start(input) → run"),
     }

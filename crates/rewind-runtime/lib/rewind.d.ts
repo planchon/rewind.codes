@@ -11,12 +11,12 @@ declare module "rewind" {
 
   /**
    * The signals this run accepts, by name, with their payload's type. For the code of a
-   * workflow, its declared signals fill it, and `signal()` and `webhook()` only take their
+   * workflow, its declared signals fill it, and `signal()` and `signalUrl()` only take their
    * names. Empty for any other code: they take any name.
    */
   export interface Signals {}
 
-  /** A name `signal()` and `webhook()` take: one of {@link Signals}, or any string if none. */
+  /** A name `signal()` and `signalUrl()` take: one of {@link Signals}, or any string if none. */
   export type SignalName = [keyof Signals] extends [never] ? string : keyof Signals & string;
 
   /** What `signal(name)` gives: the declared type of the signal `K`, or `T` if none is declared. */
@@ -56,7 +56,7 @@ declare module "rewind" {
    * becomes a signal `name` on this run, with the request's body as payload. Give the URL to an
    * external system, then wait with `signal(name)`.
    */
-  export function webhook(name: SignalName): Promise<{ url: string }>;
+  export function signalUrl(name: SignalName): Promise<{ url: string }>;
 
   /** This run. */
   export const run: {

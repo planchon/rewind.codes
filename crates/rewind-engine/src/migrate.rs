@@ -14,7 +14,7 @@
 //!             head, history, payload records, summary, counters; Seal; its retention's timer
 //!      live:  one batch: head, history, payload records, summary, counters; its inbox, signal
 //!             keys, call tasks (in flight: ready), timers (its code's, its deadline, a
-//!             backoff), watchers, webhook tokens
+//!             backoff), watchers, signal URL tokens
 //!      its legacy_runs row: the router finds its version 7 id
 //!  every run moved ───────────────────────────────────────► the tables dropped
 //! ```
@@ -478,7 +478,7 @@ fn live(batch: &mut Batch, legacy: &LegacyRun, tasks: Vec<TaskRecord>, now: Time
         });
     }
     for webhook in &legacy.webhooks {
-        batch.push(Change::WebhookToken {
+        batch.push(Change::SignalUrlToken {
             run: run.clone(),
             name: webhook.name.clone(),
             hash: webhook.hash,

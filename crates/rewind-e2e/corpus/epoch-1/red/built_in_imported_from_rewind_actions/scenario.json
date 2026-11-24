@@ -1,5 +1,5 @@
 {
-  "description": "rewind:actions does not export the built-ins, even when the action set has them: scripts reach http through fetch, and webhook from \"rewind\". Importing one from rewind:actions is refused at start, and no run exists.",
+  "description": "rewind:actions does not export the built-ins, even when the action set has them: workflows reach http through fetch, and signalUrl from \"rewind\". Importing one from rewind:actions is refused at start, and no run exists.",
   "actions": {
     "http": {
       "status": 200,
@@ -9,7 +9,7 @@
       "headers": [],
       "body": ""
     },
-    "webhook": { "url": "https://rewind.example.com/hooks/tok_1" },
+    "signalUrl": { "url": "https://rewind.example.com/hooks/tok_1" },
     "audit.record": { "ok": true }
   },
   "http_hosts": ["api.example.com"],

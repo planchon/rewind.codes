@@ -65,7 +65,11 @@ fn action_set() -> ActionSet {
         json!({}),
     );
     let ask = Action::new("ask_user", ActionRoute::Harness { group: None }, json!({}));
-    let webhook = Action::new("webhook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
+    let webhook = Action::new(
+        "signalUrl",
+        ActionRoute::Builtin(Builtin::SignalUrl),
+        json!({}),
+    );
     ActionSet::new([server], [issue, ask, webhook]).unwrap()
 }
 
@@ -198,7 +202,7 @@ fn hooked() -> FakeExecutor {
     caller().with(
         "hooked",
         |run| {
-            run.call("webhook", json!({ "name": "pr_merged" }));
+            run.call("signalUrl", json!({ "name": "pr_merged" }));
         },
         |run, delivery| match delivery {
             Delivery::CallCompleted { .. } => run.await_signal("pr_merged"),
@@ -224,7 +228,7 @@ async fn first_result(world: &mut World, run: &RunRef) -> JsonValue {
 }
 
 #[tokio::test]
-async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
+async fn the_signal_url_builtin_returns_a_url_bound_to_the_run_and_the_name() {
     let dispatcher = RecordingDispatcher::new(|_| Ok(json!({ "url": "mock://hook" })));
     let mut world = World::with(hooked(), dispatcher, 1, &[public()]).await;
     let request = StartRun::new(Code::new("hooked"), action_set(), json!({}));
@@ -242,7 +246,7 @@ async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
     let mut gateway = world.driver.gateway(&world.at);
     world
         .edge
-        .webhook(&mut gateway, token, json!({ "merged": true }), None)
+        .signal_by_url(&mut gateway, token, json!({ "merged": true }), None)
         .await
         .unwrap();
     world.idle().await;
@@ -259,31 +263,31 @@ async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
 }
 
 #[tokio::test]
-async fn without_a_public_url_the_webhook_builtin_is_unavailable() {
+async fn without_a_public_url_the_signal_url_builtin_is_unavailable() {
     let mut world = World::new(caller(), RecordingDispatcher::echo()).await;
     let run = world
-        .run(calling("webhook", json!({ "name": "pr_merged" })))
+        .run(calling("signalUrl", json!({ "name": "pr_merged" })))
         .await;
     assert_eq!(
         output(&mut world, &run).await,
         json!({
             "error": "unavailable",
-            "message": "this server has no public URL, so it cannot receive webhooks",
+            "message": "this server has no public URL, so it cannot give signal URLs",
         })
     );
 }
 
 #[tokio::test]
-async fn a_webhook_name_with_a_nul_character_is_refused() {
+async fn a_signal_url_name_with_a_nul_character_is_refused() {
     let mut world = World::with(caller(), RecordingDispatcher::echo(), 1, &[public()]).await;
     let run = world
-        .run(calling("webhook", json!({ "name": "pr\u{0}merged" })))
+        .run(calling("signalUrl", json!({ "name": "pr\u{0}merged" })))
         .await;
     assert_eq!(
         output(&mut world, &run).await,
         json!({
             "error": "error",
-            "message": "the webhook name contains a NUL character (U+0000), which cannot be \
+            "message": "the signal name contains a NUL character (U+0000), which cannot be \
                         stored: remove it",
         })
     );

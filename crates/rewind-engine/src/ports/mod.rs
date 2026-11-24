@@ -119,8 +119,8 @@ pub use read_model::{
 pub use records::{
     CallTask, Created, Enqueued, ForkSource, InboxItem, ParkKind, ParkReason, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
-    StartedBy, StoreError, StoredActionSet, StoredCode, StoredWorkflow, TEST_GRACE, TaskRef,
-    TaskState, TaskToken, TestRecord, TraceContext, Trigger, WebhookTarget, WebhookToken,
+    SignalUrlTarget, SignalUrlToken, StartedBy, StoreError, StoredActionSet, StoredCode,
+    StoredWorkflow, TEST_GRACE, TaskRef, TaskState, TaskToken, TestRecord, TraceContext, Trigger,
     WorkflowFilter, deferred_timeout_failure,
 };
 pub use secrets::{

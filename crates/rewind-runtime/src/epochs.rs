@@ -51,10 +51,10 @@ const EPOCH_1: Glue = Glue {
         "RunError",
         "run",
         "signal",
+        "signalUrl",
         "sleep",
-        "webhook",
     ],
-    std_aliases: &["ToolError", "WorkflowError"],
+    std_aliases: &["ToolError", "WorkflowError", "webhook"],
     actions: actions_module_v1,
     action_exports: action_exports_v1,
     workflows: workflows_module_v1,
@@ -285,8 +285,8 @@ mod tests {
                     serde_json::json!({}),
                 ),
                 Action::new(
-                    "webhook",
-                    ActionRoute::Builtin(Builtin::Webhook),
+                    "signalUrl",
+                    ActionRoute::Builtin(Builtin::SignalUrl),
                     serde_json::json!({}),
                 ),
             ],
@@ -307,7 +307,7 @@ mod tests {
             "{module}"
         );
         assert!(
-            !module.contains("\"http\"") && !module.contains("webhook"),
+            !module.contains("\"http\"") && !module.contains("signalUrl"),
             "{module}"
         );
     }

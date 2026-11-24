@@ -337,7 +337,7 @@ impl<P: Plane> Owner<P> {
                 tracing::error!(%task, %error, "a call could not be prepared");
                 self.backoff(&task, record, std::time::Duration::ZERO, false);
             }
-            CallOutcome::Webhook { name } => self.webhook_created(&task, record, &name),
+            CallOutcome::SignalUrl { name } => self.signal_url_created(&task, record, &name),
             CallOutcome::Child(child) => match *child {
                 ChildStart::New { start, neighbours } => {
                     let tenant = task.run.tenant.clone();
@@ -733,14 +733,14 @@ impl<P: Plane> Owner<P> {
         })
     }
 
-    /// `webhook(name)` of a live run: a token bound to the run and the name, and its URL.
-    fn webhook_created(&mut self, task: &TaskRef, record: TaskRecord, name: &str) {
-        let token = tokens::webhook_token(task.run.id);
+    /// `signalUrl(name)` of a live run: a token bound to the run and the name, and its URL.
+    fn signal_url_created(&mut self, task: &TaskRef, record: TaskRecord, name: &str) {
+        let token = tokens::signal_url_token(task.run.id);
         let hash = tokens::hash(&token);
         let base = self.config.public_url.clone().unwrap_or_default();
         let url = format!("{}/hooks/{token}", base.trim_end_matches('/'));
         let mut unit = Unit::new();
-        unit.change(Change::WebhookToken {
+        unit.change(Change::SignalUrlToken {
             run: task.run.clone(),
             name: name.to_owned(),
             hash,

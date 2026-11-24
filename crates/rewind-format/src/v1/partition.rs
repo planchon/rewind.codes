@@ -363,10 +363,10 @@ pub struct Watcher {
     pub attached: bool,
 }
 
-/// What a webhook token, known by its SHA-256, is bound to.
+/// What a signal URL token, known by its SHA-256, is bound to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WebhookToken {
+pub struct SignalUrlToken {
     pub tenant: String,
     #[serde(with = "with::run_id")]
     pub run: RunId,
@@ -1174,7 +1174,7 @@ mod with {
     #[serde(rename_all = "snake_case")]
     enum BuiltinV1 {
         Http,
-        Webhook,
+        SignalUrl,
         Workflow,
     }
 
@@ -1210,8 +1210,8 @@ mod with {
                 ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => {
                     builtin(BuiltinV1::Http, Some(allowed_hosts.clone()), None, None)
                 }
-                ActionRoute::Builtin(Builtin::Webhook) => {
-                    builtin(BuiltinV1::Webhook, None, None, None)
+                ActionRoute::Builtin(Builtin::SignalUrl) => {
+                    builtin(BuiltinV1::SignalUrl, None, None, None)
                 }
                 ActionRoute::Builtin(Builtin::Workflow { workflow, op }) => builtin(
                     BuiltinV1::Workflow,
@@ -1240,11 +1240,11 @@ mod with {
                     op: None,
                 } => ActionRoute::Builtin(Builtin::Http { allowed_hosts }),
                 RouteV1::Builtin {
-                    builtin: BuiltinV1::Webhook,
+                    builtin: BuiltinV1::SignalUrl,
                     allowed_hosts: None,
                     workflow: None,
                     op: None,
-                } => ActionRoute::Builtin(Builtin::Webhook),
+                } => ActionRoute::Builtin(Builtin::SignalUrl),
                 RouteV1::Builtin {
                     builtin: BuiltinV1::Workflow,
                     allowed_hosts: None,

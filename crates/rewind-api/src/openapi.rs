@@ -38,7 +38,7 @@ use crate::webhooks::{
             (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
             (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with \
             `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's \
-            unix socket and to the inbound webhook URL. A connection names the organization a \
+            unix socket and to the inbound signal URL. A connection names the organization a \
             request acts in with the header `Rewind-Organization`. What the caller may do is its \
             grant's, or its token's: every operation requires \
             one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. \
@@ -191,7 +191,7 @@ use crate::webhooks::{
         (name = "checks", description = "Type-check code, and run tests as test runs, in virtual time."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
         (name = "calls", description = "Harness calls: handed to the harness's SDK worker on its call stream, answered by their token, approved or rejected by the harness."),
-        (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
+        (name = "webhooks", description = "Signal URLs that become signals, and subscriptions to signed lifecycle events."),
         (name = "reading", description = "The workflows executed on the platform, action statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
@@ -1156,7 +1156,7 @@ mod operations {
 
     /// Inbound webhook: becomes a signal
     ///
-    /// At the URL a code got from `webhook(name)`. A JSON body is the signal's payload; any
+    /// At the URL a code got from `signalUrl(name)`. A JSON body is the signal's payload; any
     /// other body becomes the payload as a string; an empty body is `null`. The first of
     /// `Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's
     /// idempotency key.

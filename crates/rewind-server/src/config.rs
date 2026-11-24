@@ -206,8 +206,8 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_ADMIN_TENANT", default_value = "default")]
     pub admin_tenant: String,
 
-    /// The URL clients reach this server at: `webhook(name)` returns `{public-url}/hooks/…`.
-    /// Without it, workflows cannot get a webhook URL.
+    /// The URL clients reach this server at: `signalUrl(name)` returns `{public-url}/hooks/…`.
+    /// Without it, workflows cannot get a signal URL.
     #[arg(long, env = "REWIND_PUBLIC_URL")]
     pub public_url: Option<String>,
 

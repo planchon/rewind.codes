@@ -975,7 +975,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             .iter()
             .map(|action| action.name.as_str())
             .collect::<Vec<_>>(),
-        ["github.whoami", "webhook"]
+        ["github.whoami", "signalUrl"]
     );
     assert!(
         github.received().iter().any(|received| {

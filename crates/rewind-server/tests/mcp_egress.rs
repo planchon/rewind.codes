@@ -151,7 +151,7 @@ async fn an_operator_allows_internal_mcp_servers_whose_answers_stay_unquoted() {
         .iter()
         .map(|action| action.name.as_str())
         .collect();
-    assert_eq!(names, ["finder.find", "webhook"]);
+    assert_eq!(names, ["finder.find", "signalUrl"]);
     assert_eq!(finder.sessions.load(Ordering::SeqCst), 1);
 
     // What the internal server answers to a URL that is not MCP stays out of the problem.

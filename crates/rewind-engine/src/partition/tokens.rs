@@ -1,5 +1,5 @@
 //! The tokens of call tasks and webhooks (`archi/08-decisions.md`, "Taken while writing the
-//! object-storage spec": a task's token and a webhook token name their run).
+//! object-storage spec": a task's token and a signal URL token name their run).
 //!
 //! A token is `rewind_tk_{run}_{secret}` (a task's hand-out) or `rewind_wh_{run}_{secret}` (a
 //! webhook), the secret 256 bits from the operating system's CSPRNG in hex: any process routes
@@ -25,8 +25,8 @@ pub(crate) fn task_token(run: RunId) -> TaskToken {
     TaskToken(format!("{TASK}{run}_{}", secret()))
 }
 
-/// A new webhook token of `run`.
-pub(crate) fn webhook_token(run: RunId) -> String {
+/// A new signal URL token of `run`.
+pub(crate) fn signal_url_token(run: RunId) -> String {
     format!("{WEBHOOK}{run}_{}", secret())
 }
 
@@ -54,7 +54,7 @@ mod tests {
         let token = task_token(run);
         assert_eq!(run_of(&token.0), Some(run));
         assert_ne!(token, task_token(run));
-        let webhook = webhook_token(run);
+        let webhook = signal_url_token(run);
         assert_eq!(run_of(&webhook), Some(run));
         assert_eq!(run_of("whk_8f3a"), None);
         assert_eq!(run_of("rewind_tk_nope_00"), None);

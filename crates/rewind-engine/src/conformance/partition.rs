@@ -1,6 +1,6 @@
 //! The conformance suite of `PartitionStore`: fencing, durability across a new open, atomic
 //! batches, the single writer's mistakes refused, signal keys, the end of an attempt, what an
-//! activation writes, failures and quarantine, watchers, webhook tokens, recovery, seal and
+//! activation writes, failures and quarantine, watchers, signal URL tokens, recovery, seal and
 //! erasure, the search of the index, the counters over whole hours, the gauges, the shapes, the
 //! timers, the organizations, the outbox and tenant isolation.
 //!
@@ -25,9 +25,9 @@ use crate::ports::{
     PartitionError, PartitionLog, PartitionStore, PayloadRecord, Predicate, Projection,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
     QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunOrder, RunQuery, RunRef,
-    RunSummary, Scope, SearchCursor, TaskChange, TaskPhase, TaskRecord, TaskRef, TaskState,
-    TenantId, Threshold, TimerChange, TimerKind, Trigger, Wait, WaitKind, WaitingFor, Watcher,
-    WebhookTarget, Window,
+    RunSummary, Scope, SearchCursor, SignalUrlTarget, TaskChange, TaskPhase, TaskRecord, TaskRef,
+    TaskState, TenantId, Threshold, TimerChange, TimerKind, Trigger, Wait, WaitKind, WaitingFor,
+    Watcher, Window,
 };
 
 /// The partition every check opens.
@@ -55,7 +55,7 @@ pub async fn run_all<S: PartitionStore>(new_store: impl Fn() -> S) {
     partition_check!(a_summary_is_written_alone);
     partition_check!(failures_and_interruptions_are_counted);
     partition_check!(watchers_are_kept_once);
-    partition_check!(webhook_tokens_resolve_to_their_run);
+    partition_check!(signal_url_tokens_resolve_to_their_run);
     partition_check!(recover_returns_what_an_owner_needs);
     partition_check!(seal_keeps_the_head_and_the_summary);
     partition_check!(runs_in_range_read_the_heads_a_suffix_names);
@@ -495,7 +495,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
     let first = open(store, "n1").await;
     assert_eq!(first.partition(), PARTITION);
     let (r1, r2) = (run(1), run(2));
-    let token = Digest::of(b"webhook token");
+    let token = Digest::of(b"signal URL token");
     let state = OrganizationState {
         alerts: vec![alert(None)],
         admissions: vec![Admission {
@@ -520,7 +520,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
                     attached: true,
                 },
             },
-            Change::WebhookToken {
+            Change::SignalUrlToken {
                 run: r1.clone(),
                 name: "approval".into(),
                 hash: token,
@@ -569,8 +569,8 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
         }]
     );
     assert_eq!(
-        second.webhook(token).await.expect("webhook"),
-        Some(WebhookTarget {
+        second.signal_url(token).await.expect("signal_url"),
+        Some(SignalUrlTarget {
             run: r1.clone(),
             name: "approval".into()
         })
@@ -905,7 +905,7 @@ pub async fn changes_to_a_missing_or_erased_run_are_refused<S: PartitionStore>(s
             ),
             (
                 "WebhookToken",
-                Change::WebhookToken {
+                Change::SignalUrlToken {
                     run: gone.clone(),
                     name: "x".into(),
                     hash: Digest::of(b"t"),
@@ -1056,7 +1056,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
         &log,
         vec![
             first.into(),
-            Change::WebhookToken {
+            Change::SignalUrlToken {
                 run: r1.clone(),
                 name: "hook".into(),
                 hash: token,
@@ -1079,15 +1079,15 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
     )
     .await;
     assert_eq!(timers_of(&log).await.len(), 5);
-    assert!(log.webhook(token).await.expect("webhook").is_some());
+    assert!(log.signal_url(token).await.expect("signal_url").is_some());
 
     end(&log, &r1).await;
     assert_eq!(log.tasks(&r1).await.expect("tasks"), [], "its call tasks");
     assert_eq!(log.inbox(&r1).await.expect("inbox"), [], "its inbox");
     assert_eq!(
-        log.webhook(token).await.expect("webhook"),
+        log.signal_url(token).await.expect("signal_url"),
         None,
-        "its webhook tokens stop resolving"
+        "its signal URL tokens stop resolving"
     );
     assert_eq!(
         timers_of(&log).await,
@@ -1111,7 +1111,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
         vec![
             enqueue(&r1, signal(3, "late"), None),
             put_task(task(&r1, 4, ready(T0))),
-            Change::WebhookToken {
+            Change::SignalUrlToken {
                 run: r1.clone(),
                 name: "hook".into(),
                 hash: Digest::of(b"another"),
@@ -1126,7 +1126,9 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
     );
     assert_eq!(log.tasks(&r1).await.expect("tasks"), []);
     assert_eq!(
-        log.webhook(Digest::of(b"another")).await.expect("webhook"),
+        log.signal_url(Digest::of(b"another"))
+            .await
+            .expect("signal_url"),
         None
     );
     let head = log.run(&r1).await.expect("run").expect("run");
@@ -1255,7 +1257,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
 }
 
 // -------------------------------------------------------------------------------------------
-// Failures, quarantine, watchers, webhook tokens
+// Failures, quarantine, watchers, signal URL tokens
 
 /// `Summary` writes the run's summary as it is given, outside an activation: what its tasks
 /// became shows in the index and in the search. Refused for a run that does not exist.
@@ -1461,25 +1463,25 @@ pub async fn watchers_are_kept_once<S: PartitionStore>(store: &S) {
     assert_eq!(log.watchers(&starter).await.expect("watchers"), []);
 }
 
-pub async fn webhook_tokens_resolve_to_their_run<S: PartitionStore>(store: &S) {
+pub async fn signal_url_tokens_resolve_to_their_run<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
     let (r1, r2) = (run(1), run(2));
     let (first, second) = (Digest::of(b"first"), Digest::of(b"second"));
     commit(&log, vec![create(&r1), create(&r2)]).await;
-    let token = |run: &RunRef, name: &str, hash: Digest| Change::WebhookToken {
+    let token = |run: &RunRef, name: &str, hash: Digest| Change::SignalUrlToken {
         run: run.clone(),
         name: name.into(),
         hash,
     };
     commit(&log, vec![token(&r1, "approval", first)]).await;
     assert_eq!(
-        log.webhook(first).await.expect("webhook"),
-        Some(WebhookTarget {
+        log.signal_url(first).await.expect("signal_url"),
+        Some(SignalUrlTarget {
             run: r1.clone(),
             name: "approval".into()
         })
     );
-    assert_eq!(log.webhook(second).await.expect("webhook"), None);
+    assert_eq!(log.signal_url(second).await.expect("signal_url"), None);
     let error = refused(&log, vec![token(&r2, "approval", first)]).await;
     assert!(is_conflict(&error), "a token bound to two runs: {error:?}");
     commit(
@@ -1488,9 +1490,9 @@ pub async fn webhook_tokens_resolve_to_their_run<S: PartitionStore>(store: &S) {
     )
     .await;
     assert_eq!(
-        log.webhook(second)
+        log.signal_url(second)
             .await
-            .expect("webhook")
+            .expect("signal_url")
             .map(|target| target.name),
         Some("payment".into())
     );
@@ -1877,7 +1879,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
                     attached: true,
                 },
             },
-            Change::WebhookToken {
+            Change::SignalUrlToken {
                 run: erased.clone(),
                 name: "hook".into(),
                 hash: token,
@@ -1946,7 +1948,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
             .expect("payload"),
         None
     );
-    assert_eq!(log.webhook(token).await.expect("webhook"), None);
+    assert_eq!(log.signal_url(token).await.expect("signal_url"), None);
     assert!(
         !log.signal_key(&erased, "signal-key")
             .await

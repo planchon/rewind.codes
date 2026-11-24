@@ -8455,7 +8455,7 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: action sets, workflows, runs, harness calls, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a code, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
+    "description": "The HTTP API /v1 of Rewind: action sets, workflows, runs, harness calls, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound signal URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a code, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
@@ -9399,7 +9399,7 @@
     },
     "/hooks/{token}": {
       "post": {
-        "description": "At the URL a code got from `webhook(name)`. A JSON body is the signal's payload; any\nother body becomes the payload as a string; an empty body is `null`. The first of\n`Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's\nidempotency key.",
+        "description": "At the URL a code got from `signalUrl(name)`. A JSON body is the signal's payload; any\nother body becomes the payload as a string; an empty body is `null`. The first of\n`Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's\nidempotency key.",
         "operationId": "postHook",
         "parameters": [
           {
@@ -20393,7 +20393,7 @@
       "name": "calls"
     },
     {
-      "description": "Inbound webhooks that become signals, and subscriptions to signed lifecycle events.",
+      "description": "Signal URLs that become signals, and subscriptions to signed lifecycle events.",
       "name": "webhooks"
     },
     {

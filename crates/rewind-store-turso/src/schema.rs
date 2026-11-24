@@ -869,7 +869,7 @@ CREATE TABLE legacy_runs (
 /// database holds the control plane only. The tables the old tables kept its runs in take the
 /// prefix `legacy_`, their indexes with them (`runs` becomes `legacy_journal_runs`: `legacy_runs`
 /// is the control plane's table of the runs moved): the runs, their histories, inboxes,
-/// signal keys, timers, call tasks, webhook tokens and watchers, the payloads and their
+/// signal keys, timers, call tasks, signal URL tokens and watchers, the payloads and their
 /// references, the feed, the read model's tables, and the namespaces' use per day, quota alerts
 /// and code counts. `rewind server migrate-runs` reads them, moves each run into the partition
 /// or the archive, and drops them once every run moved.

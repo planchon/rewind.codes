@@ -12,7 +12,7 @@
 //!     { "name": "github.list_issues", "route": "mcp", "description": "…", "input": {…}, "output": {…} },
 //!     { "name": "ask_user", "route": "harness", "input": {…} },
 //!     { "name": "http", "route": "http", "hosts": ["api.example.com"] },
-//!     { "name": "webhook", "route": "webhook" }
+//!     { "name": "signalUrl", "route": "signalUrl" }
 //!   ],
 //!   "observed": { "ask_user": [<recorded result>, …] }
 //! }
@@ -73,7 +73,7 @@ fn load(case: &Path) -> (ActionSet, BTreeMap<String, Shape>) {
                 "http" => ActionRoute::Builtin(Builtin::Http {
                     allowed_hosts: serde_json::from_value(action["hosts"].clone()).unwrap(),
                 }),
-                "webhook" => ActionRoute::Builtin(Builtin::Webhook),
+                "signalUrl" => ActionRoute::Builtin(Builtin::SignalUrl),
                 other => panic!("unknown route {other}"),
             };
             let mut pinned = Action::new(

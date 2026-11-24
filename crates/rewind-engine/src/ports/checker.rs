@@ -19,7 +19,7 @@ pub struct ActionDeclarations {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkflowDeclarations {
     /// Declarations that augment the `rewind` module with the workflow's signals: its `Signals`
-    /// interface, so that `signal()` and `webhook()` take only their names and `signal()`
+    /// interface, so that `signal()` and `signalUrl()` take only their names and `signal()`
     /// returns their types.
     pub signals: String,
     /// `entry.ts`: a module that imports the code's default export from `./code` and

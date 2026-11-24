@@ -9,7 +9,7 @@
 //!   hashed in the control plane and members' access tokens, grants, roles and label scopes,
 //!   organizations, members and invitations, tenants and their quotas, `Idempotency-Key`,
 //!   problem+json errors; the event stream of a run, the change stream and the call stream
-//!   (server-sent events pushed by the owners); held waits; inbound webhooks that become
+//!   (server-sent events pushed by the owners); held waits; signal URLs that become
 //!   signals; `/mcp` and the OAuth authorization server of people's connections.
 //! - The node link over HTTP/2 (`link`): its DTOs, the `NodeLink` that sends them to another
 //!   node, and the listener that serves a node's side, authenticated by the cluster's secret.

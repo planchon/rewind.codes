@@ -773,9 +773,9 @@
     });
   }
 
-  // `webhook(name)`: a call of the built-in `webhook` action, which returns `{ url }`.
-  function webhook(name) {
-    return callAction("webhook", { name: String(name) });
+  // `signalUrl(name)`: a call of the built-in `signalUrl` action, which returns `{ url }`.
+  function signalUrl(name) {
+    return callAction("signalUrl", { name: String(name) });
   }
 
   // setTimeout and setInterval on top of durable timers. An interval keeps its first seq as
@@ -1403,7 +1403,10 @@
       callActionContent,
       sleep,
       signal,
-      webhook,
+      signalUrl,
+      // Code written before signal URLs were named calls `webhook(name)`, the same function
+      // (archi/08-decisions.md, R1).
+      webhook: signalUrl,
       run,
       ActionError,
       ToolError: ActionError,

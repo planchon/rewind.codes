@@ -19,10 +19,10 @@ use rewind_engine::ports::{
     LogRecord, Month, NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind,
     ParkReason, PartitionError, PayloadRecord, Projection, Quarantine, QuarantineKind,
     QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef,
-    RunSummary, RunWorkflow, ScriptCounts, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy,
-    TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold, TimerKind, TraceContext,
-    TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookEventKind,
-    WebhookTarget,
+    RunSummary, RunWorkflow, ScriptCounts, SignalUrlTarget, Sketch, Span, SpanId, SpanKind,
+    SpanStatus, StartedBy, TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold,
+    TimerKind, TraceContext, TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent,
+    WebhookEventKind,
 };
 use rewind_format::partition as record;
 
@@ -245,7 +245,7 @@ fn wait_of(record: record::Wait) -> Wait {
 }
 
 // -------------------------------------------------------------------------------------------
-// History, inbox, tasks, timers, payloads, watchers, webhook tokens
+// History, inbox, tasks, timers, payloads, watchers, signal URL tokens
 
 pub fn event_record(entry: &rewind_core::HistoryEvent) -> record::HistoryEvent {
     record::HistoryEvent {
@@ -479,16 +479,16 @@ pub fn watcher_of(record: record::Watcher) -> Watcher {
     }
 }
 
-pub fn webhook_record(run: &RunRef, name: &str) -> record::WebhookToken {
-    record::WebhookToken {
+pub fn signal_url_record(run: &RunRef, name: &str) -> record::SignalUrlToken {
+    record::SignalUrlToken {
         tenant: run.tenant.to_string(),
         run: run.id,
         name: name.to_owned(),
     }
 }
 
-pub fn webhook_of(record: record::WebhookToken) -> Result<WebhookTarget, PartitionError> {
-    Ok(WebhookTarget {
+pub fn signal_url_of(record: record::SignalUrlToken) -> Result<SignalUrlTarget, PartitionError> {
+    Ok(SignalUrlTarget {
         run: RunRef::new(tenant(record.tenant)?, record.run),
         name: record.name,
     })

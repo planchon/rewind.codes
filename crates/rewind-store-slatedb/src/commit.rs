@@ -6,7 +6,7 @@
 //! Otherwise the transaction is written as one write batch and the WAL flushed: the commit returns
 //! once the batch is durable. The changes keep, with the records the port names, the indexes of
 //! the [key layout](crate::keys): the run's index entries, the heads of the runs not ended and of
-//! the attempts not sealed, the timers by kind, the back references of a run's webhook tokens,
+//! the attempts not sealed, the timers by kind, the back references of a run's signal URL tokens,
 //! outbox entries and start key, and the gauges of each namespace.
 
 use std::collections::{BTreeSet, HashMap};
@@ -501,22 +501,25 @@ impl Apply<'_> {
                 }
                 Ok(())
             }
-            Change::WebhookToken { run, name, hash } => {
+            Change::SignalUrlToken { run, name, hash } => {
                 let ended = self.existing_ended(&run).await?;
                 if ended {
                     return Ok(());
                 }
                 if let Some(bound) = self
-                    .get::<record::WebhookToken>(&keys::webhook(hash))
+                    .get::<record::SignalUrlToken>(&keys::signal_url(hash))
                     .await?
                     && (bound.run != run.id || bound.name != name)
                 {
                     return Err(conflict(format!(
-                        "a webhook token of run {run} is bound to another run or signal"
+                        "a signal URL token of run {run} is bound to another run or signal"
                     )));
                 }
-                self.put(&keys::webhook(hash), &codec::webhook_record(&run, &name))?;
-                self.mark(&keys::run_webhook(&run, hash))
+                self.put(
+                    &keys::signal_url(hash),
+                    &codec::signal_url_record(&run, &name),
+                )?;
+                self.mark(&keys::run_signal_url(&run, hash))
             }
             Change::Organization { tenant, state } => self.put(
                 &keys::organization(&tenant),
@@ -673,10 +676,10 @@ impl Apply<'_> {
                 self.delete(keys::timer(&timer.kind).as_bytes())?;
             }
         }
-        let webhooks = keys::of_run(keys::RUN_WEBHOOK, run);
-        for (key, _) in self.scan(&webhooks).await? {
-            let hash = hash_after(&key, &webhooks)?;
-            self.delete(keys::webhook(hash).as_bytes())?;
+        let signal_urls = keys::of_run(keys::RUN_SIGNAL_URL, run);
+        for (key, _) in self.scan(&signal_urls).await? {
+            let hash = hash_after(&key, &signal_urls)?;
+            self.delete(keys::signal_url(hash).as_bytes())?;
             self.delete(&key)?;
         }
         self.delete_all(&keys::of_run(keys::TASK, run)).await?;
@@ -764,9 +767,9 @@ impl Apply<'_> {
                 self.delete(at.as_bytes())?;
             }
         }
-        let webhooks = keys::of_run(keys::RUN_WEBHOOK, run);
-        for (key, _) in self.scan(&webhooks).await? {
-            self.delete(keys::webhook(hash_after(&key, &webhooks)?).as_bytes())?;
+        let signal_urls = keys::of_run(keys::RUN_SIGNAL_URL, run);
+        for (key, _) in self.scan(&signal_urls).await? {
+            self.delete(keys::signal_url(hash_after(&key, &signal_urls)?).as_bytes())?;
         }
         let entries = keys::of_run(keys::RUN_OUTBOX, run);
         for (key, _) in self.scan(&entries).await? {
@@ -861,7 +864,7 @@ fn hash_after(key: &[u8], prefix: &Key) -> Result<rewind_core::Digest, Partition
     key.get(prefix.as_bytes().len()..)
         .and_then(|rest| rest.try_into().ok())
         .map(rewind_core::Digest::from_bytes)
-        .ok_or_else(|| codec::corrupt("a run's webhook token"))
+        .ok_or_else(|| codec::corrupt("a run's signal URL token"))
 }
 
 /// Takes from `gauges` what `held` counted.

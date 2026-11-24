@@ -266,8 +266,8 @@
       ]
     },
     {
-      "name": "webhook",
-      "route": "webhook"
+      "name": "signalUrl",
+      "route": "signalUrl"
     }
   ],
   "observed": {

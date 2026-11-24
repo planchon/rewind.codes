@@ -22,9 +22,9 @@ use rewind_format::partition::{
     FailureCounts, FailureKind, ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
     Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
     QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow,
-    ScriptCounts, Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy,
-    Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind, TraceContext, Wait,
-    WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken, decode, encode,
+    ScriptCounts, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey,
+    StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
+    TraceContext, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind, decode, encode,
 };
 use serde_json::json;
 
@@ -438,7 +438,7 @@ fn every_record_decodes_from_its_fixture_and_re_encodes_to_the_same_bytes() {
     );
     golden(
         "webhook-token",
-        WebhookToken {
+        SignalUrlToken {
             tenant: "acme".into(),
             run: run(1),
             name: "approval".into(),
@@ -485,7 +485,7 @@ fn every_variant_round_trips() {
         ActionRoute::Harness {
             group: Some("ui".into()),
         },
-        ActionRoute::Builtin(Builtin::Webhook),
+        ActionRoute::Builtin(Builtin::SignalUrl),
         ActionRoute::Builtin(Builtin::Http {
             allowed_hosts: vec!["api.example.com".into()],
         }),

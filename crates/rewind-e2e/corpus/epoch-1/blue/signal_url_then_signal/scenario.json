@@ -1,10 +1,10 @@
 {
-  "description": "webhook(name) is a recorded call of the built-in webhook action, returning { url }; what is posted to that URL arrives as the signal of that name.",
+  "description": "signalUrl(name) is a recorded call of the built-in signalUrl action, returning { url }; what is posted to that URL arrives as the signal of that name.",
   "input": {
     "repo": "acme/api"
   },
   "actions": {
-    "webhook": {
+    "signalUrl": {
       "url": "https://rewind.example.com/hooks/whk_8f3a"
     },
     "github.create_webhook": {
@@ -28,7 +28,7 @@
     },
     "calls": {
       "github.create_webhook": 1,
-      "webhook": 1
+      "signalUrl": 1
     }
   }
 }

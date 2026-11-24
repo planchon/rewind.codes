@@ -104,7 +104,7 @@ fn sources(diagnostics: &[Diagnostic]) -> Vec<String> {
 
 fn main_with(body: &str) -> String {
     format!(
-        "import {{ github, slack, ask_user }} from \"rewind:actions\";\nimport {{ sleep, signal, webhook, run, ActionError, CancelledError }} from \"rewind\";\n\nexport default async function main(input: {{ repo: string }}) {{\n{body}\n}}\n"
+        "import {{ github, slack, ask_user }} from \"rewind:actions\";\nimport {{ sleep, signal, signalUrl, run, ActionError, CancelledError }} from \"rewind\";\n\nexport default async function main(input: {{ repo: string }}) {{\n{body}\n}}\n"
     )
 }
 
@@ -118,7 +118,7 @@ async fn the_sandbox_and_rewind_type_check() {
     let code = main_with(
         r##"  const id: string = run.id;
   const started: Date = run.startedAt;
-  const hook = await webhook("merged");
+  const hook = await signalUrl("merged");
   const url = new URL(hook.url);
   url.searchParams.set("run", id);
   const bytes = new TextEncoder().encode(btoa("x"));
@@ -746,11 +746,11 @@ export { entry };
 "##;
 
 const TRIAGE: &str = r##"import { github } from "rewind:actions";
-import { signal, webhook } from "rewind";
+import { signal, signalUrl } from "rewind";
 
 export default async function main(input: { repo: string }) {
   const issues = await github.list_issues({ repo: input.repo });
-  const hook = await webhook("pr merged");
+  const hook = await signalUrl("pr merged");
   const approval = await signal("approval");
   const close: boolean = approval.close;
   const merged = await signal("pr merged", { timeout: "1d" });

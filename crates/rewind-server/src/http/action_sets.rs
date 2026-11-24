@@ -4,7 +4,7 @@
 //! Registering connects to the MCP servers and lists their actions, and reads the APIs' OpenAPI
 //! documents; each server's and API's `auth` is pinned with it; the harness's policies, its
 //! harness actions and the `http` built-in (with its allow-list) are added, and so is the `webhook`
-//! built-in, always: every code may call `webhook()`. The pinned action set is content-addressed,
+//! built-in, always: every code may call `signalUrl()`. The pinned action set is content-addressed,
 //! so registering the same action set again gives the same id. It holds no secret.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -443,7 +443,7 @@ async fn pin(
         }
         actions.push(action);
     }
-    actions.push(app.actions.webhook_action());
+    actions.push(app.actions.signal_url_action());
     let action_set = ActionSet::from_parts(servers, apis, actions)
         .map_err(|error| invalid_action_set(error.to_string()))?;
     Ok((action_set, skipped))

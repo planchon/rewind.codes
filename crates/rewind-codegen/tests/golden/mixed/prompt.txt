@@ -7,5 +7,5 @@ crm.update(args: { fields: { name?: string, [key: string]: number | string | und
 harness.log(args?) → unknown
 harness.notify({ text: string, urgent?: boolean }) → { delivered: boolean } · Send a notification to the team.
 fetch(url, { method?, headers?, body? }) → Response · The http action, a global: HTTP requests to these hosts only: *.example.org, api.example.com.
-webhook(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
+signalUrl(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
 ActionContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP action without an output schema returns: its content blocks (text, image, audio, resource), with helpers.

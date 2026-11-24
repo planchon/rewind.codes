@@ -72,8 +72,8 @@ pub struct LegacyRun {
     pub timers: Vec<(Seq, Timestamp)>,
     /// Its call tasks, by `seq`.
     pub tasks: Vec<LegacyTask>,
-    /// Its webhook tokens, by their SHA-256.
-    pub webhooks: Vec<LegacyWebhook>,
+    /// Its signal URL tokens, by their SHA-256.
+    pub webhooks: Vec<LegacySignalUrl>,
     /// The runs that wait for its end, by run id.
     pub watchers: Vec<Watcher>,
     /// The payloads it references above the inline tier: their size, preview, and their value
@@ -105,9 +105,9 @@ pub struct LegacyTask {
     pub created_at: Timestamp,
 }
 
-/// A webhook token of a run: the signal it sends, and the SHA-256 of the token.
+/// A signal URL token of a run: the signal it sends, and the SHA-256 of the token.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LegacyWebhook {
+pub struct LegacySignalUrl {
     pub name: String,
     pub hash: Digest,
 }

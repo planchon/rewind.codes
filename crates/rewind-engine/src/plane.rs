@@ -194,7 +194,7 @@ pub struct NodeConfig {
     pub backoff: Backoff,
     /// Deliveries of a call (`archi/04-tools.md`, "Policies").
     pub max_deliveries: u32,
-    /// The server's public URL, for `webhook(name)` and the issuer of signed calls.
+    /// The server's public URL, for `signalUrl(name)` and the issuer of signed calls.
     pub public_url: Option<String>,
     pub telemetry: TelemetryConfig,
     /// TTL of a run started without one.

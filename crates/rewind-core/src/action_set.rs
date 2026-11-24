@@ -344,8 +344,8 @@ pub enum Builtin {
     /// the dispatcher, only toward these hosts (`archi/04-tools.md`, "The `http` action and
     /// egress"). Hosts are lowercase, sorted and unique, and there is at least one.
     Http { allowed_hosts: Vec<String> },
-    /// `webhook`: `webhook(name)` returns a URL bound to the run and the signal name.
-    Webhook,
+    /// `signalUrl`: `signalUrl(name)` returns a URL bound to the run and the signal name.
+    SignalUrl,
     /// `workflows.<workflow>.start` or `workflows.<workflow>.signal`: starts or signals a run of
     /// a workflow the action set pins (`archi/03-execution.md`, "Workflows across runs"). Derived
     /// from the pinned workflow, never declared as an action.
@@ -357,7 +357,7 @@ impl Builtin {
     pub fn name(&self) -> String {
         match self {
             Builtin::Http { .. } => "http".into(),
-            Builtin::Webhook => "webhook".into(),
+            Builtin::SignalUrl => "signalUrl".into(),
             Builtin::Workflow { workflow, op } => {
                 format!("{WORKFLOWS_GROUP}.{workflow}.{}", op.as_str())
             }
@@ -944,7 +944,7 @@ fn check_action(
     if matches!(
         action.route,
         ActionRoute::Mcp { .. } | ActionRoute::Api { .. } | ActionRoute::Harness { .. }
-    ) && matches!(name, "http" | "webhook")
+    ) && matches!(name, "http" | "signalUrl")
     {
         return Err(misplaced("as the built-in, with the built-in route".into()));
     }
@@ -1175,8 +1175,8 @@ fn action_json(action: &Action) -> Value {
         ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => {
             json!({ "type": "builtin", "builtin": "http", "allowed_hosts": allowed_hosts })
         }
-        ActionRoute::Builtin(Builtin::Webhook) => {
-            json!({ "type": "builtin", "builtin": "webhook" })
+        ActionRoute::Builtin(Builtin::SignalUrl) => {
+            json!({ "type": "builtin", "builtin": "signal_url" })
         }
         // Never written: an action set declares no such action (`check_action`).
         ActionRoute::Builtin(Builtin::Workflow { workflow, op }) => json!({
@@ -1352,7 +1352,7 @@ mod tests {
         assert_eq!(grouped.local_name(), "ask_user");
         assert_eq!(action_set.action("notify").unwrap().group(), None);
         assert!(!ActionRoute::Harness { group: None }.is_dispatched());
-        assert!(ActionRoute::Builtin(Builtin::Webhook).is_dispatched());
+        assert!(ActionRoute::Builtin(Builtin::SignalUrl).is_dispatched());
     }
 
     #[test]
@@ -1378,12 +1378,12 @@ mod tests {
             ActionSet::new([], [http(&[])]),
             Err(ActionSetError::InvalidAction { .. })
         ));
-        let misnamed = Action::new("hook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
+        let misnamed = Action::new("hook", ActionRoute::Builtin(Builtin::SignalUrl), json!({}));
         assert!(matches!(
             ActionSet::new([], [misnamed]),
             Err(ActionSetError::MisplacedAction { .. })
         ));
-        let impostor = Action::new("webhook", ActionRoute::Harness { group: None }, json!({}));
+        let impostor = Action::new("signalUrl", ActionRoute::Harness { group: None }, json!({}));
         assert!(matches!(
             ActionSet::new([], [impostor]),
             Err(ActionSetError::MisplacedAction { .. })

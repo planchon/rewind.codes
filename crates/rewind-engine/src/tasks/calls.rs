@@ -91,8 +91,8 @@ pub(crate) enum CallOutcome {
     /// The call could not be prepared for a reason that may pass: it was not sent; it is tried
     /// again after a backoff.
     NotSent(String),
-    /// `webhook(name)` of a live run: the owner binds a token to the run and the name.
-    Webhook { name: String },
+    /// `signalUrl(name)` of a live run: the owner binds a token to the run and the name.
+    SignalUrl { name: String },
     /// `workflows.<name>.start` of a live run, checked: the child to create, or the run its key
     /// already started.
     Child(Box<ChildStart>),
@@ -320,8 +320,8 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         trace_context,
     };
     match &call.action.route {
-        ActionRoute::Builtin(Builtin::Webhook) if live => {
-            return webhook(config, &call);
+        ActionRoute::Builtin(Builtin::SignalUrl) if live => {
+            return signal_url(config, &call);
         }
         ActionRoute::Builtin(Builtin::Workflow { workflow, op }) if live => {
             let workflow = workflow.clone();
@@ -534,18 +534,18 @@ async fn live_auth<P: Plane>(
     }
 }
 
-/// `webhook(name)`: checked here, bound by the owner.
-fn webhook(config: &NodeConfig, call: &Call) -> CallOutcome {
+/// `signalUrl(name)`: checked here, bound by the owner.
+fn signal_url(config: &NodeConfig, call: &Call) -> CallOutcome {
     if config.public_url.is_none() {
-        return unavailable("this server has no public URL, so it cannot receive webhooks".into());
+        return unavailable("this server has no public URL, so it cannot give signal URLs".into());
     }
     let Some(name) = call.args.get("name").and_then(JsonValue::as_str) else {
-        return failed(r#"webhook expects {"name": string}"#.into());
+        return failed(r#"signalUrl expects {"name": string}"#.into());
     };
-    if let Err(refused) = text::refuse_nul("the webhook name", name) {
+    if let Err(refused) = text::refuse_nul("the signal name", name) {
         return failed(refused.to_string());
     }
-    CallOutcome::Webhook {
+    CallOutcome::SignalUrl {
         name: name.to_owned(),
     }
 }

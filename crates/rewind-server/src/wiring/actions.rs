@@ -90,15 +90,15 @@ impl Actions {
     }
 
     /// The `webhook` built-in, pinned in every action set.
-    pub(crate) fn webhook_action(&self) -> Action {
+    pub(crate) fn signal_url_action(&self) -> Action {
         let mut action = Action::new(
-            "webhook",
-            ActionRoute::Builtin(Builtin::Webhook),
-            rewind_runtime::builtins::webhook_input_schema(),
+            "signalUrl",
+            ActionRoute::Builtin(Builtin::SignalUrl),
+            rewind_runtime::builtins::signal_url_input_schema(),
         );
         action.description = Some(
             "A URL bound to the run and a signal name: what is posted to it becomes that \
-             signal. Workflows call it through webhook() from \"rewind\"."
+             signal. Workflows call it through signalUrl() from \"rewind\"."
                 .to_owned(),
         );
         action

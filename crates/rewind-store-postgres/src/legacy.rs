@@ -14,7 +14,7 @@ use rewind_core::{
     SecretRef, Seq,
 };
 use rewind_engine::ports::legacy::{
-    LegacyError, LegacyHistory, LegacyRun, LegacyRuns, LegacyTask, LegacyWebhook,
+    LegacyError, LegacyHistory, LegacyRun, LegacyRuns, LegacySignalUrl, LegacyTask,
 };
 use rewind_engine::ports::{
     ForkSource, InboxItem, NamespaceName, ParkKind, ParkReason, PayloadRecord, Quarantine,
@@ -352,7 +352,7 @@ impl PostgresLegacy {
             )
             .await?
         {
-            let webhook = LegacyWebhook {
+            let webhook = LegacySignalUrl {
                 name: row.text(1)?,
                 hash: Digest::of(row.text(2)?.as_bytes()),
             };

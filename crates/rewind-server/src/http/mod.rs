@@ -1,5 +1,5 @@
 //! The HTTP API `/v1` (`archi/07-code-architecture.md`, "HTTP API `/v1`"), the dashboard's
-//! sign-in `/auth`, the inbound webhooks and the dashboard. The paths are `rewind_api::routes`;
+//! sign-in `/auth`, the signal URLs and the dashboard. The paths are `rewind_api::routes`;
 //! the DTOs are `rewind-api`'s.
 
 mod action_sets;

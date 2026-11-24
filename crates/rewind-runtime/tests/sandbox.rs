@@ -64,7 +64,7 @@ fn issue_actions(call: &Call) -> Result<Value, ActionFailure> {
             ActionFailureKind::OutcomeUnknown,
             "connection reset",
         )),
-        "webhook" => Ok(json!({
+        "signalUrl" => Ok(json!({
             "url": format!("https://rewind.example.com/hooks/tok_{}", call.args["name"].as_str().unwrap_or_default()),
         })),
         // Echoes the request it was sent, as a JSON body.
@@ -614,9 +614,9 @@ fn builtins_action_set() -> ActionSet {
                 json!({}),
             ),
             Action::new(
-                "webhook",
-                ActionRoute::Builtin(Builtin::Webhook),
-                rewind_runtime::builtins::webhook_input_schema(),
+                "signalUrl",
+                ActionRoute::Builtin(Builtin::SignalUrl),
+                rewind_runtime::builtins::signal_url_input_schema(),
             ),
             Action::new(
                 "github.get_issue",
@@ -1859,15 +1859,15 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn webhook_is_a_recorded_call_of_the_built_in() {
+async fn signal_url_is_a_recorded_call_of_the_built_in() {
     let harness = harness().await;
     let id = harness
         .start_with(
             r#"
-import { webhook, signal } from "rewind";
+import { signalUrl, signal } from "rewind";
 
 export default async function main() {
-  const hook = await webhook("pr_merged");
+  const hook = await signalUrl("pr_merged");
   const event = await signal<{ merged: boolean }>("pr_merged");
   return { url: hook.url, merged: event.merged };
 }
@@ -1897,18 +1897,18 @@ export default async function main() {
     else {
         panic!("{:#?}", run.history);
     };
-    assert_eq!(action, "webhook");
+    assert_eq!(action, "signalUrl");
     assert_eq!(args.value(), Some(&json!({ "name": "pr_merged" })));
     assert_eq!(callsite.map(|c| c.line), Some(5));
     harness.assert_replays(&run).await;
 
-    // Without the built-in, webhook() rejects at the call site, and nothing is recorded.
+    // Without the built-in, signalUrl() rejects at the call site, and nothing is recorded.
     let run = harness
         .run(
             r#"
-import { webhook } from "rewind";
+import { signalUrl } from "rewind";
 export default async function main() {
-  return await webhook("x").then(() => "resolved", (e: Error) => `${e.name}: ${e.message}`);
+  return await signalUrl("x").then(() => "resolved", (e: Error) => `${e.name}: ${e.message}`);
 }
 "#,
             json!({}),
@@ -1917,11 +1917,50 @@ export default async function main() {
     assert_eq!(
         run.output(),
         &json!(
-            "TypeError: webhook() needs the built-in webhook action, which this run's action set does \
-             not have"
+            "TypeError: signalUrl() needs the built-in signalUrl action, which this run's action set \
+             does not have"
         )
     );
     assert_eq!(run.events(), ["run_started", "complete_run"]);
+}
+
+/// Code written before signal URLs were named calls `webhook(name)` (`archi/08-decisions.md`,
+/// R1): the same function as `signalUrl`, the same recorded call, and it replays.
+#[tokio::test]
+async fn webhook_is_signal_url_for_code_already_written() {
+    let harness = harness().await;
+    let id = harness
+        .start_with(
+            r#"
+import { webhook, signalUrl, signal } from "rewind";
+
+export default async function main() {
+  const hook = await webhook("pr_merged");
+  await signal("pr_merged");
+  return { url: hook.url, same: webhook === signalUrl };
+}
+"#,
+            json!({}),
+            builtins_action_set(),
+        )
+        .await;
+    harness.drive().await;
+    harness
+        .world
+        .signal(&id, "pr_merged", json!({}))
+        .await
+        .unwrap();
+    harness.drive().await;
+    let run = harness.get(&id).await;
+    assert_eq!(
+        run.output(),
+        &json!({ "url": "https://rewind.example.com/hooks/tok_pr_merged", "same": true })
+    );
+    let Command::ScheduleCall { action, .. } = run.commands()[0] else {
+        panic!("{:#?}", run.history);
+    };
+    assert_eq!(action, "signalUrl");
+    harness.assert_replays(&run).await;
 }
 
 /// The actions of an MCP server `crm`: two pinned without an output schema, one with.

@@ -85,7 +85,11 @@ fn action_set() -> ActionSet {
         }),
         json!({}),
     );
-    let webhook = Action::new("webhook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
+    let webhook = Action::new(
+        "signalUrl",
+        ActionRoute::Builtin(Builtin::SignalUrl),
+        json!({}),
+    );
     ActionSet::new(
         [github, files],
         [
@@ -219,16 +223,16 @@ fn rejects_what_v1_does_not_define() {
     let policy = r#""policy":{"idempotent":true,"approval":false,"reconnect_timeout_ms":60000,"concurrency":16}"#;
     let action = |route: &str, extra: &str| {
         format!(
-            r#"{{"v":1,"servers":[],"actions":[{{"name":"webhook","route":{route},"schemas":{{"input":{{}}}},{policy}{extra}}}]}}"#
+            r#"{{"v":1,"servers":[],"actions":[{{"name":"signalUrl","route":{route},"schemas":{{"input":{{}}}},{policy}{extra}}}]}}"#
         )
     };
-    assert!(decode_action_set(&action(r#"{"type":"builtin","builtin":"webhook"}"#, "")).is_ok());
+    assert!(decode_action_set(&action(r#"{"type":"builtin","builtin":"signal_url"}"#, "")).is_ok());
 
     let invalid_action_sets = [
-        action(r#"{"type":"builtin","builtin":"webhook"}"#, r#","extra":1"#),
+        action(r#"{"type":"builtin","builtin":"signal_url"}"#, r#","extra":1"#),
         action(r#"{"type":"builtin","builtin":"ftp"}"#, ""),
         action(r#"{"type":"teleport"}"#, ""),
-        action(r#"{"type":"builtin","builtin":"webhook","allowed_hosts":["a"]}"#, ""),
+        action(r#"{"type":"builtin","builtin":"signal_url","allowed_hosts":["a"]}"#, ""),
         action(r#"{"type":"builtin","builtin":"http"}"#, ""),
         action(r#"{"type":"harness","group":"g"}"#, ""),
         action(r#"{"type":"mcp","server":"github"}"#, ""),

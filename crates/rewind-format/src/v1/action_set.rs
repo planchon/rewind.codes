@@ -13,7 +13,7 @@
 //! The document is written in its canonical form (RFC 8785, on one line), so its bytes hash to
 //! the action set's digest. Routes are `{"type":"mcp","server":…}`, `{"type":"harness"}` (with a
 //! `group` for a grouped harness action), `{"type":"builtin","builtin":"http","allowed_hosts":[…]}`
-//! and `{"type":"builtin","builtin":"webhook"}`; transports `{"type":"http","url":…}` and
+//! and `{"type":"builtin","builtin":"signal_url"}`; transports `{"type":"http","url":…}` and
 //! `{"type":"stdio","command":…,"args":[…],"env":{…}}`. Optional fields are omitted when
 //! absent: `description`, `schemas.output`, `policy.execution_timeout_ms`, `route.group`.
 //!
@@ -265,7 +265,7 @@ enum RouteV1 {
 #[serde(rename_all = "snake_case")]
 enum BuiltinV1 {
     Http,
-    Webhook,
+    SignalUrl,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -659,8 +659,8 @@ fn action_dto(action: &Action) -> ActionV1 {
             builtin: BuiltinV1::Http,
             allowed_hosts: Some(allowed_hosts.clone()),
         },
-        ActionRoute::Builtin(Builtin::Webhook) => RouteV1::Builtin {
-            builtin: BuiltinV1::Webhook,
+        ActionRoute::Builtin(Builtin::SignalUrl) => RouteV1::Builtin {
+            builtin: BuiltinV1::SignalUrl,
             allowed_hosts: None,
         },
         ActionRoute::Builtin(Builtin::Workflow { .. }) => {
@@ -723,15 +723,15 @@ fn action_from_dto(dto: ActionV1) -> Result<Action, String> {
             ));
         }
         RouteV1::Builtin {
-            builtin: BuiltinV1::Webhook,
+            builtin: BuiltinV1::SignalUrl,
             allowed_hosts: None,
-        } => ActionRoute::Builtin(Builtin::Webhook),
+        } => ActionRoute::Builtin(Builtin::SignalUrl),
         RouteV1::Builtin {
-            builtin: BuiltinV1::Webhook,
+            builtin: BuiltinV1::SignalUrl,
             allowed_hosts: Some(_),
         } => {
             return Err(format!(
-                "action {:?}: the webhook built-in takes no \"allowed_hosts\"",
+                "action {:?}: the signalUrl built-in takes no \"allowed_hosts\"",
                 dto.name
             ));
         }

@@ -1,8 +1,8 @@
 import { ops } from "rewind:actions";
-import { signal, webhook } from "rewind";
+import { signal, signalUrl } from "rewind";
 
 export default async function main() {
-  const hook = await webhook("build_done");
+  const hook = await signalUrl("build_done");
   await ops.trigger_build({ repo: "acme/api", commit: "3f2a9c1", callback_url: hook.url });
   const result = await signal<{ status: string }>("build_done");
   if (result.status !== "passed") return `the build ${result.status}`;

@@ -687,14 +687,14 @@ impl<P: Plane> Edge<P> {
     }
 
     /// A request posted to a webhook's URL: the signal it is bound to.
-    pub async fn webhook<G: Gateway>(
+    pub async fn signal_by_url<G: Gateway>(
         &self,
         gateway: &mut G,
         token: &str,
         payload: JsonValue,
         key: Option<String>,
     ) -> Result<Enqueued, EdgeError> {
-        let request = |payload| PartitionRequest::Webhook {
+        let request = |payload| PartitionRequest::SignalUrl {
             token: token.to_owned(),
             payload,
             key: key.clone(),

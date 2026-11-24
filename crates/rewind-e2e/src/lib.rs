@@ -330,10 +330,10 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
             });
         let mut action = match (name.as_str(), server) {
             ("http", _) => rewind_mcp::http_action(scenario.http_hosts.clone()),
-            ("webhook", _) => Action::new(
-                "webhook",
-                ActionRoute::Builtin(Builtin::Webhook),
-                rewind_runtime::builtins::webhook_input_schema(),
+            ("signalUrl", _) => Action::new(
+                "signalUrl",
+                ActionRoute::Builtin(Builtin::SignalUrl),
+                rewind_runtime::builtins::signal_url_input_schema(),
             ),
             (_, Some(server)) => {
                 let mut action = Action::new(

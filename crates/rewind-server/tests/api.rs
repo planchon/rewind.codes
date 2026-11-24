@@ -55,9 +55,9 @@ export default async function main() {
 }
 "#;
 
-const HOOK: &str = r#"import { signal, webhook } from "rewind";
+const HOOK: &str = r#"import { signal, signalUrl } from "rewind";
 export default async function main() {
-  const hook = await webhook("pr_merged");
+  const hook = await signalUrl("pr_merged");
   console.log(hook.url);
   await signal("go");
   const first = await signal("pr_merged");
@@ -230,7 +230,7 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
         action_set
             .actions
             .iter()
-            .any(|action| action.name == "webhook")
+            .any(|action| action.name == "signalUrl")
     );
     assert_eq!(
         harness.list_action_sets().await.unwrap().action_sets.len(),
@@ -560,7 +560,7 @@ async fn signals_are_delivered_once_per_key_and_refused_after_the_end() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_script_gets_a_webhook_url_and_whatever_is_posted_there_is_a_signal() {
+async fn a_run_gets_a_signal_url_and_whatever_is_posted_there_is_a_signal() {
     let server = TestServer::start(&["--public-url", "https://rewind.example.com"]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness.start_run(&start(HOOK), None).await.unwrap();
@@ -571,7 +571,7 @@ async fn a_script_gets_a_webhook_url_and_whatever_is_posted_there_is_a_signal() 
     .await;
     let token = url
         .strip_prefix("https://rewind.example.com/hooks/")
-        .unwrap_or_else(|| panic!("unexpected webhook URL {url}"));
+        .unwrap_or_else(|| panic!("unexpected signal URL {url}"));
     // Anyone may post to the URL: no key.
     let anonymous = rewind_api::Client::remote(&server.url, None).unwrap();
     let delivery = IdempotencyKey::new("delivery-1").unwrap();
@@ -1055,7 +1055,7 @@ async fn the_http_action_is_pinned_with_its_allow_list_only() {
         .iter()
         .map(|action| action.name.as_str())
         .collect();
-    assert_eq!(names, ["http", "webhook"]);
+    assert_eq!(names, ["http", "signalUrl"]);
     assert!(
         action_set
             .declarations

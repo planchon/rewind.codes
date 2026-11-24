@@ -4,7 +4,7 @@
 //! A partition holds one record per kind of thing it keeps about its runs: [`RunHead`], an
 //! [`HistoryEvent`] of an attempt's history (in the stored format of events), an
 //! [`InboxItem`], a [`SignalKey`], an action [`Task`], a [`Timer`], a [`PayloadValue`], a
-//! [`Watcher`], a [`WebhookToken`], a run's [`Summary`] in the index, a [`StartKey`], the hourly
+//! [`Watcher`], a [`SignalUrlToken`], a run's [`Summary`] in the index, a [`StartKey`], the hourly
 //! [`Counters`] of a namespace, the observed [`Shape`] of an action's results, the [`Gauges`] of a
 //! namespace, an [`Outbox`] entry, and the state of an [`Organization`] homed there.
 //!
@@ -25,9 +25,9 @@ pub use crate::v1::partition::{
     FailureCounts, FailureKind, ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
     Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
     QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, RunCounts, RunHead, RunWorkflow,
-    ScriptCounts, Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy,
-    Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind, TraceContext, Wait,
-    WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken,
+    ScriptCounts, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey,
+    StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
+    TraceContext, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind,
 };
 
 /// A partition record: what [`encode`] writes and [`decode`] reads.
@@ -60,7 +60,7 @@ records! {
     Timer => "timer",
     PayloadValue => "payload",
     Watcher => "watcher",
-    WebhookToken => "webhook token",
+    SignalUrlToken => "signal URL token",
     Summary => "run summary",
     StartKey => "start key",
     Counters => "counters",

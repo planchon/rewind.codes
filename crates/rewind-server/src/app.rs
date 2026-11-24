@@ -348,7 +348,7 @@ impl App {
         tenant: &TenantId,
     ) -> Result<StoredActionSet, ApiError> {
         let action_set =
-            ActionSet::new([], [self.actions.webhook_action()]).map_err(ApiError::internal)?;
+            ActionSet::new([], [self.actions.signal_url_action()]).map_err(ApiError::internal)?;
         let catalog = self.catalog();
         if let Some(stored) = catalog.get_action_set(tenant, action_set.digest()).await? {
             return Ok(stored);

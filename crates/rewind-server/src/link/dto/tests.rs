@@ -783,7 +783,7 @@ fn every_partition_request() -> Vec<PartitionRequest> {
             task: task_ref(1, 2),
             decision: Decision::Reject(None),
         },
-        PartitionRequest::Webhook {
+        PartitionRequest::SignalUrl {
             token: "rewind_wh_x".into(),
             payload: json!([1, "two"]),
             key: Some("delivery-1".into()),

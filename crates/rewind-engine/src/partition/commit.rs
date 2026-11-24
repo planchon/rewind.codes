@@ -139,7 +139,7 @@ fn changed_run(change: &Change) -> Option<&RunRef> {
         | Change::Seal { run, .. }
         | Change::Erase { run }
         | Change::Summary { run, .. }
-        | Change::WebhookToken { run, .. } => Some(run),
+        | Change::SignalUrlToken { run, .. } => Some(run),
         Change::Activation(activation) => Some(&activation.run),
         Change::Timer(timer) => match timer {
             crate::ports::TimerChange::Set(timer) => timer.kind.run(),

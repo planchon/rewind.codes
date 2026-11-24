@@ -187,7 +187,7 @@ async fn the_embedded_server_reads_an_api_and_calls_it() {
         .iter()
         .map(|action| action.name.as_str())
         .collect();
-    assert_eq!(names, ["dax.createMeasure", "dax.getMeasure", "webhook"]);
+    assert_eq!(names, ["dax.createMeasure", "dax.getMeasure", "signalUrl"]);
     assert_eq!(registered.apis.len(), 1);
     assert_eq!(registered.apis[0].base_url, base);
     assert_eq!(registered.apis[0].actions, 2);

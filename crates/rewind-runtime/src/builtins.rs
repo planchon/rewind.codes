@@ -3,8 +3,8 @@
 //! `webhook`) and whoever pins an action set follow the same shapes, recorded in
 //! `archi/08-decisions.md`.
 //!
-//! **`webhook(name)`** calls the action `webhook` with `{"name": string}`, and resolves to its
-//! result, `{"url": string}`. [`webhook_input_schema`] is the schema to pin.
+//! **`signalUrl(name)`** calls the action `webhook` with `{"name": string}`, and resolves to its
+//! result, `{"url": string}`. [`signal_url_input_schema`] is the schema to pin.
 //!
 //! **`fetch(input, init)`** calls the action `http` in the format of the action `rewind-mcp`
 //! implements, whose schemas `rewind_mcp::http_action` pins (one format: the runtime cannot depend
@@ -39,7 +39,7 @@
 use serde_json::{Value, json};
 
 /// The input schema to pin for the built-in `webhook` action.
-pub fn webhook_input_schema() -> Value {
+pub fn signal_url_input_schema() -> Value {
     json!({
         "type": "object",
         "properties": { "name": { "type": "string" } },
@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn the_schema_accepts_what_the_glue_sends() {
-        let webhook = jsonschema::validator_for(&webhook_input_schema()).unwrap();
+        let webhook = jsonschema::validator_for(&signal_url_input_schema()).unwrap();
         assert!(webhook.is_valid(&json!({ "name": "pr_merged" })));
         assert!(!webhook.is_valid(&json!({ "name": 1 })));
     }

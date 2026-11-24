@@ -9,8 +9,8 @@ use crate::ports::{
     Hour, InboxItem, IndexedSummary, NamespaceName, NodeId, OrganizationState, OutboxChange,
     OutboxEntry, OutboxId, Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, QuarantineNote, Recovery, RunHead,
-    RunOrder, RunQuery, RunRef, Scope, SearchPosition, TaskChange, TaskRecord, TenantId,
-    TimerChange, TimerKind, Watcher, WebhookTarget, Window,
+    RunOrder, RunQuery, RunRef, Scope, SearchPosition, SignalUrlTarget, TaskChange, TaskRecord,
+    TenantId, TimerChange, TimerKind, Watcher, Window,
 };
 
 /// `PartitionStore` in memory: one map of records per partition, shared by every log opened on
@@ -305,7 +305,7 @@ impl PartitionState {
                 }
                 Ok(())
             }
-            Change::WebhookToken { run, name, hash } => {
+            Change::SignalUrlToken { run, name, hash } => {
                 let records = self.records_mut(&run)?;
                 if records.head.is_ended() {
                     return Ok(());
@@ -313,7 +313,7 @@ impl PartitionState {
                 match self.webhooks.get(&hash) {
                     Some((bound, bound_name)) if *bound != run.id || *bound_name != name => {
                         Err(conflict(format!(
-                            "a webhook token of run {run} is bound to another run or signal"
+                            "a signal URL token of run {run} is bound to another run or signal"
                         )))
                     }
                     _ => {
@@ -456,7 +456,7 @@ impl PartitionState {
     }
 
     /// Clears what the ended attempt of a run had pending: its timers, tasks, inbox and
-    /// webhook tokens.
+    /// signal URL tokens.
     fn end(&mut self, run: &RunRef) {
         self.timers
             .retain(|kind, _| !(kind.run() == Some(run) && kind.ends_with_the_attempt()));
@@ -895,11 +895,14 @@ impl PartitionLog for MemoryPartitionLog {
         })
     }
 
-    async fn webhook(&self, token_hash: Digest) -> Result<Option<WebhookTarget>, PartitionError> {
+    async fn signal_url(
+        &self,
+        token_hash: Digest,
+    ) -> Result<Option<SignalUrlTarget>, PartitionError> {
         self.read(|state| {
             let (run, name) = state.webhooks.get(&token_hash)?;
             let records = state.runs.get(run)?;
-            (!records.head.is_ended()).then(|| WebhookTarget {
+            (!records.head.is_ended()).then(|| SignalUrlTarget {
                 run: records.head.run.clone(),
                 name: name.clone(),
             })

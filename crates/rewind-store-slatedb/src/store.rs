@@ -10,8 +10,8 @@ use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Shape, Timestamp};
 use rewind_engine::ports::{
     Attempt, Batch, CountedNamespace, Counters, DueTimer, Found, Gauges, InboxItem, IndexedSummary,
     NamespaceName, NodeId, OrganizationState, Page, PartitionError, PartitionLog, PartitionStore,
-    PayloadRecord, Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, TaskRecord, TenantId,
-    Watcher, WebhookTarget, Window,
+    PayloadRecord, Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, SignalUrlTarget,
+    TaskRecord, TenantId, Watcher, Window,
 };
 use rewind_format::partition as record;
 use slatedb::admin::Admin;
@@ -615,10 +615,13 @@ impl PartitionLog for SlateLog {
             .is_some())
     }
 
-    async fn webhook(&self, token_hash: Digest) -> Result<Option<WebhookTarget>, PartitionError> {
-        self.get::<record::WebhookToken>(keys::webhook(token_hash))
+    async fn signal_url(
+        &self,
+        token_hash: Digest,
+    ) -> Result<Option<SignalUrlTarget>, PartitionError> {
+        self.get::<record::SignalUrlToken>(keys::signal_url(token_hash))
             .await?
-            .map(codec::webhook_of)
+            .map(codec::signal_url_of)
             .transpose()
     }
 

@@ -29,7 +29,7 @@ pub(crate) fn refused(request: &PartitionRequest, refusal: Refusal) -> Partition
         PartitionRequest::Start(_) => PartitionReply::Started(Err(refusal)),
         PartitionRequest::Signal(_)
         | PartitionRequest::Cancel { .. }
-        | PartitionRequest::Webhook { .. } => PartitionReply::Enqueued(Err(refusal)),
+        | PartitionRequest::SignalUrl { .. } => PartitionReply::Enqueued(Err(refusal)),
         PartitionRequest::Release { .. }
         | PartitionRequest::GiveUp { .. }
         | PartitionRequest::Erase { .. } => PartitionReply::Done(Err(refusal)),

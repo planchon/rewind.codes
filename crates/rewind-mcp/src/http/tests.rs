@@ -588,7 +588,11 @@ async fn the_real_policy_refuses_local_and_internal_addresses() {
 async fn webhook_and_other_routes_are_not_answered_here() {
     let http = HttpAction::new(HttpConfig::default()).unwrap();
     let mut webhook = call(&["a.test"], json!({ "name": "x" }));
-    webhook.action = Action::new("webhook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
+    webhook.action = Action::new(
+        "signalUrl",
+        ActionRoute::Builtin(Builtin::SignalUrl),
+        json!({}),
+    );
     let (transient, failure) = failure(http.dispatch(webhook, CallAuth::None).await);
     assert!(!transient);
     assert_eq!(failure.kind, ActionFailureKind::Unavailable);

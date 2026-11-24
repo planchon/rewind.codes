@@ -137,7 +137,7 @@ impl TsgoChecker {
 
     /// Type-checks a workflow's code as [`check_source`](Self::check_source) does, with the
     /// workflow's own declarations too (`rewind-codegen`'s `workflow_declarations`): its
-    /// signals, which type `signal()` and `webhook()`, and `entry.ts`, whose diagnostics are
+    /// signals, which type `signal()` and `signalUrl()`, and `entry.ts`, whose diagnostics are
     /// reported at the code's default export: it does not take the workflow's input, or does
     /// not return its output.
     pub async fn check_workflow_source(

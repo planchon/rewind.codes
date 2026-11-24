@@ -494,8 +494,8 @@ async fn the_corpus_runs_through_rewind_test() {
                 .unwrap();
         // Its action set lacks the `webhook` built-in, which every action set of a server, and of
         // `rewind test`, pins.
-        let without_webhook = name == "red/webhook_without_the_built_in";
-        let Some(translated) = translate(&scenario).filter(|_| !without_webhook) else {
+        let without_signal_url = name == "red/signal_url_without_the_built_in";
+        let Some(translated) = translate(&scenario).filter(|_| !without_signal_url) else {
             skipped.push(name);
             continue;
         };
@@ -598,9 +598,9 @@ async fn the_corpus_runs_through_rewind_test() {
             "red/secret_for_a_server_taking_none",
             "red/secret_missing_at_start",
             "red/secret_not_yours_to_attach",
+            "red/signal_url_without_the_built_in",
             "red/too_many_commands",
             "red/ttl_too_long",
-            "red/webhook_without_the_built_in",
             "red/workflow_input_refused",
             "red/workflow_not_pinned",
             "red/workflow_parent_failure_cancels_its_runs",

@@ -90,8 +90,8 @@
     "RunError",
     "run",
     "signal",
-    "sleep",
-    "webhook"
+    "signalUrl",
+    "sleep"
   ],
   "absent": {
     "Buffer": "There is no Buffer: use TextEncoder and TextDecoder for text, atob and btoa for base64, and Uint8Array for bytes.",

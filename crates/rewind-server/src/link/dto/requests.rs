@@ -257,7 +257,7 @@ pub enum PartitionRequest {
         task: TaskRef,
         decision: Decision,
     },
-    Webhook {
+    SignalUrl {
         token: String,
         payload: JsonValue,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -436,11 +436,11 @@ impl From<&link::PartitionRequest> for PartitionRequest {
                     link::Decision::Reject(message) => Decision::Reject(message.clone()),
                 },
             },
-            R::Webhook {
+            R::SignalUrl {
                 token,
                 payload,
                 key,
-            } => PartitionRequest::Webhook {
+            } => PartitionRequest::SignalUrl {
                 token: token.clone(),
                 payload: payload.clone(),
                 key: key.clone(),
@@ -562,11 +562,11 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
                     Decision::Reject(message) => link::Decision::Reject(message),
                 },
             },
-            PartitionRequest::Webhook {
+            PartitionRequest::SignalUrl {
                 token,
                 payload,
                 key,
-            } => R::Webhook {
+            } => R::SignalUrl {
                 token,
                 payload,
                 key,

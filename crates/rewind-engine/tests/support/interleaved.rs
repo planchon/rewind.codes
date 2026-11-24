@@ -17,8 +17,8 @@ use rewind_engine::ports::partition::Change;
 use rewind_engine::ports::{
     Attempt, Batch, Counters, DueTimer, Found, Gauges, InboxItem, IndexedSummary, NamespaceName,
     NodeId, OrganizationState, Page, PartitionError, PartitionLog, PartitionStore, PayloadRecord,
-    Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, TaskRecord, TenantId, Watcher,
-    WebhookTarget, Window,
+    Recovery, RunHead, RunOrder, RunQuery, RunRef, Scope, SignalUrlTarget, TaskRecord, TenantId,
+    Watcher, Window,
 };
 
 #[derive(Debug, Default)]
@@ -194,8 +194,11 @@ impl PartitionLog for InterleavedLog {
         self.inner.signal_key(run, key).await
     }
 
-    async fn webhook(&self, token_hash: Digest) -> Result<Option<WebhookTarget>, PartitionError> {
-        self.inner.webhook(token_hash).await
+    async fn signal_url(
+        &self,
+        token_hash: Digest,
+    ) -> Result<Option<SignalUrlTarget>, PartitionError> {
+        self.inner.signal_url(token_hash).await
     }
 
     async fn search(

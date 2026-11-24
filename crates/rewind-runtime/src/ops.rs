@@ -203,8 +203,8 @@ impl ExecState {
     fn check_call(&mut self, action: &str, args: &Value) -> Result<(), String> {
         let Some(pinned) = self.action_set.action(action) else {
             return Err(match action {
-                "webhook" => {
-                    "webhook() needs the built-in webhook action, which this run's action set \
+                "signalUrl" => {
+                    "signalUrl() needs the built-in signalUrl action, which this run's action set \
                               does not have"
                         .to_owned()
                 }
@@ -770,9 +770,9 @@ mod tests {
         );
         assert!(
             state
-                .check_call("webhook", &json!({ "name": "x" }))
+                .check_call("signalUrl", &json!({ "name": "x" }))
                 .unwrap_err()
-                .starts_with("webhook() needs the built-in webhook action")
+                .starts_with("signalUrl() needs the built-in signalUrl action")
         );
     }
 

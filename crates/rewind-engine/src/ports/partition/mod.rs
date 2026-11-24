@@ -12,7 +12,7 @@
 //!
 //! A partition holds, for each run of its namespaces: its head, its history per attempt, its
 //! inbox, its signal keys, its call tasks, its timers, its payload records, its watchers, its
-//! webhook tokens, its summary in the run index, and its start key; and for the partition: the
+//! signal URL tokens, its summary in the run index, and its start key; and for the partition: the
 //! counters, the outbox, and the states of the organizations homed there. The keys they are
 //! stored under belong to the adapter: the engine never composes one.
 
@@ -40,7 +40,7 @@ pub use timers::{DueTimer, TimerChange, TimerKind};
 use crate::ports::cluster::NodeId;
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::read_model::{RunOrder, RunQuery};
-use crate::ports::records::{InboxItem, PayloadRecord, Quarantine, WebhookTarget};
+use crate::ports::records::{InboxItem, PayloadRecord, Quarantine, SignalUrlTarget};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -98,12 +98,12 @@ pub trait PartitionStore: Send + Sync {
 ///   anywhere but at the attempt's history length; a start key already used in the
 ///   namespace; a consumed inbox item that does not exist; a change to a run that does not exist
 ///   or has been erased. Also refused: a run created twice, an inbox item or an outbox entry
-///   numbered twice, a task created twice, a webhook token bound to two runs, an activation of
+///   numbered twice, a task created twice, a signal URL token bound to two runs, an activation of
 ///   an attempt that is not the run's or has ended, the seal of an attempt that has not ended.
 /// - **Signal keys.** An `Enqueue` with a signal key already seen for that run, or recorded by a
 ///   `SignalKey`, changes nothing.
 /// - **Ends.** A terminal `Activation` (its head's status is terminal) clears the run's timers
-///   of the attempt, call tasks and inbox, and its webhook tokens stop resolving; nothing is
+///   of the attempt, call tasks and inbox, and its signal URL tokens stop resolving; nothing is
 ///   enqueued for an ended attempt (an `Enqueue` changes nothing).
 /// - **Activations** write, with the events, the payload records of the payloads that left the
 ///   events, the run's head and summary, its index entries, the counters it moves and its
@@ -112,7 +112,7 @@ pub trait PartitionStore: Send + Sync {
 ///   records, and keeps the run's head (sealed), summary, index entries and signal keys: a key
 ///   is kept for the life of the run, so a late retry of a signal is acknowledged
 ///   (`archi/06-storage-and-scale.md`, "Idempotency of the API"). `Erase` deletes everything of
-///   the run: its records, summary, start key, signal keys, webhook tokens, timers, outbox
+///   the run: its records, summary, start key, signal keys, signal URL tokens, timers, outbox
 ///   events, and what it held in the gauges. Neither is refused for a run
 ///   already sealed or erased.
 /// - **Search.** `search` evaluates every term of the query on the summaries of the scope, in
@@ -211,12 +211,12 @@ pub trait PartitionLog: Send + Sync {
         key: &str,
     ) -> impl Future<Output = Result<bool, PartitionError>> + Send;
 
-    /// The run and signal a webhook token is bound to, by the token's SHA-256; `None` once the
+    /// The run and signal a signal URL token is bound to, by the token's SHA-256; `None` once the
     /// run has ended.
-    fn webhook(
+    fn signal_url(
         &self,
         token_hash: Digest,
-    ) -> impl Future<Output = Result<Option<WebhookTarget>, PartitionError>> + Send;
+    ) -> impl Future<Output = Result<Option<SignalUrlTarget>, PartitionError>> + Send;
 
     /// A page of the summaries of the scope that match the query, in `order`. A query of
     /// another tenant than the scope's matches nothing.
@@ -408,8 +408,8 @@ pub enum Change {
     },
     Outbox(OutboxChange),
     Counters(Vec<CounterDelta>),
-    /// Binds a webhook token, by its SHA-256, to the run's signal `name`.
-    WebhookToken {
+    /// Binds a signal URL token, by its SHA-256, to the run's signal `name`.
+    SignalUrlToken {
         run: RunRef,
         name: String,
         hash: Digest,

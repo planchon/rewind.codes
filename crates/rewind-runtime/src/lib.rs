@@ -9,7 +9,7 @@
 //!   seeded (sfc32 for `Math.random`, ChaCha20 for `crypto`);
 //! - the web-standard globals (`URL`, `TextEncoder`, `structuredClone`…) come from `deno_web`;
 //! - every interaction with the outside world is a command with a `seq`: a call, whose
-//!   args are checked against the action's pinned schema first, `webhook(name)`, `fetch` when
+//!   args are checked against the action's pinned schema first, `signalUrl(name)`, `fetch` when
 //!   the action set has the `http` action, a timer;
 //! - the code's terminal command follows the rules of "How a code ends": it waits for
 //!   the calls in flight, an unhandled rejection fails the run, and a code that nothing

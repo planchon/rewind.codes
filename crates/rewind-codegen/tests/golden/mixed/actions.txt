@@ -114,9 +114,9 @@ fetch(url, { method?, headers?, body? }) → Response · The http action, a glob
 
 declare function fetch(input: string | URL, init?: RequestInit): Promise<Response>;
 
-== webhook
-webhook(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
+== signalUrl
+signalUrl(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
 
 declare module "rewind" {
-  export function webhook(name: string): Promise<{ url: string }>;
+  export function signalUrl(name: string): Promise<{ url: string }>;
 }

@@ -310,7 +310,7 @@ pub(super) async fn signal(
     accepted_signal(&view, &name, enqueued)
 }
 
-/// The answer to a signal, from the API or an inbound webhook.
+/// The answer to a signal, from the API or an signal URL.
 pub(crate) fn accepted_signal(
     view: &RunView,
     name: &str,

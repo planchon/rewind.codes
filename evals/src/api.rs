@@ -485,9 +485,9 @@ impl World {
             let action_set = rewind_core::ActionSet::new(
                 [],
                 [rewind_core::Action::new(
-                    "webhook",
-                    rewind_core::ActionRoute::Builtin(rewind_core::Builtin::Webhook),
-                    rewind_runtime::builtins::webhook_input_schema(),
+                    "signalUrl",
+                    rewind_core::ActionRoute::Builtin(rewind_core::Builtin::SignalUrl),
+                    rewind_runtime::builtins::signal_url_input_schema(),
                 )],
             )
             .map_err(|error| fault(WorldError::ActionSet(error.to_string())))?;

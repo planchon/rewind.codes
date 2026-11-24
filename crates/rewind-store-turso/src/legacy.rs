@@ -11,7 +11,7 @@ use rewind_core::{
     SecretRef, Seq,
 };
 use rewind_engine::ports::legacy::{
-    LegacyError, LegacyHistory, LegacyRun, LegacyRuns, LegacyTask, LegacyWebhook,
+    LegacyError, LegacyHistory, LegacyRun, LegacyRuns, LegacySignalUrl, LegacyTask,
 };
 use rewind_engine::ports::{
     ForkSource, InboxItem, NamespaceName, ParkKind, ParkReason, PayloadRecord, Quarantine,
@@ -321,7 +321,7 @@ async fn fill(connection: &Connection, run: &mut LegacyRun) -> Result<(), Error>
     )
     .await?
     {
-        run.webhooks.push(LegacyWebhook {
+        run.webhooks.push(LegacySignalUrl {
             name: row.text(0)?,
             hash: Digest::of(row.text(1)?.as_bytes()),
         });

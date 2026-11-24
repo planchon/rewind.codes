@@ -131,7 +131,7 @@ impl<P: Plane> OwnerMsg<P> {
             OwnerMsg::Step(step) => match *step {
                 runs::Step::StartKey { reply, .. }
                 | runs::Step::SignalChecked { reply, .. }
-                | runs::Step::Webhook { reply, .. } => Some(reply),
+                | runs::Step::SignalUrl { reply, .. } => Some(reply),
                 _ => None,
             },
             _ => None,

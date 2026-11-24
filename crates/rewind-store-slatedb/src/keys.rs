@@ -18,14 +18,14 @@
 //! | `j t r seq:u32` | call task | `tasks` (a range); the recovery's tasks (the family) |
 //! | `p t r digest:32` | payload | `payload` |
 //! | `w t r watcher:16` | watcher | `watchers` (a range) |
-//! | `b t r hash:32` | empty | the run's webhook tokens, removed at its end |
+//! | `b t r hash:32` | empty | the run's signal URL tokens, removed at its end |
 //! | `o t r id:u64` | empty | the run's outbox entries, removed at its erasure |
 //! | `y t r key` | empty | the run's start key, removed at its erasure |
 //! | `L r` | run head | the runs that have not ended: the recovery's runnable and quarantined runs |
 //! | `U r` | run head | the ended attempts not sealed: the recovery's `unsealed` |
 //! | `t kind` | timer | a timer by its kind: setting it again finds the due time to move |
 //! | `T at:u64 kind` | timer | `timers(from, to)` (a range), in their order |
-//! | `W hash:32` | webhook token | `webhook` |
+//! | `W hash:32` | signal URL token | `signal_url` |
 //! | `K t n key` | start key | `started` |
 //! | `O id:u64` | outbox entry | the recovery's outbox (the family) |
 //! | `G t n` | gauges | `gauges` (a point, or the tenant's range); the recovery's counters |
@@ -57,14 +57,14 @@ pub(crate) const SIGNAL_KEY: u8 = b'k';
 pub(crate) const TASK: u8 = b'j';
 pub(crate) const PAYLOAD: u8 = b'p';
 pub(crate) const WATCHER: u8 = b'w';
-pub(crate) const RUN_WEBHOOK: u8 = b'b';
+pub(crate) const RUN_SIGNAL_URL: u8 = b'b';
 pub(crate) const RUN_OUTBOX: u8 = b'o';
 pub(crate) const RUN_START_KEY: u8 = b'y';
 pub(crate) const LIVE: u8 = b'L';
 pub(crate) const UNSEALED: u8 = b'U';
 pub(crate) const TIMER: u8 = b't';
 pub(crate) const DUE: u8 = b'T';
-pub(crate) const WEBHOOK: u8 = b'W';
+pub(crate) const SIGNAL_URL: u8 = b'W';
 pub(crate) const START_KEY: u8 = b'K';
 pub(crate) const OUTBOX: u8 = b'O';
 pub(crate) const GAUGES: u8 = b'G';
@@ -84,7 +84,7 @@ pub(crate) const RUN_FAMILIES: [u8; 10] = [
     TASK,
     PAYLOAD,
     WATCHER,
-    RUN_WEBHOOK,
+    RUN_SIGNAL_URL,
     RUN_OUTBOX,
     RUN_START_KEY,
 ];
@@ -215,8 +215,8 @@ pub(crate) fn watcher(run: &RunRef, watcher: RunId) -> Key {
     of_run(WATCHER, run).run(watcher)
 }
 
-pub(crate) fn run_webhook(run: &RunRef, hash: Digest) -> Key {
-    of_run(RUN_WEBHOOK, run).bytes(hash.as_bytes())
+pub(crate) fn run_signal_url(run: &RunRef, hash: Digest) -> Key {
+    of_run(RUN_SIGNAL_URL, run).bytes(hash.as_bytes())
 }
 
 pub(crate) fn run_outbox(run: &RunRef, id: OutboxId) -> Key {
@@ -279,8 +279,8 @@ pub(crate) fn due_from(at: u64) -> Key {
     Key::new(DUE).u64(at)
 }
 
-pub(crate) fn webhook(hash: Digest) -> Key {
-    Key::new(WEBHOOK).bytes(hash.as_bytes())
+pub(crate) fn signal_url(hash: Digest) -> Key {
+    Key::new(SIGNAL_URL).bytes(hash.as_bytes())
 }
 
 pub(crate) fn start_keys_of(tenant: &TenantId, namespace: &NamespaceName) -> Key {

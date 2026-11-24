@@ -1,4 +1,4 @@
-//! Inbound webhooks: `POST /hooks/{token}`, at the unguessable URL `webhook(name)` returned to a
+//! Signal URLs: `POST /hooks/{token}`, at the unguessable URL `signalUrl(name)` returned to a
 //! code. Whatever is posted becomes a signal on the run (`archi/01-product.md`, "Signals").
 //! No API key: the token is the credential, and it names its run: any process routes it to the
 //! run's owner, which resolves it.
@@ -57,7 +57,7 @@ pub(super) async fn post(
     });
     match app
         .edge
-        .webhook(&mut app.gateway(), &token, payload, key)
+        .signal_by_url(&mut app.gateway(), &token, payload, key)
         .await
     {
         Ok(Enqueued::RunEnded) | Err(EdgeError::Refused(Refusal::RunEnded(_))) => {

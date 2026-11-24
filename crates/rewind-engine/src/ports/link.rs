@@ -195,7 +195,7 @@ pub enum PartitionRequest {
     /// The harness decides on a task that waits for it: answered `Answered`.
     Decide { task: TaskRef, decision: Decision },
     /// A request posted to a webhook's URL: the signal it is bound to. Answered `Enqueued`.
-    Webhook {
+    SignalUrl {
         token: String,
         payload: JsonValue,
         key: Option<String>,

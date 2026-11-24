@@ -4,7 +4,7 @@
 //!
 //! | Rule | Flags |
 //! | --- | --- |
-//! | `floating-promise` | A promise used as a statement, neither awaited, returned, assigned nor `void`ed: a call to an action (through an import of `rewind:actions`, or `fetch` with the `http` action), to `sleep`, `signal` or `webhook`, to a function of the code declared `async` or returning `Promise<…>`, to `Promise.all` and the like, or an async function called at once; also through `.then`, `.catch`, `.finally`, `,`, `?:`, `&&`, `\|\|` and `??` |
+//! | `floating-promise` | A promise used as a statement, neither awaited, returned, assigned nor `void`ed: a call to an action (through an import of `rewind:actions`, or `fetch` with the `http` action), to `sleep`, `signal` or `signalUrl`, to a function of the code declared `async` or returning `Promise<…>`, to `Promise.all` and the like, or an async function called at once; also through `.then`, `.catch`, `.finally`, `,`, `?:`, `&&`, `\|\|` and `??` |
 //! | `ignored-async-callback` | An async callback given to `forEach`, which ignores what it returns, or to `filter`, `some`, `every`, `find`, `findIndex`, `findLast`, `findLastIndex`, which read a promise as `true` |
 //! | `absent-global` | A reference to a global the sandbox does not have but models reach for (`fetch` without the `http` action, `require`, `process`, `Buffer`), with what to use instead |
 
@@ -29,7 +29,7 @@ pub(crate) const IGNORED_ASYNC_CALLBACK: &str = "ignored-async-callback";
 pub(crate) const ABSENT_GLOBAL: &str = "absent-global";
 
 /// The functions of `rewind` that return a promise.
-const REWIND_ASYNC: [&str; 3] = ["sleep", "signal", "webhook"];
+const REWIND_ASYNC: [&str; 3] = ["sleep", "signal", "signalUrl"];
 /// The functions of `Promise` that group promises into one.
 const COMBINATORS: [&str; 4] = ["all", "allSettled", "any", "race"];
 /// Array methods that read what their callback returns as a boolean.
@@ -639,7 +639,7 @@ mod tests {
             ),
             ("sleep(\"1h\");", &["sleep"]),
             ("wait(\"approval\");", &["wait"]),
-            ("rewind.webhook(\"done\");", &["rewind.webhook"]),
+            ("rewind.signalUrl(\"done\");", &["rewind.signalUrl"]),
             ("Promise.all([1]);", &["Promise.all"]),
             (
                 "github.list_issues({}).then((issues) => issues.length);",

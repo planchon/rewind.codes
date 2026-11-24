@@ -24,7 +24,7 @@
 //! ```
 //!
 //! For a workflow's own code, checked when it is registered, [`workflow_declarations`] gives
-//! its signals (which type `signal()` and `webhook()`), and `entry.ts`, which assigns the code's
+//! its signals (which type `signal()` and `signalUrl()`), and `entry.ts`, which assigns the code's
 //! default export to a function from its input type to its output type.
 
 use rewind_core::{PinnedWorkflow, WorkflowSchemas};

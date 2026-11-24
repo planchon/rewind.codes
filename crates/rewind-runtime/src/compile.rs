@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(
             refused("import { fetch } from \"rewind\";\nexport default async () => fetch;"),
             "\"rewind\" has no export named \"fetch\" (workflow.ts:1:10); it exports ActionError, \
-             CancelledError, RunError, run, signal, sleep, webhook"
+             CancelledError, RunError, run, signal, signalUrl, sleep"
         );
         assert_eq!(
             refused("import { jira } from \"rewind:actions\";\nexport default async () => jira;"),

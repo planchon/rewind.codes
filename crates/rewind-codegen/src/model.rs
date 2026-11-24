@@ -44,7 +44,7 @@ pub(crate) struct Signature<'a> {
 }
 
 /// The exports of an action set, sorted by name, built-ins left out: workflows reach them through
-/// `fetch` and `webhook` from `rewind`. A bare harness action whose name is not an identifier
+/// `fetch` and `signalUrl` from `rewind`. A bare harness action whose name is not an identifier
 /// cannot be imported, and is left out too.
 pub(crate) fn exports<'a>(
     action_set: &'a ActionSet,

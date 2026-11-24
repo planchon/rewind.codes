@@ -558,7 +558,7 @@ impl Client {
     // ---------------------------------------------------------------------------------------
     // Webhooks
 
-    /// `POST /hooks/{token}`: what an external system does with a URL from `webhook(name)`.
+    /// `POST /hooks/{token}`: what an external system does with a URL from `signalUrl(name)`.
     /// `delivery_id` becomes the signal's idempotency key.
     pub async fn post_hook(
         &self,

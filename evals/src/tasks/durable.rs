@@ -154,7 +154,7 @@ pub(super) fn tasks() -> Vec<Task> {
         Task {
             id: "ci_then_deploy",
             difficulty: Difficulty::Hard,
-            features: &["webhook", "signal", "durable wait"],
+            features: &["signal URL", "signal", "durable wait"],
             world: || WorldSpec {
                 servers: vec!["ops"],
                 webhook: true,
@@ -163,7 +163,7 @@ pub(super) fn tasks() -> Vec<Task> {
             setup: &[],
             prompt: |_| {
                 "Trigger a CI build of acme/api at commit 3f2a9c1. Give the CI a callback URL made \
-                 with webhook(\"build_done\") so that it reports the result to your run, wait for \
+                 with signalUrl(\"build_done\") so that it reports the result to your run, wait for \
                  that signal, and if the build passed, deploy version 2.5.0 of the api service."
                     .into()
             },
@@ -193,7 +193,7 @@ pub(super) fn tasks() -> Vec<Task> {
                     outcome
                         .delivered
                         .iter()
-                        .any(|d| d.signal == "build_done" && d.source == "webhook"),
+                        .any(|d| d.signal == "build_done" && d.source == "signalUrl"),
                     || "the CI's callback reached no run".to_owned(),
                 )?;
                 let deployments = state["deployments"].as_array().cloned().unwrap_or_default();

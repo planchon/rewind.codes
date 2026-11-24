@@ -69,9 +69,9 @@ fn action_set(http_action: bool) -> ActionSet {
         }),
     );
     let webhook = Action::new(
-        "webhook",
-        ActionRoute::Builtin(Builtin::Webhook),
-        rewind_runtime::builtins::webhook_input_schema(),
+        "signalUrl",
+        ActionRoute::Builtin(Builtin::SignalUrl),
+        rewind_runtime::builtins::signal_url_input_schema(),
     );
     let mut actions = vec![lookup, export, score, ask_user, webhook];
     if http_action {
@@ -135,16 +135,18 @@ async fn a_good_script_checks_and_starts() {
 }
 
 /// Code written before actions were named (`archi/08-decisions.md`, R1): it imports
-/// `rewind:tools`, catches a `ToolError` and reads its `tool`, and catches a `WorkflowError`.
+/// `rewind:tools`, catches a `ToolError` and reads its `tool`, catches a `WorkflowError`, and
+/// asks for a URL with `webhook()`.
 const OLD_NAMES: &str = r#"import { crm, ask_user } from "rewind:tools";
 import type { ToolContent } from "rewind:tools";
-import { ToolError, WorkflowError, sleep } from "rewind";
+import { ToolError, WorkflowError, sleep, webhook } from "rewind";
 
 export default async function main() {
   try {
     const customer: ToolContent = await crm.lookup({ id: "c-1" });
     await sleep("1s");
-    return customer.json<{ name: string }>().name;
+    const hook: { url: string } = await webhook("done");
+    return `${customer.json<{ name: string }>().name} ${hook.url}`;
   } catch (error) {
     if (error instanceof ToolError) return `${error.tool} failed: ${error.message}`;
     if (error instanceof WorkflowError) return `${error.workflow} ${error.status}`;
@@ -181,6 +183,7 @@ async fn the_old_names_are_declared_nowhere() {
         assert!(!text.contains("ToolError"), "{text}");
         assert!(!text.contains("ToolContent"), "{text}");
         assert!(!text.contains("WorkflowError"), "{text}");
+        assert!(!text.contains("webhook("), "{text}");
     }
 }
 

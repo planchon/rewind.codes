@@ -251,7 +251,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
         json!({ "from": "slow" })
     );
 
-    // The webhook URL the code was given still signals it: its token names no run, and the
+    // The signal URL the code was given still signals it: its token names no run, and the
     // partition that holds its hash answers.
     let export = client.export_run(WEBHOOK, ExportAs::Run).await.unwrap();
     let hook = export["events"]

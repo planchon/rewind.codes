@@ -1,6 +1,6 @@
 //! Webhooks, both ways.
 //!
-//! - **Inbound**: `POST /hooks/{token}`, at the unguessable URL `webhook(name)` returned to a
+//! - **Inbound**: `POST /hooks/{token}`, at the unguessable URL `signalUrl(name)` returned to a
 //!   code. Anything posted there becomes a signal on the run. No API key: the token is the
 //!   credential.
 //! - **Outbound**: the harness subscribes (`POST /v1/subscriptions`) and receives lifecycle

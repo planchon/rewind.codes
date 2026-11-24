@@ -72,7 +72,7 @@ pub(crate) async fn pin(create: &CreateActionSet) -> Result<ActionSet, String> {
         apply(&mut action.policy, http.policy.as_ref());
         actions.push(action);
     }
-    actions.push(webhook());
+    actions.push(signal_url());
     ActionSet::from_parts(servers, apis, actions).map_err(|error| error.to_string())
 }
 
@@ -232,11 +232,11 @@ fn apply(policy: &mut ActionPolicy, given: Option<&ApiPolicy>) {
 }
 
 /// The `webhook` built-in, which every action set pins.
-fn webhook() -> Action {
+fn signal_url() -> Action {
     Action::new(
-        "webhook",
-        ActionRoute::Builtin(Builtin::Webhook),
-        rewind_runtime::builtins::webhook_input_schema(),
+        "signalUrl",
+        ActionRoute::Builtin(Builtin::SignalUrl),
+        rewind_runtime::builtins::signal_url_input_schema(),
     )
 }
 
@@ -253,13 +253,13 @@ pub(crate) fn of_handlers(names: &BTreeSet<String>) -> Result<ActionSet, CliErro
     }
     let mut actions: Vec<Action> = names
         .iter()
-        .filter(|name| name.as_str() != "webhook")
+        .filter(|name| name.as_str() != "signalUrl")
         .map(|name| {
             let group = name.split_once('.').map(|(group, _)| group.to_owned());
             Action::new(name.clone(), ActionRoute::Harness { group }, json!({}))
         })
         .collect();
-    actions.push(webhook());
+    actions.push(signal_url());
     ActionSet::new([], actions)
         .map_err(|error| CliError::usage(format!("the answered actions: {error}")))
 }
@@ -347,7 +347,7 @@ mod tests {
             .iter()
             .map(|action| action.name.as_str())
             .collect();
-        assert_eq!(names, ["crm.ask_user", "http", "webhook"]);
+        assert_eq!(names, ["crm.ask_user", "http", "signalUrl"]);
         let ask = &action_set.actions()[0];
         assert_eq!(
             ask.route,
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn the_answered_actions_are_harness_actions() {
-        let mut names: BTreeSet<String> = ["github.list_issues", "ask_user", "webhook"]
+        let mut names: BTreeSet<String> = ["github.list_issues", "ask_user", "signalUrl"]
             .into_iter()
             .map(String::from)
             .collect();
@@ -395,7 +395,7 @@ mod tests {
         ));
         assert!(matches!(
             routes[2].1,
-            ActionRoute::Builtin(Builtin::Webhook)
+            ActionRoute::Builtin(Builtin::SignalUrl)
         ));
         names.insert("http".into());
         let error = of_handlers(&names).unwrap_err();

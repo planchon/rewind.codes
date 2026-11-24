@@ -65,7 +65,7 @@ pub type EvalPlane = Wiring<
 
 type EvalDriver = Driver<EvalPlane, MemoryCluster>;
 
-/// The base of the URLs `webhook(name)` returns.
+/// The base of the URLs `signalUrl(name)` returns.
 pub const PUBLIC_URL: &str = "https://rewind.example";
 
 /// How far the world goes on after the conversation, at most: the runs left waiting for
@@ -270,9 +270,9 @@ impl World {
         }
         if spec.webhook {
             actions.push(Action::new(
-                "webhook",
-                ActionRoute::Builtin(Builtin::Webhook),
-                rewind_runtime::builtins::webhook_input_schema(),
+                "signalUrl",
+                ActionRoute::Builtin(Builtin::SignalUrl),
+                rewind_runtime::builtins::signal_url_input_schema(),
             ));
         }
         let action_set = ActionSet::new(pinned_servers, actions)
@@ -801,7 +801,7 @@ impl World {
                     let mut driver = self.driver.lock().await;
                     let mut gateway = driver.gateway(&self.at);
                     self.edge
-                        .webhook(&mut gateway, token, outbound.payload, Some(outbound.id))
+                        .signal_by_url(&mut gateway, token, outbound.payload, Some(outbound.id))
                         .await
                 };
                 match enqueued {
@@ -812,7 +812,7 @@ impl World {
                 }
                 let name =
                     webhook_name(&self.history(&run).await?, &outbound.url).unwrap_or_default();
-                self.record(&run, &name, now, "webhook");
+                self.record(&run, &name, now, "signalUrl");
                 delivered = true;
             }
         }
@@ -933,7 +933,7 @@ fn webhook_name(history: &[HistoryEvent], url: &str) -> Option<String> {
             action,
             args,
             ..
-        }) if *scheduled == seq && action == "webhook" => args
+        }) if *scheduled == seq && action == "signalUrl" => args
             .value()
             .and_then(|args| args.get("name"))
             .and_then(Value::as_str)

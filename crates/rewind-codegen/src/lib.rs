@@ -20,7 +20,7 @@
 //! workflows also gets the module `rewind:workflows`, one typed export per workflow, and a prompt
 //! line per workflow; the declarations a workflow's own code is checked against come from
 //! [`workflow_declarations`]. Built-ins are not part of it: workflows reach `http` through
-//! `fetch` and `webhook` through the `rewind` module. For an action set that enables `http`, the
+//! `fetch` and `signalUrl` through the `rewind` module. For an action set that enables `http`, the
 //! file starts with [`HTTP_ACTION_REFERENCE`], from which the type-checker knows to declare
 //! `fetch`. The prompt lists the built-ins too, with the hosts `fetch` may reach.
 
@@ -146,8 +146,8 @@ fn builtin_declaration(builtin: &rewind_core::Builtin) -> &'static str {
         rewind_core::Builtin::Http { .. } => {
             "declare function fetch(input: string | URL, init?: RequestInit): Promise<Response>;\n"
         }
-        rewind_core::Builtin::Webhook => {
-            "declare module \"rewind\" {\n  export function webhook(name: string): Promise<{ url: string }>;\n}\n"
+        rewind_core::Builtin::SignalUrl => {
+            "declare module \"rewind\" {\n  export function signalUrl(name: string): Promise<{ url: string }>;\n}\n"
         }
         // Not listed: a workflow's built-ins are reached through `rewind:workflows`.
         rewind_core::Builtin::Workflow { .. } => "",

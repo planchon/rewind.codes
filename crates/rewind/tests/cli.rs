@@ -524,10 +524,10 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             .keys()
             .all(|key| ["description", "input", "expect", "actions"].contains(&key.as_str()))
             && actions.iter().all(|(action, response)| {
-                !matches!(action.as_str(), "http" | "webhook") && answerable(response)
+                !matches!(action.as_str(), "http" | "signalUrl") && answerable(response)
             });
         // Its action set lacks the `webhook` built-in, which every action set of a server pins.
-        if !simple || name == "red/webhook_without_the_built_in" {
+        if !simple || name == "red/signal_url_without_the_built_in" {
             continue;
         }
         let expect = &scenario["expect"];

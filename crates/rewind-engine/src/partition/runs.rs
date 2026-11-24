@@ -27,8 +27,8 @@ use crate::ports::partition::{Change, CreateRun};
 use crate::ports::{
     ArchiveError, Attempt, BlobStore, CatalogStore, Created, DueTimer, Enqueued, InboxItem,
     LinkError, Namespace, NamespaceName, NodeId, PartitionError, PartitionLog, Projection,
-    Quarantine, QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, TenantId, TimerChange,
-    TimerKind, Trigger, Watcher, WebhookTarget,
+    Quarantine, QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, SignalUrlTarget, TenantId,
+    TimerChange, TimerKind, Trigger, Watcher,
 };
 use crate::text;
 
@@ -49,13 +49,13 @@ pub(crate) enum Step {
         checked: Result<bool, Refusal>,
     },
     /// The run and signal a webhook's token is bound to.
-    Webhook {
+    SignalUrl {
         /// The run its token names; none for a token of a run `migrate-runs` moved.
         run: Option<RunId>,
         payload: JsonValue,
         key: Option<String>,
         reply: ReplyTo,
-        target: Result<Option<WebhookTarget>, String>,
+        target: Result<Option<SignalUrlTarget>, String>,
     },
     /// What a terminal activation, or a fork's first, needs read before it is committed.
     Ending {
@@ -143,7 +143,7 @@ impl fmt::Debug for Step {
         match self {
             Step::StartKey { start, .. } => write!(f, "StartKey({})", start.run),
             Step::SignalChecked { signal, .. } => write!(f, "SignalChecked({})", signal.run),
-            Step::Webhook { .. } => f.write_str("Webhook"),
+            Step::SignalUrl { .. } => f.write_str("SignalUrl"),
             Step::Ending { run, .. } => write!(f, "Ending({run})"),
             Step::Prepared { run, node, .. } => write!(f, "Prepared({run}, {node})"),
             Step::Sealed { run, .. } => write!(f, "Sealed({run})"),
@@ -192,11 +192,11 @@ impl<P: Plane> Owner<P> {
                 answer,
             } => self.answer_task(&tenant, &token, answer, reply),
             PartitionRequest::Decide { task, decision } => self.decide(&task, decision, reply),
-            PartitionRequest::Webhook {
+            PartitionRequest::SignalUrl {
                 token,
                 payload,
                 key,
-            } => self.webhook(&token, payload, key, reply),
+            } => self.signal_by_url(&token, payload, key, reply),
             read => self.read(read, reply),
         }
     }
@@ -297,7 +297,7 @@ impl<P: Plane> Owner<P> {
                 Ok(false) => self.enqueue_signal(*signal, reply, true),
                 Err(refusal) => self.reply(reply, PartitionReply::Enqueued(Err(refusal))),
             },
-            Step::Webhook {
+            Step::SignalUrl {
                 run,
                 payload,
                 key,
@@ -858,7 +858,13 @@ impl<P: Plane> Owner<P> {
         self.push(unit);
     }
 
-    fn webhook(&mut self, token: &str, payload: JsonValue, key: Option<String>, reply: ReplyTo) {
+    fn signal_by_url(
+        &mut self,
+        token: &str,
+        payload: JsonValue,
+        key: Option<String>,
+        reply: ReplyTo,
+    ) {
         let Some(log) = self.log.clone() else {
             return;
         };
@@ -866,10 +872,13 @@ impl<P: Plane> Owner<P> {
         let hash = super::tokens::hash(token);
         let partition = self.partition;
         self.out.push(job(async move {
-            let target = log.webhook(hash).await.map_err(|error| error.to_string());
+            let target = log
+                .signal_url(hash)
+                .await
+                .map_err(|error| error.to_string());
             step(
                 partition,
-                Step::Webhook {
+                Step::SignalUrl {
                     run,
                     payload,
                     key,

@@ -1615,23 +1615,23 @@ async fn a_call_parked_by_a_schema_change_is_sent_once_the_harness_approves_it()
 }
 
 #[tokio::test]
-async fn a_webhook_bound_to_no_run_is_a_run_not_found() {
+async fn a_signal_url_bound_to_no_run_is_a_run_not_found() {
     let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
     let run = world.run(request("approval", json!({}))).await;
     let token = format!("rewind_wh_{}_{}", run.id, "00".repeat(32));
     let mut gateway = world.driver.gateway(&world.at.clone());
     let refused = world
         .edge
-        .webhook(&mut gateway, &token, json!({}), None)
+        .signal_by_url(&mut gateway, &token, json!({}), None)
         .await;
     assert_eq!(
         refused,
         Err(EdgeError::Refused(Refusal::RunNotFound(run.id))),
-        "a webhook token its run does not hold"
+        "a signal URL token its run does not hold"
     );
     let refused = world
         .edge
-        .webhook(&mut gateway, "rewind_wh_nothing", json!({}), None)
+        .signal_by_url(&mut gateway, "rewind_wh_nothing", json!({}), None)
         .await;
     assert!(
         matches!(refused, Err(EdgeError::Refused(_))),
