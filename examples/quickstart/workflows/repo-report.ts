@@ -1,7 +1,7 @@
-// What a model would write: one TypeScript module whose default export is the entry point.
-// `fetch` exists because the toolset enables the `http` tool for api.github.com; `notify` is a
-// host tool, executed by the harness's worker.
-import { notify } from "rewind:tools";
+/** The stars and open issues of a GitHub repository, sent to the user. */
+// What a model would write: one module whose default export is the entry point. `fetch` exists because the action set
+// enables the `http` action for api.github.com; `notify` is a harness action, executed by the harness's worker.
+import { notify } from "rewind:actions";
 
 export default async function main(input: { repo: string }) {
   const res = await fetch(`https://api.github.com/repos/${input.repo}`, {

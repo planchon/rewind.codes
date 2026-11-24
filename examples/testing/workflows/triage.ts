@@ -1,5 +1,5 @@
-// The first version of triage.ts: it fails at run time on an issue without labels.
-import { github, slack } from "rewind:tools";
+/** Triage the stale issues of a repository, after a human approves. */
+import { github, slack } from "rewind:actions";
 import { signal } from "rewind";
 
 const DAY = 86_400_000;
@@ -9,7 +9,7 @@ export default async function main(input: { repo: string }) {
   const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * DAY);
   await slack.post_message({ channel: "#triage", text: `${stale.length} stale issues in ${input.repo}` });
 
-  const areas = [...new Set(stale.map((i) => i.labels[0].name))];
+  const areas = [...new Set(stale.map((i) => i.labels[0]?.name ?? "unlabelled"))];
   const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
   if (!decision?.close) return { closed: 0, areas };
 

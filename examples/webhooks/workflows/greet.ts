@@ -1,4 +1,5 @@
-// Waits for the signal `hello`: the run is suspended until it arrives, then completes.
+/** Greet someone once they say hello. */
+// Waits for the signal `hello`: the run is `waiting` until it arrives, then completes.
 import { signal } from "rewind";
 
 export default async function main() {

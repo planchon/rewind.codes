@@ -1,6 +1,6 @@
-// The workflow `repo_check`: a named script with a typed input, output and signal. Registering it
-// checks that `main` takes the input schema's type, returns the output schema's, and that
-// `signal()` only names declared signals.
+/** The stars and open issues of a GitHub repository, once someone acknowledges it. */
+// The code of the workflow `repo_check`, with a typed input, output and signal. Creating it checks that `main` takes
+// the input schema's type, returns the output schema's, and that `signal()` only names declared signals.
 import { signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -10,7 +10,7 @@ export default async function main(input: { repo: string }) {
   if (!res.ok) throw new Error(`GitHub answered ${res.status} for ${input.repo}`);
   const repo = await res.json();
 
-  // Typed by the workflow's declaration: the payload is { by: string }.
+  // Typed by the workflow's interface: the payload is { by: string }.
   const ack = await signal("acknowledge", { timeout: "1h" });
   return {
     repo: input.repo,

@@ -1,5 +1,6 @@
-// A script that starts a run of `repo_check` per repository, signals each, and gathers their
-// outputs. Every call is checked against the workflow's schemas before the script runs.
+/** Check several GitHub repositories at once, the most starred first. */
+// Starts a run of the workflow `repo_check` per repository, signals each, and gathers their outputs. Every start and
+// signal is checked against the workflow's interface before the code runs.
 import { repo_check } from "rewind:workflows";
 
 export default async function main(input: { repos: string[] }) {

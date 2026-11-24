@@ -2,7 +2,7 @@
   "name": "@rewind.codes/examples",
   "version": "0.1.0",
   "private": true,
-  "description": "Examples of Rewind: a harness, its host tools, its agent loop, workflows, end users, webhooks and tests.",
+  "description": "Examples of Rewind: a harness, its harness actions, its agent loop, workflows, end users, webhooks and tests.",
   "type": "module",
   "packageManager": "pnpm@10.15.0",
   "engines": {
@@ -13,7 +13,7 @@
     "agent:anthropic": "node --env-file-if-exists=.env agent/anthropic.ts",
     "agent:openai": "node --env-file-if-exists=.env agent/openai.ts",
     "human-approval": "node --env-file-if-exists=.env human-approval/index.ts",
-    "host-tools": "node --env-file-if-exists=.env host-tools/index.ts",
+    "harness-actions": "node --env-file-if-exists=.env harness-actions/index.ts",
     "workflows": "node --env-file-if-exists=.env workflows/index.ts",
     "end-users": "node --env-file-if-exists=.env end-users/index.ts",
     "webhooks": "node --env-file-if-exists=.env webhooks/index.ts",
@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.8.0",
-    "@rewind.codes/sdk": "0.2.0",
+    "@rewind.codes/sdk": "0.6.0",
     "openai": "7.57.0"
   },
   "devDependencies": {

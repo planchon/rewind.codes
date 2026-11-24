@@ -1,7 +1,7 @@
 {
-  // The harness code of the examples, run by Node as it is (type stripping). The scripts under
-  // */scripts/ are not part of it: they run in Rewind's sandbox, which type-checks them against
-  // their toolset when a run starts.
+  // The harness code of the examples, run by Node as it is (type stripping). The workflows' code
+  // under */workflows/ is not part of it: it runs in Rewind's sandbox, which type-checks it against
+  // its action set when a run starts.
   "compilerOptions": {
     "target": "es2023",
     "module": "nodenext",
@@ -17,5 +17,5 @@
     "noUncheckedIndexedAccess": true
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "**/scripts/**"]
+  "exclude": ["node_modules", "*/workflows/**"]
 }

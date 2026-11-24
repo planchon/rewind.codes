@@ -7,21 +7,21 @@ import { Rewind } from "@rewind.codes/sdk";
 const openai = new OpenAI(); // OPENAI_API_KEY
 const rewind = new Rewind();
 
-const toolset = await rewind.toolsets.create({ http: { allow: ["api.github.com"] } });
+const actionSet = await rewind.actionSets.create({ http: { allow: ["api.github.com"] } });
 const user = { id: "user_2fQ81" };
 const conversation = { id: crypto.randomUUID() };
 
 const agentTools = rewind.namespace(user.id).agentTools({
-  toolset: toolset.id,
+  actionSet: actionSet.id,
   labels: { agent: "repo-analyst", conversation: conversation.id },
 });
 
 const instructions = [
   "You answer questions about GitHub repositories.",
-  "Solve each task by writing one TypeScript script and running it with run_script.",
+  "Solve each task by writing one TypeScript workflow and running it with run_workflow.",
   "",
-  "What scripts can use:",
-  toolset.declarations.prompt,
+  "What workflows can use:",
+  actionSet.declarations.prompt,
 ].join("\n");
 
 const question =

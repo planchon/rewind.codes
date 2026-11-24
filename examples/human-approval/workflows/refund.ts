@@ -1,7 +1,7 @@
-// A refund that needs two human decisions:
-// - a manager's review, which the script waits for as a signal (durably: minutes or days);
-// - the harness's consent to the exact `payments.refund` call, which has the `approval` policy.
-import { orders, payments, notify } from "rewind:tools";
+/** Refund an order once a manager has reviewed it and the harness approves the payment. */
+// Two human decisions: a manager's review, a signal the code waits for (durably: minutes or days); and the harness's
+// consent to the exact `payments.refund` call, whose action has the `approval` policy.
+import { orders, payments, notify } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main(input: { orderId: string; reason: string }) {

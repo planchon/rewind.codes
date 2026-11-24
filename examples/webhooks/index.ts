@@ -1,21 +1,21 @@
-// Lifecycle webhooks: subscribe, verify each delivery, and act on the events.
+// Webhooks: subscribe, verify each delivery, and act on what it says.
 //
-//   WEBHOOK_URL=https://<your tunnel>/rewind-events pnpm webhooks
+//   WEBHOOK_URL=https://<your tunnel>/rewind-webhooks pnpm webhooks
 //
-// Rewind delivers to public https:// URLs. In development, expose this process with a tunnel,
-// or run a server of your own with --allow-private-webhooks to deliver to http://127.0.0.1.
+// Rewind posts to public https:// URLs. In development, expose this process with a tunnel,
+// or run a server of your own with --allow-private-webhooks to post to http://127.0.0.1.
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { Rewind, WebhookVerificationFailed, verifyWebhook, type WebhookEvent } from "@rewind.codes/sdk";
+import { Rewind, WebhookVerificationFailed, verifyWebhook, type Webhook } from "@rewind.codes/sdk";
 
 const rewind = new Rewind();
 const port = Number(process.env.PORT ?? 3000);
-const url = process.env.WEBHOOK_URL ?? `http://127.0.0.1:${port}/rewind-events`;
+const url = process.env.WEBHOOK_URL ?? `http://127.0.0.1:${port}/rewind-webhooks`;
 
 // 1. Subscribe. The secret is in this answer only: a real harness stores it.
 const subscription = await rewind.subscriptions.create({
   url,
-  events: ["run.completed", "run.failed", "run.suspended", "quota.alert"],
+  types: ["run.completed", "run.failed", "run.waiting", "quota.alert"],
   labels: { example: "webhooks" }, // only runs carrying these labels
 });
 const secret = subscription.secret ?? process.env.REWIND_WEBHOOK_SECRET ?? "";
@@ -23,22 +23,22 @@ const secret = subscription.secret ?? process.env.REWIND_WEBHOOK_SECRET ?? "";
 let completed: () => void;
 const done = new Promise<void>((resolve) => (completed = resolve));
 
-function handle(event: WebhookEvent): void {
-  switch (event.type) {
-    case "run.suspended":
-      // The run waits for the outside world: a signal, a timer, an approval.
-      console.log(`suspended ${event.data.run.id}, waiting for`, event.data.run.waitingFor?.map((w) => w.kind));
+function handle(webhook: Webhook): void {
+  switch (webhook.type) {
+    case "run.waiting":
+      // The run waits for the outside world: a signal, an approval, a harness action.
+      console.log(`waiting ${webhook.data.run.handle}, for`, webhook.data.run.waitingFor?.map((w) => w.kind));
       break;
     case "run.completed":
       // Resume the conversation that started the run: its output is here.
-      console.log(`completed ${event.data.run.id} for ${event.data.run.namespace}:`, event.data.run.output?.value);
+      console.log(`completed ${webhook.data.run.handle} for ${webhook.data.run.namespace}:`, webhook.data.run.output?.value);
       completed();
       break;
     case "run.failed":
-      console.log(`failed ${event.data.run.id}:`, event.data.run.error?.message);
+      console.log(`failed ${webhook.data.run.handle}:`, webhook.data.run.error?.message);
       break;
     case "quota.alert":
-      console.log(`${event.data.namespace ?? "the organization"} crossed ${event.data.threshold} % of ${event.data.quota}`);
+      console.log(`${webhook.data.namespace ?? "the organization"} crossed ${webhook.data.threshold} % of ${webhook.data.quota}`);
       break;
   }
 }
@@ -47,13 +47,13 @@ function handle(event: WebhookEvent): void {
 //    a retried delivery keeps it.
 const seen = new Set<string>();
 const server = createServer(async (req, res) => {
-  if (req.method !== "POST" || req.url !== "/rewind-events") return void res.writeHead(404).end();
+  if (req.method !== "POST" || req.url !== "/rewind-webhooks") return void res.writeHead(404).end();
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
 
-  let event: WebhookEvent;
+  let webhook: Webhook;
   try {
-    event = verifyWebhook(Buffer.concat(chunks), req.headers, secret);
+    webhook = verifyWebhook(Buffer.concat(chunks), req.headers, secret);
   } catch (error) {
     if (error instanceof WebhookVerificationFailed) return void res.writeHead(400).end();
     throw error;
@@ -63,14 +63,14 @@ const server = createServer(async (req, res) => {
   const id = String(req.headers["webhook-id"]);
   if (seen.has(id)) return;
   seen.add(id);
-  handle(event);
+  handle(webhook);
 });
 server.listen(port);
 
-// 3. A run that suspends on a signal, then completes once it gets it.
+// 3. A run that waits for a signal, then completes once it gets it.
 const user = rewind.namespace("user_ada");
 const run = await user.runs.start({
-  script: await readFile(new URL("./scripts/greet.ts", import.meta.url), "utf8"),
+  code: await readFile(new URL("./workflows/greet.ts", import.meta.url), "utf8"),
   labels: { example: "webhooks" },
 });
 setTimeout(() => void user.runs.signal(run.id, "hello", { name: "Ada" }), 2_000);

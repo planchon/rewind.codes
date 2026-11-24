@@ -5,8 +5,9 @@ import { Rewind, isProblem } from "@rewind.codes/sdk";
 
 // The harness's backend holds the API key: it reaches every namespace.
 const rewind = new Rewind();
-const toolset = await rewind.toolsets.create({ http: { allow: ["api.github.com"] } });
-const script = `export default async function main(input: { n: number }) {
+const actionSet = await rewind.actionSets.create({ http: { allow: ["api.github.com"] } });
+const code = `/** The squares of the first n integers. */
+export default async function main(input: { n: number }) {
   return { squares: Array.from({ length: input.n }, (_, i) => i * i) };
 }`;
 
@@ -16,7 +17,7 @@ await rewind.namespaces.put("user_chen", { exceptions: { activeRuns: 20, runsPer
 await rewind.namespaces.put("user_erin", { exceptions: { activeRuns: 0 } });
 
 // 2. The backend names the end user of each request. Bob's run lives in Bob's namespace.
-const bobs = await rewind.namespace("user_bob").runs.start({ toolset: toolset.id, script, input: { n: 3 }, wait: "10s" });
+const bobs = await rewind.namespace("user_bob").runs.start({ actionSet: actionSet.id, code, input: { n: 3 }, wait: "10s" });
 
 // 3. The agent acting for Ada gets a token of her namespace, minted by the backend.
 const { token, id: tokenId } = await rewind.namespaces.tokens.create("user_ada", {
@@ -24,10 +25,10 @@ const { token, id: tokenId } = await rewind.namespaces.tokens.create("user_ada",
   labels: { conversation: "c-7" }, // the runs it starts carry them, and it reaches only those
 });
 
-// In the agent, possibly another process: everything it does, and every script its model
+// In the agent, possibly another process: everything it does, and every workflow its model
 // writes, stays in Ada's namespace.
 const asAda = new Rewind({ url: rewind.url, token });
-const adas = await asAda.runs.start({ toolset: toolset.id, script, input: { n: 4 }, wait: "10s" });
+const adas = await asAda.runs.start({ actionSet: actionSet.id, code, input: { n: 4 }, wait: "10s" });
 console.log(`Ada's run ${adas.id} in ${adas.namespace}:`, adas.output?.value);
 
 try {
@@ -39,7 +40,7 @@ try {
 
 // 4. A blocked end user starts nothing, with an answer the agent can show.
 try {
-  await rewind.namespace("user_erin").runs.start({ toolset: toolset.id, script, input: { n: 1 } });
+  await rewind.namespace("user_erin").runs.start({ actionSet: actionSet.id, code, input: { n: 1 } });
 } catch (error) {
   if (isProblem(error, "quota-exceeded")) console.log("Erin is blocked:", error.quota);
   else throw error;

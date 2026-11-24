@@ -1,4 +1,4 @@
-// A human in the loop, twice: a signal the script waits for, and a tool call the harness approves.
+// A human in the loop, twice: a signal the workflow waits for, and a call the harness approves.
 //
 //   pnpm human-approval
 import { readFile } from "node:fs/promises";
@@ -11,8 +11,8 @@ const object = (properties: Record<string, unknown>, required = Object.keys(prop
   required,
 });
 
-const toolset = await rewind.toolsets.create({
-  host: [
+const actionSet = await rewind.actionSets.create({
+  harness: [
     {
       name: "orders.get",
       description: "An order by its id.",
@@ -24,8 +24,8 @@ const toolset = await rewind.toolsets.create({
       description: "Refund an order. Moves money: the harness approves each call.",
       inputSchema: object({ orderId: { type: "string" }, amount: { type: "number" } }),
       outputSchema: object({ id: { type: "string" } }),
-      // Sent only once the harness approves it; never sent twice after an interruption.
-      policy: { approval: true, onInterruption: "at_most_once" },
+      // Sent only once the harness approves it; never delivered twice after an interruption.
+      policy: { approval: true, idempotent: false },
     },
     {
       name: "notify",
@@ -36,11 +36,11 @@ const toolset = await rewind.toolsets.create({
 });
 
 const worker = rewind.worker({
-  toolset: toolset.id,
-  tools: {
+  actionSet: actionSet.id,
+  actions: {
     "orders.get": async ({ id }: { id: string }) => ({ id, total: 129.9, currency: "EUR" }),
     "payments.refund": async ({ orderId }: { orderId: string }, ctx) => {
-      // ctx.idempotencyKey is the same on every attempt: pass it to the payment provider.
+      // ctx.idempotencyKey is the same on every delivery: pass it to the payment provider.
       console.log(`[payments] refund ${orderId}, idempotency key ${ctx.idempotencyKey}`);
       return { id: `re_${orderId}` };
     },
@@ -49,17 +49,17 @@ const worker = rewind.worker({
 });
 
 const customer = rewind.namespace("customer_8812");
-const script = await readFile(new URL("./scripts/refund.ts", import.meta.url), "utf8");
+const code = await readFile(new URL("./workflows/refund.ts", import.meta.url), "utf8");
 
 // The run goes until it needs the outside world, then waits there, for days if need be.
 let run = await customer.runs.start({
-  toolset: toolset.id,
-  script,
+  actionSet: actionSet.id,
+  code,
   input: { orderId: "ord_1042", reason: "arrived broken" },
   wait: "10s",
   labels: { example: "human-approval" },
 });
-console.log(`run ${run.id}: ${run.status}, waiting for`, run.waitingFor?.map((w) => w.kind));
+console.log(`run ${run.id}: ${run.status}, for`, run.waitingFor?.map((w) => w.kind));
 
 // 1. A manager approves in your product; the harness sends the signal. The run could have been
 //    waiting for days: nothing runs, nothing is held in memory meanwhile.
@@ -68,7 +68,7 @@ run = await customer.runs.get(run.id, { wait: "10s" });
 
 // 2. The run now waits for consent to the refund call: show its arguments, then decide.
 for (const approval of rewind.approvals.pending(run)) {
-  console.log(`${approval.tool} waits for approval, at line ${approval.callsite?.line}:`, await rewind.approvals.args(approval));
+  console.log(`${approval.action} waits for approval, at line ${approval.callsite?.line}:`, await rewind.approvals.args(approval));
   await rewind.approvals.approve(approval);
 }
 

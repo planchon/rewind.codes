@@ -1,8 +1,8 @@
-// An agent on Claude that solves a task by writing scripts and running them with Rewind.
+// An agent on Claude that solves a task by writing workflows and running them with Rewind.
 //
 //   pnpm agent:anthropic "Which of nodejs/node, denoland/deno and oven-sh/bun has the most stars?"
 //
-// The model gets the agent tools (run_script, get_run, signal_run, retry_run…) and the toolset's
+// The model gets the agent tools (run_workflow, get_run, signal_run, retry_run…) and the action set's
 // declarations. Every run it starts belongs to the end user the conversation serves.
 import Anthropic from "@anthropic-ai/sdk";
 import { Rewind } from "@rewind.codes/sdk";
@@ -10,25 +10,25 @@ import { Rewind } from "@rewind.codes/sdk";
 const anthropic = new Anthropic(); // ANTHROPIC_API_KEY
 const rewind = new Rewind(); // REWIND_URL, REWIND_API_KEY
 
-const toolset = await rewind.toolsets.create({ http: { allow: ["api.github.com"] } });
+const actionSet = await rewind.actionSets.create({ http: { allow: ["api.github.com"] } });
 
 // Who the agent acts for, and which conversation this is: runs carry both.
 const user = { id: "user_2fQ81" };
 const conversation = { id: crypto.randomUUID() };
 
 const agentTools = rewind.namespace(user.id).agentTools({
-  toolset: toolset.id,
+  actionSet: actionSet.id,
   labels: { agent: "repo-analyst", conversation: conversation.id },
 });
 
 const system = [
   "You answer questions about GitHub repositories.",
-  "Solve each task by writing one TypeScript script and running it with run_script: the script",
+  "Solve each task by writing one TypeScript workflow and running it with run_workflow: its code",
   "makes every call the task needs, in loops and in parallel, and returns only the answer.",
-  "If a run fails, read the error, fix the script and call retry_run: calls already made are reused.",
+  "If a run fails, read the error, fix the code and call retry_run: calls already made are reused.",
   "",
-  "What scripts can use:",
-  toolset.declarations.prompt,
+  "What workflows can use:",
+  actionSet.declarations.prompt,
 ].join("\n");
 
 const question =
@@ -58,7 +58,7 @@ for (;;) {
     break;
   }
 
-  // Each tool call is handled by the agent tools: run_script starts a run in the user's
+  // Each tool call is handled by the agent tools: run_workflow starts a run in the user's
   // namespace, with the tool call's id as its idempotency key.
   const calls = response.content.filter((block) => block.type === "tool_use");
   const results = await Promise.all(
