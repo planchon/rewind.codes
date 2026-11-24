@@ -144,7 +144,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
         ),
     }];
     let v2 = harness.create_workflow(&second).await.unwrap();
-    assert_eq!(v2.base.as_deref(), Some(v1.version.as_str()));
+    assert_eq!(v2.base.as_deref(), Some(v1.digest.as_str()));
     assert_eq!(v2.updated.len(), 1);
     assert_eq!(v2.updated[0].from, v1.tests[0].digest);
     assert_eq!(v2.updated[0].to, v2.tests[0].digest);
@@ -173,8 +173,8 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
         .list_workflows(&with_code(&v1.code_digest))
         .await
         .unwrap();
-    let versions: Vec<&str> = page.workflows.iter().map(|w| w.version.as_str()).collect();
-    assert_eq!(versions, [v3.version.as_str(), v1.version.as_str()]);
+    let versions: Vec<&str> = page.workflows.iter().map(|w| w.digest.as_str()).collect();
+    assert_eq!(versions, [v3.digest.as_str(), v1.digest.as_str()]);
     assert_eq!(page.next, None);
     assert!(harness.list_workflows(&with_code("nope")).await.is_err());
 
@@ -184,7 +184,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     test.name = "forged".into();
     test.origin = Some(rewind_api::testing::TestOrigin {
         run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10".into(),
-        version: v1.version.clone(),
+        version: v1.digest.clone(),
         namespace: "alice".into(),
     });
     forged.tests = vec![TestInput::Inline(Box::new(test))];
@@ -215,7 +215,7 @@ async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
     assert_eq!((ours.base.as_deref(), ours.tests.len()), (None, 0));
     // It cannot name a base it does not see.
     let mut named = triage(&action_set.id, TRIAGE);
-    named.base = Some(v1.version.clone());
+    named.base = Some(v1.digest.clone());
     assert_eq!(
         problem(dev.create_workflow(&named).await.unwrap_err()).status,
         404
@@ -355,7 +355,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     start.workflow = Some("triage".into());
     start.input = json!({ "repo": "acme/api" });
     let run = harness.start_run(&start, None).await.unwrap();
-    assert_eq!(run.workflow.as_ref().unwrap().version, version.version);
+    assert_eq!(run.workflow.as_ref().unwrap().digest, version.digest);
     harness
         .signal_run(&run.id, "approval", &json!({ "close": true }), None)
         .await

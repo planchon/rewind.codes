@@ -55,7 +55,7 @@ fn usage(reference: &str) -> Value {
     json!({
         "secret": secret(reference, None, json!({})),
         "activeRuns": ["run-1"], "activeTotal": 1, "waitingRuns": [], "waitingTotal": 0,
-        "workflows": [{ "name": "triage", "version": version, "servers": ["github"] }]
+        "workflows": [{ "name": "triage", "digest": version, "servers": ["github"] }]
     })
 }
 

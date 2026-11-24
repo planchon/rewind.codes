@@ -108,7 +108,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
-    assert_eq!(again.version, saved.version);
+    assert_eq!(again.digest, saved.digest);
 
     let refused = problem(
         harness
@@ -142,7 +142,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         .await
         .unwrap();
     assert_eq!(parent_action_set.workflows.len(), 1);
-    assert_eq!(parent_action_set.workflows[0].version, saved.version);
+    assert_eq!(parent_action_set.workflows[0].digest, saved.digest);
     assert!(
         parent_action_set
             .declarations
@@ -164,7 +164,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         .await
         .unwrap();
     assert_eq!(child.status, RunStatus::Completed);
-    assert_eq!(child.workflow.unwrap().version, saved.version);
+    assert_eq!(child.workflow.unwrap().digest, saved.digest);
     let started_by = child.started_by.unwrap();
     assert_eq!(
         (started_by.run.as_str(), started_by.detached),
@@ -210,7 +210,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
     let derived = harness
         .create_action_set(&CreateActionSet {
             base: Some(action_set.id.clone()),
-            workflows: vec![format!("triage@{}", &saved.version[..12])],
+            workflows: vec![format!("triage@{}", &saved.digest[..12])],
             ..CreateActionSet::default()
         })
         .await
@@ -253,7 +253,7 @@ async fn a_run_of_a_workflow_takes_only_its_input_and_its_signals() {
 
     start.input = json!({ "repo": "acme/api" });
     let run = harness.start_run(&start, None).await.unwrap();
-    assert_eq!(run.workflow.as_ref().unwrap().version, saved.version);
+    assert_eq!(run.workflow.as_ref().unwrap().digest, saved.digest);
 
     for (name, payload) in [
         ("aproval", json!({ "close": true })),
@@ -329,7 +329,7 @@ async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
     assert!(first.labels.0.is_empty());
     let ours = dev.create_workflow(&body).await.unwrap();
     assert_ne!(
-        ours.version, first.version,
+        ours.digest, first.digest,
         "the scope is part of the version"
     );
     assert_eq!(
@@ -337,16 +337,16 @@ async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
         BTreeMap::from([("env".to_owned(), "dev".to_owned())])
     );
     assert_eq!(
-        dev.create_workflow(&body).await.unwrap().version,
-        ours.version,
+        dev.create_workflow(&body).await.unwrap().digest,
+        ours.digest,
         "saving it again under the same labels returns it"
     );
     let theirs = prod.create_workflow(&body).await.unwrap();
-    assert!(theirs.version != ours.version && theirs.version != first.version);
+    assert!(theirs.digest != ours.digest && theirs.digest != first.digest);
     let again = tenant_wide.create_workflow(&body).await.unwrap();
     assert_eq!(
-        (again.version.as_str(), again.labels.0.len()),
-        (first.version.as_str(), 0),
+        (again.digest.as_str(), again.labels.0.len()),
+        (first.digest.as_str(), 0),
         "a tenant-wide save keeps its version"
     );
 
@@ -356,9 +356,9 @@ async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
         listed
             .workflows
             .iter()
-            .map(|workflow| (workflow.name.as_str(), workflow.version.as_str()))
+            .map(|workflow| (workflow.name.as_str(), workflow.digest.as_str()))
             .collect::<Vec<_>>(),
-        [("triage", ours.version.as_str())]
+        [("triage", ours.digest.as_str())]
     );
     let versions = dev.workflow_versions("triage").await.unwrap();
     assert_eq!(versions.versions.len(), 1);
@@ -369,12 +369,12 @@ async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
         })
         .await
         .unwrap();
-    assert_eq!(pinned.workflows[0].version, ours.version);
+    assert_eq!(pinned.workflows[0].digest, ours.digest);
     let mut start = StartRun::new("");
     start.workflow = Some("triage".into());
     start.input = json!({ "repo": "acme/api" });
     let run = dev.start_run(&start, None).await.unwrap();
-    assert_eq!(run.workflow.unwrap().version, ours.version);
+    assert_eq!(run.workflow.unwrap().digest, ours.digest);
     assert_eq!(
         run.labels.0.get("env").map(String::as_str),
         Some("dev"),

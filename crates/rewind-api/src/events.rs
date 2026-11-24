@@ -358,7 +358,7 @@ pub struct ScriptChanged {
 pub struct WorkflowChanged {
     pub name: String,
     /// The digest of the new version, as `GET /v1/workflows/{name}` lists it.
-    pub version: String,
+    pub digest: String,
 }
 
 /// The data of a `secret` event: a secret put (created or given a new value) or deleted.
@@ -565,10 +565,10 @@ mod tests {
             ),
             (
                 "workflow",
-                json!({ "name": "triage", "version": "cd" }),
+                json!({ "name": "triage", "digest": "cd" }),
                 Change::Workflow(WorkflowChanged {
                     name: "triage".into(),
-                    version: "cd".into(),
+                    digest: "cd".into(),
                 }),
             ),
             (

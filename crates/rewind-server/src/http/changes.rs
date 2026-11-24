@@ -192,7 +192,7 @@ impl Follow {
                 labels_seen.then(|| {
                     Change::Workflow(WorkflowChanged {
                         name,
-                        version: version.to_hex(),
+                        digest: version.to_hex(),
                     })
                 })
             }

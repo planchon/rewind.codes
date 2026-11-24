@@ -811,7 +811,7 @@ pub(crate) fn view(stored: &StoredActionSet) -> ApiActionSet {
             .iter()
             .map(|workflow| rewind_api::workflows::PinnedWorkflow {
                 name: workflow.name.clone(),
-                version: workflow.version.to_hex(),
+                digest: workflow.version.to_hex(),
                 description: workflow.description.clone(),
             })
             .collect(),

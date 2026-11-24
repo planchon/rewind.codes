@@ -421,7 +421,7 @@ async fn usage_of(
         if !servers.is_empty() {
             workflows.push(WorkflowAttaching {
                 name: stored.workflow.name().to_owned(),
-                version: stored.workflow.version().to_hex(),
+                digest: stored.workflow.version().to_hex(),
                 servers,
             });
         }

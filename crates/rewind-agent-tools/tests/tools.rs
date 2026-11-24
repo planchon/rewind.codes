@@ -282,7 +282,7 @@ impl Api for Fake {
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
         self.saw("create_workflow", workflow, None);
         Ok(serde_json::from_value(json!({
-            "name": workflow.name, "version": "9f2c4e1a07b3".repeat(5) + "9f2c", "number": 1,
+            "name": workflow.name, "digest": "9f2c4e1a07b3".repeat(5) + "9f2c", "version": 1,
             "actionSet": workflow.action_set,
             "codeDigest": sha256(&workflow.code), "input": workflow.input, "output": workflow.output,
             "signals": {}, "tests": [], "retired": [], "updated": [],

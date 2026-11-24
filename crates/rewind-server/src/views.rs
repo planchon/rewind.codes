@@ -272,9 +272,9 @@ impl Views<'_> {
         let workflow = match &head.metadata.workflow {
             Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
                 name: workflow.name.clone(),
-                version: workflow.version.to_hex(),
+                digest: workflow.version.to_hex(),
                 // A version is never erased: 0 would say its row is gone.
-                number: self
+                version: self
                     .app
                     .catalog()
                     .get_workflow(tenant, workflow.version)

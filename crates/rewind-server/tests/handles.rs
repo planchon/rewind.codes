@@ -404,20 +404,20 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
         .await
         .unwrap();
     assert_eq!(
-        (again.version.as_str(), again.number),
-        (first.version.as_str(), 1)
+        (again.digest.as_str(), again.version),
+        (first.digest.as_str(), 1)
     );
     let second = harness
         .create_workflow(&triage(&action_set.id, &TRIAGE.replace("? 3", "? 4")))
         .await
         .unwrap();
-    assert_eq!((first.number, second.number), (1, 2));
+    assert_eq!((first.version, second.version), (1, 2));
     let versions = harness.workflow_versions("triage").await.unwrap();
     assert_eq!(
         versions
             .versions
             .iter()
-            .map(|version| version.number)
+            .map(|version| version.version)
             .collect::<Vec<_>>(),
         [2, 1]
     );
@@ -425,7 +425,7 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
         .list_workflows(&WorkflowQuery::default())
         .await
         .unwrap();
-    assert_eq!(latest.workflows[0].number, 2);
+    assert_eq!(latest.workflows[0].version, 2);
 
     // `triage@v1` names the first version; a run of it shows the number and is named after
     // its workflow.
@@ -435,8 +435,8 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
     let run = harness.start_run(&start, None).await.unwrap();
     let workflow = run.workflow.unwrap();
     assert_eq!(
-        (workflow.version.as_str(), workflow.number),
-        (first.version.as_str(), 1)
+        (workflow.digest.as_str(), workflow.version),
+        (first.digest.as_str(), 1)
     );
     assert!(run.handle.contains("/triage/"), "{}", run.handle);
 

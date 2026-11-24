@@ -452,7 +452,7 @@ impl<A: Api> Session<'_, A> {
                 let workflow = parent
                     .workflow
                     .as_ref()
-                    .map(|workflow| workflow_ref(&workflow.name, &workflow.version));
+                    .map(|workflow| workflow_ref(&workflow.name, &workflow.digest));
                 let content = describe_retry_refused(
                     &parent.handle,
                     &problem.detail,
@@ -975,7 +975,7 @@ impl<A: Api> AgentTools<A> {
             .api
             .create_action_set(&CreateActionSet {
                 base: Some(base),
-                workflows: vec![format!("{}@{}", workflow.name, workflow.version)],
+                workflows: vec![format!("{}@{}", workflow.name, workflow.digest)],
                 ..CreateActionSet::default()
             })
             .await?;

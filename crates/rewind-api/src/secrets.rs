@@ -145,8 +145,8 @@ pub struct SecretUsage {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowAttaching {
     pub name: String,
-    /// The version (SHA-256, lowercase hex).
-    pub version: String,
+    /// The version's digest (SHA-256, lowercase hex).
+    pub digest: String,
     /// The servers and APIs it attaches the secret for.
     pub servers: Vec<String>,
 }

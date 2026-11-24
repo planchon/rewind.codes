@@ -59,8 +59,8 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     let workflow = match &record.metadata.workflow {
         Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
             name: workflow.name.clone(),
-            version: workflow.version.to_hex(),
-            number: world
+            digest: workflow.version.to_hex(),
+            version: world
                 .catalog()
                 .get_workflow(&run.tenant, workflow.version)
                 .await
@@ -533,8 +533,8 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
         .and_then(|generated| generated.actions.iter().find(|action| action.name == name));
     rewind_api::workflows::Workflow {
         name: workflow.name().to_owned(),
-        version: workflow.version().to_hex(),
-        number: stored.number,
+        digest: workflow.version().to_hex(),
+        version: stored.number,
         description: workflow.description().map(str::to_owned),
         action_set: workflow.action_set().to_hex(),
         code_digest: workflow.code().to_hex(),
@@ -676,7 +676,7 @@ pub fn action_set(
             .iter()
             .map(|workflow| rewind_api::workflows::PinnedWorkflow {
                 name: workflow.name.clone(),
-                version: workflow.version.to_hex(),
+                digest: workflow.version.to_hex(),
                 description: workflow.description.clone(),
             })
             .collect(),

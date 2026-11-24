@@ -175,13 +175,13 @@ pub struct SkippedRun {
 #[serde(rename_all = "camelCase")]
 pub struct Workflow {
     pub name: String,
-    /// The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its
+    /// The digest of the version (SHA-256, lowercase hex). `name@<digest>` names it, as do its
     /// first 12 digits.
-    pub version: String,
+    pub digest: String,
     /// The version's number among the versions of its workflow, from 1 in the order they were
-    /// saved (`triage v12`): `name@v<number>` names it too.
+    /// saved (`triage v12`): `name@v<version>` names it too.
     #[schema(example = 12)]
-    pub number: u32,
+    pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// The id of the action set its runs call.
@@ -257,7 +257,7 @@ pub struct WorkflowVersions {
 #[serde(rename_all = "camelCase")]
 pub struct PinnedWorkflow {
     pub name: String,
-    pub version: String,
+    pub digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -267,9 +267,9 @@ pub struct PinnedWorkflow {
 #[serde(rename_all = "camelCase")]
 pub struct RunWorkflow {
     pub name: String,
-    pub version: String,
-    /// The version's number among the versions of its workflow (`Workflow.number`).
-    pub number: u32,
+    pub digest: String,
+    /// The version's number among the versions of its workflow (`Workflow.version`).
+    pub version: u32,
 }
 
 /// The run that started a run, and the call that did.

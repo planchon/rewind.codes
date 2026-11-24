@@ -215,7 +215,7 @@ fn headline(run: &Run, limits: &Limits) -> String {
         run.workflow.as_ref().map(|workflow| {
             format!(
                 "a run of the workflow {}",
-                workflow_ref(&workflow.name, &workflow.version)
+                workflow_ref(&workflow.name, &workflow.digest)
             )
         }),
         run.started_by.as_ref().map(|by| {
@@ -724,7 +724,7 @@ pub fn describe_workflow(workflow: &Workflow, limits: &Limits) -> String {
     let mut lines = vec![
         format!(
             "Saved the workflow {}. Your next workflows can import it:",
-            workflow_ref(&workflow.name, &workflow.version)
+            workflow_ref(&workflow.name, &workflow.digest)
         ),
         format!("import {{ {} }} from \"rewind:workflows\";", workflow.name),
     ];
@@ -789,7 +789,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
     };
     let mut lines = vec![format!(
         "The workflow {}, saved {}: its latest version, of {}.",
-        workflow_ref(&latest.name, &latest.version),
+        workflow_ref(&latest.name, &latest.digest),
         latest.created_at,
         plural(details.versions.len(), "version")
     )];
@@ -879,7 +879,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
         );
         lines.push(format!(
             "- {}, saved {}{from}: {}.",
-            workflow_ref(&version.name, &version.version),
+            workflow_ref(&version.name, &version.digest),
             version.created_at,
             plural(version.tests.len(), "test")
         ));
@@ -905,10 +905,10 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
 fn version_ref(version: &str, versions: &[Workflow]) -> String {
     versions
         .iter()
-        .find(|candidate| candidate.version == version)
+        .find(|candidate| candidate.digest == version)
         .map_or_else(
             || version.get(..12).unwrap_or(version).to_owned(),
-            |known| workflow_ref(&known.name, &known.version),
+            |known| workflow_ref(&known.name, &known.digest),
         )
 }
 
@@ -1525,8 +1525,8 @@ mod tests {
     fn workflow(overrides: Value) -> Workflow {
         let mut workflow = json!({
             "name": "triage",
-            "version": VERSION,
-            "number": 3,
+            "digest": VERSION,
+            "version": 3,
             "description": "Triage the stale issues of a repository, after approval.",
             "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
             "codeDigest": "cd".repeat(32),
@@ -1769,13 +1769,13 @@ mod tests {
             }]
         }));
         let parent = workflow(json!({
-            "version": parent_version,
+            "digest": parent_version,
             "createdAt": "2026-11-11T10:00:00Z",
             "base": first_version,
             "tests": [{ "name": "asks before closing", "digest": "2e".repeat(32) }]
         }));
         let first = workflow(json!({
-            "version": first_version, "createdAt": "2026-11-10T10:00:00Z", "tests": []
+            "digest": first_version, "createdAt": "2026-11-10T10:00:00Z", "tests": []
         }));
         let inline = json!({
             "name": "closes nothing without approval",
@@ -1917,7 +1917,7 @@ mod tests {
             "actionSet": "t", "epoch": 1, "mode": "live", "labels": {}, "traceId": "0", "historyLen": 4,
             "createdAt": "2026-11-12T10:00:00Z", "updatedAt": "2026-11-12T10:00:01Z",
             "expiresAt": "2026-12-12T10:00:00Z",
-            "workflow": { "name": "triage", "version": VERSION, "number": 3 },
+            "workflow": { "name": "triage", "digest": VERSION, "version": 3 },
             "startedBy": {
                 "run": "source-1", "handle": "user_2fQ81/digest/06bqx3k9f2ms", "seq": 2,
                 "detached": true

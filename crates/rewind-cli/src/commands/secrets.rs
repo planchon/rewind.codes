@@ -229,7 +229,7 @@ fn used(usage: &SecretUsage) -> String {
             lines.push(format!(
                 "  {}@{} for {}",
                 workflow.name,
-                &workflow.version[..12.min(workflow.version.len())],
+                &workflow.digest[..12.min(workflow.digest.len())],
                 workflow.servers.join(", ")
             ));
         }

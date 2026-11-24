@@ -4395,16 +4395,16 @@
               "null"
             ]
           },
-          "name": {
+          "digest": {
             "type": "string"
           },
-          "version": {
+          "name": {
             "type": "string"
           }
         },
         "required": [
           "name",
-          "version"
+          "digest"
         ],
         "type": "object"
       },
@@ -5978,23 +5978,23 @@
       "RunWorkflow": {
         "description": "The workflow a run executes.",
         "properties": {
+          "digest": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
-          "number": {
-            "description": "The version's number among the versions of its workflow (`Workflow.number`).",
+          "version": {
+            "description": "The version's number among the versions of its workflow (`Workflow.version`).",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
-          },
-          "version": {
-            "type": "string"
           }
         },
         "required": [
           "name",
-          "version",
-          "number"
+          "digest",
+          "version"
         ],
         "type": "object"
       },
@@ -8255,6 +8255,10 @@
               "null"
             ]
           },
+          "digest": {
+            "description": "The digest of the version (SHA-256, lowercase hex). `name@<digest>` names it, as do its\nfirst 12 digits.",
+            "type": "string"
+          },
           "input": {
             "type": "object"
           },
@@ -8264,13 +8268,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "number": {
-            "description": "The version's number among the versions of its workflow, from 1 in the order they were\nsaved (`triage v12`): `name@v<number>` names it too.",
-            "example": 12,
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
           },
           "output": {
             "type": "object"
@@ -8302,14 +8299,17 @@
             "type": "array"
           },
           "version": {
-            "description": "The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its\nfirst 12 digits.",
-            "type": "string"
+            "description": "The version's number among the versions of its workflow, from 1 in the order they were\nsaved (`triage v12`): `name@v<version>` names it too.",
+            "example": 12,
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "name",
+          "digest",
           "version",
-          "number",
           "actionSet",
           "codeDigest",
           "input",
@@ -8324,6 +8324,10 @@
       "WorkflowAttaching": {
         "description": "The latest version of a workflow, which attaches a secret.",
         "properties": {
+          "digest": {
+            "description": "The version's digest (SHA-256, lowercase hex).",
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -8333,15 +8337,11 @@
               "type": "string"
             },
             "type": "array"
-          },
-          "version": {
-            "description": "The version (SHA-256, lowercase hex).",
-            "type": "string"
           }
         },
         "required": [
           "name",
-          "version",
+          "digest",
           "servers"
         ],
         "type": "object"
@@ -8349,17 +8349,17 @@
       "WorkflowChanged": {
         "description": "The data of a `workflow` event: the version a workflow was saved as.",
         "properties": {
-          "name": {
+          "digest": {
+            "description": "The digest of the new version, as `GET /v1/workflows/{name}` lists it.",
             "type": "string"
           },
-          "version": {
-            "description": "The digest of the new version, as `GET /v1/workflows/{name}` lists it.",
+          "name": {
             "type": "string"
           }
         },
         "required": [
           "name",
-          "version"
+          "digest"
         ],
         "type": "object"
       },

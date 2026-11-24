@@ -319,8 +319,8 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
     });
     ApiWorkflow {
         name: workflow.name().to_owned(),
-        version: workflow.version().to_hex(),
-        number: stored.number,
+        digest: workflow.version().to_hex(),
+        version: stored.number,
         description: workflow.description().map(str::to_owned),
         action_set: workflow.action_set().to_hex(),
         code_digest: workflow.code().to_hex(),
