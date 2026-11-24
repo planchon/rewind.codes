@@ -14,7 +14,7 @@
 //! ```text
 //! {"k":"namespace","t":"acme","n":"alice"}              {"k":"tenant","t":"acme"}
 //! {"k":"key","t":"acme","h":"<sha-256 hex>"}            {"k":"token","t":"acme","h":"<hex>"}
-//! {"k":"token_key","t":"acme","kid":"rk_…"}             {"k":"grant","t":"acme","p":"user:…"}
+//! {"k":"token_key","t":"acme","kid":"rk_…"}             {"k":"grant","t":"acme","p":"member:…"}
 //! {"k":"role","t":"acme","n":"triager"}                 {"k":"connection","id":"cn_…"}
 //! {"k":"secret","t":"acme","ns":"*","n":"github"}       {"k":"subscription","t":"acme","id":"s1"}
 //! {"k":"workflow","t":"acme","n":"triage","v":"<hex>"}  {"k":"script","t":"acme","d":"<hex>"}

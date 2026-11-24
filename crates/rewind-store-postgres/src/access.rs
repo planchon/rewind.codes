@@ -195,7 +195,7 @@ async fn holds_last(
     principal: &Principal,
     keep: &str,
 ) -> Result<bool, Error> {
-    if !matches!(principal, Principal::User(_)) {
+    if !matches!(principal, Principal::Member(_)) {
         return Ok(false);
     }
     let held = find_grant(conn, tenant_id, principal)
@@ -206,7 +206,7 @@ async fn holds_last(
     }
     let other: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM grants WHERE tenant = $1 AND role = $2 \
-         AND principal LIKE 'user:%' AND principal <> $3)",
+         AND principal LIKE 'member:%' AND principal <> $3)",
     )
     .bind(tenant(tenant_id))
     .bind(keep)

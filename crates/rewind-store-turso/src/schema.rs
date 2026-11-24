@@ -26,7 +26,7 @@
 //! - `signing_keys.public_key` holds the 32 bytes of an Ed25519 public key, which the API writes
 //!   as a JWK;
 //! - `roles.permissions` holds a role's permissions as a JSON array of strings, sorted, and
-//!   `grants.principal` and `grants.granted_by` a principal's text (`user:…`, `key:…`,
+//!   `grants.principal` and `grants.granted_by` a principal's text (`member:…`, `key:…`,
 //!   `invitation:…`), whose order is the order of principals;
 //! - a tenant's ceiling and its namespaces' defaults, and a namespace's exceptions, are a column
 //!   per quota (`*_ms` for the durations; the ceiling's `active_runs` is `active_run_quota`); the
@@ -1194,7 +1194,7 @@ mod tests {
             id: SecretId::organization(SecretName::new("github").expect("valid")),
             value: Secret::new("v"),
             labels: BTreeMap::new(),
-            by: "user:ada".into(),
+            by: "member:ada".into(),
         };
         store.put(&tenant, &secret, T0).await.expect("put");
         assert_eq!(store.master_keys_in_use().await, Ok(vec![key.id()]));

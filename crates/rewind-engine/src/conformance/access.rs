@@ -113,7 +113,7 @@ fn at(seconds: u64) -> Timestamp {
 }
 
 fn user(id: &str) -> Principal {
-    Principal::User(format!("user_{id}"))
+    Principal::Member(format!("user_{id}"))
 }
 
 fn invitation(id: &str) -> Principal {
@@ -404,8 +404,8 @@ pub async fn a_principal_has_one_grant_per_tenant<S: AccessStore>(store: &S) {
         [
             "invitation:invitation_i1".to_owned(),
             key.to_string(),
-            "user:user_ada".to_owned(),
-            "user:user_bob".to_owned(),
+            "member:user_ada".to_owned(),
+            "member:user_bob".to_owned(),
         ],
         "by principal, as their text sorts"
     );
@@ -646,7 +646,7 @@ pub async fn a_claim_without_grants_changes_nothing<S: AccessStore>(store: &S) {
     assert_eq!(grant_of(store, &acme(), &user("ada")).await, None);
     assert_eq!(
         principals(store, &acme()).await,
-        ["user:user_bob".to_owned()]
+        ["member:user_bob".to_owned()]
     );
 }
 
@@ -1311,7 +1311,7 @@ pub async fn a_code_is_redeemed_once_and_its_replay_revokes_the_connection<S: Ac
                 principal: Principal::Connection("cn_1".into()),
                 role: "harness".into(),
                 allowed_labels: BTreeMap::from([("via".to_owned(), "claude".to_owned())]),
-                granted_by: Some(Principal::User("user_ada".into())),
+                granted_by: Some(Principal::Member("user_ada".into())),
                 granted_at: at(1),
             },
             Grant {
@@ -1319,7 +1319,7 @@ pub async fn a_code_is_redeemed_once_and_its_replay_revokes_the_connection<S: Ac
                 principal: Principal::Connection("cn_1".into()),
                 role: "reader".into(),
                 allowed_labels: BTreeMap::new(),
-                granted_by: Some(Principal::User("user_ada".into())),
+                granted_by: Some(Principal::Member("user_ada".into())),
                 granted_at: at(1),
             },
         ],
@@ -1603,7 +1603,7 @@ pub async fn connections_are_listed_changed_touched_and_revoked<S: AccessStore>(
             principal: Principal::Connection("cn_b".into()),
             role: "harness".into(),
             allowed_labels: BTreeMap::from([("team".to_owned(), "a".to_owned())]),
-            granted_by: Some(Principal::User("user_ada".into())),
+            granted_by: Some(Principal::Member("user_ada".into())),
             granted_at: at(5),
         }]
     );

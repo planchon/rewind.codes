@@ -188,7 +188,7 @@ async fn put(world: &World, id: SecretId, value: &str, labels: &[(&str, &str)]) 
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect(),
-        by: "user:u_1".into(),
+        by: "member:u_1".into(),
     };
     world
         .plane

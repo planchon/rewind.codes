@@ -414,7 +414,7 @@ pub async fn scripts_take_the_titles_people_give_them<C: CatalogStore>(catalog: 
     let title = |text: &str, description: Option<&str>| ScriptTitle {
         title: text.into(),
         description: description.map(str::to_owned),
-        updated_by: "user:user_1".into(),
+        updated_by: "member:user_1".into(),
         updated_at: T0,
     };
     let scripts = [titled.digest(), plain.digest()];
@@ -1309,7 +1309,7 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
     let title = ScriptTitle {
         title: "Triage".into(),
         description: None,
-        updated_by: "user:user_1".into(),
+        updated_by: "member:user_1".into(),
         updated_at: T0,
     };
     assert!(

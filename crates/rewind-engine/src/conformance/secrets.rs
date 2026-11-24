@@ -143,7 +143,7 @@ async fn listed<S: SecretStore>(
 pub async fn a_secret_is_created_then_replaced<S: SecretStore>(store: &S) {
     let acme = tenant("acme");
     let zendesk = of_org("zendesk");
-    let first = secret(&zendesk, "z-1", labels(&[("env", "prod")]), "user:ada");
+    let first = secret(&zendesk, "z-1", labels(&[("env", "prod")]), "member:ada");
     assert_eq!(
         store.put(&acme, &first, at(0, 1)).await.expect("put"),
         PutSecret::Created
@@ -167,7 +167,7 @@ pub async fn a_secret_is_created_then_replaced<S: SecretStore>(store: &S) {
         SecretMeta {
             id: zendesk.clone(),
             labels: labels(&[("env", "dev")]),
-            created_by: "user:ada".into(),
+            created_by: "member:ada".into(),
             created_at: at(0, 1),
             updated_by: "key:ops".into(),
             updated_at: at(1, 0),
@@ -209,7 +209,7 @@ pub async fn listings_answer_one_namespace_and_the_labels_asked<S: SecretStore>(
         put(
             store,
             &acme,
-            &secret(&id, "v", secret_labels, "user:ada"),
+            &secret(&id, "v", secret_labels, "member:ada"),
             at(0, 0),
         )
         .await;
@@ -265,7 +265,7 @@ pub async fn a_namespace_s_secret_carries_no_label<S: SecretStore>(store: &S) {
         &of("alice", "github"),
         "v",
         labels(&[("env", "prod")]),
-        "user:ada",
+        "member:ada",
     );
     assert!(matches!(
         store.put(&acme, &labelled, at(0, 0)).await,
@@ -280,7 +280,7 @@ pub async fn reads_are_counted_per_day_with_the_last_read<S: SecretStore>(store:
     put(
         store,
         &acme,
-        &secret(&zendesk, "z", BTreeMap::new(), "user:ada"),
+        &secret(&zendesk, "z", BTreeMap::new(), "member:ada"),
         at(0, 0),
     )
     .await;
@@ -363,7 +363,7 @@ pub async fn a_registration_s_read_names_no_run<S: SecretStore>(store: &S) {
     put(
         store,
         &acme,
-        &secret(&notion, "n", BTreeMap::new(), "user:ada"),
+        &secret(&notion, "n", BTreeMap::new(), "member:ada"),
         at(0, 0),
     )
     .await;
@@ -471,7 +471,7 @@ pub async fn an_erased_namespace_loses_its_secrets_only<S: SecretStore>(store: &
         put(
             store,
             &acme,
-            &secret(&id, "v", BTreeMap::new(), "user:ada"),
+            &secret(&id, "v", BTreeMap::new(), "member:ada"),
             at(0, 0),
         )
         .await;
@@ -509,7 +509,7 @@ pub async fn secrets_never_cross_tenants<S: SecretStore>(store: &S) {
         put(
             store,
             &acme,
-            &secret(&id, "acme", BTreeMap::new(), "user:ada"),
+            &secret(&id, "acme", BTreeMap::new(), "member:ada"),
             at(0, 0),
         )
         .await;
@@ -522,7 +522,7 @@ pub async fn secrets_never_cross_tenants<S: SecretStore>(store: &S) {
         put(
             store,
             &globex,
-            &secret(&id, "globex", BTreeMap::new(), "user:bo"),
+            &secret(&id, "globex", BTreeMap::new(), "member:bo"),
             at(0, 0),
         )
         .await;

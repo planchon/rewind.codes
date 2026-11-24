@@ -568,7 +568,7 @@
             "type": "string"
           },
           "createdBy": {
-            "description": "The principal who created it: `user:<id>` or `key:<id>`. Absent for the operator's key\ngiven at start.",
+            "description": "The principal who created it: `member:<id>` or `key:<id>`. Absent for the operator's key\ngiven at start.",
             "type": [
               "string",
               "null"
@@ -825,26 +825,26 @@
                   "null"
                 ]
               },
+              "person": {
+                "$ref": "#/components/schemas/Person"
+              },
               "status": {
                 "enum": [
                   "authenticated"
                 ],
                 "type": "string"
-              },
-              "user": {
-                "$ref": "#/components/schemas/User"
               }
             },
             "required": [
               "accessToken",
               "expiresAt",
-              "user",
+              "person",
               "status"
             ],
             "type": "object"
           },
           {
-            "description": "The user belongs to several organizations: choose one with `POST /auth/organization`.",
+            "description": "The person belongs to several organizations: choose one with `POST /auth/organization`.",
             "properties": {
               "organizations": {
                 "items": {
@@ -852,18 +852,18 @@
                 },
                 "type": "array"
               },
+              "person": {
+                "$ref": "#/components/schemas/Person"
+              },
               "status": {
                 "enum": [
                   "organization_selection_required"
                 ],
                 "type": "string"
-              },
-              "user": {
-                "$ref": "#/components/schemas/User"
               }
             },
             "required": [
-              "user",
+              "person",
               "organizations",
               "status"
             ],
@@ -3171,7 +3171,7 @@
             ]
           },
           "grantedBy": {
-            "description": "The principal who gave it: `user:<id>` or `key:<id>`. Absent for the grants the server\ngives (an organization's creator, a member's default role, the operator).",
+            "description": "The principal who gave it: `member:<id>` or `key:<id>`. Absent for the grants the server\ngives (an organization's creator, a member's default role, the operator).",
             "type": [
               "string",
               "null"
@@ -3880,15 +3880,15 @@
               }
             ]
           },
+          "person": {
+            "$ref": "#/components/schemas/Person"
+          },
           "status": {
             "$ref": "#/components/schemas/MembershipStatus"
-          },
-          "user": {
-            "$ref": "#/components/schemas/User"
           }
         },
         "required": [
-          "user",
+          "person",
           "status"
         ],
         "type": "object"
@@ -4351,6 +4351,41 @@
         ],
         "type": "object"
       },
+      "Person": {
+        "description": "A person, as the identity provider knows them.",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`user_01J…`.",
+            "type": "string"
+          },
+          "lastName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pictureUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ],
+        "type": "object"
+      },
       "PinnedWorkflow": {
         "description": "A workflow an action set pins.",
         "properties": {
@@ -4401,16 +4436,16 @@
             "properties": {
               "kind": {
                 "enum": [
-                  "user"
+                  "member"
                 ],
                 "type": "string"
               },
-              "user": {
-                "$ref": "#/components/schemas/User"
+              "person": {
+                "$ref": "#/components/schemas/Person"
               }
             },
             "required": [
-              "user",
+              "person",
               "kind"
             ],
             "type": "object"
@@ -6145,7 +6180,7 @@
             "type": "string"
           },
           "createdBy": {
-            "description": "Who wrote it first: a principal (`user:…`, `key:…`, `connection:…`) or an end user's\ntoken (`token:<namespace>`).",
+            "description": "Who wrote it first: a principal (`member:…`, `key:…`, `connection:…`) or an end user's\ntoken (`token:<namespace>`).",
             "type": "string"
           },
           "labels": {
@@ -7729,41 +7764,6 @@
           "from",
           "to",
           "reason"
-        ],
-        "type": "object"
-      },
-      "User": {
-        "description": "A person, as the identity provider knows them.",
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "firstName": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "id": {
-            "description": "`user_01J…`.",
-            "type": "string"
-          },
-          "lastName": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "pictureUrl": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "email"
         ],
         "type": "object"
       },
@@ -14412,15 +14412,15 @@
         ]
       }
     },
-    "/v1/organization/members/{user}": {
+    "/v1/organization/members/{member}": {
       "delete": {
         "description": "Deletes the member's grant, then their membership. Requires `members:manage`, and every\npermission of the member's role.",
         "operationId": "removeMember",
         "parameters": [
           {
-            "description": "The member's user id.",
+            "description": "The member's id, the person's (`user_01J…`).",
             "in": "path",
-            "name": "user",
+            "name": "member",
             "required": true,
             "schema": {
               "type": "string"
@@ -14527,15 +14527,15 @@
         ]
       }
     },
-    "/v1/organization/members/{user}/grant": {
+    "/v1/organization/members/{member}/grant": {
       "put": {
         "description": "Their role and allowed labels. Requires `members:manage`, and every permission of the\nrole given and of the member's current role.",
         "operationId": "setMemberGrant",
         "parameters": [
           {
-            "description": "The member's user id.",
+            "description": "The member's id, the person's (`user_01J…`).",
             "in": "path",
-            "name": "user",
+            "name": "member",
             "required": true,
             "schema": {
               "type": "string"

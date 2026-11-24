@@ -73,7 +73,7 @@ pub struct Secret {
     /// An organization's secret's labels; none for a namespace's.
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
     pub labels: Labels,
-    /// Who wrote it first: a principal (`user:…`, `key:…`, `connection:…`) or an end user's
+    /// Who wrote it first: a principal (`member:…`, `key:…`, `connection:…`) or an end user's
     /// token (`token:<namespace>`).
     pub created_by: String,
     pub created_at: Timestamp,

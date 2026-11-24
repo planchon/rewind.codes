@@ -62,7 +62,7 @@ fn client(server: &TestServer, state: &AuthState) -> Client {
 
 fn user_id(state: &AuthState) -> String {
     match state {
-        AuthState::Authenticated { user, .. } => user.id.clone(),
+        AuthState::Authenticated { person, .. } => person.id.clone(),
         other => panic!("not signed in: {other:?}"),
     }
 }
@@ -146,7 +146,7 @@ async fn an_invitee_signs_in_with_the_invitation_and_gets_its_grant() {
     assert_eq!(pending.role, "harness");
     assert_eq!(
         pending.granted_by,
-        Some(format!("user:{}", acme.owner_id)),
+        Some(format!("member:{}", acme.owner_id)),
         "the inviter gave it"
     );
     let listed = acme.owner.list_invitations().await.unwrap().invitations;
@@ -178,7 +178,7 @@ async fn an_invitee_signs_in_with_the_invitation_and_gets_its_grant() {
         .iter()
         .map(|member| {
             (
-                member.user.email.as_str(),
+                member.person.email.as_str(),
                 member.grant.as_ref().unwrap().role.as_str(),
             )
         })
@@ -236,7 +236,7 @@ async fn an_invitation_is_accepted_resent_and_revoked_through_the_api() {
     let me = client(&acme.server, &state).whoami().await.unwrap();
     let grant = me.grant.unwrap();
     assert_eq!(grant.role, "reader");
-    assert_eq!(grant.granted_by, Some(format!("user:{}", acme.owner_id)));
+    assert_eq!(grant.granted_by, Some(format!("member:{}", acme.owner_id)));
 
     let resent = acme.owner.resend_invitation(&to_eve.id).await.unwrap();
     assert_eq!(resent.grant.unwrap().role, "harness");

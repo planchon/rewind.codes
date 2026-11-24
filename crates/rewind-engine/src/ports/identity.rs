@@ -71,7 +71,7 @@ impl OrganizationId {
 
 impl From<&UserId> for Principal {
     fn from(user: &UserId) -> Self {
-        Principal::User(user.0.clone())
+        Principal::Member(user.0.clone())
     }
 }
 
@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(organization.tenant().unwrap().as_str(), "org_01JABC");
         assert_eq!(
             Principal::from(&UserId::new("user_1")).to_string(),
-            "user:user_1"
+            "member:user_1"
         );
         assert_eq!(
             Principal::from(&InvitationId::new("invitation_1")).to_string(),

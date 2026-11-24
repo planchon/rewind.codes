@@ -52,7 +52,7 @@ impl State {
     /// Whether taking `principal`'s grant away from the role `keep` would leave the tenant
     /// without a member holding it. Keys and invitations never count.
     fn holds_last(&self, tenant: &TenantId, principal: &Principal, keep: &str) -> bool {
-        let member = |principal: &Principal| matches!(principal, Principal::User(_));
+        let member = |principal: &Principal| matches!(principal, Principal::Member(_));
         let holds = member(principal)
             && self
                 .grants

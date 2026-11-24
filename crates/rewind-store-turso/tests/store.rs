@@ -205,7 +205,7 @@ fn github_token() -> NewSecret {
         id: SecretId::organization(SecretName::new("github").expect("valid")),
         value: Secret::new("ghp_plaintext_token"),
         labels: BTreeMap::new(),
-        by: "user:ada".into(),
+        by: "member:ada".into(),
     }
 }
 

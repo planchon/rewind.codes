@@ -74,7 +74,7 @@ async fn the_master_key_is_replaced_and_a_key_left_out_refuses_the_start() {
             id: github(),
             value: Secret::new("ghp_1"),
             labels: BTreeMap::new(),
-            by: "user:ada".into(),
+            by: "member:ada".into(),
         };
         store
             .put(&TenantId::new("acme").unwrap(), &secret, T0)

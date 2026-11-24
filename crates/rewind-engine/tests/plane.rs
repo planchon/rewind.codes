@@ -1065,7 +1065,7 @@ async fn a_namespace_erased_has_its_runs_cancelled_and_erased_then_is_dropped() 
                 id: secret.clone(),
                 value: rewind_engine::ports::Secret::new("token"),
                 labels: BTreeMap::new(),
-                by: "user:u_1".into(),
+                by: "member:u_1".into(),
             },
             world.now(),
         )

@@ -199,7 +199,7 @@ async fn holds_last(
     principal: &Principal,
     keep: &str,
 ) -> Result<bool, Error> {
-    if !matches!(principal, Principal::User(_)) {
+    if !matches!(principal, Principal::Member(_)) {
         return Ok(false);
     }
     let held = find_grant(connection, tenant_id, principal)
@@ -210,7 +210,7 @@ async fn holds_last(
     }
     let other = sql::query_row(
         connection,
-        "SELECT 1 FROM grants WHERE tenant = ? AND role = ? AND principal LIKE 'user:%' \
+        "SELECT 1 FROM grants WHERE tenant = ? AND role = ? AND principal LIKE 'member:%' \
          AND principal <> ? LIMIT 1",
         vec![tenant(tenant_id), text(keep), text(principal.to_string())],
     )

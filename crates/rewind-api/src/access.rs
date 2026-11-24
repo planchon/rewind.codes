@@ -483,7 +483,7 @@ pub struct Grant {
     /// The principal only sees the runs carrying all these labels, and cannot administer.
     #[serde(default)]
     pub allowed_labels: Labels,
-    /// The principal who gave it: `user:<id>` or `key:<id>`. Absent for the grants the server
+    /// The principal who gave it: `member:<id>` or `key:<id>`. Absent for the grants the server
     /// gives (an organization's creator, a member's default role, the operator).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granted_by: Option<String>,
@@ -537,7 +537,7 @@ pub struct ApiKey {
     pub role: String,
     /// The allowed labels of the key's grant.
     pub allowed_labels: Labels,
-    /// The principal who created it: `user:<id>` or `key:<id>`. Absent for the operator's key
+    /// The principal who created it: `member:<id>` or `key:<id>`. Absent for the operator's key
     /// given at start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,

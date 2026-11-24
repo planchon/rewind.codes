@@ -6,7 +6,7 @@
 //!   belongs to a tenant, which scopes everything it sees; its principal is `key:<hash>`.
 //! - On a server with a sign-in (WorkOS), a member's access token, checked by the
 //!   identity provider ([`Member`]). Its organization is the tenant, whose record is created
-//!   when missing; its principal is `user:<id>`. A token without organization reaches only the
+//!   when missing; its principal is `member:<id>`. A token without organization reaches only the
 //!   onboarding endpoints, which take [`Who`]: every other one answers 403.
 //!
 //! What a principal may do is its grant: a role, and optionally allowed labels. A built-in
@@ -195,14 +195,14 @@ impl Caller {
         }
         match self.principal {
             Some(Principal::Key(_)) => "this key",
-            Some(Principal::User(_)) => "this member",
+            Some(Principal::Member(_)) => "this member",
             Some(Principal::Connection(_)) => "this connection",
             Some(Principal::Invitation(_)) | None => "this caller",
         }
     }
 
     /// Who writes, as what it writes names it (a secret, a code's title): a principal
-    /// (`user:…`, `key:…`, `connection:…`), `token:<namespace>` for an end user's token, `local`
+    /// (`member:…`, `key:…`, `connection:…`), `token:<namespace>` for an end user's token, `local`
     /// over the embedded server's socket.
     pub(crate) fn writer(&self) -> String {
         if self.token.is_some()

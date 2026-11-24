@@ -65,7 +65,7 @@ async fn every_write_of_access_sends_its_change() {
         updated_at: NOW,
     };
     store.put_role(&role).await.unwrap();
-    let user = Principal::User("user_1".into());
+    let user = Principal::Member("user_1".into());
     let grant = Grant {
         tenant: tenant.clone(),
         principal: user.clone(),
@@ -104,7 +104,7 @@ async fn every_write_of_access_sends_its_change() {
         permissions: Default::default(),
         labels: BTreeMap::new(),
         expires_at: Timestamp(NOW.0 + 1_000),
-        created_by: Principal::User("user_1".into()),
+        created_by: Principal::Member("user_1".into()),
         created_at: NOW,
         revoked_at: None,
     };
@@ -135,7 +135,7 @@ async fn every_write_of_access_sends_its_change() {
         name: "backend".into(),
         jwk: "{}".into(),
         permissions: Default::default(),
-        created_by: Principal::User("user_1".into()),
+        created_by: Principal::Member("user_1".into()),
         created_at: NOW,
     };
     store.put_token_key(&token_key).await.unwrap();
@@ -164,7 +164,7 @@ async fn a_secret_put_deleted_or_erased_with_its_namespace_sends_its_change() {
                     id: id(name),
                     value: Secret::new("value"),
                     labels: BTreeMap::new(),
-                    by: "user:user_1".into(),
+                    by: "member:user_1".into(),
                 },
                 NOW,
             )

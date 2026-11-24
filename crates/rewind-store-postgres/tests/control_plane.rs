@@ -323,7 +323,7 @@ async fn access_and_secrets_send_their_changes() {
             name: role.name.clone()
         }
     );
-    let user = Principal::User("user_1".into());
+    let user = Principal::Member("user_1".into());
     let grant = Grant {
         tenant: acme.clone(),
         principal: user.clone(),
@@ -349,7 +349,7 @@ async fn access_and_secrets_send_their_changes() {
             id: github.clone(),
             value: Secret::new("ghp_value"),
             labels: BTreeMap::new(),
-            by: "user:user_1".into(),
+            by: "member:user_1".into(),
         },
         T0,
     )

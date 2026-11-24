@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Timestamp;
-use crate::organization::{Organization, User};
+use crate::organization::{Organization, Person};
 
 /// The session: the access token, the refresh token and the pending token of a step, sealed.
 pub const SESSION_COOKIE: &str = "rewind_session";
@@ -125,16 +125,16 @@ pub enum AuthState {
         /// Ask `POST /auth/session` again before then: it refreshes a token with less than a
         /// minute left.
         expires_at: Timestamp,
-        user: User,
+        person: Person,
         /// The organization of the session, the tenant `/v1` acts in. Absent without one:
         /// create one, or accept an invitation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         organization_id: Option<String>,
     },
-    /// The user belongs to several organizations: choose one with `POST /auth/organization`.
+    /// The person belongs to several organizations: choose one with `POST /auth/organization`.
     #[serde(rename_all = "camelCase")]
     OrganizationSelectionRequired {
-        user: User,
+        person: Person,
         organizations: Vec<Organization>,
     },
     /// A code was sent to the email: give it to `POST /auth/email-verification`.
@@ -160,7 +160,7 @@ mod tests {
         let signed_in = AuthState::Authenticated {
             access_token: "eyJ…".into(),
             expires_at: Timestamp::from_second(1_767_225_900).unwrap(),
-            user: User {
+            person: Person {
                 id: "user_01JABC".into(),
                 email: "ada@example.net".into(),
                 first_name: None,
@@ -175,7 +175,7 @@ mod tests {
                 "status": "authenticated",
                 "accessToken": "eyJ…",
                 "expiresAt": "2026-01-01T00:05:00Z",
-                "user": { "id": "user_01JABC", "email": "ada@example.net" },
+                "person": { "id": "user_01JABC", "email": "ada@example.net" },
                 "organizationId": "org_01JABC"
             })
         );
@@ -185,7 +185,7 @@ mod tests {
         );
         let selection: AuthState = serde_json::from_value(json!({
             "status": "organization_selection_required",
-            "user": { "id": "user_1", "email": "ada@example.net" },
+            "person": { "id": "user_1", "email": "ada@example.net" },
             "organizations": [{ "id": "org_1", "name": "Acme" }]
         }))
         .unwrap();

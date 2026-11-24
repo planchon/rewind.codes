@@ -145,7 +145,7 @@ async fn access_and_secrets_send_their_changes() {
     assert_eq!(store.purge_tokens(Timestamp(T0.0 + 1), 10).await, Ok(1));
     assert_eq!(next(&mut changes).await, token_changed, "a purged token");
 
-    let user = Principal::User("user_1".into());
+    let user = Principal::Member("user_1".into());
     store
         .put_grant(
             &Grant {
@@ -186,7 +186,7 @@ async fn access_and_secrets_send_their_changes() {
             id: github.clone(),
             value: Secret::new("ghp_value"),
             labels: BTreeMap::new(),
-            by: "user:user_1".into(),
+            by: "member:user_1".into(),
         },
         T0,
     )

@@ -148,7 +148,7 @@ mod tests {
         let given = ScriptTitle {
             title: "Morning digest".into(),
             description: None,
-            updated_by: "user:user_1".into(),
+            updated_by: "member:user_1".into(),
             updated_at: Timestamp(0),
         };
         assert_eq!(

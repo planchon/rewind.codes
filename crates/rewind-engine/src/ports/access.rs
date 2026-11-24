@@ -31,14 +31,14 @@ use super::records::StoreError;
 use super::tenancy::TenantId;
 
 /// Who holds a grant: a member, an API key, an invitation not yet accepted, or a person's
-/// connection. Written `user:<id>`, `key:<sha256 hex>`, `invitation:<id>` and
+/// connection. Written `member:<id>`, `key:<sha256 hex>`, `invitation:<id>` and
 /// `connection:<id>`, the form the store keys grants by.
 ///
 /// Principals sort as their text form does.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Principal {
-    /// A member: the identity provider's user id (`user_01J…`).
-    User(String),
+    /// A member: the identity provider's id of the person (`user_01J…`).
+    Member(String),
     /// An API key, by the SHA-256 of its secret.
     Key(Digest),
     /// An invitation not yet accepted (`invitation_01J…`): its grant goes to the user who
@@ -50,23 +50,23 @@ pub enum Principal {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "invalid principal {0:?}: expected user:<id>, invitation:<id> or connection:<id> (1 to 128 \
+    "invalid principal {0:?}: expected member:<id>, invitation:<id> or connection:<id> (1 to 128 \
      ASCII letters, digits, - and _), or key:<64 hex digits>"
 )]
 pub struct InvalidPrincipal(pub String);
 
 impl Principal {
-    /// The prefix of the text form: `user`, `key`, `invitation` or `connection`.
+    /// The prefix of the text form: `member`, `key`, `invitation` or `connection`.
     pub fn kind(&self) -> &'static str {
         match self {
-            Principal::User(_) => "user",
+            Principal::Member(_) => "member",
             Principal::Key(_) => "key",
             Principal::Invitation(_) => "invitation",
             Principal::Connection(_) => "connection",
         }
     }
 
-    /// Reads `user:<id>`, `key:<hex>`, `invitation:<id>` or `connection:<id>`.
+    /// Reads `member:<id>`, `key:<hex>`, `invitation:<id>` or `connection:<id>`.
     pub fn parse(text: &str) -> Result<Self, InvalidPrincipal> {
         let invalid = || InvalidPrincipal(text.to_owned());
         let (kind, id) = text.split_once(':').ok_or_else(invalid)?;
@@ -75,7 +75,7 @@ impl Principal {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
         match kind {
-            "user" if valid_id => Ok(Principal::User(id.to_owned())),
+            "member" if valid_id => Ok(Principal::Member(id.to_owned())),
             "invitation" if valid_id => Ok(Principal::Invitation(id.to_owned())),
             "connection" if valid_id => Ok(Principal::Connection(id.to_owned())),
             "key" => Digest::from_hex(id)
@@ -85,13 +85,13 @@ impl Principal {
         }
     }
 
-    /// The order of the text forms' prefixes: `connection` < `invitation` < `key` < `user`.
+    /// The order of the text forms' prefixes: `connection` < `invitation` < `key` < `member`.
     fn rank(&self) -> u8 {
         match self {
             Principal::Connection(_) => 0,
             Principal::Invitation(_) => 1,
             Principal::Key(_) => 2,
-            Principal::User(_) => 3,
+            Principal::Member(_) => 3,
         }
     }
 }
@@ -99,7 +99,7 @@ impl Principal {
 impl fmt::Display for Principal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Principal::User(id) | Principal::Invitation(id) | Principal::Connection(id) => {
+            Principal::Member(id) | Principal::Invitation(id) | Principal::Connection(id) => {
                 write!(f, "{}:{id}", self.kind())
             }
             Principal::Key(hash) => write!(f, "key:{}", hash.to_hex()),
@@ -120,7 +120,7 @@ impl Ord for Principal {
     /// byte by byte, and a digest's bytes in the order of its lowercase hex.
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Principal::User(a), Principal::User(b))
+            (Principal::Member(a), Principal::Member(b))
             | (Principal::Invitation(a), Principal::Invitation(b))
             | (Principal::Connection(a), Principal::Connection(b)) => a.cmp(b),
             (Principal::Key(a), Principal::Key(b)) => a.cmp(b),
@@ -282,7 +282,7 @@ pub enum GrantClaim {
 ///   replaces it.
 /// - **A kept role keeps a holder.** `put_grant` and `delete_grant` take `keep`, a role (the
 ///   server passes `owner`): a write that would take that role away from the last member
-///   (`Principal::User`) holding it in the tenant changes nothing and answers `LastHolder`.
+///   (`Principal::Member`) holding it in the tenant changes nothing and answers `LastHolder`.
 ///   Keys and pending invitations never count as holders. The check and the write are atomic.
 /// - **A role in use stays.** `delete_role` deletes nothing while a grant of the tenant points
 ///   to the role, decided in the same transaction.
@@ -642,7 +642,7 @@ mod tests {
     fn principals_round_trip_through_their_text() {
         let key = Principal::Key(Digest::of(b"rewind_sk_secret"));
         for principal in [
-            Principal::User("user_01JABC".into()),
+            Principal::Member("user_01JABC".into()),
             key.clone(),
             Principal::Invitation("invitation_01JABC".into()),
             Principal::Connection("cn_01JABC".into()),
@@ -652,15 +652,15 @@ mod tests {
         assert!(key.to_string().starts_with("key:"));
         for invalid in [
             "",
-            "user",
-            "user:",
-            "member:user_1",
+            "member",
+            "member:",
+            "user:user_1",
             "key:abc",
-            "user:a b",
+            "member:a b",
             "invitation:é",
             "connection:",
             "connection:cn 1",
-            &format!("user:{}", "x".repeat(129)),
+            &format!("member:{}", "x".repeat(129)),
         ] {
             assert_eq!(
                 Principal::parse(invalid),
@@ -673,9 +673,9 @@ mod tests {
     #[test]
     fn principals_sort_as_their_text() {
         let mut principals = [
-            Principal::User("user_b".into()),
+            Principal::Member("user_b".into()),
             Principal::Key(Digest::of(b"one")),
-            Principal::User("user_a".into()),
+            Principal::Member("user_a".into()),
             Principal::Invitation("invitation_z".into()),
             Principal::Key(Digest::of(b"two")),
             Principal::Connection("cn_b".into()),

@@ -28,7 +28,7 @@ use rewind_api::auth::{
     SignInMethod, WaitlistRequest,
 };
 use rewind_api::common::timestamp;
-use rewind_api::organization::{Organization, User};
+use rewind_api::organization::{Organization, Person};
 use rewind_core::Timestamp;
 use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::{
@@ -77,7 +77,7 @@ enum Stored {
         /// Kept here only: never given to the browser's workflows.
         refresh_token: String,
         session: String,
-        user: User,
+        user: Person,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         organization_id: Option<String>,
         /// Milliseconds since the epoch.
@@ -85,7 +85,7 @@ enum Stored {
     },
     OrganizationSelection {
         pending: String,
-        user: User,
+        user: Person,
         organizations: Vec<Organization>,
     },
     EmailVerification {
@@ -108,8 +108,8 @@ struct OAuth {
     expires_at: u64,
 }
 
-fn user_view(user: &ports::User) -> User {
-    User {
+fn user_view(user: &ports::User) -> Person {
+    Person {
         id: user.id.as_str().to_owned(),
         email: user.email.clone(),
         first_name: user.first_name.clone(),
@@ -171,7 +171,7 @@ impl Stored {
             } => AuthState::Authenticated {
                 access_token: access_token.clone(),
                 expires_at: timestamp(Timestamp::from_millis(*expires_at)),
-                user: user.clone(),
+                person: user.clone(),
                 organization_id: organization_id.clone(),
             },
             Stored::OrganizationSelection {
@@ -179,7 +179,7 @@ impl Stored {
                 organizations,
                 ..
             } => AuthState::OrganizationSelectionRequired {
-                user: user.clone(),
+                person: user.clone(),
                 organizations: organizations.clone(),
             },
             Stored::EmailVerification { email, .. } => AuthState::EmailVerificationRequired {

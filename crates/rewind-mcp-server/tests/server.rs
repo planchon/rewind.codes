@@ -246,8 +246,8 @@ impl Api for FakeApi {
         self.saw("list_secrets");
         Ok(serde_json::from_value(json!({ "secrets": [{
             "name": "zendesk", "scope": "org", "reference": "org/zendesk",
-            "createdBy": "user:u", "createdAt": "2026-11-19T10:00:00Z",
-            "updatedBy": "user:u", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
+            "createdBy": "member:u", "createdAt": "2026-11-19T10:00:00Z",
+            "updatedBy": "member:u", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
         }] }))
         .unwrap())
     }

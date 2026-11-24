@@ -167,7 +167,7 @@ pub struct NewSecret {
     /// An organization's secret's labels; must be empty for a namespace's
     /// ([`SecretError::Invalid`] otherwise).
     pub labels: BTreeMap<String, String>,
-    /// The caller, in the form the API shows who wrote a secret: a principal (`user:<id>`,
+    /// The caller, in the form the API shows who wrote a secret: a principal (`member:<id>`,
     /// `key:<sha-256>`, `connection:<id>`) or `token:<namespace>` for an end user's token.
     pub by: String,
 }
@@ -431,7 +431,7 @@ mod tests {
                 id: SecretId::organization(SecretName::new("github").unwrap()),
                 value: secret,
                 labels: BTreeMap::new(),
-                by: "user:u".into(),
+                by: "member:u".into(),
             }
         );
         assert!(!printed.contains("ghp_123"), "{printed}");

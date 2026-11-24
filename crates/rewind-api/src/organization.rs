@@ -16,7 +16,7 @@ use crate::namespaces::NamespaceName;
 /// A person, as the identity provider knows them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct User {
+pub struct Person {
     /// `user_01J…`.
     pub id: String,
     pub email: String,
@@ -57,7 +57,7 @@ pub enum Principal {
         id: String,
     },
     /// A member, signed in on the dashboard.
-    User { user: User },
+    Member { person: Person },
     /// An end user's token: it reaches its namespace only, with its own permissions.
     Token {
         /// `opaque` (`rewind_nt_…`) or `signed` (a JWT the customer signed).
@@ -155,7 +155,7 @@ pub enum MembershipStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Member {
-    pub user: User,
+    pub person: Person,
     pub status: MembershipStatus,
     /// Absent for a member without a grant: one who has not had a session in the organization
     /// yet, or whose grant was removed.
@@ -228,8 +228,8 @@ mod tests {
     fn whoami_names_the_principal_by_kind() {
         let member = Identity {
             organization_id: Some("org_01JABC".into()),
-            principal: Some(Principal::User {
-                user: User {
+            principal: Some(Principal::Member {
+                person: Person {
                     id: "user_01JABC".into(),
                     email: "ada@example.net".into(),
                     first_name: Some("Ada".into()),
@@ -256,8 +256,8 @@ mod tests {
             }],
         };
         let value = serde_json::to_value(&member).unwrap();
-        assert_eq!(value["principal"]["kind"], "user");
-        assert_eq!(value["principal"]["user"]["firstName"], "Ada");
+        assert_eq!(value["principal"]["kind"], "member");
+        assert_eq!(value["principal"]["person"]["firstName"], "Ada");
         assert_eq!(
             value["grant"],
             json!({ "role": "owner", "allowedLabels": {} })

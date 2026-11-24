@@ -330,8 +330,8 @@ fn secrets(references: &[(&str, Option<&str>)]) -> SecretList {
             let (scope, name) = reference.split_once('/').unwrap();
             let mut secret = json!({
                 "name": name, "scope": scope, "reference": reference,
-                "createdBy": "user:u", "createdAt": "2026-11-19T10:00:00Z",
-                "updatedBy": "user:u", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
+                "createdBy": "member:u", "createdAt": "2026-11-19T10:00:00Z",
+                "updatedBy": "member:u", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
             });
             if scope == "ns" {
                 secret["namespace"] = json!("alice");

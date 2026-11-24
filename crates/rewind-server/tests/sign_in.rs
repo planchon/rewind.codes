@@ -97,14 +97,14 @@ async fn a_code_by_email_signs_in_and_a_member_without_organization_only_onboard
         .unwrap();
     let AuthState::Authenticated {
         access_token,
-        user,
+        person,
         organization_id,
         ..
     } = &state
     else {
         panic!("signed in: {state:?}");
     };
-    assert_eq!(user.email, "ada@example.net");
+    assert_eq!(person.email, "ada@example.net");
     assert_eq!(organization_id, &None, "a new person has no organization");
     let session = &browser.cookies[SESSION_COOKIE];
     for attribute in ["Path=/auth", "HttpOnly", "Secure", "SameSite=Strict"] {
@@ -122,10 +122,10 @@ async fn a_code_by_email_signs_in_and_a_member_without_organization_only_onboard
     let me = ada.whoami().await.unwrap();
     assert_eq!(me.organization_id, None);
     assert!(me.permissions.is_empty() && me.grant.is_none() && me.organizations.is_empty());
-    let Some(Principal::User { user }) = me.principal else {
+    let Some(Principal::Member { person }) = me.principal else {
         panic!("a member: {:?}", me.principal);
     };
-    assert_eq!(user.email, "ada@example.net");
+    assert_eq!(person.email, "ada@example.net");
     assert!(ada.my_invitations().await.unwrap().invitations.is_empty());
     for refused in [
         ada.list_runs(&RunFilter::default()).await.map(|_| ()),
@@ -232,10 +232,10 @@ async fn github_signs_in_through_the_callback_once_its_state_is_checked() {
     let location = callback(&mut browser, &format!("code={code}&state={state}")).await;
     assert_eq!(location, "/");
     let signed_in = browser.session().await.unwrap();
-    let AuthState::Authenticated { user, .. } = &signed_in else {
+    let AuthState::Authenticated { person, .. } = &signed_in else {
         panic!("signed in: {signed_in:?}");
     };
-    assert_eq!(user.email, "grace@example.net");
+    assert_eq!(person.email, "grace@example.net");
 
     // A forged callback, in a browser with no GitHub sign-in in progress, changes nothing.
     let location = callback(&mut browser, &format!("code={code}&state={state}")).await;
@@ -296,12 +296,12 @@ async fn the_steps_of_a_sign_in_verify_the_email_and_choose_an_organization() {
         .unwrap();
     let AuthState::OrganizationSelectionRequired {
         organizations: offered,
-        user,
+        person,
     } = &step
     else {
         panic!("an organization is asked for: {step:?}");
     };
-    assert_eq!(user.email, "carol@example.net");
+    assert_eq!(person.email, "carol@example.net");
     assert_eq!(offered.len(), 2);
     assert_eq!(browser.session().await.unwrap(), step, "the step is kept");
     let refused = browser

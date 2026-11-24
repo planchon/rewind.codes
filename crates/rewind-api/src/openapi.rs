@@ -1323,8 +1323,8 @@ mod operations {
     /// Their role and allowed labels. Requires `members:manage`, and every permission of the
     /// role given and of the member's current role.
     #[utoipa::path(
-        put, path = "/v1/organization/members/{user}/grant", tag = "organization", operation_id = "setMemberGrant",
-        params(("user" = String, Path, description = "The member's user id.")),
+        put, path = "/v1/organization/members/{member}/grant", tag = "organization", operation_id = "setMemberGrant",
+        params(("member" = String, Path, description = "The member's id, the person's (`user_01J…`).")),
         request_body = SetGrant,
         responses(
             (status = 200, description = "The member's grant.", body = Grant),
@@ -1339,8 +1339,8 @@ mod operations {
     /// Deletes the member's grant, then their membership. Requires `members:manage`, and every
     /// permission of the member's role.
     #[utoipa::path(
-        delete, path = "/v1/organization/members/{user}", tag = "organization", operation_id = "removeMember",
-        params(("user" = String, Path, description = "The member's user id.")),
+        delete, path = "/v1/organization/members/{member}", tag = "organization", operation_id = "removeMember",
+        params(("member" = String, Path, description = "The member's id, the person's (`user_01J…`).")),
         responses(
             (status = 204, description = "Removed."),
             (status = 404, description = "No such member.", body = Problem, content_type = "application/problem+json"),

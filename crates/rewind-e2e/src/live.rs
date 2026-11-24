@@ -432,7 +432,7 @@ async fn put_secrets(case: &Case, world: &World) -> Result<(), String> {
             id: SecretId::resolve(&reference, &namespace),
             value: Secret::new(value.clone()),
             labels: BTreeMap::new(),
-            by: "user:harness".into(),
+            by: "member:harness".into(),
         };
         world
             .plane
@@ -612,7 +612,7 @@ async fn accept_again(
             id: SecretId::resolve(attached, &view.head.namespace),
             value: Secret::new(value),
             labels: BTreeMap::new(),
-            by: "user:harness".into(),
+            by: "member:harness".into(),
         };
         world
             .plane

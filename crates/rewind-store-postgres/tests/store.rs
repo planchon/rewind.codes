@@ -266,7 +266,7 @@ fn github_token(name: &str) -> NewSecret {
         id: SecretId::organization(SecretName::new(name).expect("valid")),
         value: Secret::new("ghp_plaintext_token"),
         labels: BTreeMap::new(),
-        by: "user:ada".into(),
+        by: "member:ada".into(),
     }
 }
 
@@ -883,7 +883,7 @@ async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
 fn member_grant(tenant: &TenantId, user: &str, role: &str) -> Grant {
     Grant {
         tenant: tenant.clone(),
-        principal: Principal::User(user.to_owned()),
+        principal: Principal::Member(user.to_owned()),
         role: role.to_owned(),
         allowed_labels: BTreeMap::new(),
         granted_by: None,

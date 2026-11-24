@@ -96,7 +96,7 @@ async fn sign_in(server: &TestServer, identity: &MemoryIdentity, email: &str) ->
     let mut browser = Browser::new(&server.url);
     let state = browser.sign_in(identity, email, None).await.unwrap();
     let user = match &state {
-        AuthState::Authenticated { user, .. } => user.id.clone(),
+        AuthState::Authenticated { person, .. } => person.id.clone(),
         other => panic!("not signed in: {other:?}"),
     };
     Person {

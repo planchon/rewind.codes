@@ -18,8 +18,8 @@ use rewind_api::access::{DEFAULT_ROLE, OPERATOR, Permission, SetGrant};
 use rewind_api::common::timestamp;
 use rewind_api::organization::{
     CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, InvitationState,
-    Member, MemberList, MembershipStatus, Organization, OrganizationSettings,
-    Principal as CallerPrincipal, TokenKind, UpdateOrganization, User,
+    Member, MemberList, MembershipStatus, Organization, OrganizationSettings, Person,
+    Principal as CallerPrincipal, TokenKind, UpdateOrganization,
 };
 use rewind_engine::ports::{
     self, AccessStore, GrantClaim, GrantDeletion, GrantWrite, IdentityProvider, InvitationId,
@@ -36,8 +36,8 @@ use crate::grants::{OWNER, current_permissions, first_grant, givable_role, grant
 // -------------------------------------------------------------------------------------------
 // Views
 
-fn user_view(user: &ports::User) -> User {
-    User {
+fn user_view(user: &ports::User) -> Person {
+    Person {
         id: user.id.as_str().to_owned(),
         email: user.email.clone(),
         first_name: user.first_name.clone(),
@@ -205,8 +205,8 @@ pub(super) async fn whoami(
     if let Some(member) = &who.member {
         let sign_in = app.sign_in()?;
         let user = user_of(sign_in, &member.user).await?;
-        identity.principal = Some(CallerPrincipal::User {
-            user: user_view(&user),
+        identity.principal = Some(CallerPrincipal::Member {
+            person: user_view(&user),
         });
         if let Some(organization) = &member.organization {
             let named = named(sign_in, organization).await?;
@@ -463,7 +463,7 @@ pub(super) async fn members(
     let members = memberships
         .iter()
         .map(|membership| Member {
-            user: user_view(&membership.user),
+            person: user_view(&membership.user),
             status: membership_status(membership.status),
             grant: grants
                 .get(&Principal::from(&membership.user.id))
@@ -612,7 +612,7 @@ pub(super) async fn invite(
     refuse_nul_in_labels(&request.allowed_labels.0)?;
     let organization = tenant_state_of(&caller);
     let inviter = match &caller.principal {
-        Some(Principal::User(user)) => Some(UserId::new(user.clone())),
+        Some(Principal::Member(user)) => Some(UserId::new(user.clone())),
         _ => None,
     };
     let invitation = sign_in
