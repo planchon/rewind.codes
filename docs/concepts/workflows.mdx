@@ -99,10 +99,10 @@ passes; there is no way around it. Each version records the suite it passed.
 ```mermaid
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart LR
-  v1["triage v1<br/>suite: A, B, C"] -- "retires C, with a reason<br/>updates B to B′, with a reason<br/>adds D" --> v2["triage v2<br/>suite: A, B′, D<br/>stored once every test passes"]
+  v1["triage v1<br/>suite: A, B, C"] -- "retires C, with a reason<br/>replaces B with B′, with a reason<br/>adds D" --> v2["triage v2<br/>suite: A, B′, D<br/>stored once every test passes"]
 ```
 
-To change a behavior a test pins, the new version **retires** the test, because it is deprecated, or **updates** it,
+To change a behavior a test pins, the new version **retires** the test, because it is deprecated, or **replaces** it,
 because its state or its result is out of date, and says why in both cases. The reasons stay in the workflow's
 lineage: whoever reads a version, a person in the dashboard or a model with `get_workflow`, learns what changed on
 purpose.

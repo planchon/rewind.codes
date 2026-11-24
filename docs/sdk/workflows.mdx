@@ -294,7 +294,7 @@ v1.tests; // [{ name: "closes nothing without approval", digest: "…" }, { name
 New code, a new interface, another action set or other secrets make the workflow's next version, through the gate:
 
 1. Its base is the workflow's latest version made under your key's labels, or none for a first version.
-2. Its suite is the workflow's suite, minus those `retire` names, with those `update` names replaced, plus `tests`.
+2. Its suite is the workflow's suite, minus those `retire` names, with those `replace` names replaced, plus `tests`.
 3. Every test is checked, then runs against the version's code and action set.
 4. The version is stored only if every test passes, with the next number. Otherwise nothing is stored, and the call
    throws a `tests-failed` error whose `tests` holds each test's outcome, with its problem and its failures.
@@ -311,14 +311,14 @@ try {
 ```
 
 There is no way around the gate. To keep a behavior a test of the suite refuses, the new version **retires** the test,
-because it is deprecated, or **updates** it, because its state or its result is out of date, and says why:
+because it is deprecated, or **replaces** it, because its state or its result is out of date, and says why:
 
 ```ts
 await rewind.workflows.createVersion("triage", {
   ...triage,
   code: triageV2,
   retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
-  update: [
+  replace: [
     {
       name: "closes nothing without approval",
       reason: "the message names the repository",
@@ -328,9 +328,9 @@ await rewind.workflows.createVersion("triage", {
 });
 ```
 
-An update gives a whole new test (`test`), or only a new `expect` for the one in the suite. `retire` and `update` name
+A replacement gives a whole new test (`test`), or only a new `expect` for the one in the suite. `retire` and `replace` name
 tests of the suite, each with a reason; names are unique in a suite. A refused suite (a test that is not valid, a
-retired or updated test that is not in the suite or has no reason, two tests of the same name) is `invalid-test`.
+retired or replaced test that is not in the suite or has no reason, two tests of the same name) is `invalid-test`.
 
 Tests added on their own go through the same gate against the latest version, and make no version:
 
@@ -339,7 +339,7 @@ await rewind.workflows.addTests("triage", { tests: [reopensNothing] });
 ```
 
 The reasons stay in the lineage: each version of `rewind.workflows.get(name).versions` has its `base`, the suite it
-passed (`tests`), the tests it `retired` and those it `updated` (`old` and `new` digests), each with its reason. A
+passed (`tests`), the tests it `retired` and those it `replaced` (`old` and `new` digests), each with its reason. A
 person reading a version learns what changed on purpose. The dashboard's [Workflows](/dashboard/workflows) view shows
 them.
 
@@ -427,5 +427,5 @@ workflow that is not a fork is refused with `not-a-fork`.
 
 Give the model the agent tool `update_workflow`, and it names, describes and versions the workflows it wrote: a
 procedure it wrote once becomes a workflow its later calls run by name. The same gate applies: the model reads a
-workflow's suite and lineage with `get_workflow`, records tests with `record_tests`, and retires or updates tests with a
+workflow's suite and lineage with `get_workflow`, records tests with `record_tests`, and retires or replaces tests with a
 reason. See [Agent tools](/sdk/agent-tools#workflows-the-model-changes).

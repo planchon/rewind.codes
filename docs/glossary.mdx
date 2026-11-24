@@ -153,7 +153,7 @@ A workflow's tests, which every new version must pass. Each version records the 
 ### Gate
 
 The check every new version goes through: its suite runs against it, and it is stored only if every test passes. A
-test leaves the suite only when it is retired or updated with a reason.
+test leaves the suite only when it is retired or replaced with a reason.
 [Versions and the gate](/sdk/workflows#versions-and-the-gate)
 
 ### Recorded test
@@ -458,7 +458,7 @@ building on Rewind needs none of them.
     - **Base**: the version a new version derives from; a workflow's versions form its lineage.
     - **Promote**: move a namespace's workflow to the organization, with the same id, versions and suite.
     - **Pull**: make a fork's next version from its source's latest, once the fork's suite passes.
-    - **Retire, update**: take a test out of a suite, or replace it, with a reason kept in the lineage.
+    - **Retire, replace**: take a test out of a suite, or replace it, with a reason kept in the lineage.
     - **Path**: the actions a run called in order, the signals it waited for and how it ended; recording keeps one run
       per path.
   </Accordion>

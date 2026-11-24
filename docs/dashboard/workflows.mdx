@@ -46,7 +46,7 @@ output and signal schemas) and its **suite**, the tests it passed when it was ma
 
 | Column | What |
 | --- | --- |
-| **Test** | Its name, a link to its page, and how it joined the suite: **inherited** from the version before as it was, **added** by this version (written by hand or [recorded from a run](/sdk/workflows#record-tests-from-runs), a link to that run), or **updated**, with the test it replaces and why |
+| **Test** | Its name, a link to its page, and how it joined the suite: **inherited** from the version before as it was, **added** by this version (written by hand or [recorded from a run](/sdk/workflows#record-tests-from-runs), a link to that run), or **replaced**, with the test it replaces and why |
 | **Input** | The run's input |
 | **Expects** | How the run must end: its status, and what its output must contain or the error it fails with |
 | **Calls** | How many calls the test checks, and how many must never happen |
@@ -76,7 +76,7 @@ For whoever holds `workflows:write`, the workflow's header holds its controls:
 Each test has its own page, at `/workflows/<id>/tests/<digest>`, in the suite of a version. The breadcrumb switches the
 version (to the test of the same name in that version, or to the version itself when it has none) and the test;
 previous and next go through the suite. The page says where the test stands in the suite and why it changed; for an
-updated test, the test it replaced opens in the suite of the version before. Then:
+replaced test, the test before it opens in the suite of the version before. Then:
 
 - **Input** and **expected output**: what the run begins with, and what its output must contain.
 - **World**: the rules each action answers with (the args they match, what they return or the error, how many times),

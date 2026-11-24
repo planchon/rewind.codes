@@ -42,7 +42,7 @@ try {
 | `invalid-action-set`, `invalid-workflow` | The action set cannot be registered; a workflow's name, a signal's name or a schema cannot be used |
 | `name-taken` | The workflow's scope already has a workflow of that name |
 | `not-forkable`, `not-a-fork` | Only an organization's workflow is forked; only a fork pulls |
-| `invalid-test` | A test or a suite was refused: an invalid test, a stored test that does not exist, a retired or updated test that is not in the suite or has no reason, two tests of the same name |
+| `invalid-test` | A test or a suite was refused: an invalid test, a stored test that does not exist, a retired or replaced test that is not in the suite or has no reason, two tests of the same name |
 | `tests-failed` | Tests did not pass: the workflow version was not made, the tests not added, or the fork not created; see `tests` |
 | `invalid-input` | A workflow's input does not match its schema |
 | `secret-required` | A run, a fork or a workflow version was refused before it existed: a server that takes a secret has none named, a secret is named for a server that takes none or does not exist, or the caller may not use it; see `secrets` and [Secrets](/sdk/secrets#when-a-secret-is-refused) |
@@ -66,7 +66,7 @@ Two more errors come from the SDK itself:
 
 All of them extend `RewindError`.
 
-## Redeliveries
+## Retrying requests
 
 A request that is safe to repeat is sent again after a network error or a 503, twice by default (`maxRetries`):
 reads, `PUT`, `DELETE`, action set registration and workflow creation (both find what they already made), checks and

@@ -144,7 +144,7 @@ and schemas:
 | `base` | The version it derives from. |
 | `tests` | The name and digest of each test of the suite it passed. |
 | `retired` | The tests of the suite it does not keep: name, digest and reason. |
-| `updated` | The tests of the suite it replaced: name, the old and the new digest, and the reason. |
+| `replaced` | The tests of the suite it replaced: name, the old and the new digest, and the reason. |
 
 Making a version, the first one (`POST /v1/workflows`) or the next one
 (`POST /v1/workflows/{id}/versions`, the agent tool `update_workflow` given code or an interface),
@@ -152,9 +152,9 @@ goes through a gate:
 
 1. Its base is the workflow's latest version made under the caller's labels (its lineage: a
    version made under other labels is another's), or none for a first version.
-2. Its suite is the workflow's suite, minus those `retire` names, with those `update` names
-   replaced, plus `tests`. `retire` and `update` name tests of the suite and give a reason. An
-   update gives a whole new test, or only a new `expect` for the one in the suite. Names are
+2. Its suite is the workflow's suite, minus those `retire` names, with those `replace` names
+   replaced, plus `tests`. `retire` and `replace` name tests of the suite and give a reason. An
+   A replacement gives a whole new test, or only a new `expect` for the one in the suite. Names are
    unique in a suite. A test recorded from a namespace erased since is left out, and listed as
    retired with the reason `recorded from an erased namespace`.
 3. Every test is checked, then runs against the version's code and action set.
@@ -163,13 +163,13 @@ goes through a gate:
    pass, with its problem and its failures.
 
 Tests added to a suite on their own (`POST /v1/workflows/{id}/tests`, `update_workflow` given
-only `tests`, `update` or `retire`) go through the same gate against the workflow's latest
+only `tests`, `replace` or `retire`) go through the same gate against the workflow's latest
 version, and make no version: once they pass, they join the workflow's suite, and its next
-version lists them in its `tests`, and the retirements and updates made since, with their
-reasons, in `retired` and `updated`.
+version lists them in its `tests`, and the retirements and replacements made since, with their
+reasons, in `retired` and `replaced`.
 
 There is no way around the gate. To keep a behavior a test of the suite refuses, the workflow
-retires the test because it is deprecated, or updates it because its state or its result is
+retires the test because it is deprecated, or replaces it because its state or its result is
 out of date, and says why. The reasons stay in the lineage: a person reading a version learns
 what changed on purpose.
 
@@ -523,7 +523,7 @@ single-page application, served by `rewind-server`.
 | Overview | The home page: runs by outcome over time, success rate, durations, runs waiting now, quarantined runs, what fails most, failing actions; every mark opens the runs behind it in Runs |
 | Runs | The runs, looked at and filtered. Four views: All (the query bar, with suggestions drawn from the facets, the runs over time of the namespace and the window shown, and the results), Running, Waiting (the runs waiting on the outside world, grouped by what they wait for: signals, timers, harness actions, approvals, deferred and parked calls, quarantines; with the line each is paused on and when it wakes) and Failures (failed, cancelled and aborted runs by fingerprint: count over time, workflows, labels, the line most runs failed at, its latest run by its handle). Its sidebar holds the views and the filters: the statuses, workflows and namespaces of the window with their counts (facets), which add or remove their term in the query. The table's headers order the runs by their column (newest or oldest first, latest activity, longest, most calls, soonest to wake) and filter what each shows, as terms of the query |
 | Run | One run, analysed in depth. At its top, how it ended; a cancellation is told as a cancellation, not a failure: its cause (its deadline, a request, its own code) and what the run awaited then ([decisions](08-decisions.md#taken-for-the-dashboards-type-scale-november-2026)). Its header holds its handle ([handles](06-storage-and-scale.md#run-handles)), its Test run or quarantine tags and its Controls: its forks, beside them a menu of the controls its permissions allow (send a signal, with the signals its version declares and their payloads' schemas; cancel; retry a failed run), Export run and Export cassette. Its sidebar holds no control: its sections and its details (namespace, workflow and version, the run that started it, code, action set, labels, the secrets it uses). Its sections: the debugger (the code, with each call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor), the History, the logs, and the runs it started ([decisions](08-decisions.md#taken-for-the-dashboards-sidebar-and-run-page-november-2026)) |
-| Workflows | Every workflow of the organization and of its namespaces, or of one namespace (`namespace:`), by how it is shown ([names](04-tools.md#workflow-names)), with its scope (its namespace or the organization), its run counts, outcomes and actions used in the window (the last hour, day, 7 or 30 days). A workflow's page (`/workflows/:id`) has its own sidebar: its versions, the suite (each test a click away, where it came from as a glyph) and the version's details. It opens at one version, switched in the breadcrumb (the latest by default): its code, its interface and its [suite](#suites-and-the-gate) as a table, each test with where it came from (inherited, added, recorded, updated, retired, with the reasons), its input, what it expects, the calls it checks and its world; a fork shows its source and the version it last pulled. Each test has its own page (`/workflows/:id/tests/:digest`), switched in the breadcrumb or with previous/next: its input and expected output, its world, signals and expectations; every JSON value opens whole, colored, in a dialog, its objects and arrays folding. No test result is shown: every test of a suite passed when it joined it. For whoever holds `workflows:write`, its header names and describes the workflow, promotes a namespace's workflow to the organization, forks an organization's into a namespace, and pulls a fork's source |
+| Workflows | Every workflow of the organization and of its namespaces, or of one namespace (`namespace:`), by how it is shown ([names](04-tools.md#workflow-names)), with its scope (its namespace or the organization), its run counts, outcomes and actions used in the window (the last hour, day, 7 or 30 days). A workflow's page (`/workflows/:id`) has its own sidebar: its versions, the suite (each test a click away, where it came from as a glyph) and the version's details. It opens at one version, switched in the breadcrumb (the latest by default): its code, its interface and its [suite](#suites-and-the-gate) as a table, each test with where it came from (inherited, added, recorded, replaced, retired, with the reasons), its input, what it expects, the calls it checks and its world; a fork shows its source and the version it last pulled. Each test has its own page (`/workflows/:id/tests/:digest`), switched in the breadcrumb or with previous/next: its input and expected output, its world, signals and expectations; every JSON value opens whole, colored, in a dialog, its objects and arrays folding. No test result is shown: every test of a suite passed when it joined it. For whoever holds `workflows:write`, its header names and describes the workflow, promotes a namespace's workflow to the organization, forks an organization's into a namespace, and pulls a fork's source |
 | Actions | Latency, error rate and redeliveries per action, in the window, for the organization or one namespace, filtered by group (the start of an action's name) |
 | Namespaces | The alerts of the month first, then the tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or workflows of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search by the start of a name or of a display name with the runs' query bar, and a filter of those above 80 %. A namespace's page, over a month: its alerts first, when it has any; how its runs went (started, completed, failed, waiting now, durations, the runs of each day by outcome, what fails most, the actions they call), its cumulative CPU against its quota, its tokens in use, its exceptions, then its runs of the month, in the Runs table forced to the namespace and the month (its headers order and filter them), and its workflows; and the controls its permissions allow (rename it, change its limits, revoke its tokens, delete it) |
 | Secrets | The organization's secrets, then a namespace's on its own page: each with its labels, who wrote it and when, its reads per day and its last read, and the runs and workflows that use it. A value is written, never shown. Deleting one first shows what it would stop: the active runs that use it, those waiting on a call that reads it, the workflows whose versions use it ([secrets](04-tools.md#secrets)) |

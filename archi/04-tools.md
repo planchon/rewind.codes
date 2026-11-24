@@ -484,7 +484,7 @@ checks of the `http` action, at registration and at every connection:
 
 An operator may let internal servers through, by configuration: host names
 (`mcp.internal.example`, `*.svc.cluster.local`) and networks (`10.20.0.0/16`), never a switch
-for the whole private network (`rewind server --allow-internal-tools`). What such an internal
+for the whole private network (`rewind server --allow-internal-addresses`). What such an internal
 server answers is never quoted to the organization: an error gives the HTTP status, not the body.
 
 A refused server fails the registration (`action-set-unavailable`), and a call with an

@@ -31,8 +31,8 @@ from a client holding [the end user's token](/sdk/end-users#tokens).
 | `retry_run({ run_id, code, secrets? })` | Forks the run with corrected code: the calls already made are not made again. For a run of a workflow version with a suite, the suite must pass first |
 | `search_actions({ query })` | The declarations of the matching actions, for action sets too large for the prompt (with an action set) |
 | `list_secrets({})` | The names of the secrets the model's runs may use, the organization's and its namespace's, never a value |
-| `update_workflow({ workflow, code?, name?, description?, input?, output?, signals?, secrets?, tests?, update?, retire? })` | Changes a [workflow](/sdk/workflows), named by its id or its name: its name and description, or its next version, stored once its suite passes, or tests added to its suite |
-| `get_workflow({ workflow })` | A workflow's code, schemas, versions, suite and source, with the reasons its tests were updated or retired |
+| `update_workflow({ workflow, code?, name?, description?, input?, output?, signals?, secrets?, tests?, replace?, retire? })` | Changes a [workflow](/sdk/workflows), named by its id or its name: its name and description, or its next version, stored once its suite passes, or tests added to its suite |
+| `get_workflow({ workflow })` | A workflow's code, schemas, versions, suite and source, with the reasons its tests were replaced or retired |
 | `record_tests({ workflow, query?, runs?, limit? })` | Records tests from a workflow's past runs, one per path, and returns their digests for `update_workflow` |
 
 ## Plug them into your model
@@ -202,7 +202,7 @@ and changes it:
   `run_workflow({ workflow: "triage" })`, and its runs' handles carry it.
 - **`code`, an interface (`input`, `output`, `signals`) or `secrets`**: its next version, stored only once its suite
   passes.
-- **`tests`, `update`, `retire` alone**: tests that join its suite once they pass against its latest version, with no
+- **`tests`, `replace`, `retire` alone**: tests that join its suite once they pass against its latest version, with no
   new version.
 
 No agent tool promotes, forks or pulls a workflow: your harness and the dashboard do (see
@@ -219,15 +219,15 @@ problem (`stale`, `incompatible` or `failed`) and its failures, one sentence eac
 transcript come only for the tests that did not pass.
 
 `update_workflow` goes through the [gate](/sdk/workflows#versions-and-the-gate): the suite's tests, minus those it retires,
-with those it updates, plus its new `tests`, must all pass, or nothing is stored. When a test does not pass, the model
+with those it replaces, plus its new `tests`, must all pass, or nothing is stored. When a test does not pass, the model
 gets the failing tests as `test_workflow` shows them, and either fixes the code or changes the suite on purpose:
 
 - `retire: [{ names, reason }]` drops tests of the suite that are deprecated;
-- `update: [{ name, reason, test?, expect? }]` replaces a test of the suite whose state or result is out of date, by a
+- `replace: [{ name, reason, test?, expect? }]` replaces a test of the suite whose state or result is out of date, by a
   whole new test or by a new `expect`.
 
 The reasons stay in the workflow's lineage. `get_workflow` reads it back: the latest version's code and schemas, each
-test of its suite in full, and every version's retired and updated tests with their reasons, newest first. A model
+test of its suite in full, and every version's retired and replaced tests with their reasons, newest first. A model
 repairs or extends a workflow it did not write from there.
 
 `record_tests` [records tests](/sdk/workflows#record-tests-from-runs) from the workflow's past runs, one per path, and

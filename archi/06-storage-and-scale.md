@@ -809,7 +809,7 @@ subscriptions. None goes to the internal network: all go through the egress chec
 action, a name resolved once, private, loopback, link-local and metadata addresses refused, the
 connection to the checked address ([MCP servers and APIs](04-tools.md#where-mcp-servers-and-apis-may-be)).
 Only the operator opens the way: to internal MCP servers and APIs by host or network
-(`--allow-internal-tools`), whose answers are then never quoted to the tenant, and to webhook
+(`--allow-internal-addresses`), whose answers are then never quoted to the tenant, and to webhook
 receivers on the private network (`--allow-private-webhooks`). The embedded server, for one
 local developer, reaches any address.
 
