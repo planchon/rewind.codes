@@ -155,7 +155,7 @@ fn wait_until(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
 }
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../rewind-e2e/corpus/epoch-1")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../rewind-e2e/corpus/epoch-2")
 }
 
 /// `expected` is found in `actual`: objects key by key, recursively, as scenarios compare.

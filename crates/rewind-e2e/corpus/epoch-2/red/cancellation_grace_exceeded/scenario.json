@@ -1,0 +1,29 @@
+{
+  "description": "After cancel_requested the code gets one grace delivery to end; one that does not is aborted, and what it emitted is dropped.",
+  "actions": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "steps": [
+    {
+      "cancel": {
+        "message": "user asked"
+      }
+    }
+  ],
+  "expect": {
+    "status": "aborted",
+    "abort": {
+      "kind": "cancelled",
+      "message": "cancellation grace"
+    },
+    "calls": {},
+    "events": [
+      "run_started",
+      "start_timer",
+      "cancel_requested",
+      "run_aborted"
+    ]
+  }
+}

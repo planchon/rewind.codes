@@ -1,5 +1,5 @@
 {
-  "description": "A workflow's version uses the namespace's crm: the run a code starts reads the secret of its own namespace, though the code that started it named none.",
+  "description": "A workflow's version attaches the namespace's crm: the run a script starts reads the secret of its own namespace, though the script that started it attached nothing.",
   "live": true,
   "mcp_servers": [
     "crm"
@@ -22,7 +22,7 @@
   },
   "workflows": {
     "triage": {
-      "code": "triage.ts",
+      "script": "triage.ts",
       "input": {
         "type": "object",
         "properties": {
@@ -54,7 +54,7 @@
     "ns/crm": "crm-token",
     "org/crm": "org-token"
   },
-  "actions": {
+  "tools": {
     "crm.lookup": {
       "name": "Ada"
     }

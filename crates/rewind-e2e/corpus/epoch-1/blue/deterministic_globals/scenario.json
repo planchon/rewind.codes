@@ -1,6 +1,6 @@
 {
-  "description": "Date, Intl, Math.random, crypto and performance are deterministic: logical time, seeded generators, UTC and en-US. The recorded history pins their values for epoch 1.",
-  "actions": {
+  "description": "Date, Intl, Math.random, crypto and performance are deterministic: logical time, seeded generators, UTC and en-US. The recorded journal pins their values for epoch 1.",
+  "tools": {
     "audit.record": {
       "ok": true
     }

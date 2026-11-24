@@ -331,6 +331,9 @@ impl ErrorInfo {
     pub const CANCELLED: &'static str = "CancelledError";
     /// The name of the error a failed call rejects with.
     pub const ACTION_ERROR: &'static str = "ActionError";
+    /// Its name under the determinism epoch 1, which the runs started before the rename release
+    /// recorded (`archi/03-execution.md`, "Determinism epoch").
+    pub const TOOL_ERROR: &'static str = "ToolError";
 
     /// The message of the `ActionError` the runtime builds from a failed call of `action`:
     /// `{action} failed: {message}`, where `message` is the recorded failure's.
@@ -343,10 +346,10 @@ impl ErrorInfo {
     /// The error records no `seq`: the runtime builds it from the call's recorded
     /// `call_failed` completion and the action its `schedule_call` names. The call is
     /// the last recorded failure that builds exactly this error. `None` when the error is not an
-    /// `ActionError`, or when no recorded failure builds it (the code threw one it made itself
-    /// from another error's message, say).
+    /// `ActionError` (or a `ToolError`, its name for a run of epoch 1), or when no recorded
+    /// failure builds it (the code threw one it made itself from another error's message, say).
     pub fn failed_call(&self, history: &[HistoryEvent]) -> Option<Seq> {
-        if self.name != Self::ACTION_ERROR {
+        if self.name != Self::ACTION_ERROR && self.name != Self::TOOL_ERROR {
             return None;
         }
         let actions: std::collections::BTreeMap<Seq, &str> = history

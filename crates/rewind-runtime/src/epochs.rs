@@ -5,16 +5,28 @@
 //! requires a new epoch: a new `js/epochN/` directory and a new event in [`EPOCHS`], while the
 //! previous epochs stay as they are for the runs that started under them. The epoch corpus
 //! (`rewind-e2e`) fails the build when a supported epoch stops replaying.
+//!
+//! | Epoch | Since | What code observes |
+//! | --- | --- | --- |
+//! | 1 | 0.1 | `ToolError`, `WorkflowError`, `webhook`, the module `rewind:tools`, the code at `file:///script.ts` |
+//! | 2 | the rename release | `ActionError`, `RunError`, `signalUrl`, `rewind:actions`, the code at `file:///workflow.ts`; the old names still resolve, undeclared (`archi/08-decisions.md`, R1) |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use rewind_core::{Action, ActionRoute, ActionSet, Epoch};
 
+use crate::compile::CODE_SPECIFIER;
+
 /// The glue of one epoch.
 #[derive(Debug)]
 pub(crate) struct Glue {
     pub(crate) epoch: Epoch,
+    /// The module a run's code is loaded as: what its stacks name.
+    pub(crate) code_specifier: &'static str,
+    /// The texts of the errors the runtime throws into the code say tool, toolset and script,
+    /// as before the rename release.
+    pub(crate) old_texts: bool,
     /// Runs once per isolate, before any module: deterministic globals, removed capabilities,
     /// and the hooks Rust drives the code with.
     pub(crate) bootstrap: &'static str,
@@ -39,12 +51,42 @@ pub(crate) struct Glue {
     pub(crate) workflow_exports: fn(&ActionSet) -> BTreeSet<String>,
 }
 
+/// The glue of the runs started before the rename release: the old names, which code observes
+/// (the errors' names, the stacks' file), and the new ones as the same functions and classes.
 const EPOCH_1: Glue = Glue {
     epoch: Epoch(1),
+    code_specifier: "file:///script.ts",
+    old_texts: true,
     bootstrap: include_str!("js/epoch1/bootstrap.js"),
     entry: include_str!("js/epoch1/entry.js"),
     internal: include_str!("js/epoch1/internal.js"),
     std: include_str!("js/epoch1/std.js"),
+    std_exports: &[
+        "CancelledError",
+        "ToolError",
+        "WorkflowError",
+        "run",
+        "signal",
+        "sleep",
+        "webhook",
+    ],
+    std_aliases: &["ActionError", "RunError", "signalUrl"],
+    actions: actions_module_v1,
+    action_exports: action_exports_v1,
+    workflows: workflows_module_v1,
+    workflow_exports: workflow_exports_v1,
+};
+
+/// The glue of the rename release (`archi/03-execution.md`, "Determinism epoch"): the errors are
+/// `ActionError` and `RunError`, the code is `file:///workflow.ts`.
+const EPOCH_2: Glue = Glue {
+    epoch: Epoch(2),
+    code_specifier: CODE_SPECIFIER,
+    old_texts: false,
+    bootstrap: include_str!("js/epoch2/bootstrap.js"),
+    entry: include_str!("js/epoch2/entry.js"),
+    internal: include_str!("js/epoch2/internal.js"),
+    std: include_str!("js/epoch2/std.js"),
     std_exports: &[
         "ActionError",
         "CancelledError",
@@ -62,7 +104,7 @@ const EPOCH_1: Glue = Glue {
 };
 
 /// Every supported epoch, oldest first. New runs start under the last one.
-pub(crate) const EPOCHS: &[Glue] = &[EPOCH_1];
+pub(crate) const EPOCHS: &[Glue] = &[EPOCH_1, EPOCH_2];
 
 pub(crate) fn glue(epoch: Epoch) -> Option<&'static Glue> {
     EPOCHS.iter().find(|glue| glue.epoch == epoch)
@@ -317,5 +359,22 @@ mod tests {
         assert!(EPOCHS.windows(2).all(|pair| pair[0].epoch < pair[1].epoch));
         assert!(glue(Epoch(1)).is_some());
         assert!(glue(Epoch(0)).is_none());
+        assert_eq!(
+            latest().epoch,
+            Epoch(2),
+            "the rename release bumped the epoch"
+        );
+        assert_eq!(
+            glue(Epoch(1)).map(|glue| glue.code_specifier),
+            Some("file:///script.ts")
+        );
+        for glue in EPOCHS {
+            assert!(
+                glue.entry
+                    .contains(&format!("import main from \"{}\";", glue.code_specifier)),
+                "{}: the entry imports the code where the loader serves it",
+                glue.epoch
+            );
+        }
     }
 }

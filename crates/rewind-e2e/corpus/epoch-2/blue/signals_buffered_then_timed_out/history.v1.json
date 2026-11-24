@@ -1,0 +1,14 @@
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","code":"import { signal, sleep } from \"rewind\";\n\nexport default async function main() {\n  await sleep(\"1h\"); // \"approval\" arrives meanwhile\n  const approval = await signal(\"approval\"); // buffered: returns at once\n  const comment = await signal(\"comment\", { timeout: \"1d\" }); // arrives: its timeout is cancelled\n  const never = await signal(\"never\", { timeout: \"2h\" }); // times out\n  return { approval, comment, never: never ?? null, elapsed: performance.now() };\n}\n","action_set":{"actions":[],"servers":[],"v":1},"events":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","code":"f874eb48aaaf4bed4212ccf5a5398df91e5c8c5cf661f0e745fc905f565d6cba","action_set":"81d812ec8315850cc4b914c0c07c954d1c49e6272565a210449fa1a9910d3346","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":2,"expires_at":1769817600000,"mode":"test"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"start_timer","seq":1,"duration_ms":3600000,"fire_at":1767229200000,"callsite":{"line":4,"column":9}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"signal_received","name":"approval","payload":{"value":{"by":"paul"}}}},
+{"index":3,"recorded_at":1767229200000,"event":{"type":"timer_fired","seq":1}},
+{"index":4,"recorded_at":1767229200000,"event":{"type":"start_timer","seq":2,"duration_ms":86400000,"fire_at":1767315600000,"callsite":{"line":6,"column":25}}},
+{"index":5,"recorded_at":1767229200000,"event":{"type":"signal_awaited","name":"comment","timeout":2,"callsite":{"line":6,"column":25}}},
+{"index":6,"recorded_at":1767232800000,"event":{"type":"signal_received","name":"comment","payload":{"value":"lgtm"}}},
+{"index":7,"recorded_at":1767232800000,"event":{"type":"cancel_timer","seq":2}},
+{"index":8,"recorded_at":1767232800000,"event":{"type":"start_timer","seq":3,"duration_ms":7200000,"fire_at":1767240000000,"callsite":{"line":7,"column":23}}},
+{"index":9,"recorded_at":1767232800000,"event":{"type":"signal_awaited","name":"never","timeout":3,"callsite":{"line":7,"column":23}}},
+{"index":10,"recorded_at":1767240000000,"event":{"type":"timer_fired","seq":3}},
+{"index":11,"recorded_at":1767240000000,"event":{"type":"complete_run","output":{"value":{"approval":{"by":"paul"},"comment":"lgtm","elapsed":14400000,"never":null}}}}
+]}

@@ -1,10 +1,10 @@
 {
-  "description": "A code that logs more than one trigger's response may hold (64 MiB by default, kept outside V8's heap until the call ends): the sandbox stops it, the host aborts the run, and none of the logs are recorded.",
+  "description": "A script that logs more than one trigger's response may hold (64 MiB by default, kept outside V8's heap until the call ends): the sandbox stops it, the host aborts the run, and none of the logs are recorded.",
   "expect": {
     "status": "aborted",
     "abort": {
       "kind": "limit_exceeded",
-      "message": "the code emitted more than 64 MiB of commands and logs reacting to one trigger"
+      "message": "the script emitted more than 64 MiB of commands and logs reacting to one trigger"
     },
     "events": [
       "run_started",

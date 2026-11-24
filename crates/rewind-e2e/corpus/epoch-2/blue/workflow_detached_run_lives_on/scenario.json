@@ -1,0 +1,17 @@
+{
+  "description": "A run started detached lives on its own: the code that started it ends at once, and the run still waits for its approval.",
+  "live": true,
+  "workflows": {
+    "triage": {
+      "code": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": { "started": 36 },
+    "children": ["waiting"]
+  }
+}

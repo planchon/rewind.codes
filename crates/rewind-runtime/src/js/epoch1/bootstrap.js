@@ -1,13 +1,23 @@
 // Bootstrap of the Rewind sandbox, determinism epoch 1.
 //
-// FROZEN once 0.1 ships: a change a code can observe (a seq, a digest, a value, a global)
+// FROZEN once 0.1 ships: a change a script can observe (a seq, a digest, a value, a global)
 // needs a new epoch (archi/03-execution.md, "Determinism epoch").
+//
+// Epoch 1 is the glue of the runs started before the rename release, as they observed it: its
+// errors are named `ToolError` and `WorkflowError`, the code is `file:///script.ts`, its texts
+// say tool and script. Since the release, it speaks to the runtime in the runtime's new words
+// (the op `op_rewind_call_action`, the completions `call_completed` and `call_failed`, the hooks
+// `callAction` and `callActionContent` of `rewind:actions`), and `webhook(name)` calls the
+// built-in action `signalUrl`, the name `rename-data` gave the calls the histories recorded. It
+// also resolves the new names (`ActionError`, `RunError`, `signalUrl`) as the same functions
+// and classes, for a fork that corrects such a run with code written since
+// (archi/08-decisions.md, "Taken while bumping the determinism epoch").
 //
 // It runs once per process, when the epoch's V8 startup snapshot is built: it makes every
 // source of non-determinism deterministic, installs the web-standard globals of deno_web,
-// and leaves the hooks Rust drives the code with in `globalThis.__rewindHooks`. Every instance
+// and leaves the hooks Rust drives the script with in `globalThis.__rewindHooks`. Every instance
 // starts from that snapshot. Rust takes the hooks, then calls init(config) with what belongs to
-// the run (its id, its start, its seed, whether the action set has the http action); init removes the
+// the run (its id, its start, its seed, whether the toolset has the http tool); init removes the
 // ambient capabilities, `Deno`, `__bootstrap` and the hooks from the global object before any
 // module is loaded. The `rewind` modules get their hooks through a global that
 // `rewind:internal` deletes before any user code runs.
@@ -210,7 +220,7 @@
   }
 
   // A clone copies the resizable buffers it holds: each copy takes its own reservation. A
-  // clone is plain data made by V8 (no accessor, no proxy), so walking it runs no code code.
+  // clone is plain data made by V8 (no accessor, no proxy), so walking it runs no script code.
   function reserveClonedBuffers(clone) {
     const seen = new primordials.SafeSet();
     const stack = [clone];
@@ -264,7 +274,7 @@
   // 64 MiB heap, and past 2^27 elements V8 aborts the process ("invalid size"). An element takes
   // at least 8 bytes of heap, so a call that must create more than the heap holds can only
   // exceed the heap limit: it ends the call at once, as the heap limit does. A call is measured
-  // only from what reading cannot run code code: the length of an array that is not a proxy,
+  // only from what reading cannot run script code: the length of an array that is not a proxy,
   // or an own data property `length`, and arguments that are primitives. Anything else goes to
   // V8 unchecked.
 
@@ -285,7 +295,7 @@
   const toNumberOrUndefined = (value) =>
     isPrimitive(value) && typeof value !== "symbol" && typeof value !== "bigint" ? +value : undefined;
 
-  // ToLength of a primitive; undefined when converting could run code code or throw.
+  // ToLength of a primitive; undefined when converting could run script code or throw.
   function toLength(value) {
     const number = toNumberOrUndefined(value);
     if (number === undefined) return undefined;
@@ -293,7 +303,7 @@
     return integer <= 0 ? 0 : integer > MAX_SAFE_INTEGER ? MAX_SAFE_INTEGER : integer;
   }
 
-  // The length a built-in reads from `object`, when reading it cannot run code code.
+  // The length a built-in reads from `object`, when reading it cannot run script code.
   function plainLength(object) {
     if (isPrimitive(object) || isProxy(object)) return undefined;
     if (ArrayIsArray(object)) return object.length;
@@ -312,7 +322,7 @@
   }
 
   // Whether nothing on `object`'s prototype chain, `object` included, has `key`, and no proxy
-  // is on it: looking `key` up then runs no code code.
+  // is on it: looking `key` up then runs no script code.
   function plainlyLacks(object, key) {
     for (let current = object; current !== null; current = primordials.ObjectGetPrototypeOf(current)) {
       if (isProxy(current) || ObjectGetOwnPropertyDescriptor(current, key) !== undefined) return false;
@@ -388,7 +398,7 @@
 
   const NativeArray = primordials.Array;
   guard(NativeArray, "from", function (items, mapFn) {
-    // With a function to map elements, each element runs code code, which checks for
+    // With a function to map elements, each element runs script code, which checks for
     // interrupts. An iterable goes through the iteration protocol, which does too.
     if (this !== NativeArray || mapFn !== undefined || isPrimitive(items)) return;
     if (!plainlyLacks(items, primordials.SymbolIterator)) return;
@@ -418,23 +428,23 @@
   });
 
   // ---------------------------------------------------------------------------------------
-  // Stacks: the code's own frames only. Frames of the runtime's modules (`rewind:…`) and of
-  // the web globals (`ext:…`) would leak their line numbers into histories.
+  // Stacks: the script's own frames only. Frames of the runtime's modules (`rewind:…`) and of
+  // the web globals (`ext:…`) would leak their line numbers into journals.
 
-  const CODE_FRAME = /file:\/\/\/workflow\.ts:(\d+):(\d+)/;
+  const SCRIPT_FRAME = /file:\/\/\/script\.ts:(\d+):(\d+)/;
   // Such as "    at start (rewind:bootstrap:467:16)" or "    at new URL (ext:deno_web/00_url.js:1:2)".
   const INTERNAL_FRAME = /^\s+at (?:.* \()?(?:rewind:\w+|ext:[\w/.-]+):\d+:\d+\)?$/;
 
   function callsite() {
     const stack = new Error().stack ?? "";
     for (const line of StringPrototypeSplit(stack, "\n")) {
-      const match = RegExpPrototypeExec(CODE_FRAME, line);
+      const match = RegExpPrototypeExec(SCRIPT_FRAME, line);
       if (match) return [NumberParseInt(match[1], 10), NumberParseInt(match[2], 10)];
     }
     return [0, 0];
   }
 
-  function codeStack(stack) {
+  function scriptStack(stack) {
     return ArrayPrototypeJoin(
       ArrayPrototypeFilter(
         StringPrototypeSplit(String(stack ?? ""), "\n"),
@@ -444,13 +454,13 @@
     );
   }
 
-  // An error raised by the glue on behalf of a call the code made: a fresh error of the same
-  // kind, whose stack starts at the code's call.
+  // An error raised by the glue on behalf of a call the script made: a fresh error of the same
+  // kind, whose stack starts at the script's call.
   function atCallSite(error) {
     const Kind = ObjectPrototypeIsPrototypeOf(RangeError.prototype, error) ? RangeError : TypeError;
     const raised = new Kind(String(error?.message ?? error));
     ObjectDefineProperty(raised, "stack", {
-      value: codeStack(raised.stack),
+      value: scriptStack(raised.stack),
       writable: true,
       configurable: true,
     });
@@ -474,7 +484,7 @@
     if (args.length === 0) return ReflectConstruct(NativeDate, [now()], new.target);
     return ReflectConstruct(NativeDate, args, new.target);
   };
-  // NativeDate stays private: through it, a code would read the real clock. Only its pure
+  // NativeDate stays private: through it, a script would read the real clock. Only its pure
   // static methods are copied.
   for (const name of ["parse", "UTC"]) {
     ObjectDefineProperty(LogicalDate, name, {
@@ -568,8 +578,8 @@
   );
 
   // ---------------------------------------------------------------------------------------
-  // Errors the code can see. They are created by the glue, outside the code's code, so
-  // their stack is only their name and message: no frame of the glue leaks into a history.
+  // Errors the script can see. They are created by the glue, outside the script's code, so
+  // their stack is only their name and message: no frame of the glue leaks into a journal.
 
   function ownStack(error) {
     ObjectDefineProperty(error, "stack", {
@@ -579,22 +589,22 @@
     });
   }
 
-  class ActionError extends Error {
-    constructor(action, failure) {
-      super(`${action} failed: ${failure.message}`);
-      this.name = "ActionError";
-      this.action = action;
+  class ToolError extends Error {
+    constructor(tool, failure) {
+      super(`${tool} failed: ${failure.message}`);
+      this.name = "ToolError";
+      this.tool = tool;
       this.outcomeUnknown = failure.outcomeUnknown;
       this.data = failure.data ?? undefined;
       ownStack(this);
     }
   }
 
-  // Code written before actions were named catches a `ToolError`, the same class, and reads its
-  // `tool`, the same value as `action` (archi/08-decisions.md, R1). Neither is declared.
-  ObjectDefineProperty(ActionError.prototype, "tool", {
+  // Code written since the rename release reads `action`, the same value as `tool`. Not an own
+  // property: what the error enumerates stays what it was.
+  ObjectDefineProperty(ToolError.prototype, "action", {
     get() {
-      return this.action;
+      return this.tool;
     },
     configurable: true,
   });
@@ -608,7 +618,7 @@
   }
 
   // A run this run started ended badly, or its output does not match its workflow's schema.
-  class RunError extends Error {
+  class WorkflowError extends Error {
     constructor(workflow, runId, status, detail) {
       const what = status === "invalid_output"
         ? "returned an output its schema refuses"
@@ -616,7 +626,7 @@
         ? "failed"
         : `was ${status}`;
       super(`workflow ${workflow} (run ${runId}) ${what}: ${detail}`);
-      this.name = "RunError";
+      this.name = "WorkflowError";
       this.workflow = workflow;
       this.runId = runId;
       this.status = status;
@@ -627,7 +637,7 @@
   class DeadlockError extends Error {
     constructor() {
       super(
-        "main has not settled, and nothing can wake the code: no call, timer or signal wait is pending",
+        "main has not settled, and nothing can wake the script: no tool call, timer or signal wait is pending",
       );
       this.name = "DeadlockError";
       ownStack(this);
@@ -635,22 +645,22 @@
   }
 
   // ---------------------------------------------------------------------------------------
-  // How a code ends (archi/03-execution.md): the outcome is evaluated each time the code
-  // goes idle, and the terminal command waits until no call is in flight.
+  // How a script ends (archi/03-execution.md): the outcome is evaluated each time the script
+  // goes idle, and the terminal command waits until no tool call is in flight.
 
   let main;
   let mainState = "running"; // "returned" | "threw"
   // The JSON of main's return value, serialized as soon as main returns: serializing runs the
-  // code's code (toJSON, getters), which must not happen once the outcome is decided.
+  // script's code (toJSON, getters), which must not happen once the outcome is decided.
   let output;
   // { name, message, stack }, captured as soon as the run is known to fail. From then on, no
-  // code code runs any more.
+  // script code runs any more.
   let failure;
   let cancellation; // the message of the cancellation, once one was requested
   let ended = false; // the terminal command was emitted
-  let callsInFlight = 0;
+  let toolsInFlight = 0;
 
-  // seq -> { kind: "call" | "sleep" | "timeout" | "callback", ... }
+  // seq -> { kind: "tool" | "sleep" | "timeout" | "callback", ... }
   const pending = new SafeMap();
 
   function take(seq) {
@@ -669,10 +679,10 @@
       return {
         name: String(error.name),
         message: String(error.message),
-        stack: codeStack(error.stack),
+        stack: scriptStack(error.stack),
       };
     } catch {
-      return { name: "Error", message: "the code failed with a value that cannot be described", stack: "" };
+      return { name: "Error", message: "the script failed with a value that cannot be described", stack: "" };
     }
   }
 
@@ -694,13 +704,13 @@
     throw new TypeError(`invalid duration: ${String(duration)}`);
   }
 
-  // What an MCP action pinned without an output schema returns, `{ content, structuredContent? }`,
-  // reaches the code with two helpers (archi/04-tools.md, "Action sets and code generation"),
-  // as `rewind-actions.d.ts` declares them in `ActionContent`: `text()` joins the text blocks with
-  // newlines; `json()` is `structuredContent` when the action sent it, else `text()` parsed as
+  // What an MCP tool pinned without an output schema returns, `{ content, structuredContent? }`,
+  // reaches the script with two helpers (archi/04-tools.md, "Toolsets and code generation"), as
+  // `rewind-tools.d.ts` declares them in `ToolContent`: `text()` joins the text blocks with
+  // newlines; `json()` is `structuredContent` when the tool sent it, else `text()` parsed as
   // JSON. They live on a frozen prototype, not enumerable: the value's own keys stay the
-  // result's, what JSON.stringify and the history see.
-  const ActionContentPrototype = ObjectFreeze(
+  // result's, what JSON.stringify and the journal see.
+  const ToolContentPrototype = ObjectFreeze(
     ObjectCreate(ObjectPrototype, {
       text: {
         value: function text() {
@@ -719,49 +729,49 @@
       json: {
         value: function json() {
           if (this.structuredContent !== undefined) return this.structuredContent;
-          return JSONParse(ReflectApply(ActionContentPrototype.text, this, []));
+          return JSONParse(ReflectApply(ToolContentPrototype.text, this, []));
         },
       },
     }),
   );
 
-  function actionContent(result) {
+  function toolContent(result) {
     if (result !== null && typeof result === "object" && !ArrayIsArray(result)) {
-      ObjectSetPrototypeOf(result, ActionContentPrototype);
+      ObjectSetPrototypeOf(result, ToolContentPrototype);
     }
     return result;
   }
 
-  function callActionContent(action, args) {
-    return callAction(action, args, true);
+  function callToolContent(tool, args) {
+    return callTool(tool, args, true);
   }
 
-  // A call: the op checks the arguments against the action's pinned input schema and
+  // A tool call: the op checks the arguments against the tool's pinned input schema and
   // records the command. A call without arguments sends `{}`. A call refused before it is
-  // recorded rejects with an error whose stack starts at the code's call. `content`: the
-  // result is MCP content, which gets the helpers of `ActionContent`.
-  function callAction(action, args, content = false) {
+  // recorded rejects with an error whose stack starts at the script's call. `content`: the
+  // result is MCP content, which gets the helpers of `ToolContent`.
+  function callTool(tool, args, content = false) {
     let json;
     try {
       json = JSONStringify(args === undefined ? {} : args);
     } catch (error) {
       return PromiseReject(
-        atCallSite(`the arguments of ${action} are not serializable to JSON: ${error.message}`),
+        atCallSite(`the arguments of ${tool} are not serializable to JSON: ${error.message}`),
       );
     }
     if (json === undefined) {
-      return PromiseReject(atCallSite(`the arguments of ${action} are not serializable to JSON`));
+      return PromiseReject(atCallSite(`the arguments of ${tool} are not serializable to JSON`));
     }
     const [line, column] = callsite();
     let seq;
     try {
-      seq = op_rewind_call_action(action, wellFormed(json), line, column);
+      seq = op_rewind_call_action(tool, wellFormed(json), line, column);
     } catch (error) {
       return PromiseReject(atCallSite(error));
     }
-    callsInFlight++;
+    toolsInFlight++;
     return new Promise((resolve, reject) => {
-      pending.set(seq, { kind: "call", action, content, resolve, reject });
+      pending.set(seq, { kind: "tool", tool, content, resolve, reject });
     });
   }
 
@@ -773,9 +783,9 @@
     });
   }
 
-  // `signalUrl(name)`: a call of the built-in `signalUrl` action, which returns `{ url }`.
-  function signalUrl(name) {
-    return callAction("signalUrl", { name: String(name) });
+  // `webhook(name)`: a call of the built-in `webhook` tool, which returns `{ url }`.
+  function webhook(name) {
+    return callTool("signalUrl", { name: String(name) });
   }
 
   // setTimeout and setInterval on top of durable timers. An interval keeps its first seq as
@@ -818,7 +828,7 @@
   const mailboxes = new SafeMap(); // name -> [payload]
   const waiters = new SafeMap(); // name -> [{ resolve, reject, timeoutSeq }]
 
-  // Names starting with this prefix are Rewind's: no mailbox the code reads holds them.
+  // Names starting with this prefix are Rewind's: no mailbox the script reads holds them.
   const RESERVED = "rewind:";
 
   function signal(name, options) {
@@ -873,9 +883,9 @@
 
   // ---------------------------------------------------------------------------------------
   // Workflows across runs (archi/03-execution.md): `workflows.<name>.start` and
-  // `workflows.<name>.signal` are calls. The end of a run this run started, or watches,
+  // `workflows.<name>.signal` are tool calls. The end of a run this run started, or watches,
   // comes back as the signal `rewind:ended:<run id>`, which the glue takes itself: it never
-  // reaches a mailbox the code reads. An end may arrive before the start's result: it is kept.
+  // reaches a mailbox the script reads. An end may arrive before the start's result: it is kept.
 
   const ENDED = "rewind:ended:";
   const ends = new SafeMap(); // run id -> its end, as the signal carried it
@@ -900,7 +910,7 @@
           }
         }
         const detached = args.detached === true;
-        return PromisePrototypeThen(callAction(`workflows.${name}.start`, args), (result) => {
+        return PromisePrototypeThen(callTool(`workflows.${name}.start`, args), (result) => {
           const runId = String(result.runId);
           if (!detached && !ends.has(runId)) attached.add(runId);
           return workflowRun(name, runId, true);
@@ -923,7 +933,7 @@
           payload: payload === undefined ? null : payload,
         };
         return PromisePrototypeThen(
-          callAction(`workflows.${name}.signal`, args),
+          callTool(`workflows.${name}.signal`, args),
           () => undefined,
         );
       },
@@ -934,7 +944,7 @@
     return ObjectFreeze(handle);
   }
 
-  // The run's output, or a RunError; with a timeout, `undefined` if the run has not ended
+  // The run's output, or a WorkflowError; with a timeout, `undefined` if the run has not ended
   // in time. A wait on the end is a signal wait: `signal_awaited` names `rewind:ended:<run id>`.
   function awaitEnd(name, runId, options) {
     if (ends.has(runId)) {
@@ -983,7 +993,7 @@
         const output = end.output === undefined ? null : end.output;
         const refused = op_rewind_check_workflow_output(name, wellFormed(JSONStringify(output)));
         if (refused !== "") {
-          return { ok: false, value: new RunError(name, runId, "invalid_output", refused) };
+          return { ok: false, value: new WorkflowError(name, runId, "invalid_output", refused) };
         }
         return { ok: true, value: output };
       }
@@ -991,7 +1001,7 @@
       case "cancelled":
         return {
           ok: false,
-          value: new RunError(
+          value: new WorkflowError(
             name,
             runId,
             end.status,
@@ -1001,7 +1011,7 @@
       default:
         return {
           ok: false,
-          value: new RunError(
+          value: new WorkflowError(
             name,
             runId,
             "aborted",
@@ -1047,9 +1057,9 @@
     for (const [seq, entry] of pending) {
       pending.delete(seq);
       switch (entry.kind) {
-        case "call":
+        case "tool":
           // Cancellation does not wait for the calls in flight: their results are dropped.
-          callsInFlight--;
+          toolsInFlight--;
           entry.reject(error());
           break;
         case "sleep":
@@ -1067,7 +1077,7 @@
 
   function hasPendingTimers() {
     for (const [, entry] of pending) {
-      if (entry.kind !== "call") return true;
+      if (entry.kind !== "tool") return true;
     }
     return false;
   }
@@ -1080,9 +1090,9 @@
   }
 
   // ---------------------------------------------------------------------------------------
-  // fetch: a call of the built-in `http` action, present only when the action set enables it
-  // (archi/04-tools.md, "The `http` action and egress"). The request and the response cross the
-  // boundary as JSON, in the format of the action `rewind-mcp` implements (archi/08-decisions.md):
+  // fetch: a call of the built-in `http` tool, present only when the toolset enables it
+  // (archi/04-tools.md, "The http tool and egress"). The request and the response cross the
+  // boundary as JSON, in the format of the tool `rewind-mcp` implements (archi/08-decisions.md):
   //
   //   args   { url, method, headers: [[name, value], …], body?, bodyEncoding?: "base64" }
   //   result { status, statusText, url, redirected, headers: [[name, value], …], body,
@@ -1248,7 +1258,7 @@
     #used = false;
     constructor(result) {
       const notAResponse = () =>
-        new TypeError("the http action returned something that is not a response");
+        new TypeError("the http tool returned something that is not a response");
       if (result === null || typeof result !== "object" || !NumberIsInteger(result.status)) {
         throw notAResponse();
       }
@@ -1341,16 +1351,16 @@
     } catch (error) {
       return PromiseReject(atCallSite(error));
     }
-    return PromisePrototypeThen(callAction("http", request), (result) => new Response(result));
+    return PromisePrototypeThen(callTool("http", request), (result) => new Response(result));
   }
 
   // ---------------------------------------------------------------------------------------
-  // Console: recorded as annotations.
+  // Console: journaled as annotations.
 
   function show(value) {
     if (typeof value === "string") return value;
     if (value instanceof Error) {
-      return value.stack === undefined ? `${value.name}: ${value.message}` : codeStack(value.stack);
+      return value.stack === undefined ? `${value.name}: ${value.message}` : scriptStack(value.stack);
     }
     try {
       return JSONStringify(value) ?? String(value);
@@ -1399,26 +1409,23 @@
     });
 
     globalThis.__rewindHandoff = ObjectFreeze({
-      callAction,
-      callActionContent,
+      // The names `rewind:actions`, generated by the runtime for every epoch, calls.
+      callAction: callTool,
+      callActionContent: callToolContent,
       sleep,
       signal,
-      signalUrl,
-      // Code written before signal URLs were named calls `webhook(name)`, the same function
-      // (archi/08-decisions.md, R1).
-      webhook: signalUrl,
+      webhook,
+      signalUrl: webhook,
       run,
-      ActionError,
-      ToolError: ActionError,
+      ToolError,
+      ActionError: ToolError,
       CancelledError,
-      RunError,
-      // Code written before runs' errors were named catches a `WorkflowError`, the same class
-      // (archi/08-decisions.md, R1).
-      WorkflowError: RunError,
+      WorkflowError,
+      RunError: WorkflowError,
       workflow,
       setMain(fn) {
         if (typeof fn !== "function") {
-          throw new TypeError("the code must `export default` its main function");
+          throw new TypeError("the script must `export default` its main function");
         }
         main = fn;
       },
@@ -1484,17 +1491,17 @@
       case "call_completed": {
         const entry = take(completion.seq);
         if (entry === undefined) break;
-        callsInFlight--;
+        toolsInFlight--;
         if (failure === undefined) {
-          entry.resolve(entry.content ? actionContent(completion.result) : completion.result);
+          entry.resolve(entry.content ? toolContent(completion.result) : completion.result);
         }
         break;
       }
       case "call_failed": {
         const entry = take(completion.seq);
         if (entry === undefined) break;
-        callsInFlight--;
-        if (failure === undefined) entry.reject(new ActionError(entry.action, completion));
+        toolsInFlight--;
+        if (failure === undefined) entry.reject(new ToolError(entry.tool, completion));
         break;
       }
       case "timer_fired":
@@ -1510,7 +1517,7 @@
         } else {
           // Already failing: stop waiting for the calls in flight.
           pending.clear();
-          callsInFlight = 0;
+          toolsInFlight = 0;
         }
         break;
       default:
@@ -1518,8 +1525,8 @@
     }
   }
 
-  // Called once microtasks are drained: decides whether the code has ended. Once it has,
-  // the terminal command is emitted from what was captured: no code code runs any more.
+  // Called once microtasks are drained: decides whether the script has ended. Once it has,
+  // the terminal command is emitted from what was captured: no script code runs any more.
   function idle() {
     if (ended) return;
     // Rejections still without a handler after the microtask checkpoint are unhandled.
@@ -1527,13 +1534,13 @@
     if (rejections !== undefined && rejections.length > 0) fail(rejections[1]);
 
     if (failure !== undefined) {
-      if (callsInFlight === 0) end();
+      if (toolsInFlight === 0) end();
     } else if (mainState === "returned") {
       // The runs it started attached end first, unless the run is being cancelled: its end
       // cancels them.
-      if (callsInFlight === 0 && (attached.size === 0 || cancellation !== undefined)) end();
-    } else if (callsInFlight === 0 && !hasPendingTimers() && !hasSignalWaiters()) {
-      // Nothing can wake the code any more. After a cancellation, that is how it ends.
+      if (toolsInFlight === 0 && (attached.size === 0 || cancellation !== undefined)) end();
+    } else if (toolsInFlight === 0 && !hasPendingTimers() && !hasSignalWaiters()) {
+      // Nothing can wake the script any more. After a cancellation, that is how it ends.
       fail(cancellation === undefined ? new DeadlockError() : new CancelledError(cancellation));
       end();
     }

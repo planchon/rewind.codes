@@ -1,0 +1,17 @@
+{
+  "description": "The run of a workflow fails: result() rejects with a RunError that names the run's failure, and the code that does not catch it fails with it.",
+  "live": true,
+  "workflows": {
+    "triage": {
+      "code": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": { "name": "RunError", "message": "failed: TypeError: cannot triage acme/api" },
+    "children": ["failed"]
+  }
+}

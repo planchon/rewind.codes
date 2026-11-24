@@ -51,6 +51,9 @@ pub(crate) struct ExecState {
     /// The validators of the pinned workflows' schemas used so far: by workflow, then
     /// `input`, `output` or `signal:<name>`.
     workflow_validators: BTreeMap<(String, String), Validator>,
+    /// The texts code can catch say tool, toolset and script, as before the rename release: a
+    /// run of epoch 1 observes them as it did (`archi/03-execution.md`, "Determinism epoch").
+    pub(crate) old_texts: bool,
 }
 
 impl ExecState {
@@ -90,6 +93,7 @@ impl ExecState {
             crypto: ChaCha20::new(&key.into(), &[0u8; 12].into()),
             validators: BTreeMap::new(),
             workflow_validators: BTreeMap::new(),
+            old_texts: false,
         }
     }
 
@@ -182,9 +186,13 @@ impl ExecState {
     }
 
     fn take_seq(&mut self) -> Result<Seq, JsErrorBox> {
-        let seq = self
-            .next_seq
-            .ok_or_else(|| JsErrorBox::range_error("the code emitted too many commands"))?;
+        let seq = self.next_seq.ok_or_else(|| {
+            JsErrorBox::range_error(if self.old_texts {
+                "the script emitted too many commands"
+            } else {
+                "the code emitted too many commands"
+            })
+        })?;
         self.next_seq = seq.next();
         Ok(seq)
     }
@@ -202,6 +210,17 @@ impl ExecState {
     /// the code sees at its call.
     fn check_call(&mut self, action: &str, args: &Value) -> Result<(), String> {
         let Some(pinned) = self.action_set.action(action) else {
+            if self.old_texts {
+                return Err(match action {
+                    "signalUrl" => "webhook() needs the built-in webhook tool, which this run's \
+                                    toolset does not have"
+                        .to_owned(),
+                    "http" => "fetch() needs the built-in http tool, which this run's toolset \
+                               does not have"
+                        .to_owned(),
+                    _ => format!("{action} is not a tool of this run's toolset"),
+                });
+            }
             return Err(match action {
                 "signalUrl" => {
                     "signalUrl() needs the built-in signalUrl action, which this run's action set \
@@ -279,8 +298,13 @@ impl ExecState {
                 ));
             }
             None => {
+                let action_set = if self.old_texts {
+                    "toolset"
+                } else {
+                    "action set"
+                };
                 return Err(format!(
-                    "{workflow} is not a workflow of this run's action set"
+                    "{workflow} is not a workflow of this run's {action_set}"
                 ));
             }
         }

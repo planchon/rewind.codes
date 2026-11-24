@@ -1,0 +1,26 @@
+{
+  "description": "A signal sent twice with the same idempotency key is delivered once: the second wait times out.",
+  "steps": [
+    {
+      "signal": {
+        "name": "approval",
+        "payload": 1,
+        "key": "approval-from-slack-42"
+      }
+    },
+    {
+      "signal": {
+        "name": "approval",
+        "payload": 1,
+        "key": "approval-from-slack-42"
+      }
+    }
+  ],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "first": 1,
+      "second": null
+    }
+  }
+}

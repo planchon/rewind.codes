@@ -1,5 +1,5 @@
 {
-  "description": "The secret a run uses is deleted while the run sleeps: its next call is parked (secret_missing) before anything is sent, and putting the secret again sends it with the call's own idempotency key.",
+  "description": "The secret a run attached is deleted while the run sleeps: its next call is parked (secret_missing) before anything is sent, and putting the secret again sends it with the call's own idempotency key.",
   "live": true,
   "input": {
     "customer": "c-7"
@@ -30,7 +30,7 @@
   "secrets": {
     "crm": "ns/crm"
   },
-  "actions": {
+  "tools": {
     "crm.lookup": {
       "$sequence": [
         {
@@ -51,7 +51,7 @@
     },
     {
       "parked": {
-        "action": "crm.lookup",
+        "tool": "crm.lookup",
         "reason": "secret_missing"
       }
     },

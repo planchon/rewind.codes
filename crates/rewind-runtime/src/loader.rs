@@ -16,7 +16,6 @@ use deno_core::{
 };
 use deno_error::JsErrorBox;
 
-use crate::compile::CODE_SPECIFIER;
 use crate::epochs::Glue;
 
 pub(crate) const ENTRY_SPECIFIER: &str = "rewind:event";
@@ -59,7 +58,7 @@ impl Loader {
                 actions,
                 workflows,
             },
-            source_map,
+            source_map: source_map_of(glue, source_map),
         }
     }
 
@@ -73,11 +72,33 @@ impl Loader {
 
     fn file_name(&self) -> &'static str {
         match self.modules {
-            Modules::Code { .. } => CODE_SPECIFIER,
+            Modules::Code { glue, .. } => glue.code_specifier,
             Modules::Handlers { .. } => HANDLERS_SPECIFIER,
         }
     }
 }
+
+/// The source map of a code, naming the module its epoch loads it as: a code compiled under one
+/// epoch's name (`workflow.ts`, `script.ts` before the rename release) shows the name of the
+/// epoch its run is of in its stacks.
+fn source_map_of(glue: &Glue, source_map: Vec<u8>) -> Vec<u8> {
+    let Ok(text) = String::from_utf8(source_map) else {
+        return Vec::new();
+    };
+    let mut text = text;
+    for name in CODE_FILES {
+        if name != glue.code_specifier {
+            text = text.replace(
+                &format!("\"{name}\""),
+                &format!("\"{}\"", glue.code_specifier),
+            );
+        }
+    }
+    text.into_bytes()
+}
+
+/// The modules a code has been loaded as, every epoch's.
+const CODE_FILES: [&str; 2] = ["file:///script.ts", "file:///workflow.ts"];
 
 impl ModuleLoader for Loader {
     fn resolve(
@@ -92,22 +113,26 @@ impl ModuleLoader for Loader {
             ));
         }
         let main = matches!(kind, ResolutionKind::MainModule);
+        let code_specifier = self.file_name();
         let target = match (&self.modules, referrer, specifier) {
             (Modules::Code { .. }, _, ENTRY_SPECIFIER) if main => specifier,
-            (Modules::Code { .. }, ENTRY_SPECIFIER, "rewind:internal" | CODE_SPECIFIER) => {
-                specifier
-            }
+            (Modules::Code { .. }, ENTRY_SPECIFIER, "rewind:internal") => specifier,
+            (Modules::Code { .. }, ENTRY_SPECIFIER, code) if code == code_specifier => specifier,
             (
                 Modules::Code { .. },
                 "rewind:std" | "rewind:actions" | "rewind:workflows",
                 "rewind:internal",
             ) => specifier,
-            (Modules::Code { .. }, CODE_SPECIFIER, "rewind") => "rewind:std",
-            (Modules::Code { .. }, CODE_SPECIFIER, "rewind:actions" | OLD_ACTIONS_SPECIFIER) => {
+            (Modules::Code { .. }, code, "rewind") if code == code_specifier => "rewind:std",
+            (Modules::Code { .. }, code, "rewind:actions" | OLD_ACTIONS_SPECIFIER)
+                if code == code_specifier =>
+            {
                 "rewind:actions"
             }
-            (Modules::Code { .. }, CODE_SPECIFIER, "rewind:workflows") => "rewind:workflows",
-            (Modules::Code { .. }, CODE_SPECIFIER, other) => {
+            (Modules::Code { .. }, code, "rewind:workflows") if code == code_specifier => {
+                "rewind:workflows"
+            }
+            (Modules::Code { .. }, code, other) if code == code_specifier => {
                 return Err(JsErrorBox::type_error(format!(
                     "cannot import {other:?}: workflows can only import \"rewind\", \
                      \"rewind:actions\" and \"rewind:workflows\""
@@ -140,7 +165,9 @@ impl ModuleLoader for Loader {
             (Modules::Code { glue, .. }, "rewind:std") => glue.std.to_owned(),
             (Modules::Code { actions, .. }, "rewind:actions") => actions.clone(),
             (Modules::Code { workflows, .. }, "rewind:workflows") => workflows.clone(),
-            (Modules::Code { code, .. }, CODE_SPECIFIER) => code.clone(),
+            (Modules::Code { code, glue, .. }, specifier) if specifier == glue.code_specifier => {
+                code.clone()
+            }
             (Modules::Handlers { javascript }, HANDLERS_SPECIFIER) => javascript.clone(),
             (_, other) => {
                 return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(

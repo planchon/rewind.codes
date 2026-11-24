@@ -4,7 +4,7 @@
     "status": "aborted",
     "abort": {
       "kind": "limit_exceeded",
-      "message": "the code used more than 128 MiB of heap"
+      "message": "the script used more than 128 MiB of heap"
     },
     "events": [
       "run_started",

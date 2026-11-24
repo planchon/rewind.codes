@@ -1,0 +1,13 @@
+{
+  "description": "A code that allocates without bound reaches the heap limit: the host aborts the run.",
+  "limits": {
+    "heap_mb": 64
+  },
+  "expect": {
+    "status": "aborted",
+    "abort": {
+      "kind": "limit_exceeded",
+      "message": "64 MiB of heap"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "description": "Node's trap: a promise rejected while nothing handles it fails the run, even if a handler is attached later.",
+  "actions": {
+    "payments.charge": {
+      "$error": "card declined"
+    },
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "ActionError",
+      "message": "payments.charge failed: card declined"
+    }
+  }
+}

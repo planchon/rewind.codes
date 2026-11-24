@@ -27,6 +27,15 @@
 //!    code it holds, which must be the case's, on a fresh executor with no store. This is the
 //!    epoch contract: a build that stops replaying a history of an epoch it supports fails
 //!    here.
+//!
+//! The cases of the latest epoch are checked the three ways; new runs start under it. When the
+//! epoch goes up, the corpus is copied to the new epoch's directory and recorded again there,
+//! and each case of the previous one keeps only the history it recorded, frozen: its
+//! `journal.v1.json` as that build wrote it, with the case's `scenario.json` for its limits.
+//! [`check_recorded`] reads it under the names it was written with (`rewind_format::rename`,
+//! what `rename-data` does to stored histories) and replays it with its own code under its own
+//! epoch: `epoch-1` holds the histories recorded before the rename release, in its old names,
+//! and the runs started then replay as they did.
 
 #![forbid(unsafe_code)]
 
@@ -478,11 +487,15 @@ fn server_secrets(secrets: &BTreeMap<String, String>) -> Result<ServerSecrets, S
 }
 
 fn executor(scenario: &Scenario) -> V8Executor {
+    executor_with(&scenario.limits)
+}
+
+fn executor_with(case: &scenario::Limits) -> V8Executor {
     let mut limits = rewind_runtime::SandboxLimits::default();
-    if let Some(ms) = scenario.limits.cpu_per_trigger_ms {
+    if let Some(ms) = case.cpu_per_trigger_ms {
         limits.cpu_per_trigger = Duration::from_millis(ms);
     }
-    if let Some(mb) = scenario.limits.heap_mb {
+    if let Some(mb) = case.heap_mb {
         limits.heap_bytes = mb * 1024 * 1024;
     }
     V8Executor::new(limits).expect("the corpus runs with TZ=UTC (see .cargo/config.toml)")
@@ -537,6 +550,86 @@ pub async fn replay_export(case: &Case, export: &RunExport, code: &Code) -> Repl
         Err(ReplayError::NonDeterminism(mismatch)) => Replayed::Fails(mismatch.to_string()),
         Err(err) => Replayed::Fails(err.to_string()),
     }
+}
+
+/// Checks a case of an epoch before the latest: the history it recorded (`journal.v1.json`, in
+/// the names it was written with) reads in the new names, holds a run of the directory's epoch,
+/// and replays to its end with the code it holds under that epoch's glue, with the case's
+/// limits. An abort ends the replay with the abort's kind: its message is the engine's, in the
+/// words of the build that replays it. Panics with what failed.
+pub async fn check_recorded(name: &str) {
+    let dir = corpus_dir().join(name);
+    let failures = recorded_failures(name, &dir).await;
+    if !failures.is_empty() {
+        let mut report = format!("{name}:\n");
+        for failure in failures {
+            let _ = writeln!(report, "  - {failure}");
+        }
+        panic!("{report}");
+    }
+}
+
+async fn recorded_failures(name: &str, dir: &Path) -> Vec<String> {
+    let epoch = name
+        .split('/')
+        .next()
+        .and_then(|epoch| epoch.strip_prefix("epoch-"))
+        .and_then(|n| n.parse::<u32>().ok());
+    let journal = match read(&dir.join("journal.v1.json")) {
+        Ok(journal) => journal,
+        Err(err) => return vec![err],
+    };
+    let export = match rewind_format::rename::run_export(
+        &journal,
+        "local",
+        &rewind_format::rename::NoContext,
+    ) {
+        Ok(export) => export,
+        Err(err) => return vec![format!("the history does not read in the new names: {err}")],
+    };
+    let mut failures = Vec::new();
+    if let Err(err) = export.check() {
+        failures.push(format!("the history is inconsistent: {err}"));
+    }
+    let recorded_epoch = export.events.first().and_then(|entry| match &entry.event {
+        Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.epoch.0),
+        _ => None,
+    });
+    if recorded_epoch != epoch {
+        failures.push(format!(
+            "the history is of epoch {recorded_epoch:?}, its directory of {epoch:?}"
+        ));
+    }
+    let scenario: Value = read(&dir.join("scenario.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let limits: scenario::Limits =
+        serde_json::from_value(scenario["limits"].clone()).unwrap_or_default();
+    let executor = executor_with(&limits);
+    let compiled = executor.compile(&export.code, &export.action_set);
+    let run = RunRef::new(TenantId::local(), export.run);
+    let input = ReplayInput {
+        run: &run,
+        compiled: compiled.as_ref(),
+        action_set: &export.action_set,
+        history: &export.events,
+    };
+    let expected = match export.events.last().map(|entry| &entry.event) {
+        Some(Event::Lifecycle(Lifecycle::RunAborted(reason))) => Some(reason.kind),
+        _ => None,
+    };
+    match replay::replay(&executor, &replay::InExport, input).await {
+        Ok(rebuilt) => match (&rebuilt.end, expected) {
+            (ReplayEnd::EndOfHistory, None) => {}
+            (ReplayEnd::Aborted(reason), Some(kind)) if reason.kind == kind => {}
+            (end, _) => failures.push(format!(
+                "the history replays to {end:?}, its last event says {expected:?}"
+            )),
+        },
+        Err(err) => failures.push(format!("the history does not replay: {err}")),
+    }
+    failures
 }
 
 /// Checks a case of the corpus: live, recorded, replayed, recording its history when

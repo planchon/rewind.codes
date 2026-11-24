@@ -419,7 +419,7 @@ async fn export(
     UrlPath(_id): UrlPath<String>,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
-    let case = corpus("epoch-1/blue/waiting_for_a_signal");
+    let case = corpus("epoch-2/blue/waiting_for_a_signal");
     if query.get("as").map(String::as_str) == Some("cassette") {
         let export = rewind_format::decode_run_export(
             &std::fs::read_to_string(case.join("history.v1.json")).unwrap(),
@@ -906,7 +906,7 @@ async fn a_run_is_exported_and_replayed_here() {
     assert_eq!(exit, Exit::Success, "{err}");
     // Written in the stored format, byte for byte as the corpus has it.
     let committed =
-        std::fs::read_to_string(corpus("epoch-1/blue/waiting_for_a_signal/history.v1.json"))
+        std::fs::read_to_string(corpus("epoch-2/blue/waiting_for_a_signal/history.v1.json"))
             .unwrap();
     assert_eq!(std::fs::read_to_string(&output).unwrap(), committed);
 

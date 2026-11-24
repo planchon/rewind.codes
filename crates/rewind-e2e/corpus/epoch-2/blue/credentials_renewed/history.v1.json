@@ -1,0 +1,6 @@
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","code":"import { crm } from \"rewind:actions\";\n\nexport default async function main(input: { customer: string }) {\n  const customer = await crm.lookup({ id: input.customer });\n  return { name: customer.name };\n}\n","action_set":{"actions":[{"name":"crm.lookup","policy":{"approval":false,"concurrency":16,"idempotent":true,"reconnect_timeout_ms":60000},"route":{"group":"crm","type":"harness"},"schemas":{"input":{}}}],"servers":[],"v":1},"events":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","code":"59f46d4b12040d7dfca27451b7f2ef6cf3aba3f0f815e33321c12048c9fe50fa","action_set":"098dc83977b4ae6a8b245608c81aa1661ffb4caaa6b9bc02b8ad220c68f23cdb","input":{"value":{"customer":"c-7"}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":2,"expires_at":1769817600000,"mode":"test"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_call","seq":1,"action":"crm.lookup","args":{"value":{"id":"c-7"}},"callsite":{"line":4,"column":30}}},
+{"index":2,"recorded_at":1767312000000,"event":{"type":"call_completed","seq":1,"result":{"value":{"name":"Ada"}}}},
+{"index":3,"recorded_at":1767312000000,"event":{"type":"complete_run","output":{"value":{"name":"Ada"}}}}
+]}

@@ -1,0 +1,26 @@
+{
+  "description": "Date, Intl, Math.random, crypto and performance are deterministic: logical time, seeded generators, UTC and en-US. The recorded history pins their values for epoch 1.",
+  "actions": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "now": 1767225600000,
+      "date": "2026-01-01T00:00:00.000Z",
+      "called": "Thu Jan 01 2026 00:00:00 GMT+0000 (Coordinated Universal Time)",
+      "perf": 0,
+      "formatted": "January 1, 2026",
+      "locale": "1,234,567.891",
+      "sorted": [
+        "a",
+        "e",
+        "é",
+        "z"
+      ],
+      "startedAt": "2026-01-01T00:00:00.000Z"
+    }
+  }
+}

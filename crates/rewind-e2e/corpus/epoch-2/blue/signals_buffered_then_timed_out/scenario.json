@@ -1,0 +1,36 @@
+{
+  "description": "One mailbox per signal name: a signal sent before the code waits is kept; a signal that arrives cancels its timeout timer; a timeout resolves to undefined.",
+  "steps": [
+    {
+      "signal": {
+        "name": "approval",
+        "payload": {
+          "by": "paul"
+        }
+      }
+    },
+    {
+      "advance": "1h"
+    },
+    {
+      "advance": "1h"
+    },
+    {
+      "signal": {
+        "name": "comment",
+        "payload": "lgtm"
+      }
+    }
+  ],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "approval": {
+        "by": "paul"
+      },
+      "comment": "lgtm",
+      "never": null,
+      "elapsed": 14400000
+    }
+  }
+}

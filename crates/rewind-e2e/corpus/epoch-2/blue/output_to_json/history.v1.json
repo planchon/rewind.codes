@@ -1,0 +1,6 @@
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","code":"import { audit } from \"rewind:actions\";\n\nexport default async function main() {\n  return {\n    toJSON() {\n      audit.record({ serializing: true }); // runs when the output is serialized\n      return \"out\";\n    },\n  };\n}\n","action_set":{"actions":[{"name":"audit.record","policy":{"approval":false,"concurrency":16,"idempotent":true,"reconnect_timeout_ms":60000},"route":{"group":"audit","type":"harness"},"schemas":{"input":{}}}],"servers":[],"v":1},"events":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","code":"853b59a9cf1143a6f8d41e1bb093637f72a6958a65c5ee0a618fef89e56bcd69","action_set":"24bf5ff7ed8eed8887d661c5ed3c8c7bbe3b0c3adf50302c7f3e14d7daf7268b","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":2,"expires_at":1769817600000,"mode":"test"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_call","seq":1,"action":"audit.record","args":{"value":{"serializing":true}},"callsite":{"line":6,"column":13}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"call_completed","seq":1,"result":{"value":{"ok":true}}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":"out"}}}
+]}

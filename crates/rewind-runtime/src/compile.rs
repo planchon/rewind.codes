@@ -35,7 +35,7 @@ pub(crate) fn compile(
     action_set: &ActionSet,
     glue: &Glue,
 ) -> Result<CompiledCode, InvalidCode> {
-    let parsed = parse(code, CODE_SPECIFIER)?;
+    let parsed = parse(code, glue.code_specifier)?;
     Checker {
         parsed: &parsed,
         std: glue

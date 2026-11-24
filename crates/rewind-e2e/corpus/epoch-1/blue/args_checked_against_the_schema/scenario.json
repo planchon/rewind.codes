@@ -1,9 +1,9 @@
 {
-  "description": "Args are validated against the action's pinned JSON Schema inside the op: an invalid call throws a TypeError at the call site, which the code can catch, and nothing is recorded for it.",
+  "description": "Args are validated against the tool's pinned JSON Schema inside the op: an invalid call throws a TypeError at the call site, which the script can catch, and nothing is recorded for it.",
   "input": {
     "numbers": [4, "7", 0]
   },
-  "actions": {
+  "tools": {
     "github.get_issue": {
       "title": "Crash on start"
     }
@@ -30,6 +30,6 @@
     "calls": {
       "github.get_issue": 1
     },
-    "events": ["run_started", "schedule_call", "call_completed", "complete_run"]
+    "events": ["run_started", "schedule_tool_call", "tool_call_completed", "complete_run"]
   }
 }

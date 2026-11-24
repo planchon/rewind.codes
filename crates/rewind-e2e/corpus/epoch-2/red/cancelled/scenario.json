@@ -1,0 +1,21 @@
+{
+  "description": "A cancellation the code does not catch ends the run cancelled: a fail_run with CancelledError.",
+  "steps": [
+    {
+      "cancel": {}
+    }
+  ],
+  "expect": {
+    "status": "cancelled",
+    "error": {
+      "name": "CancelledError",
+      "message": "run cancelled"
+    },
+    "events": [
+      "run_started",
+      "start_timer",
+      "cancel_requested",
+      "fail_run"
+    ]
+  }
+}

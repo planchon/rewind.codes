@@ -1,5 +1,5 @@
-// The `rewind` module (epoch 1): the standard library of workflows (archi/01-product.md, "Modules
-// available to workflows").
+// The `rewind` module (epoch 1): the standard library of scripts (archi/01-product.md, "Modules
+// available to scripts").
 import hooks from "rewind:internal";
 
-export const { sleep, signal, signalUrl, webhook, run, ActionError, ToolError, CancelledError, RunError, WorkflowError } = hooks;
+export const { sleep, signal, webhook, signalUrl, run, ToolError, ActionError, CancelledError, WorkflowError, RunError } = hooks;

@@ -1,5 +1,5 @@
 {
-  "description": "A cancellation the code does not catch ends the run cancelled: a fail_run with CancelledError.",
+  "description": "A cancellation the script does not catch ends the run cancelled: a fail_run with CancelledError.",
   "steps": [
     {
       "cancel": {}

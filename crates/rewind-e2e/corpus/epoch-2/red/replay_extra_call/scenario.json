@@ -1,0 +1,21 @@
+{
+  "description": "A code changed after the run: it makes a call the history does not contain.",
+  "input": {
+    "repo": "acme/api"
+  },
+  "actions": {
+    "github.get_issue": {
+      "$echo": true
+    },
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "completed"
+  },
+  "replay": {
+    "code": "changed.ts",
+    "diverges": "event 7 is run completion ({\"numbers\":[1,2,3]}), but the code emitted call #4 audit.record({\"count\":3})"
+  }
+}

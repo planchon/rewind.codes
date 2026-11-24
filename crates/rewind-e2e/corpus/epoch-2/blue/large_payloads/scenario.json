@@ -1,0 +1,23 @@
+{
+  "description": "Payloads above 1 KiB go to the blob store at commit and are loaded back on delivery; the run export is self-contained.",
+  "input": {
+    "size": 5000
+  },
+  "actions": {
+    "storage.put": {
+      "$echo": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "length": 5000
+    },
+    "events": [
+      "run_started",
+      "schedule_call",
+      "call_completed",
+      "complete_run"
+    ]
+  }
+}

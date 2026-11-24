@@ -1,0 +1,13 @@
+{
+  "description": "A code that never yields exceeds its CPU budget: the watchdog terminates it and the host aborts the run.",
+  "limits": {
+    "cpu_per_trigger_ms": 200
+  },
+  "expect": {
+    "status": "aborted",
+    "abort": {
+      "kind": "limit_exceeded",
+      "message": "200ms of CPU time"
+    }
+  }
+}

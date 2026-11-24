@@ -1,0 +1,20 @@
+{
+  "description": "A cancellation rejects every pending await with CancelledError; a code that catches it may end by itself within its grace.",
+  "steps": [
+    {
+      "cancel": {
+        "message": "user asked"
+      }
+    }
+  ],
+  "expect": {
+    "status": "completed",
+    "output": "cleaned up after: run cancelled: user asked",
+    "events": [
+      "run_started",
+      "start_timer",
+      "cancel_requested",
+      "complete_run"
+    ]
+  }
+}

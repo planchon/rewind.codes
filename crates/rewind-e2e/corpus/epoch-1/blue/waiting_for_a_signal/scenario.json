@@ -1,6 +1,6 @@
 {
-  "description": "A run waiting for a signal is suspended, not deadlocked: only the outside world can wake it, and its history replays to exactly that state.",
-  "actions": {
+  "description": "A run waiting for a signal is suspended, not deadlocked: only the outside world can wake it, and its journal replays to exactly that state.",
+  "tools": {
     "github.get_issue": {
       "$echo": true
     },
@@ -9,14 +9,14 @@
     }
   },
   "expect": {
-    "status": "waiting",
+    "status": "active",
     "awaiting": [
       "approval"
     ],
     "events": [
       "run_started",
-      "schedule_call",
-      "call_completed",
+      "schedule_tool_call",
+      "tool_call_completed",
       "signal_awaited"
     ]
   }

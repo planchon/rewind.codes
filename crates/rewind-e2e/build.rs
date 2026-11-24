@@ -1,4 +1,6 @@
-//! Generates one test per case of the corpus: `epoch_1::blue::fan_out`, and so on.
+//! Generates one test per case of the corpus: `epoch_2::blue::fan_out`, and so on. A case of an
+//! epoch before the latest holds only the history it recorded (`journal.v1.json`, in the names
+//! of its time): its test replays it (`rewind_e2e::check_recorded`).
 
 use std::fmt::Write as _;
 use std::fs;
@@ -28,10 +30,15 @@ fn tests() -> String {
                     "corpus case names are snake_case: {}",
                     case.display()
                 );
+                let check = if case.join("journal.v1.json").is_file() {
+                    "check_recorded"
+                } else {
+                    "check_case"
+                };
                 let _ = writeln!(
                     tests,
                     "        #[tokio::test]\n        async fn {case_name}() {{\n            \
-                     rewind_e2e::check_case(\"{epoch_name}/{color}/{case_name}\").await;\n        }}"
+                     rewind_e2e::{check}(\"{epoch_name}/{color}/{case_name}\").await;\n        }}"
                 );
             }
             let _ = writeln!(tests, "    }}");

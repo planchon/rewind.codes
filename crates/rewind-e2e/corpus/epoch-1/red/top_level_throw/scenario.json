@@ -1,9 +1,9 @@
 {
-  "description": "An error thrown by the top-level code only shows when the code loads: its first activation aborts the run with invalid_code.",
+  "description": "An error thrown by the top-level code only shows when the script loads: its first activation aborts the run with invalid_script.",
   "expect": {
     "status": "aborted",
     "abort": {
-      "kind": "invalid_code",
+      "kind": "invalid_script",
       "message": "SyntaxError"
     },
     "events": [

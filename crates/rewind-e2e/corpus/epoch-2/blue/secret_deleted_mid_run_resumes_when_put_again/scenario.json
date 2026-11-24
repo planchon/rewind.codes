@@ -1,0 +1,84 @@
+{
+  "description": "The secret a run uses is deleted while the run sleeps: its next call is parked (secret_missing) before anything is sent, and putting the secret again sends it with the call's own idempotency key.",
+  "live": true,
+  "input": {
+    "customer": "c-7"
+  },
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "put_secrets": {
+    "ns/crm": "crm-token-1",
+    "org/crm": "org-token"
+  },
+  "secrets": {
+    "crm": "ns/crm"
+  },
+  "actions": {
+    "crm.lookup": {
+      "$sequence": [
+        {
+          "name": "Ada"
+        },
+        {
+          "name": "Ada Lovelace"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "delete_secret": "crm"
+    },
+    {
+      "advance": "1h"
+    },
+    {
+      "parked": {
+        "action": "crm.lookup",
+        "reason": "secret_missing"
+      }
+    },
+    {
+      "credentials": {
+        "crm": {
+          "Authorization": "crm-token-2"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "before": "Ada",
+      "after": "Ada Lovelace"
+    },
+    "calls": {
+      "crm.lookup": 2
+    },
+    "auth": [
+      "crm-token-1",
+      "crm-token-2"
+    ],
+    "keys": [
+      "{run}/1",
+      "{run}/3"
+    ]
+  }
+}

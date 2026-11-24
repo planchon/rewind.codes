@@ -1,0 +1,17 @@
+{
+  "description": "A code that fails does not wait for the runs it started attached: its end cancels them.",
+  "live": true,
+  "workflows": {
+    "triage": {
+      "code": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": { "name": "Error", "message": "the parent gave up" },
+    "children": ["cancelled"]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "description": "The CPU budget applies to each trigger: main stays within it, the delivery of the action result spins past it, and the host aborts the run at that delivery.",
+  "actions": {
+    "github.get_issue": {
+      "title": "Crash"
+    }
+  },
+  "limits": {
+    "cpu_per_trigger_ms": 200
+  },
+  "expect": {
+    "status": "aborted",
+    "abort": {
+      "kind": "limit_exceeded",
+      "message": "200ms of CPU time"
+    },
+    "events": ["run_started", "schedule_call", "call_completed", "run_aborted"]
+  }
+}

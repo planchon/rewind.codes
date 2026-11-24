@@ -1,0 +1,27 @@
+{
+  "description": "An invalid call that the code does not catch fails the run with the TypeError, its stack at the code's line; no call was recorded.",
+  "actions": {
+    "slack.post_message": {
+      "ok": true
+    }
+  },
+  "schemas": {
+    "slack.post_message": {
+      "type": "object",
+      "properties": {
+        "channel": { "type": "string", "pattern": "^#" },
+        "text": { "type": "string" }
+      },
+      "required": ["channel", "text"]
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "TypeError",
+      "message": "invalid arguments for slack.post_message: args.text: 42 is not of type \"string\""
+    },
+    "calls": {},
+    "events": ["run_started", "fail_run"]
+  }
+}

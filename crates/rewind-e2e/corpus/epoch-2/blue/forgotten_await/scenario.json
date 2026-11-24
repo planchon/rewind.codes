@@ -1,0 +1,18 @@
+{
+  "description": "A forgotten await is harmless: main returned first, but complete_run waits until the call in flight has an outcome.",
+  "actions": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": "done",
+    "events": [
+      "run_started",
+      "schedule_call",
+      "call_completed",
+      "complete_run"
+    ]
+  }
+}

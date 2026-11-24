@@ -1,6 +1,6 @@
 {
   "description": "Node's trap: a promise rejected while nothing handles it fails the run, even if a handler is attached later.",
-  "actions": {
+  "tools": {
     "payments.charge": {
       "$error": "card declined"
     },
@@ -11,7 +11,7 @@
   "expect": {
     "status": "failed",
     "error": {
-      "name": "ActionError",
+      "name": "ToolError",
       "message": "payments.charge failed: card declined"
     }
   }

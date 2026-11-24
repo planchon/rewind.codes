@@ -1462,13 +1462,102 @@ export default async function main() {
     assert!(message.contains("more than 4 MiB"), "{message}");
 }
 
+/// The rename release bumped the determinism epoch (`archi/03-execution.md`, "Determinism
+/// epoch"): a run of epoch 1, started before it, still observes the names its code was written
+/// against, `ToolError` and `script.ts`, and one of epoch 2 the new ones; both resolve both.
+#[tokio::test]
+async fn each_epoch_shows_the_names_of_its_glue() {
+    let executor = V8Executor::new(SandboxLimits::default()).unwrap();
+    let action_set = ActionSet::from_harness_actions(["github.close"]).unwrap();
+    let source = r#"import { github } from "rewind:tools";
+import { ToolError, ActionError, WorkflowError, RunError, webhook, signalUrl } from "rewind";
+
+export default async function main() {
+  try {
+    await github.close({});
+  } catch (e) {
+    return {
+      name: e.name,
+      tool: e.tool,
+      action: e.action,
+      keys: Object.keys(e),
+      same: ToolError === ActionError && WorkflowError === RunError && webhook === signalUrl,
+      frame: String(new Error("here").stack).split("\n")[1],
+    };
+  }
+}
+"#;
+    let compiled = executor.compile(&Code::new(source), &action_set).unwrap();
+    for (epoch, name, own, file) in [
+        (Epoch(1), "ToolError", "tool", "script.ts"),
+        (Epoch(2), "ActionError", "action", "workflow.ts"),
+    ] {
+        let start = StartCode {
+            run_id: RunId::from_u128(1),
+            compiled: compiled.clone(),
+            action_set: action_set.clone(),
+            input: json!({}),
+            seed: Seed::from_bytes([0; 32]),
+            epoch,
+            started_at: T0,
+        };
+        let (mut instance, emitted) = executor.start(start).await.unwrap();
+        assert!(
+            matches!(
+                emitted.as_slice(),
+                [rewind_engine::ports::Emitted::Command(
+                    Command::ScheduleCall { .. }
+                )]
+            ),
+            "{epoch}: {emitted:?}"
+        );
+        let emitted = rewind_engine::ports::CodeInstance::deliver(
+            &mut instance,
+            rewind_engine::ports::Handoff::CallFailed {
+                seq: Seq(1),
+                error: ActionFailure {
+                    kind: ActionFailureKind::Error,
+                    message: "no".into(),
+                    data: None,
+                },
+            },
+            T0,
+        )
+        .await
+        .unwrap();
+        let output = emitted
+            .iter()
+            .find_map(|emitted| match emitted {
+                rewind_engine::ports::Emitted::Command(Command::CompleteRun { output }) => {
+                    output.value().cloned()
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{epoch}: {emitted:?}"));
+        assert_eq!(output["name"], name, "{epoch}");
+        assert_eq!(output["tool"], "github.close", "{epoch}");
+        assert_eq!(output["action"], "github.close", "{epoch}");
+        assert_eq!(
+            output["keys"],
+            json!(["name", own, "outcomeUnknown", "data"]),
+            "{epoch}: the own properties of its glue"
+        );
+        assert_eq!(output["same"], true, "{epoch}");
+        let frame = output["frame"].as_str().unwrap();
+        assert!(
+            frame.contains(&format!("file:///{file}:")),
+            "{epoch}: {frame}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Boundaries
 
 #[tokio::test]
 async fn an_unsupported_epoch_is_refused() {
     let executor = V8Executor::new(SandboxLimits::default()).unwrap();
-    assert_eq!(executor.epochs(), [Epoch(1)]);
+    assert_eq!(executor.epochs(), [Epoch(1), Epoch(2)]);
     let start = StartCode {
         run_id: RunId::from_u128(1),
         compiled: CompiledCode {

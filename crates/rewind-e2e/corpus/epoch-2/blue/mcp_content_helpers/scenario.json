@@ -1,0 +1,42 @@
+{
+  "description": "An MCP action pinned without an output schema returns its content, { content, structuredContent? }, with the text() and json() helpers that rewind-actions.d.ts declares (ActionContent): text() joins the text blocks with newlines, json() is structuredContent when the action sent one, else the text parsed as JSON. The helpers are not keys of the value: the history and JSON.stringify see the content only. An action pinned with an output schema returns its structured content, without helpers.",
+  "mcp_servers": ["crm"],
+  "actions": {
+    "crm.lookup": {
+      "content": [{ "type": "text", "text": "{\"id\":\"c-1\",\"name\":\"Ada\"}" }]
+    },
+    "crm.profile": {
+      "content": [
+        { "type": "text", "text": "Ada Lovelace" },
+        { "type": "image", "data": "aGk=", "mimeType": "image/png" },
+        { "type": "text", "text": "VIP since 1843" }
+      ],
+      "structuredContent": { "name": "Ada Lovelace", "vip": true }
+    },
+    "crm.score": { "score": 42 }
+  },
+  "output_schemas": {
+    "crm.score": {
+      "type": "object",
+      "properties": { "score": { "type": "number" } },
+      "required": ["score"]
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "customer": { "id": "c-1", "name": "Ada" },
+      "profile": ["Ada Lovelace\nVIP since 1843", { "name": "Ada Lovelace", "vip": true }],
+      "keys": ["content", "structuredContent"],
+      "serialized": {
+        "content": [{ "type": "text", "text": "{\"id\":\"c-1\",\"name\":\"Ada\"}" }]
+      },
+      "score": [42, false]
+    },
+    "calls": {
+      "crm.lookup": 1,
+      "crm.profile": 1,
+      "crm.score": 1
+    }
+  }
+}

@@ -1,9 +1,9 @@
 {
-  "description": "A code changed after the run: an argument differs, and the replay of the history stops at the exact event where it diverges.",
+  "description": "A script changed after the run: an argument differs, and the replay of the journal stops at the exact entry where it diverges.",
   "input": {
     "repo": "acme/api"
   },
-  "actions": {
+  "tools": {
     "github.get_issue": {
       "$echo": true
     }
@@ -12,7 +12,7 @@
     "status": "completed"
   },
   "replay": {
-    "code": "changed.ts",
-    "diverges": "event 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), but the code emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
+    "script": "changed.ts",
+    "diverges": "history entry 3 is tool call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), but the script emitted tool call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
   }
 }

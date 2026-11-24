@@ -1,7 +1,7 @@
 //! Replays a history of the corpus by hand:
 //!
 //! ```text
-//! cargo run -p rewind-e2e -- replay epoch-1/blue/fan_out [--code other.ts]
+//! cargo run -p rewind-e2e -- replay epoch-2/blue/fan_out [--code other.ts]
 //! ```
 //!
 //! The committed `history.v1.json` is decoded and replayed with the code it holds (or

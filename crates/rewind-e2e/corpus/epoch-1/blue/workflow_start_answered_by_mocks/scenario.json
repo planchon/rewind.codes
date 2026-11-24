@@ -1,0 +1,21 @@
+{
+  "description": "In mock mode no run of a workflow is created: the mocks answer its start with the run's output, its end follows at once, and its signals are accepted.",
+  "tools": {
+    "workflows.triage.start": { "closed": 5 },
+    "workflows.triage.signal": {}
+  },
+  "workflows": {
+    "triage": {
+      "script": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": { "closed": 5 },
+    "calls": { "workflows.triage.start": 1, "workflows.triage.signal": 1 },
+    "children": []
+  }
+}

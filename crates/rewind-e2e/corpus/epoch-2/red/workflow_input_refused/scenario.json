@@ -1,0 +1,18 @@
+{
+  "description": "The input of a start is checked against the workflow's input schema inside the op: a TypeError at the call, and nothing is recorded.",
+  "live": true,
+  "workflows": {
+    "triage": {
+      "code": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": { "name": "TypeError", "message": "invalid input for workflow triage: input.repo: 42 is not of type \"string\"" },
+    "events": ["run_started", "fail_run"],
+    "children": []
+  }
+}

@@ -34,12 +34,13 @@ impl Instance {
             (glue.actions)(&start.action_set),
             (glue.workflows)(&start.action_set),
         ));
-        let state = ExecState::new(
+        let mut state = ExecState::new(
             start.run_id,
             &start.seed,
             start.action_set.clone(),
             start.started_at,
         );
+        state.old_texts = glue.old_texts;
         let (mut isolate, hooks) = Isolate::new(glue, limits, loader, state)?;
         let (start_hook, deliver, idle) = {
             let runtime = isolate.runtime();

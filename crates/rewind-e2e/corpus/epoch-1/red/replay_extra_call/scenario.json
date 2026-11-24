@@ -1,9 +1,9 @@
 {
-  "description": "A code changed after the run: it makes a call the history does not contain.",
+  "description": "A script changed after the run: it makes a call the journal does not contain.",
   "input": {
     "repo": "acme/api"
   },
-  "actions": {
+  "tools": {
     "github.get_issue": {
       "$echo": true
     },
@@ -15,7 +15,7 @@
     "status": "completed"
   },
   "replay": {
-    "code": "changed.ts",
-    "diverges": "event 7 is run completion ({\"numbers\":[1,2,3]}), but the code emitted call #4 audit.record({\"count\":3})"
+    "script": "changed.ts",
+    "diverges": "history entry 7 is run completion ({\"numbers\":[1,2,3]}), but the script emitted tool call #4 audit.record({\"count\":3})"
   }
 }

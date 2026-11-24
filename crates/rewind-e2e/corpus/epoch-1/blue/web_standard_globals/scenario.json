@@ -1,6 +1,6 @@
 {
-  "description": "URL, URLSearchParams, TextEncoder, TextDecoder, atob, btoa and structuredClone (from deno_web), and the ES2025 built-ins V8 ships, are pure: the history pins their values for epoch 1.",
-  "actions": {
+  "description": "URL, URLSearchParams, TextEncoder, TextDecoder, atob, btoa and structuredClone (from deno_web), and the ES2025 built-ins V8 ships, are pure: the journal pins their values for epoch 1.",
+  "tools": {
     "audit.record": {
       "ok": true
     }

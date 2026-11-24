@@ -1,0 +1,6 @@
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"import { payments } from \"rewind:tools\";\n\nexport default async function main() {\n  payments.charge({ amount: 100 }); // no await\n  return \"charged\";\n}\n","toolset":{"servers":[],"tools":[{"name":"payments.charge","policy":{"approval":false,"concurrency":16,"heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"group":"payments","type":"host"},"schemas":{"input":{}}}],"v":1},"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"3f5572f1a27f998a9de2864c596672e34006cad10b7182c4886f17be45c98406","toolset":"c07d074f2545c77156a8ed832e4514c06f534d1514e775272bbc11b4709b3d3b","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"payments.charge","args":{"value":{"amount":100}},"callsite":{"line":4,"column":12}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_failed","seq":1,"error":{"kind":"error","message":"card declined"}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"ToolError","message":"payments.charge failed: card declined","stack":"ToolError: payments.charge failed: card declined"}}}
+]}

@@ -1,0 +1,18 @@
+{
+  "description": "Serializing the output runs the code's code: a call it makes then is still a call in flight, and the run waits for its outcome before it ends.",
+  "actions": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": "out",
+    "events": [
+      "run_started",
+      "schedule_call",
+      "call_completed",
+      "complete_run"
+    ]
+  }
+}

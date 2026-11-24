@@ -38,7 +38,7 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
 }
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../rewind-e2e/corpus/epoch-1")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../rewind-e2e/corpus/epoch-2")
 }
 
 // -------------------------------------------------------------------------------------------
@@ -612,7 +612,7 @@ async fn the_corpus_runs_through_rewind_test() {
     assert!(ran.len() >= 25, "only {} cases ran: {ran:?}", ran.len());
 }
 
-/// The cases of the corpus, `epoch-1/<color>/<name>`, sorted.
+/// The cases of the latest epoch of the corpus, `epoch-2/<color>/<name>`, sorted.
 fn cases() -> Vec<(String, PathBuf)> {
     let mut cases = Vec::new();
     for color in ["blue", "red"] {

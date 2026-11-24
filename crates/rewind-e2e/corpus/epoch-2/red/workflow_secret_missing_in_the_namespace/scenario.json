@@ -1,0 +1,67 @@
+{
+  "description": "A workflow's version uses the namespace's crm, and the namespace of the run that starts it has none: the start fails with an ActionError (unavailable), and no run of it exists.",
+  "live": true,
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "workflows": {
+    "triage": {
+      "code": "triage.ts",
+      "input": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "secrets": {
+        "crm": "ns/crm"
+      }
+    }
+  },
+  "actions": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "ActionError",
+      "message": "the secret ns/crm named for crm does not exist"
+    },
+    "children": [],
+    "auth": []
+  }
+}

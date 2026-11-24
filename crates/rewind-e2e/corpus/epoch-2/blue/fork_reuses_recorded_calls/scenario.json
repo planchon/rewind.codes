@@ -1,0 +1,48 @@
+{
+  "description": "A run fails at its last step; a fork with the corrected code reuses the recorded results of the first steps, which are not called again, and calls the actions only from where its commands differ.",
+  "input": {
+    "repo": "acme/api"
+  },
+  "actions": {
+    "github.list_issues": [
+      {
+        "number": 7
+      },
+      {
+        "number": 9
+      }
+    ],
+    "github.get_issue": {
+      "$echo": true
+    },
+    "github.close_issue": {
+      "$sequence": [
+        {
+          "$error": "issue 8 does not exist"
+        },
+        {
+          "$echo": true
+        }
+      ]
+    }
+  },
+  "fork": {
+    "code": "fixed.ts"
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "closed": 7
+    },
+    "calls": {
+      "github.list_issues": 1,
+      "github.get_issue": 2,
+      "github.close_issue": 1
+    },
+    "dispatched": {
+      "github.list_issues": 1,
+      "github.get_issue": 2,
+      "github.close_issue": 2
+    }
+  }
+}
