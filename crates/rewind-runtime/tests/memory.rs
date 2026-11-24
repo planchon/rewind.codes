@@ -5,7 +5,7 @@
 
 use rewind_core::{ActionSet, Code, Epoch, RunId, RunStatus, Seed};
 use rewind_engine::adapters::StaticDispatcher;
-use rewind_engine::ports::{CodeExecutor, CodeInstance, Delivery, RunRef, StartCode};
+use rewind_engine::ports::{CodeExecutor, CodeInstance, Handoff, RunRef, StartCode};
 use rewind_engine::{CacheConfig, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
@@ -65,7 +65,7 @@ async fn an_instance_reports_the_memory_its_isolate_holds() {
     // 2M doubles: 16 MiB more on the heap, measured after the delivery.
     instance
         .deliver(
-            Delivery::SignalReceived {
+            Handoff::SignalReceived {
                 name: "grow".into(),
                 payload: json!(2_000_000),
             },

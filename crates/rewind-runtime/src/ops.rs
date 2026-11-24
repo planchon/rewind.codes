@@ -2,7 +2,7 @@
 //!
 //! Ops are synchronous: they record a command, assign its `seq` and return it. Nothing is
 //! asynchronous from V8's point of view; the glue turns a `seq` into a promise that a later
-//! delivery settles.
+//! handoff settles.
 
 use std::collections::BTreeMap;
 use std::time::Duration;

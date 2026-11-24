@@ -567,7 +567,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             self.map
                 .partitions
                 .get(partition)
-                .is_some_and(|known| known.epoch > owner.epoch)
+                .is_some_and(|known| known.generation > owner.generation)
         });
         if stale {
             return self.deliver_fenced();
@@ -581,7 +581,8 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             .into_iter()
             .filter(|partition| {
                 self.owners.get(partition).is_none_or(|owner| {
-                    owner.is_closed() || previous.epoch(*partition) != self.map.epoch(*partition)
+                    owner.is_closed()
+                        || previous.generation(*partition) != self.map.generation(*partition)
                 })
             })
             .collect();
@@ -632,16 +633,16 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         if self.config.executors_only || self.lost {
             return Vec::new();
         }
-        let epoch = self.map.epoch(partition).unwrap_or_default();
+        let generation = self.map.generation(partition).unwrap_or_default();
         let (owner, effects) = Owner::open(
             partition,
-            epoch,
+            generation,
             Arc::clone(&self.plane),
             Arc::clone(&self.config),
             self.epochs.clone(),
             self.nodes.clone(),
         );
-        tracing::info!(node = %self.config.node, %partition, %epoch, "partition opened");
+        tracing::info!(node = %self.config.node, %partition, %generation, "partition opened");
         self.owners.insert(partition, owner);
         effects
     }

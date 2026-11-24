@@ -26,12 +26,12 @@ impl<T> Default for ReadyQueue<T> {
 }
 
 impl<T> ReadyQueue<T> {
-    /// Queues a run of `tenant` with `attempts` started activations and its oldest trigger
+    /// Queues a run of `tenant` with `unfinished` activations never finished and its oldest trigger
     /// received at `oldest`. A run queued again replaces its entry.
     pub(crate) fn push(
         &mut self,
         tenant: TenantId,
-        attempts: u32,
+        unfinished: u32,
         oldest: Timestamp,
         run: RunId,
         item: T,
@@ -41,7 +41,7 @@ impl<T> ReadyQueue<T> {
         if runs.is_empty() {
             self.turns.push_back(tenant);
         }
-        runs.insert((attempts, oldest, run), item);
+        runs.insert((unfinished, oldest, run), item);
     }
 
     /// The next run: the first of the tenant whose turn it is.
@@ -71,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn tenants_take_turns_and_fewer_attempts_go_first() {
+    fn tenants_take_turns_and_fewer_unfinished_go_first() {
         let mut queue = ReadyQueue::default();
         let (a, b) = (tenant("a"), tenant("b"));
         for n in 1..=3 {

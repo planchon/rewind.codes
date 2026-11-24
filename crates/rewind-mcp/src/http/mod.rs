@@ -16,7 +16,7 @@
 //! `OPTIONS`, `PUT`, `DELETE`), and fails otherwise, as the request may have taken effect. A
 //! response with any status, 404 and 500 included, is a result, as `fetch` resolves with it.
 //!
-//! In production, egress also goes through an egress proxy: a rule of the network the workers
+//! In production, egress also goes through an egress proxy: a rule of the network the nodes
 //! run in, not a setting of this client.
 
 mod allow;

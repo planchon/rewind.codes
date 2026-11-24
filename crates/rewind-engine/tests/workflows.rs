@@ -16,7 +16,7 @@ use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogStore, Created, Delivery, Diagnostic, DiagnosticSource, Enqueued,
+    ActionDeclarations, CatalogStore, Created, Diagnostic, DiagnosticSource, Enqueued, Handoff,
     NamespaceName, RunMetadata, RunRef, Severity, StartedBy, StoredWorkflow, TenantId,
     WorkflowDeclarations,
 };
@@ -91,7 +91,7 @@ fn triage(executor: FakeExecutor) -> FakeExecutor {
         "triage",
         |run| run.await_signal("approval"),
         |run, delivery| match delivery {
-            Delivery::SignalReceived { name, payload } if name == "approval" => {
+            Handoff::SignalReceived { name, payload } if name == "approval" => {
                 let closed = if payload["close"] == json!(true) {
                     3
                 } else {
@@ -99,9 +99,9 @@ fn triage(executor: FakeExecutor) -> FakeExecutor {
                 };
                 run.complete(json!({ "closed": closed, "repo": run.input["repo"].clone() }));
             }
-            Delivery::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
+            Handoff::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
             // Another signal waits in its mailbox.
-            Delivery::SignalReceived { .. } => {}
+            Handoff::SignalReceived { .. } => {}
             other => panic!("triage got {other:?}"),
         },
     )
@@ -120,7 +120,7 @@ fn parent(executor: FakeExecutor) -> FakeExecutor {
             run.call("workflows.triage.start", args);
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { seq: Seq(1), result } => {
+            Handoff::CallCompleted { seq: Seq(1), result } => {
                 if run.input["fail_after_start"] == json!(true) {
                     run.fail("Error", "the parent gave up");
                     return;
@@ -130,8 +130,8 @@ fn parent(executor: FakeExecutor) -> FakeExecutor {
                     json!({ "run": run_id(result), "name": "approval", "payload": { "close": true } }),
                 );
             }
-            Delivery::CallCompleted { seq: Seq(2), .. } => {}
-            Delivery::SignalReceived { name, payload } if ended_run(name).is_some() => {
+            Handoff::CallCompleted { seq: Seq(2), .. } => {}
+            Handoff::SignalReceived { name, payload } if ended_run(name).is_some() => {
                 run.complete(payload.clone());
             }
             other => panic!("parent got {other:?}"),
@@ -154,8 +154,8 @@ fn others(executor: FakeExecutor) -> FakeExecutor {
                 );
             },
             |run, delivery| match delivery {
-                Delivery::CallCompleted { .. } => run.complete(json!("sent")),
-                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
+                Handoff::CallCompleted { .. } => run.complete(json!("sent")),
+                Handoff::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 other => panic!("signaller got {other:?}"),
             },
         )
@@ -169,9 +169,9 @@ fn others(executor: FakeExecutor) -> FakeExecutor {
                 run.call("workflows.triage.start", args);
             },
             |run, delivery| match delivery {
-                Delivery::CallCompleted { .. } => {}
-                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
-                Delivery::SignalReceived { name, payload } if ended_run(name).is_some() => {
+                Handoff::CallCompleted { .. } => {}
+                Handoff::CallFailed { error, .. } => run.fail("ActionError", &error.message),
+                Handoff::SignalReceived { name, payload } if ended_run(name).is_some() => {
                     run.complete(payload.clone());
                 }
                 other => panic!("starter got {other:?}"),
@@ -546,7 +546,7 @@ async fn registering_checks_the_name_the_schemas_the_action_set_and_the_types() 
 }
 
 #[tokio::test]
-async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
+async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_allowed_labels() {
     let (mut world, stored, action_set) = registered().await;
     let scope = BTreeMap::from([("conversation".to_owned(), "c-1".to_owned())]);
     let in_scope = |scope: &BTreeMap<String, String>| {
@@ -574,7 +574,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
             action_set.clone(),
             json!({ "target": target.to_string() }),
         );
-        request.metadata.scope = scope.clone();
+        request.metadata.allowed_labels = scope.clone();
         request.metadata.labels = scope.clone();
         request
     };
@@ -614,27 +614,27 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
         action_set.clone(),
         json!({ "labels": { "conversation": "c-2" } }),
     );
-    conflicting.metadata.scope = scope.clone();
+    conflicting.metadata.allowed_labels = scope.clone();
     let run = world.run(conflicting).await;
     let failed = failure(&mut world, &run).await;
     assert!(
         failed
             .as_deref()
-            .is_some_and(|message| message.contains("its scope fixes it")),
+            .is_some_and(|message| message.contains("its allowed labels fix it")),
         "{failed:?}"
     );
 
     // A version saved without the scope's labels is not started from a scoped run: it may use
     // the organization's secrets of other labels.
     let mut scoped = StartRun::new(Code::new("starter"), action_set.clone(), json!({}));
-    scoped.metadata.scope = scope.clone();
+    scoped.metadata.allowed_labels = scope.clone();
     scoped.metadata.labels = scope.clone();
     let run = world.run(scoped).await;
     let failed = failure(&mut world, &run).await;
     assert!(
-        failed
-            .as_deref()
-            .is_some_and(|message| message.contains("was not saved under this run's scope")),
+        failed.as_deref().is_some_and(
+            |message| message.contains("was not saved under this run's allowed labels")
+        ),
         "{failed:?}"
     );
 }

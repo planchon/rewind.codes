@@ -4,7 +4,7 @@
 
 mod support;
 
-use rewind_engine::ports::Delivery;
+use rewind_engine::ports::Handoff;
 use serde_json::json;
 use support::plane::World;
 use support::*;
@@ -17,12 +17,12 @@ fn triage() -> FakeExecutor {
             run.call("a", json!({ "repo": "acme/api", "state": "open" }));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { .. } => {
+            Handoff::CallCompleted { .. } => {
                 run.log("3 stale issues");
                 run.timer(3 * DAY);
                 run.await_signal("approval");
             }
-            Delivery::SignalReceived { .. } => run.fail("TypeError", "decision.close is undefined"),
+            Handoff::SignalReceived { .. } => run.fail("TypeError", "decision.close is undefined"),
             _ => {}
         },
     )

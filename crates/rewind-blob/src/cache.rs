@@ -1,4 +1,4 @@
-//! The workers' local cache of blobs (`archi/06-storage-and-scale.md`, "Payloads").
+//! The nodes' local cache of blobs (`archi/06-storage-and-scale.md`, "Payloads").
 
 use std::fmt;
 use std::future::Future;
@@ -28,7 +28,7 @@ const TYPICAL_BLOB: u64 = 64 * 1024;
 /// The default capacity of a [`CachedBlobs`]: 256 MiB.
 pub const DEFAULT_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 
-/// A `BlobStore` with a local cache in front of it: what a worker puts in front of S3.
+/// A `BlobStore` with a local cache in front of it: what a node puts in front of S3.
 ///
 /// The cache is in memory, bounded in bytes, and evicts the blobs read least recently and least
 /// often (CLOCK-Pro, from `quick_cache`). Its entries are immutable: a digest always names the
@@ -36,7 +36,7 @@ pub const DEFAULT_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 /// enter it. A get that misses reads the inner store and keeps the blob; a put always writes
 /// to the inner store, then keeps the blob; a delete drops the entry and deletes from the
 /// inner store, and so does the deletion of a run's blobs for each of them. A copy is the inner
-/// store's. Another worker's cache may still serve a blob this one deleted: a cleanup only
+/// store's. Another node's cache may still serve a blob this one deleted: a cleanup only
 /// deletes blobs that no run has referenced for a day, and an erased run is read no more.
 pub struct CachedBlobs<S> {
     inner: S,

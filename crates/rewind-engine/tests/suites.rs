@@ -16,7 +16,7 @@ use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::{RecordFrom, RecordingError};
 use rewind_engine::ports::BlobStore as _;
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogStore, Delivery, NamespaceName, StoreError, TenantId,
+    ActionDeclarations, CatalogStore, Handoff, NamespaceName, StoreError, TenantId,
     WorkflowDeclarations,
 };
 use rewind_engine::suites::{
@@ -40,8 +40,8 @@ fn programs() -> FakeExecutor {
                 run.call("github.close_issue", json!({ "repo": repo, "number": 4 }));
             },
             |run, delivery| match delivery {
-                Delivery::CallCompleted { .. } => run.complete(json!({ "closed": 1 })),
-                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
+                Handoff::CallCompleted { .. } => run.complete(json!({ "closed": 1 })),
+                Handoff::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 _ => run.fail("Error", "unexpected"),
             },
         )
@@ -53,8 +53,8 @@ fn programs() -> FakeExecutor {
             },
             |run, delivery| match delivery {
                 // A regression: it reports nothing closed.
-                Delivery::CallCompleted { .. } => run.complete(json!({ "closed": 0 })),
-                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
+                Handoff::CallCompleted { .. } => run.complete(json!({ "closed": 0 })),
+                Handoff::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 _ => run.fail("Error", "unexpected"),
             },
         )
@@ -586,8 +586,8 @@ fn closer() -> FakeExecutor {
             }
         },
         |run, delivery| match delivery {
-            Delivery::SignalReceived { .. } => run.complete(json!({ "closed": 0 })),
-            Delivery::CallCompleted { seq, .. } if seq.0 >= 2 || run.input["count"] == 1 => {
+            Handoff::SignalReceived { .. } => run.complete(json!({ "closed": 0 })),
+            Handoff::CallCompleted { seq, .. } if seq.0 >= 2 || run.input["count"] == 1 => {
                 run.complete(json!({ "closed": run.input["count"].clone() }));
             }
             _ => {}

@@ -5,8 +5,8 @@
 //! - `initialize` answers the name `Rewind`, this crate's version and [`INSTRUCTIONS`]: from an
 //!   organization to a run.
 //! - `tools/list` lists the tools the caller may use in at least one of its organizations, each
-//!   with its title, its input schema and its annotations; `list_orgs` always.
-//! - `tools/call` resolves the call's `org` among the caller's organizations (an id, or a name no
+//!   with its title, its input schema and its annotations; `list_organizations` always.
+//! - `tools/call` resolves the call's `organization` among the caller's organizations (an id, or a name no
 //!   other of them has; left out when the caller reaches one), checks the tool's permission
 //!   there, then runs the agent tool with an API of `/v1` bound to that organization and to the
 //!   call's `namespace`. Every refusal the model can fix is a result with `isError`; a fault of

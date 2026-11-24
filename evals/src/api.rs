@@ -695,7 +695,7 @@ impl Api for World {
         request.metadata.trace_context =
             trace_context(start.traceparent.as_ref(), start.tracestate.as_ref())?;
         // What the run's workflows reach: the runs carrying the caller's labels.
-        request.metadata.scope = self.labels.clone();
+        request.metadata.allowed_labels = self.labels.clone();
         request.idempotency_key = key.map(|key| key.as_str().to_owned());
         let created = self
             .start(request, start.check == Some(false))

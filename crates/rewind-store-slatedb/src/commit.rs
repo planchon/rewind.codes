@@ -402,7 +402,7 @@ impl Apply<'_> {
             Change::Interrupted { run } => {
                 let before = self.existing(&run).await?;
                 let mut after = before.clone();
-                after.head.attempts = after.head.attempts.saturating_add(1);
+                after.head.unfinished = after.head.unfinished.saturating_add(1);
                 self.write_run(Some(&before), Some(&after)).await
             }
             Change::Summary { run, summary } => {
@@ -427,7 +427,7 @@ impl Apply<'_> {
                 let mut after = before.clone();
                 after.quarantine(None);
                 after.head.failures = 0;
-                after.head.attempts = 0;
+                after.head.unfinished = 0;
                 self.write_run(Some(&before), Some(&after)).await
             }
             Change::Watch { run, watcher } => {

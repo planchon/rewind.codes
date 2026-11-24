@@ -273,7 +273,7 @@ impl Runs {
                 attempt: Attempt::FIRST,
                 sealed: None,
                 failures: 0,
-                attempts: 0,
+                unfinished: 0,
                 quarantine: None,
                 waits: Vec::new(),
                 expires_at: Timestamp(at.0 + 30 * 86_400_000),

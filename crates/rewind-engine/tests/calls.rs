@@ -17,7 +17,7 @@ use rewind_engine::StartRun;
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::{HarnessActions, NodeConfig};
 use rewind_engine::ports::link::{Refusal, StreamAttach, StreamId};
-use rewind_engine::ports::{Delivery, Dispatched, RunRef, TenantId};
+use rewind_engine::ports::{Dispatched, Handoff, RunRef, TenantId};
 use serde_json::json;
 use support::plane::{World, config, handed};
 use support::{FakeExecutor, RecordingDispatcher, T0};
@@ -36,10 +36,10 @@ fn caller() -> FakeExecutor {
             run.call(&action, args);
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { result, .. } => {
+            Handoff::CallCompleted { result, .. } => {
                 run.complete(json!({ "result": result }));
             }
-            Delivery::CallFailed { error, .. } => run.complete(json!({
+            Handoff::CallFailed { error, .. } => run.complete(json!({
                 "error": error.kind.as_str(),
                 "message": error.message,
             })),
@@ -205,8 +205,8 @@ fn hooked() -> FakeExecutor {
             run.call("signalUrl", json!({ "name": "pr_merged" }));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { .. } => run.await_signal("pr_merged"),
-            Delivery::SignalReceived { name, payload } => {
+            Handoff::CallCompleted { .. } => run.await_signal("pr_merged"),
+            Handoff::SignalReceived { name, payload } => {
                 run.complete(json!({ "name": name, "payload": payload }));
             }
             other => panic!("unexpected {other:?}"),

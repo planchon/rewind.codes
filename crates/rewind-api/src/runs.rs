@@ -513,19 +513,19 @@ pub struct RunStatsQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,
-    /// The width of the series' buckets (`"1h"`, `"1d"`), from `since`, which it requires; whole
-    /// hours, a shorter or uneven width rounded up to them; 500 buckets at most. No series
+    /// The width of the series' intervals (`"1h"`, `"1d"`), from `since`, which it requires; whole
+    /// hours, a shorter or uneven width rounded up to them; 500 intervals at most. No series
     /// without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
-    pub bucket: Option<Duration>,
+    pub interval: Option<Duration>,
     /// Values per facet (10 by default, 50 at most).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<u32>,
 }
 
 /// The runs of a scope. Counts, series, durations and facets are over the runs started in the
-/// window, from the hourly counters; `since`, `until` and `bucket` are the window and the width
+/// window, from the hourly counters; `since`, `until` and `interval` are the window and the width
 /// the answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the
 /// scope now, whenever they started, from the gauge of the active runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -534,15 +534,15 @@ pub struct RunStats {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<Timestamp>,
     pub until: Timestamp,
-    /// The width of the series' buckets, if any.
+    /// The width of the series' intervals, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
-    pub bucket: Option<Duration>,
+    pub interval: Option<Duration>,
     pub runs: u64,
     pub statuses: StatusCounts,
-    /// One bucket per `bucket` from `since`, the runs started in it by status.
+    /// One interval per `interval` from `since`, the runs started in it by status.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub series: Vec<SeriesBucket>,
+    pub series: Vec<SeriesInterval>,
     /// From start to end, in milliseconds, over the runs that ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub durations: Option<DurationStats>,
@@ -577,8 +577,8 @@ pub struct WaitCounts {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct SeriesBucket {
-    /// The bucket's start.
+pub struct SeriesInterval {
+    /// The interval's start.
     pub at: Timestamp,
     pub statuses: StatusCounts,
 }
@@ -654,11 +654,11 @@ pub struct FailureQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,
-    /// The width of each group's series' buckets, from `since`, which it requires; whole hours,
-    /// a shorter or uneven width rounded up to them; 500 buckets at most.
+    /// The width of each group's series' intervals, from `since`, which it requires; whole hours,
+    /// a shorter or uneven width rounded up to them; 500 intervals at most.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
-    pub bucket: Option<Duration>,
+    pub interval: Option<Duration>,
     /// Groups at most (50 by default, 500 at most).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
@@ -672,7 +672,7 @@ pub struct FingerprintPage {
     pub until: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
-    pub bucket: Option<Duration>,
+    pub interval: Option<Duration>,
     /// Runs of every fingerprint.
     pub runs: u64,
     /// Fingerprints in all, beyond `limit` included.
@@ -694,7 +694,7 @@ pub struct Fingerprint {
     /// The error's name, or the abort's kind.
     pub error: String,
     pub runs: u64,
-    /// One count per bucket from `since`: the runs that ended in it.
+    /// One count per interval from `since`: the runs that ended in it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub series: Vec<u64>,
     /// Distinct workflows.

@@ -629,12 +629,12 @@ mod operations {
     /// Save a workflow (`save_workflow`)
     ///
     /// Checks the workflow's code against its action set and its own schemas, then runs its
-    /// suite: its base's tests, minus those it retires and with those it updates, each with a
+    /// suite: its base's tests, minus those it retires and with those it replaces, each with a
     /// reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
     /// every test passes. Saving the same workflow again returns the version saved first (200).
     /// A key limited to labels saves a version of its own, carrying its labels, even when the
-    /// same workflow was saved under other labels or tenant-wide. Runs the code's tests:
-    /// served by a server with the worker role (503 on the api role when there is a test to run).
+    /// same workflow was saved under other labels or tenant-wide. Runs the code's tests
+    /// on the node that serves the request (503 when the run plane they run on fails).
     #[utoipa::path(
         post, path = "/v1/workflows", tag = "workflows", operation_id = "createWorkflow",
         request_body = CreateWorkflow,
@@ -643,7 +643,7 @@ mod operations {
             (status = 200, description = "Saved earlier.", body = Workflow),
             (status = 404, description = "No such action set, or base version.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
-            (status = 503, description = "A server without the worker role, with tests to run (`unavailable`).", body = Problem, content_type = "application/problem+json"),
+            (status = 503, description = "The run plane the tests run on failed (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn create_workflow() {}
@@ -724,7 +724,7 @@ mod operations {
     ///
     /// In virtual time, each test against its world: rules, handlers and a cassette. No
     /// action is really called. With `workflow`, the suite of that version runs too, against the
-    /// given code or action set. Served by a server with the worker role.
+    /// given code or action set, on the node that serves the request.
     #[utoipa::path(
         post, path = "/v1/test", tag = "checks", operation_id = "testWorkflow",
         params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
@@ -1005,7 +1005,7 @@ mod operations {
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The corrected code was refused (`invalid-code`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
             (status = 429, description = "Too many active runs (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
-            (status = 503, description = "A run of a workflow forked on a server without the worker role (`unavailable`).", body = Problem, content_type = "application/problem+json"),
+            (status = 503, description = "For a run of a workflow, the run plane its version's suite runs on failed (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn fork_run() {}

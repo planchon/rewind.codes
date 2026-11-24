@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rewind_core::{RunStatus, Timestamp};
 use rewind_engine::plane::NodeConfig;
-use rewind_engine::ports::{Delivery, NamespaceName, Scope, TenantId, Window};
+use rewind_engine::ports::{Handoff, NamespaceName, Scope, TenantId, Window};
 use serde_json::json;
 use support::plane::{World, config};
 use support::{DAY, FakeExecutor, RecordingDispatcher, T0, request, result_of};
@@ -43,11 +43,11 @@ fn steps() -> FakeExecutor {
             run.call("a", json!(1));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { seq, .. } if seq.0 == 1 => {
+            Handoff::CallCompleted { seq, .. } if seq.0 == 1 => {
                 run.spend(Duration::from_millis(7));
                 run.call("b", json!(2));
             }
-            Delivery::CallCompleted { .. } => {
+            Handoff::CallCompleted { .. } => {
                 run.spend(Duration::from_millis(11));
                 run.complete(json!("done"));
             }

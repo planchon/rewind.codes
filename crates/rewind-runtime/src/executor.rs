@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rewind_core::{ActionSet, Code, Epoch, Timestamp};
 use rewind_engine::ports::{
-    CodeExecutor, CodeInstance, CompiledCode, Delivery, Emitted, ExecutorError, InvalidCode,
+    CodeExecutor, CodeInstance, CompiledCode, Emitted, ExecutorError, Handoff, InvalidCode,
     StartCode,
 };
 use tokio::sync::oneshot;
@@ -119,7 +119,7 @@ struct Ran {
 type Reply = oneshot::Sender<Ran>;
 
 struct Request {
-    delivery: Delivery,
+    handoff: Handoff,
     now: Timestamp,
     reply: Reply,
 }
@@ -138,7 +138,7 @@ pub struct V8Instance {
 impl CodeInstance for V8Instance {
     async fn deliver(
         &mut self,
-        delivery: Delivery,
+        handoff: Handoff,
         now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         let (reply, emitted) = oneshot::channel();
@@ -146,7 +146,7 @@ impl CodeInstance for V8Instance {
             .get_mut()
             .map_err(|_| stopped())?
             .send(Request {
-                delivery,
+                handoff,
                 now,
                 reply,
             })
@@ -167,7 +167,7 @@ impl CodeInstance for V8Instance {
     }
 
     /// The CPU time of the isolate's thread in the last call, as the watchdog measured it:
-    /// loading the modules and `main(input)` after a start, one delivery after `deliver`.
+    /// loading the modules and `main(input)` after a start, one handoff after `deliver`.
     fn cpu_time(&self) -> Duration {
         self.cpu
     }
@@ -220,7 +220,7 @@ fn run_isolate(
         return;
     }
     while let Ok(request) = inbox.recv() {
-        let result = isolate.deliver(&request.delivery, request.now);
+        let result = isolate.deliver(&request.handoff, request.now);
         let alive = result.is_ok();
         let _ = request.reply.send(measured(&mut isolate, result));
         if !alive {

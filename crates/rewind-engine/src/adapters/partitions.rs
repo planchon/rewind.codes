@@ -220,7 +220,7 @@ impl PartitionState {
             }
             Change::Interrupted { run } => {
                 let head = &mut self.records_mut(&run)?.head;
-                head.attempts = head.attempts.saturating_add(1);
+                head.unfinished = head.unfinished.saturating_add(1);
                 Ok(())
             }
             Change::Quarantine { run, quarantine } => {
@@ -231,7 +231,7 @@ impl PartitionState {
                 let records = self.records_mut(&run)?;
                 records.quarantine(None);
                 records.head.failures = 0;
-                records.head.attempts = 0;
+                records.head.unfinished = 0;
                 Ok(())
             }
             Change::Watch { run, watcher } => {

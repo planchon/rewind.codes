@@ -17,7 +17,7 @@ use rewind_core::{
 use rewind_engine::failures;
 use rewind_engine::plane::NodeConfig;
 use rewind_engine::ports::{
-    Delivery, Ending, RunMetadata, RunSnapshot, SpanId, TraceContext, Wait, WaitKind,
+    Ending, Handoff, RunMetadata, RunSnapshot, SpanId, TraceContext, Wait, WaitKind,
 };
 use rewind_engine::projector::{headline, run_snapshot};
 use serde_json::json;
@@ -32,11 +32,11 @@ fn programs() -> FakeExecutor {
             run.call("a", json!({ "n": 1 }));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { .. } => {
+            Handoff::CallCompleted { .. } => {
                 run.log("a answered");
                 run.await_signal("go");
             }
-            Delivery::SignalReceived { .. } => run.complete(json!({ "done": true })),
+            Handoff::SignalReceived { .. } => run.complete(json!({ "done": true })),
             _ => {}
         },
     )

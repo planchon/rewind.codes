@@ -828,7 +828,7 @@ mod tests {
             attempt: crate::ports::Attempt::FIRST,
             sealed: None,
             failures: 0,
-            attempts: 0,
+            unfinished: 0,
             quarantine: None,
             waits: Vec::new(),
             expires_at: Timestamp(0),

@@ -511,7 +511,7 @@ impl<P: Plane> Owner<P> {
         };
         let report = crate::ports::link::CountsReport {
             partition: self.partition,
-            epoch: self.epoch,
+            generation: self.generation,
             namespace,
             gauges,
             created_this_month: counters.created,

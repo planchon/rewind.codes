@@ -49,7 +49,7 @@ fn chain() -> FakeExecutor {
             run.timer(20);
         },
         |run, delivery| match delivery {
-            rewind_engine::ports::Delivery::TimerFired { .. } => {
+            rewind_engine::ports::Handoff::TimerFired { .. } => {
                 run.call("a", json!({ "n": 1 }));
             }
             other => run.complete(result_of(other).clone()),

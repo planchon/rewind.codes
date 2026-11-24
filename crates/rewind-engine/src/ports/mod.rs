@@ -81,7 +81,7 @@ pub use checker::{
 pub use clock::{Clock, Entropy, VirtualTime};
 pub use cluster::{
     Cluster, ClusterError, ControlPlaneChange, Departed, InvalidNodeId, Moves, NodeId, NodeInfo,
-    PartitionEpoch, PartitionMap, PartitionOwner,
+    PartitionGeneration, PartitionMap, PartitionOwner,
 };
 pub use connections::{
     Access, ClientAuthMethod, ClientKind, CodeRedemption, Connection, ConnectionToken,
@@ -90,7 +90,7 @@ pub use connections::{
 };
 pub use dispatcher::{ActionDispatcher, Call, CallAuth, CallClaims, Dispatched, RETRY_AFTER_DATA};
 pub use executor::{
-    CodeExecutor, CodeInstance, CompiledCode, Delivery, Emitted, ExecutorError, InvalidCode,
+    CodeExecutor, CodeInstance, CompiledCode, Emitted, ExecutorError, Handoff, InvalidCode,
     StartCode,
 };
 pub use identity::{

@@ -23,7 +23,7 @@
 //! {"k":"nodes"}
 //! ```
 //!
-//! A partition map lists every partition as `[partition, node, epoch]`, the node an index into
+//! A partition map lists every partition as `[partition, node, generation]`, the node an index into
 //! `n` (`null`: no owner): the whole map as it committed, about 10 bytes a partition.
 //!
 //! Postgres refuses a payload of 8000 bytes or more. A payload longer than [`MAX_FRAME`] bytes
@@ -34,7 +34,7 @@
 
 use rewind_core::{Digest, PartitionId};
 use rewind_engine::ports::{
-    ControlPlaneChange, NamespaceName, NodeId, PartitionEpoch, PartitionMap, PartitionOwner,
+    ControlPlaneChange, NamespaceName, NodeId, PartitionGeneration, PartitionMap, PartitionOwner,
     Principal, SecretId, SecretNamespace, TenantId,
 };
 use serde::{Deserialize, Serialize};
@@ -146,7 +146,7 @@ impl From<&ControlPlaneChange> for Payload {
                                 }
                             }
                         });
-                        (partition.get(), node, owner.epoch.0)
+                        (partition.get(), node, owner.generation.0)
                     })
                     .collect();
                 Payload::PartitionMap { n: nodes, p }
@@ -244,7 +244,7 @@ impl TryFrom<Payload> for ControlPlaneChange {
                     .map(|node| NodeId::new(node).map_err(bad))
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut map = PartitionMap::default();
-                for (partition, node, epoch) in p {
+                for (partition, node, generation) in p {
                     let node = node
                         .map(|index| {
                             nodes
@@ -257,7 +257,7 @@ impl TryFrom<Payload> for ControlPlaneChange {
                         PartitionId::new(partition),
                         PartitionOwner {
                             node,
-                            epoch: PartitionEpoch(epoch),
+                            generation: PartitionGeneration(generation),
                         },
                     );
                 }
@@ -483,7 +483,7 @@ mod tests {
             PartitionId::new(1),
             PartitionOwner {
                 node: Some(NodeId::new("node-a").unwrap()),
-                epoch: PartitionEpoch(7),
+                generation: PartitionGeneration(7),
             },
         );
         vec![
@@ -582,7 +582,7 @@ mod tests {
                         PartitionId::new(id),
                         PartitionOwner {
                             node: Some(nodes[usize::from(id) % nodes.len()].clone()),
-                            epoch: PartitionEpoch(u64::MAX - u64::from(id)),
+                            generation: PartitionGeneration(u64::MAX - u64::from(id)),
                         },
                     )
                 })
@@ -604,7 +604,7 @@ mod tests {
                         PartitionId::new(id),
                         PartitionOwner {
                             node: Some(node.clone()),
-                            epoch: PartitionEpoch(1_000_000),
+                            generation: PartitionGeneration(1_000_000),
                         },
                     )
                 })

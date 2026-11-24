@@ -19,7 +19,7 @@ use crate::watchdog::Watchdog;
 /// Resource limits of one instance (`archi/03-execution.md`, "Resource limits").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxLimits {
-    /// CPU time the code may use to react to one trigger (`main(input)`, or one delivery),
+    /// CPU time the code may use to react to one trigger (`main(input)`, or one handoff),
     /// measured on the CPU clock of the isolate's thread: time the thread spends waiting for a
     /// core does not count.
     pub cpu_per_trigger: Duration,

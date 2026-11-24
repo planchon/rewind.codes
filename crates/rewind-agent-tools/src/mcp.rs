@@ -4,7 +4,7 @@
 //! (`wait` at most 200 s, 30 s by default; a result at most 80 000 characters), and the tools
 //! that find what the caller reaches.
 //!
-//! The organization (`org`) is not read here: the MCP server resolves it among the caller's
+//! The organization (`organization`) is not read here: the MCP server resolves it among the caller's
 //! organizations, checks the tool's permission there, and hands [`McpTools::handle`] an API
 //! bound to that organization and to the call's namespace.
 
@@ -80,8 +80,8 @@ impl McpTools {
         self.limits
     }
 
-    /// `list_orgs`: the organizations the caller reaches, with what the tools may do in each.
-    pub fn list_orgs(&self, organizations: &[Organization]) -> AgentToolResult {
+    /// `list_organizations`: the organizations the caller reaches, with what the tools may do in each.
+    pub fn list_organizations(&self, organizations: &[Organization]) -> AgentToolResult {
         let views: Vec<OrganizationView<'_>> = organizations
             .iter()
             .map(|organization| OrganizationView {
@@ -96,8 +96,8 @@ impl McpTools {
         )
     }
 
-    /// Executes a call of a tool of the MCP set but `list_orgs`, with `api` bound to the
-    /// organization of the call and to its namespace. `input` is the call's arguments, `org`
+    /// Executes a call of a tool of the MCP set but `list_organizations`, with `api` bound to the
+    /// organization of the call and to its namespace. `input` is the call's arguments, `organization`
     /// included, which is left alone. Mistakes the model can fix come back as a result with
     /// `is_error`; a fault of the platform is an error.
     pub async fn handle<A: McpApi>(
@@ -106,7 +106,7 @@ impl McpTools {
         name: &str,
         input: &Value,
     ) -> Result<AgentToolResult, AgentError> {
-        if name == "list_orgs" || !MCP_TOOLS.contains(&name) {
+        if name == "list_organizations" || !MCP_TOOLS.contains(&name) {
             return Err(AgentError::UnknownTool(name.to_owned()));
         }
         let call = HandleOptions::default();

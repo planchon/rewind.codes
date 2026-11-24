@@ -35,7 +35,7 @@ use crate::ports::link::{
     Refusal, SlotRequest, StreamAttach, StreamId, TenantReply, TenantRequest,
 };
 use crate::ports::{
-    Admission, CatalogStore, Gauges, Month, NamespaceName, PartitionEpoch, QuotaAlert,
+    Admission, CatalogStore, Gauges, Month, NamespaceName, PartitionGeneration, QuotaAlert,
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, TaskRef, TaskToken, Tenant,
     TenantId, TenantState, Threshold, namespace_partition,
 };
@@ -113,7 +113,7 @@ struct Limits {
 /// The calls in flight of one server, and those waiting for a slot.
 #[derive(Debug, Default)]
 struct Server {
-    held: BTreeMap<TaskRef, (PartitionId, PartitionEpoch)>,
+    held: BTreeMap<TaskRef, (PartitionId, PartitionGeneration)>,
     queue: VecDeque<SlotRequest>,
 }
 
@@ -134,11 +134,11 @@ pub(crate) struct TenantActor<P: Plane> {
     partitions: NonZeroU16,
     plane: Arc<P>,
     state: TenantState,
-    /// The epoch of each admission in flight, by run: an admission of an owner that is gone is
+    /// The partition generation of each admission in flight, by run: an admission of an owner that is gone is
     /// released when the next owner of its partition reports.
-    epochs: BTreeMap<rewind_core::RunId, (PartitionId, PartitionEpoch)>,
+    generations: BTreeMap<rewind_core::RunId, (PartitionId, PartitionGeneration)>,
     reported: BTreeMap<NamespaceName, Reported>,
-    owners: BTreeMap<PartitionId, PartitionEpoch>,
+    owners: BTreeMap<PartitionId, PartitionGeneration>,
     limits: Option<Limits>,
     /// The admissions waiting for limits to be read, by namespace.
     waiting: BTreeMap<NamespaceName, Vec<(Admit, ReplyTo)>>,
@@ -175,7 +175,7 @@ impl<P: Plane> TenantActor<P> {
             partitions,
             plane,
             state,
-            epochs: BTreeMap::new(),
+            generations: BTreeMap::new(),
             reported: BTreeMap::new(),
             owners: BTreeMap::new(),
             limits: None,
@@ -498,8 +498,8 @@ impl<P: Plane> TenantActor<P> {
             code: admit.code,
             admitted_at: admit.at,
         });
-        self.epochs
-            .insert(admit.run, (admit.partition, admit.epoch));
+        self.generations
+            .insert(admit.run, (admit.partition, admit.generation));
         out.push(TenantEffect::Persist {
             state: self.state.clone(),
             alerts,
@@ -539,12 +539,12 @@ impl<P: Plane> TenantActor<P> {
 
     fn counts(&mut self, report: CountsReport, now: Timestamp, out: &mut Vec<TenantEffect<P>>) {
         let known = self.owners.get(&report.partition).copied();
-        if known.is_some_and(|known| known > report.epoch) {
+        if known.is_some_and(|known| known > report.generation) {
             return;
         }
-        if known.is_none_or(|known| known < report.epoch) {
-            self.owners.insert(report.partition, report.epoch);
-            self.release_owner(report.partition, report.epoch, out);
+        if known.is_none_or(|known| known < report.generation) {
+            self.owners.insert(report.partition, report.generation);
+            self.release_owner(report.partition, report.generation, out);
         }
         let mut changed = false;
         let released: BTreeSet<_> = report
@@ -559,7 +559,7 @@ impl<P: Plane> TenantActor<P> {
                 .admissions
                 .retain(|admission| !released.contains(&admission.run));
             for run in &released {
-                self.epochs.remove(run);
+                self.generations.remove(run);
             }
             changed |= before != self.state.admissions.len();
         }
@@ -632,7 +632,7 @@ impl<P: Plane> TenantActor<P> {
     fn release_owner(
         &mut self,
         partition: PartitionId,
-        epoch: PartitionEpoch,
+        generation: PartitionGeneration,
         out: &mut Vec<TenantEffect<P>>,
     ) {
         let partitions = self.partitions;
@@ -644,9 +644,9 @@ impl<P: Plane> TenantActor<P> {
             .filter(|admission| {
                 namespace_partition(&tenant, &admission.namespace, partitions) == partition
                     && self
-                        .epochs
+                        .generations
                         .get(&admission.run)
-                        .is_none_or(|(_, at)| *at < epoch)
+                        .is_none_or(|(_, at)| *at < generation)
             })
             .map(|admission| admission.run)
             .collect();
@@ -657,21 +657,21 @@ impl<P: Plane> TenantActor<P> {
         for (name, server) in &mut self.servers {
             server
                 .held
-                .retain(|_, (of, at)| !(*of == partition && *at < epoch));
+                .retain(|_, (of, at)| !(*of == partition && *at < generation));
             server
                 .queue
-                .retain(|slot| !(slot.partition == partition && slot.epoch < epoch));
+                .retain(|slot| !(slot.partition == partition && slot.generation < generation));
             freed.push(name.clone());
         }
         for name in freed {
             self.grant(&name, out);
         }
         self.offers
-            .retain(|offer| !(offer.partition == partition && offer.epoch < epoch));
+            .retain(|offer| !(offer.partition == partition && offer.generation < generation));
         let gone: Vec<TaskRef> = self
             .handed
             .iter()
-            .filter(|(_, (_, offer))| offer.partition == partition && offer.epoch < epoch)
+            .filter(|(_, (_, offer))| offer.partition == partition && offer.generation < generation)
             .map(|(task, _)| task.clone())
             .collect();
         for task in gone {
@@ -743,7 +743,7 @@ impl<P: Plane> TenantActor<P> {
         if let Some(held) = server.held.get_mut(&slot.task) {
             // An owner that asks again for a slot it holds lost the grant (a message lost, a new
             // owner of the partition): it is granted again.
-            *held = (slot.partition, slot.epoch);
+            *held = (slot.partition, slot.generation);
             out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Partition(slot.partition),
                 request: NodeRequest::Owner {
@@ -781,7 +781,7 @@ impl<P: Plane> TenantActor<P> {
             };
             server
                 .held
-                .insert(next.task.clone(), (next.partition, next.epoch));
+                .insert(next.task.clone(), (next.partition, next.generation));
             out.push(TenantEffect::Effect(Effect::Request {
                 to: Target::Partition(next.partition),
                 request: NodeRequest::Owner {

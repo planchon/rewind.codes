@@ -28,7 +28,7 @@ use rewind_core::{
 };
 
 use crate::ports::archive::SealedAttempt;
-use crate::ports::cluster::{NodeId, PartitionEpoch};
+use crate::ports::cluster::{NodeId, PartitionGeneration};
 use crate::ports::namespaces::{Month, NamespaceName, QuotaAlert, QuotaExceeded, Usage};
 use crate::ports::partition::{
     Activation, Counters, Found, Gauges, IndexedSummary, Page, Projection, RunHead, Scope,
@@ -223,13 +223,13 @@ pub enum PartitionRequest {
         order: RunOrder,
         page: Page,
     },
-    /// The partition's counters over a window, in buckets of `bucket` whole hours from the
-    /// window's start (the last one cut at its end), or as one bucket when `None`, and its
-    /// gauges: answered `Counted`, one `Counters` per bucket.
+    /// The partition's counters over a window, in intervals of `interval` whole hours from the
+    /// window's start (the last one cut at its end), or as one interval when `None`, and its
+    /// gauges: answered `Counted`, one `Counters` per interval.
     Counters {
         scope: Scope,
         window: Window,
-        bucket: Option<NonZeroU32>,
+        interval: Option<NonZeroU32>,
     },
     /// The use in a month of each namespace of the scope the partition holds: CPU time and runs
     /// created over the month, with its days when `days`; active runs and distinct workflows now.
@@ -387,10 +387,10 @@ pub enum TenantReply {
 /// A start to admit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Admit {
-    /// The partition of the run and the epoch of its owner: an admission of an owner that is
+    /// The partition of the run and the generation of its owner: an admission of an owner that is
     /// gone is dropped when the next owner reports.
     pub partition: PartitionId,
-    pub epoch: PartitionEpoch,
+    pub generation: PartitionGeneration,
     pub run: RunId,
     pub namespace: NamespaceName,
     pub code: Digest,
@@ -402,7 +402,7 @@ pub struct Admit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CountsReport {
     pub partition: PartitionId,
-    pub epoch: PartitionEpoch,
+    pub generation: PartitionGeneration,
     pub namespace: NamespaceName,
     /// Active runs, and runs kept per code.
     pub gauges: Gauges,
@@ -421,7 +421,7 @@ pub struct CountsReport {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotRequest {
     pub partition: PartitionId,
-    pub epoch: PartitionEpoch,
+    pub generation: PartitionGeneration,
     pub task: TaskRef,
     /// The MCP server or the API.
     pub server: String,
@@ -434,7 +434,7 @@ pub struct SlotRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HarnessTaskOffer {
     pub partition: PartitionId,
-    pub epoch: PartitionEpoch,
+    pub generation: PartitionGeneration,
     pub task: HarnessTask,
     pub action_set: Digest,
     /// The grace a stream that closes gets to come back before the task is handed again.

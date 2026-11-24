@@ -152,7 +152,7 @@ impl<B: BlobStore> PayloadSource for Carried<'_, B> {
 /// Why a run is quarantined instead of activated: [`QUARANTINE_AFTER_FAILURES`] activations
 /// started on owners that died during them, counted at each recovery. `None` otherwise.
 fn unfinished(head: &RunHead) -> Option<String> {
-    if head.attempts < QUARANTINE_AFTER_FAILURES {
+    if head.unfinished < QUARANTINE_AFTER_FAILURES {
         return None;
     }
     let why = "the node running it stopped during it, as when the code crashes the node's \
@@ -160,14 +160,14 @@ fn unfinished(head: &RunHead) -> Option<String> {
     Some(if head.failures == 0 {
         format!(
             "the activation of this run never finished {} times in a row: {why}",
-            head.attempts
+            head.unfinished
         )
     } else {
         format!(
             "{} activations of this run in a row committed nothing: {} never finished ({why}), \
              and {} failed",
-            head.attempts + head.failures,
-            head.attempts,
+            head.unfinished + head.failures,
+            head.unfinished,
             head.failures
         )
     })
@@ -648,13 +648,13 @@ async fn deliver<I: CodeInstance, S: PayloadSource, C: CountCpu>(
     recorded_at: Timestamp,
 ) -> Result<(), EngineError> {
     let run_id = batch.run_id;
-    let delivery = payloads::delivery(source, &batch.tenant, &completion).await?;
+    let handoff = payloads::handoff(source, &batch.tenant, &completion).await?;
     let grace = match completion {
         Completion::CancelRequested { .. } => Grace::Ends,
         _ => Grace::No,
     };
     let trigger = Event::Completion(completion);
-    let delivered = instance.deliver(delivery, recorded_at).await;
+    let delivered = instance.deliver(handoff, recorded_at).await;
     batch.count_cpu(cpu, instance.cpu_time());
     match delivered {
         Ok(emitted) => batch.respond(recorded_at, trigger, emitted, grace),

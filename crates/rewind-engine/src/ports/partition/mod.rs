@@ -359,7 +359,7 @@ pub enum Change {
         at: Timestamp,
     },
     /// An activation of the run may have been running when the previous owner died: its
-    /// attempts + 1, in the recovery batch.
+    /// `unfinished` + 1, in the recovery batch.
     Interrupted {
         run: RunRef,
     },
@@ -368,7 +368,7 @@ pub enum Change {
         run: RunRef,
         quarantine: Quarantine,
     },
-    /// Lifts the run's quarantine, and resets its failures and attempts.
+    /// Lifts the run's quarantine, and resets its failures and its unfinished activations.
     Release {
         run: RunRef,
     },

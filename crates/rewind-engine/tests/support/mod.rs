@@ -17,8 +17,8 @@ use rewind_core::{
 };
 use rewind_engine::StartRun;
 use rewind_engine::ports::{
-    ActionDispatcher, Call, CallAuth, CodeExecutor, CodeInstance, CompiledCode, Delivery,
-    Dispatched, Emitted, ExecutorError, InvalidCode, StartCode,
+    ActionDispatcher, Call, CallAuth, CodeExecutor, CodeInstance, CompiledCode, Dispatched,
+    Emitted, ExecutorError, Handoff, InvalidCode, StartCode,
 };
 
 /// 2026-01-01T00:00:00Z
@@ -46,7 +46,7 @@ pub fn request(name: &str, input: JsonValue) -> StartRun {
 /// commands through [`FakeRun`].
 pub trait Program: Send + Sync + 'static {
     fn start(&self, run: &mut FakeRun);
-    fn deliver(&self, run: &mut FakeRun, delivery: &Delivery);
+    fn deliver(&self, run: &mut FakeRun, handoff: &Handoff);
 }
 
 struct FnProgram<S, D> {
@@ -57,14 +57,14 @@ struct FnProgram<S, D> {
 impl<S, D> Program for FnProgram<S, D>
 where
     S: Fn(&mut FakeRun) + Send + Sync + 'static,
-    D: Fn(&mut FakeRun, &Delivery) + Send + Sync + 'static,
+    D: Fn(&mut FakeRun, &Handoff) + Send + Sync + 'static,
 {
     fn start(&self, run: &mut FakeRun) {
         (self.start)(run);
     }
 
-    fn deliver(&self, run: &mut FakeRun, delivery: &Delivery) {
-        (self.deliver)(run, delivery);
+    fn deliver(&self, run: &mut FakeRun, handoff: &Handoff) {
+        (self.deliver)(run, handoff);
     }
 }
 
@@ -93,7 +93,7 @@ impl FakeRun {
         self.refused = Some(error);
     }
 
-    /// Makes this call into the code never return, as a code that brings its worker down
+    /// Makes this call into the code never return, as a code that brings its node down
     /// does: the activation is left without a commit and without a recorded failure.
     pub fn hang(&mut self) {
         self.hung = true;
@@ -189,7 +189,7 @@ impl FakeExecutor {
         mut self,
         name: &str,
         start: impl Fn(&mut FakeRun) + Send + Sync + 'static,
-        deliver: impl Fn(&mut FakeRun, &Delivery) + Send + Sync + 'static,
+        deliver: impl Fn(&mut FakeRun, &Handoff) + Send + Sync + 'static,
     ) -> Self {
         self.programs
             .insert(name.into(), Arc::new(FnProgram { start, deliver }));
@@ -280,12 +280,12 @@ impl CodeExecutor for FakeExecutor {
 impl CodeInstance for FakeInstance {
     async fn deliver(
         &mut self,
-        delivery: Delivery,
+        handoff: Handoff,
         now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         self.run.now = now;
         self.run.cpu = CALL_CPU;
-        self.program.deliver(&mut self.run, &delivery);
+        self.program.deliver(&mut self.run, &handoff);
         if self.run.hung {
             std::future::pending::<()>().await;
         }
@@ -365,9 +365,9 @@ impl ActionDispatcher for RecordingDispatcher {
 }
 
 /// The delivered value of a call, or panics.
-pub fn result_of(delivery: &Delivery) -> &JsonValue {
-    match delivery {
-        Delivery::CallCompleted { result, .. } => result,
+pub fn result_of(handoff: &Handoff) -> &JsonValue {
+    match handoff {
+        Handoff::CallCompleted { result, .. } => result,
         other => panic!("expected an action result, got {other:?}"),
     }
 }

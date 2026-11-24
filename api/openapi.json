@@ -2925,7 +2925,7 @@
             "type": "integer"
           },
           "series": {
-            "description": "One count per bucket from `since`: the runs that ended in it.",
+            "description": "One count per interval from `since`: the runs that ended in it.",
             "items": {
               "format": "int64",
               "minimum": 0,
@@ -2953,18 +2953,18 @@
       },
       "FingerprintPage": {
         "properties": {
-          "bucket": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "fingerprints": {
             "description": "The most runs first, then the latest ending first.",
             "items": {
               "$ref": "#/components/schemas/Fingerprint"
             },
             "type": "array"
+          },
+          "interval": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "runs": {
             "description": "Runs of every fingerprint.",
@@ -5657,15 +5657,8 @@
         "type": "object"
       },
       "RunStats": {
-        "description": "The runs of a scope. Counts, series, durations and facets are over the runs started in the\nwindow, from the hourly counters; `since`, `until` and `bucket` are the window and the width\nthe answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the\nscope now, whenever they started, from the gauge of the active runs.",
+        "description": "The runs of a scope. Counts, series, durations and facets are over the runs started in the\nwindow, from the hourly counters; `since`, `until` and `interval` are the window and the width\nthe answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the\nscope now, whenever they started, from the gauge of the active runs.",
         "properties": {
-          "bucket": {
-            "description": "The width of the series' buckets, if any.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "durations": {
             "oneOf": [
               {
@@ -5680,6 +5673,13 @@
           "facets": {
             "$ref": "#/components/schemas/Facets"
           },
+          "interval": {
+            "description": "The width of the series' intervals, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "quarantined": {
             "format": "int64",
             "minimum": 0,
@@ -5691,9 +5691,9 @@
             "type": "integer"
           },
           "series": {
-            "description": "One bucket per `bucket` from `since`, the runs started in it by status.",
+            "description": "One interval per `interval` from `since`, the runs started in it by status.",
             "items": {
-              "$ref": "#/components/schemas/SeriesBucket"
+              "$ref": "#/components/schemas/SeriesInterval"
             },
             "type": "array"
           },
@@ -6204,7 +6204,7 @@
             "type": "array"
           },
           "reference": {
-            "description": "How a secret names it: `org/zendesk`, `ns/github`.",
+            "description": "How a reference names it: `org/zendesk`, `ns/github`.",
             "type": "string"
           },
           "scope": {
@@ -6347,7 +6347,7 @@
         "type": "object"
       },
       "SecretProblem": {
-        "description": "One secret that refused a start, a fork or a save, with what the caller may use for\nthat server instead.",
+        "description": "One server whose secret refused a start, a fork or a save, with what the caller may use for\nthat server instead.",
         "properties": {
           "problem": {
             "$ref": "#/components/schemas/SecretProblemKind"
@@ -6378,7 +6378,7 @@
         "type": "object"
       },
       "SecretProblemKind": {
-        "description": "Why a secret refused a start, a fork or a save (`secret-required`).",
+        "description": "Why the secrets of a start, a fork or a save refused it (`secret-required`).",
         "enum": [
           "missing",
           "takes_none",
@@ -6445,10 +6445,10 @@
         ],
         "type": "object"
       },
-      "SeriesBucket": {
+      "SeriesInterval": {
         "properties": {
           "at": {
-            "description": "The bucket's start.",
+            "description": "The interval's start.",
             "format": "date-time",
             "type": "string"
           },
@@ -16598,9 +16598,9 @@
             }
           },
           {
-            "description": "The width of each group's series' buckets, from `since`, which it requires; whole hours,\na shorter or uneven width rounded up to them; 500 buckets at most.",
+            "description": "The width of each group's series' intervals, from `since`, which it requires; whole hours,\na shorter or uneven width rounded up to them; 500 intervals at most.",
             "in": "query",
-            "name": "bucket",
+            "name": "interval",
             "required": false,
             "schema": {
               "type": "string"
@@ -16739,9 +16739,9 @@
             }
           },
           {
-            "description": "The width of the series' buckets (`\"1h\"`, `\"1d\"`), from `since`, which it requires; whole\nhours, a shorter or uneven width rounded up to them; 500 buckets at most. No series\nwithout it.",
+            "description": "The width of the series' intervals (`\"1h\"`, `\"1d\"`), from `since`, which it requires; whole\nhours, a shorter or uneven width rounded up to them; 500 intervals at most. No series\nwithout it.",
             "in": "query",
-            "name": "bucket",
+            "name": "interval",
             "required": false,
             "schema": {
               "type": "string"
@@ -17747,7 +17747,7 @@
                 }
               }
             },
-            "description": "A run of a workflow forked on a server without the worker role (`unavailable`)."
+            "description": "For a run of a workflow, the run plane its version's suite runs on failed (`unavailable`)."
           }
         },
         "summary": "Fork a run with a corrected code (`retry_run`)",
@@ -19494,7 +19494,7 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, each test against its world: rules, handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven code or action set. Served by a server with the worker role.",
+        "description": "In virtual time, each test against its world: rules, handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven code or action set, on the node that serves the request.",
         "operationId": "testWorkflow",
         "parameters": [
           {
@@ -20028,7 +20028,7 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's code against its action set and its own schemas, then runs its\nsuite: its base's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the code's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
+        "description": "Checks the workflow's code against its action set and its own schemas, then runs its\nsuite: its base's tests, minus those it retires and with those it replaces, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the code's tests\non the node that serves the request (503 when the run plane they run on fails).",
         "operationId": "createWorkflow",
         "parameters": [
           {
@@ -20140,7 +20140,7 @@
                 }
               }
             },
-            "description": "A server without the worker role, with tests to run (`unavailable`)."
+            "description": "The run plane the tests run on failed (`unavailable`)."
           }
         },
         "summary": "Save a workflow (`save_workflow`)",

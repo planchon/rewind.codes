@@ -66,7 +66,7 @@ pub struct RunHead {
     pub failures: u32,
     /// Activations an owner started without seeing their end: one more for each runnable run
     /// at each recovery of the partition.
-    pub attempts: u32,
+    pub unfinished: u32,
     pub quarantine: Option<Quarantine>,
     /// What the run waits for, while it is active.
     pub waits: Vec<Wait>,

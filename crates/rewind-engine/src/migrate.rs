@@ -318,7 +318,7 @@ where
             attempt: Attempt::FIRST,
             sealed: None,
             failures: legacy.failures,
-            attempts: legacy.attempts,
+            unfinished: legacy.attempts,
             quarantine: legacy.quarantine.clone(),
             waits: Vec::new(),
             expires_at: legacy.expires_at,

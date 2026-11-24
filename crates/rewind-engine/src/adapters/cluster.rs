@@ -329,7 +329,7 @@ impl Membership for MemoryMembership {
                     && owner.node.as_ref() != Some(node)
                 {
                     owner.node = Some(node.clone());
-                    owner.epoch = owner.epoch.next();
+                    owner.generation = owner.generation.next();
                 }
             }
             state.map.clone()

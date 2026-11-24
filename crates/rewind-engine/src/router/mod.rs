@@ -142,7 +142,7 @@ mod tests {
             PartitionId::new(1),
             PartitionOwner {
                 node: Some(node),
-                epoch: crate::ports::PartitionEpoch(1),
+                generation: crate::ports::PartitionGeneration(1),
             },
         );
         router.set_map(map);

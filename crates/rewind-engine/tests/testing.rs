@@ -11,7 +11,7 @@ use rewind_core::{
     ActionOutcome, ActionRule, ActionSet, CallOrder, Code, Expectations, ExpectedCall,
     ExpectedError, Matching, RunStatus, SignalWhen, Test, TestFromRun, TestSignal,
 };
-use rewind_engine::ports::Delivery;
+use rewind_engine::ports::Handoff;
 use rewind_engine::testing::{
     DEFAULT_START, NoHandlerLoader, Subject, TestOptions, TestProblem, run_test, run_tests,
 };
@@ -28,15 +28,15 @@ fn sleepy() -> FakeExecutor {
             run.call("a", json!({ "n": 1 }));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { .. } => {
+            Handoff::CallCompleted { .. } => {
                 run.timer(10 * DAY);
             }
-            Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
-            Delivery::TimerFired { .. } => run.await_signal("approval"),
-            Delivery::SignalReceived { payload, .. } => {
+            Handoff::CallFailed { error, .. } => run.fail("ActionError", &error.message),
+            Handoff::TimerFired { .. } => run.await_signal("approval"),
+            Handoff::SignalReceived { payload, .. } => {
                 run.complete(json!({ "approved": payload, "at": run.now.0 }));
             }
-            Delivery::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
+            Handoff::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
         },
     )
 }

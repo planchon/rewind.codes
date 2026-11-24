@@ -15,7 +15,7 @@ use rewind_core::{
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::ports::{
-    Delivery, Diagnostic, DiagnosticSource, ForkSource, Page, RunOrder, RunQuery, RunRef, Scope,
+    Diagnostic, DiagnosticSource, ForkSource, Handoff, Page, RunOrder, RunQuery, RunRef, Scope,
     Severity, TenantId, TraceContext,
 };
 use rewind_engine::{ForkError, ForkPoint, ForkRun, Limits, ReplayVerdict, StartError};
@@ -45,10 +45,10 @@ fn two_steps(executor: FakeExecutor, name: &str, arg: &'static str) -> FakeExecu
             run.call("a", json!(1));
         },
         move |run, delivery| match delivery {
-            Delivery::CallCompleted { seq: Seq(1), .. } => {
+            Handoff::CallCompleted { seq: Seq(1), .. } => {
                 run.call("b", json!(arg));
             }
-            Delivery::CallCompleted { result, .. } => run.complete(result.clone()),
+            Handoff::CallCompleted { result, .. } => run.complete(result.clone()),
             _ => run.fail("ActionError", "b failed"),
         },
     )

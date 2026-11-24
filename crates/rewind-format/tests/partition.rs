@@ -93,7 +93,7 @@ fn run_head() -> RunHead {
         attempt: 1,
         sealed: None,
         failures: 1,
-        attempts: 2,
+        unfinished: 2,
         quarantine: Some(Quarantine {
             kind: QuarantineKind::NonDeterminism,
             reason: "replay mismatch at event 3".into(),
@@ -122,7 +122,7 @@ fn run_head() -> RunHead {
                 seq: 4,
                 detached: false,
             }),
-            scope: BTreeMap::from([("env".into(), "dev".into())]),
+            allowed_labels: BTreeMap::from([("env".into(), "dev".into())]),
             secrets,
         },
         idempotency_key: Some("start-1".into()),

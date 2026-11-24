@@ -4,7 +4,7 @@
 //!
 //! - The scope is the tenant, or one namespace: a token's, `Rewind-Namespace`'s, or the one `q`
 //!   names with a single `namespace:` term. Any other term is refused with its position.
-//! - The window is made of whole UTC hours, its bounds rounded out; a series' bucket is rounded
+//! - The window is made of whole UTC hours, its bounds rounded out; a series' interval is rounded
 //!   up to whole hours.
 //! - A grant or a token limited to labels reads none of them (403): counters carry no labels.
 
@@ -22,7 +22,7 @@ use rewind_api::query::{self, Filter, QueryError};
 use rewind_api::reading::{ActionStats, ActionStatsFilter, ActionStatsPage, Latency};
 use rewind_api::runs::{
     FacetValue, Facets, FailureQuery, FailureSample, Fingerprint, FingerprintPage, RunStats,
-    RunStatsQuery, SeriesBucket, StatusCounts,
+    RunStatsQuery, SeriesInterval, StatusCounts,
 };
 use rewind_api::scripts::{RunCounts, ScriptFilter, ScriptPage, ScriptSummary};
 use rewind_core::{Digest, RunStatus};
@@ -38,8 +38,8 @@ use crate::http::refuse_nul_in_filter;
 use crate::http::runs::core_time;
 use crate::http::search::{durations, wait_counts};
 
-/// Buckets of a series at most.
-const MAX_BUCKETS: u64 = 500;
+/// Intervals of a series at most.
+const MAX_INTERVALS: u64 = 500;
 const HOUR_MS: u64 = 3_600_000;
 const PAGE: u32 = 50;
 const MAX_PAGE: u32 = 500;
@@ -109,11 +109,11 @@ pub(crate) fn scope(caller: &Caller, q: Option<&str>) -> Result<Scope, ApiError>
 }
 
 /// The whole hours from `since` (the epoch without it) to `until` (now without it), and the
-/// bucket of a series in whole hours, which needs `since`.
+/// interval of a series in whole hours, which needs `since`.
 fn window(
     since: Option<jiff::Timestamp>,
     until: Option<jiff::Timestamp>,
-    bucket: Option<rewind_api::common::Duration>,
+    interval: Option<rewind_api::common::Duration>,
     now: rewind_core::Timestamp,
 ) -> Result<(Window, Option<u32>), ApiError> {
     let since = since.map(core_time);
@@ -124,29 +124,29 @@ fn window(
         ));
     }
     let window = Window::covering(since.unwrap_or(rewind_core::Timestamp(0)), until);
-    let bucket = match (bucket, since) {
+    let interval = match (interval, since) {
         (None, _) => None,
         (Some(_), None) => {
             return Err(ApiError::invalid(
-                "bucket needs since: the series starts there",
+                "interval needs since: the series starts there",
             ));
         }
-        (Some(bucket), Some(_)) => {
-            let hours = bucket.as_millis().div_ceil(HOUR_MS).max(1);
+        (Some(interval), Some(_)) => {
+            let hours = interval.as_millis().div_ceil(HOUR_MS).max(1);
             let span = u64::from(window.to.0.saturating_sub(window.from.0));
-            if span.div_ceil(hours) > MAX_BUCKETS {
+            if span.div_ceil(hours) > MAX_INTERVALS {
                 return Err(ApiError::invalid(format!(
-                    "{bucket} buckets from since to until make more than {MAX_BUCKETS}: widen \
-                     the bucket or narrow the window"
+                    "{interval} intervals from since to until make more than {MAX_INTERVALS}: widen \
+                     the interval or narrow the window"
                 )));
             }
             Some(u32::try_from(hours).unwrap_or(u32::MAX))
         }
     };
-    Ok((window, bucket))
+    Ok((window, interval))
 }
 
-/// The counters of each bucket of `hours` hours over the window: one request per partition.
+/// The counters of each interval of `hours` hours over the window: one request per partition.
 async fn series(
     app: &App,
     scope: &Scope,
@@ -204,7 +204,7 @@ pub(super) async fn runs(
 ) -> Result<Json<RunStats>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let scope = scope(&caller, request.q.as_deref())?;
-    let (window, hours) = window(request.since, request.until, request.bucket, app.now())?;
+    let (window, hours) = window(request.since, request.until, request.interval, app.now())?;
     let top_n = usize::try_from(request.top.unwrap_or(10).clamp(1, 50)).unwrap_or(10);
     let (counters, gauges) = app
         .edge
@@ -267,7 +267,7 @@ pub(super) async fn runs(
     Ok(Json(RunStats {
         since: request.since.map(|_| timestamp(window.start())),
         until: timestamp(window.end()),
-        bucket: hours.map(|hours| {
+        interval: hours.map(|hours| {
             rewind_api::common::Duration::from(std::time::Duration::from_secs(
                 u64::from(hours) * 3_600,
             ))
@@ -276,8 +276,8 @@ pub(super) async fn runs(
         statuses: counts,
         series: series
             .iter()
-            .map(|(bucket, counters)| SeriesBucket {
-                at: timestamp(bucket.start()),
+            .map(|(interval, counters)| SeriesInterval {
+                at: timestamp(interval.start()),
                 statuses: ended(&counters.runs),
             })
             .collect(),
@@ -352,7 +352,7 @@ pub(super) async fn failures(
 ) -> Result<Json<FingerprintPage>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let scope = scope(&caller, request.q.as_deref())?;
-    let (window, hours) = window(request.since, request.until, request.bucket, app.now())?;
+    let (window, hours) = window(request.since, request.until, request.interval, app.now())?;
     let limit = usize::try_from(request.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let (counters, _) = app
         .edge
@@ -406,7 +406,7 @@ pub(super) async fn failures(
     Ok(Json(FingerprintPage {
         since: request.since.map(|_| timestamp(window.start())),
         until: timestamp(window.end()),
-        bucket: hours.map(|hours| {
+        interval: hours.map(|hours| {
             rewind_api::common::Duration::from(std::time::Duration::from_secs(
                 u64::from(hours) * 3_600,
             ))

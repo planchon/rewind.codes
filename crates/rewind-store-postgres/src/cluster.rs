@@ -1,4 +1,4 @@
-//! `Cluster` on Postgres: the nodes alive, the partition map and its epochs, a node's liveness,
+//! `Cluster` on Postgres: the nodes alive, the partition map and its generations, a node's liveness,
 //! and the changes of the control plane (`archi/07-code-architecture.md`, "`Cluster` and
 //! `NodeLink`"; `archi/06-storage-and-scale.md`, "Partitions, owners and nodes"). The in-memory
 //! `MemoryCluster` of `rewind-engine` is the reference of every behavior here; both pass the
@@ -39,7 +39,7 @@
 //!   database, from `pg_locks`: the members alive. [`Membership::assign`] moves partitions only
 //!   to them. A join and a departure seen send `ControlPlaneChange::Nodes`.
 //! - **Moves.** `assign` locks every row of `partitions` (`FOR UPDATE`), so moves are decided
-//!   one after the other; it raises the epoch of each partition whose owner changes and sends
+//!   one after the other; it raises the generation of each partition whose owner changes and sends
 //!   the whole map on the channel `partition_map` in the same transaction (`crate::changes`).
 //! - **Changes.** [`Membership::changes`] listens (`LISTEN control_plane, partition_map, nodes`)
 //!   on a connection of its own, to the control plane's database, before it returns. The stream ends when that connection is lost, or
@@ -68,8 +68,8 @@ use futures_util::stream::BoxStream;
 use rewind_core::{Epoch, PartitionId};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    Cluster, ClusterError, ControlPlaneChange, Departed, Moves, NodeId, NodeInfo, PartitionEpoch,
-    PartitionMap, PartitionOwner,
+    Cluster, ClusterError, ControlPlaneChange, Departed, Moves, NodeId, NodeInfo,
+    PartitionGeneration, PartitionMap, PartitionOwner,
 };
 use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions, PgRow};
 use sqlx::{ConnectOptions as _, Connection as _, PgConnection, PgPool};
@@ -153,7 +153,7 @@ impl PostgresCluster {
     }
 
     /// The cluster of a deployment of `partitions` partitions, on the store's database: the rows
-    /// of the partitions it lacks are created, unowned at epoch 0. A database with more
+    /// of the partitions it lacks are created, unowned at generation 0 (the column `epoch`). A database with more
     /// partitions is refused: a partition, once created, holds runs. The liveness locks are
     /// taken in `lock_database` (`--cluster-database`), a database of the same server reached
     /// with the same credentials, where nothing is stored (`archi/06-storage-and-scale.md`,
@@ -303,7 +303,7 @@ async fn read_map(conn: &mut PgConnection, lock: bool) -> Result<PartitionMap, E
             PartitionId::new(id),
             PartitionOwner {
                 node,
-                epoch: PartitionEpoch(row.u64(2)?),
+                generation: PartitionGeneration(row.u64(2)?),
             },
         );
     }
@@ -603,7 +603,7 @@ impl Membership for PostgresMembership {
             if owner.node.as_ref() == Some(node) {
                 continue;
             }
-            let epoch: i64 = sqlx::query_scalar(
+            let generation: i64 = sqlx::query_scalar(
                 "UPDATE partitions SET node = $2, epoch = epoch + 1 WHERE id = $1 RETURNING epoch",
             )
             .bind(i32::from(partition.get()))
@@ -612,7 +612,7 @@ impl Membership for PostgresMembership {
             .await
             .map_err(failed)?;
             owner.node = Some(node.clone());
-            owner.epoch = PartitionEpoch(u64::try_from(epoch).unwrap_or_default());
+            owner.generation = PartitionGeneration(u64::try_from(generation).unwrap_or_default());
         }
         notify(&mut tx, &[ControlPlaneChange::PartitionMap(map.clone())])
             .await

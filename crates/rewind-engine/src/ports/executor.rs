@@ -39,7 +39,7 @@ pub struct StartCode {
 
 /// A completion, with its payloads loaded: what reaches the code.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Delivery {
+pub enum Handoff {
     CallCompleted { seq: Seq, result: JsonValue },
     CallFailed { seq: Seq, error: ActionFailure },
     TimerFired { seq: Seq },
@@ -126,7 +126,7 @@ pub trait CodeInstance: Send {
     /// code until it is idle.
     fn deliver(
         &mut self,
-        delivery: Delivery,
+        handoff: Handoff,
         now: Timestamp,
     ) -> impl Future<Output = Result<Vec<Emitted>, ExecutorError>> + Send;
 
@@ -139,7 +139,7 @@ pub trait CodeInstance: Send {
     }
 
     /// The CPU time of the instance's last call into the code: loading the code and
-    /// `main(input)` once [`CodeExecutor::start`] returned it, then its last delivery, whether
+    /// `main(input)` once [`CodeExecutor::start`] returned it, then its last handoff, whether
     /// the call succeeded or not. It is the CPU time of the thread the code runs on, the clock
     /// of the CPU budget (`archi/03-execution.md`, "Resource limits"). The engine counts the
     /// calls that execute toward the namespace's `cpu_per_month`, and leaves out those of a

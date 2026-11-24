@@ -28,7 +28,7 @@ pub struct RunMetadata {
     /// The labels every run this run's workflows reach carries: the allowed labels of the API key
     /// that started the first run of its tree, inherited by every run it starts. Empty: any run
     /// of the tenant.
-    pub scope: BTreeMap<String, String>,
+    pub allowed_labels: BTreeMap<String, String>,
     /// The secrets the run uses, named at start, by server or API: the request's, a fork's source's
     /// unless the fork gave its own, a workflow version's (`archi/04-tools.md`, "Secrets"). Its
     /// calls read these and no other. Names, never values: the `runs.secrets` column.

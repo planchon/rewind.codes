@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use deno_core::{ModuleSpecifier, PollEventLoopOptions, v8};
-use rewind_engine::ports::{Delivery, Emitted, ExecutorError, StartCode};
+use rewind_engine::ports::{Emitted, ExecutorError, Handoff, StartCode};
 use serde_json::{Value, json};
 
 use crate::epochs::Glue;
@@ -94,12 +94,12 @@ impl Instance {
     /// Delivers one completion at logical time `now`, and runs the code until it is idle.
     pub(crate) fn deliver(
         &mut self,
-        delivery: &Delivery,
+        handoff: &Handoff,
         now: rewind_core::Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         self.isolate.state(|state| state.now = now);
         let deliver = self.deliver.clone();
-        self.run(&deliver, &delivery_json(delivery))
+        self.run(&deliver, &handoff_json(handoff))
     }
 
     /// The memory the isolate holds, in bytes.
@@ -109,7 +109,7 @@ impl Instance {
 
     /// The CPU time of the isolate's thread in the calls into the code since the last take:
     /// loading the modules and `main(input)` after [`Instance::load`] and [`Instance::start`],
-    /// one delivery after [`Instance::deliver`]; whether they succeeded or not.
+    /// one handoff after [`Instance::deliver`]; whether they succeeded or not.
     pub(crate) fn take_cpu_time(&mut self) -> std::time::Duration {
         self.isolate.take_cpu_time()
     }
@@ -133,28 +133,28 @@ impl Instance {
     }
 }
 
-/// The JS ↔ Rust encoding of a delivery: internal to the sandbox, shaped for the glue.
-fn delivery_json(delivery: &Delivery) -> String {
-    let value = match delivery {
-        Delivery::CallCompleted { seq, result } => json!({
+/// The JS ↔ Rust encoding of a handoff: internal to the sandbox, shaped for the glue.
+fn handoff_json(handoff: &Handoff) -> String {
+    let value = match handoff {
+        Handoff::CallCompleted { seq, result } => json!({
             "type": "call_completed",
             "seq": seq.0,
             "result": result,
         }),
-        Delivery::CallFailed { seq, error } => json!({
+        Handoff::CallFailed { seq, error } => json!({
             "type": "call_failed",
             "seq": seq.0,
             "message": error.message,
             "outcomeUnknown": error.kind == rewind_core::ActionFailureKind::OutcomeUnknown,
             "data": error.data,
         }),
-        Delivery::TimerFired { seq } => json!({ "type": "timer_fired", "seq": seq.0 }),
-        Delivery::SignalReceived { name, payload } => json!({
+        Handoff::TimerFired { seq } => json!({ "type": "timer_fired", "seq": seq.0 }),
+        Handoff::SignalReceived { name, payload } => json!({
             "type": "signal_received",
             "name": name,
             "payload": payload,
         }),
-        Delivery::CancelRequested { reason } => json!({
+        Handoff::CancelRequested { reason } => json!({
             "type": "cancel_requested",
             "message": match reason {
                 rewind_core::CancelReason::Requested(Some(message)) => format!("run cancelled: {message}"),

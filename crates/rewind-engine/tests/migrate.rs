@@ -25,7 +25,7 @@ use rewind_engine::migrate::{Migration, MovedAs};
 use rewind_engine::plane::Wiring;
 use rewind_engine::ports::legacy::{LegacyHistory, LegacyRun};
 use rewind_engine::ports::{
-    Attempt, BlobOwner, BlobStore, CatalogStore, Clock, Delivery, NamespaceName, NodeId,
+    Attempt, BlobOwner, BlobStore, CatalogStore, Clock, Handoff, NamespaceName, NodeId,
     PayloadRecord, RunArchive, RunRef, TenantId, namespace_partition,
 };
 use serde_json::json;
@@ -42,7 +42,7 @@ fn programs() -> FakeExecutor {
                 run.call("a", json!({ "text": "m".repeat(2_000) }));
             },
             |run, delivery| match delivery {
-                Delivery::CallCompleted { result, .. } => {
+                Handoff::CallCompleted { result, .. } => {
                     let size = result
                         .get("text")
                         .and_then(JsonValue::as_str)
@@ -59,7 +59,7 @@ fn programs() -> FakeExecutor {
                 run.timer(HOUR);
             },
             |run, delivery| {
-                if let Delivery::SignalReceived { payload, .. } = delivery {
+                if let Handoff::SignalReceived { payload, .. } = delivery {
                     run.complete(payload.clone());
                 }
             },

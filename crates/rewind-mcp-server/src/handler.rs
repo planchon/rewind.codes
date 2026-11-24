@@ -21,7 +21,7 @@ use crate::organizations;
 pub const INSTRUCTIONS: &str = "Rewind runs TypeScript workflows that call actions, durably: a \
 code can sleep for days and wait for signals, every call it makes is recorded, and a failed run \
 is fixed without calling again what it already called. From an organization to a run:\n\
-1. list_orgs: the organizations you reach. Give one as `org` to the other tools, by its id or \
+1. list_organizations: the organizations you reach. Give one as `organization` to the other tools, by its id or \
 its name; leave it out when you reach only one.\n\
 2. list_namespaces: the namespaces of the organization, each one end user. A code runs in the \
 namespace you give as `namespace`; a new name creates one.\n\
@@ -214,13 +214,14 @@ impl<C: Connector> ServerHandler for RewindMcp<C> {
             .organizations()
             .await
             .map_err(|error| fault(&error))?;
-        if tool.name == "list_orgs" {
-            return Ok(answer(self.tools.list_orgs(&organizations)));
+        if tool.name == "list_organizations" {
+            return Ok(answer(self.tools.list_organizations(&organizations)));
         }
-        let organization = match organizations::resolve(name, &organizations, input.get("org")) {
-            Ok(organization) => organization,
-            Err(text) => return Ok(refused(text)),
-        };
+        let organization =
+            match organizations::resolve(name, &organizations, input.get("organization")) {
+                Ok(organization) => organization,
+                Err(text) => return Ok(refused(text)),
+            };
         if let Some(permission) = tool.permission
             && !organization.allows(permission)
         {
@@ -259,7 +260,7 @@ fn not_allowed(
     };
     format!(
         "{tool}: you may not use it in the organization {which}: it needs the permission \
-         {permission}, which you do not hold there. list_orgs says what you may do in each \
+         {permission}, which you do not hold there. list_organizations says what you may do in each \
          organization."
     )
 }

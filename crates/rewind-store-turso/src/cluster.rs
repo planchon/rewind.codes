@@ -6,7 +6,7 @@
 //! `.rewind/server.lock`). Members, their ring and their watches are those of `MemoryCluster`,
 //! whose change streams are the store's broadcast ([`TursoStore::changes`]): every member
 //! receives the changes of the catalog, of access and of secrets. The partition map is kept in
-//! the database (`partitions`), so the epochs of its moves outlive the process; a move is one
+//! the database (`partitions`), so the generations of its moves (the column `epoch`) outlive the process; a move is one
 //! transaction, and sends the map once it committed. The in-memory `MemoryCluster` of
 //! `rewind-engine` is the reference of every behavior here; both pass the same conformance suite.
 
@@ -17,8 +17,8 @@ use rewind_core::PartitionId;
 use rewind_engine::adapters::{ChangeStream, MemoryCluster, MemoryMembership};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    Cluster, ClusterError, ControlPlaneChange, Departed, Moves, NodeId, NodeInfo, PartitionEpoch,
-    PartitionMap, PartitionOwner,
+    Cluster, ClusterError, ControlPlaneChange, Departed, Moves, NodeId, NodeInfo,
+    PartitionGeneration, PartitionMap, PartitionOwner,
 };
 use turso::Connection;
 
@@ -41,7 +41,7 @@ pub struct TursoCluster {
 
 impl TursoCluster {
     /// The cluster of `partitions` partitions on the store's database: the rows of the
-    /// partitions it lacks are created, unowned at epoch 0. A database with more partitions is
+    /// partitions it lacks are created, unowned at generation 0. A database with more partitions is
     /// refused: a partition, once created, holds runs.
     pub async fn open(store: &TursoStore, partitions: NonZeroU16) -> Result<Self, ClusterError> {
         let connection = store.connection().await?;
@@ -93,7 +93,7 @@ async fn read_map(connection: &Connection) -> Result<PartitionMap, Error> {
             PartitionId::new(id),
             PartitionOwner {
                 node,
-                epoch: PartitionEpoch(row.u64(2)?),
+                generation: PartitionGeneration(row.u64(2)?),
             },
         );
     }
@@ -157,13 +157,13 @@ impl Membership for TursoMembership {
                     continue;
                 }
                 owner.node = Some(node.clone());
-                owner.epoch = owner.epoch.next();
+                owner.generation = owner.generation.next();
                 sql::execute(
                     connection,
                     "UPDATE partitions SET node = ?, epoch = ? WHERE id = ?",
                     vec![
                         text(node.as_str()),
-                        int(owner.epoch.0),
+                        int(owner.generation.0),
                         int(u64::from(partition.get())),
                     ],
                 )

@@ -1653,12 +1653,12 @@ async fn claude_runs_a_script_over_mcp() {
         body["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("list_orgs")
+            .contains("list_organizations")
     );
 
     let names = action_names(&world, &tokens.access).await;
     for name in [
-        "list_orgs",
+        "list_organizations",
         "list_namespaces",
         "list_action_sets",
         "run_workflow",
@@ -1674,7 +1674,7 @@ async fn claude_runs_a_script_over_mcp() {
         "{names:?}"
     );
 
-    let (text, error) = call(&world, &tokens.access, "list_orgs", json!({})).await;
+    let (text, error) = call(&world, &tokens.access, "list_organizations", json!({})).await;
     assert!(!error, "{text}");
     assert!(text.contains(&world.acme), "{text}");
 
@@ -1758,7 +1758,7 @@ async fn mcp_tools_follow_the_access_given() {
         .unwrap()
         .key
         .unwrap();
-    let (text, error) = call(&world, &key, "list_orgs", json!({})).await;
+    let (text, error) = call(&world, &key, "list_organizations", json!({})).await;
     assert!(!error, "{text}");
     assert!(text.contains(&world.acme), "{text}");
     let names = action_names(&world, &key).await;

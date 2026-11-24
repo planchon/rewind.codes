@@ -14,7 +14,7 @@ use rewind_engine::conformance::{self, T0, tenant};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
     AccessStore, ApiKey, CatalogStore, Cluster, ControlPlaneChange, Grant, Moves, NamespaceName,
-    NamespaceWrite, NewSecret, NodeId, NodeInfo, PartitionEpoch, Principal, Secret, SecretId,
+    NamespaceWrite, NewSecret, NodeId, NodeInfo, PartitionGeneration, Principal, Secret, SecretId,
     SecretStore, Token, namespace_partition,
 };
 use rewind_store_turso::{MasterKey, TursoCluster, TursoStore};
@@ -285,7 +285,10 @@ async fn the_partition_map_outlives_the_process() {
             .assign(&Moves::new().to(PartitionId::new(0), NodeId::new("embedded").expect("id")))
             .await
             .expect("assign");
-        assert_eq!(map.epoch(PartitionId::new(0)), Some(PartitionEpoch(1)));
+        assert_eq!(
+            map.generation(PartitionId::new(0)),
+            Some(PartitionGeneration(1))
+        );
     }
     let store = open(&path).await;
     let cluster = TursoCluster::open(&store, partitions(1))
@@ -296,16 +299,19 @@ async fn the_partition_map_outlives_the_process() {
     assert_eq!(
         (
             map.owner(PartitionId::new(0)).map(ToString::to_string),
-            map.epoch(PartitionId::new(0))
+            map.generation(PartitionId::new(0))
         ),
-        (Some("embedded".to_owned()), Some(PartitionEpoch(1))),
+        (Some("embedded".to_owned()), Some(PartitionGeneration(1))),
         "the map as it was, its owner gone"
     );
     let moved = member
         .assign(&Moves::new().to(PartitionId::new(0), NodeId::new("restarted").expect("id")))
         .await
         .expect("assign");
-    assert_eq!(moved.epoch(PartitionId::new(0)), Some(PartitionEpoch(2)));
+    assert_eq!(
+        moved.generation(PartitionId::new(0)),
+        Some(PartitionGeneration(2))
+    );
     assert!(TursoCluster::open(&store, partitions(2)).await.is_ok());
     assert!(
         TursoCluster::open(&store, partitions(1)).await.is_err(),

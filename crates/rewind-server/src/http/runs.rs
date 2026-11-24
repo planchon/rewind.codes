@@ -48,7 +48,7 @@ pub(super) async fn start(
         labels,
         trace_context,
         // What the run's workflows reach: the runs carrying the key's labels.
-        scope: caller.labels.clone(),
+        allowed_labels: caller.labels.clone(),
         secrets,
         ..RunMetadata::default()
     };

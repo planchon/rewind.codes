@@ -551,7 +551,7 @@ impl<P: Plane> Owner<P> {
                 tenant,
                 request: Box::new(TenantRequest::Admit(Admit {
                     partition: self.partition,
-                    epoch: self.epoch,
+                    generation: self.generation,
                     run: start.run.id,
                     namespace: start.namespace.clone(),
                     code: start.started.code,
@@ -654,7 +654,7 @@ impl<P: Plane> Owner<P> {
             attempt: Attempt::FIRST,
             sealed: None,
             failures: 0,
-            attempts: 0,
+            unfinished: 0,
             quarantine: None,
             waits: Vec::new(),
             expires_at: started.expires_at,
@@ -938,7 +938,7 @@ impl<P: Plane> Owner<P> {
         if let Some(slot) = self.slot_mut(run.id) {
             slot.head.quarantine = None;
             slot.head.failures = 0;
-            slot.head.attempts = 0;
+            slot.head.unfinished = 0;
             if let Some(summary) = &mut slot.summary {
                 summary.summary.quarantine = None;
             }

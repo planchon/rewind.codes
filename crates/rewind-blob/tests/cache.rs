@@ -113,7 +113,7 @@ async fn a_put_is_written_through_and_kept() {
         .expect("put");
     assert!(store.is_cached(&BlobOwner::Tests(tenant("acme")), digest));
 
-    // Cleaned up from the store behind the cache's back (by another worker), then put again.
+    // Cleaned up from the store behind the cache's back (by another node), then put again.
     store
         .inner()
         .delete(&BlobOwner::Tests(tenant("acme")), digest)

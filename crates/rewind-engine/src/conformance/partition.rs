@@ -136,7 +136,7 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
         attempt: Attempt::FIRST,
         sealed: None,
         failures: 0,
-        attempts: 0,
+        unfinished: 0,
         quarantine: None,
         waits: Vec::new(),
         expires_at: later(T0, DAY),
@@ -288,7 +288,7 @@ async fn activation<L: PartitionLog>(
     let mut head = log.run(run).await.expect("run").expect("the run exists");
     head.status = status;
     head.failures = 0;
-    head.attempts = 0;
+    head.unfinished = 0;
     head.ended_at = status.is_terminal().then_some(later(T0, 100));
     let mut summary = summary_of(run, &head.namespace, status);
     summary.summary.history_len = head.history_len + events.len() as u64;
@@ -1337,7 +1337,7 @@ pub async fn failures_and_interruptions_are_counted<S: PartitionStore>(store: &S
         ],
     )
     .await;
-    assert_eq!(log.run(&r1).await.expect("run").expect("run").attempts, 2);
+    assert_eq!(log.run(&r1).await.expect("run").expect("run").unfinished, 2);
     for n in 1..QUARANTINE_AFTER_FAILURES {
         commit(
             &log,
@@ -1386,7 +1386,7 @@ pub async fn failures_and_interruptions_are_counted<S: PartitionStore>(store: &S
     commit(&log, vec![Change::Release { run: r1.clone() }]).await;
     let head = log.run(&r1).await.expect("run").expect("run");
     assert_eq!(
-        (head.failures, head.attempts, head.quarantine),
+        (head.failures, head.unfinished, head.quarantine),
         (0, 0, None),
         "a release lifts it, and resets the counts"
     );

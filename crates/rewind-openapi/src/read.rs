@@ -43,7 +43,7 @@ pub struct ReadOptions {
     /// The operations to keep, by action name (the `operationId`, or the name made from the method
     /// and the path); every one when `None`.
     pub operations: Option<Vec<String>>,
-    /// Its calls in flight on each worker; [`Api::DEFAULT_CONCURRENCY`] when `None`.
+    /// Its calls in flight on each node; [`Api::DEFAULT_CONCURRENCY`] when `None`.
     pub concurrency: Option<u32>,
     /// Where the document was read, against which a relative server URL is resolved.
     pub document_url: Option<Url>,

@@ -30,8 +30,8 @@ use rewind_engine::edge::Edge;
 use rewind_engine::metrics;
 use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::{
-    ActionDispatcher, Call, CallAuth, CodeExecutor, CodeInstance, CompiledCode, Delivery,
-    Dispatched, Emitted, ExecutorError, InvalidCode, NodeId, QuarantineKind, RunRef, StartCode,
+    ActionDispatcher, Call, CallAuth, CodeExecutor, CodeInstance, CompiledCode, Dispatched,
+    Emitted, ExecutorError, Handoff, InvalidCode, NodeId, QuarantineKind, RunRef, StartCode,
 };
 use rewind_engine::telemetry::{SpanKey, TelemetryConfig, span_id};
 use rewind_engine::{CacheConfig, StartRun};
@@ -496,16 +496,16 @@ impl CodeExecutor for Programs {
 impl CodeInstance for Instance {
     async fn deliver(
         &mut self,
-        delivery: Delivery,
+        delivery: Handoff,
         _now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         Ok(match (self.code.as_str(), delivery) {
-            ("flow", Delivery::CallCompleted { result, .. }) => {
+            ("flow", Handoff::CallCompleted { result, .. }) => {
                 vec![Emitted::Command(Command::CompleteRun {
                     output: Payload::Value(result),
                 })]
             }
-            ("diverge", Delivery::CallCompleted { .. }) => {
+            ("diverge", Handoff::CallCompleted { .. }) => {
                 vec![Emitted::Annotation(
                     rewind_core::Annotation::SignalAwaited {
                         name: "go".into(),

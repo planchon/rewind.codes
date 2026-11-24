@@ -1592,28 +1592,28 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
         .run_stats(&RunStatsQuery {
             since: Some(now - jiff::SignedDuration::from_hours(1)),
             until: Some(now + jiff::SignedDuration::from_secs(1)),
-            bucket: Some("10m".parse().unwrap()),
+            interval: Some("10m".parse().unwrap()),
             ..RunStatsQuery::default()
         })
         .await
         .unwrap();
     assert_eq!(
-        series.bucket,
+        series.interval,
         Some("1h".parse().unwrap()),
-        "a bucket is rounded up to whole hours"
+        "an interval is rounded up to whole hours"
     );
     assert!((2..=3).contains(&series.series.len()), "{series:?}");
     let failed_in_series: u64 = series
         .series
         .iter()
-        .map(|bucket| bucket.statuses.failed)
+        .map(|interval| interval.statuses.failed)
         .sum();
     assert_eq!(failed_in_series, 2);
     let too_many = problem(
         harness
             .run_stats(&RunStatsQuery {
                 since: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 30)),
-                bucket: Some("1h".parse().unwrap()),
+                interval: Some("1h".parse().unwrap()),
                 ..RunStatsQuery::default()
             })
             .await

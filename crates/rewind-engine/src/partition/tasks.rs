@@ -130,7 +130,7 @@ impl<P: Plane> Owner<P> {
                 tenant,
                 request: Box::new(TenantRequest::Slot(SlotRequest {
                     partition: self.partition,
-                    epoch: self.epoch,
+                    generation: self.generation,
                     task: task.clone(),
                     server,
                     limit,
@@ -345,7 +345,7 @@ impl<P: Plane> Owner<P> {
                         tenant: tenant.clone(),
                         request: Box::new(TenantRequest::Admit(crate::ports::link::Admit {
                             partition: self.partition,
-                            epoch: self.epoch,
+                            generation: self.generation,
                             run: start.run.id,
                             namespace: start.namespace.clone(),
                             code: start.started.code,
@@ -412,7 +412,7 @@ impl<P: Plane> Owner<P> {
                         tenant,
                         request: Box::new(TenantRequest::HarnessTask(Box::new(HarnessTaskOffer {
                             partition: self.partition,
-                            epoch: self.epoch,
+                            generation: self.generation,
                             task: *host,
                             action_set: record.task.action_set,
                             grace: record.task.policy.reconnect_timeout,

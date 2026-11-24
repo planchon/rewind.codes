@@ -437,7 +437,7 @@ impl<P: Plane> Edge<P> {
             }),
             workflow: None,
             started_by: None,
-            scope: head.metadata.scope.clone(),
+            allowed_labels: head.metadata.allowed_labels.clone(),
             secrets: request
                 .secrets
                 .clone()
@@ -1117,25 +1117,28 @@ impl<P: Plane> Edge<P> {
         scope: &Scope,
         window: Window,
     ) -> Result<(Counters, Gauges), EdgeError> {
-        let (mut buckets, gauges) = self.counted(gateway, scope, window, None).await?;
-        let counters = buckets
+        let (mut intervals, gauges) = self.counted(gateway, scope, window, None).await?;
+        let counters = intervals
             .pop()
             .map(|(_, counters)| counters)
             .unwrap_or_default();
         Ok((counters, gauges))
     }
 
-    /// The counters of a scope over a window in buckets of `bucket` whole hours from the
+    /// The counters of a scope over a window in intervals of `interval` whole hours from the
     /// window's start, the last one cut at the window's end, each added up from the partitions
-    /// that hold the scope: one request per partition, whatever the number of buckets.
+    /// that hold the scope: one request per partition, whatever the number of intervals.
     pub async fn series<G: Gateway>(
         &self,
         gateway: &mut G,
         scope: &Scope,
         window: Window,
-        bucket: NonZeroU32,
+        interval: NonZeroU32,
     ) -> Result<Vec<(Window, Counters)>, EdgeError> {
-        Ok(self.counted(gateway, scope, window, Some(bucket)).await?.0)
+        Ok(self
+            .counted(gateway, scope, window, Some(interval))
+            .await?
+            .0)
     }
 
     async fn counted<G: Gateway>(
@@ -1143,9 +1146,9 @@ impl<P: Plane> Edge<P> {
         gateway: &mut G,
         scope: &Scope,
         window: Window,
-        bucket: Option<NonZeroU32>,
+        interval: Option<NonZeroU32>,
     ) -> Result<(Vec<(Window, Counters)>, Gauges), EdgeError> {
-        let mut buckets: Vec<(Window, Counters)> = crate::partition::buckets(window, bucket)
+        let mut intervals: Vec<(Window, Counters)> = crate::partition::intervals(window, interval)
             .into_iter()
             .map(|of| (of, Counters::default()))
             .collect();
@@ -1154,12 +1157,12 @@ impl<P: Plane> Edge<P> {
             let request = PartitionRequest::Counters {
                 scope: scope.clone(),
                 window,
-                bucket,
+                interval,
             };
             match ask(gateway, partition, request).await? {
                 PartitionReply::Counted(counted) => {
                     let (partition_counters, partition_gauges) = counted?;
-                    for ((_, sum), counters) in buckets.iter_mut().zip(&partition_counters) {
+                    for ((_, sum), counters) in intervals.iter_mut().zip(&partition_counters) {
                         sum.add(counters);
                     }
                     gauges.add(&partition_gauges);
@@ -1167,7 +1170,7 @@ impl<P: Plane> Edge<P> {
                 other => return Err(unexpected(&other)),
             }
         }
-        Ok((buckets, gauges))
+        Ok((intervals, gauges))
     }
 
     /// The use in a month of each namespace of the scope, from the partitions that hold it: CPU

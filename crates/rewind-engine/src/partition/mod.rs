@@ -45,14 +45,14 @@ use crate::ports::link::{
 use crate::ports::partition::Change;
 use crate::ports::{
     CatalogStore, ControlPlaneChange, DueTimer, IndexedSummary, LinkError, NamespaceName, NodeId,
-    NodeInfo, OutboxEntry, OutboxId, PartitionEpoch, PartitionError, PartitionLog, RunHead, RunRef,
-    TaskRecord, TaskRef, TenantId, TenantState, home_partition,
+    NodeInfo, OutboxEntry, OutboxId, PartitionError, PartitionGeneration, PartitionLog, RunHead,
+    RunRef, TaskRecord, TaskRef, TenantId, TenantState, home_partition,
 };
 use crate::tasks::calls::CallDone;
 use crate::tenant::{TenantActor, TenantEffect, TenantMsg};
 pub(crate) use attempt::{AttemptRead, read_attempt};
 use commit::Unit;
-pub(crate) use reads::buckets;
+pub(crate) use reads::intervals;
 pub(crate) use recovery::Opened;
 use wheel::Wheel;
 
@@ -350,7 +350,7 @@ pub(crate) enum Phase {
 pub(crate) struct Owner<P: Plane> {
     pub(crate) partition: PartitionId,
     pub(crate) node: NodeId,
-    pub(crate) epoch: PartitionEpoch,
+    pub(crate) generation: PartitionGeneration,
     pub(crate) plane: Arc<P>,
     pub(crate) config: Arc<NodeConfig>,
     pub(crate) phase: Phase,
@@ -403,10 +403,10 @@ impl<P: Plane> fmt::Debug for Owner<P> {
 }
 
 impl<P: Plane> Owner<P> {
-    /// An owner that opens `partition` at `epoch`: the open and the recovery are its first job.
+    /// An owner that opens `partition` at `generation`: the open and the recovery are its first job.
     pub(crate) fn open(
         partition: PartitionId,
-        epoch: PartitionEpoch,
+        generation: PartitionGeneration,
         plane: Arc<P>,
         config: Arc<NodeConfig>,
         epochs: BTreeSet<Epoch>,
@@ -416,7 +416,7 @@ impl<P: Plane> Owner<P> {
         let mut owner = Self {
             partition,
             node: config.node.clone(),
-            epoch,
+            generation,
             plane,
             wheel: Wheel::new(now, config.horizon),
             config,

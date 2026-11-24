@@ -133,7 +133,7 @@ mod tests {
     use rewind_core::{RunId, Timestamp};
 
     use super::*;
-    use crate::ports::{Delivery, Emitted, ExecutorError, TenantId};
+    use crate::ports::{Emitted, ExecutorError, Handoff, TenantId};
 
     #[derive(Debug)]
     struct Sized(u64);
@@ -141,7 +141,7 @@ mod tests {
     impl CodeInstance for Sized {
         async fn deliver(
             &mut self,
-            _delivery: Delivery,
+            _handoff: Handoff,
             _now: Timestamp,
         ) -> Result<Vec<Emitted>, ExecutorError> {
             Ok(Vec::new())

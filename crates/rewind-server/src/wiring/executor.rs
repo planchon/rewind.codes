@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use rewind_core::{ActionSet, Code, Epoch, Timestamp};
 use rewind_engine::ports::{
-    CodeExecutor, CodeInstance, CompiledCode, Delivery, Emitted, ExecutorError, InvalidCode,
+    CodeExecutor, CodeInstance, CompiledCode, Emitted, ExecutorError, Handoff, InvalidCode,
     StartCode,
 };
 use rewind_runtime::{V8Executor, V8Instance};
@@ -58,7 +58,7 @@ pub(crate) struct Instance {
 impl CodeInstance for Instance {
     async fn deliver(
         &mut self,
-        delivery: Delivery,
+        delivery: Handoff,
         now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         self.idle.touch();

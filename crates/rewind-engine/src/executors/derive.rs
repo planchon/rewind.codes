@@ -211,7 +211,7 @@ pub(crate) fn head_after(
     next.waits = summary.summary.waits.clone();
     next.history_len = history.len() as u64;
     next.failures = 0;
-    next.attempts = 0;
+    next.unfinished = 0;
     if let Some(last) = history.last() {
         next.updated_at = last.recorded_at;
     }
@@ -652,7 +652,7 @@ mod tests {
             attempt: Attempt::FIRST,
             sealed: None,
             failures: 0,
-            attempts: 0,
+            unfinished: 0,
             quarantine: None,
             waits: Vec::new(),
             expires_at: Timestamp(u64::MAX),

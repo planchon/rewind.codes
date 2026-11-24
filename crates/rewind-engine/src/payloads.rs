@@ -21,7 +21,7 @@ use rewind_core::{
     canonical_json, canonicalize,
 };
 
-use crate::ports::{BlobError, BlobStore, Delivery, PayloadRecord, TenantId};
+use crate::ports::{BlobError, BlobStore, Handoff, PayloadRecord, TenantId};
 
 /// Characters of a payload kept as its preview.
 pub(crate) const PREVIEW_CHARS: usize = 256;
@@ -185,30 +185,30 @@ pub(crate) async fn load_all<P: PayloadSource>(
     Ok(())
 }
 
-/// The delivery of a completion, its payloads loaded.
-pub(crate) async fn delivery<P: PayloadSource>(
+/// The handoff of a completion to the code, its payloads loaded.
+pub(crate) async fn handoff<P: PayloadSource>(
     source: &P,
     tenant: &TenantId,
     completion: &Completion,
-) -> Result<Delivery, BlobError> {
+) -> Result<Handoff, BlobError> {
     Ok(match completion {
-        Completion::CallCompleted { seq, result } => Delivery::CallCompleted {
+        Completion::CallCompleted { seq, result } => Handoff::CallCompleted {
             seq: *seq,
             result: load(source, tenant, result).await?,
         },
-        Completion::CallFailed { seq, error } => Delivery::CallFailed {
+        Completion::CallFailed { seq, error } => Handoff::CallFailed {
             seq: *seq,
             error: ActionFailure {
                 data: error.data.as_ref().map(canonicalize),
                 ..error.clone()
             },
         },
-        Completion::TimerFired { seq } => Delivery::TimerFired { seq: *seq },
-        Completion::SignalReceived { name, payload } => Delivery::SignalReceived {
+        Completion::TimerFired { seq } => Handoff::TimerFired { seq: *seq },
+        Completion::SignalReceived { name, payload } => Handoff::SignalReceived {
             name: name.clone(),
             payload: load(source, tenant, payload).await?,
         },
-        Completion::CancelRequested { reason } => Delivery::CancelRequested {
+        Completion::CancelRequested { reason } => Handoff::CancelRequested {
             reason: reason.clone(),
         },
     })

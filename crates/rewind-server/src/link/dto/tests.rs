@@ -26,7 +26,7 @@ use rewind_engine::ports::{
     ActionCounts, ActionDeclarations, Attempt, AttributeValue, CallTask, CompiledCode,
     CounterDelta, Counters, Created, Day, DayUsage, DueTimer, Ending, Enqueued, FailureCounts,
     ForkSource, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
-    NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionEpoch,
+    NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionGeneration,
     PayloadRecord, Predicate, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range, RunCounts, RunHead, RunMetadata,
     RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, ScriptCounts, SealedAttempt,
@@ -117,7 +117,7 @@ fn metadata() -> RunMetadata {
             seq: Seq(2),
             detached: true,
         }),
-        scope: BTreeMap::from([("team".to_owned(), "a".to_owned())]),
+        allowed_labels: BTreeMap::from([("team".to_owned(), "a".to_owned())]),
         secrets,
     }
 }
@@ -192,7 +192,7 @@ fn head(n: u128) -> RunHead {
         attempt: Attempt(2),
         sealed: Some(Attempt(1)),
         failures: 1,
-        attempts: 2,
+        unfinished: 2,
         quarantine: Some(Quarantine {
             kind: QuarantineKind::Failures,
             reason: "the activation failed".into(),
@@ -820,12 +820,12 @@ fn every_partition_request() -> Vec<PartitionRequest> {
         PartitionRequest::Counters {
             scope: namespace_scope(),
             window: Window::hours(Hour(10), Hour(12)),
-            bucket: None,
+            interval: None,
         },
         PartitionRequest::Counters {
             scope: Scope::Tenant(acme()),
             window: Window::hours(Hour(10), Hour(34)),
-            bucket: NonZeroU32::new(6),
+            interval: NonZeroU32::new(6),
         },
         PartitionRequest::Usage {
             scope: namespace_scope(),
@@ -969,7 +969,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
     let requests = vec![
         TenantRequest::Admit(Admit {
             partition: PartitionId::new(3),
-            epoch: PartitionEpoch(7),
+            generation: PartitionGeneration(7),
             run: run_id(1),
             namespace: user(),
             code: digest("script"),
@@ -977,7 +977,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
         }),
         TenantRequest::Counts(CountsReport {
             partition: PartitionId::new(3),
-            epoch: PartitionEpoch(7),
+            generation: PartitionGeneration(7),
             namespace: user(),
             gauges: gauges(),
             created_this_month: 4,
@@ -989,7 +989,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
         // What a partition keeps of its tenants' erased namespaces is reported as theirs.
         TenantRequest::Counts(CountsReport {
             partition: PartitionId::new(3),
-            epoch: PartitionEpoch(7),
+            generation: PartitionGeneration(7),
             namespace: NamespaceName::erased(PartitionId::new(3)),
             gauges: gauges(),
             created_this_month: 2,
@@ -1000,7 +1000,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
         }),
         TenantRequest::Slot(SlotRequest {
             partition: PartitionId::new(3),
-            epoch: PartitionEpoch(7),
+            generation: PartitionGeneration(7),
             task: task_ref(1, 2),
             server: "srv".into(),
             limit: 4,
@@ -1011,7 +1011,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
         },
         TenantRequest::HarnessTask(Box::new(HarnessTaskOffer {
             partition: PartitionId::new(3),
-            epoch: PartitionEpoch(7),
+            generation: PartitionGeneration(7),
             task: harness_task(),
             action_set: digest("action_set"),
             grace: Duration::from_secs(60),

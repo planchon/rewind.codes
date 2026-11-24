@@ -14,7 +14,7 @@
 //!   that tenants stay apart on a file system that ignores case.
 //! - [`S3Blobs`]: S3 or any S3-compatible service, for production. Keys are
 //!   `blobs/{tenant}/{run}/sha256/{digest}` and `tests/{tenant}/sha256/{digest}`.
-//! - [`CachedBlobs`]: the workers' local cache, in memory and bounded in bytes, in front of
+//! - [`CachedBlobs`]: the nodes' local cache, in memory and bounded in bytes, in front of
 //!   either store.
 //!
 //! [`LegacyFiles`] and [`LegacyS3`] read the tenant-keyed blobs of the runs `rewind server

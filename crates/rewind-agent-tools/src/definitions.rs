@@ -6,7 +6,7 @@
 //! them; the SDK keeps the order it writes them in.
 //!
 //! The MCP set (`archi/07-code-architecture.md`, "MCP and OAuth"): the same tools but
-//! `save_workflow`, with `list_orgs`, `list_namespaces` and `list_action_sets` to find what the
+//! `save_workflow`, with `list_organizations`, `list_namespaces` and `list_action_sets` to find what the
 //! caller reaches, the organization, the namespace and the action set as arguments, and for each
 //! tool a title, its annotations and the permission it needs.
 
@@ -515,7 +515,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
 /// The names of the agent tools of the MCP set, in the order `tools/list` gives them: from an
 /// organization to a run.
 pub const MCP_TOOLS: [&str; 15] = [
-    "list_orgs",
+    "list_organizations",
     "list_namespaces",
     "list_action_sets",
     "search_actions",
@@ -566,14 +566,14 @@ pub struct McpTool {
     pub description: String,
     pub input_schema: Value,
     pub annotations: Annotations,
-    /// The permission it needs in the organization it acts in; none for `list_orgs`.
+    /// The permission it needs in the organization it acts in; none for `list_organizations`.
     pub permission: Option<Permission>,
 }
 
-fn org() -> Value {
+fn organization() -> Value {
     json!({
         "type": "string",
-        "description": "The organization to act in: its id or its name, as list_orgs gives them. Leave it out when you reach one organization only."
+        "description": "The organization to act in: its id or its name, as list_organizations gives them. Leave it out when you reach one organization only."
     })
 }
 
@@ -626,11 +626,11 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
     };
     // The tools of their own.
     match name {
-        "list_orgs" => {
+        "list_organizations" => {
             return Some(McpTool {
-                name: "list_orgs",
+                name: "list_organizations",
                 title: "List organizations",
-                description: "List the organizations you reach, with their id, their name and what you may do in each. Every other tool acts in one of them, given as `org`; leave `org` out when there is only one. Call it first when the person has not said which organization to use.".into(),
+                description: "List the organizations you reach, with their id, their name and what you may do in each. Every other tool acts in one of them, given as `organization`; leave `organization` out when there is only one. Call it first when the person has not said which organization to use.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {},
@@ -648,7 +648,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "org": org(),
+                        "organization": organization(),
                         "prefix": { "type": "string", "description": "Only the namespaces whose name starts with this, or whose display name does, case aside." }
                     },
                     "additionalProperties": false
@@ -664,7 +664,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 description: "List the action sets of an organization: each pins MCP servers and their actions, which workflows import from \"rewind:actions\", and the workflows they import from \"rewind:workflows\". Give an action set's id as `action_set` to search_actions, check_workflow, test_workflow and run_workflow, and read its tools' declarations with search_actions before you write a code.".into(),
                 input_schema: json!({
                     "type": "object",
-                    "properties": { "org": org() },
+                    "properties": { "organization": organization() },
                     "additionalProperties": false
                 }),
                 annotations: Annotations::READ,
@@ -677,7 +677,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
     let mut schema = sdk.input_schema;
     let mut description = sdk.description.to_owned();
     let mut required: Vec<&str> = Vec::new();
-    let mut extra = vec![("org", org())];
+    let mut extra = vec![("organization", organization())];
     let (title, permission, annotations, place) = match name {
         "search_actions" => {
             extra.push(("action_set", action_set_required("whose actions to search")));
@@ -705,7 +705,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 "List secrets",
                 Permission::SecretsRead,
                 Annotations::READ,
-                "Give the organization as `org`, and the namespace the run will act for as `namespace`.",
+                "Give the organization as `organization`, and the namespace the run will act for as `namespace`.",
             )
         }
         "check_workflow" => {
@@ -753,7 +753,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 "Read a run",
                 Permission::RunsRead,
                 Annotations::READ,
-                "Give the organization of the run as `org`.",
+                "Give the organization of the run as `organization`.",
             )
         }
         "list_runs" => {
@@ -765,32 +765,32 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 "List runs",
                 Permission::RunsRead,
                 Annotations::READ,
-                "Give the organization as `org`.",
+                "Give the organization as `organization`.",
             )
         }
         "signal_run" => (
             "Signal a run",
             Permission::RunsControl,
             annotations(false, false, false),
-            "Give the organization of the run as `org`.",
+            "Give the organization of the run as `organization`.",
         ),
         "cancel_run" => (
             "Cancel a run",
             Permission::RunsControl,
             annotations(true, true, false),
-            "Give the organization of the run as `org`.",
+            "Give the organization of the run as `organization`.",
         ),
         "retry_run" => (
             "Retry a run",
             Permission::RunsStart,
             annotations(false, false, true),
-            "Give the organization of the run as `org`: the new run takes its namespace and its action set.",
+            "Give the organization of the run as `organization`: the new run takes its namespace and its action set.",
         ),
         "get_workflow" => (
             "Read a workflow",
             Permission::ActionsRead,
             Annotations::READ,
-            "Give the organization as `org`.",
+            "Give the organization as `organization`.",
         ),
         "record_tests" => {
             description = description.replace(
@@ -801,7 +801,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 "Record tests",
                 Permission::RunsRead,
                 annotations(false, true, false),
-                "Give the organization as `org`.",
+                "Give the organization as `organization`.",
             )
         }
         _ => return None,
@@ -869,9 +869,11 @@ mod tests {
                 tool.name,
                 tool.description
             );
-            let org = tool.input_schema["properties"].get("org").is_some();
-            assert_eq!(org, tool.name != "list_orgs", "{}", tool.name);
-            assert_eq!(tool.permission.is_none(), tool.name == "list_orgs");
+            let org = tool.input_schema["properties"]
+                .get("organization")
+                .is_some();
+            assert_eq!(org, tool.name != "list_organizations", "{}", tool.name);
+            assert_eq!(tool.permission.is_none(), tool.name == "list_organizations");
         }
         let tool = |name: &str| tools.iter().find(|tool| tool.name == name).unwrap();
         let required = |name: &str| tool(name).input_schema["required"].clone();
@@ -908,7 +910,7 @@ mod tests {
         assert_eq!(
             read_only,
             [
-                "list_orgs",
+                "list_organizations",
                 "list_namespaces",
                 "list_action_sets",
                 "search_actions",

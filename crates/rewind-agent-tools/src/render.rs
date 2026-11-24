@@ -1131,7 +1131,7 @@ pub fn plural(count: usize, noun: &str) -> String {
 // -------------------------------------------------------------------------------------------
 // What a caller reaches (the MCP set)
 
-/// What the tools of the MCP set do with a permission, for `list_orgs`; `None` for those they
+/// What the tools of the MCP set do with a permission, for `list_organizations`; `None` for those they
 /// never use.
 fn permission_phrase(permission: Permission) -> Option<&'static str> {
     Some(match permission {
@@ -1144,7 +1144,7 @@ fn permission_phrase(permission: Permission) -> Option<&'static str> {
     })
 }
 
-/// An organization the caller reaches, as `list_orgs` shows it.
+/// An organization the caller reaches, as `list_organizations` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrganizationView<'a> {
     pub id: &'a str,
@@ -1152,16 +1152,16 @@ pub struct OrganizationView<'a> {
     pub permissions: &'a [Permission],
 }
 
-/// `list_orgs`: the organizations, with what the tools may do in each.
+/// `list_organizations`: the organizations, with what the tools may do in each.
 pub fn describe_orgs(organizations: &[OrganizationView<'_>]) -> String {
     if organizations.is_empty() {
         return "You reach no organization: ask the person to open one to this connection in Rewind's dashboard.".to_owned();
     }
     let mut lines = vec![if organizations.len() == 1 {
-        "You reach one organization: the tools act in it without `org`.".to_owned()
+        "You reach one organization: the tools act in it without `organization`.".to_owned()
     } else {
         format!(
-            "You reach {} organizations: give one as `org`, by its id or its name.",
+            "You reach {} organizations: give one as `organization`, by its id or its name.",
             organizations.len()
         )
     }];
@@ -1377,7 +1377,7 @@ mod tests {
                     permissions: &[Permission::TokensWrite]
                 },
             ]),
-            "You reach 2 organizations: give one as `org`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests, read action sets and workflows.\n- id org_2: these tools can do nothing there."
+            "You reach 2 organizations: give one as `organization`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests, read action sets and workflows.\n- id org_2: these tools can do nothing there."
         );
 
         let action_sets: rewind_api::action_sets::ActionSetList = serde_json::from_value(json!({

@@ -7,7 +7,7 @@
 //! them apart by an HMAC of the transport and the credentials under a key drawn when the pool is
 //! made: it never holds a value in clear, nor a digest of one that could be reversed by trying
 //! every short secret. Calls share a connection concurrently; the store already bounds the calls
-//! in flight per server and worker.
+//! in flight per server and node.
 //!
 //! A connection unused for [`McpConfig::idle_timeout`] is closed when the pool is next used, as
 //! is the least recently used one beyond [`McpConfig::max_connections`]; a connection in use is

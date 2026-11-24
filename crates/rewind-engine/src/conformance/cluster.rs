@@ -1,5 +1,5 @@
 //! The conformance suite of `Cluster`: members and their liveness, the ring each member
-//! watches, the partition map and the epochs of its moves, the changes every member receives,
+//! watches, the partition map and the generations of its moves, the changes every member receives,
 //! the members' joins and departures among them.
 //!
 //! The factory creates an empty cluster of [`PARTITIONS`] partitions. A member's liveness ends
@@ -13,8 +13,8 @@ use rewind_core::{Epoch, PartitionId};
 
 use crate::ports::cluster::Membership;
 use crate::ports::{
-    Cluster, ClusterError, ControlPlaneChange, Departed, Moves, NodeId, NodeInfo, PartitionEpoch,
-    PartitionMap,
+    Cluster, ClusterError, ControlPlaneChange, Departed, Moves, NodeId, NodeInfo,
+    PartitionGeneration, PartitionMap,
 };
 
 /// The partitions of the clusters the suite runs on.
@@ -69,7 +69,7 @@ fn owners(map: &PartitionMap) -> Vec<(u16, Option<String>, u64)> {
             (
                 partition.get(),
                 owner.node.as_ref().map(ToString::to_string),
-                owner.epoch.0,
+                owner.generation.0,
             )
         })
         .collect()
@@ -122,7 +122,7 @@ pub async fn a_new_cluster_has_every_partition_unowned_at_epoch_zero<C: Cluster>
     let a = join(cluster, "node-a").await;
     let map = a.partition_map().await.expect("partition_map");
     assert_eq!(map, PartitionMap::unowned(PARTITIONS));
-    assert_eq!(map.epoch(partition(0)), Some(PartitionEpoch(0)));
+    assert_eq!(map.generation(partition(0)), Some(PartitionGeneration(0)));
     assert_eq!(map.owner(partition(0)), None);
 }
 
@@ -155,7 +155,7 @@ pub async fn assign_moves_partitions_and_raises_their_epochs<C: Cluster>(cluster
             (2, Some("node-b".to_owned()), 2),
             (3, Some("node-a".to_owned()), 1),
         ],
-        "a partition moved to its owner keeps its epoch"
+        "a partition moved to its owner keeps its generation"
     );
     assert_eq!(a.partition_map().await.expect("partition_map"), moved);
     assert_eq!(b.partition_map().await.expect("partition_map"), moved);

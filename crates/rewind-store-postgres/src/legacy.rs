@@ -185,7 +185,7 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
             source: parent,
             workflow,
             started_by,
-            scope: decode_labels(&row.text(29)?)?,
+            allowed_labels: decode_labels(&row.text(29)?)?,
             secrets: server_secrets(&row.text(30)?)?,
         },
         idempotency_key: row.opt_text(19)?,

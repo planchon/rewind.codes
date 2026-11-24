@@ -44,7 +44,7 @@ pub struct RunHead {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sealed: Option<u32>,
     pub failures: u32,
-    pub attempts: u32,
+    pub unfinished: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantine: Option<Quarantine>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -76,7 +76,7 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<StartedBy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub scope: BTreeMap<String, String>,
+    pub allowed_labels: BTreeMap<String, String>,
     /// By server or API: `org/<name>` or `ns/<name>`.
     #[serde(
         default,

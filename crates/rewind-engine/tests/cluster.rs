@@ -22,7 +22,7 @@ use rewind_engine::ports::link::{
     StreamAttach, StreamId,
 };
 use rewind_engine::ports::{
-    Delivery, Enqueued, NamespaceName, NodeId, RunRef, TaskState, TenantId, home_partition,
+    Enqueued, Handoff, NamespaceName, NodeId, RunRef, TaskState, TenantId, home_partition,
     namespace_partition,
 };
 use serde_json::json;
@@ -65,7 +65,7 @@ fn waiter() -> FakeExecutor {
         "waiter",
         |run| run.await_signal("go"),
         |run, delivery| match delivery {
-            Delivery::SignalReceived { payload, .. } => run.complete(payload.clone()),
+            Handoff::SignalReceived { payload, .. } => run.complete(payload.clone()),
             other => panic!("unexpected {other:?}"),
         },
     )
@@ -119,7 +119,7 @@ async fn a_node_killed_during_an_activation_is_taken_over_and_the_run_goes_on() 
     );
     let view = world.view(&run).await;
     assert_eq!(view.head.status, RunStatus::Completed);
-    assert_eq!(view.head.attempts, 0, "the commit reset the count");
+    assert_eq!(view.head.unfinished, 0, "the commit reset the count");
     assert_eq!(
         world.events(&run).await,
         ["run_started", "start_timer", "timer_fired", "complete_run"]
@@ -162,8 +162,8 @@ async fn a_partition_moves_to_a_node_that_joins_and_its_runs_go_on() {
     assert_eq!(after.owned_by(&a).len() + moved.len(), 8);
     for partition in &moved {
         assert!(
-            after.epoch(*partition) > before.epoch(*partition),
-            "a move raises the epoch"
+            after.generation(*partition) > before.generation(*partition),
+            "a move raises the generation"
         );
     }
     assert_eq!(
@@ -441,8 +441,8 @@ fn host() -> FakeExecutor {
             run.call("a", json!({ "ask": "user" }));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { result, .. } => run.complete(result.clone()),
-            Delivery::CallFailed { error, .. } => {
+            Handoff::CallCompleted { result, .. } => run.complete(result.clone()),
+            Handoff::CallFailed { error, .. } => {
                 run.complete(json!({ "kind": error.kind.as_str() }));
             }
             other => panic!("unexpected {other:?}"),

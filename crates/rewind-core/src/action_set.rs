@@ -71,7 +71,7 @@ pub struct McpServer {
     /// The group of its actions in `rewind:actions`: an identifier, such as `github`.
     pub name: String,
     pub transport: McpTransport,
-    /// Calls in flight to this server, on each worker. The claim of call tasks enforces it.
+    /// Calls in flight to this server, on each node. The claim of call tasks enforces it.
     pub concurrency: u32,
     /// How its calls prove who calls (`archi/04-tools.md`, "Authenticating calls"): a header or
     /// a signature for an HTTP server, a variable for a stdio server.
@@ -79,7 +79,7 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Calls in flight to one MCP server on each worker, unless the action set says otherwise.
+    /// Calls in flight to one MCP server on each node, unless the action set says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 8;
 
     /// A public server with the default concurrency.
@@ -105,12 +105,12 @@ pub struct Api {
     /// How its calls prove who calls: the `auth` given at registration, or what the document's
     /// security requirement means, resolved then.
     pub auth: ActionAuth,
-    /// Calls in flight to this API, on each worker. The claim of call tasks enforces it.
+    /// Calls in flight to this API, on each node. The claim of call tasks enforces it.
     pub concurrency: u32,
 }
 
 impl Api {
-    /// Calls in flight to one API on each worker, unless the action set says otherwise.
+    /// Calls in flight to one API on each node, unless the action set says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 8;
 
     /// A public API with the default concurrency.

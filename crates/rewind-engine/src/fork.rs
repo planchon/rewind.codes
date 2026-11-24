@@ -391,9 +391,9 @@ where
             // payloads itself, and with its `recorded_at`.
             let completion = with_values(with.payloads, tenant, completion).await?;
             let recorded_at = batch.recorded_at(cursor.logical_now());
-            let delivery = payloads::delivery(with.payloads, tenant, &completion).await?;
+            let handoff = payloads::handoff(with.payloads, tenant, &completion).await?;
             let trigger = Event::Completion(completion);
-            let delivered = instance.deliver(delivery, recorded_at).await;
+            let delivered = instance.deliver(handoff, recorded_at).await;
             batch.count_cpu(with.cpu, instance.cpu_time());
             match delivered {
                 Ok(emitted) => {

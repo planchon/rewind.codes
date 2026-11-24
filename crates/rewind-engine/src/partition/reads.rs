@@ -4,7 +4,7 @@
 //! A read answers what the partition's last durable batch left: a run's head and summary, its
 //! history (from its partition while its attempt is live, from the archive once sealed), its
 //! tasks (those in flight from the owner's memory), a page of a search, counters and gauges by
-//! bucket, the use of its namespaces, shapes. Each read is a job of its own; the quota alerts of
+//! interval, the use of its namespaces, shapes. Each read is a job of its own; the quota alerts of
 //! a tenant homed here are answered from its tenant actor's state.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -226,12 +226,13 @@ impl<P: Plane> Owner<P> {
                 PartitionRequest::Counters {
                     scope,
                     window,
-                    bucket,
+                    interval,
                 } => PartitionReply::Counted(
                     async {
                         let mut counters = Vec::new();
-                        for bucket in buckets(window, bucket) {
-                            counters.push(log.counters(&scope, bucket).await.map_err(unavailable)?);
+                        for interval in intervals(window, interval) {
+                            counters
+                                .push(log.counters(&scope, interval).await.map_err(unavailable)?);
                         }
                         let gauges = log.gauges(&scope).await.map_err(unavailable)?;
                         Ok((counters, gauges))
@@ -294,10 +295,10 @@ impl<P: Plane> Owner<P> {
     }
 }
 
-/// The windows of `bucket` whole hours that cover `window`, from its start, the last one cut at
-/// its end; the window itself without a bucket.
-pub(crate) fn buckets(window: Window, bucket: Option<NonZeroU32>) -> Vec<Window> {
-    let Some(width) = bucket else {
+/// The windows of `interval` whole hours that cover `window`, from its start, the last one cut at
+/// its end; the window itself without an interval.
+pub(crate) fn intervals(window: Window, interval: Option<NonZeroU32>) -> Vec<Window> {
+    let Some(width) = interval else {
         return vec![window];
     };
     let mut windows = Vec::new();

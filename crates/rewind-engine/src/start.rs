@@ -170,7 +170,7 @@ pub(crate) fn refuse_nul_in_metadata(
     idempotency_key: Option<&str>,
 ) -> Result<(), NulCharacter> {
     text::refuse_nul_in_labels(&metadata.labels)?;
-    text::refuse_nul_in_labels(&metadata.scope)?;
+    text::refuse_nul_in_labels(&metadata.allowed_labels)?;
     if let Some(trace) = &metadata.trace_context {
         text::refuse_nul_in_trace(trace)?;
     }

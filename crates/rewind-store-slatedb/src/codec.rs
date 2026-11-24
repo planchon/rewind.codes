@@ -64,7 +64,7 @@ pub fn head_record(head: &RunHead) -> record::RunHead {
         attempt: head.attempt.0,
         sealed: head.sealed.map(|attempt| attempt.0),
         failures: head.failures,
-        attempts: head.attempts,
+        unfinished: head.unfinished,
         quarantine: head.quarantine.as_ref().map(quarantine_record),
         waits: head.waits.iter().map(wait_record).collect(),
         expires_at: head.expires_at.0,
@@ -90,7 +90,7 @@ pub fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError> {
         attempt: Attempt(record.attempt),
         sealed: record.sealed.map(Attempt),
         failures: record.failures,
-        attempts: record.attempts,
+        unfinished: record.unfinished,
         quarantine: record.quarantine.map(quarantine_of),
         waits: record.waits.into_iter().map(wait_of).collect(),
         expires_at: Timestamp(record.expires_at),
@@ -129,7 +129,7 @@ pub fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
             seq: started.seq.0,
             detached: started.detached,
         }),
-        scope: metadata.scope.clone(),
+        allowed_labels: metadata.allowed_labels.clone(),
         secrets: metadata.secrets.clone(),
     }
 }
@@ -154,7 +154,7 @@ pub fn metadata_of(record: record::Metadata) -> RunMetadata {
             seq: Seq(started.seq),
             detached: started.detached,
         }),
-        scope: record.scope,
+        allowed_labels: record.allowed_labels,
         secrets: record.secrets,
     }
 }

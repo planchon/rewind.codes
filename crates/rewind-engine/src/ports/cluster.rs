@@ -1,11 +1,11 @@
-//! The `Cluster` port: the nodes alive, the partition map and its epochs, a node's liveness, and
+//! The `Cluster` port: the nodes alive, the partition map and its generations, a node's liveness, and
 //! the changes of the control plane (`archi/07-code-architecture.md`, "`Cluster` and
 //! `NodeLink`"; `archi/06-storage-and-scale.md`, "Partitions, owners and nodes").
 //!
 //! ```text
 //!   Cluster::join(NodeInfo) ──► Membership ── watch() ──► Departed { node }   the next node of
 //!                                  │                                          the ring died
-//!                                  ├── assign(Moves) ──► PartitionMap          owners, epochs + 1
+//!                                  ├── assign(Moves) ──► PartitionMap          owners, generations + 1
 //!                                  ├── partition_map(), nodes()
 //!                                  ├── changes() ──► stream of ControlPlaneChange
 //!                                  └── leave()                                 after the hand-over
@@ -81,38 +81,38 @@ pub struct NodeInfo {
 /// How many times a partition has moved: raised by one at each move, so that a stale owner is
 /// told apart from the current one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PartitionEpoch(pub u64);
+pub struct PartitionGeneration(pub u64);
 
-impl PartitionEpoch {
-    /// The epoch after a move.
+impl PartitionGeneration {
+    /// The generation after a move.
     pub fn next(self) -> Self {
         Self(self.0.saturating_add(1))
     }
 }
 
-impl fmt::Display for PartitionEpoch {
+impl fmt::Display for PartitionGeneration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-/// A partition's place in the map: its owner, and the epoch of its last move.
+/// A partition's place in the map: its owner, and the generation of its last move.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionOwner {
     /// `None` until a node takes it.
     pub node: Option<NodeId>,
-    pub epoch: PartitionEpoch,
+    pub generation: PartitionGeneration,
 }
 
 /// Which node owns each partition of the deployment: every partition, from 0 to the number of
-/// partitions, is listed. A new cluster's partitions have no owner, at epoch 0.
+/// partitions, is listed. A new cluster's partitions have no owner, at generation 0.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PartitionMap {
     pub partitions: BTreeMap<PartitionId, PartitionOwner>,
 }
 
 impl PartitionMap {
-    /// A map of `count` partitions, none owned, at epoch 0.
+    /// A map of `count` partitions, none owned, at generation 0.
     pub fn unowned(count: u16) -> Self {
         Self {
             partitions: (0..count)
@@ -121,7 +121,7 @@ impl PartitionMap {
                         PartitionId::new(id),
                         PartitionOwner {
                             node: None,
-                            epoch: PartitionEpoch::default(),
+                            generation: PartitionGeneration::default(),
                         },
                     )
                 })
@@ -134,9 +134,11 @@ impl PartitionMap {
         self.partitions.get(&partition)?.node.as_ref()
     }
 
-    /// The epoch of a partition; `None` for a partition the deployment does not have.
-    pub fn epoch(&self, partition: PartitionId) -> Option<PartitionEpoch> {
-        self.partitions.get(&partition).map(|owner| owner.epoch)
+    /// The generation of a partition; `None` for a partition the deployment does not have.
+    pub fn generation(&self, partition: PartitionId) -> Option<PartitionGeneration> {
+        self.partitions
+            .get(&partition)
+            .map(|owner| owner.generation)
     }
 
     /// The partitions a node owns, in order.
@@ -277,8 +279,8 @@ pub enum ClusterError {
 ///   the last the first. `watch` returns [`Departed`] once the membership of that node ended,
 ///   and waits while the member is alone.
 /// - **Moves.** [`Membership::assign`] moves partitions in one transaction: each partition whose
-///   owner changes gets the new owner and its epoch + 1; a partition moved to its current owner
-///   keeps its epoch. Every member then reads the new map, and receives it as a
+///   owner changes gets the new owner and its generation + 1; a partition moved to its current owner
+///   keeps its generation. Every member then reads the new map, and receives it as a
 ///   [`ControlPlaneChange::PartitionMap`].
 /// - **Changes.** [`Membership::changes`] yields every [`ControlPlaneChange`] committed by any
 ///   process after it returned, in commit order. A stream that ends may have missed changes:
@@ -306,7 +308,7 @@ pub trait Membership: Send + Sync {
     /// Waits until the membership of the next node of the ring ends, and names that node.
     fn watch(&self) -> impl Future<Output = Result<Departed, ClusterError>> + Send;
 
-    /// Moves partitions in one transaction, raising each moved partition's epoch, and sends the
+    /// Moves partitions in one transaction, raising each moved partition's generation, and sends the
     /// new map as it commits. Refuses, moving nothing, a node that is not a member and a
     /// partition the deployment does not have.
     fn assign(
@@ -346,10 +348,13 @@ mod tests {
         let map = PartitionMap::unowned(3);
         assert_eq!(map.partitions.len(), 3);
         assert_eq!(map.owner(PartitionId::new(2)), None);
-        assert_eq!(map.epoch(PartitionId::new(2)), Some(PartitionEpoch(0)));
-        assert_eq!(map.epoch(PartitionId::new(3)), None);
+        assert_eq!(
+            map.generation(PartitionId::new(2)),
+            Some(PartitionGeneration(0))
+        );
+        assert_eq!(map.generation(PartitionId::new(3)), None);
         let node = NodeId::new("a").unwrap();
         assert!(map.owned_by(&node).is_empty());
-        assert_eq!(PartitionEpoch(4).next(), PartitionEpoch(5));
+        assert_eq!(PartitionGeneration(4).next(), PartitionGeneration(5));
     }
 }

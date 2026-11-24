@@ -844,8 +844,8 @@ CREATE UNIQUE INDEX workflows_by_number ON workflows (tenant, name, number);
 /// What the control plane keeps of the run plane (`archi/06-storage-and-scale.md`, "The control
 /// plane"): the partition of each namespace, chosen when the catalog creates it (null for a
 /// namespace created before the column, which the catalog places at its next use or with
-/// `TursoCatalog::place_namespaces`); the partition map, each partition's owner and the epoch of
-/// its last move; the runs `migrate-runs` moved into a partition. The members of an embedded
+/// `TursoCatalog::place_namespaces`); the partition map, each partition's owner and the generation of
+/// its last move (the column `epoch`); the runs `migrate-runs` moved into a partition. The members of an embedded
 /// cluster live in its process: no table holds them.
 const V12: &str = r#"
 ALTER TABLE namespaces ADD COLUMN partition INTEGER;

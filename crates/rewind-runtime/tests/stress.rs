@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{ActionSet, Code, Epoch, RunId, Seed, Seq, Timestamp};
-use rewind_engine::ports::{CodeExecutor, CodeInstance, Delivery, StartCode};
+use rewind_engine::ports::{CodeExecutor, CodeInstance, Handoff, StartCode};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
@@ -91,7 +91,7 @@ async fn lifecycle_of_many_instances_at_once() {
                 executor.start(start(&executor, n, SCRIPT)).await.unwrap();
             assert_eq!(emitted.len(), 1, "{emitted:?}");
             let emitted = instance
-                .deliver(Delivery::TimerFired { seq: Seq::FIRST }, T0)
+                .deliver(Handoff::TimerFired { seq: Seq::FIRST }, T0)
                 .await
                 .unwrap();
             assert_eq!(emitted.len(), 1, "{emitted:?}");

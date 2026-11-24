@@ -18,7 +18,7 @@ use rewind_engine::StartWorkflow;
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::plane::NodeConfig;
 use rewind_engine::ports::{
-    ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, Day, Delivery, Dispatched,
+    ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, Day, Dispatched, Handoff,
     NamespaceName, NewSecret, Page, ParkKind, PutSecret, RunOrder, RunQuery, RunRef, Scope, Secret,
     SecretExpiredReason, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription,
     TaskState, TenantId, WebhookKind, WorkflowDeclarations,
@@ -80,12 +80,12 @@ fn calling(run: &mut FakeRun) {
     run.call(&action, json!({}));
 }
 
-fn answered(run: &mut FakeRun, delivery: &Delivery) {
+fn answered(run: &mut FakeRun, delivery: &Handoff) {
     match delivery {
-        Delivery::CallCompleted { result, .. } => {
+        Handoff::CallCompleted { result, .. } => {
             run.complete(json!({ "result": result }));
         }
-        Delivery::CallFailed { error, .. } => run.complete(json!({
+        Handoff::CallFailed { error, .. } => run.complete(json!({
             "error": error.kind.as_str(),
             "message": error.message,
         })),

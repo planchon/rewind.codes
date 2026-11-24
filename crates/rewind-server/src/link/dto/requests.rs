@@ -289,7 +289,7 @@ pub enum PartitionRequest {
         scope: Scope,
         window: Window,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        bucket: Option<NonZeroU32>,
+        interval: Option<NonZeroU32>,
     },
     Usage {
         scope: Scope,
@@ -470,11 +470,11 @@ impl From<&link::PartitionRequest> for PartitionRequest {
             R::Counters {
                 scope,
                 window,
-                bucket,
+                interval,
             } => PartitionRequest::Counters {
                 scope: scope.into(),
                 window: (*window).into(),
-                bucket: *bucket,
+                interval: *interval,
             },
             R::Usage { scope, month, days } => PartitionRequest::Usage {
                 scope: scope.into(),
@@ -600,11 +600,11 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
             PartitionRequest::Counters {
                 scope,
                 window,
-                bucket,
+                interval,
             } => R::Counters {
                 scope: scope.try_into()?,
                 window: window.into(),
-                bucket,
+                interval,
             },
             PartitionRequest::Usage { scope, month, days } => R::Usage {
                 scope: scope.try_into()?,
@@ -668,7 +668,7 @@ pub enum Enqueued {
     RunEnded,
 }
 
-/// A partition's counters over a window, one per bucket, and its gauges:
+/// A partition's counters over a window, one per interval, and its gauges:
 /// `{"counters":[{…},…],"gauges":<gauges record>}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -826,26 +826,26 @@ pub enum TenantRequest {
     Detach { stream: String },
 }
 
-/// `{"partition":3,"epoch":7,"run":"0196…","namespace":"user-1","code":"<hex>","at":…}`.
+/// `{"partition":3,"generation":7,"run":"0196…","namespace":"user-1","code":"<hex>","at":…}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Admit {
     pub partition: u16,
-    pub epoch: u64,
+    pub generation: u64,
     pub run: Id,
     pub namespace: String,
     pub code: Hex,
     pub at: u64,
 }
 
-/// `{"partition":3,"epoch":7,"namespace":"user-1","gauges":<gauges record>,
+/// `{"partition":3,"generation":7,"namespace":"user-1","gauges":<gauges record>,
 /// "created_this_month":4,"cpu_this_month":{"secs":…,"nanos":…},"included":[…],
 /// "abandoned":[…],"at":…}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CountsReport {
     pub partition: u16,
-    pub epoch: u64,
+    pub generation: u64,
     pub namespace: String,
     pub gauges: record::Gauges,
     pub created_this_month: u64,
@@ -857,23 +857,23 @@ pub struct CountsReport {
     pub at: u64,
 }
 
-/// `{"partition":3,"epoch":7,"task":{…},"server":"github","limit":4}`.
+/// `{"partition":3,"generation":7,"task":{…},"server":"github","limit":4}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlotRequest {
     pub partition: u16,
-    pub epoch: u64,
+    pub generation: u64,
     pub task: TaskRef,
     pub server: String,
     pub limit: u32,
 }
 
-/// `{"partition":3,"epoch":7,"task":{…},"action_set":"<hex>","grace":{"secs":60,"nanos":0}}`.
+/// `{"partition":3,"generation":7,"task":{…},"action_set":"<hex>","grace":{"secs":60,"nanos":0}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessTaskOffer {
     pub partition: u16,
-    pub epoch: u64,
+    pub generation: u64,
     pub task: HarnessTask,
     pub action_set: Hex,
     pub grace: Duration,
@@ -1027,7 +1027,7 @@ impl From<&link::TenantRequest> for TenantRequest {
         match request {
             R::Admit(admit) => TenantRequest::Admit(Admit {
                 partition: admit.partition.get(),
-                epoch: admit.epoch.0,
+                generation: admit.generation.0,
                 run: Id(admit.run),
                 namespace: admit.namespace.to_string(),
                 code: Hex(admit.code),
@@ -1035,7 +1035,7 @@ impl From<&link::TenantRequest> for TenantRequest {
             }),
             R::Counts(report) => TenantRequest::Counts(CountsReport {
                 partition: report.partition.get(),
-                epoch: report.epoch.0,
+                generation: report.generation.0,
                 namespace: report.namespace.to_string(),
                 gauges: codec::gauges_record(&report.gauges),
                 created_this_month: report.created_this_month,
@@ -1046,7 +1046,7 @@ impl From<&link::TenantRequest> for TenantRequest {
             }),
             R::Slot(slot) => TenantRequest::Slot(SlotRequest {
                 partition: slot.partition.get(),
-                epoch: slot.epoch.0,
+                generation: slot.generation.0,
                 task: (&slot.task).into(),
                 server: slot.server.clone(),
                 limit: slot.limit,
@@ -1057,7 +1057,7 @@ impl From<&link::TenantRequest> for TenantRequest {
             },
             R::HarnessTask(offer) => TenantRequest::HarnessTask(Box::new(HarnessTaskOffer {
                 partition: offer.partition.get(),
-                epoch: offer.epoch.0,
+                generation: offer.generation.0,
                 task: (&offer.task).into(),
                 action_set: Hex(offer.action_set),
                 grace: offer.grace,
@@ -1082,7 +1082,7 @@ impl TryFrom<TenantRequest> for link::TenantRequest {
         Ok(match request {
             TenantRequest::Admit(admit) => R::Admit(link::Admit {
                 partition: PartitionId::new(admit.partition),
-                epoch: engine::PartitionEpoch(admit.epoch),
+                generation: engine::PartitionGeneration(admit.generation),
                 run: admit.run.0,
                 namespace: namespace(admit.namespace)?,
                 code: admit.code.0,
@@ -1090,7 +1090,7 @@ impl TryFrom<TenantRequest> for link::TenantRequest {
             }),
             TenantRequest::Counts(report) => R::Counts(link::CountsReport {
                 partition: PartitionId::new(report.partition),
-                epoch: engine::PartitionEpoch(report.epoch),
+                generation: engine::PartitionGeneration(report.generation),
                 namespace: namespace(report.namespace)?,
                 gauges: codec::gauges_of(report.gauges),
                 created_this_month: report.created_this_month,
@@ -1101,7 +1101,7 @@ impl TryFrom<TenantRequest> for link::TenantRequest {
             }),
             TenantRequest::Slot(slot) => R::Slot(link::SlotRequest {
                 partition: PartitionId::new(slot.partition),
-                epoch: engine::PartitionEpoch(slot.epoch),
+                generation: engine::PartitionGeneration(slot.generation),
                 task: slot.task.try_into()?,
                 server: slot.server,
                 limit: slot.limit,
@@ -1112,7 +1112,7 @@ impl TryFrom<TenantRequest> for link::TenantRequest {
             },
             TenantRequest::HarnessTask(offer) => R::HarnessTask(Box::new(link::HarnessTaskOffer {
                 partition: PartitionId::new(offer.partition),
-                epoch: engine::PartitionEpoch(offer.epoch),
+                generation: engine::PartitionGeneration(offer.generation),
                 task: offer.task.try_into()?,
                 action_set: offer.action_set.0,
                 grace: offer.grace,

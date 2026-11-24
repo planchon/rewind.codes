@@ -378,7 +378,7 @@ async fn the_tools_listed_are_those_one_organization_of_the_caller_allows() {
     assert_eq!(
         names(&tools),
         [
-            "list_orgs",
+            "list_organizations",
             "list_namespaces",
             "list_action_sets",
             "search_actions",
@@ -394,7 +394,7 @@ async fn the_tools_listed_are_those_one_organization_of_the_caller_allows() {
     let client = self::client(nothing).await;
     assert_eq!(
         names(&client.list_all_tools().await.unwrap()),
-        ["list_orgs"]
+        ["list_organizations"]
     );
 
     let (both, _) = FakeConnector::new(vec![
@@ -442,8 +442,8 @@ async fn every_tool_has_a_title_and_its_annotations() {
         let org = tool
             .input_schema
             .get("properties")
-            .and_then(|p| p.get("org"));
-        assert_eq!(org.is_some(), name != "list_orgs", "{name}");
+            .and_then(|p| p.get("organization"));
+        assert_eq!(org.is_some(), name != "list_organizations", "{name}");
     }
 }
 
@@ -457,7 +457,7 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
     assert_eq!(server.version, env!("CARGO_PKG_VERSION"));
     assert_eq!(info.instructions.as_deref(), Some(INSTRUCTIONS));
     for step in [
-        "list_orgs",
+        "list_organizations",
         "list_namespaces",
         "list_action_sets",
         "search_actions",
@@ -517,12 +517,12 @@ async fn the_organization_is_one_by_default_and_named_by_id_or_name_otherwise() 
     assert_eq!(missing.is_error, Some(true));
     assert_eq!(
         text(&missing),
-        "list_runs: you reach 3 organizations: give one as `org`, by its id or its name:\n- Acme (id org_1)\n- acme (id org_2)\n- Globex (id org_3)"
+        "list_runs: you reach 3 organizations: give one as `organization`, by its id or its name:\n- Acme (id org_1)\n- acme (id org_2)\n- Globex (id org_3)"
     );
     let named = call(
         &client,
         "list_runs",
-        json!({ "org": "GLOBEX", "namespace": "bob" }),
+        json!({ "organization": "GLOBEX", "namespace": "bob" }),
     )
     .await;
     assert_eq!(named.is_error, Some(false), "{}", text(&named));
@@ -530,30 +530,30 @@ async fn the_organization_is_one_by_default_and_named_by_id_or_name_otherwise() 
         log.lock().unwrap().last().unwrap(),
         "list_runs org=org_3 ns=bob"
     );
-    let by_id = call(&client, "list_runs", json!({ "org": "org_2" })).await;
+    let by_id = call(&client, "list_runs", json!({ "organization": "org_2" })).await;
     assert_eq!(by_id.is_error, Some(false));
     assert_eq!(
         log.lock().unwrap().last().unwrap(),
         "list_runs org=org_2 ns=-"
     );
-    let ambiguous = call(&client, "list_runs", json!({ "org": "Acme" })).await;
+    let ambiguous = call(&client, "list_runs", json!({ "organization": "Acme" })).await;
     assert_eq!(ambiguous.is_error, Some(true));
     assert_eq!(
         text(&ambiguous),
-        "list_runs: 2 of the organizations you reach are named \"Acme\": give one of their ids as `org`:\n- Acme (id org_1)\n- acme (id org_2)"
+        "list_runs: 2 of the organizations you reach are named \"Acme\": give one of their ids as `organization`:\n- Acme (id org_1)\n- acme (id org_2)"
     );
-    let unknown = call(&client, "list_runs", json!({ "org": "Initech" })).await;
+    let unknown = call(&client, "list_runs", json!({ "organization": "Initech" })).await;
     assert_eq!(unknown.is_error, Some(true));
     assert!(
-        text(&unknown).starts_with("list_runs: you reach no organization \"Initech\". Give one of these as `org`, by its id or its name:\n- Acme (id org_1)"),
+        text(&unknown).starts_with("list_runs: you reach no organization \"Initech\". Give one of these as `organization`, by its id or its name:\n- Acme (id org_1)"),
         "{}",
         text(&unknown)
     );
 
-    let orgs = call(&client, "list_orgs", json!({})).await;
+    let orgs = call(&client, "list_organizations", json!({})).await;
     assert_eq!(orgs.is_error, Some(false));
     assert!(
-        text(&orgs).starts_with("You reach 3 organizations: give one as `org`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests,"),
+        text(&orgs).starts_with("You reach 3 organizations: give one as `organization`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests,"),
         "{}",
         text(&orgs)
     );
@@ -569,20 +569,20 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
     let refused = call(
         &client,
         "run_workflow",
-        json!({ "org": "Acme", "namespace": "alice", "code": "export default async () => 1;" }),
+        json!({ "organization": "Acme", "namespace": "alice", "code": "export default async () => 1;" }),
     )
     .await;
     assert_eq!(refused.is_error, Some(true));
     assert_eq!(
         text(&refused),
-        "run_workflow: you may not use it in the organization Acme (id org_1): it needs the permission runs:start, which you do not hold there. list_orgs says what you may do in each organization."
+        "run_workflow: you may not use it in the organization Acme (id org_1): it needs the permission runs:start, which you do not hold there. list_organizations says what you may do in each organization."
     );
     assert!(log.lock().unwrap().is_empty(), "nothing reached the API");
 
     let ran = call(
         &client,
         "run_workflow",
-        json!({ "org": "Globex", "namespace": "alice", "action_set": "ts1", "code": "export default async () => 1;" }),
+        json!({ "organization": "Globex", "namespace": "alice", "action_set": "ts1", "code": "export default async () => 1;" }),
     )
     .await;
     assert_eq!(ran.is_error, Some(false), "{}", text(&ran));

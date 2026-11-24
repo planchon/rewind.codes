@@ -1,6 +1,6 @@
 //! [`Api`] and [`McpApi`] over HTTP: `rewind_api::Client`, with its Bearer, its
 //! `Rewind-Organization` and its `Rewind-Namespace`. The CLI's `rewind mcp` reaches the embedded
-//! server through it, and `rewind-server` the workers.
+//! server through it, and `rewind-server` the nodes.
 
 use rewind_api::action_sets::{
     ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,

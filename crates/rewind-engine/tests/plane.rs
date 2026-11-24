@@ -23,7 +23,7 @@ use rewind_engine::ports::link::{
     HarnessFailure, NodeReply, NodeRequest, PartitionRequest, Refusal, StreamAttach, StreamId,
 };
 use rewind_engine::ports::{
-    BlobStore, CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind,
+    BlobStore, CatalogStore, Dispatched, Enqueued, Handoff, NamespaceName, Page, QuarantineKind,
     Quotas, RunArchive, RunOrder, RunQuery, Scope, SecretStore, TaskState, TenantId, Window,
 };
 use serde_json::json;
@@ -53,8 +53,8 @@ fn approval() -> FakeExecutor {
         "approval",
         |run| run.await_signal("approval"),
         |run, delivery| match delivery {
-            Delivery::SignalReceived { payload, .. } => run.complete(payload.clone()),
-            Delivery::CancelRequested { .. } => run.fail("CancelledError", "run cancelled"),
+            Handoff::SignalReceived { payload, .. } => run.complete(payload.clone()),
+            Handoff::CancelRequested { .. } => run.fail("CancelledError", "run cancelled"),
             other => panic!("unexpected {other:?}"),
         },
     )
@@ -67,9 +67,9 @@ fn one_call() -> FakeExecutor {
             run.call("a", json!({ "x": 1 }));
         },
         |run, delivery| match delivery {
-            Delivery::CallCompleted { result, .. } => run.complete(result.clone()),
-            Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
-            Delivery::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
+            Handoff::CallCompleted { result, .. } => run.complete(result.clone()),
+            Handoff::CallFailed { error, .. } => run.fail("ActionError", &error.message),
+            Handoff::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
             other => panic!("unexpected {other:?}"),
         },
     )
@@ -318,7 +318,7 @@ async fn a_ten_day_sleep_takes_no_wall_clock_time() {
             run.timer(10 * DAY);
         },
         |run, delivery| {
-            assert!(matches!(delivery, Delivery::TimerFired { .. }));
+            assert!(matches!(delivery, Handoff::TimerFired { .. }));
             run.complete(json!({ "at": run.now.0 }));
         },
     );
@@ -349,7 +349,7 @@ async fn thousands_of_timers_due_at_once_fire_until_the_history_is_full() {
             }
         },
         |run, delivery| {
-            let Delivery::TimerFired { seq } = delivery else {
+            let Handoff::TimerFired { seq } = delivery else {
                 panic!("unexpected {delivery:?}");
             };
             if seq.0 % AT_ONCE == 0 {
@@ -1390,13 +1390,13 @@ async fn a_series_and_the_namespaces_use_are_one_request_per_partition() {
         .iter()
         .map(|(_, counters)| counters.created)
         .collect();
-    assert_eq!(created, [3, 0, 2, 0], "one bucket per hour");
+    assert_eq!(created, [3, 0, 2, 0], "one interval per hour");
     assert_eq!(
         series[2].0,
         Window::hours(series[2].0.from, series[2].0.from.next())
     );
     let messages = world.driver.steps().messages - steps.messages;
-    // Two buckets of three hours: the last one is cut at the window's end.
+    // Two intervals of three hours: the last one is cut at the window's end.
     let mut gateway = world.driver.gateway(&world.at.clone());
     let series = world
         .edge
@@ -1414,7 +1414,7 @@ async fn a_series_and_the_namespaces_use_are_one_request_per_partition() {
     assert_eq!(
         world.driver.steps().messages - steps.messages,
         2 * messages,
-        "a series is one request per partition, whatever its buckets"
+        "a series is one request per partition, whatever its intervals"
     );
 
     // The use of the month, by namespace, then by day for one.

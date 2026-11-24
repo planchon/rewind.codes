@@ -106,19 +106,24 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
     let client = ().serve((client_input, client_output)).await.unwrap();
     let info = client.peer_info().unwrap();
     assert_eq!(info.server_info.as_ref().unwrap().name, "Rewind");
-    assert!(info.instructions.as_deref().unwrap().contains("list_orgs"));
+    assert!(
+        info.instructions
+            .as_deref()
+            .unwrap()
+            .contains("list_organizations")
+    );
 
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(names, rewind_agent_tools::definitions::MCP_TOOLS);
 
     let orgs = client
-        .call_tool(CallToolRequestParams::new("list_orgs"))
+        .call_tool(CallToolRequestParams::new("list_organizations"))
         .await
         .unwrap();
     assert_eq!(
         orgs.content[0].as_text().unwrap().text,
-        "You reach one organization: the tools act in it without `org`.\n- id local: you may read runs and record tests, check, test, run and retry workflows, signal and cancel runs, read action sets and workflows, list namespaces."
+        "You reach one organization: the tools act in it without `organization`.\n- id local: you may read runs and record tests, check, test, run and retry workflows, signal and cancel runs, read action sets and workflows, list namespaces."
     );
 
     let checked = client
@@ -139,7 +144,7 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
     let refused = client
         .call_tool(
             CallToolRequestParams::new("check_workflow").with_arguments(arguments(json!({
-                "org": "local",
+                "organization": "local",
                 "namespace": "bob",
                 "code": "const x: string = 42;\nexport default async () => x;"
             }))),

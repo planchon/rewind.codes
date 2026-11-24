@@ -141,8 +141,8 @@ where
     loop {
         match cursor.on_idle()? {
             Next::Deliver { completion, .. } => {
-                let delivery = payloads::delivery(payloads, tenant, completion).await?;
-                let emitted = match instance.deliver(delivery, cursor.logical_now()).await {
+                let handoff = payloads::handoff(payloads, tenant, completion).await?;
+                let emitted = match instance.deliver(handoff, cursor.logical_now()).await {
                     Ok(emitted) => emitted,
                     Err(err) => return stopped(&mut cursor, Some(instance), err),
                 };

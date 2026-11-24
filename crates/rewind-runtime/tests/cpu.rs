@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use rewind_core::{ActionSet, Code, Epoch, RunId, Seed, Timestamp};
-use rewind_engine::ports::{CodeExecutor, CodeInstance, Delivery, ExecutorError, StartCode};
+use rewind_engine::ports::{CodeExecutor, CodeInstance, ExecutorError, Handoff, StartCode};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
 
@@ -46,8 +46,8 @@ fn start(executor: &V8Executor, input: u64) -> StartCode {
     }
 }
 
-fn spin(iterations: u64) -> Delivery {
-    Delivery::SignalReceived {
+fn spin(iterations: u64) -> Handoff {
+    Handoff::SignalReceived {
         name: "spin".into(),
         payload: json!(iterations),
     }

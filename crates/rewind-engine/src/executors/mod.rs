@@ -145,7 +145,7 @@ impl<P: Plane> Executors<P> {
                 let head = &run.head;
                 self.queue.push(
                     head.run.tenant.clone(),
-                    head.attempts,
+                    head.unfinished,
                     run.oldest,
                     head.run.id,
                     Work::Local(run),
@@ -159,7 +159,7 @@ impl<P: Plane> Executors<P> {
                     .map_or(head.updated_at, |item| item.received_at);
                 self.queue.push(
                     head.run.tenant.clone(),
-                    head.attempts,
+                    head.unfinished,
                     oldest,
                     head.run.id,
                     Work::Remote(request, reply),

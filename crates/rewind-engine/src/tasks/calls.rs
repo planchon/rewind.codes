@@ -607,24 +607,24 @@ async fn start_child<P: Plane>(
     };
     let mut labels = head.metadata.labels.clone();
     for (key, value) in args.labels {
-        if let Some(fixed) = head.metadata.scope.get(&key)
+        if let Some(fixed) = head.metadata.allowed_labels.get(&key)
             && *fixed != value
         {
             return failed(format!(
-                "the label {key:?} is {fixed:?} for every run this run starts: its scope fixes it"
+                "the label {key:?} is {fixed:?} for every run this run starts: its allowed labels fix it"
             ));
         }
         labels.insert(key, value);
     }
-    let scope = &head.metadata.scope;
-    if !scope
+    let allowed = &head.metadata.allowed_labels;
+    if !allowed
         .iter()
         .all(|(key, value)| workflow.labels().get(key) == Some(value))
     {
         return failed(format!(
-            "the workflow version {pinned} was not saved under this run's scope ({}): a run \
+            "the workflow version {pinned} was not saved under this run's allowed labels ({}): a run \
              started under labels starts only the versions saved under them",
-            scope
+            allowed
                 .iter()
                 .map(|(key, value)| format!("{key}={value}"))
                 .collect::<Vec<_>>()
@@ -693,7 +693,7 @@ async fn start_child<P: Plane>(
             seq: call.seq,
             detached: args.detached,
         }),
-        scope: head.metadata.scope.clone(),
+        allowed_labels: head.metadata.allowed_labels.clone(),
         secrets: workflow.secrets().clone(),
     };
     let key = format!("rewind:{}", call.idempotency_key);
@@ -766,7 +766,7 @@ async fn signal_child<P: Plane>(
     let in_scope = found.namespace == head.namespace
         && head
             .metadata
-            .scope
+            .allowed_labels
             .iter()
             .all(|(key, value)| found.metadata.labels.get(key) == Some(value));
     if !in_scope {

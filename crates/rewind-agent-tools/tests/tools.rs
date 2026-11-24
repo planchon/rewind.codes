@@ -615,7 +615,7 @@ async fn the_tools_are_those_given_and_some_need_an_action_set() {
     let unknown = AgentTools::new(
         Fake::default(),
         AgentOptions {
-            tools: Some(vec!["list_orgs".into()]),
+            tools: Some(vec!["list_organizations".into()]),
             ..AgentOptions::default()
         },
     )
@@ -623,7 +623,7 @@ async fn the_tools_are_those_given_and_some_need_an_action_set() {
     assert!(
         unknown
             .to_string()
-            .starts_with("unknown agent tool \"list_orgs\""),
+            .starts_with("unknown agent tool \"list_organizations\""),
         "{unknown}"
     );
 }

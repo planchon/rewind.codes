@@ -189,7 +189,7 @@ pub struct Connection {
     /// When an access token of it was last used, to the minute.
     pub last_used_at: Option<Timestamp>,
     pub revoked_at: Option<Timestamp>,
-    /// When its latest refresh token lapses: the workers delete it 30 days later.
+    /// When its latest refresh token lapses: the nodes delete it 30 days later.
     pub expires_at: Timestamp,
 }
 
