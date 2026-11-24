@@ -1,5 +1,5 @@
 {
-  "description": "With the built-in http action, fetch exists: each request is a journaled call of the http action, sent by the dispatcher, in the args and result format of rewind-mcp's http action (a text body, or bytes in base64 with bodyEncoding), and its result becomes a Response. A status outside 2xx is a response, not a failure.",
+  "description": "With the built-in http action, fetch exists: each request is a recorded call of the http action, sent by the dispatcher, in the args and result format of rewind-mcp's http action (a text body, or bytes in base64 with bodyEncoding), and its result becomes a Response. A status outside 2xx is a response, not a failure.",
   "actions": {
     "http": {
       "$sequence": [

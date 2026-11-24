@@ -81,7 +81,7 @@ impl<'a> IntoIterator for &'a Labels {
 /// A time, as an RFC 3339 string in UTC (`"2026-11-09T10:02:11.120Z"`).
 pub use jiff::Timestamp;
 
-/// Converts a journal time (milliseconds since the Unix epoch) to an API time.
+/// Converts a history time (milliseconds since the Unix epoch) to an API time.
 pub fn timestamp(time: rewind_core::Timestamp) -> Timestamp {
     let ms = i64::try_from(time.as_millis()).unwrap_or(i64::MAX);
     Timestamp::from_millisecond(ms).unwrap_or(Timestamp::MAX)
@@ -308,7 +308,7 @@ pub(crate) fn present<'de, D: Deserializer<'de>>(
 // -------------------------------------------------------------------------------------------
 // Runs
 
-/// The status of a run, a function of its journal (`archi/02-journal.md`, "Run state").
+/// The status of a run, a function of its history (`archi/02-history.md`, "Run state").
 /// Quarantine is not a status: see `Run.quarantine`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

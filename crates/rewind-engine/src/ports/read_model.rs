@@ -9,8 +9,8 @@ use std::ops::Bound;
 
 use rewind_core::{ActionFailureKind, Callsite, Digest, RunId, RunMode, RunStatus, Seq, Timestamp};
 
-use crate::ports::journal::{Quarantine, QuarantineKind};
 use crate::ports::namespaces::NamespaceName;
+use crate::ports::records::{Quarantine, QuarantineKind};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 /// The run as a whole, folded from its history ([`run_snapshot`](crate::projector::run_snapshot)):
@@ -132,7 +132,7 @@ pub struct Ending {
 }
 
 /// The state of a call's task, as whoever changes it records it. Tasks are service state:
-/// they are not in the journal.
+/// they are not in the history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TaskPhase {
     /// Waits for the harness's approval (`approval` policy).

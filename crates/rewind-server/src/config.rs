@@ -314,7 +314,7 @@ pub struct ServerArgs {
     pub cache_memory: Option<u64>,
 
     /// For the tenants this server creates: how long an ended run (its summary, its sealed
-    /// journals and its payloads) is kept after it ended. 365 days by default.
+    /// histories and its payloads) is kept after it ended. 365 days by default.
     #[arg(long, env = "REWIND_RETENTION", value_parser = parse_duration)]
     pub retention: Option<Duration>,
 

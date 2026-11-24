@@ -259,7 +259,7 @@ pub(crate) struct RunSlot<P: Plane> {
     pub(crate) busy: Option<Purpose>,
     /// The batch of a terminal activation is being prepared or committed.
     pub(crate) ending: bool,
-    /// The ended attempt's journal is being written to the archive: an erasure waits for it,
+    /// The ended attempt's history is being written to the archive: an erasure waits for it,
     /// so that nothing reaches the archive after the erasure emptied it.
     pub(crate) sealing: bool,
     /// The run's objects are being erased: no seal starts.

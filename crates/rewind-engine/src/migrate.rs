@@ -8,7 +8,7 @@
 //!      in legacy_runs already ─────────────────────────────► skipped
 //!      its namespace's partition (ensure_namespace), opened once: the only writer
 //!      in the partition already (moved, not recorded) ─────► recorded, skipped
-//!      its history: from the tables, or its archived journal
+//!      its history: from the tables, or its archived history
 //!      its payloads above 64 KiB ─────────────────────────► blobs under the run
 //!      ended: its attempt sealed in the archive, then one batch:
 //!             head, history, payload records, summary, counters; Seal; its retention's timer
@@ -25,7 +25,7 @@
 //! and quotas count it; the CPU time it used is not known per run and is not counted. A task in
 //! flight (claimed, or deferred with a token the run plane cannot route) is written `ready`:
 //! recovery sends it again with delivery + 1, or fails it when its action is not idempotent. A run
-//! that cannot be moved (its code, its action set, a blob or its journal missing, its history
+//! that cannot be moved (its code, its action set, a blob or its history missing, its history
 //! corrupt) is reported and left in the tables, which are then not dropped; the command can run
 //! again: what moved is skipped.
 //!
@@ -246,10 +246,10 @@ where
             LegacyHistory::Entries(entries) => entries.clone(),
             LegacyHistory::Archived(document) => self
                 .legacy_blobs
-                .journal(tenant, *document)
+                .export(tenant, *document)
                 .await?
                 .ok_or_else(|| {
-                    Refused::Run(format!("its archived journal {document} is missing"))
+                    Refused::Run(format!("its archived history {document} is missing"))
                 })?,
         };
         let code = self
@@ -529,7 +529,7 @@ fn tasks_of(
         .collect()
 }
 
-/// The values of the payload records that hold one: those up to 64 KiB, which a sealed journal
+/// The values of the payload records that hold one: those up to 64 KiB, which a sealed attempt
 /// inlines.
 fn table_values(records: &[PayloadRecord]) -> BTreeMap<Digest, JsonValue> {
     records

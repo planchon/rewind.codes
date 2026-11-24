@@ -5,12 +5,12 @@ use std::fmt;
 
 use rewind_core::{Digest, Epoch, RunHandle, RunId, RunStatus, Seq, Timestamp};
 
-use crate::ports::journal::{CallTask, Quarantine, RunMetadata, TaskState};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::read_model::Wait;
+use crate::ports::records::{CallTask, Quarantine, RunMetadata, TaskState};
 use crate::ports::tenancy::RunRef;
 
-/// An attempt of a run: the run's history, its inbox, its call tasks and its sealed journal
+/// An attempt of a run: the run's history, its inbox, its call tasks and its sealed attempt
 /// belong to one attempt. A run starts at [`Attempt::FIRST`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Attempt(pub u32);

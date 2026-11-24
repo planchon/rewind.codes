@@ -1,9 +1,9 @@
-//! A run's journal over HTTP: one entry in full (`GET /v1/runs/{id}/entries/{idx}`) and the
+//! A run's history over HTTP: one entry in full (`GET /v1/runs/{id}/entries/{idx}`) and the
 //! event stream (`GET /v1/runs/{id}/events`, server-sent events); and the stream of what changes
 //! in the organization, its runs and its control plane (`GET /v1/changes`, server-sent events).
 //!
 //! These are projections of committed entries (`archi/05-testing-and-observability.md`). The
-//! stored form of the journal is `rewind-format`'s, exported by `GET /v1/runs/{id}/journal`; the
+//! stored form of the history is `rewind-format`'s, exported by `GET /v1/runs/{id}/export`; the
 //! entries here are its HTTP view: camelCase fields, RFC 3339 times, payloads with their size
 //! and preview, and no seed.
 
@@ -17,7 +17,7 @@ use crate::common::{
 use crate::namespaces::NamespaceName;
 use crate::runs::RunSummary;
 
-/// One journal entry.
+/// One history entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -30,7 +30,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// The HTTP view of a journal entry. `payload` turns each payload into its view: the
+    /// The HTTP view of a history entry. `payload` turns each payload into its view: the
     /// server knows where values that left the event live, and how much of them to include.
     pub fn from_core(
         entry: &rewind_core::HistoryEntry,
@@ -44,11 +44,11 @@ impl Entry {
     }
 }
 
-/// A journal event (`archi/02-journal.md`): lifecycle, commands, completions and annotations.
+/// A history event (`archi/02-history.md`): lifecycle, commands, completions and annotations.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    /// The run's first entry. The seed is left out: it is only in the exported journal.
+    /// The run's first entry. The seed is left out: it is only in the run export.
     #[serde(rename_all = "camelCase")]
     RunStarted {
         code: String,
@@ -135,7 +135,7 @@ pub enum CancelReason {
 }
 
 impl Event {
-    /// The event's name in the journal, such as `schedule_call`.
+    /// The event's name in the history, such as `schedule_call`.
     pub fn name(&self) -> &'static str {
         match self {
             Event::RunStarted { .. } => "run_started",
@@ -155,7 +155,7 @@ impl Event {
         }
     }
 
-    /// The HTTP view of a journal event; see [`Entry::from_core`].
+    /// The HTTP view of a history event; see [`Entry::from_core`].
     pub fn from_core(
         event: &rewind_core::Event,
         mut payload: impl FnMut(&rewind_core::Payload) -> Payload,
@@ -285,7 +285,7 @@ pub struct EventsQuery {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
-    /// A committed journal entry. Payload values above 256 KiB are left out.
+    /// A committed history entry. Payload values above 256 KiB are left out.
     Entry(Box<Entry>),
     /// The last event of a stream: the run has ended, or, without `follow`, every entry
     /// committed so far was sent.

@@ -417,26 +417,24 @@ async fn release(State(stub): State<Shared>, UrlPath(id): UrlPath<String>) -> Re
     }
 }
 
-/// The journal of a run: a committed journal of the e2e corpus, as a server exports it.
-async fn journal(
+/// The history of a run: a committed history of the e2e corpus, as a server exports it.
+async fn export(
     UrlPath(_id): UrlPath<String>,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
     let case = corpus("epoch-1/blue/waiting_for_a_signal");
     if query.get("as").map(String::as_str) == Some("cassette") {
-        let journal = rewind_format::decode_journal(
-            &std::fs::read_to_string(case.join("journal.v1.json")).unwrap(),
+        let export = rewind_format::decode_run_export(
+            &std::fs::read_to_string(case.join("history.v1.json")).unwrap(),
         )
         .unwrap();
-        let cassette = rewind_core::Cassette::from_history(
-            &journal.entries,
-            rewind_core::Matching::Sequential,
-        )
-        .unwrap();
+        let cassette =
+            rewind_core::Cassette::from_history(&export.entries, rewind_core::Matching::Sequential)
+                .unwrap();
         let text = rewind_format::encode_cassette(&cassette);
         return axum::Json(serde_json::from_str::<Value>(&text).unwrap()).into_response();
     }
-    let text = std::fs::read_to_string(case.join("journal.v1.json")).unwrap();
+    let text = std::fs::read_to_string(case.join("history.v1.json")).unwrap();
     axum::Json(serde_json::from_str::<Value>(&text).unwrap()).into_response()
 }
 
@@ -502,7 +500,7 @@ fn app(stub: Shared) -> Router {
         .route("/v1/runs/{id}/fork", post(fork))
         .route("/v1/runs/{id}/trace", get(trace))
         .route("/v1/runs/{id}/release", post(release))
-        .route("/v1/runs/{id}/journal", get(journal))
+        .route("/v1/runs/{id}/export", get(export))
         .route("/v1/action-sets", post(create_action_set))
         .route("/v1/check", post(check))
         .with_state(stub)
@@ -903,14 +901,14 @@ async fn status_runs_trace_fork_and_release() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_run_is_exported_and_replayed_here() {
     let server = Embedded::start().await;
-    let output = server.path("journal.json");
+    let output = server.path("run.json");
     let (exit, _, err) = server
         .rewind(&["export", "run-1", "--output", output.to_str().unwrap()])
         .await;
     assert_eq!(exit, Exit::Success, "{err}");
     // Written in the stored format, byte for byte as the corpus has it.
     let committed =
-        std::fs::read_to_string(corpus("epoch-1/blue/waiting_for_a_signal/journal.v1.json"))
+        std::fs::read_to_string(corpus("epoch-1/blue/waiting_for_a_signal/history.v1.json"))
             .unwrap();
     assert_eq!(std::fs::read_to_string(&output).unwrap(), committed);
 
@@ -920,7 +918,7 @@ async fn a_run_is_exported_and_replayed_here() {
     assert_eq!(exit, Exit::Success);
     assert!(rewind_format::decode_cassette(&out).is_ok(), "{out}");
 
-    // `rewind replay <run>` exports the journal and replays it in this process.
+    // `rewind replay <run>` exports the history and replays it in this process.
     let (exit, out, err) = server.rewind(&["replay", "run-1"]).await;
     assert_eq!(exit, Exit::Success, "{out}{err}");
     assert!(out.contains("the code replays the 4 entries"), "{out}");

@@ -1,5 +1,5 @@
 //! Observed result types (`archi/04-tools.md`, "Observed result types"): the shape a projection
-//! folded from the results recorded in journals, as a TypeScript type.
+//! folded from the results recorded in histories, as a TypeScript type.
 
 use rewind_core::Shape;
 

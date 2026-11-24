@@ -28,7 +28,7 @@ pub const RUN_EVENTS: &str = "/v1/runs/{id}/events";
 pub const RUN_SIGNAL: &str = "/v1/runs/{id}/signals/{name}";
 pub const RUN_CANCEL: &str = "/v1/runs/{id}/cancel";
 pub const RUN_FORK: &str = "/v1/runs/{id}/fork";
-pub const RUN_JOURNAL: &str = "/v1/runs/{id}/journal";
+pub const RUN_EXPORT: &str = "/v1/runs/{id}/export";
 pub const RUN_RELEASE: &str = "/v1/runs/{id}/release";
 pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
 /// What changes in the organization, its runs and its control plane, as server-sent events
@@ -153,7 +153,7 @@ pub const OPERATIONS: [(&str, &str); 114] = [
     ("POST", RUN_SIGNAL),
     ("POST", RUN_CANCEL),
     ("POST", RUN_FORK),
-    ("GET", RUN_JOURNAL),
+    ("GET", RUN_EXPORT),
     ("POST", RUN_RELEASE),
     ("POST", RUN_GIVE_UP),
     ("GET", CALL_STREAM),

@@ -15,7 +15,7 @@
 //! | [`Edge::signal`], [`Edge::cancel`], [`Edge::webhook`] | NUL characters | the run, its workflow's signals, the signal key |
 //! | [`Edge::release`], [`Edge::give_up`], [`Edge::erase`] | | the quarantine, the archive, the records |
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
-//! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::call_tasks`] | | the partition, or the archive |
+//! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_run`], [`Edge::call_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its organization actor |
 //! | [`Edge::trace`], [`Edge::trace_entry`] | | the run's head and history |
@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    Code, HistoryEntry, JournalDocument, JsonValue, PartitionId, Payload, RunHandle, RunId,
-    RunMode, RunStarted, SCRIPT_ORIGIN, Shape, code_doc, origin_slug,
+    Code, HistoryEntry, JsonValue, PartitionId, Payload, RunExport, RunHandle, RunId, RunMode,
+    RunStarted, SCRIPT_ORIGIN, Shape, code_doc, origin_slug,
 };
 
 use crate::attachments::{self, AttachmentCheck};
@@ -938,7 +938,7 @@ impl<P: Plane> Edge<P> {
         }
     }
 
-    /// The entries of the run's attempt from `from`: from its partition, or its sealed journal.
+    /// The entries of the run's attempt from `from`: from its partition, or its sealed attempt.
     pub async fn history<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -958,12 +958,12 @@ impl<P: Plane> Edge<P> {
         }
     }
 
-    /// The run's journal with every payload loaded: a self-contained document.
-    pub async fn export_journal<G: Gateway>(
+    /// The run's history with every payload loaded: a self-contained document.
+    pub async fn export_run<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
-    ) -> Result<JournalDocument, EdgeError> {
+    ) -> Result<RunExport, EdgeError> {
         let view = self
             .get_run(gateway, run)
             .await?
@@ -991,7 +991,7 @@ impl<P: Plane> Edge<P> {
             .await
             .map_err(unavailable)?
             .ok_or_else(|| unavailable(format!("action set {} not found", view.head.action_set)))?;
-        Ok(JournalDocument {
+        Ok(RunExport {
             run: run.id,
             code: code.code,
             action_set: action_set.action_set,
@@ -999,7 +999,7 @@ impl<P: Plane> Edge<P> {
         })
     }
 
-    /// Replays a run's journal with its code, or another one, on this node's executor:
+    /// Replays a run's history with its code, or another one, on this node's executor:
     /// whether it reproduces the history. Nothing is written and no action is called.
     pub async fn replay<G: Gateway>(
         &self,
@@ -1007,15 +1007,15 @@ impl<P: Plane> Edge<P> {
         run: &RunRef,
         code: Option<&Code>,
     ) -> Result<crate::replay::ReplayVerdict, EdgeError> {
-        let journal = self.export_journal(gateway, run).await?;
-        let code = code.cloned().unwrap_or(journal.code.clone());
+        let export = self.export_run(gateway, run).await?;
+        let code = code.cloned().unwrap_or(export.code.clone());
         let executor = self.plane.executor();
-        let compiled = executor.compile(&code, &journal.action_set);
+        let compiled = executor.compile(&code, &export.action_set);
         let input = crate::replay::ReplayInput {
             run,
             compiled: compiled.as_ref(),
-            action_set: &journal.action_set,
-            history: &journal.entries,
+            action_set: &export.action_set,
+            history: &export.entries,
         };
         let blobs = self.plane.blobs();
         let source = crate::executors::activation::Carried {

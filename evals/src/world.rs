@@ -448,7 +448,7 @@ impl World {
     pub async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EdgeError> {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
-        Ok(self.edge.export_journal(&mut gateway, run).await?.entries)
+        Ok(self.edge.export_run(&mut gateway, run).await?.entries)
     }
 
     /// The run's call tasks.

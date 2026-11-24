@@ -1,5 +1,5 @@
 {
-  "description": "A code that returns while a run it started attached is still running ends only once that run has ended, as it does with a call in flight: its end is in the journal before complete_run.",
+  "description": "A code that returns while a run it started attached is still running ends only once that run has ended, as it does with a call in flight: its end is in the history before complete_run.",
   "live": true,
   "workflows": {
     "triage": {

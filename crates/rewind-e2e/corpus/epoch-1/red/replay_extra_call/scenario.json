@@ -1,5 +1,5 @@
 {
-  "description": "A code changed after the run: it makes a call the journal does not contain.",
+  "description": "A code changed after the run: it makes a call the history does not contain.",
   "input": {
     "repo": "acme/api"
   },

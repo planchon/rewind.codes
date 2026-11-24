@@ -2,12 +2,12 @@
 //! (`archi/08-decisions.md`, "Taken while writing the object-storage spec": the migration): the
 //! `LegacyBlobs` of the engine.
 //!
-//! The set-aside runs keep their payload values above 64 KiB, and the journal documents their
+//! The set-aside runs keep their payload values above 64 KiB, and the run exports their
 //! retention archived, as blobs of their tenant, keyed by the SHA-256 of their bytes:
 //! `{tenant}/sha256/{ab}/{hex}` under a directory (the embedded server's `.rewind/blobs`, a
 //! server's `--blobs <dir>`), the tenant's capital letters escaped as [`crate::FileBlobs`]
 //! escapes them, or `{tenant}/sha256/{hex}` in a bucket. [`LegacyFiles`] and [`LegacyS3`] read
-//! them, check their digests and decode the journals; they write nothing.
+//! them, check their digests and decode the histories; they write nothing.
 
 use std::path::PathBuf;
 
@@ -28,13 +28,13 @@ fn unavailable(error: BlobError) -> LegacyError {
     }
 }
 
-/// The entries of an archived journal document.
+/// The entries of an archived run export.
 fn entries(digest: Digest, bytes: &[u8]) -> Result<Vec<HistoryEntry>, LegacyError> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| LegacyError::Corrupt(format!("the journal {digest} is not UTF-8")))?;
-    rewind_format::decode_journal(text)
+        .map_err(|_| LegacyError::Corrupt(format!("the history {digest} is not UTF-8")))?;
+    rewind_format::decode_run_export(text)
         .map(|document| document.entries)
-        .map_err(|error| LegacyError::Corrupt(format!("the journal {digest}: {error}")))
+        .map_err(|error| LegacyError::Corrupt(format!("the history {digest}: {error}")))
 }
 
 /// The tenant-keyed blobs under a directory.
@@ -101,7 +101,7 @@ impl LegacyBlobs for LegacyFiles {
         self.bytes(tenant, digest).await
     }
 
-    async fn journal(
+    async fn export(
         &self,
         tenant: &TenantId,
         digest: Digest,
@@ -154,7 +154,7 @@ impl LegacyBlobs for LegacyS3 {
         self.bytes(tenant, digest).await
     }
 
-    async fn journal(
+    async fn export(
         &self,
         tenant: &TenantId,
         digest: Digest,
@@ -189,7 +189,7 @@ mod tests {
             Ok(None)
         );
         assert!(matches!(
-            legacy.journal(&tenant, digest).await,
+            legacy.export(&tenant, digest).await,
             Err(LegacyError::Corrupt(_))
         ));
         legacy.remove().expect("remove");

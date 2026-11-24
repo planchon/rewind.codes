@@ -458,7 +458,7 @@ pub fn describe_page(
     lines.join("\n")
 }
 
-/// One journal entry in full.
+/// One history entry in full.
 pub fn entry_text(entry: &rewind_api::events::Entry) -> String {
     let event = serde_json::to_value(&entry.event).unwrap_or(Value::Null);
     format!(

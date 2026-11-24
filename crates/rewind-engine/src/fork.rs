@@ -25,9 +25,9 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Attachments, Code, Command, Completion, Event, HistoryEntry, JournalDocument,
-    JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted,
-    RunStatus, Seq,
+    ActionSet, Attachments, Code, Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle,
+    Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunExport, RunId, RunStarted, RunStatus,
+    Seq,
 };
 
 use crate::attachments::AttachRights;
@@ -193,15 +193,15 @@ pub(crate) struct FollowWith<'a, X, S, C> {
     pub(crate) cpu: &'a C,
 }
 
-/// Whether `code` is compatible with a run's journal, and if not, where it diverges; and what
+/// Whether `code` is compatible with a run's history, and if not, where it diverges; and what
 /// a fork of the run with it would reuse (`rewind replay <run> --code fixed.ts`,
 /// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The code is
-/// followed against the journal on `executor` as a fork's first activation follows its parent,
-/// as the run itself (it reads the run's id); every payload of the journal is held as a value.
+/// followed against the history on `executor` as a fork's first activation follows its parent,
+/// as the run itself (it reads the run's id); every payload of the history is held as a value.
 /// Nothing is written and no action is called.
 pub async fn compatibility<X: CodeExecutor>(
     executor: &X,
-    journal: &JournalDocument,
+    export: &RunExport,
     code: &Code,
     at: Option<u64>,
     limits: &Limits,
@@ -209,22 +209,22 @@ pub async fn compatibility<X: CodeExecutor>(
     let Some(HistoryEntry {
         event: Event::Lifecycle(Lifecycle::RunStarted(started)),
         ..
-    }) = journal.entries.first()
+    }) = export.entries.first()
     else {
-        return Err(ForkError::ParentNotStarted(journal.run));
+        return Err(ForkError::ParentNotStarted(export.run));
     };
     let compiled = executor
-        .compile(code, &journal.action_set)
+        .compile(code, &export.action_set)
         .map_err(|invalid| ForkError::Start(StartError::InvalidCode(invalid)))?;
     let started = RunStarted {
         code: code.digest(),
         ..started.clone()
     };
-    let run = RunRef::new(crate::ports::TenantId::local(), journal.run);
+    let run = RunRef::new(crate::ports::TenantId::local(), export.run);
     let mut batch = Batch::for_check(&run, limits);
     let with = FollowWith {
         executor,
-        payloads: &crate::replay::InJournal,
+        payloads: &crate::replay::InExport,
         cpu: &Uncounted,
     };
     let followed = follow_parent(
@@ -233,14 +233,14 @@ pub async fn compatibility<X: CodeExecutor>(
         ForkSource {
             run: &run,
             parent: ForkParent {
-                run: journal.run,
+                run: export.run,
                 at,
             },
             started,
             compiled: &compiled,
-            action_set: &journal.action_set,
+            action_set: &export.action_set,
         },
-        &journal.entries,
+        &export.entries,
     )
     .await?;
     let mut reused: Vec<Seq> = followed.reused.iter().filter_map(completion_seq).collect();

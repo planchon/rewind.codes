@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-/// Milliseconds since the Unix epoch, UTC. The journal's only notion of time.
+/// Milliseconds since the Unix epoch, UTC. The history's only notion of time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(pub u64);
 

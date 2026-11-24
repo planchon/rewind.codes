@@ -15,7 +15,7 @@
 //! moved and skipped, and drops the set-aside tables once every run moved. Run again, it skips
 //! what it moved. Opening a partition fences its writer: it runs while no node runs.
 //!
-//! Embedded, it moves a `.rewind/` of the journal store into the run plane's layout:
+//! Embedded, it moves a `.rewind/` of the old tables into the run plane's layout:
 //!
 //! ```text
 //! journal.db (+ -wal)      ──► control.db (+ -wal), its run tables set aside, then moved
@@ -50,14 +50,14 @@ use crate::wiring::control::ControlPlane;
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "rewind server migrate-runs",
-    about = "Moves the runs of the journal store into their partitions and the archive, once: \
+    about = "Moves the runs of the old tables into their partitions and the archive, once: \
              ended runs sealed in the archive, live ones in their namespace's partition. Run it \
              while no node runs: opening a partition fences its writer. It skips what it moved, \
              so it can run again.",
     version
 )]
 pub struct MigrateArgs {
-    /// Where the runs' payloads above 64 KiB and their archived journals are: the directory or
+    /// Where the runs' payloads above 64 KiB and their archived histories are: the directory or
     /// `s3://<bucket>` the server kept its blobs in (with the `--s3-*` of the bucket). The
     /// bucket by default; `.rewind/blobs` embedded.
     #[arg(long, env = "REWIND_BLOBS")]
@@ -186,9 +186,9 @@ async fn embedded(server: ServerArgs) -> Result<Report, StartupError> {
     let dir = server.dir.clone();
     let directory = Directory::open(&dir)?;
     let io = |what: String, error: std::io::Error| StartupError::Io(format!("{what}: {error}"));
-    let journal = dir.join("journal.db");
+    let legacy = dir.join("journal.db");
     let control = dir.join("control.db");
-    if journal.exists() {
+    if legacy.exists() {
         if control.exists() {
             return Err(StartupError::Setup(format!(
                 "{} holds both journal.db and control.db: keep the one to serve",
@@ -196,7 +196,7 @@ async fn embedded(server: ServerArgs) -> Result<Report, StartupError> {
             )));
         }
         for suffix in ["", "-wal", "-shm"] {
-            let from = PathBuf::from(format!("{}{suffix}", journal.display()));
+            let from = PathBuf::from(format!("{}{suffix}", legacy.display()));
             let to = PathBuf::from(format!("{}{suffix}", control.display()));
             if from.exists() {
                 std::fs::rename(&from, &to)

@@ -7,7 +7,7 @@
 // determinism epoch, and with globals.json.
 
 // -------------------------------------------------------------------------------------------
-// Console: journaled as log lines of the run.
+// Console: recorded as log lines of the run.
 
 interface Console {
   log(...data: unknown[]): void;
@@ -17,7 +17,7 @@ interface Console {
   error(...data: unknown[]): void;
 }
 
-/** Writes to the run's log: each call is journaled with its line in the code. */
+/** Writes to the run's log: each call is recorded with its line in the code. */
 declare var console: Console;
 
 // -------------------------------------------------------------------------------------------

@@ -80,7 +80,7 @@ impl WorkflowSchemas {
 
 /// A version of a workflow: a code with a name and a typed interface. Immutable and
 /// content-addressed: its [`version`](Self::version) is the digest of its document, the workflow
-/// version document of the stored format v1 (`archi/02-journal.md`).
+/// version document of the stored format v1 (`archi/02-history.md`).
 ///
 /// A version saved under a grant limited to labels carries them, and they are part of its
 /// document: the same workflow saved under other labels, or tenant-wide, is another version,
@@ -494,7 +494,7 @@ fn check_interface(name: &str, schemas: &WorkflowSchemas) -> Result<(), InvalidW
 
 /// How a run ended, as the payload of its `rewind:ended:<run id>` signal:
 /// `{ "status": "completed", "output" }`, `{ "status": "failed" | "cancelled", "error" }` or
-/// `{ "status": "aborted", "reason" }` (`archi/02-journal.md`).
+/// `{ "status": "aborted", "reason" }` (`archi/02-history.md`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunEnd {
     Completed {

@@ -323,10 +323,10 @@ async fn start_wired(
     let directory = match &config.listen {
         Listen::Embedded { dir } => {
             let directory = Directory::open(dir)?;
-            // A `.rewind/` of the journal store: its runs move first.
+            // A `.rewind/` of the old tables: its runs move first.
             if dir.join("journal.db").exists() && !dir.join("control.db").exists() {
                 return Err(StartupError::Setup(format!(
-                    "{} holds the runs of the journal store (journal.db), which this server does \
+                    "{} holds the runs of the old tables (journal.db), which this server does \
                      not read: move them with `rewind server migrate-runs --embedded --dir {}`, \
                      then start the server again",
                     dir.display(),

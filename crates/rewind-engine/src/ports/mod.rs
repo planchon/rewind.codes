@@ -30,14 +30,14 @@
 //! have a conformance suite in the module `conformance` (feature `conformance`) that every
 //! adapter passes.
 //!
-//! What a run's history, inbox and call tasks are made of lives in `journal`, what a search and
+//! What a run's history, inbox and call tasks are made of lives in `history`, what a search and
 //! a summary are in `read_model` (`archi/05-testing-and-observability.md`, "Read model"): both
 //! are re-exported here. The modules [`catalog`], [`partition`], [`archive`], [`cluster`] and
 //! [`link`] are public: the names they share with other modules ([`partition::CreateRun`],
 //! [`partition::Activation`], [`cluster::Membership`], [`link::HarnessTask`]) are read through
 //! them; every other name is also re-exported here. The ports of `rewind server migrate-runs`
 //! are read through [`legacy`] alone, and have no suite: the migration's tests load a database
-//! the journal store filled. A span exporter and a
+//! the old tables filled. A span exporter and a
 //! webhook sender have no read side: their suites read the backend through a collector or a
 //! receiver the adapter's test provides. An identity provider's contract is not observable
 //! through the port alone: its adapters test it.
@@ -54,12 +54,12 @@ mod dispatcher;
 mod executor;
 pub mod identity;
 
-mod journal;
 pub mod legacy;
 pub mod link;
 mod namespaces;
 pub mod partition;
 mod read_model;
+mod records;
 mod secrets;
 mod telemetry;
 mod tenancy;
@@ -98,13 +98,6 @@ pub use identity::{
     InvitationId, InvitationState, MagicCode, Membership, MembershipId, MembershipStatus,
     Organization, OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
 };
-pub use journal::{
-    CallTask, Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
-    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
-    StartedBy, StoreError, StoredActionSet, StoredCode, StoredWorkflow, TEST_GRACE, TaskRef,
-    TaskState, TaskToken, TestRecord, TraceContext, Trigger, WebhookTarget, WebhookToken,
-    WorkflowFilter, deferred_timeout_failure,
-};
 pub use link::{LinkError, NodeLink};
 pub use namespaces::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, InvalidDisplayName,
@@ -122,6 +115,13 @@ pub use partition::{
 pub use read_model::{
     Ending, Latency, Predicate, QuarantineNote, Range, RunOrder, RunQuery, RunSnapshot, RunSummary,
     SearchCursor, TaskPhase, Term, TextMatch, Wait, WaitKind, WaitingFor,
+};
+pub use records::{
+    CallTask, Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
+    StartedBy, StoreError, StoredActionSet, StoredCode, StoredWorkflow, TEST_GRACE, TaskRef,
+    TaskState, TaskToken, TestRecord, TraceContext, Trigger, WebhookTarget, WebhookToken,
+    WorkflowFilter, deferred_timeout_failure,
 };
 pub use secrets::{
     DailyReads, LastRead, MasterKeyId, NewSecret, PrivateKey, PublicKey, PutSecret,

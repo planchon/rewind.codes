@@ -1,7 +1,7 @@
 //! Runs: start with the secrets they attach, state, list, trace, signals, cancellation, forks,
-//! journal export, quarantine, deletion (`archi/01-product.md`, `archi/03-execution.md`).
+//! run export, quarantine, deletion (`archi/01-product.md`, `archi/03-execution.md`).
 //!
-//! The journal entries and the event stream of a run are in [`crate::events`].
+//! The history entries and the event stream of a run are in [`crate::events`].
 
 use std::fmt;
 
@@ -106,7 +106,7 @@ pub(crate) fn empty_object() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-/// The state of a run: a projection of its journal, with its metadata.
+/// The state of a run: a projection of its history, with its metadata.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -176,7 +176,7 @@ pub struct Run {
     /// Deliveries live in the calls' tasks, not in the history: the read model keeps them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deliveries: Vec<Deliveries>,
-    /// Number of journal entries.
+    /// Number of history entries.
     pub history_len: u64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -198,7 +198,7 @@ pub struct Quarantine {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuarantineCause {
-    /// A replay diverged from the journal: a fault of the platform, never of the code.
+    /// A replay diverged from the history: a fault of the platform, never of the code.
     NonDeterminism,
     /// Its activations failed 5 times in a row.
     RepeatedFailures,
@@ -304,7 +304,7 @@ pub enum Waiting {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LogLine {
-    /// The journal entry.
+    /// The history entry.
     pub idx: u64,
     pub at: Timestamp,
     pub level: LogLevel,
@@ -785,7 +785,7 @@ pub struct CancelRun {
 pub struct ForkRun {
     /// The corrected TypeScript source.
     pub code: String,
-    /// Go live from this journal entry even if the commands still match.
+    /// Go live from this history entry even if the commands still match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<u64>,
     /// The fork's input. The parent's when absent.
@@ -871,32 +871,32 @@ pub struct Trace {
     pub text: String,
 }
 
-/// `GET /v1/runs/{id}/journal`.
+/// `GET /v1/runs/{id}/export`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
-pub struct JournalQuery {
-    /// `journal` by default.
+pub struct ExportQuery {
+    /// `run` by default.
     #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
     #[param(inline)]
-    pub export_as: Option<JournalExport>,
+    pub export_as: Option<ExportAs>,
 }
 
-/// What `GET /v1/runs/{id}/journal` exports, as a document of the stored format v1.
+/// What `GET /v1/runs/{id}/export` exports, as a document of the stored format v1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum JournalExport {
-    /// The journal document: replayable with `rewind replay`, without a server.
+pub enum ExportAs {
+    /// The run export: replayable with `rewind replay`, without a server.
     #[default]
-    Journal,
+    Run,
     /// A cassette of the run's calls and signals, for `rewind test` and `POST /v1/test`.
     Cassette,
 }
 
-impl JournalExport {
+impl ExportAs {
     pub fn as_str(self) -> &'static str {
         match self {
-            JournalExport::Journal => "journal",
-            JournalExport::Cassette => "cassette",
+            ExportAs::Run => "run",
+            ExportAs::Cassette => "cassette",
         }
     }
 }

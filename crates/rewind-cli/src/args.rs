@@ -14,7 +14,7 @@ use rewind_api::common::{Duration, RunStatus};
     long_about = "Rewind: durable TypeScript workflows that call actions, in a deterministic sandbox.\n\n\
         Commands about runs go to a server: the remote one of --url (REWIND_URL) with its API key \
         (REWIND_API_KEY), or else the embedded server of the state directory (.rewind/), started on \
-        demand. `rewind check`, `rewind test` and the replay of an exported journal run in this \
+        demand. `rewind check`, `rewind test` and the replay of a run export run in this \
         process.\n\nExit codes: 0 completed or success, 1 failed, 2 cancelled, 3 aborted, 4 \
         still waiting, 5 quarantined, 6 refused, 64 usage error, 65 code refused, 70 internal \
         error, 130 interrupted.",
@@ -75,7 +75,7 @@ pub(crate) enum Command {
     Cancel(CancelArgs),
     /// Show a run's state, waiting up to --wait for it to end.
     Status(StatusArgs),
-    /// Replay a run, or an exported journal, in this process, and check determinism.
+    /// Replay a run, or a run export, in this process, and check determinism.
     Replay(ReplayArgs),
     /// Start a fork of a run with a corrected code.
     Fork(ForkArgs),
@@ -85,7 +85,7 @@ pub(crate) enum Command {
     Runs(RunsArgs),
     /// Take a run out of quarantine, or give it up.
     Release(ReleaseArgs),
-    /// Export a run's journal document, or a cassette of its calls and signals.
+    /// Export a run's run export, or a cassette of its calls and signals.
     Export(ExportArgs),
     /// Register action sets and read their declarations.
     #[command(subcommand)]
@@ -261,9 +261,9 @@ pub(crate) struct StatusArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ReplayArgs {
-    /// A run, by its handle or its id, or the path of an exported journal document.
+    /// A run, by its handle or its id, or the path of an exported run export.
     pub(crate) run: String,
-    /// Check whether this corrected code is compatible with the journal instead, and what a
+    /// Check whether this corrected code is compatible with the history instead, and what a
     /// fork with it would reuse.
     #[arg(long, value_name = "FILE")]
     pub(crate) code: Option<PathBuf>,
@@ -279,7 +279,7 @@ pub(crate) struct ForkArgs {
     /// The corrected code.
     #[arg(long, value_name = "FILE")]
     pub(crate) code: PathBuf,
-    /// Go live from this journal entry even if the commands still match.
+    /// Go live from this history entry even if the commands still match.
     #[arg(long, value_name = "INDEX")]
     pub(crate) at: Option<u64>,
     /// The fork's input: JSON, or @file.json. The parent's by default.
@@ -293,7 +293,7 @@ pub(crate) struct ForkArgs {
 pub(crate) struct TraceArgs {
     /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
-    /// One journal entry in full, its payload included.
+    /// One history entry in full, its payload included.
     #[arg(long, value_name = "INDEX")]
     pub(crate) entry: Option<u64>,
 }
@@ -398,7 +398,7 @@ pub(crate) struct ExportArgs {
     /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
     /// What to export.
-    #[arg(long = "as", value_enum, default_value = "journal")]
+    #[arg(long = "as", value_enum, default_value = "run")]
     pub(crate) export_as: ExportFormat,
     /// Write it to this file instead of stdout.
     #[arg(long, short, value_name = "FILE")]
@@ -407,8 +407,8 @@ pub(crate) struct ExportArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum ExportFormat {
-    /// The journal document: replayable with `rewind replay <file>`.
-    Journal,
+    /// The run export: replayable with `rewind replay <file>`.
+    Run,
     /// A cassette of the run's calls and signals, for `rewind test`.
     Cassette,
 }

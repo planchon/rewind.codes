@@ -2,7 +2,7 @@
 //! "A partition", "The archive and the blobs").
 //!
 //! An attempt's records live in its partition until the attempt is sealed: the seal writes its
-//! journal to the archive, then a batch sets the head's `sealed` and deletes the attempt's
+//! history to the archive, then a batch sets the head's `sealed` and deletes the attempt's
 //! history and payload records. A reader that runs as a job of its own reads the head, then the
 //! entries, in two reads: a seal committed between them would leave it a live head and no
 //! entries, and it would answer an ended run with an empty history. So the head is read again
@@ -32,7 +32,7 @@ pub(crate) enum AttemptRead {
         /// The payload records of the payloads the entries hold by digest, when asked.
         payloads: Vec<PayloadRecord>,
     },
-    /// The attempt is sealed: its journal in the archive.
+    /// The attempt is sealed: its history in the archive.
     Sealed {
         head: RunHead,
         sealed: Box<SealedAttempt>,

@@ -9,7 +9,7 @@ use rewind_core::{LogLevel, Timestamp};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TraceId(pub [u8; 16]);
 
-/// A span id. Spans projected from the journal have deterministic ids, `H(run, …)`: a span
+/// A span id. Spans projected from the history have deterministic ids, `H(run, …)`: a span
 /// exported again after a crash is the same span.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SpanId(pub [u8; 8]);

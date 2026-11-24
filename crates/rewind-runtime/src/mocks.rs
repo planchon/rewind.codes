@@ -3,7 +3,7 @@
 //!
 //! The handlers run in an isolate of their own, on a thread of their own: nothing they do can
 //! reach the code's isolate, so they cannot break its determinism, and what they return is
-//! journaled like any action result. Their isolate is the sandbox of the latest epoch: the same
+//! recorded like any action result. Their isolate is the sandbox of the latest epoch: the same
 //! globals, randomness seeded with zeros, and the time of the clock the dispatcher is given.
 //!
 //! A module of mock handlers imports nothing, and default-exports its handlers, by full action

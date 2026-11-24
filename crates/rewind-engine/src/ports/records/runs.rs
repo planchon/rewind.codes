@@ -9,7 +9,7 @@ use super::workflows::{RunWorkflow, StartedBy};
 use crate::ports::tenancy::RunRef;
 
 /// Given by the harness when it starts a run, and stored with the run. The code never sees
-/// it and it is not part of the journal's events, so it is never replayed and never ends up
+/// it and it is not part of the history's events, so it is never replayed and never ends up
 /// in a cassette (`archi/05-testing-and-observability.md`, "Run metadata"). The tenant is in
 /// the run's [`RunRef`], and the idempotency key is given with the start beside it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

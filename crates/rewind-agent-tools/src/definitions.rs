@@ -321,12 +321,12 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "get_run" => ToolDefinition {
             name: "get_run",
-            description: "Read a run: its status, what it waits for or how it ended, and its trace. With `entry`, one journal entry in full instead. With `offset`, the next page of an output (or entry) too large for one answer.",
+            description: "Read a run: its status, what it waits for or how it ended, and its trace. With `entry`, one history entry in full instead. With `offset`, the next page of an output (or entry) too large for one answer.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "run_id": run_id(),
-                    "entry": { "type": "integer", "minimum": 0, "description": "The index of a journal entry, as the trace shows it." },
+                    "entry": { "type": "integer", "minimum": 0, "description": "The index of a history entry, as the trace shows it." },
                     "offset": { "type": "integer", "minimum": 0, "description": "Where the page starts, in bytes, as the previous answer said." },
                     "wait": { "type": "string", "description": "Wait up to this long for the run to end first, such as \"30s\"." }
                 },

@@ -1,4 +1,4 @@
-//! Events and journal entries, v1.
+//! Events and history entries, v1.
 
 use rewind_core::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, Annotation, Callsite, CancelReason,

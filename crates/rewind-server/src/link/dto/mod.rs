@@ -11,7 +11,7 @@
 //! (`rewind_format::partition`, converted by `rewind_store_slatedb::codec`): a run head, a
 //! history entry (its event in the stored format of events), an inbox item, a call's task, a timer,
 //! a payload record, a summary, counters, gauges, a shape, an outbox entry's projection, run
-//! metadata; an event alone (`run_started`) as a stored event, a sealed attempt as a journal
+//! metadata; an event alone (`run_started`) as a stored event, a sealed attempt as a history
 //! document and a pinned action set as its document. The rest is defined here:
 //!
 //! - [`requests`]: [`NodeRequest`] and [`NodeReply`], with what an edge asks an owner

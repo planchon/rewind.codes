@@ -1,4 +1,4 @@
-//! The harness cannot pass silently: a wrong expectation, an altered journal or a case in the
+//! The harness cannot pass silently: a wrong expectation, an altered history or a case in the
 //! wrong color is reported. These checks never record: they alter cases in memory.
 
 #![allow(clippy::unwrap_used)]
@@ -19,16 +19,16 @@ async fn a_wrong_expectation_is_reported() {
 }
 
 #[tokio::test]
-async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
+async fn a_history_that_no_longer_matches_its_code_does_not_replay() {
     let case = Case::load("epoch-1/blue/fan_out_out_of_order").unwrap();
-    let journal = std::fs::read_to_string(case.journal_path()).unwrap();
-    let mut document = rewind_format::decode_journal(&journal).unwrap();
+    let export = std::fs::read_to_string(case.history_path()).unwrap();
+    let mut document = rewind_format::decode_run_export(&export).unwrap();
     let Event::Command(Command::ScheduleCall { args, .. }) = &mut document.entries[2].event else {
         panic!("entry 2 is the second call");
     };
     *args = Payload::Value(json!({ "number": 20, "repo": "acme/api" }));
 
-    let replayed = rewind_e2e::replay_journal(&case, &document, &case.code).await;
+    let replayed = rewind_e2e::replay_export(&case, &document, &case.code).await;
     let Replayed::Fails(message) = replayed else {
         panic!("{replayed:?}")
     };
@@ -37,11 +37,11 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
         "{message}"
     );
 
-    // The same journal, untouched, replays.
-    let document = rewind_format::decode_journal(&journal).unwrap();
+    // The same history, untouched, replays.
+    let document = rewind_format::decode_run_export(&export).unwrap();
     assert_eq!(document.code, case.code);
     assert!(matches!(
-        rewind_e2e::replay_journal(&case, &document, &case.code).await,
+        rewind_e2e::replay_export(&case, &document, &case.code).await,
         Replayed::Matches(_)
     ));
 }
@@ -54,13 +54,13 @@ async fn a_script_that_changed_is_reported_by_the_recording() {
     assert!(
         failures
             .iter()
-            .any(|failure| failure.starts_with("the journal differs from")),
+            .any(|failure| failure.starts_with("the history differs from")),
         "{failures:#?}"
     );
     assert!(
         failures
             .iter()
-            .any(|failure| failure.starts_with("the committed journal does not replay")),
+            .any(|failure| failure.starts_with("the committed history does not replay")),
         "{failures:#?}"
     );
 }

@@ -225,7 +225,7 @@ async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
     assert_eq!(recorded.start, Some(T0));
 
     // The cassette answers the call and replays the signal at the time it arrived; the run
-    // passes what it recorded, with the same journal call for call, but its start.
+    // passes what it recorded, with the same history call for call, but its start.
     let report = self::run(&recorded).await;
     assert!(report.passed, "{report:#?}");
     assert_eq!(report.history[1..], original[1..]);

@@ -18,7 +18,7 @@ pub struct MemoryLegacy {
 struct State {
     runs: BTreeMap<RunId, LegacyRun>,
     payloads: BTreeMap<(TenantId, Digest), Vec<u8>>,
-    journals: BTreeMap<(TenantId, Digest), Vec<HistoryEntry>>,
+    exports: BTreeMap<(TenantId, Digest), Vec<HistoryEntry>>,
     dropped: bool,
 }
 
@@ -37,10 +37,10 @@ impl MemoryLegacy {
         self.lock().payloads.insert((tenant.clone(), digest), bytes);
     }
 
-    /// Adds an archived journal document of the tenant, by its digest.
-    pub fn put_journal(&self, tenant: &TenantId, digest: Digest, entries: Vec<HistoryEntry>) {
+    /// Adds an archived run export of the tenant, by its digest.
+    pub fn put_export(&self, tenant: &TenantId, digest: Digest, entries: Vec<HistoryEntry>) {
         self.lock()
-            .journals
+            .exports
             .insert((tenant.clone(), digest), entries);
     }
 
@@ -90,11 +90,11 @@ impl LegacyBlobs for MemoryLegacy {
         Ok(self.lock().payloads.get(&(tenant.clone(), digest)).cloned())
     }
 
-    async fn journal(
+    async fn export(
         &self,
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
-        Ok(self.lock().journals.get(&(tenant.clone(), digest)).cloned())
+        Ok(self.lock().exports.get(&(tenant.clone(), digest)).cloned())
     }
 }

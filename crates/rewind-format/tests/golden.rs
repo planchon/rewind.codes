@@ -8,7 +8,9 @@ use rewind_core::{
     Command, Completion, Digest, Epoch, Event, Lifecycle, LogLevel, Payload, RunId, RunMode,
     RunStarted, RunState, RunStatus, ScriptError, Seed, Seq, Timestamp,
 };
-use rewind_format::{FormatError, decode_event, decode_journal, encode_event, encode_journal};
+use rewind_format::{
+    FormatError, decode_event, decode_run_export, encode_event, encode_run_export,
+};
 use serde_json::json;
 
 const FIXTURES: [(&str, &str); 3] = [
@@ -28,15 +30,13 @@ fn digest(hex: &str) -> Digest {
 }
 
 #[test]
-fn every_fixture_decodes_to_a_valid_journal_and_re_encodes_to_the_same_bytes() {
+fn every_fixture_decodes_to_a_valid_run_export_and_re_encodes_to_the_same_bytes() {
     for (name, fixture) in FIXTURES {
-        let journal = decode_journal(fixture).unwrap_or_else(|err| panic!("{name}: {err}"));
+        let export = decode_run_export(fixture).unwrap_or_else(|err| panic!("{name}: {err}"));
         // The history is valid, and the code and action set are those of its run_started.
-        journal
-            .check()
-            .unwrap_or_else(|err| panic!("{name}: {err}"));
-        assert_eq!(encode_journal(&journal), fixture, "{name}");
-        for entry in &journal.entries {
+        export.check().unwrap_or_else(|err| panic!("{name}: {err}"));
+        assert_eq!(encode_run_export(&export), fixture, "{name}");
+        for entry in &export.entries {
             let event = encode_event(&entry.event);
             assert_eq!(
                 decode_event(&event).unwrap(),
@@ -49,21 +49,21 @@ fn every_fixture_decodes_to_a_valid_journal_and_re_encodes_to_the_same_bytes() {
 
 #[test]
 fn decodes_to_the_expected_domain_values() {
-    let journal = decode_journal(FIXTURES[0].1).unwrap();
+    let export = decode_run_export(FIXTURES[0].1).unwrap();
     assert_eq!(
-        journal.run,
+        export.run,
         "019b7a3c-8f00-7000-8000-000000000001"
             .parse::<RunId>()
             .unwrap()
     );
     assert!(
-        journal
+        export
             .code
             .source()
             .starts_with("import { github } from \"rewind:tools\";")
     );
-    assert_eq!(journal.action_set.actions().len(), 7);
-    let history = journal.entries;
+    assert_eq!(export.action_set.actions().len(), 7);
+    let history = export.entries;
     assert_eq!(history.len(), 16);
     assert_eq!(
         history[0].event,
@@ -135,7 +135,7 @@ fn decodes_to_the_expected_domain_values() {
         RunStatus::Cancelled
     );
 
-    let ttl = decode_journal(FIXTURES[1].1).unwrap().entries;
+    let ttl = decode_run_export(FIXTURES[1].1).unwrap().entries;
     assert_eq!(
         ttl[9].event,
         Event::Completion(Completion::CancelRequested {
@@ -147,7 +147,7 @@ fn decodes_to_the_expected_domain_values() {
         RunStatus::Completed
     );
 
-    let aborted = decode_journal(FIXTURES[2].1).unwrap().entries;
+    let aborted = decode_run_export(FIXTURES[2].1).unwrap().entries;
     assert_eq!(
         aborted[1].event,
         Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
@@ -333,7 +333,7 @@ fn rejects_what_v1_does_not_define() {
     let valid = document(&format!(
         r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[]"#
     ));
-    assert_eq!(decode_journal(&valid).unwrap().entries, vec![]);
+    assert_eq!(decode_run_export(&valid).unwrap().entries, vec![]);
     let invalid_documents = [
         // An unknown field.
         format!(
@@ -356,19 +356,22 @@ fn rejects_what_v1_does_not_define() {
     for json in invalid_documents {
         let json = document(&json);
         assert!(
-            matches!(decode_journal(&json), Err(FormatError::InvalidDocument(_))),
+            matches!(
+                decode_run_export(&json),
+                Err(FormatError::InvalidDocument(_))
+            ),
             "{json} must be rejected, got {:?}",
-            decode_journal(&json)
+            decode_run_export(&json)
         );
     }
     assert!(matches!(
-        decode_journal(&document(
+        decode_run_export(&document(
             r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{"servers":[],"v":1},"entries":[]"#
         )),
         Err(FormatError::InvalidActionSet(_))
     ));
     assert!(matches!(
-        decode_journal(&document(&format!(
+        decode_run_export(&document(&format!(
             r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[{{"index":0,"recorded_at":0}}]"#
         ))),
         Err(FormatError::InvalidEntry { position: 0, .. })

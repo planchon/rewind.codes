@@ -75,7 +75,7 @@ async fn file_archives_pass_the_conformance_suite() {
 }
 
 #[tokio::test]
-async fn a_sealed_attempt_is_a_journal_document_beside_the_run_s_blobs() {
+async fn a_sealed_attempt_is_a_run_export_beside_the_run_s_blobs() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join(".rewind");
     let blobs = FileBlobs::open(&root).expect("open");
@@ -90,8 +90,8 @@ async fn a_sealed_attempt_is_a_journal_document_beside_the_run_s_blobs() {
         .join("01930000-0000-7000-8000-000000000001")
         .join("1.json");
     assert_eq!(archive.path(&run, Attempt::FIRST), path);
-    let document = rewind_format::decode_journal(&fs::read_to_string(&path).expect("read"))
-        .expect("a journal document v1");
+    let document = rewind_format::decode_run_export(&fs::read_to_string(&path).expect("read"))
+        .expect("a run export v1");
     assert_eq!(document, first.document());
     assert_eq!(
         fs::read_dir(root.join(".staging"))
@@ -154,13 +154,13 @@ async fn a_corrupt_or_foreign_attempt_is_reported() {
     );
     fs::write(
         &path,
-        rewind_format::encode_journal(&sealed(&other, Attempt::FIRST, "x").document()),
+        rewind_format::encode_run_export(&sealed(&other, Attempt::FIRST, "x").document()),
     )
     .expect("swap");
     let read = archive.get(&run, Attempt::FIRST).await;
     assert!(
-        matches!(&read, Err(ArchiveError::Corrupt(message)) if message.contains("journal of run")),
-        "another run's journal: {read:?}"
+        matches!(&read, Err(ArchiveError::Corrupt(message)) if message.contains("history of run")),
+        "another run's history: {read:?}"
     );
 }
 

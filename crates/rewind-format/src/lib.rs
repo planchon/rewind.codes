@@ -1,16 +1,16 @@
-//! The stored form of the Rewind journal, versioned (`archi/07-code-architecture.md`,
+//! The stored form of the Rewind history, versioned (`archi/07-code-architecture.md`,
 //! principle 4).
 //!
 //! Runs stay paused for days across deploys, so what is stored must stay readable while the
 //! domain types of `rewind-core` change. This crate owns that representation: domain events are
-//! converted to versioned DTOs at the edge, and a stored v1 journal must always decode.
+//! converted to versioned DTOs at the edge, and a stored v1 history must always decode.
 //! A future v2 gets its own module and an explicit migration from v1.
 //!
-//! Seven documents are defined (`archi/02-journal.md`, "Stored format v1"):
+//! Seven documents are defined (`archi/02-history.md`, "Stored format v1"):
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_call","seq":1,…}`;
-//! - a **journal document** (exports, the archive of a finished run, the epoch corpus):
+//! - a **run export** (exports, the archive of a finished run, the epoch corpus):
 //!   `{"v":1,"run":"…","code":"…","action_set":{…},"entries":[{"index":0,"recorded_at":…,
 //!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
 //!   action set document and its entries, written with one entry per line so that diffs stay
@@ -40,8 +40,7 @@ pub mod partition;
 mod v1;
 
 use rewind_core::{
-    ActionSet, Cassette, Code, Digest, Event, JournalDocument, RunId, Test, Workflow,
-    canonical_json,
+    ActionSet, Cassette, Code, Digest, Event, RunExport, RunId, Test, Workflow, canonical_json,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -61,9 +60,9 @@ pub enum FormatError {
     UnsupportedVersion(Value),
     #[error("invalid event: {0}")]
     InvalidEvent(String),
-    #[error("invalid journal document: {0}")]
+    #[error("invalid run export: {0}")]
     InvalidDocument(String),
-    #[error("invalid journal entry at position {position}: {message}")]
+    #[error("invalid history entry at position {position}: {message}")]
     InvalidEntry { position: usize, message: String },
     #[error("invalid cassette: {0}")]
     InvalidCassette(String),
@@ -102,16 +101,16 @@ pub fn decode_event(json: &str) -> Result<Event, FormatError> {
     }
 }
 
-/// A journal document: the version, the run, its code and its action set, then one entry per
+/// A run export: the version, the run, its code and its action set, then one entry per
 /// line.
-pub fn encode_journal(journal: &JournalDocument) -> String {
+pub fn encode_run_export(export: &RunExport) -> String {
     let mut out = format!(
         "{{\"v\":{VERSION},\"run\":{},\"code\":{},\"action_set\":{},\"entries\":[",
-        to_json(&journal.run.to_string()),
-        to_json(&journal.code.source()),
-        encode_action_set(&journal.action_set),
+        to_json(&export.run.to_string()),
+        to_json(&export.code.source()),
+        encode_action_set(&export.action_set),
     );
-    for (i, entry) in journal.entries.iter().enumerate() {
+    for (i, entry) in export.entries.iter().enumerate() {
         out.push_str(if i == 0 { "\n" } else { ",\n" });
         out.push_str(&to_json(&v1::EntryV1::from(entry)));
     }
@@ -119,12 +118,12 @@ pub fn encode_journal(journal: &JournalDocument) -> String {
     out
 }
 
-/// Decodes a journal document written by [`encode_journal`], of any supported version.
+/// Decodes a run export written by [`encode_run_export`], of any supported version.
 ///
 /// Only the encoding is checked here. Whether the entries form a valid history, and whether
 /// the code and the action set are those of its `run_started`, is the domain's business
-/// ([`JournalDocument::check`]).
-pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
+/// ([`RunExport::check`]).
+pub fn decode_run_export(json: &str) -> Result<RunExport, FormatError> {
     let mut object = parse_object(json)?;
     match take_version(&mut object)? {
         Version::V1 => {
@@ -167,7 +166,7 @@ pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
                         .map_err(|message| FormatError::InvalidEntry { position, message })
                 })
                 .collect::<Result<_, _>>()?;
-            Ok(JournalDocument {
+            Ok(RunExport {
                 run,
                 code,
                 action_set,

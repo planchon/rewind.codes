@@ -1009,7 +1009,7 @@ impl Api for World {
             .filter_map(|entry| view::payload_of(&entry.event))
             .find(|payload| payload.digest() == parsed)
             .and_then(|payload| payload.value().cloned())
-            .ok_or_else(|| not_found(format!("no payload {digest} in the journal of run {id}")))
+            .ok_or_else(|| not_found(format!("no payload {digest} in the history of run {id}")))
     }
 
     async fn get_test(&self, digest: &str) -> Result<ApiTest, ApiError> {

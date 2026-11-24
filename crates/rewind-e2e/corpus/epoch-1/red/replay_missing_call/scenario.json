@@ -1,5 +1,5 @@
 {
-  "description": "A code changed after the run: it goes idle where the journal says it made a call.",
+  "description": "A code changed after the run: it goes idle where the history says it made a call.",
   "actions": {
     "audit.record": {
       "ok": true

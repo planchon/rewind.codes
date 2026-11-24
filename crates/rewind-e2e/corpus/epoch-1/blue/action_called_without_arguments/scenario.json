@@ -1,5 +1,5 @@
 {
-  "description": "An action called without arguments is sent {}: the journal records {}, and {} is checked against the pinned schema, so an action with required arguments refuses the call with a TypeError at the call site.",
+  "description": "An action called without arguments is sent {}: the history records {}, and {} is checked against the pinned schema, so an action with required arguments refuses the call with a TypeError at the call site.",
   "actions": {
     "audit.list": { "$echo": true },
     "audit.get": { "$echo": true }

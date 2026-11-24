@@ -1,31 +1,31 @@
 //! End-to-end corpus of Rewind: TypeScript workflows run by the engine's run plane and the V8
-//! sandbox, over the memory adapters in virtual time; their journals are recorded in the stored
+//! sandbox, over the memory adapters in virtual time; their histories are recorded in the stored
 //! format and replayed (`archi/07-code-architecture.md`, "Tests": the epoch corpus).
 //!
 //! A case is a directory `corpus/epoch-<n>/<blue|red>/<name>/` holding:
 //!
 //! - `workflow.ts`, the code;
 //! - `scenario.json`, its input, actions, steps and expectations ([`Scenario`]);
-//! - `journal.v1.json`, the journal document recorded from it (`rewind-format` v1): the run's id,
+//! - `history.v1.json`, the run export recorded from it (`rewind-format` v1): the run's id,
 //!   its code, its action set and its entries, committed.
 //!
 //! A case may fork its run with a corrected code (`fork` in the scenario): the expectations,
-//! the recorded journal and the replays are then the fork's.
+//! the recorded history and the replays are then the fork's.
 //!
 //! **Blue** cases end as they should succeed: the run completes, or waits for the outside
 //! world. **Red** cases must fail, exactly as specified: a refused start, a failed, cancelled
-//! or aborted run, a replay that diverges from the journal, a tampered journal. A case that
+//! or aborted run, a replay that diverges from the history, a tampered history. A case that
 //! does not fail the way it says it does is a failing test, whatever its color.
 //!
 //! Each case is checked three ways:
 //!
 //! 1. **Live**: the scenario runs on one node of the run plane in the engine's driver
 //!    ([`live`]), and its expectations hold.
-//! 2. **Recorded**: the journal it produced is byte for byte the committed `journal.v1.json`.
+//! 2. **Recorded**: the history it produced is byte for byte the committed `history.v1.json`.
 //!    `REWIND_E2E_RECORD=1 cargo test -p rewind-e2e` writes the files instead: review the diff.
-//! 3. **Replayed**: the committed journal, decoded from its file, replays identically with the
+//! 3. **Replayed**: the committed history, decoded from its file, replays identically with the
 //!    code it holds, which must be the case's, on a fresh executor with no store. This is the
-//!    epoch contract: a build that stops replaying a journal of an epoch it supports fails
+//!    epoch contract: a build that stops replaying a history of an epoch it supports fails
 //!    here.
 
 #![forbid(unsafe_code)]
@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use rewind_core::{
     Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Code, Command, Event,
-    HistoryEntry, JournalDocument, Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState,
+    HistoryEntry, Lifecycle, McpServer, McpTransport, RunExport, RunId, RunOutcome, RunState,
     SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
@@ -60,12 +60,12 @@ pub const T0: Timestamp = Timestamp(1_767_225_600_000);
 /// The environment variable that turns recording on, for the corpus tests.
 pub const RECORD: &str = "REWIND_E2E_RECORD";
 
-/// What to do with the journal a case produces.
+/// What to do with the history a case produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Compare it with the committed `journal.v1.json`.
+    /// Compare it with the committed `history.v1.json`.
     Verify,
-    /// Write it to `journal.v1.json`.
+    /// Write it to `history.v1.json`.
     Record,
 }
 
@@ -193,8 +193,8 @@ impl Case {
             .collect()
     }
 
-    pub fn journal_path(&self) -> PathBuf {
-        self.dir.join("journal.v1.json")
+    pub fn history_path(&self) -> PathBuf {
+        self.dir.join("history.v1.json")
     }
 
     /// The scenario's actions: harness actions, MCP actions, and the built-ins `http` and
@@ -458,7 +458,7 @@ fn executor(scenario: &Scenario) -> V8Executor {
 pub struct Recorded {
     pub run_id: RunId,
     /// With every payload loaded.
-    pub journal: JournalDocument,
+    pub export: RunExport,
     pub state: RunState,
     /// How many times each action answered, across the case.
     pub dispatched: BTreeMap<String, usize>,
@@ -478,33 +478,33 @@ pub enum Live {
     Ran(Box<Recorded>),
 }
 
-/// How replaying a journal ended.
+/// How replaying a history ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Replayed {
     Matches(ReplayEnd),
     Fails(String),
 }
 
-/// Replays a journal document's entries with a code on a fresh executor, without any store:
+/// Replays a run export's entries with a code on a fresh executor, without any store:
 /// the document holds the run's id and action set.
-pub async fn replay_journal(case: &Case, journal: &JournalDocument, code: &Code) -> Replayed {
+pub async fn replay_export(case: &Case, export: &RunExport, code: &Code) -> Replayed {
     let executor = executor(&case.scenario);
-    let compiled = executor.compile(code, &journal.action_set);
-    let run = RunRef::new(TenantId::local(), journal.run);
+    let compiled = executor.compile(code, &export.action_set);
+    let run = RunRef::new(TenantId::local(), export.run);
     let input = ReplayInput {
         run: &run,
         compiled: compiled.as_ref(),
-        action_set: &journal.action_set,
-        history: &journal.entries,
+        action_set: &export.action_set,
+        history: &export.entries,
     };
-    match replay::replay(&executor, &replay::InJournal, input).await {
+    match replay::replay(&executor, &replay::InExport, input).await {
         Ok(rebuilt) => Replayed::Matches(rebuilt.end),
         Err(ReplayError::NonDeterminism(mismatch)) => Replayed::Fails(mismatch.to_string()),
         Err(err) => Replayed::Fails(err.to_string()),
     }
 }
 
-/// Checks a case of the corpus: live, recorded, replayed, recording its journal when
+/// Checks a case of the corpus: live, recorded, replayed, recording its history when
 /// [`RECORD`] is set. Panics with every failed expectation.
 pub async fn check_case(name: &str) {
     let failures = match Case::load(name) {
@@ -664,7 +664,7 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
     }
     if let Some(expected) = &expect.calls {
         let mut calls: BTreeMap<String, usize> = BTreeMap::new();
-        for entry in &recorded.journal.entries {
+        for entry in &recorded.export.entries {
             if let Event::Command(Command::ScheduleCall { action, .. }) = &entry.event {
                 *calls.entry(action.clone()).or_default() += 1;
             }
@@ -676,7 +676,7 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
     }
     if let Some(expected) = &expect.events {
         let events: Vec<&str> = recorded
-            .journal
+            .export
             .entries
             .iter()
             .map(|entry| entry.event.name())
@@ -720,21 +720,21 @@ fn check_recording(case: &Case, recorded: &Recorded, mode: Mode, failures: &mut 
             case.run_id()
         ));
     }
-    let journal = rewind_format::encode_journal(&recorded.journal);
-    let path = case.journal_path();
+    let export = rewind_format::encode_run_export(&recorded.export);
+    let path = case.history_path();
     if mode == Mode::Record {
-        if let Err(err) = std::fs::write(&path, &journal) {
+        if let Err(err) = std::fs::write(&path, &export) {
             failures.push(format!("cannot record {}: {err}", path.display()));
         }
         return;
     }
     match std::fs::read_to_string(&path) {
-        Ok(committed) if committed == journal => {}
+        Ok(committed) if committed == export => {}
         Ok(committed) => failures.push(format!(
-            "the journal differs from {} at line {}: if the change is intended (and does not \
+            "the history differs from {} at line {}: if the change is intended (and does not \
              require a new determinism epoch), record again with {RECORD}=1",
             path.display(),
-            first_difference(&committed, &journal)
+            first_difference(&committed, &export)
         )),
         Err(_) => failures.push(format!(
             "{} is missing: record it with {RECORD}=1",
@@ -752,51 +752,51 @@ fn first_difference(a: &str, b: &str) -> usize {
 }
 
 async fn check_replays(case: &Case, recorded: &Recorded, failures: &mut Vec<String>) {
-    // The committed journal, decoded from its file, holds the case's code and replays with
+    // The committed history, decoded from its file, holds the case's code and replays with
     // it.
-    let committed = match std::fs::read_to_string(case.journal_path())
+    let committed = match std::fs::read_to_string(case.history_path())
         .map_err(|err| err.to_string())
-        .and_then(|json| rewind_format::decode_journal(&json).map_err(|err| err.to_string()))
+        .and_then(|json| rewind_format::decode_run_export(&json).map_err(|err| err.to_string()))
     {
-        Ok(journal) => journal,
+        Ok(export) => export,
         Err(err) => {
-            failures.push(format!("cannot read the committed journal: {err}"));
+            failures.push(format!("cannot read the committed history: {err}"));
             return;
         }
     };
     if let Err(err) = committed.check() {
-        failures.push(format!("the committed journal is inconsistent: {err}"));
+        failures.push(format!("the committed history is inconsistent: {err}"));
     }
     if &committed.code != case.recorded_code() {
-        failures.push("the committed journal holds another code than the case's".into());
+        failures.push("the committed history holds another code than the case's".into());
     }
     let expected_end = match committed.entries.last().map(|entry| &entry.event) {
         Some(Event::Lifecycle(Lifecycle::RunAborted(reason))) => ReplayEnd::Aborted(reason.clone()),
         _ => ReplayEnd::EndOfHistory,
     };
-    let replayed = replay_journal(case, &committed, case.recorded_code()).await;
+    let replayed = replay_export(case, &committed, case.recorded_code()).await;
     if replayed != Replayed::Matches(expected_end.clone()) {
         failures.push(format!(
-            "the committed journal does not replay: {replayed:?} (expected {expected_end:?})"
+            "the committed history does not replay: {replayed:?} (expected {expected_end:?})"
         ));
     }
 
     if let Some(check) = &case.scenario.replay {
-        check_altered_replay(case, &recorded.journal, check, failures).await;
+        check_altered_replay(case, &recorded.export, check, failures).await;
     }
 }
 
 async fn check_altered_replay(
     case: &Case,
-    journal: &JournalDocument,
+    export: &RunExport,
     check: &ReplayCheck,
     failures: &mut Vec<String>,
 ) {
-    let mut journal = journal.clone();
-    let history: &mut Vec<HistoryEntry> = &mut journal.entries;
+    let mut export = export.clone();
+    let history: &mut Vec<HistoryEntry> = &mut export.entries;
     if let Some(index) = check.drop_entry {
         if index >= history.len() {
-            failures.push(format!("drop_entry {index} is past the end of the journal"));
+            failures.push(format!("drop_entry {index} is past the end of the history"));
             return;
         }
         history.remove(index);
@@ -811,7 +811,7 @@ async fn check_altered_replay(
         },
         None => case.recorded_code().clone(),
     };
-    let replayed = replay_journal(case, &journal, &code).await;
+    let replayed = replay_export(case, &export, &code).await;
     let expected = check.diverges.as_ref().or(check.error.as_ref());
     match (&replayed, expected) {
         (Replayed::Fails(message), Some(expected)) if message == expected => {}

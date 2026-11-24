@@ -11,11 +11,11 @@ use tokio::sync::Mutex;
 use crate::convert::{fill_log_record, span_data};
 use crate::{OtelError, OtlpConfig, ServiceConfig, otlp};
 
-/// The instrumentation scope of run telemetry: what workflows did, projected from the journal.
+/// The instrumentation scope of run telemetry: what workflows did, projected from the history.
 pub const RUN_SCOPE: &str = "rewind.run";
 
 /// `SpanExporter` on OpenTelemetry: the spans and log records the projector derived from the
-/// journal, sent over OTLP as they were derived. Ids, parents, times, statuses and attributes
+/// history, sent over OTLP as they were derived. Ids, parents, times, statuses and attributes
 /// are kept: a span exported twice is the same span.
 ///
 /// Each call exports right away, without batching, and returns the backend's answer: a failure

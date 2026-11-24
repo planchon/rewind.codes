@@ -14,7 +14,7 @@ model ──► system prompt (introduction, the rewind module, the action set i
   │          record_tests
   ▼
 agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──► run plane in process:
-                                       │   tsgo check, V8 sandbox, journal, workflows and their
+                                       │   tsgo check, V8 sandbox, history, workflows and their
                                        │   suites (the gate), tests, McpDispatcher (the real MCP
                                        ▼   client)
                          fake MCP servers (rmcp, streamable HTTP on 127.0.0.1)

@@ -16,11 +16,11 @@ use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workfl
 
 use crate::ports::checker::ActionDeclarations;
 use crate::ports::executor::CompiledCode;
-use crate::ports::journal::{
-    ScriptTitle, StoredActionSet, StoredCode, StoredWorkflow, TestRecord, WorkflowFilter,
-};
 use crate::ports::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
+};
+use crate::ports::records::{
+    ScriptTitle, StoredActionSet, StoredCode, StoredWorkflow, TestRecord, WorkflowFilter,
 };
 use crate::ports::tenancy::{RunRef, Tenant, TenantId};
 use crate::ports::webhooks::Subscription;

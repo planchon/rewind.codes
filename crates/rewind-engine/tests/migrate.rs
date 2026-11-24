@@ -111,7 +111,7 @@ fn plane(partitions: u16) -> (Arc<TestPlane>, MemoryCluster) {
     (plane, cluster)
 }
 
-/// A version 7 id, as the journal store drew them.
+/// A version 7 id, as the old tables drew them.
 fn v7(n: u128) -> RunId {
     RunId::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0000 | n)
 }

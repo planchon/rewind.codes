@@ -47,7 +47,7 @@ use crate::streams::Rights;
 use crate::views::{call_id, parse_call_id};
 
 /// The most a failure holds: its message and its data as canonical JSON, together. A failure
-/// stays in its journal entry, which never moves a value to the payload tiers: it is bounded by
+/// stays in its history entry, which never moves a value to the payload tiers: it is bounded by
 /// the largest value a row holds next to a digest (08).
 const FAILURE_LIMIT: usize = 64 * 1024;
 
@@ -296,7 +296,7 @@ fn check_failure_size(message: &str, data: Option<&serde_json::Value>) -> Result
             ProblemType::PayloadTooLarge,
             format!(
                 "the failure is {size} bytes (its message, and its data as canonical JSON), above \
-                 the limit of {FAILURE_LIMIT}: a failure stays in its journal entry; give large \
+                 the limit of {FAILURE_LIMIT}: a failure stays in its history entry; give large \
                  details as a result"
             ),
         ));

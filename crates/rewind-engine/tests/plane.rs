@@ -1,7 +1,7 @@
 //! The use cases of the run plane, in the driver: the owner, its executors, its call executor
 //! and its organization actor, with memory adapters and a fake executor
 //! (`archi/07-code-architecture.md`, "Inside a node", "Tests"). The behaviours are those the
-//! journal's engine keeps (`tests/engine.rs`, `tests/tasks.rs`, `tests/quotas.rs`).
+//! history's engine keeps (`tests/engine.rs`, `tests/tasks.rs`, `tests/quotas.rs`).
 
 #![allow(clippy::unwrap_used, clippy::too_many_lines)]
 
@@ -109,7 +109,7 @@ async fn a_run_calls_its_actions_ends_and_is_sealed() {
             "complete_run",
         ]
     );
-    // Sealed: the attempt's journal is in the archive, and the run is read from there.
+    // Sealed: the attempt's history is in the archive, and the run is read from there.
     assert_eq!(view.head.sealed, Some(view.head.attempt));
     let sealed = world
         .plane
@@ -168,7 +168,7 @@ async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
     assert_eq!(history[7].event.name(), "complete_run");
     assert_eq!(world.view(&run).await.head.sealed, Some(view.head.attempt));
 
-    // The journal's export, as `GET /v1/runs/{id}/journal` reads it.
+    // The history's export, as `GET /v1/runs/{id}/export` reads it.
     let mut world = World::over(
         Interleaved::new(),
         chain(),
@@ -182,9 +182,9 @@ async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
     let run = world.run(request("chain", json!({}))).await;
     assert!(store.holding());
     let mut gateway = world.driver.gateway(&world.at.clone());
-    let journal = world.edge.export_journal(&mut gateway, &run).await.unwrap();
+    let export = world.edge.export_run(&mut gateway, &run).await.unwrap();
     assert_eq!(store.applied(), 1);
-    assert_eq!(journal.entries.len(), 8);
+    assert_eq!(export.entries.len(), 8);
 }
 
 /// An owner whose read finds the partition opened by another node drops it, as a fenced commit

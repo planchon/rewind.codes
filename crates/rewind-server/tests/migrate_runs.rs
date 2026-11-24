@@ -1,4 +1,4 @@
-//! `rewind server migrate-runs` on the stores the journal store filled (`archi/08-decisions.md`,
+//! `rewind server migrate-runs` on the stores the old tables filled (`archi/08-decisions.md`,
 //! "Taken while writing the object-storage spec": the migration): a Postgres database and an
 //! embedded `.rewind/`, kept as fixtures (`tests/fixtures/`). The command runs twice, the second
 //! time moving nothing; then a server on the result reads every run back as the tables held it,
@@ -19,7 +19,7 @@ use clap::Parser;
 use rewind_api::Client;
 use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::RunStatus;
-use rewind_api::runs::JournalExport;
+use rewind_api::runs::ExportAs;
 use rewind_engine::ports::legacy::{LegacyBlobs, LegacyHistory, LegacyRuns};
 use rewind_server::{MigrateArgs, ServerArgs, migrate_runs};
 use serde_json::{Value, json};
@@ -74,7 +74,7 @@ async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Hist
         let entries = match run.history {
             LegacyHistory::Entries(entries) => entries,
             LegacyHistory::Archived(document) => blobs
-                .journal(&run.run.tenant, document)
+                .export(&run.run.tenant, document)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -125,11 +125,8 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
         })
         .await;
         assert_eq!((&found.id, &found.handle), (run, handle));
-        let journal = client
-            .export_journal(run, JournalExport::Journal)
-            .await
-            .unwrap();
-        let read: Vec<String> = journal["entries"]
+        let export = client.export_run(run, ExportAs::Run).await.unwrap();
+        let read: Vec<String> = export["entries"]
             .as_array()
             .unwrap()
             .iter()
@@ -256,11 +253,8 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
 
     // The webhook URL the code was given still signals it: its token names no run, and the
     // partition that holds its hash answers.
-    let journal = client
-        .export_journal(WEBHOOK, JournalExport::Journal)
-        .await
-        .unwrap();
-    let hook = journal["entries"]
+    let export = client.export_run(WEBHOOK, ExportAs::Run).await.unwrap();
+    let hook = export["entries"]
         .as_array()
         .unwrap()
         .iter()
@@ -316,7 +310,7 @@ async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
     )
     .await
     else {
-        panic!("a directory of the journal store is refused");
+        panic!("a directory of the old tables is refused");
     };
     assert_eq!(rewind_server::exit_code(&refused), 70);
     assert!(
@@ -344,7 +338,7 @@ async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
         "{again:?}"
     );
 
-    // The layout of the run plane, and nothing of the journal store's.
+    // The layout of the run plane, and nothing of the old tables's.
     assert!(!dir.join("journal.db").exists());
     assert!(dir.join("control.db").exists());
     assert!(dir.join("partitions/0").is_dir());

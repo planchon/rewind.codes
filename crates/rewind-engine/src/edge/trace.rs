@@ -3,7 +3,7 @@
 //! trace of a test's report.
 //!
 //! The run's head and the history of its attempt come from its owner, from the partition while
-//! the attempt is live, from its sealed journal once it is sealed; every payload up to 64 KiB is
+//! the attempt is live, from its sealed attempt once it is sealed; every payload up to 64 KiB is
 //! a value there. A payload above is a blob of the run: the trace shows its size and preview,
 //! and an entry shown in full loads its value.
 

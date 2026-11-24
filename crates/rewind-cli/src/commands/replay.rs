@@ -1,20 +1,18 @@
-//! `rewind replay <run|journal.json> [--code fixed.ts [--at n]]`, in this process
+//! `rewind replay <run|run.json> [--code fixed.ts [--at n]]`, in this process
 //! (`archi/05-testing-and-observability.md`, "Replay, debugging and forks").
 //!
-//! The journal document is read from the file, or exported by the server
-//! (`GET /v1/runs/{id}/journal`); either way the replay runs here, on a fresh V8 executor,
-//! and calls no action. Without `--code`, the run's own code must reproduce the journal
+//! The run export is read from the file, or exported by the server
+//! (`GET /v1/runs/{id}/export`); either way the replay runs here, on a fresh V8 executor,
+//! and calls no action. Without `--code`, the run's own code must reproduce the history
 //! exactly: a divergence is non-determinism. With `--code`, the corrected code is followed
-//! against the journal as a fork would follow it (`rewind_engine::fork::compatibility`): the
+//! against the history as a fork would follow it (`rewind_engine::fork::compatibility`): the
 //! report says where it stops following the run, and which calls a fork would reuse, call
 //! again, or fail with `outcome_unknown`.
 
 use std::path::Path;
 
-use rewind_api::runs::JournalExport;
-use rewind_core::{
-    Code, Command, Completion, Event, HistoryEntry, JournalDocument, NonDeterminism, Seq,
-};
+use rewind_api::runs::ExportAs;
+use rewind_core::{Code, Command, Completion, Event, HistoryEntry, NonDeterminism, RunExport, Seq};
 use rewind_engine::ports::{CodeExecutor, RunRef, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_engine::{Compatibility, ForkError, ForkPoint, Limits};
@@ -34,7 +32,7 @@ use crate::output::Console;
 pub(crate) struct ReplayReport {
     pub(crate) run: String,
     pub(crate) entries: u64,
-    /// The code reproduces the journal: its own code, or the corrected one up to the end
+    /// The code reproduces the history: its own code, or the corrected one up to the end
     /// of the run (or its cancellation or abort).
     pub(crate) matches: bool,
     /// What the replay found, in one sentence.
@@ -80,27 +78,25 @@ pub(super) async fn replay(
                 || path
                     .extension()
                     .is_some_and(|extension| extension == "json")));
-    let journal = if is_file {
+    let export = if is_file {
         let text = input::read_text(path)?;
-        rewind_format::decode_journal(&text)
+        rewind_format::decode_run_export(&text)
             .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?
     } else {
         let client = server.client().await?;
-        let document = client
-            .export_journal(&args.run, JournalExport::Journal)
-            .await?;
-        rewind_format::decode_journal(&document.to_string()).map_err(|error| {
+        let document = client.export_run(&args.run, ExportAs::Run).await?;
+        rewind_format::decode_run_export(&document.to_string()).map_err(|error| {
             CliError::Api(rewind_api::Error::Decode(format!(
-                "the exported journal of run {}: {error}",
+                "the run export of run {}: {error}",
                 args.run
             )))
         })?
     };
     let report = match &args.code {
-        None => replay_journal(&journal).await?,
+        None => replay_export(&export).await?,
         Some(path) => {
             let code = Code::new(input::read_text(path)?);
-            compatibility(&journal, &code, args.at).await?
+            compatibility(&export, &code, args.at).await?
         }
     };
     if console.json() {
@@ -147,45 +143,45 @@ fn executor() -> Result<V8Executor, CliError> {
     V8Executor::new(SandboxLimits::default()).map_err(|error| CliError::internal(error.to_string()))
 }
 
-/// Replays a journal with its own code.
-pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayReport, CliError> {
-    let entries = journal.entries.len() as u64;
+/// Replays a history with its own code.
+pub(crate) async fn replay_export(export: &RunExport) -> Result<ReplayReport, CliError> {
+    let entries = export.entries.len() as u64;
     let mut report = ReplayReport {
-        run: journal.run.to_string(),
+        run: export.run.to_string(),
         entries,
         matches: false,
         verdict: String::new(),
         fork: None,
     };
-    if let Err(error) = journal.check() {
-        report.verdict = format!("the journal is inconsistent: {error}");
+    if let Err(error) = export.check() {
+        report.verdict = format!("the history is inconsistent: {error}");
         return Ok(report);
     }
     let executor = executor()?;
-    let compiled = executor.compile(&journal.code, &journal.action_set);
-    let run = RunRef::new(TenantId::local(), journal.run);
+    let compiled = executor.compile(&export.code, &export.action_set);
+    let run = RunRef::new(TenantId::local(), export.run);
     let input = ReplayInput {
         run: &run,
         compiled: compiled.as_ref(),
-        action_set: &journal.action_set,
-        history: &journal.entries,
+        action_set: &export.action_set,
+        history: &export.entries,
     };
-    match replay::replay(&executor, &replay::InJournal, input).await {
+    match replay::replay(&executor, &replay::InExport, input).await {
         Ok(rebuilt) => {
             report.matches = true;
             report.verdict = match rebuilt.end {
                 ReplayEnd::EndOfHistory => format!(
-                    "the code replays the {entries} entries of the journal of run {}",
-                    journal.run
+                    "the code replays the {entries} entries of the history of run {}",
+                    export.run
                 ),
                 ReplayEnd::Aborted(reason) => format!(
-                    "the code replays the {entries} entries of the journal of run {}, up to its abort ({reason})",
-                    journal.run
+                    "the code replays the {entries} entries of the history of run {}, up to its abort ({reason})",
+                    export.run
                 ),
             };
         }
         Err(ReplayError::NonDeterminism(mismatch)) => {
-            report.verdict = format!("the replay diverges from the journal: {mismatch}");
+            report.verdict = format!("the replay diverges from the history: {mismatch}");
         }
         Err(error) => {
             report.verdict = format!("the replay fails: {error}");
@@ -194,27 +190,27 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
     Ok(report)
 }
 
-/// Follows a journal with a corrected code, as a fork would.
+/// Follows a history with a corrected code, as a fork would.
 pub(crate) async fn compatibility(
-    journal: &JournalDocument,
+    export: &RunExport,
     code: &Code,
     at: Option<u64>,
 ) -> Result<ReplayReport, CliError> {
-    let entries = journal.entries.len() as u64;
+    let entries = export.entries.len() as u64;
     let mut report = ReplayReport {
-        run: journal.run.to_string(),
+        run: export.run.to_string(),
         entries,
         matches: false,
         verdict: String::new(),
         fork: None,
     };
-    if let Err(error) = journal.check() {
-        report.verdict = format!("the journal is inconsistent: {error}");
+    if let Err(error) = export.check() {
+        report.verdict = format!("the history is inconsistent: {error}");
         return Ok(report);
     }
     let executor = executor()?;
     let found: Compatibility =
-        match rewind_engine::fork::compatibility(&executor, journal, code, at, &Limits::default())
+        match rewind_engine::fork::compatibility(&executor, export, code, at, &Limits::default())
             .await
         {
             Ok(found) => found,
@@ -226,33 +222,33 @@ pub(crate) async fn compatibility(
             }
             Err(error) => {
                 return Err(CliError::internal(format!(
-                    "the journal cannot be followed: {error}"
+                    "the history cannot be followed: {error}"
                 )));
             }
         };
     report.matches = found.is_compatible();
     report.verdict = match &found.point {
         ForkPoint::Diverged(mismatch) => {
-            format!("the code diverges from the journal: {mismatch}")
+            format!("the code diverges from the history: {mismatch}")
         }
         ForkPoint::At(index) => format!(
-            "the code follows the journal of run {} up to entry {index}, where a fork goes live",
-            journal.run
+            "the code follows the history of run {} up to entry {index}, where a fork goes live",
+            export.run
         ),
         ForkPoint::Stopped => {
-            "the code could not go on while it followed the journal: a fork is aborted".to_owned()
+            "the code could not go on while it followed the history: a fork is aborted".to_owned()
         }
         point @ (ForkPoint::EndOfParent
         | ForkPoint::ParentCancelled(_)
         | ForkPoint::ParentAborted(_)) => format!(
-            "the code is compatible with the journal of run {} ({entries} entries): {point}",
-            journal.run
+            "the code is compatible with the history of run {} ({entries} entries): {point}",
+            export.run
         ),
     };
-    let actions = actions_by_seq(&journal.entries);
+    let actions = actions_by_seq(&export.entries);
     // What a fork reuses: the calls it copies with their outcomes while it follows the run,
     // and the calls it inherits still pending, whose recorded outcomes it delivers.
-    let mut reused = completed_before(&journal.entries, live_from(&found.point, entries));
+    let mut reused = completed_before(&export.entries, live_from(&found.point, entries));
     reused.extend(found.reused.iter().copied());
     reused.sort();
     reused.dedup();
@@ -313,7 +309,7 @@ fn completed_before(entries: &[HistoryEntry], end: u64) -> Vec<Seq> {
         .collect()
 }
 
-/// The action of each call the journal schedules.
+/// The action of each call the history schedules.
 fn actions_by_seq(entries: &[HistoryEntry]) -> Vec<(Seq, String)> {
     entries
         .iter()

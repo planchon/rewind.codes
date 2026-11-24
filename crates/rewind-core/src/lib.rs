@@ -1,6 +1,6 @@
-//! Domain of Rewind: the run journal and the pure logic built on it.
+//! Domain of Rewind: the run history and the pure logic built on it.
 //!
-//! - [`event`]: the four families of journal events and [`HistoryEntry`] (`archi/02-journal.md`).
+//! - [`event`]: the four families of history events and [`HistoryEntry`] (`archi/02-history.md`).
 //! - [`Payload`]: a JSON value identified by the digest of its canonical form (RFC 8785).
 //! - [`RunState`]: the state of a run, a pure function of its history.
 //! - [`ReplayCursor`]: the determinism check (`archi/03-execution.md`, "Replay").
@@ -9,9 +9,9 @@
 //!   action its route, schemas and policy.
 //! - [`SecretRef`] and [`Attachments`]: the secrets a run or a workflow version attaches, by
 //!   name, never by value (`archi/04-tools.md`, "Secrets").
-//! - [`JournalDocument`]: a run's journal with its code and action set, replayable on its own.
+//! - [`RunExport`]: a run's history with its code and action set, replayable on its own.
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
-//! - [`Shape`]: the type of an action's results, as observed in journals.
+//! - [`Shape`]: the type of an action's results, as observed in histories.
 //! - [`RunId`] and [`PartitionId`]: a run id names the partition its run lives in.
 //! - [`Workflow`]: a code with a name and a typed interface, that workflows start and signal;
 //!   [`RunEnd`], how a run's end reaches the runs that watch it; its [`Suite`] of tests.
@@ -36,9 +36,9 @@ pub mod event;
 mod handle;
 mod history;
 mod ids;
-mod journal;
 mod payload;
 mod replay;
+mod run_export;
 mod secret;
 mod shape;
 mod state;
@@ -66,9 +66,9 @@ pub use handle::{
 };
 pub use history::{HistoryError, validate_history};
 pub use ids::{Epoch, PartitionId, RunId, Seed, Seq};
-pub use journal::{JournalDocument, JournalError};
 pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
+pub use run_export::{RunExport, RunExportError};
 pub use secret::{
     ActionAuth, Attachments, InvalidSecretName, InvalidSecretRef, MAX_SECRET_VALUE_BYTES,
     RESERVED_HEADERS, SECRET_PLACEHOLDER, SecretEncoding, SecretName, SecretPlacement, SecretRef,

@@ -781,7 +781,7 @@ CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 /// stored before handles takes its workflow's name, or `code`, and the short suffix, unless
 /// another run of its tenant shares the first 64 bits of its id (the first 18 characters of its
 /// text, `xxxxxxxx-xxxx-xxxx`): every run of such a group then takes the full suffix, which tells
-/// distinct ids apart. A summary takes its run's; a summary whose run the journal no longer holds
+/// distinct ids apart. A summary takes its run's; a summary whose run the history no longer holds
 /// follows the same rules among the summaries of its tenant. The versions of each workflow are
 /// numbered from 1 in the order they were created, ties in the order they were stored.
 ///
@@ -866,7 +866,7 @@ CREATE TABLE legacy_runs (
 
 /// The tables of runs set aside (`archi/08-decisions.md`, "Taken while writing the object-storage
 /// spec": the migration): runs live in the partition of the run plane and in the archive, and the
-/// database holds the control plane only. The tables the journal store kept its runs in take the
+/// database holds the control plane only. The tables the old tables kept its runs in take the
 /// prefix `legacy_`, their indexes with them (`runs` becomes `legacy_journal_runs`: `legacy_runs`
 /// is the control plane's table of the runs moved): the runs, their histories, inboxes,
 /// signal keys, timers, call tasks, webhook tokens and watchers, the payloads and their
@@ -875,7 +875,7 @@ CREATE TABLE legacy_runs (
 /// or the archive, and drops them once every run moved.
 ///
 /// A tenant keeps one retention, how long an ended run is kept from its end: `retention_ms`,
-/// which was the retention of archived journals; the other three go.
+/// which was the retention of archived histories; the other three go.
 const V13: &str = r#"
 ALTER TABLE runs RENAME TO legacy_journal_runs;
 ALTER TABLE history RENAME TO legacy_history;

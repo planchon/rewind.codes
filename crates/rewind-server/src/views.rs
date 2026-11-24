@@ -1,4 +1,4 @@
-//! What the API shows of a run: its state, its journal entries, its payloads, its tasks. Every
+//! What the API shows of a run: its state, its history entries, its payloads, its tasks. Every
 //! view is read from the run's owner (its head, summary, history and tasks, live or sealed) and
 //! from the run's blobs; nothing here writes.
 
@@ -93,7 +93,7 @@ fn held_by_digest(entries: &[HistoryEntry]) -> BTreeSet<Digest> {
 
 impl Views<'_> {
     /// The run's history from `from`, every payload up to 64 KiB with its value: from its
-    /// partition, or from its sealed journal.
+    /// partition, or from its sealed attempt.
     pub(crate) async fn history_from(
         &self,
         run: &RunRef,
@@ -188,7 +188,7 @@ impl Views<'_> {
         Ok(None)
     }
 
-    /// The API views of journal entries of a run.
+    /// The API views of history entries of a run.
     pub(crate) async fn entries(
         &self,
         run: &RunRef,

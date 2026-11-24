@@ -1860,7 +1860,7 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn webhook_is_a_journaled_call_of_the_built_in() {
+async fn webhook_is_a_recorded_call_of_the_built_in() {
     let harness = harness().await;
     let id = harness
         .start_with(
@@ -2008,7 +2008,7 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn fetch_is_a_journaled_call_of_the_http_action() {
+async fn fetch_is_a_recorded_call_of_the_http_action() {
     let harness = harness().await;
     let id = harness
         .start_with(

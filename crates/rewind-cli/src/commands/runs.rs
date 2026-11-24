@@ -6,7 +6,7 @@ use std::time::{Duration as StdDuration, Instant};
 use rewind_api::Client;
 use rewind_api::common::Duration;
 use rewind_api::headers::IdempotencyKey;
-use rewind_api::runs::{CancelRun, ForkRun, JournalExport, Run, RunFilter, StartRun, TraceFormat};
+use rewind_api::runs::{CancelRun, ExportAs, ForkRun, Run, RunFilter, StartRun, TraceFormat};
 use serde_json::Value;
 
 use super::Server;
@@ -271,10 +271,10 @@ pub(super) async fn export(
 ) -> Result<Exit, CliError> {
     let client = server.client().await?;
     let export = match args.export_as {
-        ExportFormat::Journal => JournalExport::Journal,
-        ExportFormat::Cassette => JournalExport::Cassette,
+        ExportFormat::Run => ExportAs::Run,
+        ExportFormat::Cassette => ExportAs::Cassette,
     };
-    let document = client.export_journal(&args.run, export).await?;
+    let document = client.export_run(&args.run, export).await?;
     // Written in the stored format v1, byte for byte as a store writes it, and checked on the
     // way: what is written always reads back.
     let text = stored_form(export, &document)?;
@@ -291,7 +291,7 @@ pub(super) async fn export(
 }
 
 /// An exported document in the stored format v1.
-pub(super) fn stored_form(export: JournalExport, document: &Value) -> Result<String, CliError> {
+pub(super) fn stored_form(export: ExportAs, document: &Value) -> Result<String, CliError> {
     let json = document.to_string();
     let invalid = |error: rewind_format::FormatError| {
         CliError::Api(rewind_api::Error::Decode(format!(
@@ -300,10 +300,10 @@ pub(super) fn stored_form(export: JournalExport, document: &Value) -> Result<Str
         )))
     };
     Ok(match export {
-        JournalExport::Journal => {
-            rewind_format::encode_journal(&rewind_format::decode_journal(&json).map_err(invalid)?)
-        }
-        JournalExport::Cassette => {
+        ExportAs::Run => rewind_format::encode_run_export(
+            &rewind_format::decode_run_export(&json).map_err(invalid)?,
+        ),
+        ExportAs::Cassette => {
             rewind_format::encode_cassette(&rewind_format::decode_cassette(&json).map_err(invalid)?)
         }
     })

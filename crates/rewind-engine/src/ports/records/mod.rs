@@ -1,5 +1,5 @@
 //! What a run's history, inbox and call tasks are made of, and what the catalog keeps of the
-//! workflows, action sets and workflow versions they run (`archi/02-journal.md`,
+//! workflows, action sets and workflow versions they run (`archi/02-history.md`,
 //! `archi/03-execution.md`, "Activations", "Workflows across runs"; `archi/04-tools.md`,
 //! "Call lifecycle"). The records the stores keep them in are their adapters':
 //! [`PartitionStore`](crate::ports::PartitionStore) for a run, [`CatalogStore`](

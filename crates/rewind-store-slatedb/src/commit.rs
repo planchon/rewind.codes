@@ -1,4 +1,4 @@
-//! A batch applied in one SlateDB transaction (`archi/02-journal.md`, "The commit invariant";
+//! A batch applied in one SlateDB transaction (`archi/02-history.md`, "The commit invariant";
 //! `archi/07-code-architecture.md`, "`PartitionStore`").
 //!
 //! The changes apply in order, each reading what the ones before it wrote. A change the single

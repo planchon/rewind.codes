@@ -1,4 +1,4 @@
-//! The state of a run: a pure function of its history (`archi/02-journal.md`, "Run state").
+//! The state of a run: a pure function of its history (`archi/02-history.md`, "Run state").
 
 use std::collections::BTreeMap;
 use std::fmt;

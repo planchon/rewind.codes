@@ -1,4 +1,4 @@
-//! The partition records, stored format v1 (`archi/02-journal.md`, "Stored format v1";
+//! The partition records, stored format v1 (`archi/02-history.md`, "Stored format v1";
 //! `archi/06-storage-and-scale.md`, "A partition").
 //!
 //! A partition holds one record per kind of thing it keeps about its runs: [`RunHead`], an

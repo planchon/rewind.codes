@@ -1465,7 +1465,7 @@ impl<P: Plane> Owner<P> {
     // ---------------------------------------------------------------------------------------
     // Sealing, retention and erasure
 
-    /// Writes the ended attempt's journal to the archive; its seal follows in a later batch.
+    /// Writes the ended attempt's history to the archive; its seal follows in a later batch.
     /// One seal at a time, and none while the run is being erased.
     pub(crate) fn seal(&mut self, run: &RunRef) {
         let Some(slot) = self.slot_mut(run.id) else {
@@ -1965,7 +1965,7 @@ pub(crate) async fn end_value<P: Plane>(
     Ok(Some(rewind_core::RunEnd::Completed { output }.to_json()))
 }
 
-/// Writes the ended attempt's journal to the archive, every payload up to 64 KiB inlined, and
+/// Writes the ended attempt's history to the archive, every payload up to 64 KiB inlined, and
 /// answers the run's retention.
 async fn seal_attempt<P: Plane>(
     plane: &P,

@@ -148,13 +148,13 @@ impl<D: ActionDispatcher + 'static> World<D> {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
         self.edge
-            .export_journal(&mut gateway, run)
+            .export_run(&mut gateway, run)
             .await
             .unwrap()
             .entries
     }
 
-    /// Replays the run's journal with its code, or `code`.
+    /// Replays the run's history with its code, or `code`.
     pub async fn replay(&self, run: &RunRef, code: Option<&Code>) -> ReplayVerdict {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);

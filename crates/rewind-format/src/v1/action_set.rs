@@ -1,4 +1,4 @@
-//! The pinned action set document, v1 (`archi/02-journal.md`, "Stored format v1";
+//! The pinned action set document, v1 (`archi/02-history.md`, "Stored format v1";
 //! `archi/04-tools.md`, "Action sets and code generation").
 //!
 //! ```json

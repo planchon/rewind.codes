@@ -1,5 +1,5 @@
 //! The ports of `rewind server migrate-runs`: the runs of the tables the migration set aside,
-//! and the payload values and archived journals of their tenant-keyed blobs
+//! and the payload values and archived histories of their tenant-keyed blobs
 //! (`archi/08-decisions.md`, "Taken while writing the object-storage spec": the migration;
 //! `archi/07-code-architecture.md`, "Embedded server and CLI").
 //!
@@ -7,7 +7,7 @@
 //!  LegacyRuns ── runs(after, limit) ──► [LegacyRun]   the schema `legacy` (Postgres),
 //!             ── drop_tables()                         the tables `legacy_*` (Turso)
 //!  LegacyBlobs ── payload(tenant, digest) ──► bytes    `{tenant}/sha256/{digest}`
-//!              ── journal(tenant, digest) ──► entries  the journal document archived there
+//!              ── history(tenant, digest) ──► entries  the run export archived there
 //! ```
 //!
 //! [`crate::migrate`] reads them once, writes each run into its namespace's partition or into
@@ -17,9 +17,9 @@ use std::future::Future;
 
 use rewind_core::{Digest, Epoch, HistoryEntry, Payload, RunId, Seq, Timestamp};
 
-use crate::ports::journal::{InboxItem, PayloadRecord, Quarantine, RunMetadata, TaskState};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::partition::Watcher;
+use crate::ports::records::{InboxItem, PayloadRecord, Quarantine, RunMetadata, TaskState};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -86,8 +86,8 @@ pub struct LegacyRun {
 pub enum LegacyHistory {
     /// In the tables, in order.
     Entries(Vec<HistoryEntry>),
-    /// The retention archived it: the journal document is a blob of the tenant, by its
-    /// digest ([`LegacyBlobs::journal`]).
+    /// The retention archived it: the run export is a blob of the tenant, by its
+    /// digest ([`LegacyBlobs::history`]).
     Archived(Digest),
 }
 
@@ -131,7 +131,7 @@ pub trait LegacyRuns: Send + Sync {
 }
 
 /// The tenant-keyed blobs the set-aside runs reference: payload values above 64 KiB, and the
-/// journal documents the retention archived. Both are read, never written.
+/// run exports the retention archived. Both are read, never written.
 pub trait LegacyBlobs: Send + Sync {
     /// The canonical JSON of a payload value of the tenant; `None` when it is missing.
     fn payload(
@@ -140,8 +140,8 @@ pub trait LegacyBlobs: Send + Sync {
         digest: Digest,
     ) -> impl Future<Output = Result<Option<Vec<u8>>, LegacyError>> + Send;
 
-    /// The entries of an archived journal document of the tenant; `None` when it is missing.
-    fn journal(
+    /// The entries of an archived run export of the tenant; `None` when it is missing.
+    fn export(
         &self,
         tenant: &TenantId,
         digest: Digest,

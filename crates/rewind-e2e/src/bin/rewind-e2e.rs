@@ -1,11 +1,11 @@
-//! Replays a journal of the corpus by hand:
+//! Replays a history of the corpus by hand:
 //!
 //! ```text
 //! cargo run -p rewind-e2e -- replay epoch-1/blue/fan_out [--code other.ts]
 //! ```
 //!
-//! The committed `journal.v1.json` is decoded and replayed with the code it holds (or
-//! another one, to check that it is compatible with the journal), on a fresh V8 executor.
+//! The committed `history.v1.json` is decoded and replayed with the code it holds (or
+//! another one, to check that it is compatible with the history), on a fresh V8 executor.
 
 use std::process::ExitCode;
 
@@ -39,18 +39,18 @@ async fn main() -> ExitCode {
 
 async fn replay(name: &str, code: Option<&str>) -> Result<String, String> {
     let case = Case::load(name)?;
-    let journal = std::fs::read_to_string(case.journal_path()).map_err(|err| err.to_string())?;
-    let journal = rewind_format::decode_journal(&journal).map_err(|err| err.to_string())?;
+    let export = std::fs::read_to_string(case.history_path()).map_err(|err| err.to_string())?;
+    let export = rewind_format::decode_run_export(&export).map_err(|err| err.to_string())?;
     let code = match code {
         Some(path) => {
             Code::new(std::fs::read_to_string(path).map_err(|err| format!("{path}: {err}"))?)
         }
-        None => journal.code.clone(),
+        None => export.code.clone(),
     };
-    match rewind_e2e::replay_journal(&case, &journal, &code).await {
+    match rewind_e2e::replay_export(&case, &export, &code).await {
         Replayed::Matches(end) => Ok(format!(
-            "{name}: the code replays the {} entries of the journal ({end:?})",
-            journal.entries.len()
+            "{name}: the code replays the {} entries of the history ({end:?})",
+            export.entries.len()
         )),
         Replayed::Fails(message) => Err(format!("{name}: {message}")),
     }

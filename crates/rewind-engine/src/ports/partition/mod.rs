@@ -38,9 +38,9 @@ pub use search::{Found, IndexedSummary, Page, SCAN_BUDGET, SearchPosition};
 pub use timers::{DueTimer, TimerChange, TimerKind};
 
 use crate::ports::cluster::NodeId;
-use crate::ports::journal::{InboxItem, PayloadRecord, Quarantine, WebhookTarget};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::read_model::{RunOrder, RunQuery};
+use crate::ports::records::{InboxItem, PayloadRecord, Quarantine, WebhookTarget};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -437,7 +437,7 @@ pub struct CreateRun {
     pub summary: IndexedSummary,
 }
 
-/// Everything one activation of a run commits (`archi/02-journal.md`, "The commit invariant"):
+/// Everything one activation of a run commits (`archi/02-history.md`, "The commit invariant"):
 /// the entries, complete "trigger → response" groups, and what they caused.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Activation {

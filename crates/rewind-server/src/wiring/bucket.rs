@@ -265,14 +265,14 @@ impl LegacyBlobs for LegacyBlobStore {
         }
     }
 
-    async fn journal(
+    async fn export(
         &self,
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
         match self {
-            Self::Files(files) => files.journal(tenant, digest).await,
-            Self::S3(s3) => s3.journal(tenant, digest).await,
+            Self::Files(files) => files.export(tenant, digest).await,
+            Self::S3(s3) => s3.export(tenant, digest).await,
         }
     }
 }

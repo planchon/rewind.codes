@@ -13,7 +13,7 @@ use rewind_api::access::Permission;
 use rewind_api::common::Payload;
 use rewind_api::events::Entry;
 use rewind_api::runs::{
-    CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
+    CancelRun, ExportAs, ExportQuery, ForkRun, GetRunQuery, Run, RunFilter, RunPage,
     SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
 };
 use rewind_core::{Attachments, Code, Matching, RunHandle, RunMode, SecretRef, canonical_json};
@@ -226,7 +226,7 @@ pub(super) async fn get(
     Ok(Json(app.views().run(&view).await?))
 }
 
-/// `DELETE /v1/runs/{id}`: the run's sealed journals and blobs, then its records, summary and
+/// `DELETE /v1/runs/{id}`: the run's sealed attempts and blobs, then its records, summary and
 /// counts, by its owner.
 pub(super) async fn erase(
     State(app): State<Arc<App>>,
@@ -440,33 +440,33 @@ pub(super) async fn fork(
     Ok((status, Json(run)).into_response())
 }
 
-/// `GET /v1/runs/{id}/journal`: the journal document, self-contained (every payload's value),
+/// `GET /v1/runs/{id}/export`: the run export, self-contained (every payload's value),
 /// or the cassette of the run, in the stored format v1.
-pub(super) async fn journal(
+pub(super) async fn export(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(id): Path<String>,
-    Query(query): Query<JournalQuery>,
+    Query(query): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsRead)?;
     let view = app.run(&caller, &id).await?;
     if view.head.history_len == 0 && !view.head.is_ended() {
         return Err(ApiError::invalid(format!(
-            "run {id} has not started yet: its journal is empty"
+            "run {id} has not started yet: its history is empty"
         )));
     }
     let document = app
         .edge
-        .export_journal(&mut app.gateway(), &view.head.run)
+        .export_run(&mut app.gateway(), &view.head.run)
         .await?;
     if document.entries.is_empty() {
         return Err(ApiError::invalid(format!(
-            "run {id} has not started yet: its journal is empty"
+            "run {id} has not started yet: its history is empty"
         )));
     }
     let body = match query.export_as.unwrap_or_default() {
-        JournalExport::Journal => rewind_format::encode_journal(&document),
-        JournalExport::Cassette => {
+        ExportAs::Run => rewind_format::encode_run_export(&document),
+        ExportAs::Cassette => {
             let cassette =
                 rewind_core::Cassette::from_history(&document.entries, Matching::Sequential)
                     .map_err(ApiError::internal)?;

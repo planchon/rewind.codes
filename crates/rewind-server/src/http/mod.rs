@@ -81,7 +81,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::RUN_SIGNAL, post(runs::signal))
         .route(routes::RUN_CANCEL, post(runs::cancel))
         .route(routes::RUN_FORK, post(runs::fork))
-        .route(routes::RUN_JOURNAL, get(runs::journal))
+        .route(routes::RUN_EXPORT, get(runs::export))
         .route(routes::RUN_RELEASE, post(runs::release))
         .route(routes::RUN_GIVE_UP, post(runs::give_up))
         .route(routes::CALL_STREAM, get(calls::stream))

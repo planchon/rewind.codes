@@ -66,13 +66,13 @@ pub struct ParentHistory {
     pub sealed: Option<Box<SealedAttempt>>,
 }
 
-/// A sealed attempt: `{"tenant":"acme","attempt":1,"journal":<journal document v1>}`.
+/// A sealed attempt: `{"tenant":"acme","attempt":1,"export":<run export v1>}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealedAttempt {
     pub tenant: String,
     pub attempt: u32,
-    pub journal: Box<RawValue>,
+    pub export: Box<RawValue>,
 }
 
 /// A code as stored: `{"source":"…","javascript":"…","source_map":"…"}`.
@@ -378,8 +378,8 @@ impl From<&engine::SealedAttempt> for SealedAttempt {
         Self {
             tenant: sealed.run.tenant.to_string(),
             attempt: sealed.attempt.0,
-            journal: RawValue::from_string(rewind_format::encode_journal(&sealed.document()))
-                .expect("a journal document is JSON"),
+            export: RawValue::from_string(rewind_format::encode_run_export(&sealed.document()))
+                .expect("a run export is JSON"),
         }
     }
 }
@@ -388,13 +388,13 @@ impl TryFrom<SealedAttempt> for engine::SealedAttempt {
     type Error = Invalid;
 
     fn try_from(sealed: SealedAttempt) -> Result<Self, Invalid> {
-        let journal = rewind_format::decode_journal(sealed.journal.get()).map_err(Invalid::new)?;
+        let export = rewind_format::decode_run_export(sealed.export.get()).map_err(Invalid::new)?;
         Ok(engine::SealedAttempt {
-            run: engine::RunRef::new(tenant(sealed.tenant)?, journal.run),
+            run: engine::RunRef::new(tenant(sealed.tenant)?, export.run),
             attempt: engine::Attempt(sealed.attempt),
-            code: journal.code,
-            action_set: journal.action_set,
-            entries: journal.entries,
+            code: export.code,
+            action_set: export.action_set,
+            entries: export.entries,
         })
     }
 }

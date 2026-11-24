@@ -91,7 +91,7 @@ pub(crate) fn span_data(span: Span, scope: &InstrumentationScope) -> SpanData {
     }
 }
 
-/// Fills an empty OpenTelemetry log record. The time it was observed is the time the journal
+/// Fills an empty OpenTelemetry log record. The time it was observed is the time the history
 /// recorded it: a record exported again is the same record.
 pub(crate) fn fill_log_record(log: LogRecord, record: &mut SdkLogRecord) {
     record.set_timestamp(time(log.time));

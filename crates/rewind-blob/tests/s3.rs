@@ -100,7 +100,7 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
     })
     .await;
 
-    // A sealed attempt is the journal document at its key.
+    // A sealed attempt is the run export at its key.
     let config = next_bucket();
     let store = S3Archive::new(S3Blobs::new(config.clone()).expect("s3"));
     let raw = AmazonS3Builder::new()
@@ -152,7 +152,7 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
         .await
         .expect("its bytes");
     let document =
-        rewind_format::decode_journal(std::str::from_utf8(&object).expect("utf-8")).expect("v1");
+        rewind_format::decode_run_export(std::str::from_utf8(&object).expect("utf-8")).expect("v1");
     assert_eq!(document, sealed.document());
     raw.put(
         &Path::from(key.as_str()),

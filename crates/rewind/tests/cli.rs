@@ -7,7 +7,7 @@
 //! - A signal sent from another process while `rewind run` waits.
 //! - `kill -9` of the embedded server in the middle of an activation: the next command starts a
 //!   new server, and the run finishes once its lease expires.
-//! - The e2e corpus driven through the CLI: every committed journal replays with `rewind replay`,
+//! - The e2e corpus driven through the CLI: every committed history replays with `rewind replay`,
 //!   the red replays fail as specified, and the cases without actions run live on the embedded
 //!   server, in virtual time.
 //! - `rewind test` on a cassette recorded from a run of the embedded server.
@@ -450,18 +450,18 @@ fn a_server_killed_mid_activation_is_replaced() {
     assert_eq!(ran.code, 0, "{ran:?}");
 }
 
-/// Every committed journal of the corpus replays through `rewind replay <file>`, and the red
+/// Every committed history of the corpus replays through `rewind replay <file>`, and the red
 /// cases that alter their replay with another code fail with the divergence they specify.
 #[test]
-fn the_corpus_journals_replay_through_the_binary() {
+fn the_corpus_histories_replay_through_the_binary() {
     let project = Project::new();
     let mut replayed = 0;
     for (name, case) in cases() {
-        let journal = case.join("journal.v1.json");
-        if !journal.exists() {
+        let export = case.join("history.v1.json");
+        if !export.exists() {
             continue;
         }
-        let ran = project.rewind(&["replay", journal.to_str().unwrap()]);
+        let ran = project.rewind(&["replay", export.to_str().unwrap()]);
         assert_eq!(ran.code, 0, "{name}: {ran:?}");
         replayed += 1;
         let scenario = scenario(&case);
@@ -470,7 +470,7 @@ fn the_corpus_journals_replay_through_the_binary() {
             let code = case.join(code);
             let ran = project.rewind(&[
                 "replay",
-                journal.to_str().unwrap(),
+                export.to_str().unwrap(),
                 "--code",
                 code.to_str().unwrap(),
             ]);
@@ -478,7 +478,7 @@ fn the_corpus_journals_replay_through_the_binary() {
             assert!(ran.stdout.contains(expected), "{name}: {ran:?}");
         }
     }
-    assert!(replayed >= 54, "{replayed} journals");
+    assert!(replayed >= 54, "{replayed} histories");
     assert!(
         project.servers().is_empty(),
         "replaying a file needs no server"

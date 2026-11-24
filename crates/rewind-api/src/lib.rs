@@ -6,7 +6,7 @@
 //! code:
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
-//!   table: [`action_sets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the journal
+//!   table: [`action_sets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the history
 //!   entries and the event stream), [`calls`], [`webhooks`], [`reading`], [`organization`],
 //!   [`access`] (with the catalog of permissions and the built-in roles), [`namespaces`] (the
 //!   end users, their quotas and their tokens), [`connections`] (a person's connections and the
@@ -23,7 +23,7 @@
 //!   over the embedded server's unix socket without one.
 //!
 //! JSON conventions: fields are camelCase, enumerated values are snake_case (as in the
-//! journal), times are RFC 3339 strings, durations are written as workflows write them
+//! history), times are RFC 3339 strings, durations are written as workflows write them
 //! (`"30s"`, `"1h30m"`) or as a number of milliseconds.
 //!
 //! Query strings: the query DTOs serialize as the server reads them; a list repeats its key

@@ -29,16 +29,16 @@ use rewind_core::{
 
 use crate::ports::archive::SealedAttempt;
 use crate::ports::cluster::{NodeId, PartitionEpoch};
-use crate::ports::journal::{
-    Created, Enqueued, InboxItem, PayloadRecord, QuarantineKind, RunMetadata, StoredActionSet,
-    StoredCode, TaskRef, TaskToken, TraceContext,
-};
 use crate::ports::namespaces::{Month, NamespaceName, QuotaAlert, QuotaExceeded, Usage};
 use crate::ports::partition::{
     Activation, Counters, Found, Gauges, IndexedSummary, Page, Projection, RunHead, Scope,
     TaskRecord, Window,
 };
 use crate::ports::read_model::{RunOrder, RunQuery, RunSummary};
+use crate::ports::records::{
+    Created, Enqueued, InboxItem, PayloadRecord, QuarantineKind, RunMetadata, StoredActionSet,
+    StoredCode, TaskRef, TaskToken, TraceContext,
+};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 /// The link could not carry a message: the node is unreachable, or it dropped the request.
@@ -205,9 +205,9 @@ pub enum PartitionRequest {
     /// The run of the tenant a handle names, live or sealed: answered `Run`
     /// (`archi/06-storage-and-scale.md`, "Run handles").
     Find { tenant: TenantId, handle: RunHandle },
-    /// The entries of the run's attempt from `from`, from its partition or its sealed journal:
+    /// The entries of the run's attempt from `from`, from its partition or its sealed attempt:
     /// answered `History`. With `values`, every payload up to 64 KiB is inlined as a value, as
-    /// the sealed journal holds it; larger ones stay digests, their values in the run's blobs.
+    /// the sealed attempt holds it; larger ones stay digests, their values in the run's blobs.
     History {
         run: RunRef,
         from: u64,

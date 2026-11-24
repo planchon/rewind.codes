@@ -207,7 +207,7 @@ fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str
         Layer::Adapter => {
             let allowed = match to_layer {
                 Layer::Domain | Layer::Application => true,
-                // Stores and the archive (rewind-blob) write the stored journal format; the
+                // Stores and the archive (rewind-blob) write the stored history format; the
                 // action dispatchers send through rewind-outbound.
                 Layer::AdapterSupport => {
                     to == "rewind-format"

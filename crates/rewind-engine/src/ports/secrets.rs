@@ -12,7 +12,7 @@
 //! A run reads a secret only through the dispatcher, and only one it attached at start
 //! ([`Attachments`](rewind_core::Attachments)): the engine resolves the attachment
 //! ([`SecretId::resolve`]) in the run's namespace and calls [`SecretStore::read`]. Values and
-//! private keys never enter the journal, the isolate, a cassette, OpenTelemetry nor an answer of
+//! private keys never enter the history, the isolate, a cassette, OpenTelemetry nor an answer of
 //! the API: their types redact `Debug` and implement no serialization.
 
 use std::collections::BTreeMap;

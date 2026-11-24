@@ -1,6 +1,6 @@
 [package]
 name = "rewind-cli"
-description = "The client commands of the rewind binary: a client of the API /v1 (embedded or remote server), and the local commands check, test and replay of an exported journal."
+description = "The client commands of the rewind binary: a client of the API /v1 (embedded or remote server), and the local commands check, test and replay of a run export."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

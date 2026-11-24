@@ -1,5 +1,5 @@
 {
-  "description": "Payloads above 1 KiB go to the blob store at commit and are loaded back on delivery; the exported journal is self-contained.",
+  "description": "Payloads above 1 KiB go to the blob store at commit and are loaded back on delivery; the run export is self-contained.",
   "input": {
     "size": 5000
   },

@@ -459,7 +459,7 @@ where
         .ok_or_else(|| TestError::Unavailable(format!("run {} is not found", run.id)))?;
     let history = world
         .edge
-        .export_journal(&mut gateway, &run)
+        .export_run(&mut gateway, &run)
         .await
         .map_err(unavailable)?
         .entries;

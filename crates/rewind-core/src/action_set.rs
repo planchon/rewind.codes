@@ -4,7 +4,7 @@
 //! OpenAPI documents and **pins** them: the servers and APIs, with how each one authenticates its
 //! calls, and for each action its name, route, description, schemas and policy. The pinned action
 //! set is immutable and content-addressed: its digest is the SHA-256 of its canonical JSON, the
-//! pinned action set document of the stored format v1 (`archi/02-journal.md`), and every run
+//! pinned action set document of the stored format v1 (`archi/02-history.md`), and every run
 //! records the digest it was started with.
 //!
 //! ```text

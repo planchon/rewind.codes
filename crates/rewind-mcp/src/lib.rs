@@ -9,7 +9,7 @@
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
 //! Where a deployment's HTTP servers may be is `rewind-outbound`'s [`ActionEgress`], with the
 //! operator's internal hosts (`--allow-internal-addresses`). The dispatchers never write to the
-//! journal; a secret or a key goes only into the transport, never into a result, a failure or a
+//! history; a secret or a key goes only into the transport, never into a result, a failure or a
 //! log.
 //!
 //! How a delivery proves who calls (`archi/04-tools.md`, "Authenticating calls"), from the

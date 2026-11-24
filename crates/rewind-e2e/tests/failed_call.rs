@@ -1,4 +1,4 @@
-//! `ScriptError::failed_call` against the runtime's own `ActionError`s: in every journal of the
+//! `ScriptError::failed_call` against the runtime's own `ActionError`s: in every history of the
 //! corpus that ends on an uncaught `ActionError`, it finds the call that failed. The API's
 //! `failedCall` (`GET /v1/runs/{id}`) and the agent tools' failure text rest on it.
 
@@ -15,10 +15,10 @@ fn every_uncaught_action_error_of_the_corpus_names_its_call() {
         let dir = rewind_e2e::corpus_dir().join("epoch-1").join(color);
         for case in std::fs::read_dir(&dir).unwrap() {
             let case = case.unwrap().path();
-            let Ok(journal) = std::fs::read_to_string(case.join("journal.v1.json")) else {
+            let Ok(export) = std::fs::read_to_string(case.join("history.v1.json")) else {
                 continue;
             };
-            let document = rewind_format::decode_journal(&journal).unwrap();
+            let document = rewind_format::decode_run_export(&export).unwrap();
             let Some(Event::Command(Command::FailRun { error })) =
                 document.entries.last().map(|entry| &entry.event)
             else {

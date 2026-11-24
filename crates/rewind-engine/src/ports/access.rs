@@ -26,8 +26,8 @@ use super::connections::{
     OAuthCode, OpenedOrganization, Rotation,
 };
 use super::identity::UserId;
-use super::journal::StoreError;
 use super::namespaces::NamespaceName;
+use super::records::StoreError;
 use super::tenancy::TenantId;
 
 /// Who holds a grant: a member, an API key, an invitation not yet accepted, or a person's

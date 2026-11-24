@@ -82,7 +82,7 @@ use crate::webhooks::{
         operations::signal_run,
         operations::cancel_run,
         operations::fork_run,
-        operations::export_run_journal,
+        operations::export_run,
         operations::release_run,
         operations::give_up_run,
         operations::stream_calls,
@@ -553,7 +553,7 @@ mod operations {
     use crate::problem::Problem;
     use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
     use crate::runs::{
-        CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalQuery, Run,
+        CancelRun, ExportQuery, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, Run,
         RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
     };
     use crate::scripts::{
@@ -877,7 +877,7 @@ mod operations {
 
     /// Erase a run
     ///
-    /// Its journal, its archive, its read model rows and its payload references. An active run
+    /// Its history, its archive, its read model rows and its payload references. An active run
     /// is cancelled first.
     #[utoipa::path(
         delete, path = "/v1/runs/{id}", tag = "runs", operation_id = "deleteRun",
@@ -900,7 +900,7 @@ mod operations {
     )]
     pub(super) fn get_run_trace() {}
 
-    /// One journal entry in full
+    /// One history entry in full
     ///
     /// Every payload of the entry has its value, whatever its size.
     #[utoipa::path(
@@ -913,7 +913,7 @@ mod operations {
     )]
     pub(super) fn get_run_entry() {}
 
-    /// Stream the run's journal (server-sent events)
+    /// Stream the run's history (server-sent events)
     ///
     /// Each event's `data` is a `StreamEvent`: the committed entries from `from`, then, with
     /// `follow=1`, each new entry as it is committed, and `end` when the run has ended.
@@ -1012,18 +1012,18 @@ mod operations {
     )]
     pub(super) fn fork_run() {}
 
-    /// Export the journal, or a cassette
+    /// Export the history, or a cassette
     ///
-    /// A document of the stored format v1 (`archi/02-journal.md`).
+    /// A document of the stored format v1 (`archi/02-history.md`).
     #[utoipa::path(
-        get, path = "/v1/runs/{id}/journal", tag = "runs", operation_id = "exportRunJournal",
-        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), JournalQuery),
+        get, path = "/v1/runs/{id}/export", tag = "runs", operation_id = "exportRun",
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), ExportQuery),
         responses(
-            (status = 200, description = "The journal document or the cassette, stored format v1.", body = Object),
+            (status = 200, description = "The run export or the cassette, stored format v1.", body = Object),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn export_run_journal() {}
+    pub(super) fn export_run() {}
 
     /// Take a run out of quarantine
     ///

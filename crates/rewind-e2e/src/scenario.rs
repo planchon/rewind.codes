@@ -82,13 +82,13 @@ pub struct Scenario {
     /// engine at the current time; a last pass in virtual time follows the last step.
     #[serde(default)]
     pub steps: Vec<Step>,
-    /// Forks the run once its steps are done: the expectations, the recorded journal and the
+    /// Forks the run once its steps are done: the expectations, the recorded history and the
     /// replays are then the fork's.
     #[serde(default)]
     pub fork: Option<Fork>,
     #[serde(default)]
     pub expect: Expect,
-    /// A check of the recorded journal against another code, or a tampered journal.
+    /// A check of the recorded history against another code, or a tampered history.
     #[serde(default)]
     pub replay: Option<ReplayCheck>,
 }
@@ -220,12 +220,12 @@ pub struct Expect {
     pub abort: Option<ExpectedAbort>,
     /// How many times each action was called.
     pub calls: Option<BTreeMap<String, usize>>,
-    /// The names of the journal's events, in order.
+    /// The names of the history's events, in order.
     pub events: Option<Vec<String>>,
     /// The signals the run is waiting for at the end.
     pub awaiting: Option<Vec<String>>,
     /// How many times each action really answered, across the case: a fork that reuses its
-    /// parent's results calls the actions fewer times than its journal schedules calls.
+    /// parent's results calls the actions fewer times than its history schedules calls.
     pub dispatched: Option<BTreeMap<String, usize>>,
     /// The statuses of the runs of workflows the run started, in the order of its calls.
     pub children: Option<Vec<String>>,
@@ -253,13 +253,13 @@ pub struct ExpectedAbort {
     pub message: String,
 }
 
-/// Replays the recorded journal with a change, and says how it must fail.
+/// Replays the recorded history with a change, and says how it must fail.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayCheck {
-    /// Another code, next to `scenario.json`, replayed against the recorded journal.
+    /// Another code, next to `scenario.json`, replayed against the recorded history.
     pub code: Option<String>,
-    /// Removes this entry from the recorded journal before replaying it.
+    /// Removes this entry from the recorded history before replaying it.
     pub drop_entry: Option<usize>,
     /// The replay diverges with exactly this message.
     pub diverges: Option<String>,

@@ -11,7 +11,7 @@
 //! A payload that leaves the event keeps only its digest there, and gets a payload record
 //! (digest, size, preview, and the value in the table tier). On delivery to the code, values
 //! are loaded back from where they live: the records first, then the run's blobs. A run's
-//! sealed journal inlines every value up to the table tier; its blobs are erased with it.
+//! sealed attempt inlines every value up to the table tier; its blobs are erased with it.
 
 use std::collections::BTreeSet;
 use std::future::Future;

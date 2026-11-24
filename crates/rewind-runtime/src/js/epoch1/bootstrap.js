@@ -419,7 +419,7 @@
 
   // ---------------------------------------------------------------------------------------
   // Stacks: the code's own frames only. Frames of the runtime's modules (`rewind:…`) and of
-  // the web globals (`ext:…`) would leak their line numbers into journals.
+  // the web globals (`ext:…`) would leak their line numbers into histories.
 
   const CODE_FRAME = /file:\/\/\/workflow\.ts:(\d+):(\d+)/;
   // Such as "    at start (rewind:bootstrap:467:16)" or "    at new URL (ext:deno_web/00_url.js:1:2)".
@@ -569,7 +569,7 @@
 
   // ---------------------------------------------------------------------------------------
   // Errors the code can see. They are created by the glue, outside the code's code, so
-  // their stack is only their name and message: no frame of the glue leaks into a journal.
+  // their stack is only their name and message: no frame of the glue leaks into a history.
 
   function ownStack(error) {
     ObjectDefineProperty(error, "stack", {
@@ -699,7 +699,7 @@
   // as `rewind-actions.d.ts` declares them in `ActionContent`: `text()` joins the text blocks with
   // newlines; `json()` is `structuredContent` when the action sent it, else `text()` parsed as
   // JSON. They live on a frozen prototype, not enumerable: the value's own keys stay the
-  // result's, what JSON.stringify and the journal see.
+  // result's, what JSON.stringify and the history see.
   const ActionContentPrototype = ObjectFreeze(
     ObjectCreate(ObjectPrototype, {
       text: {
@@ -1345,7 +1345,7 @@
   }
 
   // ---------------------------------------------------------------------------------------
-  // Console: journaled as annotations.
+  // Console: recorded as annotations.
 
   function show(value) {
     if (typeof value === "string") return value;

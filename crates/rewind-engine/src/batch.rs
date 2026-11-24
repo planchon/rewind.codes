@@ -1,4 +1,4 @@
-//! The entries of one activation, as they are appended (`archi/02-journal.md`, "The commit
+//! The entries of one activation, as they are appended (`archi/02-history.md`, "The commit
 //! invariant"; `archi/03-execution.md`, "Activations", "How a code ends").
 //!
 //! A trigger is always appended with everything the code emitted in response to it. When the

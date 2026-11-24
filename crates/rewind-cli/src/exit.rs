@@ -10,7 +10,7 @@ pub enum Exit {
     /// The run completed, or the command succeeded.
     Success,
     /// The run failed. Also: `rewind test` found an expectation that does not hold, `rewind replay`
-    /// found that the code does not reproduce the journal.
+    /// found that the code does not reproduce the history.
     Failed,
     /// The run was cancelled.
     Cancelled,

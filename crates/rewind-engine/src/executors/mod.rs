@@ -376,7 +376,7 @@ async fn records<L: PartitionLog>(
     Ok(records)
 }
 
-/// The history a fork follows: its parent's attempt from the partition, or its sealed journal
+/// The history a fork follows: its parent's attempt from the partition, or its sealed attempt
 /// from the archive. `None` when the parent is gone.
 async fn parent_history<P: Plane>(
     plane: &P,

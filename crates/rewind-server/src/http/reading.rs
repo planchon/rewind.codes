@@ -215,7 +215,7 @@ pub(super) async fn payload(
         .value(&view.head.run, parsed)
         .await?
         .ok_or_else(|| {
-            ApiError::not_found(format!("no payload {digest} in the journal of run {run}"))
+            ApiError::not_found(format!("no payload {digest} in the history of run {run}"))
         })?;
     Ok((
         [

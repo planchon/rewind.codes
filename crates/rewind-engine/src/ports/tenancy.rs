@@ -102,7 +102,7 @@ impl Tenant {
 }
 
 /// How long an ended run is kept (`archi/06-storage-and-scale.md`, "Retention and deletion"):
-/// its summary, its sealed journals and its payloads, from its end; then a timer erases it.
+/// its summary, its sealed attempts and its payloads, from its end; then a timer erases it.
 /// Active runs are never touched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Retention {

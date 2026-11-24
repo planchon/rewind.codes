@@ -1,7 +1,7 @@
 //! Starts and forks at the edge, in the driver (`archi/03-execution.md`, "Starting a run",
 //! "Forks"): what is refused before a run exists, a fork that reuses its parent's recorded
 //! calls and goes live where it differs, and whether a corrected code is compatible with a
-//! journal.
+//! history.
 
 #![allow(clippy::unwrap_used)]
 
@@ -292,11 +292,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
     let mut world = World::new(programs(), dispatcher()).await;
     let parent = failed_parent(&mut world).await;
     let mut gateway = world.driver.gateway(&world.at.clone());
-    let journal = world
-        .edge
-        .export_journal(&mut gateway, &parent)
-        .await
-        .unwrap();
+    let export = world.edge.export_run(&mut gateway, &parent).await.unwrap();
     let executor = &world.plane.executor;
     let limits = Limits::default();
     let scripts: BTreeMap<&str, Code> = ["buggy", "fixed", "syntax error"]
@@ -304,7 +300,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
         .map(|name| (name, Code::new(name)))
         .collect();
     let check = |code: &str, at| {
-        rewind_engine::fork::compatibility(executor, &journal, &scripts[code], at, &limits)
+        rewind_engine::fork::compatibility(executor, &export, &scripts[code], at, &limits)
     };
 
     let same = check("buggy", None).await.unwrap();

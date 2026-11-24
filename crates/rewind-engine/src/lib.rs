@@ -18,7 +18,7 @@
 //! What the actors share:
 //!
 //! - [`fork`]: following a parent's history with a corrected code, and whether a code is
-//!   compatible with a journal; [`replay`]: rebuilding a code from its history.
+//!   compatible with a history; [`replay`]: rebuilding a code from its history.
 //! - [`projector`]: what committed entries project (a run's summary, its lifecycle events);
 //!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
 //!   signatures and fingerprints that group failed, cancelled and aborted runs.

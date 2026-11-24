@@ -5,7 +5,7 @@
 //!
 //! The DTOs follow the test document of the stored format, with the API's conventions: times
 //! in RFC 3339, durations `"2h"`. A test's world's cassette is a cassette document, as
-//! `GET /v1/runs/{id}/journal?as=cassette` exports it. Converting to and from the domain takes
+//! `GET /v1/runs/{id}/export?as=cassette` exports it. Converting to and from the domain takes
 //! the cassette's codec, which the API does not know.
 
 use std::collections::BTreeMap;

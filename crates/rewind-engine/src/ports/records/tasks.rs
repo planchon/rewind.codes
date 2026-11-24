@@ -16,7 +16,7 @@
 //!
 //! `done` is not a state the partition keeps: a task that is done is deleted, and its outcome
 //! is in the run's inbox. Deliveries, backoff, approvals and tokens live in the task, never in
-//! the journal. Sending a call or handing out a task writes nothing: the records say `ready`
+//! the history. Sending a call or handing out a task writes nothing: the records say `ready`
 //! while the run's owner holds the task in flight, and a read shows it `claimed`.
 
 use std::fmt;

@@ -2,7 +2,7 @@
 //! "Payloads", "The archive and the blobs").
 //!
 //! The archive: [`FileArchive`] and [`S3Archive`] keep the sealed attempts of ended runs beside
-//! the blobs, `runs/{tenant}/{run}/{attempt}.json`, each the attempt's journal document
+//! the blobs, `runs/{tenant}/{run}/{attempt}.json`, each the attempt's run export
 //! (`rewind-format`); erasing a run deletes its attempts and its blobs. [`CachedArchive`] is the
 //! local cache every process puts in front of it: a sealed attempt never changes.
 //!
@@ -18,7 +18,7 @@
 //!   either store.
 //!
 //! [`LegacyFiles`] and [`LegacyS3`] read the tenant-keyed blobs of the runs `rewind server
-//! migrate-runs` moves: their payload values above 64 KiB and their archived journals.
+//! migrate-runs` moves: their payload values above 64 KiB and their archived histories.
 //!
 //! Every store checks the digest of the bytes it is given and of the bytes it reads, and passes
 //! the conformance suite of the port. `copy` serves a fork, `delete_run` the erasure of a run,

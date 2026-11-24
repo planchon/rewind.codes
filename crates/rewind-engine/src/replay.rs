@@ -16,12 +16,12 @@ use rewind_core::{
 
 pub use crate::payloads::PayloadSource;
 
-/// Where the payloads of a journal document are: in the document, every one a value. A replay
-/// of an exported journal reads nothing from elsewhere.
+/// Where the payloads of a run export are: in the document, every one a value. A replay
+/// of a run export reads nothing from elsewhere.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct InJournal;
+pub struct InExport;
 
-impl PayloadSource for InJournal {
+impl PayloadSource for InExport {
     async fn fetch(
         &self,
         _tenant: &crate::ports::TenantId,

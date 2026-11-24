@@ -1,4 +1,4 @@
-//! The events of a run's journal (`archi/02-journal.md`).
+//! The events of a run's history (`archi/02-history.md`).
 //!
 //! Every entry holds one event from four families:
 //!
@@ -24,7 +24,7 @@ use crate::time::Timestamp;
 /// Characters of a payload shown in messages read by models.
 const PREVIEW_CHARS: usize = 120;
 
-/// One entry of a run's journal.
+/// One entry of a run's history.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistoryEntry {
     /// Position in the history: starts at 0, contiguous.
@@ -67,7 +67,7 @@ impl Event {
         }
     }
 
-    /// The event's name in the journal, such as `schedule_call`.
+    /// The event's name in the history, such as `schedule_call`.
     pub fn name(&self) -> &'static str {
         match self {
             Event::Lifecycle(Lifecycle::RunStarted(_)) => "run_started",

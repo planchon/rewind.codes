@@ -1,5 +1,5 @@
-//! A run's journal as one self-contained document (`archi/02-journal.md`, "Stored format v1"):
-//! the run's id, its code and action set, and its history. It is what a journal export, the
+//! A run's history as one self-contained document (`archi/02-history.md`, "Stored format v1"):
+//! the run's id, its code and action set, and its history. It is what a run export, the
 //! archive of a finished run and the epoch corpus hold, so that each replays on its own: the
 //! code reads `run.id`, and replay needs the exact code and action set the run started with.
 
@@ -10,9 +10,9 @@ use crate::event::HistoryEntry;
 use crate::history::{HistoryError, validate_history};
 use crate::ids::RunId;
 
-/// A run's journal with everything needed to replay it.
+/// A run's history with everything needed to replay it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct JournalDocument {
+pub struct RunExport {
     pub run: RunId,
     /// The code the run started with: its digest is `run_started.code`.
     pub code: Code,
@@ -21,9 +21,9 @@ pub struct JournalDocument {
     pub entries: Vec<HistoryEntry>,
 }
 
-/// A journal document whose parts do not belong together.
+/// A run export whose parts do not belong together.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum JournalError {
+pub enum RunExportError {
     #[error("invalid history: {0}")]
     History(#[from] HistoryError),
     #[error("the code's digest is {actual}, but run_started records {recorded}")]
@@ -32,21 +32,21 @@ pub enum JournalError {
     ActionSetMismatch { recorded: Digest, actual: Digest },
 }
 
-impl JournalDocument {
+impl RunExport {
     /// Checks that the history is well formed and that the code and the action set are the ones
     /// its `run_started` records.
-    pub fn check(&self) -> Result<(), JournalError> {
+    pub fn check(&self) -> Result<(), RunExportError> {
         let started = validate_history(&self.entries)?;
         let code = self.code.digest();
         if code != started.code {
-            return Err(JournalError::CodeMismatch {
+            return Err(RunExportError::CodeMismatch {
                 recorded: started.code,
                 actual: code,
             });
         }
         let action_set = self.action_set.digest();
         if action_set != started.action_set {
-            return Err(JournalError::ActionSetMismatch {
+            return Err(RunExportError::ActionSetMismatch {
                 recorded: started.action_set,
                 actual: action_set,
             });
@@ -64,8 +64,8 @@ mod tests {
     use crate::ids::{Epoch, Seed};
     use crate::time::Timestamp;
 
-    fn document(code: &Code, action_set: &ActionSet) -> JournalDocument {
-        JournalDocument {
+    fn document(code: &Code, action_set: &ActionSet) -> RunExport {
+        RunExport {
             run: RunId::from_u128(7),
             code: code.clone(),
             action_set: action_set.clone(),
@@ -95,21 +95,21 @@ mod tests {
         other_code.code = Code::new("export default () => 2");
         assert!(matches!(
             other_code.check(),
-            Err(JournalError::CodeMismatch { .. })
+            Err(RunExportError::CodeMismatch { .. })
         ));
 
         let mut other_action_set = document(&code, &action_set);
         other_action_set.action_set = ActionSet::empty();
         assert!(matches!(
             other_action_set.check(),
-            Err(JournalError::ActionSetMismatch { .. })
+            Err(RunExportError::ActionSetMismatch { .. })
         ));
 
         let mut empty = document(&code, &action_set);
         empty.entries.clear();
         assert_eq!(
             empty.check(),
-            Err(JournalError::History(HistoryError::Empty))
+            Err(RunExportError::History(HistoryError::Empty))
         );
     }
 }

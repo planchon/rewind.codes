@@ -3,8 +3,8 @@ use std::future::Future;
 
 use rewind_core::{Action, ActionFailure, Api, JsonValue, McpServer, RunId, SecretPlacement, Seq};
 
-use crate::ports::journal::{ParkReason, TaskToken, TraceContext};
 use crate::ports::namespaces::NamespaceName;
+use crate::ports::records::{ParkReason, TaskToken, TraceContext};
 use crate::ports::secrets::{Secret, SigningKey};
 use crate::ports::tenancy::{RunRef, TenantId};
 
@@ -137,7 +137,7 @@ pub enum Dispatched {
 /// `dispatch(call, auth)`: `auth` is what the engine resolved from the server's `auth`: nothing,
 /// the attached secret's value, or the tenant's signing key. The engine parks a call itself
 /// (`secret_missing`) when the secret the run attached no longer exists, before anything is
-/// sent. The dispatcher never writes to the journal, and `auth` goes into the transport and
+/// sent. The dispatcher never writes to the history, and `auth` goes into the transport and
 /// nowhere else.
 pub trait ActionDispatcher: Send + Sync {
     fn dispatch(&self, call: Call, auth: CallAuth) -> impl Future<Output = Dispatched> + Send;

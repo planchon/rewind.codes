@@ -20,7 +20,7 @@
 //! - The embedded server of a `.rewind/` directory: one node, one partition, its lock, its unix
 //!   socket, its idle stop (`embedded`).
 //! - The control plane's daily jobs.
-//! - `rewind server migrate-runs`: the runs of the journal store moved onto the run plane, once
+//! - `rewind server migrate-runs`: the runs of the old tables moved onto the run plane, once
 //!   (`migrate`).
 //! - The dashboard's build, embedded in the binary and served under `/`.
 //!
@@ -90,7 +90,7 @@ pub fn exit_code(error: &StartupError) -> u8 {
 /// `rewind server …`: `args` are the arguments after `server`. Runs until a signal (SIGINT,
 /// SIGTERM), `POST /v1/server/stop` or the idle timeout stops the server. With
 /// `--rewrap-data-keys`, rewraps the data keys, prints how many it changed, and exits;
-/// `rewind server migrate-runs …` moves the runs of the journal store onto the run plane, prints
+/// `rewind server migrate-runs …` moves the runs of the old tables onto the run plane, prints
 /// what it moved, and exits ([`migrate_runs`]).
 pub fn main(args: Vec<OsString>) -> ExitCode {
     if args.first().is_some_and(|first| first == "migrate-runs") {

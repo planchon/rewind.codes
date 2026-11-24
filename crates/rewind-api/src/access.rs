@@ -178,7 +178,7 @@ impl Permission {
         match self {
             Permission::RunsRead => {
                 "Read runs, their statistics and failure groups, a run's state, trace, entries, \
-                 event stream and journal, the workflows, the action statistics and payloads."
+                 event stream and history, the workflows, the action statistics and payloads."
             }
             Permission::RunsStart => {
                 "Start and fork runs, and check and test workflows (`/v1/check`, `/v1/test`)."

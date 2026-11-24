@@ -22,7 +22,7 @@ use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
-    CancelRun, FailureQuery, ForkRun, JournalExport, RunFilter, RunSort, RunStatsQuery, StartRun,
+    CancelRun, ExportAs, FailureQuery, ForkRun, RunFilter, RunSort, RunStatsQuery, StartRun,
     TraceFormat, WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
@@ -127,15 +127,12 @@ async fn a_run_starts_waits_and_is_read_back() {
         Some(ProblemType::NotFound)
     );
 
-    let journal = harness
-        .export_journal(&run.id, JournalExport::Journal)
-        .await
-        .unwrap();
-    let document = rewind_format::decode_journal(&journal.to_string()).unwrap();
+    let export = harness.export_run(&run.id, ExportAs::Run).await.unwrap();
+    let document = rewind_format::decode_run_export(&export.to_string()).unwrap();
     assert_eq!(document.run.to_string(), run.id);
     assert_eq!(document.entries.len() as u64, run.history_len);
     let cassette = harness
-        .export_journal(&run.id, JournalExport::Cassette)
+        .export_run(&run.id, ExportAs::Cassette)
         .await
         .unwrap();
     assert_eq!(cassette["v"], 1);
@@ -1210,7 +1207,7 @@ async fn harness_action_failures_are_bounded_like_results() {
         .await
         .unwrap();
 
-    // A failure stays in its journal entry: message and data together hold 64 KiB at most.
+    // A failure stays in its history entry: message and data together hold 64 KiB at most.
     let large = 64 * 1024;
     for failure in [
         FailCall {

@@ -1,6 +1,6 @@
 // The glue of TypeScript mock handlers (archi/05-testing-and-observability.md, "Testing and
 // mocks"). It belongs to no epoch: nothing a mock does reaches a code but its result, which is
-// journaled.
+// recorded.
 //
 // Evaluates to setup(handlers), which takes the module's default export and returns
 // { actions, call }: the names of the actions with a handler, sorted, and call(action, argsJson,

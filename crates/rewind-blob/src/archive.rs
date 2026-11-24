@@ -2,8 +2,8 @@
 //! (`archi/07-code-architecture.md`, "`RunArchive`"; `archi/06-storage-and-scale.md`, "The
 //! archive and the blobs", "Retention and deletion").
 //!
-//! A sealed attempt is the object `runs/{tenant}/{run}/{attempt}.json`: its journal document v1
-//! (`rewind_format::encode_journal`), every payload up to 64 KiB inlined as a value, larger ones
+//! A sealed attempt is the object `runs/{tenant}/{run}/{attempt}.json`: its run export v1
+//! (`rewind_format::encode_run_export`), every payload up to 64 KiB inlined as a value, larger ones
 //! digests whose values are the run's blobs. It is written once: a second put of the attempt
 //! leaves the first. Erasing a run deletes its sealed attempts, then its blobs, the prefix
 //! `blobs/{tenant}/{run}/`; an erasure stopped half-way is done again whole.
@@ -27,20 +27,20 @@ use rewind_engine::ports::{
 use crate::files::{self, tenant_directory};
 use crate::{FileBlobs, S3Blobs};
 
-/// The journal document of a sealed attempt, as stored.
+/// The run export of a sealed attempt, as stored.
 fn encode(sealed: &SealedAttempt) -> Vec<u8> {
-    rewind_format::encode_journal(&sealed.document()).into_bytes()
+    rewind_format::encode_run_export(&sealed.document()).into_bytes()
 }
 
 /// A sealed attempt read back: the document must be the run's.
 fn decode(run: &RunRef, attempt: Attempt, bytes: &[u8]) -> Result<SealedAttempt, ArchiveError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|err| ArchiveError::Corrupt(format!("{run} attempt {attempt}: {err}")))?;
-    let document = rewind_format::decode_journal(text)
+    let document = rewind_format::decode_run_export(text)
         .map_err(|err| ArchiveError::Corrupt(format!("{run} attempt {attempt}: {err}")))?;
     if document.run != run.id {
         return Err(ArchiveError::Corrupt(format!(
-            "{run} attempt {attempt} holds the journal of run {}",
+            "{run} attempt {attempt} holds the history of run {}",
             document.run
         )));
     }
@@ -252,7 +252,7 @@ pub const DEFAULT_ARCHIVE_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 /// A `RunArchive` with a local cache in front of it: what every process puts in front of the
 /// archive, since a sealed attempt never changes.
 ///
-/// The cache is in memory, bounded in bytes (the size of each attempt's journal document), and
+/// The cache is in memory, bounded in bytes (the size of each attempt's run export), and
 /// evicts the runs read least recently and least often (CLOCK-Pro, from `quick_cache`). A get
 /// that misses reads the inner archive and keeps the attempt; a put only writes to the inner
 /// archive, since the attempt the archive keeps is the first put, which may be another

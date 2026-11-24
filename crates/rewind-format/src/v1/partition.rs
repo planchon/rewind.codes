@@ -1,4 +1,4 @@
-//! The partition records, v1 (`archi/02-journal.md`, "Stored format v1";
+//! The partition records, v1 (`archi/02-history.md`, "Stored format v1";
 //! `archi/06-storage-and-scale.md`, "A partition").
 //!
 //! One record per kind of thing a partition holds. Each is written `{"v":1,…}` by

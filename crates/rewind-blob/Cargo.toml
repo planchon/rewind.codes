@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 rewind-core.workspace = true
 rewind-engine.workspace = true
-# The journal document of a sealed attempt (`crate::archive`).
+# The run export of a sealed attempt (`crate::archive`).
 rewind-format.workspace = true
 # The objects of a run's prefix, listed as a stream to delete them (`object_store`'s own).
 futures-util = { workspace = true, features = ["alloc"] }

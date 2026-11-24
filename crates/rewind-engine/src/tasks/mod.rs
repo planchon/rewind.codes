@@ -2,7 +2,7 @@
 //! "When an action set changes during a run").
 //!
 //! Each `schedule_call` an activation commits becomes a call's task in the run's partition.
-//! Its deliveries, backoff, approval, deferral and park live in the task; the journal only gets
+//! Its deliveries, backoff, approval, deferral and park live in the task; the history only gets
 //! the final outcome, as a completion in the run's inbox. The owner of the partition keeps the
 //! lifecycle (`partition::tasks`), the call executor of the node sends the calls ([`calls`]).
 //!
@@ -26,7 +26,7 @@
 //! - **Authentication** is resolved when an MCP or API call is sent, from its server's `auth`:
 //!   the secret the run attached, read from the `SecretStore` in the run's namespace, or the
 //!   tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]), and its texts are
-//!   taken out of the answer ([`redacted`]): never in the journal.
+//!   taken out of the answer ([`redacted`]): never in the history.
 //! - **Parked tasks.** A schema change, a 401 or a missing secret parks the task and sends
 //!   `action.schema_changed` or `credentials.expired` (reason `refused` or `missing`) to the
 //!   tenant's subscriptions. Approved after a schema change, the call goes on against the new
@@ -129,8 +129,8 @@ pub(crate) fn secret_texts(auth: &CallAuth) -> Vec<String> {
 }
 
 /// `dispatched` without the attached secret's texts: a server that echoes its credential (an
-/// error quoting the key, a debug endpoint) must not bring it into the journal and the code
-/// (`archi/04-tools.md`, "Secrets": secrets never enter the journal nor the isolate).
+/// error quoting the key, a debug endpoint) must not bring it into the history and the code
+/// (`archi/04-tools.md`, "Secrets": secrets never enter the history nor the isolate).
 pub(crate) fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
     if texts.is_empty() {
         return dispatched;

@@ -1,5 +1,5 @@
 //! The commands that run in this process, without a server: `rewind check`, `rewind test` and
-//! `rewind replay` of an exported journal; and the e2e corpus driven through them.
+//! `rewind replay` of a run export; and the e2e corpus driven through them.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -296,12 +296,12 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
 async fn test_replays_a_recorded_cassette() {
     let dir = tempfile::tempdir().unwrap();
     let case = corpus().join("blue/waiting_for_a_signal");
-    let journal = rewind_format::decode_journal(
-        &std::fs::read_to_string(case.join("journal.v1.json")).unwrap(),
+    let export = rewind_format::decode_run_export(
+        &std::fs::read_to_string(case.join("history.v1.json")).unwrap(),
     )
     .unwrap();
     let cassette =
-        rewind_core::Cassette::from_history(&journal.entries, rewind_core::Matching::Sequential)
+        rewind_core::Cassette::from_history(&export.entries, rewind_core::Matching::Sequential)
             .unwrap();
     write(
         dir.path(),
@@ -345,15 +345,15 @@ async fn test_replays_a_recorded_cassette() {
 }
 
 // -------------------------------------------------------------------------------------------
-// rewind replay of an exported journal
+// rewind replay of a run export
 
 #[tokio::test]
 async fn replay_reports_compatibility_with_a_corrected_script() {
     let dir = tempfile::tempdir().unwrap();
     let case = corpus().join("blue/waiting_for_a_signal");
-    let journal = case.join("journal.v1.json");
+    let export = case.join("history.v1.json");
 
-    let run = rewind(&["replay", journal.to_str().unwrap()]).await;
+    let run = rewind(&["replay", export.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
     assert!(
         run.out.contains("the code replays the 4 entries"),
@@ -369,7 +369,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     );
     let run = rewind(&[
         "replay",
-        journal.to_str().unwrap(),
+        export.to_str().unwrap(),
         "--code",
         moved.to_str().unwrap(),
     ])
@@ -391,7 +391,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     let run = rewind(&[
         "--json",
         "replay",
-        journal.to_str().unwrap(),
+        export.to_str().unwrap(),
         "--code",
         changed.to_str().unwrap(),
     ])
@@ -416,21 +416,21 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
 // -------------------------------------------------------------------------------------------
 // The e2e corpus, driven through the CLI
 
-/// Every committed journal of the corpus replays through `rewind replay <file>`, and each red
+/// Every committed history of the corpus replays through `rewind replay <file>`, and each red
 /// case that alters its replay fails exactly as specified.
 #[tokio::test]
 async fn the_corpus_replays_through_the_cli() {
     let dir = tempfile::tempdir().unwrap();
     let mut replayed = 0;
     for (name, case) in cases() {
-        let journal = case.join("journal.v1.json");
-        if !journal.exists() {
+        let export = case.join("history.v1.json");
+        if !export.exists() {
             continue;
         }
         let scenario: Value =
             serde_json::from_str(&std::fs::read_to_string(case.join("scenario.json")).unwrap())
                 .unwrap();
-        let run = rewind(&["--json", "replay", journal.to_str().unwrap()]).await;
+        let run = rewind(&["--json", "replay", export.to_str().unwrap()]).await;
         assert_eq!(run.exit, Exit::Success, "{name}: {}{}", run.out, run.err);
         replayed += 1;
 
@@ -447,7 +447,7 @@ async fn the_corpus_replays_through_the_cli() {
                 let code = case.join(code.as_str().unwrap());
                 rewind(&[
                     "replay",
-                    journal.to_str().unwrap(),
+                    export.to_str().unwrap(),
                     "--code",
                     code.to_str().unwrap(),
                 ])
@@ -455,13 +455,13 @@ async fn the_corpus_replays_through_the_cli() {
             }
             (None, Some(index)) => {
                 let mut tampered =
-                    rewind_format::decode_journal(&std::fs::read_to_string(&journal).unwrap())
+                    rewind_format::decode_run_export(&std::fs::read_to_string(&export).unwrap())
                         .unwrap();
                 tampered
                     .entries
                     .remove(usize::try_from(index.as_u64().unwrap()).unwrap());
                 let path = dir.path().join(format!("{}.json", name.replace('/', "_")));
-                std::fs::write(&path, rewind_format::encode_journal(&tampered)).unwrap();
+                std::fs::write(&path, rewind_format::encode_run_export(&tampered)).unwrap();
                 rewind(&["replay", path.to_str().unwrap()]).await
             }
             other => panic!("{name}: unexpected replay check {other:?}"),
@@ -473,8 +473,8 @@ async fn the_corpus_replays_through_the_cli() {
             run.out
         );
     }
-    // Every case has its journal, but those whose start is refused.
-    assert!(replayed >= 54, "only {replayed} journals replayed");
+    // Every case has its history, but those whose start is refused.
+    assert!(replayed >= 54, "only {replayed} histories replayed");
 }
 
 /// The corpus cases whose actions and steps a scenario of `rewind test` can express run through

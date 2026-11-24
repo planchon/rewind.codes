@@ -1,5 +1,5 @@
 {
-  "description": "A journal with a missing entry is not a history the engine could have written: replay refuses it before running anything.",
+  "description": "A history with a missing entry is not a history the engine could have written: replay refuses it before running anything.",
   "actions": {
     "audit.record": {
       "ok": true

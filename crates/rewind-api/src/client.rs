@@ -43,8 +43,8 @@ use crate::problem::Problem;
 use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
 use crate::routes;
 use crate::runs::{
-    CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalExport, JournalQuery,
-    Run, RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
+    CancelRun, ExportAs, ExportQuery, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, Run,
+    RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
     TraceQuery,
 };
 use crate::scripts::{
@@ -374,7 +374,7 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/runs/{id}/events`: the run's journal as a stream of events.
+    /// `GET /v1/runs/{id}/events`: the run's history as a stream of events.
     pub async fn run_events(&self, run: &str, query: &EventsQuery) -> Result<EventStream, Error> {
         let request = self
             .request_with(Method::GET, routes::RUN_EVENTS, &[run], query)?
@@ -483,12 +483,12 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/runs/{id}/journal`: a document of the stored format v1.
-    pub async fn export_journal(&self, run: &str, export: JournalExport) -> Result<Value, Error> {
-        let query = JournalQuery {
+    /// `GET /v1/runs/{id}/export`: a document of the stored format v1.
+    pub async fn export_run(&self, run: &str, export: ExportAs) -> Result<Value, Error> {
+        let query = ExportQuery {
             export_as: Some(export),
         };
-        let request = self.request_with(Method::GET, routes::RUN_JOURNAL, &[run], &query)?;
+        let request = self.request_with(Method::GET, routes::RUN_EXPORT, &[run], &query)?;
         self.json(request).await
     }
 
@@ -1319,12 +1319,12 @@ mod tests {
         let follow: EventsQuery = serde_html_form::from_str("follow=1").unwrap();
         assert_eq!(follow.follow, Some(true));
 
-        let journal = JournalQuery {
-            export_as: Some(JournalExport::Cassette),
+        let export = ExportQuery {
+            export_as: Some(ExportAs::Cassette),
         };
-        assert_eq!(round_trip(&journal), journal);
+        assert_eq!(round_trip(&export), export);
         assert_eq!(
-            query_pairs(&journal).unwrap(),
+            query_pairs(&export).unwrap(),
             [("as".to_owned(), "cassette".to_owned())]
         );
     }

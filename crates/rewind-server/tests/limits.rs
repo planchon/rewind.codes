@@ -23,7 +23,7 @@ use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::{AbortKind, RunStatus};
-use rewind_api::runs::{JournalExport, Run, StartRun};
+use rewind_api::runs::{ExportAs, Run, StartRun};
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{TestServer, wait};
@@ -64,13 +64,10 @@ fn assert_limit(run: &Run, message: &str) {
     );
 }
 
-/// The `type` of each entry of the run's journal.
+/// The `type` of each entry of the run's history.
 async fn events(client: &Client, run: &str) -> Vec<String> {
-    let journal = client
-        .export_journal(run, JournalExport::Journal)
-        .await
-        .unwrap();
-    journal["entries"]
+    let export = client.export_run(run, ExportAs::Run).await.unwrap();
+    export["entries"]
         .as_array()
         .unwrap()
         .iter()

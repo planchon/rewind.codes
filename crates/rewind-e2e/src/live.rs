@@ -6,7 +6,7 @@
 //! worker is an SDK stream at the node's edge: it is handed the harness calls and answers them
 //! through their token; a worker that crashes closes its stream, and another worker opens one.
 //! The entropy draws the scenario's ids and seeds in order, whatever the partition, so a case's
-//! run has the id its committed journal holds.
+//! run has the id its committed history holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -36,7 +36,7 @@ use crate::scenario::Step;
 use crate::{Case, Live, Recorded, T0, attachments, executor, scenario_action_set};
 
 /// The ids and seeds of a scenario's entropy, drawn in order: a run of the one partition has
-/// the version 7 id the committed journal holds.
+/// the version 7 id the committed history holds.
 #[derive(Debug)]
 pub struct CorpusEntropy(SeededEntropy);
 
@@ -350,21 +350,19 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         ReplayVerdict::Matches(_) => {}
         other => return Err(format!("the engine's replay of the live run: {other:?}")),
     }
-    let journal = {
+    let export = {
         let World {
             edge, driver, at, ..
         } = &mut world;
         let mut gateway = driver.gateway(at);
-        edge.export_journal(&mut gateway, &run)
-            .await
-            .map_err(fail)?
+        edge.export_run(&mut gateway, &run).await.map_err(fail)?
     };
-    let state = RunState::from_history(&journal.entries).map_err(|err| err.to_string())?;
+    let state = RunState::from_history(&export.entries).map_err(|err| err.to_string())?;
     let children = children(&mut world, &run).await?;
     let dispatcher = &world.plane.dispatcher;
     Ok(Live::Ran(Box::new(Recorded {
         run_id: run.id,
-        journal,
+        export,
         state,
         dispatched: dispatcher.dispatched(),
         children,

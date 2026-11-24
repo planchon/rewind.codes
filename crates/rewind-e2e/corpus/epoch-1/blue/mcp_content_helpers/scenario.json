@@ -1,5 +1,5 @@
 {
-  "description": "An MCP action pinned without an output schema returns its content, { content, structuredContent? }, with the text() and json() helpers that rewind-actions.d.ts declares (ActionContent): text() joins the text blocks with newlines, json() is structuredContent when the action sent one, else the text parsed as JSON. The helpers are not keys of the value: the journal and JSON.stringify see the content only. An action pinned with an output schema returns its structured content, without helpers.",
+  "description": "An MCP action pinned without an output schema returns its content, { content, structuredContent? }, with the text() and json() helpers that rewind-actions.d.ts declares (ActionContent): text() joins the text blocks with newlines, json() is structuredContent when the action sent one, else the text parsed as JSON. The helpers are not keys of the value: the history and JSON.stringify see the content only. An action pinned with an output schema returns its structured content, without helpers.",
   "mcp_servers": ["crm"],
   "actions": {
     "crm.lookup": {

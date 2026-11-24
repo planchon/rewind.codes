@@ -1,6 +1,6 @@
 [package]
 name = "rewind-core"
-description = "Domain of Rewind: the run journal, payload identity, run state and the determinism check. Pure: no I/O, no serde."
+description = "Domain of Rewind: the run history, payload identity, run state and the determinism check. Pure: no I/O, no serde."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
