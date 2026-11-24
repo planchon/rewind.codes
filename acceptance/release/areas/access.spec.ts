@@ -22,7 +22,7 @@ import {
   waitingRun,
 } from "../support/access-helpers.js";
 import { startWebhookReceiver } from "../support/fixtures.js";
-import { TaskStream } from "../support/tools-helpers.js";
+import { TaskStream } from "../support/actions-helpers.js";
 import {
   Api,
   evidence,
@@ -226,43 +226,43 @@ const PROBES: Probe[] = [
   { op: "GET /v1/subscriptions", need: p("subscriptions:read"), path: "/v1/subscriptions" },
   { op: "POST /v1/subscriptions", need: p("subscriptions:write"), path: "/v1/subscriptions", body: { url: "not a url" } },
   { op: "DELETE /v1/subscriptions/{id}", need: p("subscriptions:write"), path: "/v1/subscriptions/sub_unknown" },
-  // Host-tool tasks.
-  { op: "GET /v1/tasks/stream", need: p("tasks:work"), path: "/v1/tasks/stream", stream: true },
-  { op: "POST /v1/tasks/{id}/approve", need: p("tasks:approve"), path: `/v1/tasks/${NO_TASK}/approve` },
-  { op: "POST /v1/tasks/{id}/reject", need: p("tasks:approve"), path: `/v1/tasks/${NO_TASK}/reject`, body: {} },
-  { op: "POST /v1/tasks/{token}/complete", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/complete`, body: { result: null } },
-  { op: "POST /v1/tasks/{token}/defer", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/defer`, body: {} },
-  { op: "POST /v1/tasks/{token}/fail", need: p("tasks:work"), path: `/v1/tasks/${NO_TOKEN}/fail`, body: { message: "matrix" } },
+  // Harness calls.
+  { op: "GET /v1/calls/stream", need: p("calls:work"), path: "/v1/calls/stream", stream: true },
+  { op: "POST /v1/calls/{id}/approve", need: p("calls:approve"), path: `/v1/calls/${NO_TASK}/approve` },
+  { op: "POST /v1/calls/{id}/reject", need: p("calls:approve"), path: `/v1/calls/${NO_TASK}/reject`, body: {} },
+  { op: "POST /v1/calls/{token}/complete", need: p("calls:work"), path: `/v1/calls/${NO_TOKEN}/complete`, body: { result: null } },
+  { op: "POST /v1/calls/{token}/defer", need: p("calls:work"), path: `/v1/calls/${NO_TOKEN}/defer`, body: {} },
+  { op: "POST /v1/calls/{token}/fail", need: p("calls:work"), path: `/v1/calls/${NO_TOKEN}/fail`, body: { message: "matrix" } },
   // Tokens.
   { op: "DELETE /v1/tokens/{id}", need: p("tokens:write"), path: `/v1/tokens/${NO_DIGEST}` },
   // Tool statistics span the tenant: not for a grant limited to labels.
-  { op: "GET /v1/tools/stats", need: p("runs:read"), path: "/v1/tools/stats", refusedTo: ["labels"] },
-  // Toolsets.
-  { op: "GET /v1/toolsets", need: p("toolsets:read"), path: "/v1/toolsets" },
+  { op: "GET /v1/actions/stats", need: p("runs:read"), path: "/v1/actions/stats", refusedTo: ["labels"] },
+  // Action sets.
+  { op: "GET /v1/action-sets", need: p("actions:read"), path: "/v1/action-sets" },
   // Attaching an organization's secret to list a server needs secrets:use as well; no server of
   // the request takes it, so a holder is answered 422 secret-required and nothing is registered.
   {
-    op: "POST /v1/toolsets",
-    need: p("toolsets:write"),
+    op: "POST /v1/action-sets",
+    need: p("actions:write"),
     also: "secrets:use",
-    path: "/v1/toolsets",
+    path: "/v1/action-sets",
     body: { secrets: { matrix: "org/matrix-never-put" } },
   },
-  { op: "GET /v1/toolsets/{id}/declarations", need: p("toolsets:read"), path: `/v1/toolsets/${NO_DIGEST}/declarations` },
-  { op: "GET /v1/toolsets/{id}/search", need: p("toolsets:read"), path: `/v1/toolsets/${NO_DIGEST}/search`, query: { query: "x" } },
+  { op: "GET /v1/action-sets/{id}/declarations", need: p("actions:read"), path: `/v1/action-sets/${NO_DIGEST}/declarations` },
+  { op: "GET /v1/action-sets/{id}/search", need: p("actions:read"), path: `/v1/action-sets/${NO_DIGEST}/search`, query: { query: "x" } },
   // Who calls.
   { op: "GET /v1/whoami", need: "any", path: "/v1/whoami" },
   // Workflows.
-  { op: "GET /v1/workflows", need: p("toolsets:read"), path: "/v1/workflows" },
+  { op: "GET /v1/workflows", need: p("actions:read"), path: "/v1/workflows" },
   {
     op: "POST /v1/workflows",
-    need: p("toolsets:write"),
+    need: p("actions:write"),
     path: "/v1/workflows",
-    body: { name: "matrix", toolset: NO_DIGEST, script: "export default async function main() {}", input: {}, output: {} },
+    body: { name: "matrix", actionSet: NO_DIGEST, script: "export default async function main() {}", input: {}, output: {} },
   },
-  { op: "GET /v1/workflows/{name}", need: p("toolsets:read"), path: "/v1/workflows/matrix-never-saved" },
+  { op: "GET /v1/workflows/{name}", need: p("actions:read"), path: "/v1/workflows/matrix-never-saved" },
   { op: "POST /v1/workflows/{name}/record", need: p("runs:read"), path: "/v1/workflows/matrix-never-saved/record", body: {} },
-  { op: "GET /v1/tests/{digest}", need: p("toolsets:read"), path: `/v1/tests/${NO_DIGEST}` },
+  { op: "GET /v1/tests/{digest}", need: p("actions:read"), path: `/v1/tests/${NO_DIGEST}` },
 ];
 
 /** Every operation of `api/openapi.json`, as `METHOD /path`. */
@@ -414,7 +414,7 @@ test.describe("the permission matrix", () => {
   test("every permission is both held and refused by a principal of the matrix", { tag: "@success" }, () => {
     const holders: Record<string, readonly string[]> = {
       ...BUILT_IN,
-      "custom role": ["tasks:approve"],
+      "custom role": ["calls:approve"],
       "owner limited to labels": PERMISSIONS.filter((p) => !ADMINISTRATION.includes(p)),
       "end user's token": TOKEN_DEFAULT,
     };
@@ -448,9 +448,9 @@ test.describe("the permission matrix", () => {
 
   test("a key of a role of the organization holding one permission reaches that permission only", { tag: "@attack" }, async () => {
     const role = `approver-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "approves calls", permissions: ["tasks:approve"] }));
+    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "approves calls", permissions: ["calls:approve"] }));
     const { key } = await createKey(tenant.api, role);
-    expectMatrix(role, await matrix(tenant, { name: role, bearer: key, holds: ["tasks:approve"] }));
+    expectMatrix(role, await matrix(tenant, { name: role, bearer: key, holds: ["calls:approve"] }));
   });
 
   test("an owner key limited to labels cannot administer or read statistics", { tag: "@attack" }, async () => {
@@ -492,11 +492,11 @@ test.describe("roles and grants", () => {
     const { key, id } = await createKey(tenant.api, role);
     const holder = new Api(stacks().a.url, key);
     expectOk(await holder.get("/v1/runs"), 200);
-    expectProblem(await holder.get("/v1/toolsets"), 403, "forbidden");
+    expectProblem(await holder.get("/v1/action-sets"), 403, "forbidden");
 
     // Changed: the next request of its holder follows the role.
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "reads toolsets", permissions: ["toolsets:read"] }));
-    expectOk(await holder.get("/v1/toolsets"), 200);
+    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "reads actionSets", permissions: ["actions:read"] }));
+    expectOk(await holder.get("/v1/action-sets"), 200);
     const refused = await holder.get("/v1/runs");
     expectProblem(refused, 403, "forbidden");
     expect(refused.json.detail).toContain("`runs:read`");
@@ -613,8 +613,8 @@ test.describe("roles and grants", () => {
     expectOk(await tenant.api.delete(`/v1/api-keys/${id}`), 204);
     expectProblem(await asKey.get("/v1/runs"), 401, "unauthorized");
     expectProblem(await asKey.get("/v1/whoami"), 401, "unauthorized");
-    const toolsets = async () => (await tenant.api.get("/v1/toolsets")).json;
-    await expectRefused({ attempt: () => asKey.post("/v1/toolsets", {}), status: 401, slug: "unauthorized", probe: toolsets });
+    const actionSets = async () => (await tenant.api.get("/v1/action-sets")).json;
+    await expectRefused({ attempt: () => asKey.post("/v1/action-sets", {}), status: 401, slug: "unauthorized", probe: actionSets });
     // Revoked twice: not found.
     expectProblem(await tenant.api.delete(`/v1/api-keys/${id}`), 404, "not-found");
     evidence("after DELETE /v1/api-keys/{id}, the key's next request → 401 unauthorized");
@@ -663,7 +663,7 @@ const CRM_API = {
     },
   ],
 };
-const CRM_SCRIPT = `import { crm } from "rewind:tools";\nexport default async function main() { return await crm.find({ id: "1" }); }\n`;
+const CRM_SCRIPT = `import { crm } from "rewind:actions";\nexport default async function main() { return await crm.find({ id: "1" }); }\n`;
 
 test.describe("keys limited to labels", () => {
   let tenant: Tenant;
@@ -739,14 +739,14 @@ test.describe("keys limited to labels", () => {
     await expectRefused({ attempt: () => red.put("/v1/namespaces/labels/secrets/crm", { value: "red's" }), status: 403, slug: "forbidden", probe: secrets });
     await expectRefused({ attempt: () => red.delete("/v1/namespaces/labels/secrets/crm"), status: 403, slug: "forbidden", probe: secrets });
     // Attaching: blue's is unknown to it, for a listing as for a run.
-    const toolset = { mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }] };
-    const listing = await red.post("/v1/toolsets", { ...toolset, secrets: { crm: "org/blue-crm" } });
+    const actionSet = { mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }] };
+    const listing = await red.post("/v1/action-sets", { ...actionSet, secrets: { crm: "org/blue-crm" } });
     expectProblem(listing, 422, "secret-required");
     expect(listing.json.attachments[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
     expect(listing.json.attachments[0].attachable).toEqual(["org/red-crm"]);
-    const api = await tenant.api.post("/v1/toolsets", CRM_API);
+    const api = await tenant.api.post("/v1/action-sets", CRM_API);
     expectOk(api);
-    const run = await red.ns("labels").post("/v1/runs", { script: CRM_SCRIPT, toolset: api.json.id, secrets: { crm: "org/blue-crm" } });
+    const run = await red.ns("labels").post("/v1/runs", { script: CRM_SCRIPT, actionSet: api.json.id, secrets: { crm: "org/blue-crm" } });
     expectProblem(run, 422, "secret-required");
     expect(run.json.attachments[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
     evidence("the red key lists org/red-crm only (written with team:red); blue's usage and deletion → 404, replacing it or labelling one blue → 403; a namespace's secret read, never written (403); org/blue-crm attached for a listing or a run → 422 secret-required (unknown), attachable org/red-crm");
@@ -754,21 +754,21 @@ test.describe("keys limited to labels", () => {
 
   test("attaching an organization's secret takes secrets:use", { tag: "@attack" }, async () => {
     const role = `starter-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "starts runs, registers toolsets", permissions: ["runs:start", "runs:read", "toolsets:write", "toolsets:read"] }));
+    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "starts runs, registers actionSets", permissions: ["runs:start", "runs:read", "actions:write", "actions:read"] }));
     const starter = tenant.api.as((await createKey(tenant.api, role)).key);
     expectOk(await tenant.api.put("/v1/secrets/shared-crm", { value: "the organization's" }), 201);
-    const listing = await starter.post("/v1/toolsets", {
+    const listing = await starter.post("/v1/action-sets", {
       mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }],
       secrets: { crm: "org/shared-crm" },
     });
     expectProblem(listing, 403, "forbidden");
     expect(listing.json.detail).toContain("`secrets:use`");
-    const toolset = await tenant.api.post("/v1/toolsets", CRM_API);
-    expectOk(toolset);
+    const actionSet = await tenant.api.post("/v1/action-sets", CRM_API);
+    expectOk(actionSet);
     const started = async () => (await tenant.api.get("/v1/namespaces/use")).json?.namespace?.usage?.runsStarted ?? 0;
     const run = await expectRefused({
       attempt: () =>
-        starter.ns("use").post("/v1/runs", { script: CRM_SCRIPT, toolset: toolset.json.id, secrets: { crm: "org/shared-crm" } }),
+        starter.ns("use").post("/v1/runs", { script: CRM_SCRIPT, actionSet: actionSet.json.id, secrets: { crm: "org/shared-crm" } }),
       status: 422,
       slug: "secret-required",
       probe: started,
@@ -779,30 +779,30 @@ test.describe("keys limited to labels", () => {
 
   test("a key limited to labels reads no statistics, no scripts, and no payload without its run", { tag: "@attack" }, async () => {
     // Statistics come from hourly counters, which carry no labels: none would be the key's alone.
-    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"]) {
+    for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/actions/stats"]) {
       const reply = await red.get(path);
       expectProblem(reply, 403, "forbidden");
       expect(reply.text).not.toContain(blueRun);
     }
     // A payload belongs to its run: no caller reads one without naming it.
     expectProblem(await red.get(`/v1/payloads/${NO_DIGEST}`), 400, "invalid-request");
-    evidence("GET /v1/runs/stats, /v1/runs/failures, /v1/scripts and /v1/tools/stats → 403 for a key limited to labels; a payload without its run → 400");
+    evidence("GET /v1/runs/stats, /v1/runs/failures, /v1/scripts and /v1/actions/stats → 403 for a key limited to labels; a payload without its run → 400");
   });
 
-  test("a worker key limited to labels is handed and answers the host-tool tasks of its runs only", { tag: "@attack" }, async () => {
-    // One toolset for both teams, as two environments of a tenant register the same host tools.
-    const toolset = await tenant.api.post("/v1/toolsets", {
+  test("a worker key limited to labels is handed and answers the harness calls of its runs only", { tag: "@attack" }, async () => {
+    // One action set for both teams, as two environments of a tenant register the same harness actions.
+    const actionSet = await tenant.api.post("/v1/action-sets", {
       host: [{ name: "team.lookup", description: "Looks something up.", inputSchema: { type: "object" } }],
     });
-    expectOk(toolset);
-    const script = `import { team } from "rewind:tools";
+    expectOk(actionSet);
+    const script = `import { team } from "rewind:actions";
 export default async function main() { return await team.lookup({}); }
 `;
     const redWorker = new Api(stacks().a.url, (await createKey(tenant.api, "worker", { name: "red worker", allowedLabels: { team: "red" } })).key);
-    const query = { toolset: toolset.json.id, tools: ["team.lookup"], slots: 10 };
+    const query = { actionSet: actionSet.json.id, actions: ["team.lookup"], slots: 10 };
     const reds = await TaskStream.open(redWorker, query);
     try {
-      const ask = (labels: Record<string, string>) => startRun(tenant.api, "labels", { script, toolset: toolset.json.id, labels });
+      const ask = (labels: Record<string, string>) => startRun(tenant.api, "labels", { script, actionSet: actionSet.json.id, labels });
       const redAsks = await ask({ team: "red" });
       const blueAsks = await ask({ team: "blue" });
       expectOk(redAsks);
@@ -818,11 +818,11 @@ export default async function main() { return await team.lookup({}); }
         const blue = await all.task("the blue run's task", (task) => task.runId === blueAsks.json.id);
         expect(reds.handed.map((task) => task.runId), "the blue run's task is not the red worker's").toEqual([redAsks.json.id]);
         const probe = async () => (await tenant.api.get(`/v1/runs/${blueAsks.json.id}`)).json.status;
-        await expectRefused({ attempt: () => redWorker.post(`/v1/tasks/${blue.token}/complete`, { result: "from red" }), status: 410, slug: "task-gone", probe });
-        await expectRefused({ attempt: () => redWorker.post(`/v1/tasks/${blue.token}/defer`, {}), status: 410, slug: "task-gone", probe });
+        await expectRefused({ attempt: () => redWorker.post(`/v1/calls/${blue.token}/complete`, { result: "from red" }), status: 410, slug: "call-gone", probe });
+        await expectRefused({ attempt: () => redWorker.post(`/v1/calls/${blue.token}/defer`, {}), status: 410, slug: "call-gone", probe });
 
-        expectOk(await redWorker.post(`/v1/tasks/${ours.token}/complete`, { result: "red's" }), 204);
-        expectOk(await tenant.api.post(`/v1/tasks/${blue.token}/complete`, { result: "blue's" }), 204);
+        expectOk(await redWorker.post(`/v1/calls/${ours.token}/complete`, { result: "red's" }), 204);
+        expectOk(await tenant.api.post(`/v1/calls/${blue.token}/complete`, { result: "blue's" }), 204);
       } finally {
         await all.close();
       }
@@ -834,7 +834,7 @@ export default async function main() { return await team.lookup({}); }
     } finally {
       await reds.close();
     }
-    evidence("the task stream of a worker key limited to team:red → the red run's task only; the blue task's token → 410 task-gone for it");
+    evidence("the task stream of a worker key limited to team:red → the red run's task only; the blue task's token → 410 call-gone for it");
   });
 
   test("a subscription a key limited to labels creates carries them", { tag: "@success" }, async () => {
@@ -907,25 +907,25 @@ test.describe("forged credentials", () => {
 
   test("no credential, or a malformed or unknown one, is refused with 401 and creates nothing", { tag: "@attack" }, async () => {
     const url = stacks().a.url;
-    const toolsets = async () => (await tenant.api.get("/v1/toolsets")).json;
+    const actionSets = async () => (await tenant.api.get("/v1/action-sets")).json;
     const realKey = tenant.ownerKey;
     const attempts: [string, () => Promise<Reply>][] = [
-      ["no Authorization", () => new Api(url).post("/v1/toolsets", {})],
-      ["an empty Bearer", () => new Api(url).post("/v1/toolsets", {}, { headers: { authorization: "Bearer " } })],
-      ["a random rewind_sk_", () => new Api(url, `rewind_sk_${randomBytes(24).toString("hex")}`).post("/v1/toolsets", {})],
-      ["a real key with one character changed", () => new Api(url, `${realKey.slice(0, -1)}${realKey.endsWith("0") ? "1" : "0"}`).post("/v1/toolsets", {})],
-      ["the key's id (its SHA-256) as a Bearer", async () => new Api(url, (await tenant.api.get("/v1/whoami")).json.principal.id).post("/v1/toolsets", {})],
-      ["the key under Basic", () => new Api(url).post("/v1/toolsets", {}, { headers: { authorization: `Basic ${Buffer.from(`${realKey}:`).toString("base64")}` } })],
-      ["the key in the query string", () => new Api(url).post("/v1/toolsets", {}, { query: { api_key: realKey, key: realKey } })],
-      ["the key in a cookie", () => new Api(url).post("/v1/toolsets", {}, { headers: { cookie: `rewind_session=${realKey}; api_key=${realKey}` } })],
-      ["two keys in one header", () => new Api(url).post("/v1/toolsets", {}, { headers: { authorization: `Bearer ${realKey}, Bearer ${realKey}` } })],
-      ["a JWT that is not one", () => new Api(url, "a.b.c").post("/v1/toolsets", {})],
-      ["an opaque token never minted", () => new Api(url, `rewind_nt_${randomBytes(24).toString("hex")}`).post("/v1/toolsets", {})],
-      ["a key with a NUL byte", () => new Api(url, `${realKey}%00`).post("/v1/toolsets", {})],
+      ["no Authorization", () => new Api(url).post("/v1/action-sets", {})],
+      ["an empty Bearer", () => new Api(url).post("/v1/action-sets", {}, { headers: { authorization: "Bearer " } })],
+      ["a random rewind_sk_", () => new Api(url, `rewind_sk_${randomBytes(24).toString("hex")}`).post("/v1/action-sets", {})],
+      ["a real key with one character changed", () => new Api(url, `${realKey.slice(0, -1)}${realKey.endsWith("0") ? "1" : "0"}`).post("/v1/action-sets", {})],
+      ["the key's id (its SHA-256) as a Bearer", async () => new Api(url, (await tenant.api.get("/v1/whoami")).json.principal.id).post("/v1/action-sets", {})],
+      ["the key under Basic", () => new Api(url).post("/v1/action-sets", {}, { headers: { authorization: `Basic ${Buffer.from(`${realKey}:`).toString("base64")}` } })],
+      ["the key in the query string", () => new Api(url).post("/v1/action-sets", {}, { query: { api_key: realKey, key: realKey } })],
+      ["the key in a cookie", () => new Api(url).post("/v1/action-sets", {}, { headers: { cookie: `rewind_session=${realKey}; api_key=${realKey}` } })],
+      ["two keys in one header", () => new Api(url).post("/v1/action-sets", {}, { headers: { authorization: `Bearer ${realKey}, Bearer ${realKey}` } })],
+      ["a JWT that is not one", () => new Api(url, "a.b.c").post("/v1/action-sets", {})],
+      ["an opaque token never minted", () => new Api(url, `rewind_nt_${randomBytes(24).toString("hex")}`).post("/v1/action-sets", {})],
+      ["a key with a NUL byte", () => new Api(url, `${realKey}%00`).post("/v1/action-sets", {})],
     ];
     const seen: string[] = [];
     for (const [what, attempt] of attempts) {
-      const reply = await expectRefused({ attempt, status: 401, slug: "unauthorized", probe: toolsets });
+      const reply = await expectRefused({ attempt, status: 401, slug: "unauthorized", probe: actionSets });
       seen.push(`${what} → ${reply.status} ${reply.slug}`);
     }
     evidence(seen.join("; "));

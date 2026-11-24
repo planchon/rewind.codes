@@ -5,7 +5,7 @@
  * and whose Postgres it pauses. It runs alone, after the areas.
  *
  * - Owners (`archi/06-storage-and-scale.md`, "Partitions, owners and nodes"): the node owning a
- *   run's partition killed during an activation, or while a host tool holds the run's call: the
+ *   run's partition killed during an activation, or while a harness action holds the run's call: the
  *   other node takes the partition over and recovers the run, and its call is scheduled once
  *   (the task handed before kept, or handed again with the same idempotency key).
  * - A node that stops hands its partitions over before it exits; one that joins takes its share.
@@ -41,7 +41,7 @@ import {
 import { type McpFixture, startMcpFixture } from "../support/fixtures.js";
 import { ended, eventTypes, journal, replayDocument, runScript } from "../support/sandbox-helpers.js";
 import { type Stack, startDeployed } from "../support/stack.js";
-import { type RunState, TaskStream } from "../support/tools-helpers.js";
+import { type RunState, TaskStream } from "../support/actions-helpers.js";
 
 // Without setup A (`REWIND_GATE_NO_STACKS=1`) this stage has a canary of its own, published for
 // the sweeps.
@@ -52,7 +52,7 @@ const RETENTION_S = 40;
 
 let stack: Stack;
 let tenant: Tenant;
-let toolset: string;
+let actionSet: string;
 let workerKey: string;
 
 test.beforeAll(async () => {
@@ -65,16 +65,16 @@ test.beforeAll(async () => {
       "--retention",
       `${RETENTION_S}s`,
       // The MCP fixture of the restart listens on 127.0.0.1.
-      "--allow-internal-tools",
+      "--allow-internal-addresses",
       "127.0.0.1",
     ],
   });
   tenant = await newTenant("lifecycle", stack.info);
-  const created = await tenant.api.post("/v1/toolsets", {
+  const created = await tenant.api.post("/v1/action-sets", {
     host: [{ name: "t.record", description: "Records a call.", inputSchema: { type: "object" } }],
   });
   expectOk(created);
-  toolset = created.json.id;
+  actionSet = created.json.id;
   workerKey = (await tenant.key("worker")).key;
 });
 
@@ -109,7 +109,7 @@ function objects(prefix: string): string[] {
 }
 
 /**
- * Serves the host tool `t.record` with the worker key on a task stream, opened again with the same
+ * Serves the harness action `t.record` with the worker key on a call stream, opened again with the same
  * worker id after it drops (its node stopped): completes each task handed, but those `hold` keeps
  * for the test to answer. Every hand-out is kept, so a check counts the tool's executions.
  */
@@ -131,7 +131,7 @@ class TaskServer {
 
   private async run(): Promise<void> {
     while (!this.stopped) {
-      const opened = await TaskStream.attempt(this.api, { toolset, slots: 10, worker: this.worker }).catch(() => undefined);
+      const opened = await TaskStream.attempt(this.api, { actionSet, slots: 10, worker: this.worker }).catch(() => undefined);
       if (!(opened instanceof TaskStream)) {
         await delay(250);
         continue;
@@ -156,7 +156,7 @@ class TaskServer {
       this.held.push(task);
       return;
     }
-    await this.api.post(`/v1/tasks/${task.token}/complete`, { result: { recorded: task.idempotencyKey } }).catch(() => undefined);
+    await this.api.post(`/v1/calls/${task.token}/complete`, { result: { recorded: task.idempotencyKey } }).catch(() => undefined);
   }
 
   async stop(): Promise<void> {
@@ -182,10 +182,10 @@ async function whileMoving(attempt: () => Promise<Reply>, timeoutMs = 60_000): P
 
 /** The calls the run scheduled, from its journal. */
 async function scheduled(run: string): Promise<number> {
-  return eventTypes((await journal(tenant.api, run)).doc).filter((type) => type === "schedule_tool_call").length;
+  return eventTypes((await journal(tenant.api, run)).doc).filter((type) => type === "schedule_call").length;
 }
 
-const CPU_THEN_CALL = `import { t } from "rewind:tools";
+const CPU_THEN_CALL = `import { t } from "rewind:actions";
 function spin(n: number): number {
   let x = 0;
   for (let i = 0; i < n; i++) x = (x + i) % 1000003;
@@ -208,7 +208,7 @@ test("the owner killed during an activation: the other node takes the partition 
   // journal's times are logical: the wall time of a start that waits for the end measures it.
   const turns = 200_000_000;
   const before = Date.now();
-  const calibration = await runScript(tenant.api, CPU_THEN_CALL, { namespace, input: { n: turns, call: false }, toolset });
+  const calibration = await runScript(tenant.api, CPU_THEN_CALL, { namespace, input: { n: turns, call: false }, actionSet });
   const wall = Math.max(100, Date.now() - before);
   expect(calibration.status, JSON.stringify(calibration.error ?? calibration.abort)).toBe("completed");
   const n = Math.min(6 * turns, Math.max(turns / 2, Math.round((turns * 1_500) / wall)));
@@ -216,7 +216,7 @@ test("the owner killed during an activation: the other node takes the partition 
 
   const server = new TaskServer(tenant.api.as(workerKey));
   try {
-    const started = await api.post("/v1/runs", { script: CPU_THEN_CALL, input: { n, call: true }, toolset, check: false });
+    const started = await api.post("/v1/runs", { script: CPU_THEN_CALL, input: { n, call: true }, actionSet, check: false });
     expectOk(started);
     const id: string = started.json.id;
     // The activation is under way on the owner's executors.
@@ -227,7 +227,7 @@ test("the owner killed during an activation: the other node takes the partition 
     expect(done.status, JSON.stringify(done.error ?? done.abort)).toBe("completed");
     expect(await scheduled(id)).toBe(1);
     expect(server.handed.filter((task) => task.runId === id)).toHaveLength(1);
-    expect(done.attempts ?? []).toEqual([]);
+    expect(done.deliveries ?? []).toEqual([]);
     const survivor = ownerOf(namespace);
     expect(survivor).toBeDefined();
     expect(survivor).not.toBe(owner);
@@ -238,12 +238,12 @@ test("the owner killed during an activation: the other node takes the partition 
   }
 });
 
-test("the owner killed while a host tool holds the run's call: the run completes elsewhere, its call scheduled once", { tag: "@success" }, async () => {
+test("the owner killed while a harness action holds the run's call: the run completes elsewhere, its call scheduled once", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
   allow5xx("unavailable");
   const namespace = unique("holds-");
   const api = tenant.api.ns(namespace);
-  // The first hand-out is held: the host tool is working on it while the owner dies.
+  // The first hand-out is held: the harness action is working on it while the owner dies.
   let first: RunState | undefined;
   const server = new TaskServer(tenant.api.as(workerKey), (task) => {
     if (first !== undefined) return false;
@@ -252,8 +252,8 @@ test("the owner killed while a host tool holds the run's call: the run completes
   });
   try {
     const started = await api.post("/v1/runs", {
-      script: 'import { t } from "rewind:tools";\nexport default async function main() { return await t.record({ step: 1 }); }\n',
-      toolset,
+      script: 'import { t } from "rewind:actions";\nexport default async function main() { return await t.record({ step: 1 }); }\n',
+      actionSet,
       check: false,
     });
     expectOk(started);
@@ -261,16 +261,16 @@ test("the owner killed while a host tool holds the run's call: the run completes
     const task = await eventually("the call is handed", () => server.held.find((t) => t.runId === id), 30_000, 50);
     const owner = ownerOf(namespace)!;
     await stack.kill(owner, "SIGKILL");
-    // The host tool answers by its token: the new owner takes it, or has given that hand-out up
+    // The harness action answers by its token: the new owner takes it, or has given that hand-out up
     // (the node that takes a partition over cannot know which tasks had left) and handed the call
     // again, as attempt 2 with the same idempotency key, which the server answers.
-    const answered = await whileMoving(() => tenant.api.as(workerKey).post(`/v1/tasks/${task.token}/complete`, { result: { recorded: "once" } }));
-    if (answered.status >= 300) expectProblem(answered, 410, "task-gone");
+    const answered = await whileMoving(() => tenant.api.as(workerKey).post(`/v1/calls/${task.token}/complete`, { result: { recorded: "once" } }));
+    if (answered.status >= 300) expectProblem(answered, 410, "call-gone");
 
     const done = await ended(tenant.api, id, 120_000);
     expect(done.status, JSON.stringify(done.error ?? done.abort)).toBe("completed");
     expect(await scheduled(id)).toBe(1);
-    expect(eventTypes((await journal(tenant.api, id)).doc)).toEqual(["run_started", "schedule_tool_call", "tool_call_completed", "complete_run"]);
+    expect(eventTypes((await journal(tenant.api, id)).doc)).toEqual(["run_started", "schedule_call", "call_completed", "complete_run"]);
     const handOuts = server.handed.filter((t) => t.runId === id);
     expect(new Set(handOuts.map((t) => t.idempotencyKey))).toEqual(new Set([`${id}/1`]));
     expect([{ recorded: "once" }, { recorded: `${id}/1` }]).toContainEqual(done.output.value);
@@ -313,14 +313,14 @@ test("a full restart: a timer due during the outage fires, a signal sent before 
   const mcp: McpFixture = await startMcpFixture();
   const value = `${canary()}-restart`;
   expectOk(await tenant.api.put("/v1/namespaces/restart/secrets/fx", { value }), 201);
-  const keyed = await tenant.api.post("/v1/toolsets", {
+  const keyed = await tenant.api.post("/v1/action-sets", {
     mcp: [{ name: "fx", url: mcp.url, auth: { type: "secret", header: "authorization", format: "Bearer {secret}" } }],
   });
   expectOk(keyed);
   const reading = await runScript(
     tenant.api,
-    'import { signal } from "rewind";\nimport { fx } from "rewind:tools";\nexport default async function main() { await signal("go"); return (await fx.echo({ text: "after the restart" })).text(); }\n',
-    { namespace: "restart", toolset: keyed.json.id, extra: { wait: "1s", secrets: { fx: "ns/fx" } } },
+    'import { signal } from "rewind";\nimport { fx } from "rewind:actions";\nexport default async function main() { await signal("go"); return (await fx.echo({ text: "after the restart" })).text(); }\n',
+    { namespace: "restart", actionSet: keyed.json.id, extra: { wait: "1s", secrets: { fx: "ns/fx" } } },
   );
   expect(reading.waitingFor?.[0]).toMatchObject({ kind: "signal", name: "go" });
   const timer = await runScript(tenant.api, 'import { sleep } from "rewind";\nexport default async function main() { await sleep("4s"); return "timer fired"; }\n', {

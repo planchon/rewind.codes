@@ -23,12 +23,12 @@ const ENDED = new Set(["completed", "failed", "cancelled", "aborted"]);
 export async function runScript(
   api: Api,
   script: string,
-  options: { namespace?: string; input?: unknown; toolset?: string; check?: boolean; timeoutMs?: number; extra?: Record<string, unknown> } = {},
+  options: { namespace?: string; input?: unknown; actionSet?: string; check?: boolean; timeoutMs?: number; extra?: Record<string, unknown> } = {},
 ): Promise<RunJson> {
   const started = await api.ns(options.namespace ?? "sandbox").post("/v1/runs", {
     script,
     input: options.input,
-    toolset: options.toolset,
+    actionSet: options.actionSet,
     check: options.check ?? false,
     wait: "30s",
     ...options.extra,

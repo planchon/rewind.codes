@@ -8,7 +8,7 @@
  * - 5: `rewind test` replays that recorded real run as a test, from its cassette; `rewind fork`
  *   continues a failed run with a corrected script without repeating its recorded calls.
  *
- * The MCP server's call log: the toolset starts it behind `tee`, which appends every JSON-RPC
+ * The MCP server's call log: the action set starts it behind `tee`, which appends every JSON-RPC
  * message the client sends to a file. A `tools/call` there is a call the server received.
  */
 import { readFileSync } from "node:fs";
@@ -18,7 +18,7 @@ import { Project } from "../support/project.js";
 /** The reference server, pinned. */
 export const EVERYTHING = "@modelcontextprotocol/server-everything@2.2.1";
 
-const GOOD = `import { everything } from "rewind:tools";
+const GOOD = `import { everything } from "rewind:actions";
 
 export default async function main(input: { city: "New York" | "Chicago" | "Los Angeles" }) {
   const echoed = await everything.echo({ message: "hello" });
@@ -29,7 +29,7 @@ export default async function main(input: { city: "New York" | "Chicago" | "Los 
 }
 `;
 
-const WRONG_TYPE = `import { everything } from "rewind:tools";
+const WRONG_TYPE = `import { everything } from "rewind:actions";
 
 export default async function main() {
   const sum = await everything["get-sum"]({ a: "2", b: 40 });
@@ -38,7 +38,7 @@ export default async function main() {
 `;
 
 /** Fails after its two calls: the sum's text is not JSON. */
-const FAILING = `import { everything } from "rewind:tools";
+const FAILING = `import { everything } from "rewind:actions";
 
 export default async function main() {
   const echoed = await everything.echo({ message: "step 1" });
@@ -48,7 +48,7 @@ export default async function main() {
 }
 `;
 
-const FIXED = `import { everything } from "rewind:tools";
+const FIXED = `import { everything } from "rewind:actions";
 
 export default async function main() {
   const echoed = await everything.echo({ message: "step 1" });
@@ -61,7 +61,7 @@ export default async function main() {
 test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind test, rewind fork", () => {
   let project: Project;
   let log: string;
-  let toolset: string;
+  let actionSet: string;
   let recorded: string;
 
   /** The `tools/call` requests the MCP server received, by tool name. */
@@ -77,7 +77,7 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
     project = new Project("rewind-c35");
     log = project.write("mcp-calls.jsonl", "");
     project.write(
-      "toolset.json",
+      "actionSet.json",
       JSON.stringify({
         mcp: [
           {
@@ -96,31 +96,31 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
   });
 
   test("criterion 3: a wrong argument type is refused before any run exists; a correct script completes", async () => {
-    const added = await project.json(["toolsets", "add", "toolset.json"]);
+    const added = await project.json(["action-sets", "add", "actionSet.json"]);
     expect(added.code, added.ran.stderr).toBe(0);
-    toolset = added.value.id;
-    const declarations = await project.rewind(["toolsets", "declarations", toolset]);
+    actionSet = added.value.id;
+    const declarations = await project.rewind(["action-sets", "declarations", actionSet]);
     expect(declarations.stdout).toContain(`"get-sum"(args: {`);
 
     project.write("wrong.ts", WRONG_TYPE);
     project.write("good.ts", GOOD);
-    // Checked against the registered toolset (the server), and against the file (in the CLI).
-    for (const against of [toolset, "toolset.json"]) {
-      const checked = await project.rewind(["check", "wrong.ts", "--toolset", against]);
+    // Checked against the registered action set (the server), and against the file (in the CLI).
+    for (const against of [actionSet, "actionSet.json"]) {
+      const checked = await project.rewind(["check", "wrong.ts", "--action-set", against]);
       expect(checked.code, checked.stdout + checked.stderr).toBe(65);
       expect(checked.stdout + checked.stderr).toContain("TS2322: Type 'string' is not assignable to type 'number'");
       expect(checked.stdout + checked.stderr).toContain("wrong.ts:4:");
     }
     // Starting it is refused the same way.
-    const refused = await project.rewind(["run", "wrong.ts", "--toolset", toolset]);
+    const refused = await project.rewind(["run", "wrong.ts", "--action-set", actionSet]);
     expect(refused.code).toBe(65);
     expect(refused.stderr).toContain("TS2322");
     expect((await project.json(["runs"])).value.runs).toEqual([]);
     expect(toolCalls()).toEqual([]);
 
-    const ok = await project.rewind(["check", "good.ts", "--toolset", toolset]);
+    const ok = await project.rewind(["check", "good.ts", "--action-set", actionSet]);
     expect(ok.code, ok.stdout + ok.stderr).toBe(0);
-    const ran = await project.json(["run", "good.ts", "--toolset", toolset, "--input", `{"city":"Chicago"}`, "--wait", "120s"]);
+    const ran = await project.json(["run", "good.ts", "--action-set", actionSet, "--input", `{"city":"Chicago"}`, "--wait", "120s"]);
     expect(ran.code, JSON.stringify(ran.value)).toBe(0);
     expect(ran.value.status).toBe("completed");
     expect(ran.value.output.value).toEqual({ echoed: "Echo: hello", sum: "The sum of 2 and 40 is 42.", celsius: true });
@@ -157,14 +157,14 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
       ]);
     project.write("good.tests.json", tests(true));
     const before = toolCalls().length;
-    const tested = await project.rewind(["test", "good.ts", "--toolset", "toolset.json"]);
+    const tested = await project.rewind(["test", "good.ts", "--action-set", "actionSet.json"]);
     expect(tested.code, tested.stdout + tested.stderr).toBe(0);
     expect(tested.stdout.startsWith("PASS"), tested.stdout).toBe(true);
     expect(toolCalls()).toHaveLength(before);
 
     // The same test with another expectation fails: the test is not vacuous.
     project.write("wrong.tests.json", tests(false));
-    const failed = await project.rewind(["test", "good.ts", "--toolset", "toolset.json", "--tests", "wrong.tests.json"]);
+    const failed = await project.rewind(["test", "good.ts", "--action-set", "actionSet.json", "--tests", "wrong.tests.json"]);
     expect(failed.code).toBe(1);
   });
 
@@ -172,7 +172,7 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
     project.write("failing.ts", FAILING);
     project.write("fixed.ts", FIXED);
     const before = toolCalls().length;
-    const failed = await project.json(["run", "failing.ts", "--toolset", toolset, "--wait", "120s"]);
+    const failed = await project.json(["run", "failing.ts", "--action-set", actionSet, "--wait", "120s"]);
     expect(failed.code, JSON.stringify(failed.value)).toBe(1);
     expect(failed.value.error.name).toBe("SyntaxError");
     const parent: string = failed.value.id;

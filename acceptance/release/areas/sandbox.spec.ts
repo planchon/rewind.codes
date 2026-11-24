@@ -4,8 +4,8 @@
  * - Determinism: logical time, the seeded `Math.random` and `crypto`; a replay of the exported
  *   journal recomputes every value; two runs differ (`archi/01-product.md`, "What exists in the
  *   sandbox"; `archi/03-execution.md`, "Logical time", "Replay").
- * - Escape: the globals are exactly the sandbox lib's; no module but `rewind`, `rewind:tools` and
- *   `rewind:workflows`, statically, dynamically or through `eval`; no tool outside the toolset;
+ * - Escape: the globals are exactly the sandbox lib's; no module but `rewind`, `rewind:actions` and
+ *   `rewind:workflows`, statically, dynamically or through `eval`; no tool outside the action set;
  *   no `fetch` without the `http` tool; nothing a run leaves in its isolate reaches another run;
  *   stack traces name no host path; a secret the run attaches never enters the isolate.
  * - Exhaustion (`archi/03-execution.md`, "Resource limits"): CPU per call, heap, array buffers
@@ -39,19 +39,19 @@ import {
   replayDocument,
   runScript,
 } from "../support/sandbox-helpers.js";
-import { handedWithin } from "../support/tools-helpers.js";
+import { handedWithin } from "../support/actions-helpers.js";
 
 let tenant: Tenant;
-/** A toolset of host tools nobody serves: `t.noop`. */
-let hostToolset: string;
+/** An action set of harness actions nobody serves: `t.noop`. */
+let hostActionSet: string;
 
 test.beforeAll(async () => {
   tenant = await newTenant("sandbox");
-  const created = await tenant.api.post("/v1/toolsets", {
+  const created = await tenant.api.post("/v1/action-sets", {
     host: [{ name: "t.noop", description: "Does nothing.", inputSchema: { type: "object" } }],
   });
   expectOk(created);
-  hostToolset = created.json.id;
+  hostActionSet = created.json.id;
 });
 
 /** The runs of a namespace, as the read model lists them. */
@@ -156,7 +156,7 @@ const SPECIFIERS = [
   "rewind:secrets",
 ];
 
-test("a module outside rewind, rewind:tools and rewind:workflows is refused before any run exists", { tag: "@attack" }, async () => {
+test("a module outside rewind, rewind:actions and rewind:workflows is refused before any run exists", { tag: "@attack" }, async () => {
   const namespace = unique("imports-");
   for (const specifier of SPECIFIERS) {
     const reply = await expectRefused({
@@ -205,7 +205,7 @@ test("an import() hidden in eval or new Function loads nothing", { tag: "@attack
 }
 `;
   const outcomes: string[] = [];
-  for (const specifier of ["node:fs", "file:///etc/passwd", "data:text/javascript,export default 42", "rewind", "rewind:tools"]) {
+  for (const specifier of ["node:fs", "file:///etc/passwd", "data:text/javascript,export default 42", "rewind", "rewind:actions"]) {
     for (const how of ["eval", "Function"]) {
       const run = await runScript(tenant.api, script, { input: { specifier, how } });
       expect(run.status, JSON.stringify(run.error)).toBe("completed");
@@ -217,13 +217,13 @@ test("an import() hidden in eval or new Function loads nothing", { tag: "@attack
   evidence(`hidden import() never loads a module (${[...new Set(outcomes.map((o) => o.split(": ")[1]))].join(", ")})`);
 });
 
-test("a tool outside the toolset: an absent group is refused at start, an absent tool calls nothing", { tag: "@attack" }, async () => {
+test("a tool outside the action set: an absent group is refused at start, an absent calls nothing", { tag: "@attack" }, async () => {
   const namespace = unique("tools-");
   const refused = await expectRefused({
     attempt: () =>
       tenant.api.ns(namespace).post("/v1/runs", {
-        toolset: hostToolset,
-        script: `import { payments } from "rewind:tools";\nexport default async function main() { return await payments.refund({ amount: 100 }); }\n`,
+        actionSet: hostActionSet,
+        script: `import { payments } from "rewind:actions";\nexport default async function main() { return await payments.refund({ amount: 100 }); }\n`,
         check: false,
       }),
     status: 422,
@@ -234,17 +234,17 @@ test("a tool outside the toolset: an absent group is refused at start, an absent
 
   const run = await runScript(
     tenant.api,
-    `import { t } from "rewind:tools";\nexport default async function main() { return await (t as any).refund({ amount: 100 }); }\n`,
-    { toolset: hostToolset, namespace },
+    `import { t } from "rewind:actions";\nexport default async function main() { return await (t as any).refund({ amount: 100 }); }\n`,
+    { actionSet: hostActionSet, namespace },
   );
   expect(run.status).toBe("failed");
   expect(run.error).toMatchObject({ name: "TypeError" });
   // No call was scheduled: the journal holds the start and the failure only.
   expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "fail_run"]);
-  evidence("absent group: 422 invalid-script; absent tool: TypeError, no schedule_tool_call");
+  evidence("absent group: 422 invalid-script; absent tool: TypeError, no schedule_call");
 });
 
-test("fetch does not exist without the http tool, and nothing reaches the network", { tag: "@attack" }, async () => {
+test("fetch does not exist without the http action, and nothing reaches the network", { tag: "@attack" }, async () => {
   const sink: Sink = await startSink();
   try {
     const run = await runScript(
@@ -310,7 +310,7 @@ export default async function main() {
 test("stack traces name the script and the runtime, never a host path", { tag: "@attack" }, async () => {
   const run = await runScript(
     tenant.api,
-    `import { t } from "rewind:tools";
+    `import { t } from "rewind:actions";
 export default async function main() {
   (Error as any).prepareStackTrace = (_e: unknown, frames: unknown[]) => frames;
   const stacks: unknown[] = [];
@@ -322,7 +322,7 @@ export default async function main() {
   throw new Error("the end");
 }
 `,
-    { toolset: hostToolset },
+    { actionSet: hostActionSet },
   );
   expect(run.status).toBe("failed");
   const text = JSON.stringify(run);
@@ -342,15 +342,15 @@ test("a secret the run attaches never enters the isolate, a journal, a trace or 
   const secret = canary();
   try {
     expectOk(await tenant.api.put("/v1/secrets/sandbox-fx", { value: secret }));
-    const created = await tenant.api.post("/v1/toolsets", {
+    const created = await tenant.api.post("/v1/action-sets", {
       mcp: [{ name: "fx", url: mcp.url, auth: { type: "secret", header: "authorization", format: "Bearer {secret}" } }],
     });
     expectOk(created);
     const run = await runScript(
       tenant.api,
-      `import * as tools from "rewind:tools";
+      `import * as tools from "rewind:actions";
 import * as rewind from "rewind";
-import { fx } from "rewind:tools";
+import { fx } from "rewind:actions";
 export default async function main() {
   const result: any = await fx.echo({ text: "hello" });
   const dump: string[] = [];
@@ -375,7 +375,7 @@ export default async function main() {
   return { reached: dump.length, text: text.slice(0, 1_000_000), echoed: JSON.stringify(result) };
 }
 `,
-      { toolset: created.json.id, extra: { secrets: { fx: "org/sandbox-fx" } } },
+      { actionSet: created.json.id, extra: { secrets: { fx: "org/sandbox-fx" } } },
     );
     expect(run.status, JSON.stringify(run.error)).toBe("completed");
     expect(run.output.value.reached).toBeGreaterThan(100);
@@ -393,8 +393,8 @@ export default async function main() {
     const cassette = await tenant.api.get(`/v1/runs/${run.id}/journal`, { query: { as: "cassette" } });
     expectOk(cassette);
     expect(cassette.text).not.toContain(secret);
-    const toolsets = await tenant.api.get("/v1/toolsets");
-    expect(toolsets.text).not.toContain(secret);
+    const actionSets = await tenant.api.get("/v1/action-sets");
+    expect(actionSets.text).not.toContain(secret);
     const events = await tenant.api.get(`/v1/runs/${run.id}/events`);
     expectOk(events);
     expect(events.text).not.toContain(secret);
@@ -492,16 +492,16 @@ test("a million timers in one trigger end the run", { tag: "@attack" }, async ()
   evidence(String(run.abort.message));
 });
 
-test("a million tool calls in one trigger end the run, and no task is created", { tag: "@attack" }, async () => {
+test("a million calls in one trigger end the run, and no task is created", { tag: "@attack" }, async () => {
   const run = await runScript(
     tenant.api,
-    'import { t } from "rewind:tools";\nexport default async function main() { await Promise.all(Array.from({ length: 1_000_000 }, () => t.noop({}))); }\n',
-    { toolset: hostToolset },
+    'import { t } from "rewind:actions";\nexport default async function main() { await Promise.all(Array.from({ length: 1_000_000 }, () => t.noop({}))); }\n',
+    { actionSet: hostActionSet },
   );
   expectLimit(run, "reacting to one trigger");
   expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "run_aborted"]);
   const worker = await tenant.key("worker");
-  expect(await handedWithin(tenant.api.as(worker.key), { toolset: hostToolset, slots: 100 })).toEqual([]);
+  expect(await handedWithin(tenant.api.as(worker.key), { actionSet: hostActionSet, slots: 100 })).toEqual([]);
   await expectHealthy(tenant);
   evidence(`${String(run.abort.message)}; no task handed on a stream`);
 });

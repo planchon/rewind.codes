@@ -2,7 +2,7 @@
  * Criterion 2 (`archi/09-roadmap.md`, "0.1 is done when"), the part `crates/rewind/tests/cli.rs`
  * does not prove on its own: a forgotten `await`, an unhandled rejection and a deadlock each end
  * as `archi/03-execution.md` ("How a script ends") specifies, through `rewind` and the embedded
- * server it starts. The host tools are served by the SDK's worker over the server's socket.
+ * server it starts. The harness actions are served by the SDK's worker over the server's socket.
  *
  * `cli.rs` proves the rest, through the same binary: a run that sleeps, whose server is killed,
  * resumes in another process (`rewind run`, `rewind signal`, `rewind status`, `rewind trace`, `rewind replay`);
@@ -12,7 +12,7 @@ import { HostToolError, type HostToolWorker } from "@rewind.codes/sdk";
 import { expect, test } from "@playwright/test";
 import { Project } from "../support/project.js";
 
-const TOOLSET = {
+const ACTION_SET = {
   host: [
     {
       name: "payments.charge",
@@ -34,18 +34,18 @@ const runs = new Map<string, string>();
 
 test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
   let project: Project;
-  let toolset: string;
+  let actionSet: string;
   let worker: HostToolWorker;
 
   test.beforeAll(async () => {
     project = new Project("rewind-c2");
-    project.write("toolset.json", JSON.stringify(TOOLSET));
-    // Registering the toolset starts the embedded server.
-    const added = await project.json(["toolsets", "add", "toolset.json"]);
+    project.write("actionSet.json", JSON.stringify(ACTION_SET));
+    // Registering the action set starts the embedded server.
+    const added = await project.json(["action-sets", "add", "actionSet.json"]);
     expect(added.code, added.ran.stderr).toBe(0);
-    toolset = added.value.id;
+    actionSet = added.value.id;
     worker = project.client().worker({
-      toolset,
+      actionSet,
       tools: {
         // A card is always declined.
         "payments.charge": async () => {
@@ -68,11 +68,11 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
     await project?.dispose();
   });
 
-  /** `rewind run` with the toolset, to its end; the run and the events of its journal. */
+  /** `rewind run` with the action set, to its end; the run and the events of its journal. */
   async function run(name: string, script: string) {
     project.write(name, script);
     // `rewind check` would refuse a forgotten await: these scripts run anyway.
-    const started = await project.json(["run", name, "--toolset", toolset, "--no-check", "--wait", "60s"]);
+    const started = await project.json(["run", name, "--action-set", actionSet, "--no-check", "--wait", "60s"]);
     const id: string = started.value.id;
     runs.set(name, id);
     const exported = await project.json(["export", id]);
@@ -81,7 +81,7 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
   }
 
   test("a forgotten await is caught by rewind check, and its call still happens before the run ends", async () => {
-    const script = `import { audit } from "rewind:tools";
+    const script = `import { audit } from "rewind:actions";
 
 export default async function main() {
   audit.record({ event: "triaged" }); // no await
@@ -89,7 +89,7 @@ export default async function main() {
 }
 `;
     project.write("forgotten.ts", script);
-    const checked = await project.rewind(["check", "forgotten.ts", "--toolset", "toolset.json"]);
+    const checked = await project.rewind(["check", "forgotten.ts", "--action-set", "actionSet.json"]);
     expect(checked.code).toBe(65);
     expect(checked.stdout + checked.stderr).toContain("rewind/floating-promise");
 
@@ -99,7 +99,7 @@ export default async function main() {
     expect(ended.run.status).toBe("completed");
     expect(ended.run.output.value).toBe("done");
     // main returned first; complete_run waited for the call's outcome.
-    expect(ended.events).toEqual(["run_started", "schedule_tool_call", "tool_call_completed", "complete_run"]);
+    expect(ended.events).toEqual(["run_started", "schedule_call", "call_completed", "complete_run"]);
     expect(answered.slice(before).map((a) => a.tool)).toEqual(["audit.record"]);
     expect(Date.parse(ended.run.endedAt)).toBeGreaterThanOrEqual(answered.at(-1)!.at - 50);
   });
@@ -107,7 +107,7 @@ export default async function main() {
   test("a forgotten await whose call fails fails the run, and the run names the call", async () => {
     const ended = await run(
       "forgotten_fails.ts",
-      `import { payments } from "rewind:tools";
+      `import { payments } from "rewind:actions";
 
 export default async function main() {
   payments.charge({ amount: 100 }); // no await
@@ -117,7 +117,7 @@ export default async function main() {
     );
     expect(ended.code, JSON.stringify(ended.run)).toBe(1);
     expect(ended.run.status).toBe("failed");
-    expect(ended.run.error.name).toBe("ToolError");
+    expect(ended.run.error.name).toBe("ActionError");
     expect(ended.run.error.message).toBe("payments.charge failed: card declined");
     expect(ended.run.error.failedCall).toMatchObject({
       seq: 1,
@@ -126,7 +126,7 @@ export default async function main() {
       error: { message: "card declined" },
       callsite: { line: 4 },
     });
-    expect(ended.events).toEqual(["run_started", "schedule_tool_call", "tool_call_failed", "fail_run"]);
+    expect(ended.events).toEqual(["run_started", "schedule_call", "call_failed", "fail_run"]);
 
     const trace = await project.rewind(["trace", ended.run.id]);
     expect(trace.code).toBe(0);
@@ -137,7 +137,7 @@ export default async function main() {
   test("a rejection left unhandled fails the run, even if a handler comes later", async () => {
     const ended = await run(
       "unhandled.ts",
-      `import { payments, audit } from "rewind:tools";
+      `import { payments, audit } from "rewind:actions";
 
 export default async function main() {
   const charge = payments.charge({ amount: 100 }); // rejected before it is awaited
@@ -153,10 +153,10 @@ export default async function main() {
     expect(ended.code, JSON.stringify(ended.run)).toBe(1);
     expect(ended.run.status).toBe("failed");
     expect(ended.run.output).toBeUndefined();
-    expect(ended.run.error).toMatchObject({ name: "ToolError", message: "payments.charge failed: card declined" });
+    expect(ended.run.error).toMatchObject({ name: "ActionError", message: "payments.charge failed: card declined" });
     expect(ended.run.error.failedCall).toMatchObject({ seq: 1, tool: "payments.charge" });
     // The run does not end while a call is in flight: the audit record has its outcome.
-    expect(ended.events.indexOf("tool_call_completed")).toBeGreaterThan(-1);
+    expect(ended.events.indexOf("call_completed")).toBeGreaterThan(-1);
     expect(ended.events.at(-1)).toBe("fail_run");
   });
 
@@ -186,7 +186,7 @@ export default async function main() {
       return (listed.value.runs as { id: string }[]).map((r) => r.id).sort();
     };
     expect(await ids(["--error", "DeadlockError"])).toEqual([runs.get("deadlock.ts")]);
-    expect(await ids(["--error", "ToolError"])).toEqual(
+    expect(await ids(["--error", "ActionError"])).toEqual(
       [runs.get("forgotten_fails.ts"), runs.get("unhandled.ts")].sort(),
     );
     expect(await ids(["--status", "completed"])).toEqual([runs.get("forgotten.ts")]);

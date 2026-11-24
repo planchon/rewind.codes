@@ -53,7 +53,7 @@ import {
   test,
   unique,
 } from "../support/gate.js";
-import { detail, ended, startBroken, startRun, waitingCall } from "../support/tools-helpers.js";
+import { detail, ended, startBroken, startRun, waitingCall } from "../support/actions-helpers.js";
 
 let a: Tenant;
 let b: Tenant;
@@ -72,7 +72,7 @@ test.beforeAll(async () => {
     startSink(),
     startRedirector(),
   ]);
-  const subscription = await a.api.post("/v1/subscriptions", { url: receiver.url, events: ["tool.schema_changed", "credentials.expired"] });
+  const subscription = await a.api.post("/v1/subscriptions", { url: receiver.url, events: ["action.schema_changed", "credentials.expired"] });
   expectOk(subscription, 201);
   secret = subscription.json.secret;
 });
@@ -81,18 +81,18 @@ test.afterAll(async () => {
   await Promise.all([mcp?.close(), receiver?.close(), sink?.close(), redirector?.close()]);
 });
 
-/** Registers a toolset of MCP servers on tenant `t`; the raw answer. */
+/** Registers an action set of MCP servers on tenant `t`; the raw answer. */
 function register(t: Tenant, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
-  return t.api.post("/v1/toolsets", { mcp: servers, ...extra });
+  return t.api.post("/v1/action-sets", { mcp: servers, ...extra });
 }
 
-async function toolsetOf(t: Tenant, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}): Promise<string> {
+async function actionSetOf(t: Tenant, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}): Promise<string> {
   const reply = await register(t, servers, extra);
   expectOk(reply);
   return reply.json.id;
 }
 
-const LOOKUP = `import { fx } from "rewind:tools";
+const LOOKUP = `import { fx } from "rewind:actions";
 
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
@@ -104,7 +104,7 @@ export default async function main(input: { id: string }) {
 const BEARER = { type: "secret", header: "authorization", format: "Bearer {secret}" };
 
 /** A script that waits for `go` between two calls of `fx.lookup`. */
-const TWO_LOOKUPS = `import { fx } from "rewind:tools";
+const TWO_LOOKUPS = `import { fx } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main(input: { id: string }) {
@@ -126,9 +126,9 @@ function deliveries(type: string, runId: string): { delivery: Delivery; event: a
 // Success
 
 test("a script calls an MCP server over streamable HTTP, with the idempotency key and trace context in _meta", { tag: "@success" }, async () => {
-  const toolset = await toolsetOf(a, [{ name: "fx", url: mcp.url }]);
+  const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
   const before = mcp.calls.length;
-  const run = await startRun(a.api.ns("alice"), { toolset, script: LOOKUP, input: { id: "42" }, wait: "30s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet, script: LOOKUP, input: { id: "42" }, wait: "30s" });
   const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toEqual({ name: "Customer 42", tier: "gold" });
@@ -140,8 +140,8 @@ test("a script calls an MCP server over streamable HTTP, with the idempotency ke
 });
 
 test("MCP content without an output schema is read with text() and json()", { tag: "@success" }, async () => {
-  const toolset = await toolsetOf(a, [{ name: "fx", url: mcp.url }]);
-  const script = `import { fx } from "rewind:tools";
+  const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
+  const script = `import { fx } from "rewind:actions";
 
 export default async function main() {
   const plain = await fx.echo({ text: "hello" });
@@ -149,30 +149,30 @@ export default async function main() {
   return { text: plain.text(), n: structured.json<{ n: number }>().n };
 }
 `;
-  const run = await startRun(a.api.ns("alice"), { toolset, script, wait: "30s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet, script, wait: "30s" });
   const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toEqual({ text: "hello", n: 7 });
 });
 
-test("an MCP tool's error reaches the script as a ToolError it can catch", { tag: "@success" }, async () => {
-  const toolset = await toolsetOf(a, [{ name: "fx", url: mcp.url }]);
-  const script = `import { fx } from "rewind:tools";
-import { ToolError } from "rewind";
+test("an MCP tool's error reaches the script as a ActionError it can catch", { tag: "@success" }, async () => {
+  const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
+  const script = `import { fx } from "rewind:actions";
+import { ActionError } from "rewind";
 
 export default async function main() {
   try {
     await fx.fail({ reason: "quota" });
     return "no error";
   } catch (error) {
-    if (!(error instanceof ToolError)) throw error;
-    return { tool: error.tool, message: error.message };
+    if (!(error instanceof ActionError)) throw error;
+    return { action: error.action, message: error.message };
   }
 }
 `;
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { toolset, script })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, script })).id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
-  expect(done.output.value.tool).toBe("fx.fail");
+  expect(done.output.value.action).toBe("fx.fail");
   expect(done.output.value.message).toContain("failed: quota");
 });
 
@@ -186,11 +186,11 @@ test("each run calls with the secret it attached: Alice's, Bob's or the organiza
     expectOk(await a.api.put(`/v1/namespaces/alice/secrets/${name}`, { value: values.alice }), 201);
     expectOk(await a.api.put(`/v1/namespaces/bob/secrets/${name}`, { value: values.bob }), 201);
     // The listing carries the organization's secret attached for it; no run keeps it.
-    const toolset = await toolsetOf(a, [{ name: "fx", url: server.url, auth: BEARER }], { secrets: { fx: `org/${name}-listing` } });
+    const actionSet = await actionSetOf(a, [{ name: "fx", url: server.url, auth: BEARER }], { secrets: { fx: `org/${name}-listing` } });
     expect(server.requests.filter((r) => r.body.includes('"tools/list"')).map((r) => r.headers.authorization)).toContain(`Bearer ${values.listing}`);
     const seenBy = async (namespace: string, attached: string) => {
       const before = server.calls.length;
-      const run = await startRun(a.api.ns(namespace), { toolset, script: LOOKUP, input: { id: namespace }, secrets: { fx: attached }, wait: "30s" });
+      const run = await startRun(a.api.ns(namespace), { actionSet, script: LOOKUP, input: { id: namespace }, secrets: { fx: attached }, wait: "30s" });
       const done = run.status === "completed" ? run : await ended(a.api.ns(namespace), run.id);
       expect(done.status, JSON.stringify(done)).toBe("completed");
       expect(done.secrets).toEqual({ fx: attached });
@@ -203,12 +203,12 @@ test("each run calls with the secret it attached: Alice's, Bob's or the organiza
     expect(await seenBy("bob", `ns/${name}`)).toBe(`Bearer ${values.bob}`);
     expect(await seenBy("carol", `org/${name}`)).toBe(`Bearer ${values.organization}`);
     // Dave has none of his own: ns/ is refused before any run exists, with no fallback.
-    const refused = await a.api.ns("dave").post("/v1/runs", { toolset, script: LOOKUP, input: { id: "dave" }, secrets: { fx: `ns/${name}` } });
+    const refused = await a.api.ns("dave").post("/v1/runs", { actionSet, script: LOOKUP, input: { id: "dave" }, secrets: { fx: `ns/${name}` } });
     expectProblem(refused, 422, "secret-required");
     expect(refused.json.attachments).toEqual([
       expect.objectContaining({ server: "fx", problem: "unknown", secret: `ns/${name}`, attachable: expect.arrayContaining([`org/${name}`]) }),
     ]);
-    const nothing = await a.api.ns("alice").post("/v1/runs", { toolset, script: LOOKUP, input: { id: "alice" } });
+    const nothing = await a.api.ns("alice").post("/v1/runs", { actionSet, script: LOOKUP, input: { id: "alice" } });
     expectProblem(nothing, 422, "secret-required");
     expect(nothing.json.attachments[0]).toMatchObject({ server: "fx", problem: "missing" });
     expect(server.calls.filter((c) => c.args.id === "dave"), "nothing was sent for Dave").toEqual([]);
@@ -223,8 +223,8 @@ test("a secret deleted mid-run parks the call, and putting it again sends it wit
   try {
     const name = unique("gone-");
     expectOk(await a.api.put(`/v1/namespaces/erin/secrets/${name}`, { value: `${canary()}-erin` }), 201);
-    const toolset = await toolsetOf(a, [{ name: "fx", url: server.url, auth: BEARER }]);
-    const run = await startRun(a.api.ns("erin"), { toolset, script: TWO_LOOKUPS, input: { id: "erin" }, secrets: { fx: `ns/${name}` } });
+    const actionSet = await actionSetOf(a, [{ name: "fx", url: server.url, auth: BEARER }]);
+    const run = await startRun(a.api.ns("erin"), { actionSet, script: TWO_LOOKUPS, input: { id: "erin" }, secrets: { fx: `ns/${name}` } });
     await waitingSignal(a.api.ns("erin"), run.id, "go");
     expectOk(await a.api.delete(`/v1/namespaces/erin/secrets/${name}`), 204);
     expectOk(await a.api.post(`/v1/runs/${run.id}/signals/go`, {}));
@@ -232,7 +232,7 @@ test("a secret deleted mid-run parks the call, and putting it again sends it wit
     expect(parked.parked).toBe("secret_missing");
     const hook = await eventually("credentials.expired (missing) is delivered", () => deliveries("credentials.expired", run.id)[0], 60_000);
     expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("credentials.expired");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "erin", tool: "fx.lookup", server: "fx", reason: "missing", secret: `ns/${name}`, taskId: parked.taskId });
+    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "erin", action: "fx.lookup", server: "fx", reason: "missing", secret: `ns/${name}`, callId: parked.callId });
     expect(hook.event.data.message).toContain(`PUT /v1/namespaces/erin/secrets/${name}`);
     const key = `${run.id}/${parked.seq}`;
     expect(server.calls.filter((c) => c.meta?.["codes.rewind/idempotency-key"] === key), "nothing was sent while parked").toEqual([]);
@@ -253,15 +253,15 @@ test("a call refused with 401 is parked, and sent again with the same key once t
   try {
     const name = unique("gate-");
     expectOk(await a.api.put(`/v1/secrets/${name}`, { value: `${canary()}-v1` }), 201);
-    const toolset = await toolsetOf(a, [{ name: "fx", url: gate.url, auth: BEARER }], { secrets: { fx: `org/${name}` } });
+    const actionSet = await actionSetOf(a, [{ name: "fx", url: gate.url, auth: BEARER }], { secrets: { fx: `org/${name}` } });
     // The token expires during the run's pause.
     gate.accept = `Bearer ${canary()}-v2`;
-    const run = await startRun(a.api.ns("carol"), { toolset, script: LOOKUP, input: { id: "7" }, secrets: { fx: `org/${name}` } });
+    const run = await startRun(a.api.ns("carol"), { actionSet, script: LOOKUP, input: { id: "7" }, secrets: { fx: `org/${name}` } });
     const parked = await waitingCall(a.api.ns("carol"), run.id, "parked");
     expect(parked.parked).toBe("credentials_refused");
     const hook = await eventually("credentials.expired is delivered", () => deliveries("credentials.expired", run.id)[0], 60_000);
     expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("credentials.expired");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "carol", tool: "fx.lookup", toolset, reason: "refused", secret: `org/${name}` });
+    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "carol", action: "fx.lookup", actionSet, reason: "refused", secret: `org/${name}` });
     expect(hook.delivery.body).not.toContain(canary());
     const usage = await a.api.get(`/v1/secrets/${name}/usage`);
     expectOk(usage, 200);
@@ -305,14 +305,14 @@ test("a signed MCP server checks every request with verifyRewindCall and learns 
     },
   });
   state.audience = server.url;
-  const script = `import { crm } from "rewind:tools";
+  const script = `import { crm } from "rewind:actions";
 
 export default async function main() {
   return (await crm.whoami({})).json();
 }
 `;
   try {
-    const toolset = await toolsetOf(a, [{ name: "crm", url: server.url, auth: { type: "rewind" } }]);
+    const actionSet = await actionSetOf(a, [{ name: "crm", url: server.url, auth: { type: "rewind" } }]);
     expect(server.requests.length).toBeGreaterThan(0);
     expect(server.requests.filter((r) => r.refused), "the listing's requests verified").toEqual([]);
     const keys = await a.api.get("/v1/organization/signing-keys");
@@ -320,7 +320,7 @@ export default async function main() {
     expect(keys.json).toMatchObject({ issuer, jwksUrl: `${issuer}/jwks.json` });
     const first = keys.json.keys[0].kid as string;
 
-    const run = await startRun(a.api.ns("alice"), { toolset, script, labels: { env: "prod" }, wait: "30s" });
+    const run = await startRun(a.api.ns("alice"), { actionSet, script, labels: { env: "prod" }, wait: "30s" });
     const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     expect(done.output.value).toEqual({ namespace: "alice", labels: { env: "prod" } });
@@ -351,14 +351,14 @@ export default async function main() {
     // harness approves it once the server takes them; it is sent again with the same key. The SDK
     // reads the keys again for an unknown kid at most every 10 s: past that, the new key is known.
     await new Promise((resolve) => setTimeout(resolve, 11_000));
-    const dev = await startRun(a.api.ns("bob"), { toolset, script, labels: { env: "dev" } });
+    const dev = await startRun(a.api.ns("bob"), { actionSet, script, labels: { env: "dev" } });
     const parked = await waitingCall(a.api.ns("bob"), dev.id, "parked");
     expect(parked.parked).toBe("credentials_refused");
     const hook = await eventually("credentials.expired (refused) is delivered", () => deliveries("credentials.expired", dev.id)[0], 60_000);
     expect(hook.event.data).toMatchObject({ runId: dev.id, reason: "refused", server: "crm" });
     expect(hook.event.data.secret).toBeUndefined();
     state.labels = {};
-    expectOk(await a.api.post(`/v1/tasks/${parked.taskId}/approve`));
+    expectOk(await a.api.post(`/v1/calls/${parked.callId}/approve`));
     const devDone = await ended(a.api.ns("bob"), dev.id);
     expect(devDone.status, JSON.stringify(devDone)).toBe("completed");
     expect(devDone.output.value).toEqual({ namespace: "bob", labels: { env: "dev" } });
@@ -375,12 +375,12 @@ export default async function main() {
 test("an API is read from its OpenAPI document by URL: one tool per operation, the others skipped, its key attached at start", { tag: "@success" }, async () => {
   const fixture = await startApiFixture({ server: "https://measures.example.com/v1" });
   try {
-    const reply = await a.api.post("/v1/toolsets", { apis: [{ name: "dax", openapi: fixture.documentUrl }] });
+    const reply = await a.api.post("/v1/action-sets", { apis: [{ name: "dax", openapi: fixture.documentUrl }] });
     expectOk(reply);
-    const toolset = reply.json;
+    const actionSet = reply.json;
     expect(fixture.documentReads).toBe(1);
-    expect(toolset.tools.map((t: { name: string }) => t.name)).toEqual(["dax.createMeasure", "dax.getMeasure", "webhook"]);
-    expect(toolset.apis).toEqual([
+    expect(actionSet.actions.map((t: { name: string }) => t.name)).toEqual(["dax.createMeasure", "dax.getMeasure", "webhook"]);
+    expect(actionSet.apis).toEqual([
       expect.objectContaining({
         name: "dax",
         baseUrl: "https://measures.example.com/v1",
@@ -388,17 +388,17 @@ test("an API is read from its OpenAPI document by URL: one tool per operation, t
         auth: expect.objectContaining({ type: "secret", header: expect.stringMatching(/^x-api-key$/i) }),
       }),
     ]);
-    expect(toolset.skipped).toEqual([expect.objectContaining({ method: "put", path: "/measures/{id}" })]);
-    const create = toolset.tools.find((t: { name: string }) => t.name === "dax.createMeasure");
+    expect(actionSet.skipped).toEqual([expect.objectContaining({ method: "put", path: "/measures/{id}" })]);
+    const create = actionSet.actions.find((t: { name: string }) => t.name === "dax.createMeasure");
     expect(create.policy.onInterruption, "a POST declaring Idempotency-Key may be sent again").toBe("retry");
     // The declarations type-check scripts before they run.
-    const wrong = `import { dax } from "rewind:tools";\nexport default async function main() { return await dax.getMeasure({ id: 42 }); }\n`;
-    const checked = await a.api.ns("alice").post("/v1/check", { script: wrong, toolset: toolset.id });
+    const wrong = `import { dax } from "rewind:actions";\nexport default async function main() { return await dax.getMeasure({ id: 42 }); }\n`;
+    const checked = await a.api.ns("alice").post("/v1/check", { script: wrong, actionSet: actionSet.id });
     expectOk(checked, 200);
     expect(JSON.stringify(checked.json)).toContain("TS2322");
     // Its key is a secret the run attaches: none attached, the start is refused.
-    const right = `import { dax } from "rewind:tools";\nexport default async function main() { return await dax.getMeasure({ id: "42" }); }\n`;
-    const refused = await a.api.ns("alice").post("/v1/runs", { script: right, toolset: toolset.id });
+    const right = `import { dax } from "rewind:actions";\nexport default async function main() { return await dax.getMeasure({ id: "42" }); }\n`;
+    const refused = await a.api.ns("alice").post("/v1/runs", { script: right, actionSet: actionSet.id });
     expectProblem(refused, 422, "secret-required");
     expect(refused.json.attachments[0]).toMatchObject({ server: "dax", problem: "missing" });
     expect(fixture.requests, "the API itself was never called").toEqual([]);
@@ -412,7 +412,7 @@ test("a tool whose schema changed parks the call, tells the harness, and goes on
   test.setTimeout(4 * 60_000);
   const server = await startMcpFixture();
   try {
-    const toolset = await toolsetOf(a, [{ name: "fx", url: server.url }]);
+    const actionSet = await actionSetOf(a, [{ name: "fx", url: server.url }]);
     // The server's lookup now requires `customer`: the pinned call no longer matches.
     server.setTools(
       defaultTools().map((tool) =>
@@ -426,14 +426,14 @@ test("a tool whose schema changed parks the call, tells the harness, and goes on
     // listed the tools at registration, in the process that also makes the call, sees the change
     // once that time has passed.
     await delay(61_000);
-    const run = await startRun(a.api.ns("alice"), { toolset, script: LOOKUP, input: { id: "9" } });
+    const run = await startRun(a.api.ns("alice"), { actionSet, script: LOOKUP, input: { id: "9" } });
     const parked = await waitingCall(a.api.ns("alice"), run.id, "parked");
     expect(parked.parked).toBe("schema_changed");
     expect(server.calls.filter((c) => c.tool === "lookup"), "nothing is sent while parked").toHaveLength(0);
-    const hook = await eventually("tool.schema_changed is delivered", () => deliveries("tool.schema_changed", run.id)[0], 60_000);
-    expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("tool.schema_changed");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "alice", tool: "fx.lookup", taskId: parked.taskId });
-    expectOk(await a.api.post(`/v1/tasks/${parked.taskId}/approve`));
+    const hook = await eventually("action.schema_changed is delivered", () => deliveries("action.schema_changed", run.id)[0], 60_000);
+    expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("action.schema_changed");
+    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "alice", action: "fx.lookup", callId: parked.callId });
+    expectOk(await a.api.post(`/v1/calls/${parked.callId}/approve`));
     const done = await ended(a.api.ns("alice"), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     expect(server.calls.filter((c) => c.tool === "lookup").map((c) => c.args)).toEqual([{ id: "9" }]);
@@ -443,30 +443,30 @@ test("a tool whose schema changed parks the call, tells the harness, and goes on
 });
 
 test("a stdio MCP server runs where the operator allows it", { tag: "@success" }, async () => {
-  const toolset = await toolsetOf(a, [{ name: "everything", command: "npx", args: ["-y", "@modelcontextprotocol/server-everything@2.2.1", "stdio"] }]);
-  const script = `import { everything } from "rewind:tools";
+  const actionSet = await actionSetOf(a, [{ name: "everything", command: "npx", args: ["-y", "@modelcontextprotocol/server-everything@2.2.1", "stdio"] }]);
+  const script = `import { everything } from "rewind:actions";
 
 export default async function main() {
   const echoed = await everything.echo({ message: "over stdio" });
   return echoed.text();
 }
 `;
-  const run = await startRun(a.api.ns("alice"), { toolset, script, wait: "60s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet, script, wait: "60s" });
   const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id, 120_000);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toContain("over stdio");
 });
 
-test("fetch reaches a public host of the http tool's allow-list", { tag: "@success" }, async () => {
-  const toolset = await a.api.post("/v1/toolsets", { http: { allow: ["rewind.codes"] } });
-  expectOk(toolset);
+test("fetch reaches a public host of the http action's allow-list", { tag: "@success" }, async () => {
+  const actionSet = await a.api.post("/v1/action-sets", { http: { allow: ["rewind.codes"] } });
+  expectOk(actionSet);
   const script = `export default async function main() {
   const response = await fetch("https://rewind.codes/");
   const body = await response.text();
   return { status: response.status, ok: response.ok, url: response.url, html: body.includes("<html") || body.includes("<!doctype") || body.includes("<!DOCTYPE") };
 }
 `;
-  const run = await startRun(a.api.ns("alice"), { toolset: toolset.json.id, script, wait: "60s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet: actionSet.json.id, script, wait: "60s" });
   const done = run.status === "completed" || run.status === "failed" ? run : await ended(a.api.ns("alice"), run.id, 90_000);
   expect(done.status, `the http tool reached https://rewind.codes/ (this check needs the internet): ${JSON.stringify(done.error ?? done)}`).toBe("completed");
   expect(done.output.value).toMatchObject({ status: 200, ok: true, html: true });
@@ -475,13 +475,13 @@ test("fetch reaches a public host of the http tool's allow-list", { tag: "@succe
 // ---------------------------------------------------------------------------------------------
 // Failure
 
-test("an MCP server that cannot be reached fails the registration with toolset-unavailable", { tag: "@failure" }, async () => {
+test("an MCP server that cannot be reached fails the registration with action-set-unavailable", { tag: "@failure" }, async () => {
   const closed = await startSink();
   const url = `${closed.origin}/mcp`;
   await closed.close();
-  allow5xx("toolset-unavailable");
+  allow5xx("action-set-unavailable");
   const reply = await register(a, [{ name: "gone", url }]);
-  expectProblem(reply, 502, "toolset-unavailable");
+  expectProblem(reply, 502, "action-set-unavailable");
 });
 
 test("a deployed server calls APIs over https only", { tag: "@failure" }, async () => {
@@ -490,75 +490,75 @@ test("a deployed server calls APIs over https only", { tag: "@failure" }, async 
     // The document given inline: one read from an internal address is refused without a word of
     // why (08), which the check would not see.
     const document = await (await fetch(fixture.documentUrl)).json();
-    const reply = await a.api.post("/v1/toolsets", { apis: [{ name: "dax", openapi: document }] });
-    expectProblem(reply, 422, "invalid-toolset");
+    const reply = await a.api.post("/v1/action-sets", { apis: [{ name: "dax", openapi: document }] });
+    expectProblem(reply, 422, "invalid-action-set");
     expect(detail(reply)).toContain("a deployed server calls APIs over https");
     expect(fixture.requests).toEqual([]);
-    evidence(`an API whose base URL is ${fixture.base} → 422 invalid-toolset: ${detail(reply)}`);
+    evidence(`an API whose base URL is ${fixture.base} → 422 invalid-action-set: ${detail(reply)}`);
   } finally {
     await fixture.close();
   }
 });
 
-test("invalid toolsets are refused with invalid-toolset", { tag: "@failure" }, async () => {
+test("invalid action sets are refused with invalid-action-set", { tag: "@failure" }, async () => {
   const host = (name: string) => ({ name, description: "d", inputSchema: { type: "object" } });
   const cases: [string, Record<string, unknown>][] = [
-    ["a duplicate host tool", { host: [host("crm.find"), host("crm.find")] }],
-    ["a reserved word as a host tool", { host: [host("default")] }],
-    ["a reserved word as a group", { host: [host("class.find")] }],
-    ["the reserved namespace workflows", { host: [host("workflows.find")] }],
+    ["a duplicate host tool", { harness: [host("crm.find"), host("crm.find")] }],
+    ["a reserved word as a host tool", { harness: [host("default")] }],
+    ["a reserved word as a group", { harness: [host("class.find")] }],
+    ["the reserved namespace workflows", { harness: [host("workflows.find")] }],
     ["a server with both url and command", { mcp: [{ name: "fx", url: mcp.url, command: "true" }] }],
     ["a server with neither url nor command", { mcp: [{ name: "fx" }] }],
   ];
   for (const [what, body] of cases) {
-    const reply = await a.api.post("/v1/toolsets", body);
+    const reply = await a.api.post("/v1/action-sets", body);
     expect(reply.status, `${what}: ${reply.text}`).toBe(422);
-    expectProblem(reply, 422, "invalid-toolset");
+    expectProblem(reply, 422, "invalid-action-set");
   }
   evidence(cases.map(([what]) => what).join("; "));
 });
 
-test("a toolset whose input schema is not a JSON Schema is refused with invalid-toolset", { tag: "@failure" }, async () => {
-  // api/README.md: `invalid-toolset` (422) is "an invalid schema".
+test("an action set whose input schema is not a JSON Schema is refused with invalid-action-set", { tag: "@failure" }, async () => {
+  // api/README.md: `invalid-action-set` (422) is "an invalid schema".
   for (const inputSchema of [{ type: 12 }, { type: "object", properties: { id: { type: "strng" } } }, { type: "object", required: "id" }]) {
-    const reply = await a.api.post("/v1/toolsets", { host: [{ name: "crm.find", description: "d", inputSchema }] });
+    const reply = await a.api.post("/v1/action-sets", { harness: [{ name: "crm.find", description: "d", inputSchema }] });
     expect(reply.status, `${JSON.stringify(inputSchema)}: ${reply.text.slice(0, 300)}`).toBe(422);
-    expectProblem(reply, 422, "invalid-toolset");
+    expectProblem(reply, 422, "invalid-action-set");
   }
 });
 
 test("arguments outside an MCP tool's schema throw a TypeError, and the server receives nothing", { tag: "@failure" }, async () => {
-  const toolset = await toolsetOf(a, [{ name: "fx", url: mcp.url }]);
+  const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
   const before = mcp.calls.length;
-  const script = `import { fx } from "rewind:tools";
+  const script = `import { fx } from "rewind:actions";
 
 export default async function main() {
   return await fx.lookup({ id: 42 } as any);
 }
 `;
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { toolset, script })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, script })).id);
   expect(done.status).toBe("failed");
   expect(done.error.name).toBe("TypeError");
   expect(mcp.calls.length).toBe(before);
 });
 
 test("an MCP call past its execution timeout fails with kind timeout", { tag: "@failure" }, async () => {
-  const toolset = await toolsetOf(a, [{ name: "fx", url: mcp.url, policies: { slow: { timeout: "1s", onInterruption: "at_most_once" } } }]);
-  const script = `import { fx } from "rewind:tools";
+  const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url, policies: { slow: { timeout: "1s", idempotent: false } } }]);
+  const script = `import { fx } from "rewind:actions";
 
 export default async function main() {
   return (await fx.slow({ ms: 5000 })).text();
 }
 `;
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { toolset, script })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, script })).id);
   expect(done.status, JSON.stringify(done)).toBe("failed");
-  expect(done.error.failedCall).toMatchObject({ tool: "fx.slow", error: { kind: "timeout" } });
+  expect(done.error.failedCall).toMatchObject({ action: "fx.slow", error: { kind: "timeout" } });
 });
 
 test("stdio servers are refused where the operator does not allow them, and nothing is started", { tag: "@failure" }, async () => {
   const marker = join(tmpdir(), `rewind-gate-stdio-${unique()}`);
   const reply = await register(b, [{ name: "shell", command: "/bin/sh", args: ["-c", `touch ${marker}`] }]);
-  expectProblem(reply, 422, "invalid-toolset");
+  expectProblem(reply, 422, "invalid-action-set");
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(existsSync(marker), "the command never ran").toBe(false);
 });
@@ -575,16 +575,16 @@ let internalSecret: Promise<void> | undefined;
 async function refusedOnB(url: string, reason: RegExp): Promise<string> {
   internalSecret ??= b.api.put("/v1/secrets/internal", { value: canary() }).then((reply) => expectOk(reply));
   await internalSecret;
-  allow5xx("toolset-unavailable");
+  allow5xx("action-set-unavailable");
   const reply = await expectRefused({
     attempt: () => register(b, [{ name: "internal", url, auth: BEARER }], { secrets: { internal: "org/internal" } }),
     status: 502,
-    slug: "toolset-unavailable",
+    slug: "action-set-unavailable",
     probe: () => sink.hits.length,
   });
   expect(detail(reply)).toMatch(reason);
   expect(reply.text).not.toContain(canary());
-  return `${url} → 502 toolset-unavailable: ${detail(reply)}`;
+  return `${url} → 502 action-set-unavailable: ${detail(reply)}`;
 }
 
 test("an MCP server on loopback is refused, in every spelling", { tag: "@attack" }, async () => {
@@ -642,17 +642,17 @@ test("an MCP server that redirects to another origin is refused, and its secret 
     const url = redirector.to(target.url, 307);
     const name = unique("hop-");
     expectOk(await a.api.put(`/v1/secrets/${name}`, { value: `${canary()}-hop` }), 201);
-    allow5xx("toolset-unavailable");
+    allow5xx("action-set-unavailable");
     const reply = await expectRefused({
       attempt: () => register(a, [{ name: "hop", url, auth: BEARER }], { secrets: { hop: `org/${name}` } }),
       status: 502,
-      slug: "toolset-unavailable",
+      slug: "action-set-unavailable",
       probe: () => target.methods.length,
     });
     expect(target.methods, "the other origin received nothing").toEqual([]);
     expect(redirector.hits.length).toBeGreaterThan(0);
     expect(reply.text).not.toContain(canary());
-    evidence(`307 to ${target.url} → 502 toolset-unavailable: ${detail(reply)}`);
+    evidence(`307 to ${target.url} → 502 action-set-unavailable: ${detail(reply)}`);
   } finally {
     await target.close();
   }
@@ -662,9 +662,9 @@ test("what an internal MCP server answers is never quoted to the tenant", { tag:
   const marker = `INTERNAL-ONLY-${unique()}`;
   const broken = await startBroken(500, `stack trace with ${marker} and db password`);
   try {
-    allow5xx("toolset-unavailable");
+    allow5xx("action-set-unavailable");
     const reply = await register(a, [{ name: "internal", url: broken.url }]);
-    expectProblem(reply, 502, "toolset-unavailable");
+    expectProblem(reply, 502, "action-set-unavailable");
     expect(broken.hits).toBeGreaterThan(0);
     expect(reply.text).not.toContain(marker);
     evidence(`the internal server answered 500 with a body; the tenant got: ${detail(reply)}`);
@@ -693,13 +693,13 @@ test("no secret's value is stored in clear: a dump of setup A's database holds n
 });
 
 // ---------------------------------------------------------------------------------------------
-// Attack: the http tool
+// Attack: the http action
 
 test("fetch to an internal address is refused even when the allow-list names it", { tag: "@attack" }, async () => {
   for (const t of [a, b]) {
-    const toolset = await t.api.post("/v1/toolsets", { http: { allow: ["127.0.0.1", "localhost", "169.254.169.254", "10.0.0.1"] } });
-    expectOk(toolset);
-    const script = `import { ToolError } from "rewind";
+    const actionSet = await t.api.post("/v1/action-sets", { http: { allow: ["127.0.0.1", "localhost", "169.254.169.254", "10.0.0.1"] } });
+    expectOk(actionSet);
+    const script = `import { ActionError } from "rewind";
 
 export default async function main(input: { urls: string[] }) {
   const refused: string[] = [];
@@ -708,7 +708,7 @@ export default async function main(input: { urls: string[] }) {
       await fetch(url);
       refused.push("SENT " + url);
     } catch (error) {
-      if (!(error instanceof ToolError)) throw error;
+      if (!(error instanceof ActionError)) throw error;
       refused.push(error.message);
     }
   }
@@ -717,7 +717,7 @@ export default async function main(input: { urls: string[] }) {
 `;
     const urls = [`${sink.origin}/secret`, `http://localhost:${sink.port}/secret`, "http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/"];
     const before = sink.hits.length;
-    const done = await ended(t.api.ns("alice"), (await startRun(t.api.ns("alice"), { toolset: toolset.json.id, script, input: { urls } })).id);
+    const done = await ended(t.api.ns("alice"), (await startRun(t.api.ns("alice"), { actionSet: actionSet.json.id, script, input: { urls } })).id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     const messages: string[] = done.output.value;
     expect(messages).toHaveLength(urls.length);
@@ -728,9 +728,9 @@ export default async function main(input: { urls: string[] }) {
 });
 
 test("fetch outside the allow-list, or with another scheme, is refused", { tag: "@attack" }, async () => {
-  const toolset = await a.api.post("/v1/toolsets", { http: { allow: ["rewind.codes"] } });
-  expectOk(toolset);
-  const script = `import { ToolError } from "rewind";
+  const actionSet = await a.api.post("/v1/action-sets", { http: { allow: ["rewind.codes"] } });
+  expectOk(actionSet);
+  const script = `import { ActionError } from "rewind";
 
 export default async function main(input: { urls: string[] }) {
   const out: string[] = [];
@@ -739,19 +739,19 @@ export default async function main(input: { urls: string[] }) {
       await fetch(url);
       out.push("SENT " + url);
     } catch (error) {
-      // A refused host is a ToolError; a scheme fetch does not speak is refused before any call.
-      out.push(\`\${error instanceof ToolError ? "ToolError" : (error as Error).name}: \${(error as Error).message}\`);
+      // A refused host is a ActionError; a scheme fetch does not speak is refused before any call.
+      out.push(\`\${error instanceof ActionError ? "ActionError" : (error as Error).name}: \${(error as Error).message}\`);
     }
   }
   return out;
 }
 `;
   const urls = ["https://example.org/", "https://rewind.codes.evil.example/", "https://evil.example/?x=rewind.codes", "file:///etc/passwd", "ftp://rewind.codes/"];
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { toolset: toolset.json.id, script, input: { urls } })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet: actionSet.json.id, script, input: { urls } })).id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   const [org, suffix, query, file, ftp] = done.output.value as string[];
-  for (const refused of [org, suffix, query]) expect(refused).toMatch(/^ToolError: .*not in the toolset's allow-list/);
-  for (const refused of [file, ftp]) expect(refused).toMatch(/^(ToolError|TypeError): .*only sends http and https/);
+  for (const refused of [org, suffix, query]) expect(refused).toMatch(/^ActionError: .*not in the actionSet's allow-list/);
+  for (const refused of [file, ftp]) expect(refused).toMatch(/^(ActionError|TypeError): .*only sends http and https/);
   // Nothing reached the network: the journal holds no completed http call.
   const journal = await a.api.ns("alice").get(`/v1/runs/${done.id}/journal`);
   expect(JSON.stringify(journal.json)).not.toContain('"status":200');

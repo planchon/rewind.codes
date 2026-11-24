@@ -22,7 +22,7 @@ import { between, ended, events, follow, getRun, journal, parseSse, runIds, star
 
 let tenant: Tenant;
 let mcp: McpFixture;
-let toolset: string;
+let actionSet: string;
 /** The owner's raw HTTP in the namespace `alice`. */
 let alice: Api;
 
@@ -36,9 +36,9 @@ export default async function main() {
 test.beforeAll(async () => {
   tenant = await newTenant("runs");
   mcp = await startMcpFixture();
-  const created = await tenant.api.post("/v1/toolsets", { mcp: [{ name: "fx", url: mcp.url }] });
+  const created = await tenant.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
   expectOk(created);
-  toolset = created.json.id;
+  actionSet = created.json.id;
   alice = tenant.api.ns("alice");
 });
 
@@ -90,8 +90,8 @@ test("a TTL given at start sets the deadline, and the trace context makes the ru
 test("the same Idempotency-Key starts one run per namespace, and a retry runs nothing twice", { tag: "@success" }, async () => {
   const key = unique("start-");
   const body = {
-    toolset,
-    script: `import { fx } from "rewind:tools";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
+    actionSet,
+    script: `import { fx } from "rewind:actions";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
     wait: "30s",
   };
   const first = await startRun(alice, body, { key });
@@ -197,10 +197,10 @@ test("a run past its TTL is cancelled through the normal path, reason ttl", { ta
 test("a fork reuses its parent's recorded calls and seed, and stays in its namespace", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const parent = await started(alice, {
-    toolset,
+    actionSet,
     input: { id },
     wait: "30s",
-    script: `import { fx } from "rewind:tools";
+    script: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
   const draw = Math.random();
@@ -215,7 +215,7 @@ export default async function main(input: { id: string }) {
 
   const forked = await alice.post(`/v1/runs/${parent.id}/fork`, {
     wait: "30s",
-    script: `import { fx } from "rewind:tools";
+    script: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
   const draw = Math.random();
@@ -236,15 +236,15 @@ export default async function main(input: { id: string }) {
 
 test("a fork forced live at an entry, or given another input, calls again under its own key", { tag: "@success" }, async () => {
   const id = unique("cus-");
-  const script = `import { fx } from "rewind:tools";
+  const script = `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   return await fx.lookup({ id: input.id });
 }
 `;
-  const parent = await started(alice, { toolset, input: { id }, wait: "30s", script });
+  const parent = await started(alice, { actionSet, input: { id }, wait: "30s", script });
   expect(parent.status).toBe("completed");
   const entries = (await journal(alice, parent.id)).entries as { index: number; event: { type: string } }[];
-  const scheduled = entries.find((e) => e.event.type === "schedule_tool_call")!;
+  const scheduled = entries.find((e) => e.event.type === "schedule_call")!;
 
   const atEntry = await alice.post(`/v1/runs/${parent.id}/fork`, { script, at: scheduled.index, wait: "30s" });
   expectOk(atEntry, 201);
@@ -282,9 +282,9 @@ test("an erased run is gone: its state, journal and events answer 404", { tag: "
 test("the journal and the cassette export what the run did", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const run = await started(alice, {
-    toolset,
+    actionSet,
     input: { id },
-    script: `import { fx } from "rewind:tools";
+    script: `import { fx } from "rewind:actions";
 import { signal } from "rewind";
 export default async function main(input: { id: string }) {
   const customer = await fx.lookup({ id: input.id });
@@ -304,8 +304,8 @@ export default async function main(input: { id: string }) {
   expect(document.entries.map((e: any) => e.index)).toEqual(document.entries.map((_: unknown, n: number) => n));
   expect(document.entries.map((e: any) => e.event.type)).toEqual([
     "run_started",
-    "schedule_tool_call",
-    "tool_call_completed",
+    "schedule_call",
+    "call_completed",
     "signal_awaited",
     "signal_received",
     "complete_run",
@@ -373,10 +373,10 @@ test("the event stream sends every entry then the end, from any entry, and follo
 test("the LLM trace and one entry in full describe the run", { tag: "@success" }, async () => {
   const id = unique("cus-");
   const run = await started(alice, {
-    toolset,
+    actionSet,
     input: { id },
     wait: "30s",
-    script: `import { fx } from "rewind:tools";
+    script: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   console.log("looking up", input.id);
   return await fx.lookup({ id: input.id });
@@ -395,7 +395,7 @@ export default async function main(input: { id: string }) {
   const entry = await alice.get(`/v1/runs/${run.id}/entries/2`);
   expectOk(entry, 200);
   expect(entry.json.idx).toBe(2);
-  expect(entry.json.event.type).toBe("schedule_tool_call");
+  expect(entry.json.event.type).toBe("schedule_call");
   expect(JSON.stringify(entry.json)).toContain(id);
 });
 
@@ -449,10 +449,10 @@ test("an unknown run is 404 on every endpoint of a run", { tag: "@failure" }, as
   for (const reply of replies) expectProblem(reply, 404, "not-found");
 });
 
-test("an entry past the end of the journal is 404, and an unknown toolset refuses the start", { tag: "@failure" }, async () => {
+test("an entry past the end of the journal is 404, and an unknown action set refuses the start", { tag: "@failure" }, async () => {
   const run = await started(alice, { script: `export default async function main() { return 1; }\n`, wait: "30s" });
   expectProblem(await alice.get(`/v1/runs/${run.id}/entries/${run.historyLen + 5}`), 404, "not-found");
-  const unknown = await startRun(alice, { script: WAITS_FOR_GO, toolset: "0".repeat(64) });
+  const unknown = await startRun(alice, { script: WAITS_FOR_GO, actionSet: "0".repeat(64) });
   expectProblem(unknown, 404, "not-found");
 });
 
@@ -476,9 +476,9 @@ test("an input or a signal payload above 8 MiB is 413 payload-too-large, before 
 test("a start replayed with its Idempotency-Key never runs the script's effects twice", { tag: "@attack" }, async () => {
   const key = unique("replay-");
   const body = {
-    toolset,
+    actionSet,
     wait: "30s",
-    script: `import { fx } from "rewind:tools";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
+    script: `import { fx } from "rewind:actions";\nexport default async function main() {\n  return await fx.echo({ text: "${key}" });\n}\n`,
   };
   const replies = await Promise.all(Array.from({ length: 5 }, () => startRun(alice, body, { key })));
   const ids = new Set(replies.map((r) => r.json?.id));

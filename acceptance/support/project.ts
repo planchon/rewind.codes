@@ -14,7 +14,7 @@ export interface Ran {
 }
 
 /**
- * A project directory, as a developer has one: scripts, toolset files, and the `.rewind/` of the
+ * A project directory, as a developer has one: scripts, action set files, and the `.rewind/` of the
  * embedded server the CLI starts on demand. Its servers are killed and the directory removed at
  * the end.
  */

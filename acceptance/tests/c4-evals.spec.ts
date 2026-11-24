@@ -15,7 +15,7 @@ import { expect, test } from "@playwright/test";
 import { finish } from "../support/project.js";
 import { resultDir, root } from "../support/paths.js";
 
-const SOLUTION = `import { chat } from "rewind:tools";
+const SOLUTION = `import { chat } from "rewind:actions";
 
 export default async function main() {
   await chat.post_message({ channel: "#ops", text: "Deploy freeze starts Friday 18:00 UTC" });

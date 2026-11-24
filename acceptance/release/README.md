@@ -43,7 +43,7 @@ that is broken. The GitHub workflow (`.github/workflows/release-gate.yml`, start
 
 | Setup | What | Used for |
 | --- | --- | --- |
-| A, deployed | Postgres 17 for the control plane, MinIO for the bucket (`--bucket s3://…`: the partitions, the archive and the blobs), an OpenTelemetry Collector, two nodes linked by the node link (`--cluster-secret`, each its own `--node-id`, `--listen`, `--link-listen`), behind an edge that sends each request to the next node, as `deploy/edge/Caddyfile` does; `--allow-internal-tools 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable; `--public-url` its edge, so signed calls are checked against its JWKS | Every area |
+| A, deployed | Postgres 17 for the control plane, MinIO for the bucket (`--bucket s3://…`: the partitions, the archive and the blobs), an OpenTelemetry Collector, two nodes linked by the node link (`--cluster-secret`, each its own `--node-id`, `--listen`, `--link-listen`), behind an edge that sends each request to the next node, as `deploy/edge/Caddyfile` does; `--allow-internal-addresses 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable; `--public-url` its edge, so signed calls are checked against its JWKS | Every area |
 | B, strict | One node on Turso and a local bucket, with a deployed server's defaults: no internal MCP server, no private webhook, no stdio, no WorkOS | Egress and SSRF, hardening |
 | C, local | The CLI and the embedded server it starts in a project directory | CLI |
 | D, lifecycle | A deployed setup of its own, a retention of seconds (`--retention`) | Lifecycle |
@@ -91,7 +91,7 @@ later runs reuse.
 | --- | --- | --- |
 | Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, the change stream, traces |
 | Endings and limits | `areas/endings.spec.ts` | How a script ends; CPU, heap, array buffers, commands, payload sizes |
-| Host tools and tasks | `areas/host-tools.spec.ts` | Task streams: the open stream as the liveness of its tasks, slots, a worker back within the grace, a stream that does not come back, `gone`; deferrals, failures, retries, timeouts, approvals, task tokens |
+| Harness actions and tasks | `areas/harness-actions.spec.ts` | Task streams: the open stream as the liveness of its tasks, slots, a worker back within the grace, a stream that does not come back, `gone`; deferrals, failures, retries, timeouts, approvals, task tokens |
 | MCP, APIs, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; secrets attached per run (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
 | Workflows | `areas/workflows.spec.ts` | Versions, a version refused by its own tests or by its suite, starts by name, from scripts, schemas, label scope |
 | Check and test | `areas/check-test.spec.ts` | `/v1/check`, `/v1/test`, refusals at start |

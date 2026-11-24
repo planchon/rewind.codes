@@ -305,7 +305,7 @@ async function piped(project: Project, args: string[], input: string) {
   return finish(child, 120_000, args);
 }
 
-const MEASURES = `import { dax } from "rewind:tools";
+const MEASURES = `import { dax } from "rewind:actions";
 
 export default async function main() {
   const measure = await dax.getMeasure({ id: "m 1" });
@@ -318,8 +318,8 @@ test("an API is read from its OpenAPI document and called with the secret the ru
   const api = await startApiFixture();
   try {
     project.write("measures.ts", MEASURES);
-    project.write("measures.toolset.json", JSON.stringify({ apis: [{ name: "dax", openapi: api.documentUrl }] }));
-    project.write("signed.toolset.json", JSON.stringify({ apis: [{ name: "dax", openapi: api.documentUrl, auth: { type: "rewind" } }] }));
+    project.write("measures.actionSet.json", JSON.stringify({ apis: [{ name: "dax", openapi: api.documentUrl }] }));
+    project.write("signed.actionSet.json", JSON.stringify({ apis: [{ name: "dax", openapi: api.documentUrl, auth: { type: "rewind" } }] }));
     const value = `${canary()}-dax`;
     // The value goes in on standard input, never as an argument.
     const put = await piped(project, ["secrets", "put", "dax-key"], `${value}\n`);
@@ -328,13 +328,13 @@ test("an API is read from its OpenAPI document and called with the secret the ru
 
     // Nothing attached for dax, whose document requires a key: refused before any run exists,
     // naming what may be attached (a usage error of the command line: 64).
-    const refused = await project.rewind(["run", "measures.ts", "--toolset", "measures.toolset.json"]);
+    const refused = await project.rewind(["run", "measures.ts", "--action-set", "measures.actionSet.json"]);
     expect(refused.code, said(refused)).toBe(64);
     expect(refused.stderr).toContain("the script imports dax, which needs a secret");
     expect(refused.stderr).toContain("org/dax-key");
     expect(api.requests).toEqual([]);
 
-    const ran = await project.json(["run", "measures.ts", "--toolset", "measures.toolset.json", "--secret", "dax=org/dax-key", "--wait", "60s"]);
+    const ran = await project.json(["run", "measures.ts", "--action-set", "measures.actionSet.json", "--secret", "dax=org/dax-key", "--wait", "60s"]);
     expect(ran.code, said(ran.ran)).toBe(0);
     const key = `${ran.value.id}/2`;
     expect(ran.value.output.value).toEqual({ value: 3.5, created: "weight", key });
@@ -359,9 +359,9 @@ test("an API is read from its OpenAPI document and called with the secret the ru
     // Signed: the embedded server here has no public URL, so no one could read its keys; the
     // call fails unavailable and is never sent.
     const before = api.requests.length;
-    const signed = await project.json(["run", "measures.ts", "--toolset", "signed.toolset.json", "--wait", "60s"]);
+    const signed = await project.json(["run", "measures.ts", "--action-set", "signed.actionSet.json", "--wait", "60s"]);
     expect(signed.code, said(signed.ran)).toBe(1);
-    expect(signed.value.error.failedCall).toMatchObject({ tool: "dax.getMeasure", error: { kind: "unavailable" } });
+    expect(signed.value.error.failedCall).toMatchObject({ action: "dax.getMeasure", error: { kind: "unavailable" } });
     expect(api.requests.length, "the signed call was not sent").toBe(before);
     evidence(`the document read from ${api.documentUrl}; without --secret → 65; with dax=org/dax-key both calls carried X-Api-Key, the POST its Idempotency-Key ${key}; export, list and usage print no value; a signed call without a public URL → unavailable, not sent`);
   } finally {

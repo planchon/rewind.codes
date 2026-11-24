@@ -6,7 +6,7 @@
  * The deployment: Postgres for the control plane, a bucket on MinIO for the partitions, the
  * archive and the blobs, an OpenTelemetry Collector writing to a file, and two nodes
  * (`rewind server`, each an HTTP edge and a node). The harness is the TypeScript SDK: its
- * host-tool worker holds a task stream open on one node and serves the harness's tools; it sends
+ * harness's worker holds a call stream open on one node and serves the harness's tools; it sends
  * a signal and approves a call through the other.
  */
 import { randomBytes } from "node:crypto";
@@ -19,7 +19,7 @@ import { resultDir } from "../support/paths.js";
 import { eventually } from "../support/processes.js";
 
 const SCRIPT = `import { signal, sleep } from "rewind";
-import { crm, payments } from "rewind:tools";
+import { crm, payments } from "rewind:actions";
 
 export default async function main(input: { email: string }) {
   const customer = await crm.lookup({ email: input.email });
@@ -68,7 +68,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
     const user = (n: number, edge: number) => edges[edge % edges.length]!.namespace(`user${n}`);
     const suite = `acceptance-${randomBytes(4).toString("hex")}`;
 
-    const toolset = await edges[0]!.toolsets.create({
+    const actionSet = await edges[0]!.actionSets.create({
       host: [
         {
           name: "crm.lookup",
@@ -101,9 +101,9 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
         },
       ],
     });
-    expect(toolset.declarations.dts).toContain("lookup");
+    expect(actionSet.declarations.dts).toContain("lookup");
 
-    // The harness's host tools, served by the SDK's worker on the second node's task stream,
+    // The harness's harness actions, served by the SDK's worker on the second node's call stream,
     // whichever node owns the run. Each call is logged with its context.
     const calls: { tool: string; runId: string; seq: number; traceparent: string | undefined; key: string }[] = [];
     /** What the worker reported, for a stop that does not come. */
@@ -111,7 +111,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
     const log = (tool: string, ctx: HostToolContext) =>
       calls.push({ tool, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
     const worker = edges[1 % edges.length]!.worker({
-      toolset: toolset.id,
+      actionSet: actionSet.id,
       tools: {
         "crm.lookup": async ({ email }: { email: string }, ctx) => {
           log("crm.lookup", ctx);
@@ -134,7 +134,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
       const runs: Run[] = [];
       for (let n = 0; n < RUNS; n++) {
         const request = {
-          toolset: toolset.id,
+          actionSet: actionSet.id,
           script: SCRIPT,
           input: { email: `user${n}@example.com` },
           idempotencyKey: `${suite}-tool-call-${n}`,
@@ -142,7 +142,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
           traceparent: harness[n]!.traceparent,
         };
         const run = await user(n, 0).runs.start(request);
-        // The model's tool call handled twice, through either node, starts one run.
+        // The model's call handled twice, through either node, starts one run.
         expect((await user(n, 1).runs.start(request)).id).toBe(run.id);
         expect(run.traceId).toBe(harness[n]!.traceId);
         expect(run.namespace).toBe(`user${n}`);
@@ -183,7 +183,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
         );
         expect(run.labels).toEqual({ suite, conversation: `c${n}` });
       }
-      // Every tool call was made once.
+      // Every call was made once.
       expect(calls.filter((c) => c.tool === "crm.lookup")).toHaveLength(RUNS);
       expect(calls.filter((c) => c.tool === "payments.refund")).toHaveLength(RUNS - 1);
 
@@ -246,7 +246,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
           expect(activation.parentSpanId).toBe(runSpan.spanId);
           activatedBy.add(activation.resource["service.instance.id"]);
         }
-        // The host tool got the trace context, with the tool call span as parent.
+        // The harness action got the trace context, with the call span as parent.
         const call = calls.find((c) => c.runId === run.id && c.tool === "crm.lookup");
         expect(call?.traceparent).toBeDefined();
         expect(parseTraceparent(call!.traceparent!)).toEqual({ traceId: span.traceId, parentId: lookup.spanId });

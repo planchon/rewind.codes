@@ -28,7 +28,7 @@ const UNKNOWN_INVITATION = "invitation_01JZZZZZZZZZZZZZZZZZZZZZZZ";
 /**
  * One request per permission of the catalog, each needing that permission (06's table). Allowed,
  * each answers without changing anything that matters here: unknown ids are not found, an empty
- * toolset is registered, an empty change of the organization changes nothing.
+ * action set is registered, an empty change of the organization changes nothing.
  */
 const PROBES: { permission: string; method: string; path: string; body?: unknown }[] = [
   { permission: "runs:read", method: "GET", path: "/v1/runs" },
@@ -36,14 +36,14 @@ const PROBES: { permission: string; method: string; path: string; body?: unknown
   { permission: "runs:control", method: "POST", path: `/v1/runs/${UNKNOWN_RUN}/cancel`, body: {} },
   { permission: "runs:quarantine", method: "POST", path: `/v1/runs/${UNKNOWN_RUN}/release` },
   { permission: "runs:delete", method: "DELETE", path: `/v1/runs/${UNKNOWN_RUN}` },
-  { permission: "toolsets:read", method: "GET", path: "/v1/toolsets" },
-  { permission: "toolsets:write", method: "POST", path: "/v1/toolsets", body: {} },
+  { permission: "actions:read", method: "GET", path: "/v1/action-sets" },
+  { permission: "actions:write", method: "POST", path: "/v1/action-sets", body: {} },
   { permission: "scripts:write", method: "PATCH", path: `/v1/scripts/${"00".repeat(32)}`, body: { title: "c8" } },
   { permission: "secrets:read", method: "GET", path: "/v1/secrets" },
   { permission: "secrets:write", method: "DELETE", path: "/v1/secrets/never-put" },
-  { permission: "secrets:use", method: "POST", path: "/v1/toolsets", body: { secrets: { unknown: "org/never-put" } } },
-  { permission: "tasks:work", method: "POST", path: "/v1/tasks/unknown/defer", body: {} },
-  { permission: "tasks:approve", method: "POST", path: "/v1/tasks/unknown/approve" },
+  { permission: "secrets:use", method: "POST", path: "/v1/action-sets", body: { secrets: { unknown: "org/never-put" } } },
+  { permission: "calls:work", method: "POST", path: "/v1/calls/unknown/defer", body: {} },
+  { permission: "calls:approve", method: "POST", path: "/v1/calls/unknown/approve" },
   { permission: "subscriptions:read", method: "GET", path: "/v1/subscriptions" },
   { permission: "subscriptions:write", method: "DELETE", path: "/v1/subscriptions/unknown" },
   { permission: "members:read", method: "GET", path: "/v1/organization/members" },
@@ -240,14 +240,14 @@ test.describe("criterion 8: accounts, organizations and access", () => {
           "runs:control",
           "runs:quarantine",
           "runs:delete",
-          "toolsets:read",
-          "toolsets:write",
+          "actions:read",
+          "actions:write",
           "scripts:write",
           "secrets:read",
           "secrets:write",
           "secrets:use",
-          "tasks:work",
-          "tasks:approve",
+          "calls:work",
+          "calls:approve",
           "subscriptions:read",
           "subscriptions:write",
           "members:read",
@@ -309,7 +309,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       expect(whoami.tenant).toBe(organization);
       expect(whoami.grant?.role).toBe("reader");
       expect(whoami.permissions.sort()).toEqual(
-        ["runs:read", "toolsets:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"].sort(),
+        ["runs:read", "actions:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"].sort(),
       );
       await expectPermissions(server, inviteeToken, "the invitee, a reader", whoami.permissions);
       // It reads the organization's runs, the key's among them.

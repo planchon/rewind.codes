@@ -2,7 +2,7 @@
  * Tenant isolation (`archi/06-storage-and-scale.md`, "Tenancy, namespaces, identity and access":
  * the tenant is part of every storage key). Two tenants of setup A, acme and globex, each made by
  * the operator. Everything acme holds is probed with globex's owner key: runs and their journals,
- * scripts, toolsets, payloads (also when both hold the same bytes), host-tool tasks and
+ * scripts, action sets, payloads (also when both hold the same bytes), harness calls and
  * approvals, subscriptions, keys, roles, tokens and token keys, secrets (the organization's and a
  * namespace's) and signing keys, workflows, and inbound webhooks.
  * Each is not found (404, never 403, which would confirm it exists), and acme's state does not
@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { createKey, mintToken, runProbe, startRun, waitingRun } from "../support/access-helpers.js";
 import { follow } from "../support/runs-helpers.js";
 import { signingKey, startWebhookReceiver, type WebhookReceiver } from "../support/fixtures.js";
-import { handedWithin, TaskStream } from "../support/tools-helpers.js";
+import { handedWithin, TaskStream } from "../support/actions-helpers.js";
 import {
   Api,
   evidence,
@@ -48,7 +48,7 @@ const HOST_TOOLS = {
   ],
 };
 
-const TASK_SCRIPT = `import { crm } from "rewind:tools";
+const TASK_SCRIPT = `import { crm } from "rewind:actions";
 
 export default async function main() {
   const customer = await crm.lookup({ email: "a@${MARK}.test" });
@@ -56,7 +56,7 @@ export default async function main() {
 }
 `;
 
-const APPROVAL_SCRIPT = `import { pay } from "rewind:tools";
+const APPROVAL_SCRIPT = `import { pay } from "rewind:actions";
 
 export default async function main() {
   const refund = await pay.refund({ amount: 42 });
@@ -95,12 +95,12 @@ const COMPLETED_SCRIPT = `export default async function main() {
 
 interface Acme {
   tenant: Tenant;
-  toolset: string;
+  actionSet: string;
   waiting: string;
   completed: { id: string; outputDigest: string; script: string };
   shared: { id: string; outputDigest: string };
   failed: string;
-  approval: { runId: string; taskId: string };
+  approval: { runId: string; callId: string };
   task: { runId: string; token: string; id: string };
   subscription: string;
   key: { key: string; id: string };
@@ -132,9 +132,9 @@ test.beforeAll(async () => {
   const tenant = await newTenant("tenancy-acme");
   globex = await newTenant("tenancy-globex");
   receiver = await startWebhookReceiver();
-  const toolset = await tenant.api.post("/v1/toolsets", HOST_TOOLS);
-  expectOk(toolset);
-  const toolsetId = toolset.json.id as string;
+  const actionSet = await tenant.api.post("/v1/action-sets", HOST_TOOLS);
+  expectOk(actionSet);
+  const actionSetId = actionSet.json.id as string;
 
   const waiting = (await waitingRun(tenant, NS, `${MARK} waits`)).id as string;
 
@@ -148,13 +148,13 @@ test.beforeAll(async () => {
   const failed = await startRun(tenant.api, NS, { script: FAILING_SCRIPT, wait: "30s" });
   expect(failed.json.status, failed.text).toBe("failed");
 
-  const approvalRun = await startRun(tenant.api, NS, { script: APPROVAL_SCRIPT, toolset: toolsetId });
+  const approvalRun = await startRun(tenant.api, NS, { script: APPROVAL_SCRIPT, actionSet: actionSetId });
   expectOk(approvalRun);
-  const approval = await untilWaiting(tenant.api, approvalRun.json.id, (w) => w.kind === "tool_call" && w.state === "approval");
+  const approval = await untilWaiting(tenant.api, approvalRun.json.id, (w) => w.kind === "call" && w.state === "approval");
 
   // acme's worker holds a stream open for the whole file: the task handed on it stays its own.
-  acmeWorker = await TaskStream.open(tenant.api, { toolset: toolsetId, tools: ["crm.lookup"] });
-  const taskRun = await startRun(tenant.api, NS, { script: TASK_SCRIPT, toolset: toolsetId });
+  acmeWorker = await TaskStream.open(tenant.api, { actionSet: actionSetId, actions: ["crm.lookup"] });
+  const taskRun = await startRun(tenant.api, NS, { script: TASK_SCRIPT, actionSet: actionSetId });
   expectOk(taskRun);
   const handed = await acmeWorker.taskOf("crm.lookup", taskRun.json.id);
 
@@ -176,12 +176,12 @@ test.beforeAll(async () => {
 
   acme = {
     tenant,
-    toolset: toolsetId,
+    actionSet: actionSetId,
     waiting,
     completed: { id: completed.json.id, outputDigest: completed.json.output.digest, script: completed.json.script },
     shared: { id: shared.json.id, outputDigest: shared.json.output.digest },
     failed: failed.json.id,
-    approval: { runId: approvalRun.json.id, taskId: approval.taskId },
+    approval: { runId: approvalRun.json.id, callId: approval.callId },
     task: { runId: taskRun.json.id, token: handed.token, id: handed.id },
     subscription: subscription.json.id,
     key,
@@ -206,7 +206,7 @@ function expectNothingOf(reply: Reply, what: string): void {
     acme.waiting,
     acme.completed.id,
     acme.failed,
-    acme.toolset,
+    acme.actionSet,
     acme.completed.outputDigest,
     acme.subscription,
     acme.key.id,
@@ -298,8 +298,8 @@ test("another tenant's lists, statistics and failure groups hold nothing of it",
     ["stats", "/v1/runs/stats"],
     ["failure groups", "/v1/runs/failures"],
     ["scripts", "/v1/scripts"],
-    ["tool statistics", "/v1/tools/stats"],
-    ["toolsets", "/v1/toolsets"],
+    ["tool statistics", "/v1/actions/stats"],
+    ["actionSets", "/v1/action-sets"],
     ["workflows", "/v1/workflows"],
     ["namespaces", "/v1/namespaces"],
     ["subscriptions", "/v1/subscriptions"],
@@ -321,14 +321,14 @@ test("another tenant's lists, statistics and failure groups hold nothing of it",
   // acme's own failure groups do hold its failure: the check above is not vacuous.
   const own = await acme.tenant.api.get("/v1/runs/failures");
   expect(own.text).toContain(MARK);
-  evidence(`${queries.length} lists of globex (runs, stats, failures, scripts, tool stats, toolsets, namespaces, subscriptions, keys, roles, token keys, alerts, secrets, signing keys) hold no id, digest or name of acme's`);
+  evidence(`${queries.length} lists of globex (runs, stats, failures, scripts, tool stats, actionSets, namespaces, subscriptions, keys, roles, token keys, alerts, secrets, signing keys) hold no id, digest or name of acme's`);
 });
 
-test("another tenant's script and toolset are not found, and its toolset starts nothing", { tag: "@attack" }, async () => {
+test("another tenant's script and action set are not found, and its action set starts nothing", { tag: "@attack" }, async () => {
   const runs = async () => (await globex.api.get("/v1/runs", { query: { limit: 100 } })).json.runs.length;
   expectProblem(await globex.api.get(`/v1/scripts/${acme.completed.script}`), 404, "not-found");
-  expectProblem(await globex.api.get(`/v1/toolsets/${acme.toolset}/declarations`), 404, "not-found");
-  expectProblem(await globex.api.get(`/v1/toolsets/${acme.toolset}/search`, { query: { query: "refund" } }), 404, "not-found");
+  expectProblem(await globex.api.get(`/v1/action-sets/${acme.actionSet}/declarations`), 404, "not-found");
+  expectProblem(await globex.api.get(`/v1/action-sets/${acme.actionSet}/search`, { query: { query: "refund" } }), 404, "not-found");
   // acme's secrets: their usage and their deletion are another tenant's, not found.
   const acmeSecrets = async () => (await acme.tenant.api.get("/v1/secrets")).json.secrets.map((s: { reference: string }) => s.reference);
   for (const path of [`/v1/secrets/${acme.secret}/usage`, `/v1/namespaces/${NS}/secrets/${acme.secret}/usage`]) {
@@ -339,21 +339,21 @@ test("another tenant's script and toolset are not found, and its toolset starts 
   }
   expect(await acmeSecrets()).toEqual([`org/${acme.secret}`]);
   expect((await acme.tenant.api.get(`/v1/namespaces/${NS}/secrets`)).json.secrets.map((s: { reference: string }) => s.reference)).toEqual([`ns/${acme.secret}`]);
-  await expectRefused({ attempt: () => startRun(globex.api, "globex-ns", { script: TASK_SCRIPT, toolset: acme.toolset }), status: 404, slug: "not-found", probe: runs });
-  await expectRefused({ attempt: () => globex.api.ns("globex-ns").post("/v1/check", { script: TASK_SCRIPT, toolset: acme.toolset }), status: 404, slug: "not-found" });
-  const derived = await globex.api.post("/v1/toolsets", { base: acme.toolset, host: [] });
+  await expectRefused({ attempt: () => startRun(globex.api, "globex-ns", { script: TASK_SCRIPT, actionSet: acme.actionSet }), status: 404, slug: "not-found", probe: runs });
+  await expectRefused({ attempt: () => globex.api.ns("globex-ns").post("/v1/check", { script: TASK_SCRIPT, actionSet: acme.actionSet }), status: 404, slug: "not-found" });
+  const derived = await globex.api.post("/v1/action-sets", { base: acme.actionSet, harness: [] });
   expectProblem(derived, 404, "not-found");
   // acme still reads them.
   expectOk(await acme.tenant.api.get(`/v1/scripts/${acme.completed.script}`), 200);
-  expectOk(await acme.tenant.api.get(`/v1/toolsets/${acme.toolset}/declarations`), 200);
-  evidence("globex: acme's script, toolset declarations, search, secrets' usage and deletion (the organization's and a namespace's), a run, a check and a derived toolset from acme's toolset id → 404; acme still reads them and keeps its secrets");
+  expectOk(await acme.tenant.api.get(`/v1/action-sets/${acme.actionSet}/declarations`), 200);
+  evidence("globex: acme's script, actionSet declarations, search, secrets' usage and deletion (the organization's and a namespace's), a run, a check and a derived actionSet from acme's actionSet id → 404; acme still reads them and keeps its secrets");
 });
 
 test("another tenant's workflow is not found, and starts nothing", { tag: "@attack" }, async () => {
   const name = `${MARK}_flow`;
   const saved = await acme.tenant.api.post("/v1/workflows", {
     name,
-    toolset: acme.toolset,
+    actionSet: acme.actionSet,
     script: `export default async function main(input: { n: number }) {\n  return { n: input.n };\n}\n`,
     input: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
     output: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
@@ -390,22 +390,22 @@ test("a payload is read only through a run of the reader's tenant, even when bot
   evidence("globex: acme's 2 KiB payload without a run → 400, through acme's run → 404; with the same 100 KiB blob, through its own run → 200, through acme's run → 404");
 });
 
-test("another tenant's host-tool task cannot be handed, answered nor approved", { tag: "@attack" }, async () => {
+test("another tenant's harness call cannot be handed, answered nor approved", { tag: "@attack" }, async () => {
   const forged = `${acme.task.token.slice(0, -4)}${acme.task.token.endsWith("aaaa") ? "bbbb" : "aaaa"}`;
   // A token never issued, for comparison: globex must not tell acme's token from it.
-  const unknownAnswer = await globex.api.post(`/v1/tasks/${forged}/defer`, {});
+  const unknownAnswer = await globex.api.post(`/v1/calls/${forged}/defer`, {});
   expect([404, 410], unknownAnswer.text).toContain(unknownAnswer.status);
   const taskProbe = () => runProbe(acme.tenant.api, acme.task.runId);
   for (const [what, attempt] of [
-    ["complete", () => globex.api.post(`/v1/tasks/${acme.task.token}/complete`, { result: { id: "stolen" } })],
-    ["fail", () => globex.api.post(`/v1/tasks/${acme.task.token}/fail`, { message: "hostile", retryable: false })],
-    ["defer", () => globex.api.post(`/v1/tasks/${acme.task.token}/defer`, {})],
+    ["complete", () => globex.api.post(`/v1/calls/${acme.task.token}/complete`, { result: { id: "stolen" } })],
+    ["fail", () => globex.api.post(`/v1/calls/${acme.task.token}/fail`, { message: "hostile", retryable: false })],
+    ["defer", () => globex.api.post(`/v1/calls/${acme.task.token}/defer`, {})],
   ] as [string, () => Promise<Reply>][]) {
     await expectRefused({ attempt, status: unknownAnswer.status, slug: unknownAnswer.slug!, probe: taskProbe });
     void what;
   }
-  // A stream of globex's for acme's toolset is handed none of acme's tasks, or is not found.
-  const opened = await TaskStream.attempt(globex.api, { toolset: acme.toolset, tools: ["crm.lookup", "pay.refund"] });
+  // A stream of globex's for acme's action set is handed none of acme's tasks, or is not found.
+  const opened = await TaskStream.attempt(globex.api, { actionSet: acme.actionSet, actions: ["crm.lookup", "pay.refund"] });
   if (opened instanceof TaskStream) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     await opened.close();
@@ -413,18 +413,18 @@ test("another tenant's host-tool task cannot be handed, answered nor approved", 
   } else {
     expectProblem(opened, 404, "not-found");
   }
-  // Nor is one for acme's tools by name, whatever their toolset.
-  expect(await handedWithin(globex.api, { tools: ["crm.lookup", "pay.refund"] })).toEqual([]);
+  // Nor is one for acme's tools by name, whatever their action set.
+  expect(await handedWithin(globex.api, { actions: ["crm.lookup", "pay.refund"] })).toEqual([]);
   // The approval waiting in acme cannot be decided by globex.
   const approvalProbe = () => runProbe(acme.tenant.api, acme.approval.runId);
-  await expectRefused({ attempt: () => globex.api.post(`/v1/tasks/${acme.approval.taskId}/approve`), status: 404, slug: "not-found", probe: approvalProbe });
-  await expectRefused({ attempt: () => globex.api.post(`/v1/tasks/${acme.approval.taskId}/reject`, { message: "hostile" }), status: 404, slug: "not-found", probe: approvalProbe });
+  await expectRefused({ attempt: () => globex.api.post(`/v1/calls/${acme.approval.callId}/approve`), status: 404, slug: "not-found", probe: approvalProbe });
+  await expectRefused({ attempt: () => globex.api.post(`/v1/calls/${acme.approval.callId}/reject`, { message: "hostile" }), status: 404, slug: "not-found", probe: approvalProbe });
   // acme still answers both.
-  expectOk(await acme.tenant.api.post(`/v1/tasks/${acme.task.token}/complete`, { result: { id: "cus_1" } }));
+  expectOk(await acme.tenant.api.post(`/v1/calls/${acme.task.token}/complete`, { result: { id: "cus_1" } }));
   const done = await acme.tenant.api.get(`/v1/runs/${acme.task.runId}`, { query: { wait: "30s" } });
   expect(done.json.status, done.text).toBe("completed");
   expect(done.json.output.value).toEqual({ customer: { id: "cus_1" } });
-  expectOk(await acme.tenant.api.post(`/v1/tasks/${acme.approval.taskId}/reject`, { message: "not today" }));
+  expectOk(await acme.tenant.api.post(`/v1/calls/${acme.approval.callId}/reject`, { message: "not today" }));
   evidence(
     `globex with acme's task token: complete, fail, defer → ${unknownAnswer.status} ${unknownAnswer.slug ?? ""}, as for a token never issued; globex's task streams are handed nothing; approve and reject of acme's parked call → 404; acme then completes its task (cus_1) and rejects its approval`,
   );

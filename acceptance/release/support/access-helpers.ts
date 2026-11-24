@@ -13,14 +13,14 @@ export const PERMISSIONS = [
   "runs:control",
   "runs:quarantine",
   "runs:delete",
-  "toolsets:read",
-  "toolsets:write",
+  "actions:read",
+  "actions:write",
   "scripts:write",
   "secrets:read",
   "secrets:write",
   "secrets:use",
-  "tasks:work",
-  "tasks:approve",
+  "calls:work",
+  "calls:approve",
   "subscriptions:read",
   "subscriptions:write",
   "members:read",
@@ -45,14 +45,14 @@ export const BUILT_IN: Record<string, readonly string[]> = {
     "runs:control",
     "runs:quarantine",
     "runs:delete",
-    "toolsets:read",
-    "toolsets:write",
+    "actions:read",
+    "actions:write",
     "scripts:write",
     "secrets:read",
     "secrets:write",
     "secrets:use",
-    "tasks:work",
-    "tasks:approve",
+    "calls:work",
+    "calls:approve",
     "subscriptions:read",
     "subscriptions:write",
     "members:read",
@@ -61,15 +61,15 @@ export const BUILT_IN: Record<string, readonly string[]> = {
     "namespaces:write",
     "tokens:write",
   ],
-  worker: ["tasks:work"],
-  reader: ["runs:read", "toolsets:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"],
+  worker: ["calls:work"],
+  reader: ["runs:read", "actions:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"],
 };
 
 /** What a grant limited to labels may not use (06: "Labels"). */
 export const ADMINISTRATION = ["members:invite", "members:manage", "roles:write", "api_keys:read", "api_keys:write", "organization:write"];
 
 /** The permissions of a token minted without `permissions` (06: "Tokens"). */
-export const TOKEN_DEFAULT = ["runs:read", "runs:start", "runs:control", "toolsets:read"];
+export const TOKEN_DEFAULT = ["runs:read", "runs:start", "runs:control", "actions:read"];
 
 /** A run that returns its input's `n` doubled at once. */
 export const QUICK_SCRIPT = `export default async function main(input: { n: number }) {
@@ -112,12 +112,12 @@ export async function mintToken(
 export async function startRun(
   api: Api,
   namespace: string,
-  body: { script?: string; input?: unknown; labels?: Record<string, string>; wait?: string; toolset?: string },
+  body: { script?: string; input?: unknown; labels?: Record<string, string>; wait?: string; actionSet?: string },
   headers: Record<string, string> = {},
 ): Promise<Reply> {
   return api.ns(namespace).post(
     "/v1/runs",
-    { script: body.script ?? QUICK_SCRIPT, input: body.input ?? { n: 1 }, labels: body.labels, wait: body.wait, toolset: body.toolset },
+    { script: body.script ?? QUICK_SCRIPT, input: body.input ?? { n: 1 }, labels: body.labels, wait: body.wait, actionSet: body.actionSet },
     { headers },
   );
 }

@@ -23,8 +23,8 @@ import { ended, expectFailed, getRun, runIds, started, startRun, waitingFor } fr
 
 let tenant: Tenant;
 let api: Api;
-/** An empty toolset: the workflows' own. */
-let emptyToolset: string;
+/** An empty action set: the workflows' own. */
+let emptyActionSet: string;
 
 const TRIAGE = `import { signal } from "rewind";
 
@@ -39,7 +39,7 @@ function triage(name: string, script = TRIAGE) {
   return {
     name,
     description: "Triage the stale issues of a repository, after approval.",
-    toolset: emptyToolset,
+    actionSet: emptyActionSet,
     script,
     input: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] },
     output: { type: "object", properties: { closed: { type: "integer" } }, required: ["closed"] },
@@ -59,9 +59,9 @@ async function save(as: Api, definition: ReturnType<typeof triage>): Promise<any
   return reply.json;
 }
 
-/** A toolset that pins these workflows. */
+/** An action set that pins these workflows. */
 async function pinning(as: Api, ...workflows: string[]): Promise<string> {
-  const reply = await as.post("/v1/toolsets", { workflows });
+  const reply = await as.post("/v1/action-sets", { workflows });
   expectOk(reply);
   return reply.json.id;
 }
@@ -69,9 +69,9 @@ async function pinning(as: Api, ...workflows: string[]): Promise<string> {
 test.beforeAll(async () => {
   tenant = await newTenant("workflows");
   api = tenant.api.ns("wf");
-  const created = await tenant.api.post("/v1/toolsets", {});
+  const created = await tenant.api.post("/v1/action-sets", {});
   expectOk(created);
-  emptyToolset = created.json.id;
+  emptyActionSet = created.json.id;
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -81,7 +81,7 @@ test("saving a workflow checks it and gives its declarations; saving it again is
   const name = fresh();
   const created = await tenant.api.post("/v1/workflows", triage(name));
   expectOk(created, 201);
-  expect(created.json).toMatchObject({ name, toolset: emptyToolset });
+  expect(created.json).toMatchObject({ name, actionSet: emptyActionSet });
   expect(created.json.version).toMatch(/^[0-9a-f]{64}$/);
   expect(created.json.declarations.dts).toContain(`export const ${name}: Workflow<`);
   expect(created.json.declarations.prompt.startsWith(`${name}.start({ repo: string }) → run`), created.json.declarations.prompt).toBe(true);
@@ -133,9 +133,9 @@ test("the harness starts a run of a workflow by name, or by name@version, and si
 test("a script starts a run of a workflow, signals it and receives its result", { tag: "@success" }, async () => {
   const name = fresh();
   const saved = await save(tenant.api, triage(name));
-  const toolset = await pinning(tenant.api, name);
+  const actionSet = await pinning(tenant.api, name);
   const parent = await started(api, {
-    toolset,
+    actionSet,
     input: { repo: "acme/api" },
     wait: "30s",
     script: `import { ${name} } from "rewind:workflows";
@@ -160,10 +160,10 @@ export default async function main(input: { repo: string }) {
 test("a detached child lives on after its parent; a failing parent cancels its attached children", { tag: "@success" }, async () => {
   const name = fresh();
   await save(tenant.api, triage(name));
-  const toolset = await pinning(tenant.api, name);
+  const actionSet = await pinning(tenant.api, name);
 
   const detachedParent = await started(api, {
-    toolset,
+    actionSet,
     wait: "30s",
     script: `import { ${name} } from "rewind:workflows";
 export default async function main() {
@@ -179,7 +179,7 @@ export default async function main() {
   expect(detached.startedBy).toMatchObject({ run: detachedParent.id, detached: true });
 
   const failing = await started(api, {
-    toolset,
+    actionSet,
     script: `import { ${name} } from "rewind:workflows";
 export default async function main() {
   await ${name}.start({ repo: "acme/api" });
@@ -292,9 +292,9 @@ test("an unknown workflow is 404; a malformed version or a workflow with a scrip
 test("a script that starts a workflow with a wrong input gets a TypeError at the call", { tag: "@failure" }, async () => {
   const name = fresh();
   await save(tenant.api, triage(name));
-  const toolset = await pinning(tenant.api, name);
+  const actionSet = await pinning(tenant.api, name);
   const run = await started(api, {
-    toolset,
+    actionSet,
     check: false,
     script: `import { ${name} } from "rewind:workflows";
 export default async function main() {
@@ -314,9 +314,9 @@ export default async function main() {
 test("a forged end signal cannot answer a parent's result()", { tag: "@attack" }, async () => {
   const name = fresh();
   await save(tenant.api, triage(name));
-  const toolset = await pinning(tenant.api, name);
+  const actionSet = await pinning(tenant.api, name);
   const parent = await started(api, {
-    toolset,
+    actionSet,
     script: `import { ${name} } from "rewind:workflows";
 export default async function main() {
   const run = await ${name}.start({ repo: "acme/api" });
@@ -378,7 +378,7 @@ test("a key limited to labels saves its own version of a workflow saved first ou
 });
 
 test("a script started by a key limited to labels cannot signal a run outside its scope", { tag: "@attack" }, async () => {
-  // The key limited to `team: red` saves its own workflow (which carries its labels) and toolset.
+  // The key limited to `team: red` saves its own workflow (which carries its labels) and action set.
   // `Tenant.key` sends `labels`; the API takes `allowedLabels`.
   const created = await tenant.api.post("/v1/api-keys", { role: "harness", name: "red team", allowedLabels: { team: "red" } });
   expectOk(created, 201);
@@ -387,7 +387,7 @@ test("a script started by a key limited to labels cannot signal a run outside it
   const name = fresh("scoped");
   const saved = await save(redApi.ns("wf"), triage(name));
   expect(saved.labels).toEqual({ team: "red" });
-  const toolset = await pinning(redApi, name);
+  const actionSet = await pinning(redApi, name);
 
   // A run of the same workflow, started by the owner without labels: outside the red scope.
   const target = await started(api, { workflow: name, input: { repo: "acme/blue" } });
@@ -395,15 +395,15 @@ test("a script started by a key limited to labels cannot signal a run outside it
   const before = (await getRun(api, target.id)).historyLen;
 
   const attacker = await started(redApi, {
-    toolset,
+    actionSet,
     script: `import { ${name} } from "rewind:workflows";
-import { ToolError } from "rewind";
+import { ActionError } from "rewind";
 export default async function main(input: { target: string }) {
   try {
     await ${name}.get(input.target).signal("approval", { close: true });
     return "signalled";
   } catch (error) {
-    if (error instanceof ToolError) return \`refused: \${error.message}\`;
+    if (error instanceof ActionError) return \`refused: \${error.message}\`;
     throw error;
   }
 }
@@ -418,6 +418,6 @@ export default async function main(input: { target: string }) {
   expect(after.status).toBe("active");
   expect(after.historyLen).toBe(before);
   expect(after.waitingFor.some((w: any) => w.kind === "signal" && w.name === "approval")).toBe(true);
-  evidence(`ToolError at dispatch: ${done.output.value}`);
+  evidence(`ActionError at dispatch: ${done.output.value}`);
   await api.post(`/v1/runs/${target.id}/cancel`, {});
 });

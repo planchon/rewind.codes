@@ -12,23 +12,23 @@ import { flattenSpans, HarnessSpan, parseTraceparent } from "../../support/otlp.
 import { eventually } from "../../support/processes.js";
 import { type McpFixture, startMcpFixture, startWebhookReceiver, type WebhookReceiver } from "../support/fixtures.js";
 import { evidence, expect, expectOk, expectProblem, expectRefused, newTenant, stacks, type Tenant, test, unique } from "../support/gate.js";
-import { ended, startRun, waitingCall } from "../support/tools-helpers.js";
+import { ended, startRun, waitingCall } from "../support/actions-helpers.js";
 import { readFileSync, existsSync } from "node:fs";
 
 let t: Tenant;
 let mcp: McpFixture;
 let receiver: WebhookReceiver;
 let secret: string;
-let toolset: string;
+let actionSet: string;
 
 test.beforeAll(async () => {
   [t, mcp, receiver] = await Promise.all([newTenant("observability"), startMcpFixture(), startWebhookReceiver()]);
   const subscription = await t.api.post("/v1/subscriptions", { url: receiver.url });
   expectOk(subscription, 201);
   secret = subscription.json.secret;
-  const created = await t.api.post("/v1/toolsets", { mcp: [{ name: "fx", url: mcp.url }] });
+  const created = await t.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
   expectOk(created);
-  toolset = created.json.id;
+  actionSet = created.json.id;
 });
 
 test.afterAll(async () => {
@@ -38,7 +38,7 @@ test.afterAll(async () => {
 const alice = () => t.api.ns("alice");
 
 const SCRIPTS = {
-  lookup: `import { fx } from "rewind:tools";
+  lookup: `import { fx } from "rewind:actions";
 
 export default async function main() {
   return (await fx.lookup({ id: "7" })).name;
@@ -54,7 +54,7 @@ export default async function main() {
   return await signal<{ ok: boolean }>("approval");
 }
 `,
-  toolFails: `import { fx } from "rewind:tools";
+  toolFails: `import { fx } from "rewind:actions";
 
 export default async function main() {
   await fx.fail({ reason: "denied" });
@@ -74,7 +74,7 @@ async function query(q: string, extra: Record<string, string | string[]> = {}): 
  * waits until their summaries have them settled.
  */
 async function corpus(c: string, namespace = "alice") {
-  const start = (script: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { toolset, script, labels: { case: c, ...labels } });
+  const start = (script: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { actionSet, script, labels: { case: c, ...labels } });
   const [completed, rateLimited, waiting, toolFails] = await Promise.all([
     start(SCRIPTS.lookup, { agent: "triage" }),
     start(SCRIPTS.rateLimited, { agent: "billing" }),
@@ -119,9 +119,9 @@ test("the query language finds runs by label, status, tool, error, wait and text
     [`@case:${c} status:failed`, sorted(r.rateLimited, r.toolFails)],
     [`@case:${c} -status:failed`, sorted(r.completed, r.waiting)],
     [`@case:${c} status:completed,active`, sorted(r.completed, r.waiting)],
-    [`@case:${c} tool:fx.lookup`, [r.completed]],
-    [`@case:${c} tool:fx.*`, sorted(r.completed, r.toolFails)],
-    [`@case:${c} error:ToolError`, [r.toolFails]],
+    [`@case:${c} action:fx.lookup`, [r.completed]],
+    [`@case:${c} action:fx.*`, sorted(r.completed, r.toolFails)],
+    [`@case:${c} error:ActionError`, [r.toolFails]],
     [`@case:${c} error:Error`, [r.rateLimited]],
     [`@case:${c} error:error`, [r.toolFails]],
     [`@case:${c} waiting:signal`, [r.waiting]],
@@ -142,8 +142,8 @@ test("the query language finds runs by label, status, tool, error, wait and text
   }
   // The same filters as parameters.
   expect(await query(`@case:${c}`, { label: ["agent:triage"], status: "failed" })).toEqual([]);
-  expect(await query(`@case:${c}`, { tool: "fx.lookup" })).toEqual([r.completed]);
-  expect(await query(`@case:${c}`, { error: "ToolError" })).toEqual([r.toolFails]);
+  expect(await query(`@case:${c}`, { action: "fx.lookup" })).toEqual([r.completed]);
+  expect(await query(`@case:${c}`, { error: "ActionError" })).toEqual([r.toolFails]);
   evidence(`${cases.length} queries answered exactly`);
 });
 
@@ -195,8 +195,8 @@ test("scripts are listed once per source, with their runs and tools, and read wh
   const c = unique("sc");
   const namespace = `scripts-${c}`;
   const own = t.api.ns(namespace);
-  const source = `import { fx } from "rewind:tools";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const runs = await Promise.all([1, 2].map(() => startRun(own, { toolset, script: source, labels: { case: c } })));
+  const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
+  const runs = await Promise.all([1, 2].map(() => startRun(own, { actionSet, script: source, labels: { case: c } })));
   for (const run of runs) expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
   expect(runs[0]!.script).toBe(digest);
@@ -212,13 +212,13 @@ test("scripts are listed once per source, with their runs and tools, and read wh
     60_000,
   );
   expect(listed).toHaveLength(1);
-  expect(listed[0].tools).toEqual(["fx.lookup"]);
-  expect(listed[0].headline).toBe(`import { fx } from "rewind:tools";`);
+  expect(listed[0].actions).toEqual(["fx.lookup"]);
+  expect(listed[0].headline).toBe(`import { fx } from "rewind:actions";`);
   // Filtered by a tool it called, and not by one it did not.
-  const byTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, tool: "fx.lookup" } });
+  const byTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, action: "fx.lookup" } });
   expectOk(byTool);
   expect((byTool.json.scripts as any[]).map((s) => s.digest)).toEqual([digest]);
-  const otherTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, tool: "fx.fail" } });
+  const otherTool = await t.api.get("/v1/scripts", { query: { q: `namespace:${namespace}`, action: "fx.fail" } });
   expectOk(otherTool);
   expect(otherTool.json.scripts).toEqual([]);
   const one = await t.api.get(`/v1/scripts/${digest}`);
@@ -229,8 +229,8 @@ test("scripts are listed once per source, with their runs and tools, and read wh
 test("a script is titled by its top comment, then by a person's title and description, on its runs too", { tag: "@success" }, async () => {
   const c = unique("ti");
   const own = t.api.ns(`titles-${c}`);
-  const source = `// Look up ${c}\nimport { fx } from "rewind:tools";\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const run = await startRun(own, { toolset, script: source, labels: { case: c } });
+  const source = `// Look up ${c}\nimport { fx } from "rewind:actions";\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
+  const run = await startRun(own, { actionSet, script: source, labels: { case: c } });
   expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
   // The comment at the top of the source titles it.
@@ -256,8 +256,8 @@ test("a script is titled by its top comment, then by a person's title and descri
 test("a title or a description out of bounds is refused as invalid-title", { tag: "@failure" }, async () => {
   const c = unique("tb");
   const own = t.api.ns(`titles-${c}`);
-  const source = `import { fx } from "rewind:tools";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
-  const run = await startRun(own, { toolset, script: source });
+  const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
+  const run = await startRun(own, { actionSet, script: source });
   expect((await ended(own, run.id)).status).toBe("completed");
   const digest = createHash("sha256").update(source).digest("hex");
   for (const body of [{ title: "" }, { title: "t".repeat(121) }, { title: "Fine", description: "d".repeat(2001) }]) {
@@ -270,33 +270,33 @@ test("a title or a description out of bounds is refused as invalid-title", { tag
 test("tool statistics count each tool's calls, errors and their kinds", { tag: "@success" }, async () => {
   const server = await startMcpFixture();
   try {
-    const own = await t.api.post("/v1/toolsets", { mcp: [{ name: "st", url: server.url }] });
+    const own = await t.api.post("/v1/action-sets", { mcp: [{ name: "st", url: server.url }] });
     expectOk(own);
-    const script = `import { st } from "rewind:tools";
-import { ToolError } from "rewind";
+    const script = `import { st } from "rewind:actions";
+import { ActionError } from "rewind";
 
 export default async function main() {
   for (let n = 0; n < 3; n++) await st.lookup({ id: String(n) });
   for (let n = 0; n < 2; n++) {
-    try { await st.fail({ reason: "no" }); } catch (error) { if (!(error instanceof ToolError)) throw error; }
+    try { await st.fail({ reason: "no" }); } catch (error) { if (!(error instanceof ActionError)) throw error; }
   }
   return "done";
 }
 `;
-    const run = await startRun(alice(), { toolset: own.json.id, script });
+    const run = await startRun(alice(), { actionSet: own.json.id, script });
     expect((await ended(alice(), run.id)).status).toBe("completed");
     const stats = await eventually(
       "the tool statistics count the calls",
       async () => {
-        // Per tool, filtered by the start of the tools' names: counters keep no toolset.
-        const reply = await t.api.get("/v1/tools/stats", { query: { prefix: "st." } });
+        // Per action, filtered by their group: counters keep no action set.
+        const reply = await t.api.get("/v1/actions/stats", { query: { group: "st" } });
         expectOk(reply);
-        const by = Object.fromEntries((reply.json.tools as any[]).map((s) => [s.tool, s]));
+        const by = Object.fromEntries((reply.json.actions as any[]).map((s) => [s.action, s]));
         return by["st.lookup"]?.calls === 3 && by["st.fail"]?.calls === 2 ? by : undefined;
       },
       60_000,
     );
-    expect(stats["st.lookup"]).toMatchObject({ calls: 3, errors: 0, retries: 0 });
+    expect(stats["st.lookup"]).toMatchObject({ calls: 3, errors: 0, redeliveries: 0 });
     expect(stats["st.fail"]).toMatchObject({ calls: 2, errors: 2, errorKinds: { error: 2 } });
   } finally {
     await server.close();
@@ -319,7 +319,7 @@ test("each run is one trace in the Collector, under the harness's span", { tag: 
   const collector = stacks().a.collector;
   expect(collector, "setup A has a Collector").toBeDefined();
   const harness = new HarnessSpan(`chat ${unique()}`);
-  const script = `import { fx } from "rewind:tools";
+  const script = `import { fx } from "rewind:actions";
 import { sleep } from "rewind";
 
 export default async function main() {
@@ -329,7 +329,7 @@ export default async function main() {
   return customer.tier;
 }
 `;
-  const run = await startRun(alice(), { toolset, script, traceparent: harness.traceparent });
+  const run = await startRun(alice(), { actionSet, script, traceparent: harness.traceparent });
   expect(run.traceId).toBe(harness.traceId);
   expect((await ended(alice(), run.id)).status).toBe("completed");
   const mine = await eventually(
@@ -349,10 +349,10 @@ export default async function main() {
   expect(runSpan.parentSpanId).toBe(harness.spanId);
   const call = mine.find((s) => s.name === "fx.lookup" && s.scope === "rewind.run")!;
   expect(call.parentSpanId).toBe(runSpan.spanId);
-  expect(call.attributes["rewind.tool"]).toBe("fx.lookup");
+  expect(call.attributes["rewind.action"]).toBe("fx.lookup");
   expect(mine.find((s) => s.name === "timer")!.parentSpanId).toBe(runSpan.spanId);
   for (const activation of mine.filter((s) => s.name === "activation")) expect(activation.parentSpanId).toBe(runSpan.spanId);
-  // The MCP server got the tool call span as the parent of its own work.
+  // The MCP server got the call span as the parent of its own work.
   const received = mcp.calls.find((c) => c.args.id === "trace");
   expect(parseTraceparent(String(received?.meta?.traceparent))).toEqual({ traceId: harness.traceId, parentId: call.spanId });
   evidence(`${mine.length} spans in trace ${harness.traceId}: ${[...new Set(mine.map((s) => s.name))].join(", ")}`);
@@ -457,7 +457,7 @@ test("statistics and failures refuse the same unreadable query", { tag: "@failur
 });
 
 test("statistics take one namespace: term and nothing else: counters know no label nor status", { tag: "@failure" }, async () => {
-  for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"]) {
+  for (const path of ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/actions/stats"]) {
     for (const q of ["@agent:triage", "status:failed", "namespace:alice namespace:bob", "namespace:alice,bob", "-namespace:alice"]) {
       const reply = await t.api.get(path, { query: { q } });
       expectProblem(reply, 400, "invalid-query");
@@ -489,8 +489,8 @@ test("the query language is no injection vector: SQL and wildcards are text", { 
     [`@agent:%triage%`, []],
     [`"%"`, []],
     [`"_"`, []],
-    [`tool:%`, []],
-    [`tool:fx._ookup`, []],
+    [`action:%`, []],
+    [`action:fx._ookup`, []],
     [`"\\"; SELECT 1; --"`, []],
   ];
   const seen: string[] = [];

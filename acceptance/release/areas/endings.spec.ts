@@ -11,15 +11,15 @@ import { ended, events, expectFailed, expectLimit, started, waitingFor } from ".
 
 let tenant: Tenant;
 let mcp: McpFixture;
-let toolset: string;
+let actionSet: string;
 let api: Api;
 
 test.beforeAll(async () => {
   tenant = await newTenant("endings");
   mcp = await startMcpFixture();
-  const created = await tenant.api.post("/v1/toolsets", { mcp: [{ name: "fx", url: mcp.url }] });
+  const created = await tenant.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
   expectOk(created);
-  toolset = created.json.id;
+  actionSet = created.json.id;
   api = tenant.api.ns("endings");
 });
 
@@ -29,7 +29,7 @@ test.afterAll(async () => {
 
 /** Starts a script (type-checked unless `check: false`) and waits for its end. */
 async function runToEnd(script: string, options: { check?: boolean; input?: unknown; timeoutMs?: number } = {}) {
-  const run = await started(api, { toolset, script, input: options.input ?? {}, check: options.check });
+  const run = await started(api, { actionSet, script, input: options.input ?? {}, check: options.check });
   return ended(api, run.id, options.timeoutMs ?? 90_000);
 }
 
@@ -38,28 +38,28 @@ const echoes = (text: string) => mcp.calls.filter((c) => c.tool === "echo" && c.
 // ---------------------------------------------------------------------------------------------
 // Success
 
-test("main's return value is the output, and a ToolError the script catches lets it go on", { tag: "@success" }, async () => {
-  const run = await runToEnd(`import { fx } from "rewind:tools";
-import { ToolError } from "rewind";
+test("main's return value is the output, and a ActionError the script catches lets it go on", { tag: "@success" }, async () => {
+  const run = await runToEnd(`import { fx } from "rewind:actions";
+import { ActionError } from "rewind";
 export default async function main() {
   try {
     await fx.fail({ reason: "card declined" });
     return "not reached";
   } catch (error) {
-    if (error instanceof ToolError) return { tool: error.tool, message: error.message, outcomeUnknown: error.outcomeUnknown };
+    if (error instanceof ActionError) return { action: error.action, message: error.message, outcomeUnknown: error.outcomeUnknown };
     throw error;
   }
 }
 `);
   expect(run.status, JSON.stringify(run)).toBe("completed");
-  expect(run.output.value).toMatchObject({ tool: "fx.fail", outcomeUnknown: false });
+  expect(run.output.value).toMatchObject({ action: "fx.fail", outcomeUnknown: false });
   expect(run.output.value.message).toContain("card declined");
 });
 
 test("a forgotten await: main returns first, and the run completes once the call has its outcome", { tag: "@success" }, async () => {
   const text = unique("forgotten-");
   const run = await runToEnd(
-    `import { fx } from "rewind:tools";
+    `import { fx } from "rewind:actions";
 export default async function main() {
   fx.slow({ ms: 800 }); // no await
   fx.echo({ text: "${text}" }); // no await
@@ -72,9 +72,9 @@ export default async function main() {
   expect(run.output.value).toBe("done");
   expect(echoes(text)).toHaveLength(1);
   const types = await events(api, run.id);
-  expect(types.filter((t) => t === "tool_call_completed")).toHaveLength(2);
+  expect(types.filter((t) => t === "call_completed")).toHaveLength(2);
   expect(types.at(-1)).toBe("complete_run");
-  expect(types.indexOf("complete_run")).toBeGreaterThan(types.lastIndexOf("tool_call_completed"));
+  expect(types.indexOf("complete_run")).toBeGreaterThan(types.lastIndexOf("call_completed"));
 });
 
 test("a script that catches its CancelledError cleans up within its grace and completes", { tag: "@success" }, async () => {
@@ -135,9 +135,9 @@ test("main throwing fails the run with its error, its location and stack in scri
   expectFailed(typeError, "TypeError", "Cannot read properties of undefined");
 });
 
-test("a forgotten await whose call fails fails the run with the ToolError, naming the call", { tag: "@failure" }, async () => {
+test("a forgotten await whose call fails fails the run with the ActionError, naming the call", { tag: "@failure" }, async () => {
   const run = await runToEnd(
-    `import { fx } from "rewind:tools";
+    `import { fx } from "rewind:actions";
 export default async function main() {
   fx.fail({ reason: "card declined" }); // no await
   return "charged";
@@ -145,16 +145,16 @@ export default async function main() {
 `,
     { check: false },
   );
-  expectFailed(run, "ToolError", "fx.fail failed");
+  expectFailed(run, "ActionError", "fx.fail failed");
   expect(run.output ?? undefined).toBeUndefined();
-  expect(run.error.failedCall).toMatchObject({ seq: 1, tool: "fx.fail", callsite: { line: 3 } });
+  expect(run.error.failedCall).toMatchObject({ seq: 1, action: "fx.fail", callsite: { line: 3 } });
   expect(run.error.failedCall.args.value).toEqual({ reason: "card declined" });
-  expect(await events(api, run.id)).toEqual(["run_started", "schedule_tool_call", "tool_call_failed", "fail_run"]);
+  expect(await events(api, run.id)).toEqual(["run_started", "schedule_call", "call_failed", "fail_run"]);
 });
 
 test("a rejection left unhandled fails the run, even when a handler comes later", { tag: "@failure" }, async () => {
   const run = await runToEnd(
-    `import { fx } from "rewind:tools";
+    `import { fx } from "rewind:actions";
 export default async function main() {
   const charge = fx.fail({ reason: "late" }); // rejected before it is awaited
   await fx.slow({ ms: 300 });
@@ -167,8 +167,8 @@ export default async function main() {
 `,
     { check: false },
   );
-  expectFailed(run, "ToolError", "fx.fail failed");
-  expect(run.error.failedCall).toMatchObject({ tool: "fx.fail" });
+  expectFailed(run, "ActionError", "fx.fail failed");
+  expect(run.error.failedCall).toMatchObject({ action: "fx.fail" });
   const types = await events(api, run.id);
   expect(types.at(-1)).toBe("fail_run");
 });
@@ -184,7 +184,7 @@ test("a script nothing can wake fails with DeadlockError", { tag: "@failure" }, 
 
 test("a run whose script fails waits for the call in flight, and records its outcome", { tag: "@failure" }, async () => {
   const run = await runToEnd(
-    `import { fx } from "rewind:tools";
+    `import { fx } from "rewind:actions";
 export default async function main() {
   fx.slow({ ms: 600 });
   throw new Error("gave up");
@@ -193,7 +193,7 @@ export default async function main() {
     { check: false },
   );
   expectFailed(run, "Error", "gave up");
-  expect(await events(api, run.id)).toEqual(["run_started", "schedule_tool_call", "tool_call_completed", "fail_run"]);
+  expect(await events(api, run.id)).toEqual(["run_started", "schedule_call", "call_completed", "fail_run"]);
 });
 
 test("top-level code that throws aborts the run with invalid_script at its first activation", { tag: "@failure" }, async () => {
@@ -210,9 +210,9 @@ export default async function main() {
 test("a cleanup that needs another activation exceeds the cancellation grace: aborted, its call never sent", { tag: "@failure" }, async () => {
   const text = unique("cleanup-");
   const run = await started(api, {
-    toolset,
+    actionSet,
     script: `import { sleep } from "rewind";
-import { fx } from "rewind:tools";
+import { fx } from "rewind:actions";
 export default async function main() {
   try {
     await sleep("30d");
@@ -242,12 +242,12 @@ test("an output above 8 MiB aborts the run with limit_exceeded, and nothing abov
 
 test("tool arguments above 8 MiB abort the run before the call is sent", { tag: "@failure" }, async () => {
   const before = mcp.calls.length;
-  const run = await runToEnd(`import { fx } from "rewind:tools";
+  const run = await runToEnd(`import { fx } from "rewind:actions";
 export default async function main() {
   await fx.echo({ text: "x".repeat(8 * 1024 * 1024) });
 }
 `);
-  expectLimit(run, "the payload of schedule_tool_call is");
+  expectLimit(run, "the payload of schedule_call is");
   expect(await events(api, run.id)).toEqual(["run_started", "run_aborted"]);
   expect(mcp.calls.length).toBe(before);
 });

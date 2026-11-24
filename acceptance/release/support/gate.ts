@@ -195,7 +195,7 @@ export const recordingFetch: typeof fetch = async (input, init) => {
 
 /**
  * Lets a 5xx with this problem slug through the sweep, for this test only (`*` for any): a
- * check that expects `toolset-unavailable` (502) or an outage's `unavailable` (503).
+ * check that expects `action-set-unavailable` (502) or an outage's `unavailable` (503).
  */
 export function allow5xx(slug: string): void {
   current?.allowed5xx.add(slug);

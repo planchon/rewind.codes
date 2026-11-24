@@ -3,7 +3,7 @@
  * tool or error in the dashboard, and sees its code next to its trace.
  *
  * The dashboard is the one `rewind-server` embeds and serves. Runs are made through the SDK, with
- * its worker answering the host tools; the operator signs in with a `reader` key, searches with
+ * its worker answering the harness actions; the operator signs in with a `reader` key, searches with
  * the query bar, steps through a run with the time cursor, and sees a run waiting for a signal
  * and the failures grouped by signature.
  */
@@ -15,7 +15,7 @@ import { startServer } from "../support/deployment.js";
 import { resultDir } from "../support/paths.js";
 
 const TRIAGE = `import { sleep } from "rewind";
-import { audit, crm } from "rewind:tools";
+import { audit, crm } from "rewind:actions";
 
 export default async function main(input: { email: string }) {
   const customer = await crm.lookup({ email: input.email });
@@ -26,7 +26,7 @@ export default async function main(input: { email: string }) {
 }
 `;
 
-const CHARGE = `import { payments } from "rewind:tools";
+const CHARGE = `import { payments } from "rewind:actions";
 
 export default async function main() {
   const receipt = await payments.charge({ amount: 100 });
@@ -62,7 +62,7 @@ test.describe("criterion 7: the dashboard", () => {
       url: server.url,
       apiKey: (await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "harness" })).key!,
     }).namespace("alice");
-    const toolset = await harness.toolsets.create({
+    const actionSet = await harness.actionSets.create({
       host: [
         {
           name: "crm.lookup",
@@ -83,7 +83,7 @@ test.describe("criterion 7: the dashboard", () => {
       ],
     });
     const worker = harness.worker({
-      toolset: toolset.id,
+      actionSet: actionSet.id,
       tools: {
         "crm.lookup": ({ email }: { email: string }) => ({ id: `cus_${email.split("@")[0]}` }),
         "audit.record": () => ({ ok: true }),
@@ -95,7 +95,7 @@ test.describe("criterion 7: the dashboard", () => {
     });
     try {
       const start = (script: string, labels: Record<string, string>, input: unknown = {}) =>
-        harness.runs.start({ toolset: toolset.id, script, labels, input });
+        harness.runs.start({ actionSet: actionSet.id, script, labels, input });
       runs.triage = await start(TRIAGE, { team: "billing", conversation: "conv-7" }, { email: "ada@example.com" });
       runs.triageOther = await start(TRIAGE, { team: "support", conversation: "conv-10" }, { email: "bob@example.com" });
       runs.charge = await start(CHARGE, { team: "billing", conversation: "conv-8" });
@@ -168,7 +168,7 @@ test.describe("criterion 7: the dashboard", () => {
     await search(page, "tool:crm.lookup");
     await expect.poll(shown(page)).toEqual([runs.triage.id, runs.triageOther.id].sort());
 
-    // By error: the kind of a failed tool call, or the name of the error a run failed with.
+    // By error: the kind of a failed call, or the name of the error a run failed with.
     await search(page, "error:error");
     await expect.poll(shown(page)).toEqual([runs.charge.id]);
     await search(page, "error:DeadlockError");

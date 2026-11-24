@@ -20,12 +20,12 @@ import { runIds, startRun } from "../support/runs-helpers.js";
 
 let tenant: Tenant;
 let api: Api;
-let toolset: string;
+let actionSet: string;
 /** The tenant on setup B, for `/v1/test`. */
 let tested: Api;
-let testedToolset: string;
+let testedActionSet: string;
 
-const TOOLSET = {
+const ACTION_SET = {
   host: [
     {
       name: "crm.lookup",
@@ -40,7 +40,7 @@ const TOOLSET = {
   ],
 };
 
-const SCENARIO_SCRIPT = `import { crm } from "rewind:tools";
+const SCENARIO_SCRIPT = `import { crm } from "rewind:actions";
 import { signal, sleep } from "rewind";
 
 export default async function main(input: { email: string }) {
@@ -55,27 +55,27 @@ export default async function main(input: { email: string }) {
 test.beforeAll(async () => {
   tenant = await newTenant("check-test");
   api = tenant.api.ns("checks");
-  const created = await tenant.api.post("/v1/toolsets", TOOLSET);
+  const created = await tenant.api.post("/v1/action-sets", ACTION_SET);
   expectOk(created);
-  toolset = created.json.id;
+  actionSet = created.json.id;
 
   const onB = await newTenant("check-test", stacks().b);
   tested = onB.api.ns("tests");
-  const createdB = await onB.api.post("/v1/toolsets", TOOLSET);
+  const createdB = await onB.api.post("/v1/action-sets", ACTION_SET);
   expectOk(createdB);
-  testedToolset = createdB.json.id;
+  testedActionSet = createdB.json.id;
 });
 
 /** `POST /v1/check`. */
-const check = (as: Api, script: string, withToolset = toolset) => as.post("/v1/check", { script, toolset: withToolset });
+const check = (as: Api, script: string, withActionSet = actionSet) => as.post("/v1/check", { script, actionSet: withActionSet });
 
 // ---------------------------------------------------------------------------------------------
 // Success
 
-test("a correct script checks clean against its toolset", { tag: "@success" }, async () => {
+test("a correct script checks clean against its actionSet", { tag: "@success" }, async () => {
   const reply = await check(
     api,
-    `import { crm } from "rewind:tools";
+    `import { crm } from "rewind:actions";
 export default async function main(input: { email: string }) {
   const customer = await crm.lookup({ email: input.email });
   return customer.notes.length;
@@ -91,7 +91,7 @@ test("a test runs in mock mode and virtual time: a 10-day sleep, a signal, a too
   const started = Date.now();
   const reply = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
-    toolset: testedToolset,
+    actionSet: testedActionSet,
     tests: [
       {
         name: "refunds ada",
@@ -101,7 +101,7 @@ test("a test runs in mock mode and virtual time: a 10-day sleep, a signal, a too
         expect: {
           status: "completed",
           output: { customer: "cus_ada", refund: 10 },
-          calls: [{ tool: "crm.lookup", args: { email: "ada@example.com" }, times: 1 }],
+          calls: [{ action: "crm.lookup", args: { email: "ada@example.com" }, times: 1 }],
         },
       },
     ],
@@ -120,14 +120,14 @@ test("a test runs in mock mode and virtual time: a 10-day sleep, a signal, a too
 test("a test's TypeScript mock handlers answer the calls", { tag: "@success" }, async () => {
   const reply = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
-    toolset: testedToolset,
+    actionSet: testedActionSet,
     tests: [
       {
         name: "refunds grace nothing",
         input: { email: "grace@example.com" },
         world: {
           mocks: `export default {
-  crm: { lookup: ({ email }, call) => ({ id: "cus_" + email.split("@")[0], notes: call.tool }) },
+  crm: { lookup: ({ email }, call) => ({ id: "cus_" + email.split("@")[0], notes: call.action }) },
 };
 `,
         },
@@ -146,7 +146,7 @@ test("a test's TypeScript mock handlers answer the calls", { tag: "@success" }, 
 test("a type error is reported for a model: its code, its line and a frame of the source", { tag: "@failure" }, async () => {
   const reply = await check(
     api,
-    `import { crm } from "rewind:tools";
+    `import { crm } from "rewind:actions";
 export default async function main() {
   const customer = await crm.lookup({ email: 42 });
   return customer.id;
@@ -165,7 +165,7 @@ export default async function main() {
 test("the checker's own rules: a forgotten await, and a global the sandbox has not with a hint", { tag: "@failure" }, async () => {
   const floating = await check(
     api,
-    `import { crm } from "rewind:tools";
+    `import { crm } from "rewind:actions";
 export default async function main() {
   crm.lookup({ email: "a@example.com" });
   return "done";
@@ -187,8 +187,8 @@ export default async function main() {
 test("a start whose script does not type-check is 422 invalid-script with its diagnostics, and no run exists", { tag: "@failure" }, async () => {
   const before = await runIds(api);
   const reply = await startRun(api, {
-    toolset,
-    script: `import { crm } from "rewind:tools";
+    actionSet,
+    script: `import { crm } from "rewind:actions";
 export default async function main() {
   return await crm.lookup({ email: 42 });
 }
@@ -199,16 +199,16 @@ export default async function main() {
   expect(await runIds(api)).toEqual(before);
 });
 
-test("the checks at start refuse what cannot run even unchecked: a syntax error, no default export, a tool not in the toolset", { tag: "@failure" }, async () => {
+test("the checks at start refuse what cannot run even unchecked: a syntax error, no default export, a tool not in the actionSet", { tag: "@failure" }, async () => {
   const before = await runIds(api);
   const cases: [string, string][] = [
     ["export default async function main( {\n  return 1;\n}\n", "SyntaxError"],
     ["export async function main() {\n  return 1;\n}\n", "no default export"],
-    [`import { billing } from "rewind:tools";\nexport default async function main() { return billing.refund({}); }\n`, "no export named \"billing\""],
+    [`import { billing } from "rewind:actions";\nexport default async function main() { return billing.refund({}); }\n`, "no export named \"billing\""],
     [`export default 42;\n`, "export default` its main function"],
   ];
   for (const [script, words] of cases) {
-    const reply = await startRun(api, { toolset, script, check: false });
+    const reply = await startRun(api, { actionSet, script, check: false });
     expectProblem(reply, 422, "invalid-script");
     expect(reply.json.detail, reply.text).toContain(words);
   }
@@ -218,14 +218,14 @@ test("the checks at start refuse what cannot run even unchecked: a syntax error,
 test("a test whose expectations do not hold says which, in sentences", { tag: "@failure" }, async () => {
   const reply = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
-    toolset: testedToolset,
+    actionSet: testedActionSet,
     tests: [
       {
         name: "the CRM is down",
         input: { email: "ada@example.com" },
         world: { tools: { "crm.lookup": { error: { message: "the CRM is down" } } } },
         signals: [{ name: "decision", payload: { refund: 10 } }],
-        expect: { status: "completed", calls: [{ tool: "crm.lookup", times: 2 }] },
+        expect: { status: "completed", calls: [{ action: "crm.lookup", times: 2 }] },
       },
     ],
   });
@@ -234,7 +234,7 @@ test("a test whose expectations do not hold says which, in sentences", { tag: "@
   const [result] = reply.json.tests;
   expect(result.problem).toBe("failed");
   expect(result.status).toBe("failed");
-  expect(result.error?.name).toBe("ToolError");
+  expect(result.error?.name).toBe("ActionError");
   expect(result.failures.length).toBeGreaterThanOrEqual(2);
   expect(result.failures.join("\n")).toContain("crm.lookup");
 });
@@ -308,7 +308,7 @@ test("every way to load code from outside is refused before any run exists", { t
 test("mock handlers run in a sandbox of their own: no imports, no process, no network", { tag: "@attack" }, async () => {
   const imported = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
-    toolset: testedToolset,
+    actionSet: testedActionSet,
     tests: [
       {
         name: "imports node:fs",
@@ -322,7 +322,7 @@ test("mock handlers run in a sandbox of their own: no imports, no process, no ne
 
   const probing = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
-    toolset: testedToolset,
+    actionSet: testedActionSet,
     tests: [
       {
         name: "probes its sandbox",

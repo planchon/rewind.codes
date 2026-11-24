@@ -106,7 +106,7 @@ for (const setup of SETUPS) {
       for (const contentType of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "application/xml"]) {
         for (const [method, path] of [
           ["POST", "/v1/runs"],
-          ["POST", "/v1/toolsets"],
+          ["POST", "/v1/action-sets"],
           ["PUT", "/v1/namespaces/alice"],
         ] as const) {
           const reply = await tenant.api.ns("alice").request(method, path, { body: json, contentType });
@@ -145,7 +145,7 @@ for (const setup of SETUPS) {
       for (const [path, body] of [
         ["/v1/runs", `{"script": "export default async () => 1;", "input": ${nested}}`],
         [`/v1/runs/${run.id}/signals/approval`, nested],
-        ["/v1/toolsets", `{"host": [{"name": "deep", "description": "d", "inputSchema": ${nested}}]}`],
+        ["/v1/action-sets", `{"harness": [{"name": "deep", "description": "d", "inputSchema": ${nested}}]}`],
       ] as const) {
         const reply = await tenant.api.ns("alice").request("POST", path, { body, contentType: "application/json" });
         expectProblem(reply, 400, "invalid-request");
@@ -178,9 +178,9 @@ for (const setup of SETUPS) {
         (id: string) => ["POST", `/v1/runs/${id}/signals/approval`],
         (id: string) => ["GET", `/v1/scripts/${id}`],
         (id: string) => ["GET", `/v1/payloads/${id}`],
-        (id: string) => ["GET", `/v1/toolsets/${id}/declarations`],
+        (id: string) => ["GET", `/v1/action-sets/${id}/declarations`],
         (id: string) => ["DELETE", `/v1/api-keys/${id}`],
-        (id: string) => ["POST", `/v1/tasks/${id}/complete`],
+        (id: string) => ["POST", `/v1/calls/${id}/complete`],
         (id: string) => ["DELETE", `/v1/tokens/${id}`],
       ];
       const keys = await tenant.api.get("/v1/api-keys");

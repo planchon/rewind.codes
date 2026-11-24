@@ -6,7 +6,7 @@
  *   HTTP edge and a node) linked by the node link, behind an edge that spreads the requests over
  *   them, as `deploy/edge/Caddyfile` does: every node answers every route, and reaches the owner
  *   of a run's partition through the link. It lets MCP servers on 127.0.0.1 through
- *   (`--allow-internal-tools`), and webhooks to private addresses, so that the gate's fixtures
+ *   (`--allow-internal-addresses`), and webhooks to private addresses, so that the gate's fixtures
  *   are reachable; stdio MCP servers too.
  * - **B, strict**: one node on Turso and local files, with a deployed server's defaults: no
  *   internal MCP server, no private webhook, no stdio, no WorkOS. Egress attacks are proven there.

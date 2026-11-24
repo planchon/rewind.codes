@@ -13,16 +13,16 @@ export const TOKEN_ALL = [
   "runs:control",
   "runs:quarantine",
   "runs:delete",
-  "toolsets:read",
+  "actions:read",
   "secrets:read",
   "secrets:write",
   "secrets:use",
-  "tasks:work",
-  "tasks:approve",
+  "calls:work",
+  "calls:approve",
 ];
 
 /** What a token holds without `permissions`. */
-export const TOKEN_DEFAULT = ["runs:read", "runs:start", "runs:control", "toolsets:read"];
+export const TOKEN_DEFAULT = ["runs:read", "runs:start", "runs:control", "actions:read"];
 
 /** A two-line script that returns at once; the marker makes it a script of its own. */
 export function short(marker: string): string {
@@ -82,7 +82,7 @@ export async function runState(owner: Api, id: string): Promise<unknown> {
   return {
     status: reply.json.status,
     historyLen: reply.json.historyLen,
-    waiting: (reply.json.waitingFor ?? []).map((w: any) => `${w.kind}:${w.name ?? w.tool ?? ""}:${w.state ?? ""}`),
+    waiting: (reply.json.waitingFor ?? []).map((w: any) => `${w.kind}:${w.name ?? w.action ?? ""}:${w.state ?? ""}`),
     labels: reply.json.labels,
   };
 }
