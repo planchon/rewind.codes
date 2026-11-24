@@ -93,59 +93,26 @@ fn run_named(listing: &str, needle: &str) -> Option<String> {
     first_run(listing.lines().find(|line| line.contains(needle))?)
 }
 
-/// `ship_orders` as `fix_workflow_regression` saves it, with `code` and these suite changes.
+/// `update_workflow` of `ship_orders`, as `fix_workflow_regression` makes its next version:
+/// `code` and these suite changes.
 fn ship_orders(code: &str, suite: Value) -> Value {
-    let mut workflow = json!({
-        "name": "ship_orders",
-        "description": "Buy a shipping label for each order, and give each order's tracking number.",
-        "code": code,
-        "input": {
-            "type": "object",
-            "properties": { "orders": { "type": "array", "items": { "type": "string" } } },
-            "required": ["orders"],
-            "additionalProperties": false
-        },
-        "output": {
-            "type": "object",
-            "properties": { "shipped": { "type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "order": { "type": "string" },
-                    "tracking": { "type": ["string", "null"] }
-                },
-                "required": ["order", "tracking"]
-            } } },
-            "required": ["shipped"]
-        }
-    });
-    for (key, value) in suite.as_object().cloned().unwrap_or_default() {
-        workflow[key] = value;
-    }
-    workflow
+    next_version("ship_orders", code, suite)
 }
 
-/// `bug_digest` as `upgrade_workflow_suite` saves it, with `code` and these suite changes.
+/// `update_workflow` of `bug_digest`, as `upgrade_workflow_suite` makes its next version: `code`
+/// and these suite changes.
 fn bug_digest(code: &str, suite: Value) -> Value {
-    let mut workflow = json!({
-        "name": "bug_digest",
-        "description": "Post the open bugs of a repository to #bugs.",
-        "code": code,
-        "input": {
-            "type": "object",
-            "properties": { "repo": { "type": "string" } },
-            "required": ["repo"],
-            "additionalProperties": false
-        },
-        "output": {
-            "type": "object",
-            "properties": { "posted": { "type": "integer" } },
-            "required": ["posted"]
-        }
-    });
+    next_version("bug_digest", code, suite)
+}
+
+/// `update_workflow`'s arguments for the next version of `workflow`: `code` and these suite
+/// changes; its interface stays its latest version's.
+fn next_version(workflow: &str, code: &str, suite: Value) -> Value {
+    let mut arguments = json!({ "workflow": workflow, "code": code });
     for (key, value) in suite.as_object().cloned().unwrap_or_default() {
-        workflow[key] = value;
+        arguments[key] = value;
     }
-    workflow
+    arguments
 }
 
 /// An open bug as the upgraded tracker lists it.
@@ -278,7 +245,7 @@ fn reference(id: &'static str) -> Model {
                         "calls": [{ "action": "shipping.create_label", "times": 3 }]
                     });
                     Some(call(
-                        "save_workflow",
+                        "update_workflow",
                         ship_orders(
                             &solution(id),
                             json!({ "tests": [{ "test": digest, "expect": expect }] }),
@@ -295,14 +262,14 @@ fn reference(id: &'static str) -> Model {
                 // Read the workflow, see its tests go stale against the new server, then save
                 // the adapted code with its tests updated or retired, each with a reason.
                 ("upgrade_workflow_suite", 0) => {
-                    Some(call("get_workflow", json!({ "name": "bug_digest" })))
+                    Some(call("get_workflow", json!({ "workflow": "bug_digest" })))
                 }
                 ("upgrade_workflow_suite", 1) => Some(call(
                     "test_workflow",
                     json!({ "code": solution(id), "workflow": "bug_digest" }),
                 )),
                 ("upgrade_workflow_suite", 2) => Some(call(
-                    "save_workflow",
+                    "update_workflow",
                     bug_digest(&solution(id), upgraded_suite()),
                 )),
                 (_, 0) => Some(call(
@@ -593,7 +560,7 @@ async fn the_gate_refuses_a_fix_that_breaks_the_suite_and_counts_it() {
         match answered(conversation) {
             0 => Some(call("list_runs", json!({ "status": "failed" }))),
             1 => Some(call(
-                "save_workflow",
+                "update_workflow",
                 ship_orders(&swallowing_fix(), json!({})),
             )),
             2 => Some(call(
@@ -611,7 +578,7 @@ async fn the_gate_refuses_a_fix_that_breaks_the_suite_and_counts_it() {
     assert!(saved.is_error);
     assert!(
         saved.content.starts_with(
-            "The workflow was not saved: 1 of 3 tests of the suite did not pass: \"fails when the carrier refuses a label\" (failed): "
+            "No version was made: 1 of 3 tests of the suite did not pass: \"fails when the carrier refuses a label\" (failed): "
         ),
         "{}",
         saved.content
@@ -650,7 +617,7 @@ async fn the_gate_refuses_a_fix_that_breaks_the_suite_and_counts_it() {
     assert_eq!(record.runs, 0, "the refused retry started nothing");
     assert_eq!(
         record.failure.as_deref(),
-        Some("no new version of ship_orders was saved")
+        Some("no new version of ship_orders was made")
     );
 }
 
@@ -665,7 +632,7 @@ async fn a_fix_run_anew_instead_of_finishing_the_failed_run_fails_the_task() {
                 json!({ "workflow": "ship_orders", "runs": [run_named(results(conversation)[0], "ship_orders")?] }),
             )),
             2 => Some(call(
-                "save_workflow",
+                "update_workflow",
                 ship_orders(
                     &solution("fix_workflow_regression"),
                     json!({ "tests": [{ "test": digest_in(&last?)?, "expect": { "status": "completed" } }] }),
@@ -695,7 +662,7 @@ async fn a_stale_test_cannot_be_updated_by_its_expectation_alone() {
         "scripted",
         |conversation| match answered(conversation) {
             0 => Some(call(
-                "save_workflow",
+                "update_workflow",
                 bug_digest(
                     &solution("upgrade_workflow_suite"),
                     json!({
@@ -729,7 +696,7 @@ async fn a_stale_test_cannot_be_updated_by_its_expectation_alone() {
     assert_eq!(record.gate_refusals, 1);
     assert_eq!(
         record.failure.as_deref(),
-        Some("no new version of bug_digest was saved")
+        Some("no new version of bug_digest was made")
     );
 }
 
@@ -750,22 +717,24 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
                 ("test_workflow", json!({ "code": code, "tests": {} })),
                 ("test_workflow", json!({ "code": code, "workflow": 3 })),
                 ("test_workflow", json!({ "code": code, "tests": ["00"] })),
-                ("save_workflow", with("input", json!("string"))),
-                ("save_workflow", with("signals", json!([]))),
-                ("save_workflow", with("retire", json!([{ "names": ["a"] }]))),
+                ("update_workflow", with("input", json!("string"))),
+                ("update_workflow", with("signals", json!([]))),
                 (
-                    "save_workflow",
+                    "update_workflow",
+                    with("retire", json!([{ "names": ["a"] }])),
+                ),
+                (
+                    "update_workflow",
                     with("replace", json!([{ "name": "a", "expect": {} }])),
                 ),
-                ("save_workflow", with("base", json!(4))),
                 (
-                    "save_workflow",
+                    "update_workflow",
                     with(
                         "retire",
                         json!([{ "names": ["asks first"], "reason": "deprecated" }]),
                     ),
                 ),
-                ("get_workflow", json!({ "name": "nope" })),
+                ("get_workflow", json!({ "workflow": "nope" })),
                 ("get_workflow", json!({})),
                 (
                     "record_tests",
@@ -796,23 +765,22 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
         "test_workflow: `tests` must be an array of tests: each one an object, or the digest of a recorded test as a string.",
         "test_workflow: `workflow` must be a non-empty string.",
         "The tests were refused before running: \"00\" is not a test's digest: 64 lowercase hex digits, as record_tests returns them",
-        "save_workflow: `input` must be a JSON Schema: an object.",
-        "save_workflow: `signals` must be an object of JSON Schemas by signal name.",
-        "save_workflow: `retire` must be an array of { names, reason }: the names of inherited tests, and why they no longer hold.",
-        "save_workflow: `replace` must be an array of { name, reason, new?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
-        "save_workflow: `base` must be a non-empty string.",
-        "The workflow was not saved: retire names \"asks first\", which the base's suite does not have (it has \"buys no label without orders\", \"fails when the carrier refuses a label\", \"ships every order with its tracking number\")",
-        "get_workflow failed: no workflow nope for this API key: save it with POST /v1/workflows, or list them with GET /v1/workflows",
-        "get_workflow: `name` must be a non-empty string.",
+        "update_workflow: `input` must be a JSON Schema: an object.",
+        "update_workflow: `signals` must be an object of JSON Schemas by signal name.",
+        "update_workflow: `retire` must be an array of { names, reason }: the names of tests of the suite, and why they no longer hold.",
+        "update_workflow: `replace` must be an array of { name, reason, new?, expect? }: the name of a test of the suite, why it changes, and the test that replaces it or its new expectation.",
+        "No version was made: retire names \"asks first\", which the workflow's suite does not have (it has \"buys no label without orders\", \"fails when the carrier refuses a label\", \"ships every order with its tracking number\")",
+        "get_workflow failed: no workflow nope that this caller sees: list them with GET /v1/workflows; a run given code creates one",
+        "get_workflow: `workflow` must be a non-empty string.",
         "record_tests: `limit` must be an integer, 1 or more.",
         "record_tests: `runs` must be an array of non-empty strings.",
-        "record_tests failed: no workflow nope for this caller: list them with GET /v1/workflows",
+        "record_tests failed: no workflow nope that this caller sees: list them with GET /v1/workflows; a run given code creates one",
     ];
     for (n, text) in expected.iter().enumerate() {
         assert_eq!(texts[n], *text, "call {n}");
     }
     // Both runs of the workflow, newest first: two paths.
-    let recorded = texts[15];
+    let recorded = texts[14];
     assert!(
         recorded.starts_with("Recorded 2 tests from the runs of ship_orders, one per path:\n"),
         "{recorded}"
@@ -826,7 +794,7 @@ async fn the_workflow_tools_say_what_is_wrong_with_their_arguments() {
         "{recorded}"
     );
     assert_eq!(
-        texts[16],
+        texts[15],
         "All 3 tests passed.\nPASS \"buys no label without orders\"\nPASS \"fails when the carrier refuses a label\"\nPASS \"ships every order with its tracking number\""
     );
 }

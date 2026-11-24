@@ -12,7 +12,7 @@ use std::time::Duration;
 use rewind_core::{
     AbortKind, AbortReason, ActionFailureKind, ActionPolicy, ActionRoute, Annotation, Completion,
     Digest, Epoch, Event, HistoryEvent, Lifecycle, LogLevel, PartitionId, RunId, RunMode,
-    RunStarted, RunStatus, Seed, Seq, Shape, Timestamp,
+    RunStarted, RunStatus, Seed, Seq, Shape, Timestamp, WorkflowId,
 };
 use serde_json::json;
 
@@ -24,7 +24,7 @@ use crate::ports::{
     NodeId, OutboxChange, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionError,
     PartitionLog, PartitionStore, PayloadRecord, Predicate, Projection, QUARANTINE_AFTER_FAILURES,
     Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts,
-    RunHead, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, Scope, SearchCursor,
+    RunHead, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, SearchCursor,
     SignalUrlTarget, TaskChange, TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, TenantState,
     Threshold, TimerChange, TimerKind, Trigger, Wait, WaitKind, WaitingFor, Watcher, Window,
 };
@@ -123,6 +123,32 @@ fn action_set_digest() -> Digest {
     Digest::of(b"action_set")
 }
 
+/// The id of the workflow of the code `name`.
+fn flow_id(name: &str) -> WorkflowId {
+    WorkflowId::from_bits(u64::from_le_bytes(
+        code(name).as_bytes()[..8].try_into().unwrap_or_default(),
+    ))
+}
+
+/// A run's workflow: the one of the code `name`, at its version 1.
+fn flow(name: &str) -> RunWorkflow {
+    RunWorkflow {
+        id: flow_id(name),
+        name: None,
+        version: 1,
+        digest: code(name),
+        interface: false,
+    }
+}
+
+/// A run's metadata, a run of the workflow of the code `name`.
+fn of_workflow(name: &str) -> RunMetadata {
+    RunMetadata {
+        workflow: Some(flow(name)),
+        ..RunMetadata::default()
+    }
+}
+
 fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
     RunHead {
         run: run.clone(),
@@ -141,7 +167,7 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
         waits: Vec::new(),
         expires_at: later(T0, DAY),
         history_len: 0,
-        metadata: RunMetadata::default(),
+        metadata: of_workflow("script"),
         idempotency_key: None,
         created_at: T0,
         updated_at: T0,
@@ -500,7 +526,7 @@ pub async fn a_commit_is_read_by_a_later_open_on_any_node<S: PartitionStore>(sto
         admissions: vec![Admission {
             run: r2.id,
             namespace: alice(),
-            code: code("script"),
+            workflow: Some(flow_id("script")),
             admitted_at: T0,
         }],
     };
@@ -1634,7 +1660,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
             (
                 counted.namespace.to_string(),
                 counted.gauges.active_runs,
-                counted.gauges.distinct_scripts(),
+                counted.gauges.distinct_workflows(),
             )
         })
         .collect();
@@ -1917,8 +1943,8 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
         log.gauges(&Scope::Tenant(acme()))
             .await
             .expect("gauges")
-            .scripts
-            .get(&code("script")),
+            .workflows
+            .get(&flow_id("script")),
         Some(&2)
     );
 
@@ -1973,7 +1999,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
     );
     let gauges = log.gauges(&Scope::Tenant(acme())).await.expect("gauges");
     assert_eq!(
-        (gauges.active_runs, gauges.scripts.get(&code("script"))),
+        (gauges.active_runs, gauges.workflows.get(&flow_id("script"))),
         (1, Some(&1)),
         "what it held in the gauges"
     );
@@ -2372,7 +2398,7 @@ pub async fn counters_sum_whole_hours_of_the_scope<S: PartitionStore>(store: &S)
         signature: "TypeError: <n>".into(),
         error: "TypeError".into(),
         runs: 1,
-        scripts: BTreeMap::from([(code("script"), 1)]),
+        workflows: BTreeMap::from([(flow_id("script"), 1)]),
         lines: BTreeMap::from([(7, 1)]),
         latest: vec![LatestRun {
             run: self::run(run).id,
@@ -2537,6 +2563,7 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
         vec![create_with(
             RunHead {
                 code: code("second"),
+                metadata: of_workflow("second"),
                 ..head(&quarantined, &alice())
             },
             None,
@@ -2561,6 +2588,7 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
         vec![create_with(
             RunHead {
                 code: code("third"),
+                metadata: of_workflow("third"),
                 ..head(&ended, &alice())
             },
             None,
@@ -2581,11 +2609,15 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
             active_runs: 4,
             waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Approval, 1)]),
             quarantined: 1,
-            scripts: BTreeMap::from([(code("script"), 3), (code("second"), 1), (code("third"), 1)]),
+            workflows: BTreeMap::from([
+                (flow_id("script"), 3),
+                (flow_id("second"), 1),
+                (flow_id("third"), 1)
+            ]),
         },
         "a run waiting for a kind twice counts once in it"
     );
-    assert_eq!(gauges.distinct_scripts(), 3);
+    assert_eq!(gauges.distinct_workflows(), 3);
     assert_eq!(gauges.waiting_for(WaitingFor::Timer), 0);
     let tenant_wide = log.gauges(&Scope::Tenant(acme())).await.expect("gauges");
     assert_eq!(tenant_wide.active_runs, 5);
@@ -2594,8 +2626,8 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
         log.gauges(&in_alice)
             .await
             .expect("gauges")
-            .scripts
-            .get(&code("third")),
+            .workflows
+            .get(&flow_id("third")),
         None,
         "an erased run is kept no more"
     );
@@ -2745,7 +2777,7 @@ pub async fn organizations_are_kept<S: PartitionStore>(store: &S) {
         admissions: vec![Admission {
             run: run(1).id,
             namespace: alice(),
-            code: code("script"),
+            workflow: Some(flow_id("script")),
             admitted_at: T0,
         }],
     };

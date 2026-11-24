@@ -65,6 +65,9 @@ pub struct ForkRun {
     pub secrets: Option<ServerSecrets>,
     /// What the caller may use.
     pub secret_rights: SecretRights,
+    /// Who forks it, a principal as the audit log names it: the creator of the workflow the
+    /// fork creates, when its code is new to its namespace.
+    pub principal: String,
 }
 
 impl ForkRun {
@@ -80,6 +83,7 @@ impl ForkRun {
             idempotency_key: None,
             secrets: None,
             secret_rights: SecretRights::NamespaceOnly,
+            principal: "local".to_owned(),
         }
     }
 }

@@ -11,13 +11,13 @@ use rewind_core::{
     Action, ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionPolicy, ActionRoute,
     ActionRule, ActionSet, Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest,
     Expectations, ExpectedCall, ExpectedError, HttpMethod, Matching, McpServer, McpTransport,
-    ParameterLocation, RecordedCall, RecordedSignal, ReplacedTest, RetiredTest, RunStatus,
-    SecretPlacement, SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestFromRun, TestSignal,
-    Timestamp, Workflow, WorkflowSchemas, World,
+    ParameterLocation, PinnedWorkflow, RecordedCall, RecordedSignal, ReplacedTest, RetiredTest,
+    RunStatus, SecretPlacement, SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestFromRun,
+    TestSignal, Timestamp, WorkflowId, WorkflowSchemas, WorkflowVersion, World,
 };
 use rewind_format::{
-    FormatError, decode_action_set, decode_cassette, decode_test, decode_workflow,
-    encode_action_set, encode_cassette, encode_test, encode_workflow, test_digest,
+    FormatError, decode_action_set, decode_cassette, decode_test, decode_workflow_version,
+    encode_action_set, encode_cassette, encode_test, encode_workflow_version, test_digest,
 };
 use serde_json::json;
 
@@ -294,30 +294,29 @@ const WORKFLOW: &str = include_str!("fixtures/workflow.v1.json");
 const WORKFLOW_WITH_LABELS: &str = include_str!("fixtures/workflow-labels.v1.json");
 const ACTION_SET_WITH_WORKFLOWS: &str = include_str!("fixtures/action-set-workflows.v1.json");
 
+fn schemas() -> WorkflowSchemas {
+    WorkflowSchemas {
+        input: json!({
+            "type": "object",
+            "properties": { "repo": { "type": "string" } },
+            "required": ["repo"],
+        }),
+        output: json!({ "type": "object", "properties": { "closed": { "type": "integer" } } }),
+        signals: BTreeMap::from([
+            (
+                "approval".to_owned(),
+                json!({ "type": "object", "properties": { "close": { "type": "boolean" } } }),
+            ),
+            ("pr merged".to_owned(), json!(true)),
+        ]),
+    }
+}
+
 /// Every field of a workflow version.
-fn workflow() -> Workflow {
-    Workflow::new(
-        "triage",
-        Some("Triage the stale issues of a repository, after approval.".into()),
-        digest_of("script"),
-        action_set().digest(),
-        WorkflowSchemas {
-            input: json!({
-                "type": "object",
-                "properties": { "repo": { "type": "string" } },
-                "required": ["repo"],
-            }),
-            output: json!({ "type": "object", "properties": { "closed": { "type": "integer" } } }),
-            signals: BTreeMap::from([
-                (
-                    "approval".to_owned(),
-                    json!({ "type": "object", "properties": { "close": { "type": "boolean" } } }),
-                ),
-                ("pr merged".to_owned(), json!(true)),
-            ]),
-        },
-    )
-    .unwrap()
+fn workflow() -> WorkflowVersion {
+    WorkflowVersion::new(digest_of("script"), action_set().digest())
+        .with_interface(Some(schemas()))
+        .unwrap()
 }
 
 fn digest_of(text: &str) -> Digest {
@@ -326,30 +325,48 @@ fn digest_of(text: &str) -> Digest {
 
 /// An action set pinning two workflows, one without a description or signals.
 fn action_set_with_workflows() -> ActionSet {
-    let digest = Workflow::new(
-        "digest",
-        None,
-        digest_of("digest"),
-        ActionSet::empty().digest(),
-        WorkflowSchemas {
+    let triage = PinnedWorkflow {
+        name: "triage".into(),
+        id: "wf_7k2m9q4x8d1c".parse::<WorkflowId>().unwrap(),
+        version: 12,
+        digest: workflow().digest(),
+        description: Some("Triage the stale issues of a repository, after approval.".into()),
+        schemas: schemas(),
+    };
+    let digest = PinnedWorkflow {
+        name: "digest".into(),
+        id: "wf_0d1g35t0000a".parse::<WorkflowId>().unwrap(),
+        version: 1,
+        digest: digest_of("digest"),
+        description: None,
+        schemas: WorkflowSchemas {
             input: json!({}),
             output: json!({ "type": "string" }),
             signals: BTreeMap::new(),
         },
-    )
-    .unwrap();
+    };
     ActionSet::from_harness_actions(["notify"])
         .unwrap()
-        .with_workflows([workflow().pinned(), digest.pinned()])
+        .with_workflows([triage, digest])
         .unwrap()
+}
+
+/// A version without an interface: any input, output and signal name, as a run makes it.
+#[test]
+fn a_version_without_an_interface_has_no_schemas() {
+    let version = WorkflowVersion::new(digest_of("script"), digest_of("action set"));
+    let document = encode_workflow_version(&version);
+    assert!(!document.contains("schemas"), "{document}");
+    assert_eq!(decode_workflow_version(&document).unwrap(), version);
+    assert_eq!(Digest::of(document.as_bytes()), version.digest());
 }
 
 #[test]
 fn the_workflow_fixture_decodes_re_encodes_and_hashes_to_its_version() {
-    let decoded = decode_workflow(WORKFLOW).unwrap();
+    let decoded = decode_workflow_version(WORKFLOW).unwrap();
     assert_eq!(decoded, workflow());
-    assert_eq!(encode_workflow(&decoded), WORKFLOW);
-    assert_eq!(Digest::of(WORKFLOW.as_bytes()), workflow().version());
+    assert_eq!(encode_workflow_version(&decoded), WORKFLOW);
+    assert_eq!(Digest::of(WORKFLOW.as_bytes()), workflow().digest());
 }
 
 /// A version saved under a grant limited to `env=dev`: its labels are part of its document, so
@@ -357,16 +374,16 @@ fn the_workflow_fixture_decodes_re_encodes_and_hashes_to_its_version() {
 #[test]
 fn the_workflow_with_labels_fixture_decodes_re_encodes_and_hashes_to_its_version() {
     let labelled = workflow().with_labels(BTreeMap::from([("env".to_owned(), "dev".to_owned())]));
-    let decoded = decode_workflow(WORKFLOW_WITH_LABELS).unwrap();
+    let decoded = decode_workflow_version(WORKFLOW_WITH_LABELS).unwrap();
     assert_eq!(decoded, labelled);
-    assert_eq!(encode_workflow(&decoded), WORKFLOW_WITH_LABELS);
+    assert_eq!(encode_workflow_version(&decoded), WORKFLOW_WITH_LABELS);
     assert_eq!(
         Digest::of(WORKFLOW_WITH_LABELS.as_bytes()),
-        labelled.version()
+        labelled.digest()
     );
-    assert_ne!(labelled.version(), workflow().version());
+    assert_ne!(labelled.digest(), workflow().digest());
     assert!(
-        decode_workflow(&WORKFLOW_WITH_LABELS.replace(r#""dev""#, "1")).is_err(),
+        decode_workflow_version(&WORKFLOW_WITH_LABELS.replace(r#""dev""#, "1")).is_err(),
         "a label's value is a string"
     );
 }
@@ -489,7 +506,7 @@ fn the_action_set_with_apis_fixture_decodes_and_hashes_to_its_digest() {
 }
 
 /// A version that uses an end user's secret and an organization's.
-fn workflow_with_secrets() -> Workflow {
+fn workflow_with_secrets() -> WorkflowVersion {
     workflow().with_secrets(
         [
             ("github".to_owned(), SecretRef::parse("ns/github").unwrap()),
@@ -505,18 +522,19 @@ fn workflow_with_secrets() -> Workflow {
 
 #[test]
 fn the_workflow_with_secrets_fixture_decodes_re_encodes_and_hashes_to_its_version() {
-    let decoded = decode_workflow(WORKFLOW_WITH_SECRETS).unwrap();
+    let decoded = decode_workflow_version(WORKFLOW_WITH_SECRETS).unwrap();
     assert_eq!(decoded, workflow_with_secrets());
-    assert_eq!(encode_workflow(&decoded), WORKFLOW_WITH_SECRETS);
+    assert_eq!(encode_workflow_version(&decoded), WORKFLOW_WITH_SECRETS);
     assert_eq!(
         Digest::of(WORKFLOW_WITH_SECRETS.as_bytes()),
-        workflow_with_secrets().version()
+        workflow_with_secrets().digest()
     );
-    assert_ne!(workflow_with_secrets().version(), workflow().version());
+    assert_ne!(workflow_with_secrets().digest(), workflow().digest());
     for invalid in [r#""ns/github""#, r#""org/zendesk""#] {
         for replacement in [r#""github""#, r#""user/x""#, r#""ns/GitHub""#, "1"] {
             assert!(
-                decode_workflow(&WORKFLOW_WITH_SECRETS.replace(invalid, replacement)).is_err(),
+                decode_workflow_version(&WORKFLOW_WITH_SECRETS.replace(invalid, replacement))
+                    .is_err(),
                 "{replacement}"
             );
         }
@@ -568,7 +586,16 @@ fn rejects_auth_and_apis_v1_does_not_define() {
 #[ignore = "writes nothing: prints the fixtures for a human to review"]
 fn print_secrets_fixtures() {
     println!("{}", encode_action_set(&action_set_with_apis()));
-    println!("{}", encode_workflow(&workflow_with_secrets()));
+    println!("{}", encode_workflow_version(&workflow_with_secrets()));
+    println!("{}", encode_workflow_version(&workflow()));
+    println!(
+        "{}",
+        encode_workflow_version(
+            &workflow().with_labels(BTreeMap::from([("env".to_owned(), "dev".to_owned())]))
+        )
+    );
+    println!("{}", encode_workflow_version(&workflow_with_suite()));
+    println!("{}", encode_action_set(&action_set_with_workflows()));
 }
 
 #[test]
@@ -577,43 +604,55 @@ fn rejects_workflows_v1_does_not_define() {
     let digest = "0".repeat(64);
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     assert!(
-        decode_workflow(&document(&format!(
-            r#""name":"triage","code":"{digest}","action_set":"{digest}",{schemas}"#
+        decode_workflow_version(&document(&format!(
+            r#""code":"{digest}","action_set":"{digest}",{schemas}"#
         )))
         .is_ok()
     );
+    assert!(
+        decode_workflow_version(&document(&format!(
+            r#""code":"{digest}","action_set":"{digest}""#
+        )))
+        .is_ok(),
+        "a version without an interface"
+    );
     let invalid = [
         document(&format!(
-            r#""name":"triage","code":"{digest}","action_set":"{digest}",{schemas},"x":1"#
+            r#""code":"{digest}","action_set":"{digest}",{schemas},"x":1"#
         )),
-        document(&format!(r#""name":"triage","code":"{digest}",{schemas}"#)),
+        document(&format!(r#""code":"{digest}",{schemas}"#)),
         document(&format!(
-            r#""name":"triage","code":"abc","action_set":"{digest}",{schemas}"#
-        )),
-        document(&format!(
-            r#""name":"default","code":"{digest}","action_set":"{digest}",{schemas}"#
+            r#""code":"abc","action_set":"{digest}",{schemas}"#
         )),
         document(&format!(
-            r#""name":"triage","code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
+            r#""name":"triage","code":"{digest}","action_set":"{digest}",{schemas}"#
         )),
         document(&format!(
-            r#""name":"triage","code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
+            r#""code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
+        )),
+        document(&format!(
+            r#""code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
         )),
     ];
     for json in &invalid {
         assert!(
-            matches!(decode_workflow(json), Err(FormatError::InvalidWorkflow(_))),
+            matches!(
+                decode_workflow_version(json),
+                Err(FormatError::InvalidWorkflow(_))
+            ),
             "{json} must be rejected, got {:?}",
-            decode_workflow(json)
+            decode_workflow_version(json)
         );
     }
     assert_eq!(
-        decode_workflow(r#"{"v":2}"#),
+        decode_workflow_version(r#"{"v":2}"#),
         Err(FormatError::UnsupportedVersion(json!(2)))
     );
     let pinned_twice = format!(
         r#"{{"v":1,"servers":[],"actions":[],"workflows":[{w},{w}]}}"#,
-        w = format_args!(r#"{{"name":"a","version":"{digest}",{schemas}}}"#)
+        w = format_args!(
+            r#"{{"name":"a","id":"wf_7k2m9q4x8d1c","version":1,"digest":"{digest}",{schemas}}}"#
+        )
     );
     assert!(matches!(
         decode_action_set(&pinned_twice),
@@ -628,7 +667,7 @@ const WORKFLOW_WITH_SUITE: &str = include_str!("fixtures/workflow-suite.v1.json"
 const TEST: &str = include_str!("fixtures/test.v1.json");
 
 /// A version with every field of a suite.
-fn workflow_with_suite() -> Workflow {
+fn workflow_with_suite() -> WorkflowVersion {
     workflow()
         .with_suite(Suite {
             base: Some(digest_of("parent")),
@@ -766,21 +805,21 @@ fn test_document() -> Test {
 #[test]
 fn a_version_without_a_suite_keeps_its_digest() {
     // The fixture of before suites existed decodes to a version with an empty suite.
-    let decoded = decode_workflow(WORKFLOW).unwrap();
+    let decoded = decode_workflow_version(WORKFLOW).unwrap();
     assert!(decoded.suite().is_empty());
-    assert_eq!(decoded.version(), Digest::of(WORKFLOW.as_bytes()));
+    assert_eq!(decoded.digest(), Digest::of(WORKFLOW.as_bytes()));
 }
 
 #[test]
 fn the_workflow_suite_fixture_decodes_re_encodes_and_hashes_to_its_version() {
-    let decoded = decode_workflow(WORKFLOW_WITH_SUITE).unwrap();
+    let decoded = decode_workflow_version(WORKFLOW_WITH_SUITE).unwrap();
     assert_eq!(decoded, workflow_with_suite());
-    assert_eq!(encode_workflow(&decoded), WORKFLOW_WITH_SUITE);
+    assert_eq!(encode_workflow_version(&decoded), WORKFLOW_WITH_SUITE);
     assert_eq!(
         Digest::of(WORKFLOW_WITH_SUITE.as_bytes()),
-        workflow_with_suite().version()
+        workflow_with_suite().digest()
     );
-    assert_ne!(workflow_with_suite().version(), workflow().version());
+    assert_ne!(workflow_with_suite().digest(), workflow().digest());
 }
 
 #[test]
@@ -844,11 +883,11 @@ fn rejects_tests_v1_does_not_define() {
 fn rejects_suites_v1_does_not_define() {
     let digest = "0".repeat(64);
     let base = format!(
-        r#""name":"triage","code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
+        r#""code":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
     );
     let document = |fields: &str| format!(r#"{{"v":1,{base},{fields}}}"#);
     assert!(
-        decode_workflow(&document(&format!(
+        decode_workflow_version(&document(&format!(
             r#""tests":[{{"name":"a","test":"{digest}"}}]"#
         )))
         .is_ok()
@@ -867,7 +906,7 @@ fn rejects_suites_v1_does_not_define() {
     ];
     for document in invalid {
         assert!(
-            decode_workflow(&document).is_err(),
+            decode_workflow_version(&document).is_err(),
             "{document} should be refused"
         );
     }

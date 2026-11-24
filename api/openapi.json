@@ -1054,19 +1054,15 @@
         "type": "object"
       },
       "Change": {
-        "description": "One change of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
+        "description": "One change of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/RunSummary",
             "description": "`run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it."
           },
           {
-            "$ref": "#/components/schemas/ScriptChanged",
-            "description": "`script`: the organization's runs ran a code for the first time, or a person gave it a\ntitle or removed it."
-          },
-          {
             "$ref": "#/components/schemas/WorkflowChanged",
-            "description": "`workflow`: a workflow has a new version."
+            "description": "`workflow`: a workflow was created, named, described, given a version or tests,\npromoted, forked or pulled."
           },
           {
             "$ref": "#/components/schemas/SecretChanged",
@@ -1085,6 +1081,34 @@
             "description": "`resync`: more changed at once than the server reads in one pass. Read again what is\nshown."
           }
         ]
+      },
+      "ChangeTests": {
+        "additionalProperties": false,
+        "description": "`POST /v1/workflows/{id}/tests`: adds tests to its suite, replaces or retires some, with\ntheir reasons, without a version: each test given and each replacement runs against its\nlatest version first (`tests-failed`). Its next version lists them.",
+        "properties": {
+          "replace": {
+            "description": "Tests of the suite replaced, each with a reason: their state or result is out of date.",
+            "items": {
+              "$ref": "#/components/schemas/TestReplacement"
+            },
+            "type": "array"
+          },
+          "retire": {
+            "description": "Tests of the suite retired, with a reason: they are deprecated.",
+            "items": {
+              "$ref": "#/components/schemas/TestRetirement"
+            },
+            "type": "array"
+          },
+          "tests": {
+            "description": "New tests: inline, by the digest of a recorded test, or a recorded test with a new\nexpectation.",
+            "items": {
+              "$ref": "#/components/schemas/TestInput"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
       },
       "CheckRequest": {
         "additionalProperties": false,
@@ -1108,7 +1132,7 @@
         "type": "object"
       },
       "CheckResult": {
-        "description": "The diagnostics of a check. A code with only warnings passes.",
+        "description": "The diagnostics of a check. A code with only warnings passes. With `Rewind-Namespace`, the\nworkflow that has the code, if its namespace or the organization has one.",
         "properties": {
           "diagnostics": {
             "items": {
@@ -1119,6 +1143,17 @@
           "ok": {
             "description": "No diagnostic of severity `error`.",
             "type": "boolean"
+          },
+          "workflow": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunWorkflow",
+                "description": "The workflow a run of this code would be a run of, and its version with that code: the\nnamespace's, else the organization's. Absent for code no workflow has yet: its first run\ncreates one. A check creates nothing."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1209,6 +1244,24 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "CodeComment": {
+        "description": "The comment at the top of a version's code: its first line, then the lines after it. Shown\nfor a workflow without a name or a description; never part of its identity.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
         "type": "object"
       },
       "CompleteCall": {
@@ -1800,9 +1853,80 @@
         ],
         "type": "object"
       },
+      "CreateVersion": {
+        "additionalProperties": false,
+        "description": "`POST /v1/workflows/{id}/versions`: makes its next version, through the gate: the workflow's\nsuite, minus `retire`, with `replace` applied, plus `tests`, runs against it, and the version\nis stored only if each test passes (`tests-failed`). What it leaves out is its latest\nversion's: its code, its action set, its interface, its secrets. The same content without a\nchange of tests makes no version: the latest is answered (200).",
+        "properties": {
+          "actionSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input": {
+            "description": "JSON Schema of the input of `main`. Given with `output` or `signals`, or alone, it gives\nthe version a new interface, as `CreateWorkflow.input` does; without any of the three, the\nversion keeps its latest version's.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "JSON Schema of what `main` returns.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "Tests of the suite replaced, each with a reason.",
+            "items": {
+              "$ref": "#/components/schemas/TestReplacement"
+            },
+            "type": "array"
+          },
+          "retire": {
+            "description": "Tests of the suite retired, with a reason.",
+            "items": {
+              "$ref": "#/components/schemas/TestRetirement"
+            },
+            "type": "array"
+          },
+          "secrets": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BTreeMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signals": {
+            "description": "The signals its runs accept, by name, each with the JSON Schema of its payload. Names\nstarting with `rewind:` are reserved.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "tests": {
+            "description": "New tests.",
+            "items": {
+              "$ref": "#/components/schemas/TestInput"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "CreateWorkflow": {
         "additionalProperties": false,
-        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its code is checked\nagainst its action set and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain under the same labels returns the version saved first (200): the labels of a key limited\nto labels are part of the version, so such a key saves a version of its own.",
+        "description": "`POST /v1/workflows`: creates a workflow and its version 1, in the namespace\n`Rewind-Namespace` names, else the organization's. Its code is checked against its action set\nand, when it has one, its interface: its default export must take the input and return the\noutput, and `signal()` only takes the declared names. Its tests run through the gate. Without\na name, a code its scope already has answers that code's workflow, unchanged (200); a\ncreation sent again answers the workflow it created (200).",
         "example": {
           "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
           "code": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
@@ -1849,60 +1973,51 @@
             "description": "The id of the action set its runs call, already registered.",
             "type": "string"
           },
-          "base": {
-            "description": "The version it derives from, `name@<version>`, `name@v<number>` or a version: the latest\nversion of the same name saved under the caller's labels when absent. Its suite is\ninherited.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "code": {
             "description": "The TypeScript source: a single ES module whose default export is the entry point.",
             "type": "string"
           },
           "description": {
-            "description": "Shown to the model in the declarations.",
+            "description": "Shown, never part of its identity: at most 2,000 characters.",
             "type": [
               "string",
               "null"
             ]
           },
           "input": {
-            "description": "JSON Schema of the input of `main`.",
-            "type": "object"
+            "description": "JSON Schema of the input of `main`. Given with `output` or `signals`, or alone, it gives\nthe version an interface; a missing input or output then takes anything (`true`), missing\nsignals declare none. Without any of the three, the version has no interface: any input,\noutput and signal name.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "name": {
-            "description": "What workflows import from `rewind:workflows`: an identifier that is not a reserved word of\nJavaScript.",
-            "type": "string"
+            "description": "What `rewind:workflows` exports and callers start it by: an identifier of at most 64\ncharacters that is not a reserved word of JavaScript and does not start with `wf_`,\nunique in its scope (`name-taken`).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "output": {
             "description": "JSON Schema of what `main` returns.",
-            "type": "object"
-          },
-          "replace": {
-            "description": "Inherited tests replaced, each with a reason: their state or result is out of date.",
-            "items": {
-              "$ref": "#/components/schemas/TestReplacement"
-            },
-            "type": "array"
-          },
-          "retire": {
-            "description": "Inherited tests dropped, with a reason: they are deprecated.",
-            "items": {
-              "$ref": "#/components/schemas/TestRetirement"
-            },
-            "type": "array"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
-            "description": "The secrets its runs use, by MCP server or API (`org/<name>`, `ns/<name>`), part of\nthe version: checked against the saver's rights now (an `ns/` secret by its name only),\nand read by its runs without checking the caller's again (`secret-required`)."
+            "description": "The secrets its runs use, by MCP server or API (`org/<name>`, `ns/<name>`), part of\nthe version: checked against the caller's rights now (an `ns/` secret by its name only),\nand read by its runs without checking their callers' (`secret-required`)."
           },
           "signals": {
             "description": "The signals its runs accept, by name, each with the JSON Schema of its payload. Names\nstarting with `rewind:` are reserved.",
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "tests": {
-            "description": "New tests: inline, by the digest of a recorded test, or a recorded test with a new\nexpectation.",
+            "description": "Its first suite: inline tests, digests of recorded tests, or recorded tests with a new\nexpectation. Each passes against version 1 first (`tests-failed`).",
             "items": {
               "$ref": "#/components/schemas/TestInput"
             },
@@ -1910,11 +2025,8 @@
           }
         },
         "required": [
-          "name",
           "actionSet",
-          "code",
-          "input",
-          "output"
+          "code"
         ],
         "type": "object"
       },
@@ -2748,13 +2860,6 @@
             },
             "type": "array"
           },
-          "scripts": {
-            "description": "Script digests.",
-            "items": {
-              "$ref": "#/components/schemas/FacetValue"
-            },
-            "type": "array"
-          },
           "signals": {
             "description": "Signals waited for.",
             "items": {
@@ -2775,7 +2880,7 @@
             "type": "array"
           },
           "workflows": {
-            "description": "Workflows, by name: the runs of each.",
+            "description": "Workflows, by id: the runs of each.",
             "items": {
               "$ref": "#/components/schemas/FacetValue"
             },
@@ -2787,7 +2892,6 @@
           "labels",
           "actions",
           "errors",
-          "scripts",
           "waiting",
           "signals"
         ],
@@ -2918,12 +3022,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "scripts": {
-            "description": "Distinct workflows.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "series": {
             "description": "One count per interval from `since`: the runs that ended in it.",
             "items": {
@@ -2936,6 +3034,12 @@
           "signature": {
             "description": "The error's name and message with placeholders (`<n>`, `<id>`, `<uuid>`, `<time>`,\n`<str>`) where they vary.",
             "type": "string"
+          },
+          "workflows": {
+            "description": "Distinct workflows.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -2943,7 +3047,7 @@
           "signature",
           "error",
           "runs",
-          "scripts",
+          "workflows",
           "firstEndedAt",
           "lastEndedAt",
           "labels",
@@ -4219,6 +4323,31 @@
         ],
         "type": "string"
       },
+      "PatchWorkflow": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/workflows/{id}`: a JSON merge patch of its name and description. The same id, no\nnew version.",
+        "example": {
+          "description": null,
+          "name": "triage"
+        },
+        "properties": {
+          "description": {
+            "description": "At most 2,000 characters; `null` removes it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "A name gives or changes it (`name-taken`, `invalid-workflow`); `null` removes it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Payload": {
         "description": "A JSON value carried by a run (its input and output, action arguments and results, signal\npayloads), identified by the SHA-256 of its canonical JSON (RFC 8785).",
         "properties": {
@@ -4257,7 +4386,7 @@
           "runs:delete",
           "actions:read",
           "actions:write",
-          "scripts:write",
+          "workflows:write",
           "secrets:read",
           "secrets:write",
           "secrets:use",
@@ -4346,7 +4475,7 @@
         "type": "object"
       },
       "PinnedWorkflow": {
-        "description": "A workflow an action set pins.",
+        "description": "A workflow an action set pins, and the version it pins.",
         "properties": {
           "description": {
             "type": [
@@ -4357,12 +4486,22 @@
           "digest": {
             "type": "string"
           },
+          "id": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "name",
+          "id",
+          "version",
           "digest"
         ],
         "type": "object"
@@ -5005,7 +5144,7 @@
       },
       "RecordTests": {
         "additionalProperties": false,
-        "description": "`POST /v1/workflows/{name}/record`: tests recorded from the workflow's past runs, one per\npath. They are stored, and join a suite only when a save references them.",
+        "description": "`POST /v1/workflows/{id}/record`: tests recorded from the workflow's past runs, one per\npath. They are stored, and join a suite only when a version or a change of tests gives them.",
         "example": {
           "limit": 20,
           "query": "status:completed"
@@ -5041,7 +5180,7 @@
         "description": "A test recorded from a run.",
         "properties": {
           "digest": {
-            "description": "What `save_workflow` takes in `tests`.",
+            "description": "What a version or a change of tests takes in `tests`.",
             "type": "string"
           },
           "name": {
@@ -5181,7 +5320,7 @@
         "type": "object"
       },
       "ReplacedTest": {
-        "description": "A test of the base a version replaced.",
+        "description": "A test of the workflow's suite a version replaced.",
         "properties": {
           "name": {
             "type": "string"
@@ -5209,7 +5348,7 @@
         "type": "object"
       },
       "RetiredTest": {
-        "description": "A test of the base a version does not keep.",
+        "description": "A test of the workflow's suite a version does not keep.",
         "properties": {
           "digest": {
             "type": "string"
@@ -5393,7 +5532,7 @@
             "type": "string"
           },
           "codeDigest": {
-            "description": "Digest of the run's code, its TypeScript source (`GET /v1/scripts/{digest}`).",
+            "description": "Digest of the run's code, its TypeScript source.",
             "type": "string"
           },
           "createdAt": {
@@ -5501,13 +5640,6 @@
               }
             ]
           },
-          "scriptTitle": {
-            "description": "The code's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the\nfirst line of the comment at its top. Absent when it has neither.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
             "description": "The secrets it uses, named at start, by MCP server or API (`org/<name>`, `ns/<name>`):\nnames, never values."
@@ -5556,7 +5688,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/RunWorkflow",
-                "description": "For a run of a workflow, the workflow and its version."
+                "description": "The workflow it is a run of, and the version it executes: every run but a test run's\n(`GET /v1/workflows/{id}`)."
               },
               {
                 "type": "null"
@@ -5801,10 +5933,6 @@
             "example": "dana/triage/06bqx3k9f2mt",
             "type": "string"
           },
-          "headline": {
-            "description": "The first line of the code that is not blank, for display.",
-            "type": "string"
-          },
           "historyLen": {
             "format": "int64",
             "minimum": 0,
@@ -5825,13 +5953,6 @@
           },
           "quarantined": {
             "type": "boolean"
-          },
-          "scriptTitle": {
-            "description": "The code's title, as `Run.scriptTitle`. Absent when it has none.",
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "source": {
             "type": [
@@ -5869,10 +5990,14 @@
             ]
           },
           "workflow": {
-            "description": "For a run of a workflow, the workflow's name.",
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunWorkflow",
+                "description": "The workflow it is a run of, and the version it executes, as `Run.workflow`."
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         },
@@ -5883,7 +6008,6 @@
           "status",
           "quarantined",
           "codeDigest",
-          "headline",
           "actionSet",
           "labels",
           "startedAt",
@@ -5959,199 +6083,34 @@
         "type": "object"
       },
       "RunWorkflow": {
-        "description": "The workflow a run executes.",
+        "description": "The workflow a run is a run of, and the version it executes.",
         "properties": {
           "digest": {
+            "description": "The version's digest.",
+            "type": "string"
+          },
+          "id": {
+            "example": "wf_7k2m9q4x8d1c",
             "type": "string"
           },
           "name": {
-            "type": "string"
+            "description": "Its name when the run was created, if it had one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "version": {
-            "description": "The version's number among the versions of its workflow (`Workflow.version`).",
+            "description": "The version's number (`WorkflowVersion.version`).",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "name",
-          "digest",
-          "version"
-        ],
-        "type": "object"
-      },
-      "Script": {
-        "description": "`GET /v1/scripts/{digest}`: one code's source, and what its runs did.",
-        "properties": {
-          "actions": {
-            "description": "The actions its runs called.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "digest": {
-            "type": "string"
-          },
-          "firstRunAt": {
-            "description": "When its first and last runs started; absent when no run is kept.",
-            "format": "date-time",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "headline": {
-            "description": "The first line of the source that is not blank, for display.",
-            "type": "string"
-          },
-          "lastRunAt": {
-            "format": "date-time",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "runs": {
-            "$ref": "#/components/schemas/RunCounts",
-            "description": "Runs of this code, by status, as the read model keeps them."
-          },
-          "source": {
-            "description": "The TypeScript source, as submitted.",
-            "type": "string"
-          },
-          "title": {
-            "description": "The code's title, as in `ScriptSummary.title`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "titleSource": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/TitleSource",
-                "description": "Where the title comes from; absent without a title."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "digest",
-          "source",
-          "headline",
-          "runs",
-          "actions"
-        ],
-        "type": "object"
-      },
-      "ScriptChanged": {
-        "description": "The data of a `script` event: a code the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists, or whose title a person gave or removed.",
-        "properties": {
-          "digest": {
-            "description": "SHA-256 of the TypeScript source, lowercase hex.",
-            "type": "string"
-          }
-        },
-        "required": [
+          "id",
+          "version",
           "digest"
-        ],
-        "type": "object"
-      },
-      "ScriptPage": {
-        "properties": {
-          "nextCursor": {
-            "description": "Pass it as `cursor` to read the next page; absent on the last page.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "scripts": {
-            "items": {
-              "$ref": "#/components/schemas/ScriptSummary"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "scripts"
-        ],
-        "type": "object"
-      },
-      "ScriptSummary": {
-        "description": "A distinct code: content-addressed, so every run of the same source counts here.",
-        "properties": {
-          "actions": {
-            "description": "The actions its runs called.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "description": {
-            "description": "The description that goes with the title: the person's with theirs, else the rest of\nthe comment.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "digest": {
-            "description": "SHA-256 of the TypeScript source, lowercase hex.",
-            "type": "string"
-          },
-          "firstRunAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "headline": {
-            "description": "The first line of the source that is not blank, for display.",
-            "type": "string"
-          },
-          "lastRunAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "runs": {
-            "$ref": "#/components/schemas/RunCounts",
-            "description": "Runs of this code, by status."
-          },
-          "title": {
-            "description": "The code's title: the one a person gave it, else the first line of the comment at its\ntop. Absent when it has neither.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "titleSource": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/TitleSource",
-                "description": "Where the title comes from; absent without a title."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "digest",
-          "headline",
-          "firstRunAt",
-          "lastRunAt",
-          "runs",
-          "actions"
         ],
         "type": "object"
       },
@@ -6587,34 +6546,6 @@
         ],
         "type": "object"
       },
-      "SetScriptTitle": {
-        "additionalProperties": false,
-        "description": "`PATCH /v1/scripts/{digest}`: the title and description of a code, for the whole\norganization, over those of the comment at its top. The source does not change: a code is\nits digest.",
-        "example": {
-          "description": "Labels each new issue, and asks for an approval before closing duplicates.",
-          "title": "Triage new GitHub issues"
-        },
-        "properties": {
-          "description": {
-            "description": "The description, trimmed: at most 2,000 characters. Absent, `null` or `\"\"`: none.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "title": {
-            "description": "The title, trimmed: 1 to 120 characters. `null` removes the title and the description a\nperson gave: those of the comment show again.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "title"
-        ],
-        "type": "object"
-      },
       "Severity": {
         "enum": [
           "error",
@@ -6882,7 +6813,7 @@
             ]
           },
           "workflow": {
-            "description": "Instead of `code` and `actionSet`: a run of this workflow, `triage` for its latest version\nor `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one\nversion. Its input is checked against the workflow's input schema (`invalid-input`); the\ncode is not checked again.",
+            "description": "Instead of `code` and `actionSet`: a run of this workflow, by its id or its name (the\nnamespace's, else the organization's), its latest version, or `triage@v12` (its number)\nor `triage@<digest>` (12 hex digits at least) for one version. Its input is checked\nagainst the version's input schema, if it has an interface (`invalid-input`); the code is\nnot checked again. Given with `code`: 422.",
             "type": [
               "string",
               "null"
@@ -7064,8 +6995,45 @@
         ],
         "type": "object"
       },
+      "SuiteEntry": {
+        "description": "A test the workflow's suite holds or held: when it joined, and when and why it left.",
+        "properties": {
+          "addedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "description": "Its digest: `GET /v1/tests/{digest}`.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it left.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retiredAt": {
+            "description": "When it left the suite, retired or replaced; absent while it is in it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "digest",
+          "addedAt"
+        ],
+        "type": "object"
+      },
       "SuiteTest": {
-        "description": "A test of a version's suite.",
+        "description": "A test a version passed.",
         "properties": {
           "digest": {
             "description": "Its digest: `GET /v1/tests/{digest}`.",
@@ -7249,7 +7217,7 @@
       },
       "TestReplacement": {
         "additionalProperties": false,
-        "description": "An inherited test replaced: by a whole new test, which takes its name, or by itself with a\nnew expectation.",
+        "description": "A test of the suite replaced: by a whole new test, which takes its name, or by itself with a\nnew expectation.",
         "properties": {
           "expect": {
             "oneOf": [
@@ -7310,7 +7278,7 @@
       },
       "TestRequest": {
         "additionalProperties": false,
-        "description": "`POST /v1/test`: runs tests in a test run, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the code; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected code, or the version on a new action set.",
+        "description": "`POST /v1/test`: runs tests in a test run, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the code; with `workflow`, that workflow's suite\nruns too, and its version's interface checks every test. This is how a candidate is checked\nbefore it becomes a version: a corrected code, or the version on a new action set. A test\ncreates and changes nothing.",
         "example": {
           "code": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
           "tests": [
@@ -7361,7 +7329,7 @@
             "type": "array"
           },
           "workflow": {
-            "description": "A workflow, `triage` (its latest version), `triage@<version>` or `triage@v12`: its suite\nruns too.",
+            "description": "A workflow, by its id or its name (`triage`, its latest version), or one version\n(`triage@v12`, `triage@<digest>`): its suite runs too.",
             "type": [
               "string",
               "null"
@@ -7454,7 +7422,7 @@
       },
       "TestRetirement": {
         "additionalProperties": false,
-        "description": "Inherited tests dropped, and why.",
+        "description": "Tests of the suite retired, and why.",
         "properties": {
           "names": {
             "items": {
@@ -7493,14 +7461,6 @@
           "name"
         ],
         "type": "object"
-      },
-      "TitleSource": {
-        "description": "Where a code's title comes from.",
-        "enum": [
-          "person",
-          "comment"
-        ],
-        "type": "string"
       },
       "Token": {
         "description": "An end user's opaque token.",
@@ -8226,30 +8186,208 @@
         "type": "string"
       },
       "Workflow": {
-        "description": "A version of a workflow: immutable, identified by its digest.",
+        "description": "A workflow (`GET /v1/workflows/{id}`, and what each write answers).",
         "properties": {
-          "actionSet": {
-            "description": "The id of the action set its runs call.",
-            "type": "string"
-          },
-          "base": {
-            "description": "The version it derives from.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "codeDigest": {
-            "description": "Digest of its code (`GET /v1/scripts/{digest}`).",
+          "code": {
+            "description": "Its code, the TypeScript source of `version`.",
             "type": "string"
           },
           "createdAt": {
             "format": "date-time",
             "type": "string"
           },
-          "declarations": {
-            "$ref": "#/components/schemas/Declarations",
-            "description": "How a code that starts it sees it: its declaration in `rewind:workflows`, and its line\nof the prompt rendering."
+          "description": {
+            "description": "The description given; display only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`wf_` and 12 characters: it never changes.",
+            "example": "wf_7k2m9q4x8d1c",
+            "type": "string"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The labels of the grant that created it."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namespace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceName",
+                "description": "The namespace it belongs to; absent for the organization's, which every namespace's\nruns execute."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "promotedAt": {
+            "description": "When it was promoted to the organization.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shortId": {
+            "description": "`wf-` and the first 6 characters of its id: how it shows without a name or a comment,\nand the origin of its runs' handles without a name.",
+            "example": "wf-7k2m9q",
+            "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowSource",
+                "description": "For a fork: the organization's workflow it copies, and the version it last took."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suite": {
+            "description": "Every test its suite holds or held, with the reasons they left.",
+            "items": {
+              "$ref": "#/components/schemas/SuiteEntry"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/WorkflowVersion",
+            "description": "The version shown: its latest the caller sees, the one the reference names, or the one a\nwrite made."
+          },
+          "versions": {
+            "description": "Its versions the caller sees, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowVersion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "shortId",
+          "labels",
+          "createdAt",
+          "version",
+          "code",
+          "versions",
+          "suite"
+        ],
+        "type": "object"
+      },
+      "WorkflowChanged": {
+        "description": "The data of a `workflow` event: the workflow that changed, which `GET /v1/workflows/{id}`\nreads again.",
+        "properties": {
+          "workflow": {
+            "description": "Its id, `wf_` and 12 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow"
+        ],
+        "type": "object"
+      },
+      "WorkflowPage": {
+        "description": "`GET /v1/workflows`: the workflows the caller sees, by id.",
+        "properties": {
+          "next": {
+            "description": "Pass it as `after` to read the next page; absent on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflows": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "workflows"
+        ],
+        "type": "object"
+      },
+      "WorkflowSecrets": {
+        "description": "The latest version of a workflow, which uses a secret.",
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "servers": {
+            "description": "The servers and APIs it uses the secret for.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "Its latest version's number, and digest (SHA-256, lowercase hex).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workflow": {
+            "description": "The workflow's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow",
+          "version",
+          "digest",
+          "servers"
+        ],
+        "type": "object"
+      },
+      "WorkflowSource": {
+        "description": "A fork's source: the organization's workflow it copies, and the version of it it last took.",
+        "properties": {
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workflow": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow",
+          "version"
+        ],
+        "type": "object"
+      },
+      "WorkflowSummary": {
+        "description": "A workflow in a list (`GET /v1/workflows`), with what its runs did in the window, from the\nhourly counters.",
+        "properties": {
+          "actions": {
+            "description": "The actions its runs of the window called.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
           },
           "description": {
             "type": [
@@ -8257,22 +8395,143 @@
               "null"
             ]
           },
+          "firstRunAt": {
+            "description": "When its first and last runs of the window started.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastRunAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest": {
+            "$ref": "#/components/schemas/WorkflowVersion",
+            "description": "Its latest version the caller sees, without its suite's tests."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namespace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "promotedAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runs": {
+            "$ref": "#/components/schemas/RunCounts",
+            "description": "Its runs of the window, by status."
+          },
+          "shortId": {
+            "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "shortId",
+          "createdAt",
+          "latest",
+          "runs",
+          "actions"
+        ],
+        "type": "object"
+      },
+      "WorkflowVersion": {
+        "description": "A version of a workflow: immutable.",
+        "properties": {
+          "actionSet": {
+            "description": "The id of the action set its runs call.",
+            "type": "string"
+          },
+          "base": {
+            "description": "The version it derives from: its digest.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "codeDigest": {
+            "description": "Digest of its code.",
+            "type": "string"
+          },
+          "comment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodeComment",
+                "description": "The comment at the top of its code, when it has one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "declarations": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Declarations",
+                "description": "How a code that starts it sees it, for a version with an interface and a workflow with a\nname: its declaration in `rewind:workflows`, and its line of the prompt rendering."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "digest": {
-            "description": "The digest of the version (SHA-256, lowercase hex). `name@<digest>` names it, as do its\nfirst 12 digits.",
+            "description": "The digest of its document (SHA-256, lowercase hex): `triage@<digest>` names it, as do\nits first 12 digits.",
             "type": "string"
           },
           "input": {
-            "type": "object"
+            "description": "Its interface; absent for a version that accepts any input, output and signal name.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "labels": {
             "$ref": "#/components/schemas/Labels",
-            "description": "The labels of the key that saved it, part of the version: a key limited to labels only\nsees the workflows carrying them. Empty for a version saved tenant-wide."
-          },
-          "name": {
-            "type": "string"
+            "description": "The labels of the grant that made it, part of the version: a caller limited to labels\nonly sees the versions carrying them."
           },
           "output": {
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "replaced": {
             "items": {
@@ -8291,17 +8550,20 @@
             "description": "The secrets its runs use, part of the version."
           },
           "signals": {
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "tests": {
-            "description": "Its suite: the tests it passed when it was saved, by name.",
+            "description": "The suite it passed, by name.",
             "items": {
               "$ref": "#/components/schemas/SuiteTest"
             },
             "type": "array"
           },
           "version": {
-            "description": "The version's number among the versions of its workflow, from 1 in the order they were\nsaved (`triage v12`): `name@v<version>` names it too.",
+            "description": "Its number among the versions of its workflow, from 1: `triage@v12` names it.",
             "example": 12,
             "format": "int32",
             "minimum": 0,
@@ -8309,100 +8571,12 @@
           }
         },
         "required": [
-          "name",
-          "digest",
           "version",
-          "actionSet",
-          "codeDigest",
-          "input",
-          "output",
-          "signals",
-          "labels",
-          "createdAt",
-          "declarations"
-        ],
-        "type": "object"
-      },
-      "WorkflowChanged": {
-        "description": "The data of a `workflow` event: the version a workflow was saved as.",
-        "properties": {
-          "digest": {
-            "description": "The digest of the new version, as `GET /v1/workflows/{name}` lists it.",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "digest"
-        ],
-        "type": "object"
-      },
-      "WorkflowPage": {
-        "description": "`GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every\nversion whose code it is, newest first, on one page.",
-        "properties": {
-          "next": {
-            "description": "Pass it as `after` to read the next page; absent on the last page.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "workflows": {
-            "items": {
-              "$ref": "#/components/schemas/Workflow"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "workflows"
-        ],
-        "type": "object"
-      },
-      "WorkflowSecrets": {
-        "description": "The latest version of a workflow, which uses a secret.",
-        "properties": {
-          "digest": {
-            "description": "The version's digest (SHA-256, lowercase hex).",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "servers": {
-            "description": "The servers and APIs it uses the secret for.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "name",
           "digest",
-          "servers"
-        ],
-        "type": "object"
-      },
-      "WorkflowVersions": {
-        "description": "`GET /v1/workflows/{name}`: the versions of a workflow, newest first.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "versions": {
-            "items": {
-              "$ref": "#/components/schemas/Workflow"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "name",
-          "versions"
+          "codeDigest",
+          "actionSet",
+          "labels",
+          "createdAt"
         ],
         "type": "object"
       },
@@ -11509,7 +11683,7 @@
     },
     "/v1/changes": {
       "get": {
-        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `Change`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `script`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
+        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `Change`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `workflow`, `secret`,\n`namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
         "operationId": "streamChanges",
         "parameters": [
           {
@@ -11540,7 +11714,7 @@
                 }
               }
             },
-            "description": "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`."
+            "description": "A stream of server-sent events `run`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `Change`."
           },
           "400": {
             "content": {
@@ -11601,7 +11775,7 @@
     },
     "/v1/check": {
       "post": {
-        "description": "Against the sandbox lib and the action set's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs.",
+        "description": "Against the sandbox lib and the action set's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs, nothing is created: when the\nnamespace or the organization already has the code, `workflow` names its workflow and\nversion.",
         "operationId": "checkWorkflow",
         "parameters": [
           {
@@ -16208,15 +16382,6 @@
             }
           },
           {
-            "description": "Only runs of this code (its digest).",
-            "in": "query",
-            "name": "script",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "description": "Only runs whose calls failed with this kind (`error`, `timeout`…), or that failed\nwith this error name (`TypeError`, `DeadlockError`…).",
             "in": "query",
             "name": "error",
@@ -16244,7 +16409,7 @@
             }
           },
           {
-            "description": "Only runs of this workflow.",
+            "description": "Only runs of this workflow: its name or its id.",
             "in": "query",
             "name": "workflow",
             "required": false,
@@ -16534,7 +16699,7 @@
                 }
               }
             },
-            "description": "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`)."
+            "description": "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`)."
           },
           "500": {
             "content": {
@@ -18278,404 +18443,6 @@
         ]
       }
     },
-    "/v1/scripts": {
-      "get": {
-        "description": "From the hourly counters, over a window of whole hours: each code the runs of a\nnamespace or the tenant ran, with its runs by status and the actions it called. The scope as\n`GET /v1/runs/stats` takes it.",
-        "operationId": "listScripts",
-        "parameters": [
-          {
-            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
-            "in": "query",
-            "name": "q",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Runs started at or after this time, rounded down to the hour. No lower bound by default.",
-            "in": "query",
-            "name": "since",
-            "required": false,
-            "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Runs started before this time, rounded up to the hour. Now by default.",
-            "in": "query",
-            "name": "until",
-            "required": false,
-            "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only this code: its digest.",
-            "in": "query",
-            "name": "digest",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only workflows that called this action.",
-            "in": "query",
-            "name": "action",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "At most this many workflows (50 by default, 500 at most).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "The `nextCursor` of the previous page.",
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ScriptPage"
-                }
-              }
-            },
-            "description": "A page of workflows, most recently run first."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "List the distinct workflows executed",
-        "tags": [
-          "reading"
-        ]
-      }
-    },
-    "/v1/scripts/{digest}": {
-      "get": {
-        "operationId": "getScript",
-        "parameters": [
-          {
-            "description": "SHA-256 of the source, lowercase hex.",
-            "in": "path",
-            "name": "digest",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Script"
-                }
-              }
-            },
-            "description": "The code."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such code."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "One code's source",
-        "tags": [
-          "reading"
-        ]
-      },
-      "patch": {
-        "description": "The title and description people see for the code, for the whole organization, over\nthose of the comment at its top: the source does not change. `title: null` removes them,\nand the comment's show again. A new run of the code takes its origin from the title.\nRequires `scripts:write`.",
-        "operationId": "setScriptTitle",
-        "parameters": [
-          {
-            "description": "SHA-256 of the source, lowercase hex.",
-            "in": "path",
-            "name": "digest",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetScriptTitle"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Script"
-                }
-              }
-            },
-            "description": "The code, with its title as it now is."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such code, or not one the caller sees."
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The title is empty or longer than 120 characters, or the description longer than 2,000 (`invalid-request`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Give a code a title",
-        "tags": [
-          "reading"
-        ]
-      }
-    },
     "/v1/secrets": {
       "get": {
         "description": "The organization's secrets the caller sees (those carrying its labels): each one's name,\nlabels, who wrote it and when, its reads per day over 30 days and its last read; never a\nvalue. Requires `secrets:read`.",
@@ -19494,7 +19261,7 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, each test against its world: rules, handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven code or action set, on the node that serves the request.",
+        "description": "In virtual time, each test against its world: rules, handlers and a cassette. No\naction is really called. With `workflow`, its suite runs too, against the given code or\naction set, else its version's, on the node that serves the request. Creates nothing and\nchanges no workflow.",
         "operationId": "testWorkflow",
         "parameters": [
           {
@@ -19918,11 +19685,63 @@
     },
     "/v1/workflows": {
       "get": {
-        "description": "The latest version of each workflow the caller sees, by name; with `script`, every version\nwhose code it is, newest first.",
+        "description": "The workflows the caller sees, by id: a caller of a namespace, its namespace's and the\norganization's; else every namespace's and the organization's. Each with its latest\nversion and what its runs did in the window, from the hourly counters (the scope of the\ncounts as `GET /v1/runs/stats` takes it). Requires `runs:read`.",
         "operationId": "listWorkflows",
         "parameters": [
           {
-            "description": "The workflows whose name comes after this one: the `next` of the previous page.",
+            "description": "Only the namespace's workflows, or only the organization's.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "description": "Which workflows `GET /v1/workflows` lists, by scope.",
+              "enum": [
+                "namespace",
+                "organization"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the workflows one of whose versions has this code: its digest.",
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The scope of the counts, as a query: one term `namespace:<name>` of one value, or\nnothing. Any other term is refused with its position (`invalid-query`).",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Count the runs started at or after this time, rounded down to the hour; the last 30 days\nby default.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Count the runs started before this time, rounded up to the hour. Now by default.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The workflows whose id comes after this one: the `next` of the previous page.",
             "in": "query",
             "name": "after",
             "required": false,
@@ -19942,12 +19761,15 @@
             }
           },
           {
-            "description": "The digest of a code: every version of any workflow whose code it is, newest first,\nrather than the latest version of each workflow. `after` and `limit` do not apply.",
-            "in": "query",
-            "name": "script",
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -19969,7 +19791,7 @@
                 }
               }
             },
-            "description": "A page of workflows, by name."
+            "description": "A page of workflows, by id."
           },
           "400": {
             "content": {
@@ -19979,7 +19801,7 @@
                 }
               }
             },
-            "description": "The request is malformed (`invalid-request`)."
+            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`); or the window is invalid."
           },
           "401": {
             "content": {
@@ -20028,9 +19850,21 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's code against its action set and its own schemas, then runs its\nsuite: its base's tests, minus those it retires and with those it replaces, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the code's tests\non the node that serves the request (503 when the run plane they run on fails).",
+        "description": "Creates a workflow and its version 1 in the namespace `Rewind-Namespace` names, else the\norganization's (a member or a key; an end user's token has no `workflows:write`). Checks\nits code against its action set and, when it has one, its interface; checks the secrets\nits runs use against the caller's rights; runs its tests through the gate. Without a\nname, a code its scope already has answers that code's workflow, unchanged (200); a\ncreation sent again answers the workflow it created (200). Runs the tests on the node\nthat serves the request (503 when the run plane they run on fails). Requires\n`workflows:write`.",
         "operationId": "createWorkflow",
         "parameters": [
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
             "in": "header",
@@ -20060,7 +19894,7 @@
                 }
               }
             },
-            "description": "Saved earlier."
+            "description": "Its scope already has this code's workflow, or this creation was made already."
           },
           "201": {
             "content": {
@@ -20070,7 +19904,7 @@
                 }
               }
             },
-            "description": "Saved as a new version."
+            "description": "Created, with its version 1."
           },
           "400": {
             "content": {
@@ -20110,7 +19944,17 @@
                 }
               }
             },
-            "description": "No such action set, or base version."
+            "description": "No such action set."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Its scope has a workflow of that name (`name-taken`)."
           },
           "422": {
             "content": {
@@ -20120,7 +19964,7 @@
                 }
               }
             },
-            "description": "The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`)."
+            "description": "The code was refused (`invalid-code`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test (`invalid-test`); a secret (`secret-required`); or tests did not pass (`tests-failed`, with `tests`)."
           },
           "500": {
             "content": {
@@ -20143,23 +19987,36 @@
             "description": "The run plane the tests run on failed (`unavailable`)."
           }
         },
-        "summary": "Save a workflow (`save_workflow`)",
+        "summary": "Create a workflow",
         "tags": [
           "workflows"
         ]
       }
     },
-    "/v1/workflows/{name}": {
+    "/v1/workflows/{id}": {
       "get": {
-        "operationId": "getWorkflowVersions",
+        "description": "Its name and description, its scope, its source for a fork, its versions newest first,\nits suite with the reasons its tests left it, and the code of its latest version, or of\nthe version `@v12` or `@<digest>` names. Requires `runs:read`.",
+        "operationId": "getWorkflow",
         "parameters": [
           {
-            "description": "The workflow's name.",
+            "description": "The workflow: its id (`wf_…`) or its name, with `@v12` or `@<digest>` for a version.",
             "in": "path",
-            "name": "name",
+            "name": "id",
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -20177,11 +20034,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowVersions"
+                  "$ref": "#/components/schemas/Workflow"
                 }
               }
             },
-            "description": "Its versions, newest first."
+            "description": "The workflow."
           },
           "400": {
             "content": {
@@ -20221,7 +20078,7 @@
                 }
               }
             },
-            "description": "No such workflow."
+            "description": "No such workflow, or version, that the caller sees."
           },
           "500": {
             "content": {
@@ -20244,24 +20101,570 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "A workflow's versions",
+        "summary": "One workflow",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "patch": {
+        "description": "A JSON merge patch of its name and its description: the same id, no new version; `null`\nremoves one. Requires `workflows:write`.",
+        "operationId": "updateWorkflow",
+        "parameters": [
+          {
+            "description": "The workflow: its id (`wf_…`) or its name.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchWorkflow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "The workflow, as it now is."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow that the caller sees."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Its scope has a workflow of that name (`name-taken`)."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An invalid name, or a description above 2,000 characters (`invalid-workflow`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Name or describe a workflow",
         "tags": [
           "workflows"
         ]
       }
     },
-    "/v1/workflows/{name}/record": {
+    "/v1/workflows/{id}/fork": {
       "post": {
-        "description": "Takes the workflow's completed and failed runs the caller sees, those `runs` names or\nthose `query` selects (the 1,000 newest at most), groups them by the path they took, and\nrecords the newest run of each path as a test, up to `limit`. The tests are stored and\njoin no suite: a save references them by digest.",
-        "operationId": "recordTests",
+        "description": "A workflow of the namespace `Rewind-Namespace` names, with the same name and description,\nits `source` the organization's workflow and the version forked (its latest, or the one\n`@v12` names), its version 1 that version, and a copy of its suite without the tests\nrecorded from another namespace's runs. The namespace's runs that name the workflow get\nthe fork from then on. Requires `workflows:write` and a namespace.",
+        "operationId": "forkWorkflow",
         "parameters": [
           {
-            "description": "The workflow's name.",
+            "description": "The organization's workflow: its id or its name, with `@v12` or `@<digest>` for a version.",
             "in": "path",
-            "name": "name",
+            "name": "id",
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "The fork."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No namespace named (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow that the caller sees."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A namespace's workflow (`not-forkable`), or the namespace has a workflow of its name (`name-taken`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Fork an organization's workflow into a namespace",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{id}/promote": {
+      "post": {
+        "description": "Moves a namespace's workflow to the organization, with its id, its versions and its\nsuite: every namespace's runs execute it from then on. An organization's workflow is\nanswered as it is. Requires `workflows:write`.",
+        "operationId": "promoteWorkflow",
+        "parameters": [
+          {
+            "description": "The workflow: its id (`wf_…`) or its name.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "The workflow, the organization's."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow that the caller sees."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The organization has a workflow of its name (`name-taken`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Promote a workflow to the organization",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{id}/pull": {
+      "post": {
+        "description": "The source's latest version (its code, interface, action set and secrets) becomes the\nfork's next version once the fork's own suite passes against it, and its `source` moves\nto it. Nothing to pull answers the fork unchanged. Requires `workflows:write`.",
+        "operationId": "pullWorkflow",
+        "parameters": [
+          {
+            "description": "The workflow: its id (`wf_…`) or its name.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "Nothing to pull: the fork as it is."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "The fork, with the source's version as its next."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow that the caller sees."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A workflow without a source (`not-a-fork`)."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The fork's suite did not pass (`tests-failed`, with `tests`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Pull a fork's source",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{id}/record": {
+      "post": {
+        "description": "Takes the workflow's completed and failed runs the caller sees, those `runs` names or\nthose `query` selects (the 1,000 newest at most), groups them by the path they took, and\nrecords the newest run of each path as a test, up to `limit`. The tests are stored and\njoin no suite: a version or a change of tests references them by digest.",
+        "operationId": "recordTests",
+        "parameters": [
+          {
+            "description": "The workflow: its id (`wf_…`) or its name.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace a name resolves in first, and the runs recorded.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -20361,6 +20764,284 @@
           "workflows"
         ]
       }
+    },
+    "/v1/workflows/{id}/tests": {
+      "post": {
+        "description": "Adds tests to its suite, replaces or retires some, with their reasons, without a version:\neach test given and each replacement runs against its latest version first. Requires\n`workflows:write`.",
+        "operationId": "changeTests",
+        "parameters": [
+          {
+            "description": "The workflow: its id (`wf_…`) or its name.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeTests"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "The workflow, with its suite as it now is."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow, or stored test."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A test or the suite (`invalid-test`), or tests did not pass (`tests-failed`, with `tests`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Change a workflow's tests",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{id}/versions": {
+      "post": {
+        "description": "Makes its next version through the gate: the workflow's suite, minus `retire`, with\n`replace` applied, plus `tests`, runs against it, and the version is stored only if each\ntest passes. What the request leaves out is its latest version's. The same content\nwithout a change of tests makes no version: the latest is answered (200). Requires\n`workflows:write`.",
+        "operationId": "createVersion",
+        "parameters": [
+          {
+            "description": "The workflow: its id (`wf_…`) or its name.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVersion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "Unchanged: its latest version."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            },
+            "description": "Its next version."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow, or action set."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The code was refused (`invalid-code`); a schema (`invalid-workflow`); a test or the suite (`invalid-test`); a secret (`secret-required`); or tests did not pass (`tests-failed`, with `tests`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Make a workflow's next version (`update_workflow`)",
+        "tags": [
+          "workflows"
+        ]
+      }
     }
   },
   "security": [
@@ -20380,7 +21061,7 @@
       "name": "action-sets"
     },
     {
-      "description": "Workflows: named code with typed inputs, outputs and signals, which other workflows start and signal.",
+      "description": "Workflows, the templates of runs: an id, an optional name, a scope (a namespace or the organization), versions with their interface, and a suite; promoted, forked and pulled.",
       "name": "workflows"
     },
     {
@@ -20400,7 +21081,7 @@
       "name": "webhooks"
     },
     {
-      "description": "The workflows executed on the platform, action statistics and payloads, for the dashboard.",
+      "description": "Action statistics and payloads, for the dashboard.",
       "name": "reading"
     },
     {

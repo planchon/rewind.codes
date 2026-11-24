@@ -13,54 +13,49 @@
 //! as the server would: a run list filtered otherwise than by labels and status, a record query
 //! other than a status, an action set registered otherwise than from a base.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Duration as StdDuration;
 
 use rewind_agent_tools::{Api, ApiError};
-use rewind_api::action_sets::{
-    ActionMatch, ActionSearchResults, ActionSet, CreateActionSet, SearchQuery,
-};
-use rewind_api::common::{Duration, RunStatus as ApiRunStatus, timestamp};
+use rewind_api::action_sets::{ActionMatch, ActionSearchResults, SearchQuery};
+use rewind_api::checks::{CheckRequest, CheckResult, TestRequest};
+use rewind_api::common::{Duration, RunStatus as ApiRunStatus};
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
-use rewind_api::scripts::{CheckRequest, CheckResult, RunCounts, Script as ApiScript, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem,
     TestReport as ApiTestReport, TestResult,
 };
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, RecordedTest, RecordedTests, SkippedRun, Workflow,
-    WorkflowVersions,
+    ChangeTests, CreateVersion, PatchWorkflow, RecordTests, RecordedTest, RecordedTests,
+    SkippedRun, Workflow,
 };
 use rewind_api::{Problem, ProblemType};
 use rewind_core::{
-    Cassette, Code, Command, Digest, Event, RunId, Test, Timestamp, WorkflowSchemas, canonical_json,
+    Cassette, Code, Digest, RunId, Test, Timestamp, WorkflowSchemas, canonical_json,
 };
-use rewind_engine::edge::{EdgeError, RecordingError};
+use rewind_engine::edge::{EdgeError, RecordingError, ResolveError};
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunRef,
-    StoreError, StoredActionSet, StoredWorkflow, TenantId, TraceContext, TypeChecker,
-    WorkflowDeclarations,
+    ActionDeclarations, CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunMetadata,
+    RunRef, StoreError, StoredActionSet, StoredVersion, StoredWorkflow, TenantId, TraceContext,
+    TypeChecker, VersionRef, WorkflowPatch, current_suite,
 };
 use rewind_engine::suites::{
     DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, ReplaceWith, SuiteChanges,
-    SuiteError, SuiteLoadError, TestInput, TestReplacement, TestRetirement,
+    SuiteLoadError, TestInput, TestReplacement, TestRetirement,
 };
 use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
-use rewind_engine::{ForkError, RegisterError, RegisterWorkflow, StartError};
+use rewind_engine::{ForkError, MakeVersion, StartError, WorkflowError};
 use rewind_runtime::TsHandlerLoader;
 use serde_json::Value;
 
 use crate::view;
 use crate::world::{World, WorldError, test_format};
-
-/// Hex digits a reference to a version gives at least.
-const MIN_VERSION_DIGITS: usize = 12;
 
 /// The longest wait of a request, as the server bounds it.
 const MAX_WAIT: StdDuration = StdDuration::from_secs(300);
@@ -195,10 +190,6 @@ fn fork_error(error: ForkError) -> ApiError {
 /// A suite that cannot be loaded or composed, as the server answers it.
 fn suite_error(error: SuiteLoadError) -> ApiError {
     match error {
-        SuiteLoadError::Suite(SuiteError::BaseNotFound(version)) => not_found(format!(
-            "no workflow version {version} that this caller sees: name the base as \
-             name@<version>, or leave it out to derive from the latest version"
-        )),
         SuiteLoadError::Suite(error) => problem(ProblemType::InvalidTest, error.to_string()),
         SuiteLoadError::Store(error) => store_error(error),
         other => fault(WorldError::Engine(other.to_string())),
@@ -212,26 +203,38 @@ fn test_error(error: TestError) -> ApiError {
     }
 }
 
-/// A workflow refused at registration (`rewind-server`'s `workflows::register_error`).
-fn register_error(error: RegisterError) -> ApiError {
+/// A workflow's write refused (`rewind-server`'s `workflows::workflow_error`).
+fn workflow_error(error: WorkflowError) -> ApiError {
     match error {
-        RegisterError::Invalid(_) | RegisterError::Schema { .. } => {
+        WorkflowError::Invalid(_)
+        | WorkflowError::Schema { .. }
+        | WorkflowError::DescriptionTooLong(_) => {
             problem(ProblemType::InvalidWorkflow, error.to_string())
         }
-        RegisterError::ActionSetNotFound(digest) => not_found(format!(
+        WorkflowError::NameTaken(message) => problem(ProblemType::NameTaken, message),
+        WorkflowError::NotForkable(message) => problem(ProblemType::NotForkable, message),
+        WorkflowError::NotAFork(message) => problem(ProblemType::NotAFork, message),
+        WorkflowError::NotFound(message) => not_found(message),
+        WorkflowError::ActionSetNotFound(digest) => not_found(format!(
             "no action set {digest} for this tenant: register it with POST /v1/action-sets"
         )),
-        RegisterError::InvalidCode(invalid) => start_error(StartError::InvalidCode(invalid)),
-        RegisterError::TypeErrors(diagnostics) => start_error(StartError::TypeErrors(diagnostics)),
-        RegisterError::NulCharacter(error) => invalid(error.to_string()),
-        RegisterError::Suite(error) => suite_error(error.into()),
-        RegisterError::TestsFailed(reports) => tests_failed("the suite", &reports),
-        RegisterError::Tests(error) => test_error(error),
-        RegisterError::Store(StoreError::Conflict(message)) => {
-            problem(ProblemType::InvalidWorkflow, message)
-        }
-        RegisterError::Store(error) => store_error(error),
+        WorkflowError::InvalidCode(invalid) => start_error(StartError::InvalidCode(invalid)),
+        WorkflowError::TypeErrors(diagnostics) => start_error(StartError::TypeErrors(diagnostics)),
+        WorkflowError::NulCharacter(error) => invalid(error.to_string()),
+        WorkflowError::Suite(error) => suite_error(error.into()),
+        WorkflowError::TestsFailed(reports) => tests_failed("the suite", &reports),
+        WorkflowError::Tests(error) => test_error(error),
+        WorkflowError::Store(error) => store_error(error),
         other => fault(WorldError::Engine(other.to_string())),
+    }
+}
+
+/// A reference that names no workflow the agent sees, as the server answers it.
+fn resolve_error(error: ResolveError) -> ApiError {
+    match error {
+        ResolveError::Invalid(message) => invalid(message),
+        ResolveError::NotFound(message) => not_found(message),
+        ResolveError::Store(error) => store_error(error),
     }
 }
 
@@ -306,8 +309,8 @@ fn test_input(input: ApiTestInput) -> Result<TestInput, ApiError> {
                 return Err(problem(
                     ProblemType::InvalidTest,
                     format!(
-                        "test {:?}: `origin` is set by recording, never given: record the run \
-                         with POST /v1/workflows/{{name}}/record and give its digest instead",
+                        "test {:?}: `from` is set by recording, never given: record the run \
+                         with POST /v1/workflows/{{id}}/record and give its digest instead",
                         test.name
                     ),
                 ));
@@ -317,6 +320,51 @@ fn test_input(input: ApiTestInput) -> Result<TestInput, ApiError> {
                 .map_err(|message| problem(ProblemType::InvalidTest, message))
         }
     }
+}
+
+/// The changes of a suite a request gives, as the engine takes them (`rewind-server`'s
+/// `workflows::suite_changes`).
+fn suite_changes(
+    tests: Vec<ApiTestInput>,
+    replace: Vec<rewind_api::workflows::TestReplacement>,
+    retire: Vec<rewind_api::workflows::TestRetirement>,
+) -> Result<SuiteChanges, ApiError> {
+    let mut given = Vec::with_capacity(tests.len());
+    for test in tests {
+        given.push(test_input(test)?);
+    }
+    let mut replacements = Vec::with_capacity(replace.len());
+    for replacement in replace {
+        let with = match (replacement.new, replacement.expect) {
+            (Some(test), None) => ReplaceWith::Test(test_input(test)?),
+            (None, Some(expect)) => ReplaceWith::Expect(expect.into_core()),
+            _ => {
+                return Err(problem(
+                    ProblemType::InvalidTest,
+                    format!(
+                        "the replacement of {:?} gives `new` or `expect`: one of them",
+                        replacement.name
+                    ),
+                ));
+            }
+        };
+        replacements.push(TestReplacement {
+            name: replacement.name,
+            reason: replacement.reason,
+            with,
+        });
+    }
+    Ok(SuiteChanges {
+        tests: given,
+        replace: replacements,
+        retire: retire
+            .into_iter()
+            .map(|retirement| TestRetirement {
+                names: retirement.names,
+                reason: retirement.reason,
+            })
+            .collect(),
+    })
 }
 
 fn test_digest(text: &str) -> Result<Digest, ApiError> {
@@ -344,13 +392,6 @@ pub fn decode_cassette(cassette: &Value) -> Result<Cassette, String> {
 
 fn encode_cassette(cassette: &Cassette) -> Value {
     serde_json::from_str(&rewind_format::encode_cassette(cassette)).unwrap_or(Value::Null)
-}
-
-fn workflow_not_found(reference: &str) -> ApiError {
-    not_found(format!(
-        "no workflow {reference} for this API key: save it with POST /v1/workflows, or list them \
-         with GET /v1/workflows"
-    ))
 }
 
 /// The labels of a run list's filters (`key:value`).
@@ -533,48 +574,58 @@ impl World {
         view::run(self, run).await.map_err(edge_error)
     }
 
-    /// The version a reference names, among those the caller sees: `name` for the latest,
-    /// `name@<version>` for one (`rewind-server`'s `workflows::resolve`).
-    async fn resolve(&self, reference: &str) -> Result<StoredWorkflow, ApiError> {
-        let (name, version) = match reference.split_once('@') {
-            Some((name, version)) => (name, Some(version.to_ascii_lowercase())),
-            None => (reference, None),
-        };
-        if let Some(version) = &version
-            && (version.len() < MIN_VERSION_DIGITS
-                || version.len() > 64
-                || !version.chars().all(|c| c.is_ascii_hexdigit()))
-        {
-            return Err(invalid(format!(
-                "workflow {reference:?}: name a version by its digest or its first \
-                 {MIN_VERSION_DIGITS} hex digits at least, as in triage@9f2c4e1a07b3"
-            )));
-        }
-        let versions = self.workflow_versions(name).await.map_err(fault)?;
-        let found = match &version {
-            None => versions.into_iter().next(),
-            Some(prefix) => versions.into_iter().find(|stored| {
-                stored
-                    .workflow
-                    .version()
-                    .to_hex()
-                    .starts_with(prefix.as_str())
-            }),
-        };
-        found.ok_or_else(|| workflow_not_found(reference))
+    /// The workflow and the version a reference names, among those the caller sees
+    /// (`rewind-server`'s `workflows::resolve`).
+    async fn resolve(&self, reference: &str) -> Result<(StoredWorkflow, StoredVersion), ApiError> {
+        self.resolve_workflow(reference)
+            .await
+            .map_err(resolve_error)
+    }
+
+    /// The workflow a reference names, without a version (`rewind-server`'s `workflows::find`).
+    async fn find(&self, reference: &str) -> Result<StoredWorkflow, ApiError> {
+        self.edge
+            .find_workflow(
+                &TenantId::local(),
+                Some(&self.namespace()),
+                &self.labels,
+                reference,
+            )
+            .await
+            .map_err(resolve_error)
     }
 
     /// The tests of a version's suite, those of an erased namespace left out.
-    async fn suite(&self, stored: &StoredWorkflow) -> Result<Vec<Test>, ApiError> {
+    async fn suite(&self, version: &StoredVersion) -> Result<Vec<Test>, ApiError> {
         Ok(self
             .edge
             .suites(test_format())
-            .load_suite(&TenantId::local(), &stored.workflow)
+            .load_suite(&TenantId::local(), &version.document.suite().tests)
             .await
             .map_err(suite_error)?
             .into_iter()
             .filter_map(|loaded| loaded.test)
             .collect())
+    }
+
+    /// The workflow as `GET /v1/workflows/{id}` shows it, at its latest version.
+    async fn workflow_view(&self, workflow: &StoredWorkflow) -> Result<Workflow, ApiError> {
+        let latest = self
+            .catalog()
+            .versions(&TenantId::local(), &workflow.id, &self.labels)
+            .await
+            .map_err(catalog_error)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                not_found(format!(
+                    "the workflow {} has no version this caller sees",
+                    workflow.reference()
+                ))
+            })?;
+        view::workflow(self, workflow, &latest)
+            .await
+            .map_err(edge_error)
     }
 
     /// Runs tests against a subject on the node's executor, as the server does.
@@ -599,7 +650,7 @@ impl World {
         let tenant = &parent.run.tenant;
         let catalog = self.catalog();
         let Some(stored) = catalog
-            .get_workflow(tenant, of.version)
+            .version(tenant, &of.id, VersionRef::Number(of.version))
             .await
             .map_err(catalog_error)?
         else {
@@ -610,13 +661,13 @@ impl World {
             return Ok(());
         }
         let action_set = catalog
-            .get_action_set(tenant, stored.workflow.action_set())
+            .get_action_set(tenant, stored.document.action_set())
             .await
             .map_err(catalog_error)?
             .ok_or_else(|| {
                 fault(WorldError::ActionSet(format!(
-                    "the action set of {} is not stored",
-                    stored.workflow
+                    "the action set of {}@v{} is not stored",
+                    of.id, of.version
                 )))
             })?
             .action_set;
@@ -625,14 +676,15 @@ impl World {
                 &Subject {
                     code,
                     action_set: &action_set,
-                    interface: Some(stored.workflow.schemas()),
+                    interface: stored.document.interface(),
                 },
                 &tests,
             )
             .await?;
         if reports.iter().any(|report| !report.passed) {
+            let name = of.name.as_deref().unwrap_or(of.id.as_str());
             return Err(tests_failed(
-                &format!("the suite of {}", stored.workflow),
+                &format!("the suite of {name}@v{}", of.version),
                 &reports,
             ));
         }
@@ -673,16 +725,36 @@ impl Api for World {
         start: &StartRun,
         key: Option<&IdempotencyKey>,
     ) -> Result<Run, ApiError> {
-        if start.workflow.is_some() {
-            return Err(invalid(
-                "the evals' world starts a code with its action set, not a workflow by name: \
-                 workflows start workflows from rewind:workflows",
-            ));
-        }
         if !start.secrets.is_empty() {
             return Err(invalid("the evals' world uses no secrets"));
         }
         let labels = self.within(start.labels.0.clone())?;
+        if let Some(reference) = &start.workflow {
+            let request = rewind_engine::StartWorkflow {
+                tenant: TenantId::local(),
+                namespace: self.namespace(),
+                reference: reference.clone(),
+                input: start.input.clone(),
+                ttl: start.ttl.map(Duration::get),
+                metadata: RunMetadata {
+                    labels,
+                    trace_context: trace_context(
+                        start.traceparent.as_ref(),
+                        start.tracestate.as_ref(),
+                    )?,
+                    // What the run's workflows reach: the runs carrying the caller's labels.
+                    allowed_labels: self.labels.clone(),
+                    ..RunMetadata::default()
+                },
+                idempotency_key: key.map(|key| key.as_str().to_owned()),
+            };
+            let created = self
+                .start_by_reference(request)
+                .await
+                .map_err(start_error)?;
+            self.wait_for_end(&created.run, start.wait).await?;
+            return self.view(&created.run).await;
+        }
         let stored = self.stored_action_set(start.action_set.as_deref()).await?;
         let mut request = rewind_engine::StartRun::new(
             Code::new(start.code.clone()),
@@ -715,7 +787,6 @@ impl Api for World {
         let unsupported = filter.q.is_some()
             || filter.sort.is_some()
             || filter.action.is_some()
-            || filter.script.is_some()
             || filter.error.is_some()
             || filter.quarantined.is_some()
             || filter.source.is_some()
@@ -751,12 +822,7 @@ impl Api for World {
         let more = summaries.len() > offset + limit;
         let mut runs = Vec::new();
         for summary in summaries.iter().skip(offset).take(limit) {
-            let mut shown = view::summary(summary).map_err(edge_error)?;
-            shown.script_title = view::script_title(self, &summary.run.tenant, summary.code)
-                .await
-                .map_err(edge_error)?
-                .map(|(title, _, _)| title);
-            runs.push(shown);
+            runs.push(view::summary(summary).map_err(edge_error)?);
         }
         Ok(RunPage {
             runs,
@@ -876,10 +942,25 @@ impl Api for World {
         use rewind_engine::ports::CodeExecutor as _;
         let stored = self.stored_action_set(check.action_set.as_deref()).await?;
         let code = Code::new(check.code.clone());
+        // The workflow a run of this code would be a run of (`rewind-server`'s `checks::check`).
+        let workflow = self
+            .catalog()
+            .workflow_with_code(
+                &TenantId::local(),
+                &self.namespace(),
+                code.digest(),
+                &self.labels,
+            )
+            .await
+            .map_err(catalog_error)?
+            .map(|(workflow, version)| {
+                view::run_workflow(&rewind_engine::ports::RunWorkflow::of(&workflow, &version))
+            });
         if let Err(invalid) = self.plane.executor.compile(&code, &stored.action_set) {
             return Ok(CheckResult {
                 ok: false,
                 diagnostics: vec![view::invalid_code_diagnostic(&invalid)],
+                workflow,
             });
         }
         let diagnostics = self
@@ -887,7 +968,7 @@ impl Api for World {
             .check(&code, &stored.declarations)
             .await
             .map_err(|error| checker_error(&error))?;
-        Ok(view::check_result(&diagnostics))
+        Ok(view::check_result(&diagnostics, workflow))
     }
 
     async fn test(&self, test: &TestRequest) -> Result<ApiTestReport, ApiError> {
@@ -896,14 +977,30 @@ impl Api for World {
             Some(reference) => Some(self.resolve(reference).await?),
             None => None,
         };
-        let Some(code) = &test.code else {
-            return Err(invalid("the evals' world tests a code: give `code`"));
+        let code = match (&test.code, &version) {
+            (Some(source), _) => Code::new(source.clone()),
+            (None, Some((_, version))) => self
+                .catalog()
+                .get_code(&tenant, version.document.code())
+                .await
+                .map_err(catalog_error)?
+                .map(|stored| stored.code)
+                .ok_or_else(|| {
+                    fault(WorldError::Engine(format!(
+                        "the code {} is not stored",
+                        version.document.code()
+                    )))
+                })?,
+            (None, None) => {
+                return Err(invalid(
+                    "give `code`, or a `workflow` whose code the tests run against",
+                ));
+            }
         };
-        let code = Code::new(code.clone());
         // The action set given; the version's only when none is.
         let action_set = match (&test.action_set, &version) {
-            (None, Some(version)) => {
-                let digest = version.workflow.action_set().to_hex();
+            (None, Some((_, version))) => {
+                let digest = version.document.action_set().to_hex();
                 self.stored_action_set(Some(&digest)).await?
             }
             (given, _) => self.stored_action_set(given.as_deref()).await?,
@@ -919,11 +1016,25 @@ impl Api for World {
                     .map_err(suite_error)?,
             );
         }
-        if let Some(version) = &version {
-            tests.extend(self.suite(version).await?);
+        // The workflow's suite, as it is now: what its next version passes.
+        if let Some((workflow, _)) = &version {
+            let members = self
+                .catalog()
+                .suite(&tenant, &workflow.id)
+                .await
+                .map_err(catalog_error)?;
+            tests.extend(
+                suites
+                    .load_suite(&tenant, &current_suite(&members))
+                    .await
+                    .map_err(suite_error)?
+                    .into_iter()
+                    .filter_map(|loaded| loaded.test),
+            );
         }
-        let interface: Option<&WorkflowSchemas> =
-            version.as_ref().map(|version| version.workflow.schemas());
+        let interface: Option<&WorkflowSchemas> = version
+            .as_ref()
+            .and_then(|(_, version)| version.document.interface());
         let reports = self
             .run_suite(
                 &Subject {
@@ -938,66 +1049,6 @@ impl Api for World {
         Ok(ApiTestReport {
             passed: results.iter().all(|result| result.passed),
             tests: results,
-        })
-    }
-
-    async fn get_script(&self, digest: &str) -> Result<ApiScript, ApiError> {
-        let missing = || not_found(format!("no code {digest} for this tenant"));
-        let parsed = Digest::from_hex(digest).map_err(|_| missing())?;
-        let tenant = TenantId::local();
-        let stored = self
-            .catalog()
-            .get_code(&tenant, parsed)
-            .await
-            .map_err(catalog_error)?
-            .ok_or_else(missing)?;
-        // What the caller's runs of the code did.
-        let summaries = self.summaries().await.map_err(edge_error)?;
-        let mut runs = RunCounts::default();
-        let mut actions = BTreeSet::new();
-        let mut first = None;
-        let mut last = None;
-        for summary in summaries
-            .iter()
-            .filter(|summary| summary.code == parsed && self.sees(&summary.labels))
-        {
-            let count = match ApiRunStatus::from(summary.status) {
-                ApiRunStatus::Pending => &mut runs.pending,
-                ApiRunStatus::Active => &mut runs.active,
-                ApiRunStatus::Completed => &mut runs.completed,
-                ApiRunStatus::Failed => &mut runs.failed,
-                ApiRunStatus::Cancelled => &mut runs.cancelled,
-                ApiRunStatus::Aborted => &mut runs.aborted,
-            };
-            *count += 1;
-            let started_at = summary.started_at.unwrap_or(summary.last_activity_at);
-            first = first.min(Some(started_at)).or(Some(started_at));
-            last = last.max(Some(started_at));
-            for entry in self.history(&summary.run).await.map_err(edge_error)? {
-                if let Event::Command(Command::ScheduleCall { action, .. }) = &entry.event {
-                    actions.insert(action.clone());
-                }
-            }
-        }
-        let source = stored.code.source().to_owned();
-        let title = crate::view::script_title(self, &tenant, parsed)
-            .await
-            .map_err(edge_error)?;
-        let (title, description, title_source) = match title {
-            Some((title, description, source)) => (Some(title), description, Some(source)),
-            None => (None, None, None),
-        };
-        Ok(ApiScript {
-            digest: parsed.to_hex(),
-            title,
-            description,
-            title_source,
-            headline: rewind_api::scripts::headline(&source),
-            source,
-            runs,
-            actions: actions.into_iter().collect(),
-            first_run_at: first.map(timestamp),
-            last_run_at: last.map(timestamp),
         })
     }
 
@@ -1027,51 +1078,6 @@ impl Api for World {
         Ok(ApiTest::from_core(&loaded, encode_cassette))
     }
 
-    async fn create_action_set(&self, action_set: &CreateActionSet) -> Result<ActionSet, ApiError> {
-        let Some(base) = &action_set.base else {
-            return Err(problem(
-                ProblemType::InvalidActionSet,
-                "the evals' world derives action sets from a base only: its fake servers are \
-                 registered when it starts",
-            ));
-        };
-        if !action_set.mcp.is_empty() || !action_set.harness.is_empty() || action_set.http.is_some()
-        {
-            return Err(problem(
-                ProblemType::InvalidActionSet,
-                "an action set derived from a base keeps its servers and actions: give only workflows \
-                 with base",
-            ));
-        }
-        if !action_set.secrets.is_empty() || !action_set.apis.is_empty() {
-            return Err(invalid(
-                "the evals' world takes no secrets and no APIs: its servers are MCP servers",
-            ));
-        }
-        let base = self.stored_action_set(Some(base)).await?.action_set;
-        let mut pinned: BTreeMap<String, rewind_core::PinnedWorkflow> = base
-            .workflows()
-            .iter()
-            .map(|workflow| (workflow.name.clone(), workflow.clone()))
-            .collect();
-        for reference in &action_set.workflows {
-            let stored = self.resolve(reference).await?;
-            let workflow = stored.workflow.pinned();
-            pinned.insert(workflow.name.clone(), workflow);
-        }
-        let derived = base
-            .with_workflows(pinned.into_values())
-            .map_err(|error| problem(ProblemType::InvalidActionSet, error.to_string()))?;
-        let declarations = self.register_action_set(&derived).await.map_err(fault)?;
-        Ok(view::action_set(&StoredActionSet {
-            action_set: derived,
-            declarations: ActionDeclarations {
-                typescript: declarations.typescript,
-                prompt: declarations.prompt,
-            },
-        }))
-    }
-
     async fn search_actions(
         &self,
         action_set: &str,
@@ -1084,107 +1090,122 @@ impl Api for World {
         Ok(ActionSearchResults { actions })
     }
 
-    async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
-        let action_set = Digest::from_hex(&workflow.action_set).map_err(|_| {
-            not_found(format!(
-                "no action set {:?}: an action set's id is the digest POST /v1/action-sets returned",
-                workflow.action_set
-            ))
-        })?;
-        let parent = match &workflow.base {
-            Some(reference) => {
-                let reference = if reference.contains('@') {
-                    reference.clone()
-                } else {
-                    format!("{}@{reference}", workflow.name)
-                };
-                Some(self.resolve(&reference).await?.workflow.version())
-            }
-            None => None,
-        };
-        let mut tests = Vec::with_capacity(workflow.tests.len());
-        for given in workflow.tests.iter().cloned() {
-            tests.push(test_input(given)?);
-        }
-        let mut replace = Vec::with_capacity(workflow.replace.len());
-        for given in workflow.replace.iter().cloned() {
-            let with = match (given.new, given.expect) {
-                (Some(test), None) => ReplaceWith::Test(test_input(test)?),
-                (None, Some(expect)) => ReplaceWith::Expect(expect.into_core()),
-                _ => {
-                    return Err(problem(
-                        ProblemType::InvalidTest,
-                        format!(
-                            "the replacement of {:?} gives `new` or `expect`: one of them",
-                            given.name
-                        ),
-                    ));
-                }
-            };
-            replace.push(TestReplacement {
-                name: given.name,
-                reason: given.reason,
-                with,
-            });
-        }
-        let retire = workflow
-            .retire
-            .iter()
-            .map(|retire| TestRetirement {
-                names: retire.names.clone(),
-                reason: retire.reason.clone(),
-            })
-            .collect();
-        let schemas = WorkflowSchemas {
-            input: workflow.input.clone(),
-            output: workflow.output.clone(),
-            signals: workflow.signals.clone(),
-        };
-        let generated = rewind_codegen::workflow_declarations(&workflow.name, &schemas);
-        let loader = TsHandlerLoader::default();
-        let saved = self
-            .edge
-            .register_workflow(
-                RegisterWorkflow {
-                    tenant: TenantId::local(),
-                    name: workflow.name.clone(),
-                    description: workflow.description.clone(),
-                    code: Code::new(workflow.code.clone()),
-                    action_set,
-                    schemas,
-                    labels: self.labels.clone(),
-                    secrets: Default::default(),
-                    secret_rights: rewind_engine::secrets::SecretRights::Organization {
-                        labels: Default::default(),
-                    },
-                    declarations: WorkflowDeclarations {
-                        signals: generated.signals,
-                        entry: generated.entry,
-                    },
-                    suite: SuiteChanges {
-                        base: parent,
-                        tests,
-                        replace,
-                        retire,
-                    },
-                },
-                &*self.checker,
-                &self.test_kit(&loader),
-            )
+    async fn get_workflow(&self, workflow: &str) -> Result<Workflow, ApiError> {
+        let (workflow, version) = self.resolve(workflow).await?;
+        view::workflow(self, &workflow, &version)
             .await
-            .map_err(register_error)?;
-        Ok(view::workflow(&saved))
+            .map_err(edge_error)
     }
 
-    async fn workflow_versions(&self, name: &str) -> Result<WorkflowVersions, ApiError> {
-        let versions = World::workflow_versions(self, name).await.map_err(fault)?;
-        if versions.is_empty() {
-            return Err(workflow_not_found(name));
+    async fn update_workflow(
+        &self,
+        workflow: &str,
+        patch: &PatchWorkflow,
+    ) -> Result<Workflow, ApiError> {
+        let workflow = self.find(workflow).await?;
+        let updated = self
+            .edge
+            .update_workflow(
+                &TenantId::local(),
+                &workflow,
+                &WorkflowPatch {
+                    name: patch.name.clone(),
+                    description: patch.description.clone(),
+                },
+            )
+            .await
+            .map_err(workflow_error)?;
+        self.workflow_view(&updated).await
+    }
+
+    /// The gate runs the workflow's suite (`rewind-server`'s `workflows::version`).
+    async fn create_version(
+        &self,
+        workflow: &str,
+        version: &CreateVersion,
+    ) -> Result<Workflow, ApiError> {
+        let workflow = self.find(workflow).await?;
+        if version
+            .secrets
+            .as_ref()
+            .is_some_and(|secrets| !secrets.is_empty())
+        {
+            return Err(invalid("the evals' world uses no secrets"));
         }
-        Ok(WorkflowVersions {
-            name: name.to_owned(),
-            versions: versions.iter().map(view::workflow).collect(),
-        })
+        let action_set = version
+            .action_set
+            .as_deref()
+            .map(|id| {
+                Digest::from_hex(id).map_err(|_| {
+                    not_found(format!(
+                        "no action set {id:?}: an action set's id is the digest POST \
+                         /v1/action-sets returned"
+                    ))
+                })
+            })
+            .transpose()?;
+        let interface =
+            rewind_api::workflows::interface(&version.input, &version.output, &version.signals)
+                .map(|(input, output, signals)| WorkflowSchemas {
+                    input,
+                    output,
+                    signals,
+                });
+        let suite = suite_changes(
+            version.tests.clone(),
+            version.replace.clone(),
+            version.retire.clone(),
+        )?;
+        let loader = TsHandlerLoader::default();
+        let made = self
+            .edge
+            .make_version(
+                MakeVersion {
+                    tenant: TenantId::local(),
+                    workflow,
+                    code: version.code.clone().map(Code::new),
+                    action_set,
+                    interface,
+                    secrets: None,
+                    suite,
+                    maker: self.maker(),
+                },
+                &self.workflow_kit(&loader),
+            )
+            .await
+            .map_err(workflow_error)?;
+        view::workflow(self, &made.workflow, &made.version)
+            .await
+            .map_err(edge_error)
+    }
+
+    /// The new tests run against the latest version (`rewind-server`'s `workflows::tests`).
+    async fn change_tests(
+        &self,
+        workflow: &str,
+        tests: &ChangeTests,
+    ) -> Result<Workflow, ApiError> {
+        let workflow = self.find(workflow).await?;
+        let suite = suite_changes(
+            tests.tests.clone(),
+            tests.replace.clone(),
+            tests.retire.clone(),
+        )?;
+        let loader = TsHandlerLoader::default();
+        let (workflow, _) = self
+            .edge
+            .change_tests(
+                rewind_engine::ChangeTests {
+                    tenant: TenantId::local(),
+                    workflow,
+                    suite,
+                    maker: self.maker(),
+                },
+                &self.workflow_kit(&loader),
+            )
+            .await
+            .map_err(workflow_error)?;
+        self.workflow_view(&workflow).await
     }
 
     async fn record_tests(
@@ -1192,15 +1213,8 @@ impl Api for World {
         workflow: &str,
         record: &RecordTests,
     ) -> Result<RecordedTests, ApiError> {
-        if World::workflow_versions(self, workflow)
-            .await
-            .map_err(fault)?
-            .is_empty()
-        {
-            return Err(not_found(format!(
-                "no workflow {workflow} for this caller: list them with GET /v1/workflows"
-            )));
-        }
+        let reference = workflow;
+        let workflow = self.find(reference).await?;
         let limit = record
             .limit
             .map_or(DEFAULT_RECORDED, |limit| {
@@ -1233,7 +1247,12 @@ impl Api for World {
                 .into_iter()
                 .filter(|summary| self.sees(&summary.labels))
                 .filter(|summary| statuses.contains(&summary.status))
-                .filter(|summary| summary.workflow.as_deref() == Some(workflow))
+                .filter(|summary| {
+                    summary
+                        .workflow
+                        .as_ref()
+                        .is_some_and(|of| of.id == workflow.id)
+                })
                 .take(MAX_RECORDING_CANDIDATES)
                 .map(|summary| summary.run)
                 .collect()
@@ -1241,9 +1260,9 @@ impl Api for World {
             let mut candidates = Vec::with_capacity(record.runs.len());
             for id in &record.runs {
                 let (run, found) = self.visible_run(id).await?;
-                if found.metadata.workflow.as_ref().map(|of| of.name.as_str()) != Some(workflow) {
+                if found.metadata.workflow.as_ref().map(|of| &of.id) != Some(&workflow.id) {
                     return Err(invalid(format!(
-                        "run {id} is not a run of the workflow {workflow}"
+                        "run {id} is not a run of the workflow {reference}"
                     )));
                 }
                 candidates.push(run);
@@ -1252,7 +1271,7 @@ impl Api for World {
         };
 
         let recording = self
-            .record_runs(workflow, candidates, limit)
+            .record_runs(&workflow.id, candidates, limit)
             .await
             .map_err(recording_error)?;
         Ok(RecordedTests {

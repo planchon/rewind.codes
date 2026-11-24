@@ -69,7 +69,6 @@ fn run(id: &str) -> Run {
         status: RunStatus::Completed,
         quarantine: None,
         code_digest: "aa".repeat(32),
-        script_title: None,
         action_set: "bb".repeat(32),
         epoch: 1,
         mode: RunMode::Live,

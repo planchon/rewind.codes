@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use rewind_core::{ActionFailureKind, Digest, RunId, RunStatus, Shape, Timestamp};
+use rewind_core::{ActionFailureKind, RunId, RunStatus, Shape, Timestamp, WorkflowId};
 
 use super::run::RunHead;
 use super::search::IndexedSummary;
@@ -258,8 +258,8 @@ pub struct FailureCounts {
     /// The error's name, or the abort's kind.
     pub error: String,
     pub runs: u64,
-    /// The workflows its runs ran.
-    pub scripts: BTreeMap<Digest, u64>,
+    /// The workflows its runs ran, by id.
+    pub workflows: BTreeMap<WorkflowId, u64>,
     /// The lines of `workflow.ts` its runs ended at.
     pub lines: BTreeMap<u32, u64>,
     /// The latest runs, the latest end first (the highest run id on a tie).
@@ -275,7 +275,7 @@ impl FailureCounts {
             self.error.clone_from(&other.error);
         }
         self.runs += other.runs;
-        add_counts(&mut self.scripts, &other.scripts);
+        add_counts(&mut self.workflows, &other.workflows);
         add_counts(&mut self.lines, &other.lines);
         self.latest.extend(other.latest.iter().cloned());
         self.latest
@@ -310,9 +310,9 @@ impl ActionCounts {
     }
 }
 
-/// The runs of one code.
+/// The runs of one workflow.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScriptCounts {
+pub struct WorkflowCounts {
     pub runs: RunCounts,
     /// The actions its runs called.
     pub actions: BTreeSet<String>,
@@ -320,8 +320,8 @@ pub struct ScriptCounts {
     pub last_started_at: Option<Timestamp>,
 }
 
-impl ScriptCounts {
-    pub fn add(&mut self, other: &ScriptCounts) {
+impl WorkflowCounts {
+    pub fn add(&mut self, other: &WorkflowCounts) {
         self.runs.add(&other.runs);
         self.actions.extend(other.actions.iter().cloned());
         self.first_started_at = earliest(self.first_started_at, other.first_started_at);
@@ -347,8 +347,9 @@ pub struct Counters {
     /// CPU time of the isolates running the workflows, replays excluded: what `cpuPerMonth`
     /// counts.
     pub cpu: Duration,
-    /// The runs of each workflow, by name.
-    pub workflows: BTreeMap<String, RunCounts>,
+    /// The runs of each workflow, by id: their counts, the actions they called, their first
+    /// and last starts.
+    pub workflows: BTreeMap<WorkflowId, WorkflowCounts>,
     /// The runs of each namespace. A delta leaves it empty: the store fills it with the delta's
     /// namespace ([`Counters::add_for`]).
     pub namespaces: BTreeMap<NamespaceName, RunCounts>,
@@ -356,8 +357,6 @@ pub struct Counters {
     pub failures: BTreeMap<String, FailureCounts>,
     /// Calls, by action.
     pub actions: BTreeMap<String, ActionCounts>,
-    /// Runs, by code.
-    pub scripts: BTreeMap<Digest, ScriptCounts>,
 }
 
 impl Counters {
@@ -384,14 +383,24 @@ impl Counters {
 
     /// What the counts of an erased namespace leave in its tenant's: what it consumed (runs
     /// created, started and ended, their durations, CPU time, the runs of each workflow), not
-    /// its failures, actions or workflows.
+    /// its failures, its actions, nor what each workflow called.
     pub fn consumed(&self) -> Counters {
         Counters {
             created: self.created,
             runs: self.runs.clone(),
             durations: self.durations.clone(),
             cpu: self.cpu,
-            workflows: self.workflows.clone(),
+            workflows: self
+                .workflows
+                .iter()
+                .map(|(id, counts)| {
+                    let runs = WorkflowCounts {
+                        runs: counts.runs.clone(),
+                        ..WorkflowCounts::default()
+                    };
+                    (id.clone(), runs)
+                })
+                .collect(),
             ..Counters::default()
         }
     }
@@ -415,9 +424,6 @@ impl Counters {
         }
         for (action, calls) in &other.actions {
             self.actions.entry(action.clone()).or_default().add(calls);
-        }
-        for (code, runs) in &other.scripts {
-            self.scripts.entry(*code).or_default().add(runs);
         }
     }
 
@@ -460,14 +466,17 @@ pub struct Gauges {
     pub waiting: BTreeMap<WaitingFor, u64>,
     /// Runs quarantined that have not ended.
     pub quarantined: u64,
-    /// Runs kept, by code, ended or not: the number of workflows is what `scripts` counts.
-    pub scripts: BTreeMap<Digest, u64>,
+    /// Runs kept, by workflow, ended or not: the number of workflows is what the quota
+    /// `workflows` counts. A run without a workflow (a test run) counts in none.
+    pub workflows: BTreeMap<WorkflowId, u64>,
 }
 
 impl Gauges {
     /// Counts one run kept: its head, and its summary once it has one.
     pub fn count(&mut self, head: &RunHead, summary: Option<&IndexedSummary>) {
-        *self.scripts.entry(head.code).or_default() += 1;
+        if let Some(workflow) = &head.metadata.workflow {
+            *self.workflows.entry(workflow.id.clone()).or_default() += 1;
+        }
         if head.is_ended() {
             return;
         }
@@ -495,7 +504,7 @@ impl Gauges {
         self.active_runs += other.active_runs;
         add_counts(&mut self.waiting, &other.waiting);
         self.quarantined += other.quarantined;
-        add_counts(&mut self.scripts, &other.scripts);
+        add_counts(&mut self.workflows, &other.workflows);
     }
 
     /// The runs waiting for `kind`.
@@ -504,8 +513,8 @@ impl Gauges {
     }
 
     /// The distinct workflows with a run kept.
-    pub fn distinct_scripts(&self) -> u64 {
-        u64::try_from(self.scripts.len()).unwrap_or(u64::MAX)
+    pub fn distinct_workflows(&self) -> u64 {
+        u64::try_from(self.workflows.len()).unwrap_or(u64::MAX)
     }
 }
 
@@ -574,7 +583,7 @@ mod tests {
             signature: "TypeError: <n>".into(),
             error: "TypeError".into(),
             runs: 1,
-            scripts: BTreeMap::from([(Digest::of(b"s"), 1)]),
+            workflows: BTreeMap::from([(WorkflowId::from_bits(1), 1)]),
             lines: BTreeMap::from([(3, 1)]),
             latest: vec![LatestRun {
                 run: RunId::from_u128(run),

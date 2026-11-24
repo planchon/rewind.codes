@@ -8,11 +8,11 @@
 //!                └─► control()   ◄── ControlPlaneChange from Membership::changes
 //! ```
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Digest, RunHandle, RunId, Timestamp};
+use rewind_core::{ActionSet, RunHandle, RunId, Timestamp};
 use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::node::runtime::NodeHandle;
@@ -32,7 +32,6 @@ use crate::follow;
 use crate::idle::Idle;
 use crate::link::SharedMembership;
 use crate::oauth::OAuthServer;
-use crate::titles::{CodeTexts, Title};
 use crate::views::Views;
 use crate::wiring::actions::{Actions, Dispatcher};
 use crate::wiring::bucket::{Archive, Blobs};
@@ -115,9 +114,6 @@ pub(crate) struct App {
     /// The OAuth authorization server of people's connections: with a public URL and a
     /// sign-in only.
     pub(crate) oauth: Option<OAuthServer>,
-    /// What workflows' sources say of them, by tenant and digest: a code never changes. The
-    /// webhooks' rendering shares it.
-    pub(crate) texts: Arc<CodeTexts>,
     /// Tenants known to have their record: a tenant is never deleted.
     tenants: Mutex<HashSet<TenantId>>,
 }
@@ -177,7 +173,6 @@ impl App {
             stop: watch::Sender::new(false),
             sign_in: parts.sign_in,
             oauth: parts.oauth,
-            texts: Arc::new(CodeTexts::default()),
             tenants: Mutex::new(HashSet::new()),
         }
     }
@@ -367,23 +362,5 @@ impl App {
             action_set,
             declarations,
         })
-    }
-
-    /// The first non-blank line of a code.
-    pub(crate) async fn headline(&self, tenant: &TenantId, digest: Digest) -> String {
-        self.texts
-            .text(self.catalog(), tenant, digest)
-            .await
-            .map(|text| text.headline.clone())
-            .unwrap_or_default()
-    }
-
-    /// The titles of these workflows of the tenant, for those that have one.
-    pub(crate) async fn titles(
-        &self,
-        tenant: &TenantId,
-        scripts: impl IntoIterator<Item = Digest>,
-    ) -> Result<BTreeMap<Digest, Title>, ApiError> {
-        Ok(self.texts.titles(self.catalog(), tenant, scripts).await?)
     }
 }

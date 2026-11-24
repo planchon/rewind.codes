@@ -9,10 +9,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::checks::Diagnostic;
 use crate::common::Timestamp;
 use crate::namespaces::{QuotaKind, QuotaScope};
 use crate::query::{QueryError, QuerySpan};
-use crate::scripts::Diagnostic;
 
 /// The media type of every error response.
 pub const CONTENT_TYPE: &str = "application/problem+json";
@@ -45,6 +45,12 @@ pub enum ProblemType {
     LastOwner,
     /// 409: starting a run in, or minting a token for, a namespace being erased.
     NamespaceDeleting,
+    /// 409: a workflow's name its scope already has: the namespace's, or the organization's.
+    NameTaken,
+    /// 409: forking a namespace's workflow: only the organization's are forked.
+    NotForkable,
+    /// 409: pulling into a workflow that has no source: only a fork pulls.
+    NotAFork,
     /// 410: the call no longer exists: its run ended, it was completed, or its claim expired
     /// and another worker took it.
     CallGone,
@@ -66,22 +72,19 @@ pub enum ProblemType {
     /// not exist, a retired or replaced test that is not inherited or has no reason, two tests
     /// of the same name.
     InvalidTest,
-    /// 422: tests did not pass: the version was not saved, the fork not created; `tests` lists
-    /// each, with its problem and its failures.
+    /// 422: tests did not pass: no version was made, no test added, the fork of a run not
+    /// created, nothing pulled; `tests` lists each, with its problem and its failures.
     TestsFailed,
     /// 422: a signal the run does not take: a name starting with `rewind:`, or, for a run of a
     /// workflow, a signal it does not declare or a payload that does not match.
     InvalidSignal,
-    /// 422: a code's title that cannot be used: empty, or longer than 120 characters, or a
-    /// description longer than 2,000.
-    InvalidTitle,
-    /// 422: a start, a fork or a workflow's save refused before anything exists: the code
+    /// 422: a start, a fork or a workflow's version refused before anything exists: the code
     /// imports a server that needs a secret and none is named, a reference names a server
     /// that takes none or a secret that does not exist, or the caller may not use it;
     /// `secrets` says which, with the secrets the caller may use instead.
     SecretRequired,
     /// 429: the namespace or the tenant reached its `active_runs`, `runs_per_month` or
-    /// `scripts`; `quota` says which, at which scope, and when it frees.
+    /// `workflows`; `quota` says which, at which scope, and when it frees.
     QuotaExceeded,
     /// 500: a fault of the platform.
     Internal,
@@ -94,7 +97,7 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 28] = [
+    pub const ALL: [ProblemType; 30] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -106,6 +109,9 @@ impl ProblemType {
         ProblemType::RoleInUse,
         ProblemType::LastOwner,
         ProblemType::NamespaceDeleting,
+        ProblemType::NameTaken,
+        ProblemType::NotForkable,
+        ProblemType::NotAFork,
         ProblemType::CallGone,
         ProblemType::PayloadTooLarge,
         ProblemType::UnsupportedMediaType,
@@ -116,7 +122,6 @@ impl ProblemType {
         ProblemType::InvalidTest,
         ProblemType::TestsFailed,
         ProblemType::InvalidSignal,
-        ProblemType::InvalidTitle,
         ProblemType::SecretRequired,
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
@@ -139,6 +144,9 @@ impl ProblemType {
             ProblemType::RoleInUse => "urn:rewind:problem:role-in-use",
             ProblemType::LastOwner => "urn:rewind:problem:last-owner",
             ProblemType::NamespaceDeleting => "urn:rewind:problem:namespace-deleting",
+            ProblemType::NameTaken => "urn:rewind:problem:name-taken",
+            ProblemType::NotForkable => "urn:rewind:problem:not-forkable",
+            ProblemType::NotAFork => "urn:rewind:problem:not-a-fork",
             ProblemType::CallGone => "urn:rewind:problem:call-gone",
             ProblemType::PayloadTooLarge => "urn:rewind:problem:payload-too-large",
             ProblemType::UnsupportedMediaType => "urn:rewind:problem:unsupported-media-type",
@@ -149,7 +157,6 @@ impl ProblemType {
             ProblemType::TestsFailed => "urn:rewind:problem:tests-failed",
             ProblemType::InvalidInput => "urn:rewind:problem:invalid-input",
             ProblemType::InvalidSignal => "urn:rewind:problem:invalid-signal",
-            ProblemType::InvalidTitle => "urn:rewind:problem:invalid-title",
             ProblemType::SecretRequired => "urn:rewind:problem:secret-required",
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
             ProblemType::Internal => "urn:rewind:problem:internal",
@@ -171,7 +178,10 @@ impl ProblemType {
             | ProblemType::CallNotWaiting
             | ProblemType::RoleInUse
             | ProblemType::LastOwner
-            | ProblemType::NamespaceDeleting => 409,
+            | ProblemType::NamespaceDeleting
+            | ProblemType::NameTaken
+            | ProblemType::NotForkable
+            | ProblemType::NotAFork => 409,
             ProblemType::CallGone => 410,
             ProblemType::PayloadTooLarge => 413,
             ProblemType::UnsupportedMediaType => 415,
@@ -182,7 +192,6 @@ impl ProblemType {
             | ProblemType::TestsFailed
             | ProblemType::InvalidInput
             | ProblemType::InvalidSignal
-            | ProblemType::InvalidTitle
             | ProblemType::SecretRequired => 422,
             ProblemType::QuotaExceeded => 429,
             ProblemType::Internal => 500,
@@ -205,6 +214,9 @@ impl ProblemType {
             ProblemType::RoleInUse => "The role is in use",
             ProblemType::LastOwner => "The organization would have no owner",
             ProblemType::NamespaceDeleting => "The namespace is being erased",
+            ProblemType::NameTaken => "The name is taken",
+            ProblemType::NotForkable => "The workflow cannot be forked",
+            ProblemType::NotAFork => "The workflow is not a fork",
             ProblemType::CallGone => "The call no longer exists",
             ProblemType::PayloadTooLarge => "Payload too large",
             ProblemType::UnsupportedMediaType => "Unsupported media type",
@@ -215,7 +227,6 @@ impl ProblemType {
             ProblemType::TestsFailed => "Tests did not pass",
             ProblemType::InvalidInput => "The input does not match the workflow",
             ProblemType::InvalidSignal => "The run does not take this signal",
-            ProblemType::InvalidTitle => "The code's title was refused",
             ProblemType::SecretRequired => "A secret is missing or cannot be used",
             ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",

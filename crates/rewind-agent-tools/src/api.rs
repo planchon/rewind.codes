@@ -10,9 +10,8 @@
 use std::future::Future;
 
 use rewind_api::Problem;
-use rewind_api::action_sets::{
-    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
-};
+use rewind_api::action_sets::{ActionSearchResults, ActionSetList, SearchQuery};
+use rewind_api::checks::{CheckRequest, CheckResult, TestRequest};
 use rewind_api::common::Duration;
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
@@ -20,11 +19,10 @@ use rewind_api::namespaces::{NamespaceList, NamespaceListQuery};
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
-use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
+    ChangeTests, CreateVersion, PatchWorkflow, RecordTests, RecordedTests, Workflow,
 };
 use serde_json::Value;
 
@@ -132,9 +130,6 @@ pub trait Api: Send + Sync {
     fn test(&self, test: &TestRequest)
     -> impl Future<Output = Result<TestReport, ApiError>> + Send;
 
-    /// `GET /v1/scripts/{digest}`.
-    fn get_script(&self, digest: &str) -> impl Future<Output = Result<Script, ApiError>> + Send;
-
     /// `GET /v1/payloads/{digest}`, through `run`, which holds it.
     fn get_payload(
         &self,
@@ -145,12 +140,6 @@ pub trait Api: Send + Sync {
     /// `GET /v1/tests/{digest}`.
     fn get_test(&self, digest: &str) -> impl Future<Output = Result<Test, ApiError>> + Send;
 
-    /// `POST /v1/action-sets`.
-    fn create_action_set(
-        &self,
-        action_set: &CreateActionSet,
-    ) -> impl Future<Output = Result<ActionSet, ApiError>> + Send;
-
     /// `GET /v1/action-sets/{id}/search`.
     fn search_actions(
         &self,
@@ -158,19 +147,35 @@ pub trait Api: Send + Sync {
         query: &SearchQuery,
     ) -> impl Future<Output = Result<ActionSearchResults, ApiError>> + Send;
 
-    /// `POST /v1/workflows`.
-    fn create_workflow(
+    /// `GET /v1/workflows/{id}`: a workflow by its id or its name (`@v12` or `@<digest>` for a
+    /// version), with its versions, its suite and the code of the version shown.
+    fn get_workflow(
         &self,
-        workflow: &CreateWorkflow,
+        workflow: &str,
     ) -> impl Future<Output = Result<Workflow, ApiError>> + Send;
 
-    /// `GET /v1/workflows/{name}`: its versions, newest first.
-    fn workflow_versions(
+    /// `PATCH /v1/workflows/{id}`: its name and description.
+    fn update_workflow(
         &self,
-        name: &str,
-    ) -> impl Future<Output = Result<WorkflowVersions, ApiError>> + Send;
+        workflow: &str,
+        patch: &PatchWorkflow,
+    ) -> impl Future<Output = Result<Workflow, ApiError>> + Send;
 
-    /// `POST /v1/workflows/{name}/record`.
+    /// `POST /v1/workflows/{id}/versions`: its next version, through its gate.
+    fn create_version(
+        &self,
+        workflow: &str,
+        version: &CreateVersion,
+    ) -> impl Future<Output = Result<Workflow, ApiError>> + Send;
+
+    /// `POST /v1/workflows/{id}/tests`: tests added to its suite, replaced or retired.
+    fn change_tests(
+        &self,
+        workflow: &str,
+        tests: &ChangeTests,
+    ) -> impl Future<Output = Result<Workflow, ApiError>> + Send;
+
+    /// `POST /v1/workflows/{id}/record`.
     fn record_tests(
         &self,
         workflow: &str,
@@ -286,10 +291,6 @@ impl<A: Api> Api for &A {
         (**self).test(test)
     }
 
-    fn get_script(&self, digest: &str) -> impl Future<Output = Result<Script, ApiError>> + Send {
-        (**self).get_script(digest)
-    }
-
     fn get_payload(
         &self,
         digest: &str,
@@ -302,13 +303,6 @@ impl<A: Api> Api for &A {
         (**self).get_test(digest)
     }
 
-    fn create_action_set(
-        &self,
-        action_set: &CreateActionSet,
-    ) -> impl Future<Output = Result<ActionSet, ApiError>> + Send {
-        (**self).create_action_set(action_set)
-    }
-
     fn search_actions(
         &self,
         action_set: &str,
@@ -317,18 +311,35 @@ impl<A: Api> Api for &A {
         (**self).search_actions(action_set, query)
     }
 
-    fn create_workflow(
+    fn get_workflow(
         &self,
-        workflow: &CreateWorkflow,
+        workflow: &str,
     ) -> impl Future<Output = Result<Workflow, ApiError>> + Send {
-        (**self).create_workflow(workflow)
+        (**self).get_workflow(workflow)
     }
 
-    fn workflow_versions(
+    fn update_workflow(
         &self,
-        name: &str,
-    ) -> impl Future<Output = Result<WorkflowVersions, ApiError>> + Send {
-        (**self).workflow_versions(name)
+        workflow: &str,
+        patch: &PatchWorkflow,
+    ) -> impl Future<Output = Result<Workflow, ApiError>> + Send {
+        (**self).update_workflow(workflow, patch)
+    }
+
+    fn create_version(
+        &self,
+        workflow: &str,
+        version: &CreateVersion,
+    ) -> impl Future<Output = Result<Workflow, ApiError>> + Send {
+        (**self).create_version(workflow, version)
+    }
+
+    fn change_tests(
+        &self,
+        workflow: &str,
+        tests: &ChangeTests,
+    ) -> impl Future<Output = Result<Workflow, ApiError>> + Send {
+        (**self).change_tests(workflow, tests)
     }
 
     fn record_tests(

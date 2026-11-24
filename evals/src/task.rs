@@ -23,7 +23,7 @@ pub enum Difficulty {
 pub enum Setup {
     /// A run of a code.
     Run(&'static str),
-    /// A workflow saved through the gate, with its suite.
+    /// A workflow created through the gate, with its suite.
     Workflow(fn() -> SetupWorkflow),
     /// A run of the latest version of a workflow, with this input.
     WorkflowRun {
@@ -35,7 +35,8 @@ pub enum Setup {
 /// Makes an action set from the world's.
 pub type MakeActionSet = fn(&rewind_core::ActionSet) -> Result<rewind_core::ActionSet, String>;
 
-/// A workflow saved before the conversation, as `POST /v1/workflows` saves it.
+/// A workflow created before the conversation, as `POST /v1/workflows` creates it: in the
+/// namespace `local`.
 #[derive(Debug, Clone)]
 pub struct SetupWorkflow {
     pub name: &'static str,
@@ -46,7 +47,7 @@ pub struct SetupWorkflow {
     pub signals: BTreeMap<String, Value>,
     /// Its suite: tests written in full, as the API takes them.
     pub tests: Vec<Value>,
-    /// The action set it was saved with, made from the world's: the actions as they were then. The
+    /// The action set it was made with, made from the world's: the actions as they were then. The
     /// world's own when `None`.
     pub action_set: Option<MakeActionSet>,
 }
@@ -97,11 +98,11 @@ impl Outcome {
             .filter(|run| !self.setup.contains(&run.id) && !self.production.contains(&run.id))
     }
 
-    /// The versions of a workflow, oldest first.
+    /// The versions of the workflow of this name, oldest first.
     pub fn versions(&self, workflow: &str) -> Vec<&WorkflowReport> {
         self.workflows
             .iter()
-            .filter(|version| version.name == workflow)
+            .filter(|version| version.name.as_deref() == Some(workflow))
             .collect()
     }
 

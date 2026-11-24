@@ -1,17 +1,16 @@
-//! Workflows: workflows with a name and a typed interface, that workflows start and signal
+//! Workflow versions, and the workflows a workflow's code starts and signals
 //! (`archi/01-product.md`, "Workflows"; `archi/03-execution.md`, "Workflows across runs").
 //!
 //! ```text
-//! Workflow (a version: immutable, content-addressed)
-//! ├── name, description?
+//! WorkflowVersion (a version: immutable, content-addressed by its digest)
 //! ├── code, action set            digests: what its runs execute
-//! ├── schemas                    { input, output, signals: { <name>: schema } }
+//! ├── schemas?                    its interface { input, output, signals: { <name>: schema } }
 //! ├── suite                      base?, tests, retired, replaced: the tests it passed
-//! ├── labels                     the scope it was saved under; {} for a tenant-wide save
+//! ├── labels                     the scope it was made under; {} for a tenant-wide grant
 //! └── secrets                    its secrets: { <server>: org/<name> | ns/<name> }
 //!
 //! PinnedWorkflow (what an action set pins: the interface, without the code)
-//! └── name, version (the Workflow's digest), description?, schemas
+//! └── name, id, version (its number), digest, description?, schemas
 //! ```
 //!
 //! A code starts and signals runs of a pinned workflow through two built-ins, and the end of
@@ -30,7 +29,7 @@ use crate::event::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, ActionOutcome, CancelReason,
     ErrorInfo,
 };
-use crate::ids::RunId;
+use crate::ids::{RunId, WorkflowId};
 use crate::payload::Payload;
 use crate::secret::ServerSecrets;
 use crate::state::RunOutcome;
@@ -63,7 +62,7 @@ pub fn is_reserved_signal(name: &str) -> bool {
     name.starts_with(RESERVED_SIGNAL_PREFIX)
 }
 
-/// The JSON Schemas of a workflow: its input, its output, and each signal it accepts.
+/// The JSON Schemas of a workflow version: its input, its output, and each signal it accepts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowSchemas {
     pub input: Value,
@@ -73,48 +72,69 @@ pub struct WorkflowSchemas {
 }
 
 impl WorkflowSchemas {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({ "input": self.input, "output": self.output, "signals": self.signals })
+    }
+
+    /// Checks that each schema is one, and each signal's name a name a run may receive.
+    pub fn check(&self) -> Result<(), InvalidWorkflow> {
+        check_schemas(self)
     }
 }
 
-/// A version of a workflow: a code with a name and a typed interface. Immutable and
-/// content-addressed: its [`version`](Self::version) is the digest of its document, the workflow
-/// version document of the stored format v1 (`archi/02-history.md`).
+/// The longest name a workflow takes: its runs' handles carry it as their origin.
+pub const MAX_WORKFLOW_NAME_CHARS: usize = 64;
+
+/// Checks a workflow's name (`archi/04-tools.md`, "Workflow names"): an identifier that is not a
+/// reserved word of JavaScript nor a word strict mode reserves, since `rewind:workflows` exports
+/// it, that never starts with `wf_`, so it never reads as an id, and that fits a handle.
+pub fn check_workflow_name(name: &str) -> Result<(), InvalidWorkflow> {
+    if !is_identifier(name)
+        || is_reserved(name)
+        || name.starts_with(crate::ids::WORKFLOW_ID_PREFIX)
+        || name.len() > MAX_WORKFLOW_NAME_CHARS
+    {
+        return Err(InvalidWorkflow::Name(name.to_owned()));
+    }
+    Ok(())
+}
+
+/// A version of a workflow: a code, an action set, an interface, the secrets its runs use, and
+/// the suite it passed. Immutable and content-addressed: its [`digest`](Self::digest) is the
+/// digest of its document, the workflow version document of the stored format v1
+/// (`archi/02-history.md`). Its workflow's name and description are not part of it: they are
+/// the workflow's, and change without a version.
 ///
-/// A version saved under a grant limited to labels carries them, and they are part of its
-/// document: the same workflow saved under other labels, or tenant-wide, is another version,
-/// which the other scopes do not see (`archi/06-storage-and-scale.md`, "Tenancy"). A version
-/// without labels has the document, and so the digest, it had before labels were part of it.
+/// A version without an interface accepts any input, output and signal name, as the version a
+/// run creates does (`archi/01-product.md`, "Workflows").
 ///
-/// A version also carries the secrets its runs use (`archi/04-tools.md`, "Secrets"): saved
-/// with it and checked against the saver's rights, they are part of its document, and a run of
-/// it reads them without the caller's rights being checked again. A version without secrets
-/// has the document it had before secrets were part of it.
+/// A version made under a grant limited to labels carries them, and they are part of its
+/// document: the principals that do not see them do not see it (`archi/06-storage-and-scale.md`,
+/// "Tenancy"). A version also carries the secrets its runs use (`archi/04-tools.md`, "Secrets"):
+/// made with it and checked against its maker's rights, they are part of its document, and a run
+/// of it reads them without the caller's rights being checked again.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Workflow {
-    name: String,
-    description: Option<String>,
+pub struct WorkflowVersion {
     code: Digest,
     action_set: Digest,
-    schemas: WorkflowSchemas,
+    interface: Option<WorkflowSchemas>,
     suite: Suite,
     labels: BTreeMap<String, String>,
     secrets: ServerSecrets,
 }
 
-/// The tests a version passed when it was saved, and how they derive from its base's
+/// The tests a version passed when it was made, and how they derive from its base's
 /// (`archi/05-testing-and-observability.md`, "Suites and the gate"). Tests are referenced by
 /// the digest of their document.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Suite {
-    /// The version it derives from.
+    /// The version it derives from, by digest.
     pub base: Option<Digest>,
     /// Every test of the suite, by name.
     pub tests: Vec<SuiteTest>,
-    /// The base's tests it does not keep.
+    /// The tests of the workflow's suite it does not keep.
     pub retired: Vec<RetiredTest>,
-    /// The base's tests it replaced.
+    /// The tests of the workflow's suite it replaced.
     pub replaced: Vec<ReplacedTest>,
 }
 
@@ -207,13 +227,13 @@ impl Suite {
 }
 
 /// A test of a suite.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SuiteTest {
     pub name: String,
     pub test: Digest,
 }
 
-/// A test of the base a version does not keep, and why.
+/// A test of the workflow's suite a version does not keep, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetiredTest {
     pub name: String,
@@ -221,7 +241,7 @@ pub struct RetiredTest {
     pub reason: String,
 }
 
-/// A test of the base a version replaced, and why.
+/// A test of the workflow's suite a version replaced, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplacedTest {
     pub name: String,
@@ -230,17 +250,18 @@ pub struct ReplacedTest {
     pub reason: String,
 }
 
-/// Why a test of the base is left out without being retired by the version: its namespace
+/// Why a test of the suite is left out without being retired by the version: its namespace
 /// was erased with the end user's data.
 pub const ERASED_TEST_REASON: &str = "recorded from an erased namespace";
 
-/// A workflow that breaks an invariant. The messages are written for whoever registers it, a
+/// A workflow that breaks an invariant. The messages are written for whoever makes it, a
 /// harness developer or a model.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidWorkflow {
     #[error(
-        "invalid workflow name {0:?}: expected an identifier (letters, digits, _ and $) that is \
-         not a reserved word of JavaScript, since workflows import it from rewind:workflows"
+        "invalid workflow name {0:?}: expected an identifier (letters, digits, _ and $) of at \
+         most 64 characters that is not a reserved word of JavaScript, since workflows import it \
+         from rewind:workflows, and that does not start with wf_, which starts the workflows' ids"
     )]
     Name(String),
     #[error("invalid signal name {0:?}: expected a name without control characters")]
@@ -255,27 +276,30 @@ pub enum InvalidWorkflow {
     NoReason(String),
 }
 
-impl Workflow {
-    /// A version of the workflow `name`, whose runs execute `code` with `action_set`.
-    pub fn new(
-        name: impl Into<String>,
-        description: Option<String>,
-        code: Digest,
-        action_set: Digest,
-        schemas: WorkflowSchemas,
-    ) -> Result<Self, InvalidWorkflow> {
-        let name = name.into();
-        check_interface(&name, &schemas)?;
-        Ok(Self {
-            name,
-            description,
+impl WorkflowVersion {
+    /// A version whose runs execute `code` with `action_set`, without an interface: any input,
+    /// output and signal name.
+    pub fn new(code: Digest, action_set: Digest) -> Self {
+        Self {
             code,
             action_set,
-            schemas,
+            interface: None,
             suite: Suite::default(),
             labels: BTreeMap::new(),
             secrets: ServerSecrets::new(),
-        })
+        }
+    }
+
+    /// The same version with an interface, checked; `None` removes it.
+    pub fn with_interface(
+        mut self,
+        interface: Option<WorkflowSchemas>,
+    ) -> Result<Self, InvalidWorkflow> {
+        if let Some(schemas) = &interface {
+            check_schemas(schemas)?;
+        }
+        self.interface = interface;
+        Ok(self)
     }
 
     /// The same version with a suite.
@@ -288,7 +312,7 @@ impl Workflow {
         &self.suite
     }
 
-    /// The same version saved under `labels`: the scope of a grant limited to labels. Another
+    /// The same version made under `labels`: the scope of a grant limited to labels. Another
     /// version unless `labels` is empty.
     #[must_use]
     pub fn with_labels(mut self, labels: BTreeMap<String, String>) -> Self {
@@ -302,14 +326,6 @@ impl Workflow {
     pub fn with_secrets(mut self, secrets: ServerSecrets) -> Self {
         self.secrets = secrets;
         self
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
     }
 
     /// The secrets its runs use, by server or API name.
@@ -327,42 +343,41 @@ impl Workflow {
         self.action_set
     }
 
-    pub fn schemas(&self) -> &WorkflowSchemas {
-        &self.schemas
+    /// Its interface: `None` accepts any input, output and signal name.
+    pub fn interface(&self) -> Option<&WorkflowSchemas> {
+        self.interface.as_ref()
     }
 
-    /// The labels it was saved under: only the principals that see them see it.
+    /// The labels it was made under: only the principals that see them see it.
     pub fn labels(&self) -> &BTreeMap<String, String> {
         &self.labels
     }
 
-    /// The version: SHA-256 of the canonical workflow version document, `"v": 1` included. The
-    /// document `rewind-format` writes hashes to it.
-    pub fn version(&self) -> Digest {
+    /// SHA-256 of the canonical workflow version document, `"v": 1` included. The document
+    /// `rewind-format` writes hashes to it.
+    pub fn digest(&self) -> Digest {
         Digest::of(canonical_json(&self.document()).as_bytes())
     }
 
-    /// What an action set pins of this version.
-    pub fn pinned(&self) -> PinnedWorkflow {
-        PinnedWorkflow {
-            name: self.name.clone(),
-            version: self.version(),
-            description: self.description.clone(),
-            schemas: self.schemas.clone(),
-        }
+    /// Whether `other` has the same code, action set, interface, labels and secrets: everything
+    /// but its suite.
+    pub fn same_content(&self, other: &WorkflowVersion) -> bool {
+        self.code == other.code
+            && self.action_set == other.action_set
+            && self.interface == other.interface
+            && self.labels == other.labels
+            && self.secrets == other.secrets
     }
 
     /// The workflow version document v1, as a JSON value.
     fn document(&self) -> Value {
         let mut object = Map::new();
         object.insert("v".into(), json!(1));
-        object.insert("name".into(), json!(self.name));
-        if let Some(description) = &self.description {
-            object.insert("description".into(), json!(description));
-        }
         object.insert("code".into(), json!(self.code.to_hex()));
         object.insert("action_set".into(), json!(self.action_set.to_hex()));
-        object.insert("schemas".into(), self.schemas.to_json());
+        if let Some(schemas) = &self.interface {
+            object.insert("schemas".into(), schemas.to_json());
+        }
         self.suite.insert_into(&mut object);
         if !self.labels.is_empty() {
             object.insert("labels".into(), json!(self.labels));
@@ -379,28 +394,34 @@ impl Workflow {
     }
 }
 
-impl fmt::Display for Workflow {
-    /// `triage@9f2c4e1a07b3`.
+impl fmt::Display for WorkflowVersion {
+    /// The first 12 digits of its digest.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.name, self.version().short())
+        f.write_str(&self.digest().short())
     }
 }
 
-/// A workflow as an action set pins it: its name, version and interface. Workflows of that action set
-/// start runs of exactly this version, and are checked against these schemas.
+/// A workflow as an action set pins it (`archi/04-tools.md`, "Action sets and code
+/// generation"): its name, its id, the version pinned by its number and its digest, its
+/// description and its interface. Code of that action set starts runs of exactly this version,
+/// and is checked against these schemas.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinnedWorkflow {
     pub name: String,
-    /// The [`Workflow::version`] pinned.
-    pub version: Digest,
+    pub id: WorkflowId,
+    /// The version's number among the versions of its workflow.
+    pub version: u32,
+    /// The version's digest.
+    pub digest: Digest,
     pub description: Option<String>,
     pub schemas: WorkflowSchemas,
 }
 
 impl PinnedWorkflow {
-    /// Checks what [`Workflow::new`] checks of the interface.
+    /// Checks what a workflow's name and interface must be.
     pub(crate) fn check(&self) -> Result<(), InvalidWorkflow> {
-        check_interface(&self.name, &self.schemas)
+        check_workflow_name(&self.name)?;
+        check_schemas(&self.schemas)
     }
 
     /// The name of its built-in: `workflows.<name>.start` or `workflows.<name>.signal`.
@@ -408,11 +429,13 @@ impl PinnedWorkflow {
         format!("{WORKFLOWS_GROUP}.{}.{}", self.name, op.as_str())
     }
 
-    /// Its event in the pinned action set document v1.
+    /// Its entry in the pinned action set document v1.
     pub(crate) fn document(&self) -> Value {
         let mut object = Map::new();
         object.insert("name".into(), json!(self.name));
-        object.insert("version".into(), json!(self.version.to_hex()));
+        object.insert("id".into(), json!(self.id.as_str()));
+        object.insert("version".into(), json!(self.version));
+        object.insert("digest".into(), json!(self.digest.to_hex()));
         if let Some(description) = &self.description {
             object.insert("description".into(), json!(description));
         }
@@ -422,9 +445,9 @@ impl PinnedWorkflow {
 }
 
 impl fmt::Display for PinnedWorkflow {
-    /// `triage@9f2c4e1a07b3`.
+    /// `triage@v12`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.name, self.version.short())
+        write!(f, "{}@v{}", self.name, self.version)
     }
 }
 
@@ -464,10 +487,7 @@ impl WorkflowOp {
     }
 }
 
-fn check_interface(name: &str, schemas: &WorkflowSchemas) -> Result<(), InvalidWorkflow> {
-    if !is_identifier(name) || is_reserved(name) {
-        return Err(InvalidWorkflow::Name(name.to_owned()));
-    }
+fn check_schemas(schemas: &WorkflowSchemas) -> Result<(), InvalidWorkflow> {
     let is_schema = |schema: &Value| matches!(schema, Value::Object(_) | Value::Bool(_));
     if !is_schema(&schemas.input) {
         return Err(InvalidWorkflow::Schema("input".into()));
@@ -653,49 +673,65 @@ mod tests {
         }
     }
 
-    fn triage() -> Workflow {
-        Workflow::new(
-            "triage",
-            Some("Triage the stale issues".into()),
-            Digest::of(b"script"),
-            Digest::of(b"action_set"),
-            schemas(),
-        )
-        .unwrap()
+    fn triage() -> WorkflowVersion {
+        WorkflowVersion::new(Digest::of(b"code"), Digest::of(b"action_set"))
+            .with_interface(Some(schemas()))
+            .unwrap()
     }
 
     #[test]
-    fn the_version_is_the_digest_of_the_document() {
-        let workflow = triage();
+    fn the_digest_is_that_of_the_document() {
+        let version = triage();
         let document = format!(
             concat!(
-                r#"{{"action_set":"{}","code":"{}","description":"Triage the stale issues","#,
-                r#""name":"triage","schemas":{{"input":{{"properties":{{"repo":{{"type":"string"}}}},"#,
+                r#"{{"action_set":"{}","code":"{}","#,
+                r#""schemas":{{"input":{{"properties":{{"repo":{{"type":"string"}}}},"#,
                 r#""type":"object"}},"output":{{"type":"object"}},"signals":{{"approval":{{"type":"object"}}}}}},"#,
                 r#""v":1}}"#
             ),
             Digest::of(b"action_set").to_hex(),
-            Digest::of(b"script").to_hex(),
+            Digest::of(b"code").to_hex(),
         );
-        assert_eq!(workflow.version(), Digest::of(document.as_bytes()));
+        assert_eq!(version.digest(), Digest::of(document.as_bytes()));
+        assert_eq!(version.to_string(), version.digest().short());
+        let without = WorkflowVersion::new(Digest::of(b"code"), Digest::of(b"action_set"));
+        let document = format!(
+            r#"{{"action_set":"{}","code":"{}","v":1}}"#,
+            Digest::of(b"action_set").to_hex(),
+            Digest::of(b"code").to_hex(),
+        );
         assert_eq!(
-            workflow.to_string(),
-            format!("triage@{}", workflow.version().short())
+            without.digest(),
+            Digest::of(document.as_bytes()),
+            "a version without an interface has no schemas"
         );
-        let pinned = workflow.pinned();
-        assert_eq!(pinned.version, workflow.version());
+        assert_eq!(without.interface(), None);
+    }
+
+    #[test]
+    fn a_pinned_workflow_names_its_builtins_and_its_version() {
+        let pinned = PinnedWorkflow {
+            name: "triage".into(),
+            id: "wf_7k2m9q4x8d1c".parse().unwrap(),
+            version: 12,
+            digest: triage().digest(),
+            description: None,
+            schemas: schemas(),
+        };
         assert_eq!(
             pinned.action_name(WorkflowOp::Start),
             "workflows.triage.start"
         );
+        assert_eq!(pinned.to_string(), "triage@v12");
+        assert_eq!(pinned.check(), Ok(()));
     }
 
     #[test]
     fn secrets_are_part_of_the_version_only_when_there_are_some() {
         let base = triage();
         assert_eq!(
-            base.clone().with_secrets(ServerSecrets::new()).version(),
-            base.version(),
+            base.clone().with_secrets(ServerSecrets::new()).digest(),
+            base.digest(),
             "no secrets: the digest of the document without them"
         );
         let attach = |secret: &str| {
@@ -704,8 +740,8 @@ mod tests {
         };
         let of_user = attach("ns/github");
         let of_org = attach("org/github");
-        assert_ne!(of_user.version(), base.version());
-        assert_ne!(of_user.version(), of_org.version());
+        assert_ne!(of_user.digest(), base.digest());
+        assert_ne!(of_user.digest(), of_org.digest());
         assert_eq!(
             of_user.secrets().get("github").map(ToString::to_string),
             Some("ns/github".to_owned())
@@ -720,54 +756,40 @@ mod tests {
     fn labels_are_part_of_the_version_only_when_there_are_some() {
         let tenant_wide = triage();
         assert_eq!(
-            tenant_wide.clone().with_labels(BTreeMap::new()).version(),
-            tenant_wide.version(),
+            tenant_wide.clone().with_labels(BTreeMap::new()).digest(),
+            tenant_wide.digest(),
             "no labels: the digest of the document without them"
         );
         let label = |key: &str, value: &str| BTreeMap::from([(key.to_owned(), value.to_owned())]);
         let dev = triage().with_labels(label("env", "dev"));
         let prod = triage().with_labels(label("env", "prod"));
-        assert_ne!(dev.version(), tenant_wide.version());
-        assert_ne!(dev.version(), prod.version());
+        assert_ne!(dev.digest(), tenant_wide.digest());
+        assert_ne!(dev.digest(), prod.digest());
         assert_eq!(dev.labels(), &label("env", "dev"));
-        assert_eq!(dev.pinned().version, dev.version());
     }
 
     #[test]
-    fn every_field_changes_the_version() {
-        let base = triage().version();
-        let with = |name: &str, description: Option<&str>, code: &[u8], signals: &[&str]| {
-            let mut schemas = schemas();
-            schemas.signals = signals
-                .iter()
-                .map(|name| ((*name).to_owned(), json!({})))
-                .collect();
-            Workflow::new(
-                name,
-                description.map(str::to_owned),
-                Digest::of(code),
-                Digest::of(b"action_set"),
-                schemas,
-            )
-            .unwrap()
-            .version()
+    fn every_field_changes_the_digest() {
+        let base = triage().digest();
+        let with = |code: &[u8], signals: Option<&[&str]>| {
+            let interface = signals.map(|signals| {
+                let mut schemas = schemas();
+                schemas.signals = signals
+                    .iter()
+                    .map(|name| ((*name).to_owned(), json!({})))
+                    .collect();
+                schemas
+            });
+            WorkflowVersion::new(Digest::of(code), Digest::of(b"action_set"))
+                .with_interface(interface)
+                .unwrap()
+                .digest()
         };
         let versions = [
             base,
-            with(
-                "other",
-                Some("Triage the stale issues"),
-                b"script",
-                &["approval"],
-            ),
-            with("triage", None, b"script", &["approval"]),
-            with(
-                "triage",
-                Some("Triage the stale issues"),
-                b"other",
-                &["approval"],
-            ),
-            with("triage", Some("Triage the stale issues"), b"script", &[]),
+            with(b"other", Some(&["approval"])),
+            with(b"code", Some(&[])),
+            with(b"code", None),
         ];
         let distinct: std::collections::BTreeSet<_> = versions.iter().collect();
         assert_eq!(distinct.len(), versions.len());
@@ -775,37 +797,44 @@ mod tests {
 
     #[test]
     fn names_and_schemas_are_checked() {
-        let workflow = |name: &str, schemas: WorkflowSchemas| {
-            Workflow::new(name, None, Digest::of(b"s"), Digest::of(b"t"), schemas)
-        };
-        for name in ["", "1st", "my-flow", "default", "eval", "a.b"] {
+        for name in ["", "1st", "my-flow", "default", "eval", "a.b", "wf_triage"] {
             assert_eq!(
-                workflow(name, schemas()),
+                check_workflow_name(name),
                 Err(InvalidWorkflow::Name(name.into())),
                 "{name}"
             );
         }
+        assert_eq!(
+            check_workflow_name(&"a".repeat(65)),
+            Err(InvalidWorkflow::Name("a".repeat(65)))
+        );
+        assert!(check_workflow_name(&"a".repeat(64)).is_ok());
+        assert!(check_workflow_name("$flow_2").is_ok());
+        assert!(check_workflow_name("wf").is_ok());
+        let version = |schemas: WorkflowSchemas| {
+            WorkflowVersion::new(Digest::of(b"s"), Digest::of(b"t")).with_interface(Some(schemas))
+        };
         let mut reserved = schemas();
         reserved.signals.insert("rewind:ended:x".into(), json!({}));
         assert!(matches!(
-            workflow("triage", reserved),
+            version(reserved),
             Err(InvalidWorkflow::ReservedSignalName(_))
         ));
         let mut control = schemas();
         control.signals.insert("a\nb".into(), json!({}));
         assert!(matches!(
-            workflow("triage", control),
+            version(control),
             Err(InvalidWorkflow::SignalName(_))
         ));
         let mut not_a_schema = schemas();
         not_a_schema.output = json!("string");
         assert_eq!(
-            workflow("triage", not_a_schema),
+            version(not_a_schema),
             Err(InvalidWorkflow::Schema("output".into()))
         );
         let mut any = schemas();
         any.input = json!(true);
-        assert!(workflow("$flow_2", any).is_ok());
+        assert!(version(any).is_ok());
     }
 
     #[test]

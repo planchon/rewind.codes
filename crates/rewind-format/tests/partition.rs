@@ -21,10 +21,10 @@ use rewind_format::partition::{
     ActionCounts, Admission, Attribute, Callsite, Counters, Ending, FailureCounts, FailureKind,
     ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log, Metadata, Mode, Outbox,
     ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
-    QuotaKind, Record, RunCounts, RunHead, RunWorkflow, ScriptCounts, SecretExpiredReason, Shape,
-    SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status,
-    Summary, Task, TaskPhase, TaskState, TenantState, Threshold, Timer, TimerKind, TraceContext,
-    Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind, decode, encode,
+    QuotaKind, Record, RunCounts, RunHead, RunWorkflow, SecretExpiredReason, Shape, SignalKey,
+    SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status, Summary, Task,
+    TaskPhase, TaskState, TenantState, Threshold, Timer, TimerKind, TraceContext, Wait, WaitKind,
+    WaitingFor, Watcher, Webhook, WebhookKind, WorkflowCounts, decode, encode,
 };
 use serde_json::json;
 
@@ -113,10 +113,7 @@ fn run_head() -> RunHead {
                 run: run(9),
                 at: Some(3),
             }),
-            workflow: Some(RunWorkflow {
-                name: "triage".into(),
-                version: digest("version"),
-            }),
+            workflow: Some(run_workflow()),
             started_by: Some(StartedBy {
                 run: run(8),
                 seq: 4,
@@ -223,7 +220,7 @@ fn summary() -> Summary {
         mode: Some(Mode::Test),
         labels: BTreeMap::from([("agent".into(), "triage".into())]),
         source: Some(run(9)),
-        workflow: Some("triage".into()),
+        workflow: Some(run_workflow()),
         started_by: Some(run(8)),
         started_at: Some(T0),
         ended_at: Some(T0 + 100),
@@ -250,6 +247,16 @@ fn summary() -> Summary {
     }
 }
 
+fn run_workflow() -> RunWorkflow {
+    RunWorkflow {
+        id: "wf_7k2m9q4x8d1c".into(),
+        name: Some("triage".into()),
+        version: 12,
+        digest: digest("version"),
+        interface: true,
+    }
+}
+
 fn counters() -> Counters {
     let runs = RunCounts {
         started: 2,
@@ -260,14 +267,22 @@ fn counters() -> Counters {
         runs: runs.clone(),
         durations: sketch(),
         cpu_ms: 1_500,
-        workflows: BTreeMap::from([("triage".into(), runs.clone())]),
+        workflows: BTreeMap::from([(
+            "wf_7k2m9q4x8d1c".into(),
+            WorkflowCounts {
+                runs: runs.clone(),
+                actions: BTreeSet::from(["github.close_issue".into()]),
+                first_started_at: Some(T0),
+                last_started_at: Some(T0 + 50),
+            },
+        )]),
         failures: BTreeMap::from([(
             "0123456789abcdef".into(),
             FailureCounts {
                 signature: "TypeError: x is not a function".into(),
                 error: "TypeError".into(),
                 runs: 1,
-                scripts: BTreeMap::from([(digest("script"), 1)]),
+                workflows: BTreeMap::from([("wf_7k2m9q4x8d1c".into(), 1)]),
                 lines: BTreeMap::from([(7, 1)]),
                 latest: vec![LatestRun {
                     run: run(1),
@@ -288,15 +303,6 @@ fn counters() -> Counters {
                 latency: sketch(),
             },
         )]),
-        scripts: BTreeMap::from([(
-            digest("script"),
-            ScriptCounts {
-                runs,
-                actions: BTreeSet::from(["github.close_issue".into()]),
-                first_started_at: Some(T0),
-                last_started_at: Some(T0 + 50),
-            },
-        )]),
     }
 }
 
@@ -311,7 +317,7 @@ fn gauges() -> Gauges {
         active_runs: 4,
         waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Approval, 1)]),
         quarantined: 1,
-        scripts: BTreeMap::from([(digest("script"), 3), (digest("second"), 1)]),
+        workflows: BTreeMap::from([("wf_7k2m9q4x8d1c".into(), 3), ("wf_0d1g35t0000a".into(), 1)]),
     }
 }
 
@@ -392,7 +398,7 @@ fn tenant_state() -> TenantState {
         admissions: vec![Admission {
             run: run(2),
             namespace: "alice".into(),
-            code: digest("script"),
+            workflow: Some("wf_7k2m9q4x8d1c".into()),
             admitted_at: T0,
         }],
     }

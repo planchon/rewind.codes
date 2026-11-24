@@ -35,8 +35,8 @@ pub enum Permission {
     ActionsRead,
     #[serde(rename = "actions:write")]
     ActionsWrite,
-    #[serde(rename = "scripts:write")]
-    ScriptsWrite,
+    #[serde(rename = "workflows:write")]
+    WorkflowsWrite,
     #[serde(rename = "secrets:read")]
     SecretsRead,
     #[serde(rename = "secrets:write")]
@@ -85,7 +85,7 @@ impl Permission {
         Permission::RunsDelete,
         Permission::ActionsRead,
         Permission::ActionsWrite,
-        Permission::ScriptsWrite,
+        Permission::WorkflowsWrite,
         Permission::SecretsRead,
         Permission::SecretsWrite,
         Permission::SecretsUse,
@@ -145,7 +145,7 @@ impl Permission {
             Permission::RunsDelete => "runs:delete",
             Permission::ActionsRead => "actions:read",
             Permission::ActionsWrite => "actions:write",
-            Permission::ScriptsWrite => "scripts:write",
+            Permission::WorkflowsWrite => "workflows:write",
             Permission::SecretsRead => "secrets:read",
             Permission::SecretsWrite => "secrets:write",
             Permission::SecretsUse => "secrets:use",
@@ -178,7 +178,8 @@ impl Permission {
         match self {
             Permission::RunsRead => {
                 "Read runs, their statistics and fingerprints, a run's state, transcript, events, \
-                 event stream and history, the workflows, the action statistics and payloads."
+                 event stream and history, the change stream, the workflows with their versions, \
+                 suites and tests, the action statistics and payloads."
             }
             Permission::RunsStart => {
                 "Start and fork runs, and check and test workflows (`/v1/check`, `/v1/test`)."
@@ -187,11 +188,13 @@ impl Permission {
             Permission::RunsQuarantine => "Release a quarantined run, or give it up.",
             Permission::RunsDelete => "Erase a run, its payloads included.",
             Permission::ActionsRead => {
-                "List action sets and workflows, read their declarations and search their actions."
+                "List action sets, read their declarations and search their actions."
             }
-            Permission::ActionsWrite => "Register an action set, and save a workflow.",
-            Permission::ScriptsWrite => {
-                "Give a code a title and a description for the organization, or remove them."
+            Permission::ActionsWrite => "Register an action set.",
+            Permission::WorkflowsWrite => {
+                "Create a workflow; name it, describe it, give it a version or tests; promote a \
+                 namespace's workflow to the organization; fork an organization's workflow into a \
+                 namespace, and pull a fork's source."
             }
             Permission::SecretsRead => {
                 "List the secrets of the organization and of the namespaces, their metadata and \
@@ -278,7 +281,7 @@ const HARNESS: [Permission; 20] = [
     Permission::RunsDelete,
     Permission::ActionsRead,
     Permission::ActionsWrite,
-    Permission::ScriptsWrite,
+    Permission::WorkflowsWrite,
     Permission::SecretsRead,
     Permission::SecretsWrite,
     Permission::SecretsUse,
@@ -607,7 +610,7 @@ mod tests {
                 "runs:delete",
                 "actions:read",
                 "actions:write",
-                "scripts:write",
+                "workflows:write",
                 "secrets:read",
                 "secrets:write",
                 "secrets:use",
@@ -645,7 +648,7 @@ mod tests {
     /// its tenant, `harness` everything of its tenant but the administration, `worker` the
     /// harness calls, the administration only `admin`, now `operator`. The permissions of
     /// namespaces came after: `harness` manages its end users, `reader` reads them; and so did
-    /// `scripts:write`, which `harness` holds with `actions:write`.
+    /// `workflows:write`, which `harness` holds with `actions:write`.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Former {
         Read,
@@ -668,7 +671,7 @@ mod tests {
             | Permission::RunsQuarantine
             | Permission::RunsDelete
             | Permission::ActionsWrite
-            | Permission::ScriptsWrite
+            | Permission::WorkflowsWrite
             | Permission::SecretsWrite
             | Permission::SecretsUse
             | Permission::CallsApprove
@@ -729,7 +732,7 @@ mod tests {
         assert!(Permission::TOKEN_DEFAULT.iter().all(|p| p.in_token()));
         for never in [
             Permission::ActionsWrite,
-            Permission::ScriptsWrite,
+            Permission::WorkflowsWrite,
             Permission::SubscriptionsWrite,
             Permission::NamespacesRead,
             Permission::TokensWrite,

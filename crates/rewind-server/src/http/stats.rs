@@ -1,5 +1,5 @@
 //! Statistics (`archi/05-testing-and-observability.md`, "Statistics"): `GET /v1/runs/stats`,
-//! `GET /v1/runs/failures`, `GET /v1/actions/stats` and `GET /v1/scripts`, from the hourly
+//! `GET /v1/runs/failures`, `GET /v1/actions/stats` and the counts of `GET /v1/workflows`, from the hourly
 //! counters of the partitions that hold their scope, added up at the edge.
 //!
 //! - The scope is the tenant, or one namespace: a token's, `Rewind-Namespace`'s, or the one `q`
@@ -17,15 +17,15 @@ use axum::extract::State;
 use futures_util::StreamExt;
 use rewind_api::Problem;
 use rewind_api::access::Permission;
-use rewind_api::common::{Timestamp, timestamp};
+use rewind_api::common::timestamp;
 use rewind_api::query::{self, Filter, QueryError};
 use rewind_api::reading::{ActionStats, ActionStatsFilter, ActionStatsPage, Latency};
 use rewind_api::runs::{
     FacetValue, Facets, FailureQuery, FailureSample, Fingerprint, FingerprintPage, RunStats,
     RunStatsQuery, SeriesInterval, StatusCounts,
 };
-use rewind_api::scripts::{RunCounts, ScriptFilter, ScriptPage, ScriptSummary};
-use rewind_core::{Digest, RunStatus};
+use rewind_api::workflows::RunCounts;
+use rewind_core::RunStatus;
 use rewind_engine::ports::{
     Counters, Gauges, LatestRun, RunCounts as Counted, RunRef, Scope, Window,
 };
@@ -110,7 +110,7 @@ pub(crate) fn scope(caller: &Caller, q: Option<&str>) -> Result<Scope, ApiError>
 
 /// The whole hours from `since` (the epoch without it) to `until` (now without it), and the
 /// interval of a series in whole hours, which needs `since`.
-fn window(
+pub(crate) fn window(
     since: Option<jiff::Timestamp>,
     until: Option<jiff::Timestamp>,
     interval: Option<rewind_api::common::Duration>,
@@ -228,7 +228,7 @@ pub(super) async fn runs(
             counters
                 .workflows
                 .iter()
-                .map(|(name, runs)| (name.clone(), runs.started)),
+                .map(|(id, runs)| (id.to_string(), runs.runs.started)),
             top_n,
         ),
         actions: top(
@@ -239,13 +239,6 @@ pub(super) async fn runs(
             top_n,
         ),
         errors: top(failure_errors(&counters), top_n),
-        scripts: top(
-            counters
-                .scripts
-                .iter()
-                .map(|(digest, code)| (digest.to_hex(), code.runs.started)),
-            top_n,
-        ),
         waiting: top(
             gauges
                 .waiting
@@ -385,7 +378,7 @@ pub(super) async fn failures(
                             .map_or(0, |group| group.runs)
                     })
                     .collect(),
-                scripts: group.scripts.len() as u64,
+                workflows: group.workflows.len() as u64,
                 first_ended_at: timestamp(ends.clone().min().unwrap_or(latest.ended_at)),
                 last_ended_at: timestamp(ends.max().unwrap_or(latest.ended_at)),
                 line: group
@@ -503,95 +496,4 @@ pub(crate) fn run_counts(runs: &Counted) -> RunCounts {
         cancelled: ended.cancelled,
         aborted: ended.aborted,
     }
-}
-
-/// `GET /v1/scripts`: every distinct code the scope's runs ran in the window, most recently
-/// run first.
-pub(super) async fn scripts(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Query(query): Query<ScriptFilter>,
-) -> Result<Json<ScriptPage>, ApiError> {
-    caller.require(Permission::RunsRead)?;
-    let scope = scope(&caller, query.q.as_deref())?;
-    let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
-    if let Some(action) = &query.action {
-        refuse_nul_in_filter("action", action)?;
-    }
-    let digest = match &query.digest {
-        Some(digest) => Some(
-            Digest::from_hex(digest)
-                .map_err(|_| ApiError::invalid(format!("digest {digest:?}: expected a SHA-256")))?,
-        ),
-        None => None,
-    };
-    let (window, _) = window(query.since, query.until, None, app.now())?;
-    let (counters, _) = app
-        .edge
-        .statistics(&mut app.gateway(), &scope, window)
-        .await?;
-    let mut scripts: Vec<_> = counters
-        .scripts
-        .iter()
-        .filter(|(code, counts)| {
-            digest.is_none_or(|digest| **code == digest)
-                && query
-                    .action
-                    .as_ref()
-                    .is_none_or(|action| counts.actions.contains(action))
-        })
-        .collect();
-    // Most recently run first; the digest breaks ties. The cursor is the last one sent.
-    let key = |(code, counts): &(&Digest, &rewind_engine::ports::ScriptCounts)| {
-        (
-            std::cmp::Reverse(counts.last_started_at.map_or(0, |at| at.0)),
-            **code,
-        )
-    };
-    scripts.sort_by_key(key);
-    if let Some(cursor) = &query.cursor {
-        let (at, digest) = cursor
-            .split_once('.')
-            .and_then(|(at, digest)| {
-                Some((at.parse::<u64>().ok()?, Digest::from_hex(digest).ok()?))
-            })
-            .ok_or_else(|| ApiError::invalid(format!("cursor {cursor:?} is not valid")))?;
-        let after = (std::cmp::Reverse(at), digest);
-        scripts.retain(|entry| key(entry) > after);
-    }
-    let next_cursor = (scripts.len() > limit).then(|| {
-        let (code, counts) = scripts[limit - 1];
-        format!(
-            "{}.{}",
-            counts.last_started_at.map_or(0, |at| at.0),
-            code.to_hex()
-        )
-    });
-    scripts.truncate(limit);
-    let mut titles = app
-        .titles(&caller.tenant, scripts.iter().map(|(code, _)| **code))
-        .await?;
-    let mut page = Vec::with_capacity(scripts.len());
-    for (code, counts) in scripts {
-        let title = titles.remove(code);
-        page.push(ScriptSummary {
-            digest: code.to_hex(),
-            title_source: title.as_ref().map(|title| title.source),
-            description: title.as_ref().and_then(|title| title.description.clone()),
-            title: title.map(|title| title.title),
-            headline: app.headline(&caller.tenant, *code).await,
-            first_run_at: counts
-                .first_started_at
-                .map_or(Timestamp::UNIX_EPOCH, timestamp),
-            last_run_at: counts
-                .last_started_at
-                .map_or(Timestamp::UNIX_EPOCH, timestamp),
-            runs: run_counts(&counts.runs),
-            actions: counts.actions.iter().cloned().collect(),
-        });
-    }
-    Ok(Json(ScriptPage {
-        scripts: page,
-        next_cursor,
-    }))
 }

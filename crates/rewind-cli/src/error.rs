@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use rewind_api::checks::Diagnostic;
 use rewind_api::problem::{Problem, ProblemType};
-use rewind_api::scripts::Diagnostic;
 
 use crate::exit::Exit;
 
@@ -115,6 +115,9 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::RoleInUse
                 | ProblemType::LastOwner
                 | ProblemType::NamespaceDeleting
+                | ProblemType::NameTaken
+                | ProblemType::NotForkable
+                | ProblemType::NotAFork
                 | ProblemType::CallGone
                 | ProblemType::QuotaExceeded
                 | ProblemType::Unauthorized
@@ -130,7 +133,6 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::InvalidInput
                 | ProblemType::InvalidTest
                 | ProblemType::InvalidSignal
-                | ProblemType::InvalidTitle
                 | ProblemType::SecretRequired,
             ) => Exit::Usage,
             Some(ProblemType::TestsFailed) => Exit::Failed,
@@ -167,6 +169,7 @@ mod tests {
     fn problems_exit_by_their_kind() {
         assert_eq!(problem(ProblemType::NotFound).exit(), Exit::Refused);
         assert_eq!(problem(ProblemType::RunEnded).exit(), Exit::Refused);
+        assert_eq!(problem(ProblemType::NameTaken).exit(), Exit::Refused);
         assert_eq!(problem(ProblemType::NotQuarantined).exit(), Exit::Refused);
         assert_eq!(problem(ProblemType::QuotaExceeded).exit(), Exit::Refused);
         assert_eq!(problem(ProblemType::InvalidRequest).exit(), Exit::Usage);

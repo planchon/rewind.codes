@@ -51,16 +51,21 @@ async fn a_run_is_named_by_its_namespace_its_origin_and_its_suffix() {
     let mut world = World::new(programs(), dispatcher()).await;
     let triage = world.run(request(TRIAGE, json!({}))).await;
     let view = world.view(&triage).await;
-    assert_eq!(view.head.origin, "triage-new-issues", "the comment's title");
+    // Its workflow has no name: its short id. The comment's title is display only.
+    let workflow = view.head.metadata.workflow.clone().unwrap();
+    let short = workflow.id.short();
+    assert_eq!(view.head.origin, short, "its workflow's short id");
     assert_eq!(usize::from(view.head.suffix_len), SUFFIX_LEN);
     let summary = view.summary.as_ref().unwrap();
     assert_eq!(summary.handle(), view.head.handle());
     let handle = view.head.handle();
-    assert!(handle.to_string().starts_with("local/triage-new-issues/"));
+    assert!(handle.to_string().starts_with(&format!("local/{short}/")));
     assert_eq!(find(&mut world, &handle).await.unwrap().head.run, triage);
 
     let plain = world.run(request(PLAIN, json!({}))).await;
-    assert_eq!(world.view(&plain).await.head.origin, "script");
+    let plain = world.view(&plain).await.head;
+    assert_ne!(plain.origin, short, "another code, another workflow");
+    assert_eq!(plain.origin, plain.metadata.workflow.unwrap().id.short());
 
     // Another origin, another namespace, or a longer suffix name no run.
     let mut other = handle.clone();
@@ -82,7 +87,7 @@ async fn a_run_is_named_by_its_namespace_its_origin_and_its_suffix() {
         .run;
     world.idle().await;
     let forked = world.view(&fork).await;
-    assert_eq!(forked.head.origin, "triage-new-issues");
+    assert_eq!(forked.head.origin, short, "its source's origin");
     assert_eq!(forked.source, Some(handle));
     assert_eq!(view.source, None);
 }

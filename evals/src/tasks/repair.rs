@@ -36,7 +36,7 @@ export default async function main(input: { orders: string[] }) {
 const SHIPPED_ORDERS: [&str; 2] = ["A-1001", "A-1002"];
 const FAILED_ORDERS: [&str; 3] = ["A-1003", "P-1004", "A-1005"];
 
-/// The names of the tests `ship_orders` was saved with.
+/// The names of the tests `ship_orders` was created with.
 const SHIP_ORDERS_TESTS: [&str; 3] = [
     "ships every order with its tracking number",
     "buys no label without orders",
@@ -156,7 +156,7 @@ export default async function main(input: { repo: string }) {
 }
 "##;
 
-/// The names of the tests `bug_digest` was saved with: the first two pin what it is for, the
+/// The names of the tests `bug_digest` was created with: the first two pin what it is for, the
 /// third a behavior of the tracker before its upgrade.
 const BUG_DIGEST_TESTS: [&str; 3] = [
     "posts the open bugs",
@@ -299,7 +299,7 @@ fn new_version<'o>(
         return Err(format!("the workflow {workflow} does not exist"));
     };
     ensure(latest.version != first.version, || {
-        format!("no new version of {workflow} was saved")
+        format!("no new version of {workflow} was made")
     })?;
     // The lineage, from the latest version back.
     let mut seen = BTreeSet::new();
@@ -429,7 +429,7 @@ fn check_upgrade(outcome: &Outcome) -> Result<(), String> {
     ensure(
         run.workflow
             .as_ref()
-            .is_some_and(|of| of.version == latest.version),
+            .is_some_and(|of| of.digest == latest.version),
         || "this morning's run is not a run of the new version".to_owned(),
     )?;
     let posts: Vec<&Value> = run

@@ -44,10 +44,11 @@ pub struct StartRun {
     /// empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
-    /// Instead of `code` and `actionSet`: a run of this workflow, `triage` for its latest version
-    /// or `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one
-    /// version. Its input is checked against the workflow's input schema (`invalid-input`); the
-    /// code is not checked again.
+    /// Instead of `code` and `actionSet`: a run of this workflow, by its id or its name (the
+    /// namespace's, else the organization's), its latest version, or `triage@v12` (its number)
+    /// or `triage@<digest>` (12 hex digits at least) for one version. Its input is checked
+    /// against the version's input schema, if it has an interface (`invalid-input`); the code is
+    /// not checked again. Given with `code`: 422.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     /// The input of `main`. `{}` when absent.
@@ -124,12 +125,8 @@ pub struct Run {
     /// given up. Quarantine is not a status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantine: Option<Quarantine>,
-    /// Digest of the run's code, its TypeScript source (`GET /v1/scripts/{digest}`).
+    /// Digest of the run's code, its TypeScript source.
     pub code_digest: String,
-    /// The code's title: the one a person gave it (`PATCH /v1/scripts/{digest}`), else the
-    /// first line of the comment at its top. Absent when it has neither.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script_title: Option<String>,
     /// Digest of the pinned action set.
     pub action_set: String,
     /// The determinism epoch the run started under.
@@ -146,7 +143,8 @@ pub struct Run {
     /// For a fork, the run it was forked from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ForkSource>,
-    /// For a run of a workflow, the workflow and its version.
+    /// The workflow it is a run of, and the version it executes: every run but a test run's
+    /// (`GET /v1/workflows/{id}`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RunWorkflow>,
     /// For a run a code started, that run and the call.
@@ -326,9 +324,6 @@ pub struct RunFilter {
     /// Only runs that called this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
-    /// Only runs of this code (its digest).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script: Option<String>,
     /// Only runs whose calls failed with this kind (`error`, `timeout`…), or that failed
     /// with this error name (`TypeError`, `DeadlockError`…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,7 +338,7 @@ pub struct RunFilter {
     /// Only forks of this run: its id or its handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// Only runs of this workflow.
+    /// Only runs of this workflow: its name or its id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     /// Only runs this run started: its id or its handle.
@@ -425,11 +420,6 @@ pub struct RunSummary {
     pub quarantined: bool,
     /// Digest of the run's code, as `Run.codeDigest`.
     pub code_digest: String,
-    /// The code's title, as `Run.scriptTitle`. Absent when it has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script_title: Option<String>,
-    /// The first line of the code that is not blank, for display.
-    pub headline: String,
     pub action_set: String,
     pub labels: Labels,
     pub started_at: Timestamp,
@@ -460,9 +450,9 @@ pub struct RunSummary {
     pub wakes_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// For a run of a workflow, the workflow's name.
+    /// The workflow it is a run of, and the version it executes, as `Run.workflow`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<String>,
+    pub workflow: Option<RunWorkflow>,
     /// For a run a code started, that run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<String>,
@@ -491,7 +481,7 @@ pub struct RunWait {
 /// `GET /v1/runs/stats`: the runs of a scope started in a window, from the hourly counters
 /// (`archi/05-testing-and-observability.md`, "Statistics").
 ///
-/// The statistics routes (`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/scripts`,
+/// The statistics routes (`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/workflows`,
 /// `GET /v1/actions/stats`) take a scope and a window only. The scope is the caller's tenant, or
 /// one namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
 /// `namespace:` term. The window is made of whole hours in UTC: its bounds are rounded out to the
@@ -601,7 +591,7 @@ pub struct DurationStats {
 #[serde(rename_all = "camelCase")]
 pub struct Facets {
     pub statuses: Vec<FacetValue>,
-    /// Workflows, by name: the runs of each.
+    /// Workflows, by id: the runs of each.
     #[serde(default)]
     pub workflows: Vec<FacetValue>,
     /// The most frequent label keys, each with its most frequent values.
@@ -609,8 +599,6 @@ pub struct Facets {
     pub actions: Vec<FacetValue>,
     /// Errors the runs ended with (names and abort kinds), and kinds their calls failed with.
     pub errors: Vec<FacetValue>,
-    /// Script digests.
-    pub scripts: Vec<FacetValue>,
     pub waiting: Vec<FacetValue>,
     /// Signals waited for.
     pub signals: Vec<FacetValue>,
@@ -698,7 +686,7 @@ pub struct Fingerprint {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub series: Vec<u64>,
     /// Distinct workflows.
-    pub scripts: u64,
+    pub workflows: u64,
     pub first_ended_at: Timestamp,
     pub last_ended_at: Timestamp,
     /// The line of `workflow.ts` most of its runs ended at.

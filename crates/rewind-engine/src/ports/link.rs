@@ -24,7 +24,7 @@ use std::time::Duration;
 use futures_util::Stream;
 use rewind_core::{
     Digest, HistoryEvent, JsonValue, PartitionId, RunHandle, RunId, RunStarted, Seq, Shape,
-    Timestamp,
+    Timestamp, WorkflowId,
 };
 
 use crate::ports::archive::SealedAttempt;
@@ -300,7 +300,7 @@ pub struct StartAtOwner {
     pub metadata: RunMetadata,
     /// Unique in the namespace for as long as the run is kept.
     pub start_key: Option<String>,
-    /// The first line of the code that is not blank: what its summary shows.
+    /// The first line of the code that is not blank: what its summary's text search reads.
     pub headline: String,
     pub created_at: Timestamp,
 }
@@ -393,7 +393,9 @@ pub struct Admit {
     pub generation: PartitionGeneration,
     pub run: RunId,
     pub namespace: NamespaceName,
-    pub code: Digest,
+    /// The workflow the run is a run of: a workflow new to the namespace counts toward its
+    /// quota `workflows`. None for a test run.
+    pub workflow: Option<WorkflowId>,
     pub at: Timestamp,
 }
 

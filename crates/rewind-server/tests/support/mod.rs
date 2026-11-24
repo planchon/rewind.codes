@@ -492,7 +492,7 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     use rewind_api::ProblemType;
     use rewind_api::calls::{CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall};
     use rewind_api::runs::RunFilter;
-    use rewind_api::scripts::ScriptFilter;
+    use rewind_api::workflows::WorkflowQuery;
     use serde_json::json;
 
     let harness = server.key(BuiltInRole::Harness, &[]).await;
@@ -590,11 +590,11 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         ..RunFilter::default()
     };
     refused(harness.list_runs(&runs).await.unwrap_err());
-    let scripts = ScriptFilter {
-        action: Some("ask\u{0}".into()),
-        ..ScriptFilter::default()
+    let workflows = WorkflowQuery {
+        q: Some("namespace:a\u{0}".into()),
+        ..WorkflowQuery::default()
     };
-    refused(harness.list_scripts(&scripts).await.unwrap_err());
+    refused(harness.list_workflows(&workflows).await.unwrap_err());
     let stream = CallStreamQuery {
         actions: vec!["ask_user".into(), "ask\u{0}".into()],
         ..CallStreamQuery::default()

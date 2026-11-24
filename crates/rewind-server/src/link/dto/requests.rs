@@ -514,7 +514,7 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
                 namespace: namespace(start.namespace)?,
                 origin: start.origin,
                 started: started_of(&start.started)?,
-                metadata: codec::metadata_of(start.metadata),
+                metadata: codec::metadata_of(start.metadata)?,
                 start_key: start.start_key,
                 headline: start.headline,
                 created_at: Timestamp(start.created_at),
@@ -784,7 +784,7 @@ impl TryFrom<PartitionReply> for link::PartitionReply {
                         .into_iter()
                         .map(TryInto::try_into)
                         .collect::<Result<_, Invalid>>()?,
-                    codec::gauges_of(counted.gauges),
+                    codec::gauges_of(counted.gauges)?,
                 ))
             })?),
             PartitionReply::Used(result) => R::Used(refused_of(result, |used| {
@@ -826,7 +826,8 @@ pub enum TenantRequest {
     Detach { stream: String },
 }
 
-/// `{"partition":3,"generation":7,"run":"0196…","namespace":"user-1","code":"<hex>","at":…}`.
+/// `{"partition":3,"generation":7,"run":"0196…","namespace":"user-1","workflow":"wf_…","at":…}`;
+/// `workflow` left out for a test run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Admit {
@@ -834,7 +835,8 @@ pub struct Admit {
     pub generation: u64,
     pub run: Id,
     pub namespace: String,
-    pub code: Hex,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     pub at: u64,
 }
 
@@ -1030,7 +1032,7 @@ impl From<&link::TenantRequest> for TenantRequest {
                 generation: admit.generation.0,
                 run: Id(admit.run),
                 namespace: admit.namespace.to_string(),
-                code: Hex(admit.code),
+                workflow: admit.workflow.as_ref().map(ToString::to_string),
                 at: admit.at.0,
             }),
             R::Counts(report) => TenantRequest::Counts(CountsReport {
@@ -1085,14 +1087,20 @@ impl TryFrom<TenantRequest> for link::TenantRequest {
                 generation: engine::PartitionGeneration(admit.generation),
                 run: admit.run.0,
                 namespace: namespace(admit.namespace)?,
-                code: admit.code.0,
+                workflow: admit
+                    .workflow
+                    .map(|id| {
+                        id.parse()
+                            .map_err(|_| Invalid(format!("workflow id {id:?}")))
+                    })
+                    .transpose()?,
                 at: Timestamp(admit.at),
             }),
             TenantRequest::Counts(report) => R::Counts(link::CountsReport {
                 partition: PartitionId::new(report.partition),
                 generation: engine::PartitionGeneration(report.generation),
                 namespace: namespace(report.namespace)?,
-                gauges: codec::gauges_of(report.gauges),
+                gauges: codec::gauges_of(report.gauges)?,
                 created_this_month: report.created_this_month,
                 cpu_this_month: report.cpu_this_month,
                 included: report.included.into_iter().map(|id| id.0).collect(),

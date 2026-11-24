@@ -25,7 +25,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{PartitionId, Timestamp};
+use rewind_core::{PartitionId, Timestamp, WorkflowId};
 
 use crate::node::message::{Effect, Message, ReplyTo, Target, job};
 use crate::partition::OwnerMsg;
@@ -346,11 +346,14 @@ impl<P: Plane> TenantActor<P> {
         let in_flight = &self.state.admissions;
         let of_namespace = |admission: &&Admission| admission.namespace == admit.namespace;
         let reported = self.reported.get(&admit.namespace);
-        let new_code = !reported
-            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admit.code))
-            && !in_flight.iter().any(|admission| {
-                admission.namespace == admit.namespace && admission.code == admit.code
-            });
+        // A run of a workflow its namespace has no run of counts toward `workflows`.
+        let new_workflow = admit.workflow.as_ref().is_some_and(|workflow| {
+            !reported.is_some_and(|counts| counts.gauges.workflows.contains_key(workflow))
+                && !in_flight.iter().any(|admission| {
+                    admission.namespace == admit.namespace
+                        && admission.workflow.as_ref() == Some(workflow)
+                })
+        });
         let active_namespace = reported.map_or(0, |counts| counts.gauges.active_runs)
             + in_flight.iter().filter(of_namespace).count() as u64;
         let active_tenant = self
@@ -370,16 +373,16 @@ impl<P: Plane> TenantActor<P> {
             reported.map_or(0, month_of) + in_flight.iter().filter(of_namespace).count() as u64;
         let runs_tenant =
             self.reported.values().map(month_of).sum::<u64>() + in_flight.len() as u64;
-        let scripts_namespace = reported.map_or(0, |counts| counts.gauges.distinct_scripts())
-            + distinct_new_scripts(in_flight, Some(&admit.namespace), &self.reported);
-        let mut tenant_scripts: BTreeSet<rewind_core::Digest> = BTreeSet::new();
+        let workflows_namespace = reported.map_or(0, |counts| counts.gauges.distinct_workflows())
+            + distinct_new_workflows(in_flight, Some(&admit.namespace), &self.reported);
+        let mut tenant_workflows: BTreeSet<&WorkflowId> = BTreeSet::new();
         for counts in self.reported.values() {
-            tenant_scripts.extend(counts.gauges.scripts.keys().copied());
+            tenant_workflows.extend(counts.gauges.workflows.keys());
         }
         for admission in in_flight {
-            tenant_scripts.insert(admission.code);
+            tenant_workflows.extend(admission.workflow.as_ref());
         }
-        let scripts_tenant = tenant_scripts.len() as u64;
+        let workflows_tenant = tenant_workflows.len() as u64;
         let checks = [
             (
                 QuotaKind::ActiveRuns,
@@ -408,14 +411,14 @@ impl<P: Plane> TenantActor<P> {
             (
                 QuotaKind::Workflows,
                 QuotaScope::Namespace,
-                namespace_limits.workflows.filter(|_| new_code),
-                scripts_namespace,
+                namespace_limits.workflows.filter(|_| new_workflow),
+                workflows_namespace,
             ),
             (
                 QuotaKind::Workflows,
                 QuotaScope::Tenant,
-                ceiling.workflows.filter(|_| new_code),
-                scripts_tenant,
+                ceiling.workflows.filter(|_| new_workflow),
+                workflows_tenant,
             ),
         ];
         for (quota, scope, limit, used) in checks {
@@ -471,14 +474,14 @@ impl<P: Plane> TenantActor<P> {
         for (namespace, quota, used, limit) in crossed {
             alerts.extend(self.crossed(namespace, quota, month, used, used + 1, limit, now));
         }
-        if new_code {
+        if new_workflow {
             let crossed = [
                 (
                     Some(admit.namespace.clone()),
-                    scripts_namespace,
+                    workflows_namespace,
                     namespace_limits.workflows,
                 ),
-                (None, scripts_tenant, ceiling.workflows),
+                (None, workflows_tenant, ceiling.workflows),
             ];
             for (namespace, used, limit) in crossed {
                 alerts.extend(self.crossed(
@@ -495,7 +498,7 @@ impl<P: Plane> TenantActor<P> {
         self.state.admissions.push(Admission {
             run: admit.run,
             namespace: admit.namespace.clone(),
-            code: admit.code,
+            workflow: admit.workflow.clone(),
             admitted_at: admit.at,
         });
         self.generations
@@ -976,24 +979,27 @@ fn takes(stream: &StreamAttach, offer: &HarnessTaskOffer) -> bool {
 }
 
 /// The workflows new to a namespace among the admissions in flight.
-fn distinct_new_scripts(
+fn distinct_new_workflows(
     in_flight: &[Admission],
     namespace: Option<&NamespaceName>,
     reported: &BTreeMap<NamespaceName, Reported>,
 ) -> u64 {
-    let mut scripts = BTreeSet::new();
+    let mut workflows = BTreeSet::new();
     for admission in in_flight {
         if namespace.is_some_and(|namespace| admission.namespace != *namespace) {
             continue;
         }
+        let Some(workflow) = &admission.workflow else {
+            continue;
+        };
         let known = reported
             .get(&admission.namespace)
-            .is_some_and(|counts| counts.gauges.scripts.contains_key(&admission.code));
+            .is_some_and(|counts| counts.gauges.workflows.contains_key(workflow));
         if !known {
-            scripts.insert(admission.code);
+            workflows.insert(workflow);
         }
     }
-    scripts.len() as u64
+    workflows.len() as u64
 }
 
 fn reply_admission<P: Plane>(reply: ReplyTo, admission: Result<(), Refusal>) -> TenantEffect<P> {

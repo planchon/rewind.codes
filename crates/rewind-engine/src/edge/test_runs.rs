@@ -11,7 +11,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rewind_core::{ActionSet, Code, Digest, Epoch, RunId, RunStatus, Test, TestFromRun};
+use rewind_core::{
+    ActionSet, Code, Digest, Epoch, RunId, RunStatus, Test, TestFromRun, WorkflowId,
+};
 
 use super::{Edge, EdgeError, Gateway, unavailable};
 use crate::plane::{InstanceOf, Plane};
@@ -78,11 +80,11 @@ impl<P: Plane> Edge<P> {
 
     /// Records tests from the completed and failed runs of `workflow`, newest first, one per
     /// path, up to `limit` (at most [`MAX_RECORDED`]), and stores them
-    /// (`POST /v1/workflows/{name}/record`). A run that cannot be a test is skipped, and named.
+    /// (`POST /v1/workflows/{id}/record`). A run that cannot be a test is skipped, and named.
     pub async fn record_tests<G: Gateway>(
         &self,
         gateway: &mut G,
-        workflow: &str,
+        workflow: &WorkflowId,
         from: RecordFrom,
         limit: usize,
         format: TestFormat,
@@ -111,14 +113,14 @@ impl<P: Plane> Edge<P> {
                 .metadata
                 .workflow
                 .as_ref()
-                .filter(|of| of.name == workflow)
+                .filter(|of| of.id == *workflow)
             else {
                 return Err(RecordingError::NotOfWorkflow {
                     run: run.id,
-                    workflow: workflow.to_owned(),
+                    workflow: workflow.to_string(),
                 });
             };
-            let version = of.version;
+            let version = of.digest;
             let mut history = self
                 .history(gateway, run, 0, true)
                 .await?
@@ -159,13 +161,13 @@ impl<P: Plane> Edge<P> {
     async fn recordable<G: Gateway>(
         &self,
         gateway: &mut G,
-        workflow: &str,
+        workflow: &WorkflowId,
         scope: &Scope,
         query: RunQuery,
     ) -> Result<Vec<RunRef>, EdgeError> {
         let query = query
             .with(Predicate::Workflow(vec![TextMatch::Exact(
-                workflow.to_owned(),
+                workflow.to_string(),
             )]))
             .with(Predicate::Status(BTreeSet::from([
                 RunStatus::Completed,

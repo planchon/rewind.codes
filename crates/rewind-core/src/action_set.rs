@@ -1596,19 +1596,18 @@ mod tests {
     }
 
     fn pinned(name: &str) -> PinnedWorkflow {
-        crate::Workflow::new(
-            name,
-            None,
-            Digest::of(b"script"),
-            Digest::of(b"action_set"),
-            crate::WorkflowSchemas {
+        PinnedWorkflow {
+            name: name.to_owned(),
+            id: crate::WorkflowId::from_bits(name.len() as u64),
+            version: 1,
+            digest: Digest::of(name.as_bytes()),
+            description: None,
+            schemas: crate::WorkflowSchemas {
                 input: json!({ "type": "object" }),
                 output: json!({}),
                 signals: BTreeMap::from([("approval".to_owned(), json!({}))]),
             },
-        )
-        .unwrap()
-        .pinned()
+        }
     }
 
     #[test]

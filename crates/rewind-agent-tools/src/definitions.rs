@@ -1,14 +1,13 @@
 //! The agent tools' definitions.
 //!
-//! The SDK's set, as the SDK gives them to a model
-//! (`sdk/typescript/src/agent-tools/definitions.ts`): the same names, descriptions and input
-//! schemas, word for word. The keys of a schema's objects come sorted, as `serde_json` keeps
-//! them; the SDK keeps the order it writes them in.
+//! The SDK's set (`archi/01-product.md`, "Agent tools"): the names, descriptions and input
+//! schemas a model reads. The keys of a schema's objects come sorted, as `serde_json` keeps
+//! them.
 //!
 //! The MCP set (`archi/07-code-architecture.md`, "MCP and OAuth"): the same tools but
-//! `save_workflow`, with `list_organizations`, `list_namespaces` and `list_action_sets` to find what the
-//! caller reaches, the organization, the namespace and the action set as arguments, and for each
-//! tool a title, its annotations and the permission it needs.
+//! `update_workflow`, with `list_organizations`, `list_namespaces` and `list_action_sets` to find
+//! what the caller reaches, the organization, the namespace and the action set as arguments, and
+//! for each tool a title, its annotations and the permission it needs.
 
 use rewind_api::access::Permission;
 use serde_json::{Value, json};
@@ -25,18 +24,13 @@ pub const AGENT_TOOLS: [&str; 13] = [
     "retry_run",
     "search_actions",
     "list_secrets",
-    "save_workflow",
+    "update_workflow",
     "get_workflow",
     "record_tests",
 ];
 
-/// The tools that need an action set (the SDK's `NEEDS_TOOLSET`).
-pub const NEEDS_ACTION_SET: [&str; 4] = [
-    "search_actions",
-    "save_workflow",
-    "get_workflow",
-    "record_tests",
-];
+/// The tools that need an action set: the others reach a workflow by its id or its name.
+pub const NEEDS_ACTION_SET: [&str; 1] = ["search_actions"];
 
 /// A tool for a model, independent of any model API.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,19 +44,32 @@ fn run_id() -> Value {
     json!({ "type": "string", "description": "The run, by its handle (such as dana/triage/06bqx3k9f2mt) or its id, as a previous tool result gave it." })
 }
 
-/// What `run_workflow` and `check_workflow` ask of a code's first lines: the comment its title and
-/// description are read from.
-macro_rules! title_comment {
+/// What `run_workflow` and `check_workflow` ask of a code's first lines: the comment a workflow
+/// without a name shows as (`archi/04-tools.md`, "Workflow names").
+macro_rules! top_comment {
     () => {
-        "Start the code with a comment that says what it does:\n/** <title>\n *\n * <description> */\nIts title names what the code does in a few words, such as \"Triage new GitHub issues\": its runs are named after it."
+        "Start the code with a comment that says what it does:\n/** <what it does, in a few words>\n *\n * <more, if needed> */\nIts first line, such as \"Triage new GitHub issues\", is how the workflow shows until it has a name; the lines after it describe it."
     };
 }
+
+/// What the SDK's `run_workflow` says of changed code, which the MCP set, without
+/// `update_workflow`, leaves out.
+const NEXT_VERSION: &str =
+    ": to make a workflow's next version, give its new code to update_workflow";
+
+/// What the SDK's `retry_run` says of a correction, which the MCP set leaves out.
+const RETRY_VERSION: &str = ": update_workflow makes one";
 
 fn code() -> Value {
     json!({
         "type": "string",
-        "description": "The TypeScript source: one ES module whose default export is `async function main(input)`. It imports actions from \"rewind:actions\", workflows from \"rewind:workflows\", and `sleep`, `signal`, `webhook` from \"rewind\". Its input and output are JSON."
+        "description": "The TypeScript source: one ES module whose default export is `async function main(input)`. It imports actions from \"rewind:actions\", workflows from \"rewind:workflows\", and `sleep`, `signal`, `signalUrl` from \"rewind\". Its input and output are JSON."
     })
+}
+
+/// A workflow named in a call.
+fn workflow(description: &str) -> Value {
+    json!({ "type": "string", "description": description })
 }
 
 fn wait() -> Value {
@@ -89,7 +96,7 @@ fn secrets(description: &str) -> Value {
 }
 
 /// The `secrets` of `run_workflow`.
-const RUN_SECRETS: &str = "The secrets the run reads, by the MCP server or API whose calls need one: {\"github\": \"ns/github\"} for the end user's own secret, read in the namespace the run acts for, or \"org/<name>\" for the organization's. Names only, never a value: list_secrets gives those you may use. A code that imports a server needing a secret is refused without one.";
+const RUN_SECRETS: &str = "With `code`, the secrets the run reads, by the MCP server or API whose calls need one: {\"github\": \"ns/github\"} for the end user's own secret, read in the namespace the run acts for, or \"org/<name>\" for the organization's. Names only, never a value: list_secrets gives those you may use. A code that imports a server needing a secret is refused without one. A run of a `workflow` takes none: it uses those its version names.";
 
 fn with_description(mut schema: Value, description: &str) -> Value {
     schema["description"] = json!(description);
@@ -268,32 +275,67 @@ fn tests() -> Value {
     })
 }
 
+/// The changes of a suite `update_workflow` takes beside new tests.
+fn replace() -> Value {
+    json!({
+        "type": "array",
+        "description": "Tests of its suite to replace because their state or their expected result is out of date: by a whole `new` test, which takes the name, or by the same test with a new `expect`.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "The name of a test of its suite." },
+                "reason": { "type": "string", "description": "Why it changes: kept with the workflow." },
+                "new": with_description(test(), "The test that replaces it."),
+                "expect": with_description(expect(), "Its new expectation; the rest of the test is kept.")
+            },
+            "required": ["name", "reason"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn retire() -> Value {
+    json!({
+        "type": "array",
+        "description": "Tests of its suite to drop because the behavior they check is deprecated.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "names": { "type": "array", "items": { "type": "string" }, "description": "The names of tests of its suite." },
+                "reason": { "type": "string", "description": "Why they no longer hold: kept with the workflow." }
+            },
+            "required": ["names", "reason"],
+            "additionalProperties": false
+        }
+    })
+}
+
 /// The definition of an agent tool.
 pub fn definition(name: &str) -> Option<ToolDefinition> {
     Some(match name {
         "run_workflow" => ToolDefinition {
             name: "run_workflow",
             description: concat!(
-                "Type-check a TypeScript code and run it. The code calls the actions declared in `rewind:actions` and runs durably: it can sleep for days and wait for signals. A code that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the transcript up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
-                title_comment!()
+                "Run a workflow: TypeScript code, type-checked first, or an existing workflow by its id or its name. The code calls the actions declared in `rewind:actions` and runs durably: it can sleep for days and wait for signals. Code that no workflow of the namespace or the organization has becomes a new workflow, with an id (wf_…) and its version v1; the same code run again is a run of the same workflow, and changed code is another workflow: to make a workflow's next version, give its new code to update_workflow. Code that does not type-check is refused with its diagnostics, before anything runs. The result names the workflow by its id and its version. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the transcript up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
+                top_comment!()
             ),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "code": code(),
+                    "code": with_description(code(), "The TypeScript source to run: one ES module whose default export is `async function main(input)`. It imports actions from \"rewind:actions\", workflows from \"rewind:workflows\", and `sleep`, `signal`, `signalUrl` from \"rewind\". Its input and output are JSON. Give `code` or `workflow`, not both."),
+                    "workflow": workflow("An existing workflow to run instead of code: its id (wf_…) or its name, such as triage, for its latest version, or triage@v12 for one version."),
                     "input": { "description": "The input passed to `main`, any JSON value. {} when absent." },
                     "wait": wait(),
                     "secrets": secrets(RUN_SECRETS)
                 },
-                "required": ["code"],
                 "additionalProperties": false
             }),
         },
         "check_workflow" => ToolDefinition {
             name: "check_workflow",
             description: concat!(
-                "Type-check a TypeScript code against the sandbox and the action declarations, without running it. Returns the diagnostics with their location and a code frame, and a note when the code has no title. ",
-                title_comment!()
+                "Type-check TypeScript code against the sandbox and the action declarations, without running it. Returns the diagnostics with their location and a code frame. It also says which workflow and version already have this code, if one does: running the code is then a run of that workflow. It says when the code has no comment at its top. It creates nothing. ",
+                top_comment!()
             ),
             input_schema: json!({
                 "type": "object",
@@ -304,18 +346,14 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "test_workflow" => ToolDefinition {
             name: "test_workflow",
-            description: "Run tests against a code, end to end, in virtual time: no action is really called and sleeps take no time. Each test gives the world the run meets (its input, the answers of the actions it may call, the signals sent to it) and what must hold at the end (its status, its output or error, the calls it made). A call the world does not answer fails the test. With `workflow`, that workflow's suite runs too, against your code: this is how you check a fix or a change of a workflow before save_workflow. Returns whether each test passed and, for those that did not, why: stale (it names tools, answers or args your tools no longer have; not run), incompatible (the workflow's input or signal schemas refuse it; not run) or failed (an expectation does not hold), with the run's outcome and its transcript.",
+            description: "Run tests end to end, in virtual time: no action is really called and sleeps take no time. Each test gives the world the run meets (its input, the answers of the actions it may call, the signals sent to it) and what must hold at the end (its status, its output or error, the calls it made). A call the world does not answer fails the test. Give `code` with `tests`; with `workflow`, that workflow's suite runs too, against your code: this is how you check a fix or a change of a workflow before update_workflow. A `workflow` without `code` runs its suite and your tests against its version. It creates and changes nothing. Returns whether each test passed and, for those that did not, why: stale (it names actions, answers or args your actions no longer have; not run), incompatible (the workflow's input or signal schemas refuse it; not run) or failed (an expectation does not hold), with the run's outcome and its transcript.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "code": code(),
+                    "code": with_description(code(), "The TypeScript source to test. The version's code when absent, with `workflow`."),
                     "tests": tests(),
-                    "workflow": {
-                        "type": "string",
-                        "description": "Also run the suite of this workflow (its latest version, or name@version) against the code, and check every test against its input and signal schemas."
-                    }
+                    "workflow": workflow("A workflow whose suite runs too: its id (wf_…) or its name, such as triage, for its latest version, or triage@v12 for one version. Its interface checks every test against its input and signal schemas.")
                 },
-                "required": ["code"],
                 "additionalProperties": false
             }),
         },
@@ -369,13 +407,13 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "retry_run" => ToolDefinition {
             name: "retry_run",
-            description: "Start a new run from a failed one with a corrected code. The calls the failed run already made are not made again: their recorded results are reused while the corrected code makes the same calls, and it continues live from the first difference. For a run of a workflow, the suite of its version runs against the corrected code first, and the retry is refused if a test does not pass: check the fix with test_workflow({ code, workflow }) before.",
+            description: "Start a new run from a failed one with corrected code. The calls the failed run already made are not made again: their recorded results are reused while the corrected code makes the same calls, and it continues live from the first difference. The suite of the run's version runs against the corrected code first, and the retry is refused if a test does not pass: check the fix with test_workflow({ code, workflow }) before. The correction does not become a version of the run's workflow: update_workflow makes one.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "run_id": with_description(run_id(), "The run to correct."),
                     "code": with_description(code(), "The corrected TypeScript source."),
-                    "secrets": secrets("The secrets the new run reads, by MCP server or API, as run_workflow takes them. The failed run's when absent; either way checked again, since the code is new code.")
+                    "secrets": secrets("The secrets the new run reads, by MCP server or API, as run_workflow takes them with `code`. The failed run's when absent; either way checked again, since the code is new code.")
                 },
                 "required": ["run_id", "code"],
                 "additionalProperties": false
@@ -393,94 +431,70 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "list_secrets" => ToolDefinition {
             name: "list_secrets",
-            description: "List the secrets your runs may use, by name, never a value: the end user's own (ns/<name>, read in the namespace the run acts for) and the organization's (org/<name>). Give them in `secrets` of run_workflow, retry_run or save_workflow, by the MCP server or API whose calls need one, such as {\"github\": \"ns/github\"}.",
+            description: "List the secrets your runs may use, by name, never a value: the end user's own (ns/<name>, read in the namespace the run acts for) and the organization's (org/<name>). Give them in `secrets` of run_workflow, retry_run or update_workflow, by the MCP server or API whose calls need one, such as {\"github\": \"ns/github\"}.",
             input_schema: json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
         },
-        "save_workflow" => ToolDefinition {
-            name: "save_workflow",
-            description: "Save a code as a workflow: a named code with JSON Schemas for its input, its output and the signals it accepts. The code is type-checked against your actions and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`base`, by default the latest version of this name), minus those you `retire`, with those you `replace` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or replace it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_workflow({ code, workflow }) first. Once saved, your later workflows can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another code, other schemas or other tests saves a new version, which your later workflows use.",
+        "update_workflow" => ToolDefinition {
+            name: "update_workflow",
+            description: "Change a workflow, named by its id or its name. A `name` and a `description` keep its version; null removes them. New `code`, an interface (`input`, `output`, `signals`: JSON Schemas) or the `secrets` its runs use make its next version. Its code is type-checked against your actions and its interface: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the version is made only if every test passes. The suite is its tests, minus those you `retire`, with those you `replace` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or replace it when its state or its expected result is out of date, always with a reason: the reasons stay with the workflow for whoever reads it next. `tests`, `replace` and `retire` alone change its suite without a version, once each new test passes against its latest version. Read the suite with get_workflow, and check a change with test_workflow({ code, workflow }) first. Then run it by name with run_workflow({ workflow }); code starts it from \"rewind:workflows\" once an action set pins it.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "workflow": workflow("The workflow to change: its id (wf_…) or its name, such as triage."),
                     "name": {
-                        "type": "string",
-                        "description": "What workflows import from \"rewind:workflows\": a JavaScript identifier that is not a reserved word, such as triage."
+                        "type": ["string", "null"],
+                        "description": "Its new name: what code imports from \"rewind:workflows\" and runs start it by, a JavaScript identifier that is not a reserved word and does not start with wf_, such as triage, unique among the workflows of its namespace or organization. null removes it."
                     },
-                    "description": { "type": "string", "description": "What the workflow does, shown with its declaration." },
+                    "description": {
+                        "type": ["string", "null"],
+                        "description": "What the workflow does, shown with it; at most 2,000 characters. null removes it."
+                    },
                     "code": with_description(
                         code(),
-                        "The workflow's TypeScript source: one ES module whose default export is `async function main(input)`, taking the input and returning the output. It imports actions from \"rewind:actions\" and `sleep`, `signal`, `webhook` from \"rewind\"."
+                        "Its new TypeScript source: one ES module whose default export is `async function main(input)`, taking the input and returning the output. It imports actions from \"rewind:actions\" and `sleep`, `signal`, `signalUrl` from \"rewind\". Its latest version's when absent."
                     ),
-                    "input": { "type": "object", "description": "The JSON Schema of the input of `main`." },
-                    "output": { "type": "object", "description": "The JSON Schema of what `main` returns." },
+                    "input": { "type": ["object", "boolean"], "description": "The JSON Schema of the input of `main`. Each of `input`, `output` and `signals` you leave out keeps its latest version's." },
+                    "output": { "type": ["object", "boolean"], "description": "The JSON Schema of what `main` returns." },
                     "signals": {
                         "type": "object",
-                        "description": "The signals its runs accept, by name, each with the JSON Schema of its payload, such as {\"approval\": {\"type\": \"object\", \"properties\": {\"close\": {\"type\": \"boolean\"}}, \"required\": [\"close\"]}}. None when absent; names starting with \"rewind:\" are reserved.",
-                        "additionalProperties": { "type": "object" }
+                        "description": "The signals its runs accept, by name, each with the JSON Schema of its payload, such as {\"approval\": {\"type\": \"object\", \"properties\": {\"close\": {\"type\": \"boolean\"}}, \"required\": [\"close\"]}}. {} for none; names starting with \"rewind:\" are reserved.",
+                        "additionalProperties": { "type": ["object", "boolean"] }
                     },
+                    "secrets": secrets("The secrets its runs read, by MCP server or API: {\"github\": \"ns/github\"}, the secret github of the namespace each run acts for, or \"org/<name>\", the organization's. Part of the version: a run of it needs no right on them, only its namespace's ns/ secrets. Its latest version's when absent."),
                     "tests": with_description(
                         tests(),
-                        "New tests added to the suite: each written in full, the digest of a test record_tests recorded, or { test: <digest>, expect } for a recorded test with the expectation it should have met."
+                        "New tests for its suite: each written in full, the digest of a test record_tests recorded, or { test: <digest>, expect } for a recorded test with the expectation it should have met."
                     ),
-                    "replace": {
-                        "type": "array",
-                        "description": "Inherited tests to replace because their state or their expected result is out of date: by a whole `new` test, which takes the name, or by the same test with a new `expect`.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": { "type": "string", "description": "The name of an inherited test." },
-                                "reason": { "type": "string", "description": "Why it changes: kept in the lineage." },
-                                "new": with_description(test(), "The test that replaces it."),
-                                "expect": with_description(expect(), "Its new expectation; the rest of the test is kept.")
-                            },
-                            "required": ["name", "reason"],
-                            "additionalProperties": false
-                        }
-                    },
-                    "retire": {
-                        "type": "array",
-                        "description": "Inherited tests to drop because the behavior they check is deprecated.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "names": { "type": "array", "items": { "type": "string" }, "description": "The names of inherited tests." },
-                                "reason": { "type": "string", "description": "Why they no longer hold: kept in the lineage." }
-                            },
-                            "required": ["names", "reason"],
-                            "additionalProperties": false
-                        }
-                    },
-                    "base": {
-                        "type": "string",
-                        "description": "The version it derives from, whose suite it inherits: name@version, or a version. The latest version of this name when absent."
-                    },
-                    "secrets": secrets("The secrets its runs read, by MCP server or API: {\"github\": \"ns/github\"}, the secret github of the namespace each run acts for, or \"org/<name>\", the organization's. Saved with the version: a run of it needs no right on them, only its namespace's ns/ secrets.")
+                    "replace": replace(),
+                    "retire": retire()
                 },
-                "required": ["name", "description", "code", "input", "output"],
+                "required": ["workflow"],
                 "additionalProperties": false
             }),
         },
         "get_workflow" => ToolDefinition {
             name: "get_workflow",
-            description: "Read a workflow: the source of its latest version, its input, output and signal schemas, its suite with every test in full, and its lineage: for each version, the tests it retired or replaced, and why. Read it before you repair or extend a workflow you did not write: its tests say which behaviors it must keep, and its lineage which changes were made on purpose.",
+            description: "Read a workflow, by its id or its name: its name and description, whether it belongs to the namespace or to the organization, the organization's workflow it was forked from, the code of its latest version, its interface (input, output and signal schemas), the secrets its runs use, its versions, its suite with every test in full, and the tests that left it, retired or replaced, with the reason of each. Read it before you repair or extend a workflow you did not write: its tests say which behaviors it must keep, and their reasons which changes were made on purpose.",
             input_schema: json!({
                 "type": "object",
-                "properties": { "name": { "type": "string", "description": "The workflow's name, such as triage." } },
-                "required": ["name"],
+                "properties": {
+                    "workflow": workflow("The workflow: its id (wf_…) or its name, such as triage; triage@v12 reads its version v12.")
+                },
+                "required": ["workflow"],
                 "additionalProperties": false
             }),
         },
         "record_tests" => ToolDefinition {
             name: "record_tests",
-            description: "Record tests from past runs of a workflow, so a new version must keep doing what the old ones did on real inputs. Its completed and failed runs are grouped by the path they took (the actions they called in order, the signals they waited for, how they ended), and the newest run of each path becomes a test: its input, its calls and signals as they happened, and the same status, output or error and number of calls per tool as expected. The tests are stored but join no suite: pass their digests in save_workflow's `tests`, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
+            description: "Record tests from past runs of a workflow, so a new version must keep doing what the old ones did on real inputs. Its completed and failed runs are grouped by the path they took (the actions they called in order, the signals they waited for, how they ended), and the newest run of each path becomes a test: its input, its calls and signals as they happened, and the same status, output or error and number of calls per action as expected. The tests are stored but join no suite: pass their digests in update_workflow's `tests`, or { test: <digest>, expect } to give a failed run the expectation it should have met.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "workflow": { "type": "string", "description": "The workflow's name, such as triage." },
+                    "workflow": workflow("The workflow: its id (wf_…) or its name, such as triage."),
                     "query": {
                         "type": "string",
                         "description": "Which runs, in the query language of the run lists, such as \"status:completed\". All the completed and failed runs of the workflow when absent."
@@ -593,6 +607,14 @@ fn namespace_filter() -> Value {
     })
 }
 
+/// Where `get_workflow` and `record_tests` resolve a workflow's name first.
+fn namespace_of_names() -> Value {
+    json!({
+        "type": "string",
+        "description": "The namespace whose workflows a name finds first, before the organization's: the end user, as list_namespaces gives them. Only the organization's workflows by name when absent; an id finds a workflow either way."
+    })
+}
+
 fn action_set_required(what: &str) -> Value {
     json!({
         "type": "string",
@@ -603,7 +625,7 @@ fn action_set_required(what: &str) -> Value {
 fn action_set_of_code() -> Value {
     json!({
         "type": "string",
-        "description": "The action set whose actions the code imports from \"rewind:actions\": its id, as list_action_sets gives it. Without it, the code has only the built-in `webhook`."
+        "description": "With `code`, the action set whose actions the code imports from \"rewind:actions\": its id, as list_action_sets gives it. Without it, the code has only the built-in `signalUrl`. A `workflow` runs with its version's action set."
     })
 }
 
@@ -644,7 +666,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             return Some(McpTool {
                 name: "list_namespaces",
                 title: "List namespaces",
-                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, secrets and limits are kept apart from the others'. Its name is the organization's id for the end user; a display name (\"Acme Corp\") may follow it in parentheses, to find who is who. check_workflow, test_workflow and run_workflow act in the namespace whose name you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
+                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, workflows, secrets and limits are kept apart from the others'. Its name is the organization's id for the end user; a display name (\"Acme Corp\") may follow it in parentheses, to find who is who. check_workflow, test_workflow and run_workflow act in the namespace whose name you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -661,7 +683,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             return Some(McpTool {
                 name: "list_action_sets",
                 title: "List action sets",
-                description: "List the action sets of an organization: each pins MCP servers and their actions, which workflows import from \"rewind:actions\", and the workflows they import from \"rewind:workflows\". Give an action set's id as `action_set` to search_actions, check_workflow, test_workflow and run_workflow, and read its tools' declarations with search_actions before you write a code.".into(),
+                description: "List the action sets of an organization: each pins MCP servers and their actions, which code imports from \"rewind:actions\", and the organization's workflows it imports from \"rewind:workflows\". Give an action set's id as `action_set` to search_actions, check_workflow, test_workflow and run_workflow, and read its actions' declarations with search_actions before you write code.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": { "organization": organization() },
@@ -691,7 +713,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
         }
         "list_secrets" => {
             description = description.replace(
-                "run_workflow, retry_run or save_workflow",
+                "run_workflow, retry_run or update_workflow",
                 "run_workflow or retry_run",
             );
             extra.push((
@@ -713,7 +735,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             extra.push(("action_set", action_set_of_code()));
             required.push("namespace");
             (
-                "Check a code",
+                "Check a workflow",
                 Permission::RunsStart,
                 Annotations::READ,
                 "Give the namespace it will run in as `namespace`, and its action set as `action_set`.",
@@ -724,26 +746,27 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             extra.push(("action_set", action_set_of_code()));
             required.push("namespace");
             description = description.replace(
-                "this is how you check a fix or a change of a workflow before save_workflow",
+                "this is how you check a fix or a change of a workflow before update_workflow",
                 "this is how you check a fix of a workflow's run before retry_run",
             );
             (
-                "Test a code",
+                "Test a workflow",
                 Permission::RunsStart,
                 Annotations::READ,
-                "Give the namespace as `namespace`, and the code's action set as `action_set`.",
+                "Give the namespace as `namespace`, and with `code` its action set as `action_set`.",
             )
         }
         "run_workflow" => {
             extra.push(("namespace", namespace_for("the run acts for")));
             extra.push(("action_set", action_set_of_code()));
             required.push("namespace");
+            description = description.replace(NEXT_VERSION, "");
             schema["properties"]["wait"] = mcp_wait(&schema["properties"]["wait"]);
             (
-                "Run a code",
+                "Run a workflow",
                 Permission::RunsStart,
                 annotations(false, false, true),
-                "Give the namespace the run acts for as `namespace` (list_namespaces), and the action set whose actions it imports as `action_set` (list_action_sets).",
+                "Give the namespace the run acts for as `namespace` (list_namespaces), and with `code` the action set whose actions it imports as `action_set` (list_action_sets).",
             )
         }
         "get_run" => {
@@ -780,28 +803,35 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             annotations(true, true, false),
             "Give the organization of the run as `organization`.",
         ),
-        "retry_run" => (
-            "Retry a run",
-            Permission::RunsStart,
-            annotations(false, false, true),
-            "Give the organization of the run as `organization`: the new run takes its namespace and its action set.",
-        ),
-        "get_workflow" => (
-            "Read a workflow",
-            Permission::ActionsRead,
-            Annotations::READ,
-            "Give the organization as `organization`.",
-        ),
+        "retry_run" => {
+            description = description.replace(RETRY_VERSION, "");
+            (
+                "Retry a run",
+                Permission::RunsStart,
+                annotations(false, false, true),
+                "Give the organization of the run as `organization`: the new run takes its namespace and its action set.",
+            )
+        }
+        "get_workflow" => {
+            extra.push(("namespace", namespace_of_names()));
+            (
+                "Read a workflow",
+                Permission::RunsRead,
+                Annotations::READ,
+                "Give the organization as `organization`, and the namespace of a namespace's workflow as `namespace`.",
+            )
+        }
         "record_tests" => {
+            extra.push(("namespace", namespace_of_names()));
             description = description.replace(
-                "pass their digests in save_workflow's `tests`, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
-                "pass their digests in test_workflow's `tests` to run them against a code, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
+                "pass their digests in update_workflow's `tests`, or { test: <digest>, expect } to give a failed run the expectation it should have met.",
+                "pass their digests in test_workflow's `tests` to run them against a code, or { test: <digest>, expect } to give a failed run the expectation it should have met.",
             );
             (
                 "Record tests",
                 Permission::RunsRead,
                 annotations(false, true, false),
-                "Give the organization as `organization`.",
+                "Give the organization as `organization`, and the namespace of a namespace's workflow as `namespace`.",
             )
         }
         _ => return None,
@@ -809,10 +839,11 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
     for (key, value) in extra {
         schema["properties"][key] = value;
     }
-    if !required.is_empty()
-        && let Some(list) = schema["required"].as_array_mut()
-    {
-        list.extend(required.into_iter().map(Value::from));
+    if !required.is_empty() {
+        match schema["required"].as_array_mut() {
+            Some(list) => list.extend(required.into_iter().map(Value::from)),
+            None => schema["required"] = json!(required),
+        }
     }
     Some(McpTool {
         name: sdk.name,
@@ -852,19 +883,96 @@ mod tests {
         for name in NEEDS_ACTION_SET {
             assert!(AGENT_TOOLS.contains(&name), "{name}");
         }
+        // The words of the workflow model only.
+        for definition in super::definitions() {
+            let text = format!("{} {}", definition.description, definition.input_schema);
+            let words: Vec<&str> = text
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .collect();
+            for word in [
+                "save_workflow",
+                "script",
+                "scripts",
+                "title",
+                "webhook",
+                "toolset",
+                "save",
+                "saved",
+            ] {
+                assert!(!words.contains(&word), "{}: {word}", definition.name);
+            }
+            assert!(!text.contains("{ from"), "{}", definition.name);
+        }
+    }
+
+    #[test]
+    fn a_workflow_is_named_by_its_id_or_its_name() {
+        let required = |name: &str| definition(name).unwrap().input_schema["required"].clone();
+        // Code or a workflow: the handler says which is missing.
+        assert_eq!(required("run_workflow"), Value::Null);
+        assert_eq!(required("test_workflow"), Value::Null);
+        assert_eq!(required("check_workflow"), json!(["code"]));
+        for name in ["update_workflow", "get_workflow", "record_tests"] {
+            assert_eq!(required(name), json!(["workflow"]), "{name}");
+        }
+        for name in [
+            "run_workflow",
+            "test_workflow",
+            "update_workflow",
+            "get_workflow",
+            "record_tests",
+        ] {
+            let described =
+                definition(name).unwrap().input_schema["properties"]["workflow"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+            assert!(described.contains("its id (wf_…) or its name"), "{name}");
+        }
+        // The comment a workflow without a name shows as.
+        for name in ["run_workflow", "check_workflow"] {
+            assert!(
+                definition(name)
+                    .unwrap()
+                    .description
+                    .contains("is how the workflow shows until it has a name"),
+                "{name}"
+            );
+        }
+        let update = definition("update_workflow").unwrap();
+        assert_eq!(
+            update.input_schema["properties"]["name"]["type"],
+            json!(["string", "null"])
+        );
+        assert!(
+            update
+                .description
+                .contains("the version is made only if every test passes")
+        );
+        assert!(
+            update
+                .description
+                .contains("retire the test when the behavior is deprecated")
+        );
+        assert!(
+            update
+                .description
+                .contains("replace it when its state or its expected result is out of date")
+        );
     }
 
     #[test]
     fn the_mcp_set_has_titles_annotations_permissions_and_its_arguments() {
         let tools = mcp_tools();
         assert_eq!(tools.len(), MCP_TOOLS.len());
-        assert!(tools.iter().all(|tool| tool.name != "save_workflow"));
+        assert!(tools.iter().all(|tool| tool.name != "update_workflow"));
         for tool in &tools {
             assert!(!tool.title.is_empty(), "{}", tool.name);
             assert_eq!(tool.input_schema["type"], "object", "{}", tool.name);
             assert_eq!(tool.input_schema["additionalProperties"], false);
+            // No tool of the MCP set changes a workflow.
             assert!(
-                !tool.description.contains("save_workflow"),
+                !tool.description.contains("update_workflow"),
                 "{}: {}",
                 tool.name,
                 tool.description
@@ -877,24 +985,23 @@ mod tests {
         }
         let tool = |name: &str| tools.iter().find(|tool| tool.name == name).unwrap();
         let required = |name: &str| tool(name).input_schema["required"].clone();
-        assert_eq!(required("run_workflow"), json!(["code", "namespace"]));
+        assert_eq!(required("run_workflow"), json!(["namespace"]));
         assert_eq!(required("check_workflow"), json!(["code", "namespace"]));
-        assert_eq!(required("test_workflow"), json!(["code", "namespace"]));
+        assert_eq!(required("test_workflow"), json!(["namespace"]));
         assert_eq!(required("search_actions"), json!(["query", "action_set"]));
         assert_eq!(required("get_run"), json!(["run_id"]));
         assert!(tool("get_run").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_runs").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_namespaces").input_schema["properties"]["prefix"].is_object());
-        // `/v1` finds a workflow by its name alone: no action set to give.
+        // `/v1` finds a workflow by its id or its name, a name in the namespace first: no action
+        // set to give.
         for name in ["get_workflow", "record_tests"] {
-            assert!(
-                tool(name).input_schema["properties"]
-                    .get("action_set")
-                    .is_none(),
-                "{name}"
-            );
+            let properties = &tool(name).input_schema["properties"];
+            assert!(properties.get("action_set").is_none(), "{name}");
+            assert!(properties["namespace"].is_object(), "{name}");
+            assert_eq!(required(name), json!(["workflow"]), "{name}");
+            assert_eq!(tool(name).permission, Some(Permission::RunsRead), "{name}");
         }
-        assert_eq!(required("get_workflow"), json!(["name"]));
         assert!(
             tool("run_workflow").input_schema["properties"]["wait"]["description"]
                 .as_str()
@@ -974,7 +1081,6 @@ mod tests {
             names
         };
         let test_workflow = definition("test_workflow").unwrap();
-        assert_eq!(test_workflow.input_schema["required"], json!(["code"]));
         let any_of = &test_workflow.input_schema["properties"]["tests"]["items"]["anyOf"];
         let (inline, digest, from) = (&any_of[0], &any_of[1], &any_of[2]);
         assert_eq!(
@@ -1010,10 +1116,11 @@ mod tests {
         assert_eq!(from["type"], "object");
         assert_eq!(from["required"], json!(["test", "expect"]));
 
-        let save = definition("save_workflow").unwrap();
+        let update = definition("update_workflow").unwrap();
         assert_eq!(
-            keys(&save.input_schema["properties"]),
+            keys(&update.input_schema["properties"]),
             sorted(&[
+                "workflow",
                 "name",
                 "description",
                 "code",
@@ -1023,18 +1130,14 @@ mod tests {
                 "tests",
                 "replace",
                 "retire",
-                "base",
                 "secrets",
             ])
         );
-        assert!(save.description.contains("saved only if every test passes"));
-        assert!(
-            save.description
-                .contains("retire the test when the behavior is deprecated")
+        let replace = &update.input_schema["properties"]["replace"]["items"];
+        assert_eq!(
+            keys(&replace["properties"]),
+            sorted(&["name", "reason", "new", "expect"])
         );
-        assert!(
-            save.description
-                .contains("replace it when its state or its expected result is out of date")
-        );
+        assert_eq!(replace["required"], json!(["name", "reason"]));
     }
 }

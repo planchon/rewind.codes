@@ -1,13 +1,13 @@
 //! The production store of Rewind on Postgres (`archi/06-storage-and-scale.md`, "Backends";
 //! `archi/07-code-architecture.md`, "Ports").
 //!
-//! The control plane: [`PostgresCatalog`] (`CatalogStore`, [`PostgresStore::catalog`]) and
-//! [`PostgresCluster`] (`Cluster`: the nodes, their session advisory locks and the ring they
-//! watch, the partition map, the changes of the control plane through `LISTEN`), with access and
-//! secrets below. Every write of the catalog, of access and of secrets sends what it changed with
+//! The control plane: [`PostgresCatalog`] (`CatalogStore`, and `CatalogMigration` for
+//! `rename-data`; [`PostgresStore::catalog`]) and [`PostgresCluster`] (`Cluster`: the nodes,
+//! their session advisory locks and the ring they watch, the partition map, the changes of the
+//! control plane through `LISTEN`), with access and secrets below. Every write of the catalog, of access and of secrets sends what it changed with
 //! `NOTIFY` in its transaction; the payloads name what changed, never a value
-//! (`crate::changes`). A new version of a workflow takes a transaction-scoped advisory lock on
-//! the workflow: two versions never take the same number.
+//! (`crate::changes`). A new version of a workflow locks the workflow's row: two versions never
+//! take the same number.
 //!
 //! [`PostgresStore`] implements, on the same database:
 //!

@@ -333,7 +333,7 @@ async fn usage<L: PartitionLog>(
             cpu: counters.cpu,
             runs_started: counters.created,
             active_runs: gauges.active_runs,
-            workflows: gauges.distinct_scripts(),
+            workflows: gauges.distinct_workflows(),
             days: Vec::new(),
         };
         if days && !counters.is_empty() {

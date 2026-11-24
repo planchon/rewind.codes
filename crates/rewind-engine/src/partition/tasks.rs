@@ -348,7 +348,7 @@ impl<P: Plane> Owner<P> {
                             generation: self.generation,
                             run: start.run.id,
                             namespace: start.namespace.clone(),
-                            code: start.started.code,
+                            workflow: start.metadata.workflow.as_ref().map(|of| of.id.clone()),
                             at: start.created_at,
                         })),
                     };

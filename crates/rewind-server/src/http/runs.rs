@@ -25,7 +25,7 @@ use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
-use crate::http::{action_sets, search, workflows};
+use crate::http::{action_sets, search};
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most.
 const PAGE: u32 = 50;
@@ -67,15 +67,13 @@ pub(super) async fn start(
                      executes the workflow's code with its action set",
                 ));
             }
-            let stored =
-                workflows::resolve(&app, &caller.tenant, &caller.labels, &reference).await?;
             app.edge
                 .start_workflow(
                     &mut gateway,
                     rewind_engine::StartWorkflow {
                         tenant: caller.tenant.clone(),
                         namespace,
-                        version: stored.workflow.version(),
+                        reference,
                         input: input.clone(),
                         ttl: request.ttl.map(|ttl| ttl.get()),
                         metadata,
@@ -101,6 +99,7 @@ pub(super) async fn start(
                 metadata,
                 idempotency_key: key,
                 secret_rights: secret_rights(&caller),
+                principal: caller.writer(),
             };
             if request.check == Some(false) {
                 app.edge.start_run(&mut gateway, start).await?
@@ -173,21 +172,7 @@ pub(super) async fn list(
         .cursor
         .as_ref()
         .map(|cursor| search::encode_cursor(order, cursor));
-    let titles = app
-        .titles(
-            &caller.tenant,
-            found.summaries.iter().map(|summary| summary.code),
-        )
-        .await?;
-    let runs = found
-        .summaries
-        .iter()
-        .map(|found| {
-            let mut summary = search::summary(found);
-            summary.script_title = titles.get(&found.code).map(|title| title.title.clone());
-            summary
-        })
-        .collect();
+    let runs = found.summaries.iter().map(search::summary).collect();
     Ok(Json(RunPage { runs, next_cursor }))
 }
 
@@ -417,6 +402,7 @@ pub(super) async fn fork(
         idempotency_key: key,
         secrets: request.secrets.as_ref().map(server_secrets).transpose()?,
         secret_rights: secret_rights(&caller),
+        principal: caller.writer(),
     };
     let mut gateway = app.gateway();
     let created = if request.check == Some(false) {

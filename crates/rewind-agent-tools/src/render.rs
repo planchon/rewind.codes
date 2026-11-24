@@ -1,20 +1,20 @@
-//! What the agent tools say to the model: a port of the SDK's
-//! `sdk/typescript/src/agent-tools/render.ts` and `bound.ts`, on the same DTOs, so that a model
-//! reads here what it reads through the SDK; and what the MCP set says of the organizations,
-//! namespaces and action sets a caller reaches. Plain text, short, bounded, pointing at the next
-//! useful call.
+//! What the agent tools say to the model, on `rewind-api`'s DTOs (the SDK's
+//! `sdk/typescript/src/agent-tools/render.ts` and `bound.ts` say the same of runs and tests), and
+//! what the MCP set says of the organizations, namespaces and action sets a caller reaches. Plain
+//! text, short, bounded, pointing at the next useful call. A workflow is named by its name, else
+//! its id, and a version by its number: `triage@v12`.
 
 use std::collections::BTreeSet;
 
 use rewind_api::access::Permission;
 use rewind_api::action_sets::ActionMatch;
 use rewind_api::calls::{CallState, ParkedReason};
+use rewind_api::checks::{CheckResult, Diagnostic, Severity};
 use rewind_api::common::{Callsite, Payload, RunStatus};
 use rewind_api::common::{ErrorInfo, FailedCall};
 use rewind_api::runs::{Run, RunSummary, Waiting};
-use rewind_api::scripts::{CheckResult, Diagnostic, Severity};
 use rewind_api::testing::{Test, TestProblem, TestResult};
-use rewind_api::workflows::{RecordedTests, Workflow};
+use rewind_api::workflows::{PatchWorkflow, RecordedTests, RunWorkflow, Workflow, WorkflowVersion};
 use serde_json::{Value, json};
 
 /// What `run_workflow` returns of a run's output at most: 256 KiB, the bound of the API's inline
@@ -212,12 +212,9 @@ fn headline(run: &Run, limits: &Limits) -> String {
         run.source
             .as_ref()
             .map(|parent| format!("a fork of run {}", parent.handle)),
-        run.workflow.as_ref().map(|workflow| {
-            format!(
-                "a run of the workflow {}",
-                workflow_ref(&workflow.name, &workflow.digest)
-            )
-        }),
+        run.workflow
+            .as_ref()
+            .map(|workflow| format!("a run of the workflow {}", run_workflow_label(workflow))),
         run.started_by.as_ref().map(|by| {
             format!(
                 "started by run {}{}",
@@ -232,7 +229,7 @@ fn headline(run: &Run, limits: &Limits) -> String {
     let name = if about.is_empty() {
         format!("Run {}", run.handle)
     } else {
-        format!("Run {} ({})", run.handle, about.join(", "))
+        format!("Run {} ({})", run.handle, about.join("; "))
     };
     match run.status {
         RunStatus::Completed => format!("{name} completed."),
@@ -473,7 +470,7 @@ pub fn event_text(entry: &rewind_api::events::HistoryEvent) -> String {
 // -------------------------------------------------------------------------------------------
 // Checks, tests, lists, searches
 
-/// The diagnostics of a check, for the model.
+/// The diagnostics of a check, for the model, and the workflow that already has the code.
 pub fn describe_check(result: &CheckResult, limits: &Limits) -> String {
     let errors = result
         .diagnostics
@@ -485,8 +482,8 @@ pub fn describe_check(result: &CheckResult, limits: &Limits) -> String {
         .into_iter()
         .filter(|part| !part.starts_with("0 "))
         .collect();
-    if result.ok {
-        return if warnings == 0 {
+    let mut text = if result.ok {
+        if warnings == 0 {
             "The code type-checks.".to_owned()
         } else {
             format!(
@@ -494,30 +491,36 @@ pub fn describe_check(result: &CheckResult, limits: &Limits) -> String {
                 counts.join(" and "),
                 diagnostics_text(&result.diagnostics, limits)
             )
-        };
+        }
+    } else {
+        format!(
+            "The code does not type-check: {}.\n{}",
+            counts.join(" and "),
+            diagnostics_text(&result.diagnostics, limits)
+        )
+    };
+    if let Some(workflow) = &result.workflow {
+        text.push_str(&format!(
+            "\nThis code is already the version v{} of the workflow {}: running it is a run of that workflow.",
+            workflow.version,
+            workflow_of_run_label(workflow)
+        ));
     }
-    format!(
-        "The code does not type-check: {}.\n{}",
-        counts.join(" and "),
-        diagnostics_text(&result.diagnostics, limits)
-    )
+    text
 }
 
-/// What `check_workflow` adds to its answer for a code without the comment its title is read
-/// from.
-pub const UNTITLED_NOTE: &str = "Note: the code does not start with a comment that gives its title. Start it with:\n/** <title>\n *\n * <description> */\nIts title names what the code does in a few words: its runs are named after it.";
+/// What `check_workflow` adds to its answer for a code without a comment at its top: the
+/// comment a workflow without a name shows as (`archi/04-tools.md`, "Workflow names").
+pub const COMMENT_NOTE: &str = "Note: the code does not start with a comment that says what it does, so its workflow shows as its short id until it has a name. Start it with:\n/** <what it does, in a few words>\n *\n * <more, if needed> */\nIts first line is how the workflow shows; the lines after it describe it.";
 
 /// A code refused before any run exists.
 pub fn describe_refusal(detail: &str, diagnostics: &[Diagnostic], limits: &Limits) -> String {
-    let text = format!(
-        "The code was refused before anything ran: {}",
-        truncate_end(detail, limits.value)
-    );
-    if diagnostics.is_empty() {
-        text
-    } else {
-        format!("{text}\n{}", diagnostics_text(diagnostics, limits))
-    }
+    describe_refused(
+        "The code was refused before anything ran",
+        detail,
+        diagnostics,
+        limits,
+    )
 }
 
 /// The diagnostics, in order, as many as the room of a transcript holds.
@@ -663,34 +666,51 @@ fn problem_phrase(problem: TestProblem) -> &'static str {
     }
 }
 
-/// Tests that refused a save of a workflow: the outcome of each, and what the model may do.
-pub fn describe_save_refused(
+/// What `update_workflow`'s gate refused: the outcome of each test, and what the model may do.
+/// `version` is a version's refusal; otherwise a change of tests', whose tests ran against
+/// `latest`, the workflow's latest version.
+pub fn describe_gate_refused(
     detail: &str,
     results: &[TestResult],
     workflow: &str,
+    version: bool,
+    latest: u32,
     limits: &Limits,
 ) -> String {
+    let advice = if version {
+        format!(
+            "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({}) before you call update_workflow again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or replace it in `replace` (its state or its expected result is out of date), with a reason.",
+            args(&[("code", json!("…")), ("workflow", json!(workflow))])
+        )
+    } else {
+        format!(
+            "A test joins the suite only once it passes against the latest version, v{latest}. If the test is wrong, fix it. If the workflow must change to pass it, give its new `code` with the test: the version is made with it once the whole suite passes."
+        )
+    };
     [
         format!(
-            "The workflow was not saved: {}",
+            "{}: {}",
+            if version {
+                "No version was made"
+            } else {
+                "The suite was not changed"
+            },
             truncate_end(detail, limits.value)
         ),
         describe_test_results(results, limits),
-        format!(
-            "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or replace it in `replace` (its state or its expected result is out of date), with a reason.",
-            args(&[("code", json!("…")), ("workflow", json!(workflow))])
-        ),
+        advice,
     ]
     .join("\n")
 }
 
 /// Tests that refused the fork of a run of a workflow: the outcome of each, and what the model
-/// may do.
+/// may do. `updates` when `update_workflow` is one of the tools.
 pub fn describe_retry_refused(
     run_id: &str,
     detail: &str,
     results: &[TestResult],
     workflow: Option<&str>,
+    updates: bool,
     limits: &Limits,
 ) -> String {
     let suite = workflow.map_or_else(
@@ -706,6 +726,11 @@ pub fn describe_retry_refused(
             )
         },
     );
+    let on_purpose = if updates {
+        "If a behavior must change on purpose, make the workflow's next version with update_workflow, retiring or replacing its tests with a reason, and run it."
+    } else {
+        "If a behavior must change on purpose, the workflow needs a next version that retires or replaces those tests, which these tools do not make: tell the person."
+    };
     [
         format!(
             "Run {run_id} was not retried: {}",
@@ -713,43 +738,20 @@ pub fn describe_retry_refused(
         ),
         describe_test_results(results, limits),
         format!(
-            "A fix must keep every behavior {suite} pins: there is no way around it. Fix the code, and check it with {check} before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or replacing its tests with a reason, and start a new run of it."
+            "A fix must keep every behavior {suite} pins: there is no way around it. Fix the code, and check it with {check} before you try again. {on_purpose}"
         ),
     ]
     .join("\n")
 }
 
-/// A workflow saved: how the model's workflows use it, and its declaration.
-pub fn describe_workflow(workflow: &Workflow, limits: &Limits) -> String {
-    let mut lines = vec![
-        format!(
-            "Saved the workflow {}. Your next workflows can import it:",
-            workflow_ref(&workflow.name, &workflow.digest)
-        ),
-        format!("import {{ {} }} from \"rewind:workflows\";", workflow.name),
-    ];
-    let prompt = workflow.declarations.prompt.trim();
-    if !prompt.is_empty() {
-        lines.push(truncate_end(prompt, limits.value));
-    }
-    let dts = workflow.declarations.dts.trim();
-    if !dts.is_empty() {
-        lines.push("Its declaration:".to_owned());
-        lines.push(truncate_end(dts, limits.transcript));
-    }
-    lines.join("\n")
-}
-
-/// A workflow refused: why, and the diagnostics of its code.
-pub fn describe_workflow_refusal(
+/// A refusal: what was not done (`what`), why, and the diagnostics of the code.
+pub fn describe_refused(
+    what: &str,
     detail: &str,
     diagnostics: &[Diagnostic],
     limits: &Limits,
 ) -> String {
-    let text = format!(
-        "The workflow was not saved: {}",
-        truncate_end(detail, limits.value)
-    );
+    let text = format!("{what}: {}", truncate_end(detail, limits.value));
     if diagnostics.is_empty() {
         text
     } else {
@@ -757,85 +759,282 @@ pub fn describe_workflow_refusal(
     }
 }
 
-/// `triage@9f2c4e1a07b3`: a workflow's name and the first 12 digits of its version.
-pub fn workflow_ref(name: &str, version: &str) -> String {
-    format!("{name}@{}", version.get(..12).unwrap_or(version))
+/// How a run's workflow reads in a run's report: `triage@v3, id wf_7k2m9q4x8d1c`, or
+/// `wf_7k2m9q4x8d1c@v1` without a name.
+pub fn run_workflow_label(workflow: &RunWorkflow) -> String {
+    match &workflow.name {
+        Some(name) => format!("{name}@v{}, id {}", workflow.version, workflow.id),
+        None => format!("{}@v{}", workflow.id, workflow.version),
+    }
 }
 
-/// What `get_workflow` reads: the latest version, its suite with each test, and the lineage.
+/// A run's workflow without its version: `triage (id wf_7k2m9q4x8d1c)`, or `wf_7k2m9q4x8d1c`.
+fn workflow_of_run_label(workflow: &RunWorkflow) -> String {
+    match &workflow.name {
+        Some(name) => format!("{name} (id {})", workflow.id),
+        None => workflow.id.clone(),
+    }
+}
+
+/// What names a run's version in a call: `triage@v3`, or `wf_7k2m9q4x8d1c@v3` without a name.
+pub fn run_workflow_reference(workflow: &RunWorkflow) -> String {
+    format!(
+        "{}@v{}",
+        workflow.name.as_deref().unwrap_or(&workflow.id),
+        workflow.version
+    )
+}
+
+/// What names a workflow in a call: its name, else its id.
+pub fn workflow_reference(workflow: &Workflow) -> &str {
+    workflow.name.as_deref().unwrap_or(&workflow.id)
+}
+
+/// A workflow as the model reads it: `triage (id wf_7k2m9q4x8d1c)`; without a name, its id and
+/// how it shows: the first line of its latest version's comment, else its short id.
+pub fn workflow_label(workflow: &Workflow) -> String {
+    if let Some(name) = &workflow.name {
+        return format!("{name} (id {})", workflow.id);
+    }
+    let shown = latest_version(workflow).comment.as_ref().map_or_else(
+        || workflow.short_id.clone(),
+        |comment| quoted(&comment.title),
+    );
+    format!("{} (no name; it shows as {shown})", workflow.id)
+}
+
+/// Its latest version the caller sees.
+fn latest_version(workflow: &Workflow) -> &WorkflowVersion {
+    workflow.versions.first().unwrap_or(&workflow.version)
+}
+
+/// What `update_workflow` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Updated {
+    /// Its name or its description only.
+    Patched,
+    /// A version was asked for: made, or the latest already had that content.
+    Version { made: bool },
+    /// Its suite changed, without a version.
+    Tests,
+}
+
+/// What a merge patch changed: `named it triage and removed its description`.
+pub fn describe_patch(patch: &PatchWorkflow) -> Option<String> {
+    let parts: Vec<String> = [
+        patch.name.as_ref().map(|name| match name {
+            Some(name) => format!("named it {name}"),
+            None => "removed its name".to_owned(),
+        }),
+        patch
+            .description
+            .as_ref()
+            .map(|description| match description {
+                Some(_) => "gave it a new description".to_owned(),
+                None => "removed its description".to_owned(),
+            }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(" and "))
+}
+
+/// `update_workflow`'s result: the workflow's id, its name, and its version, new or unchanged.
+pub fn describe_update(
+    workflow: &Workflow,
+    patch: &PatchWorkflow,
+    updated: Updated,
+    limits: &Limits,
+) -> String {
+    let label = workflow_label(workflow);
+    let version = &workflow.version;
+    let mut lines = Vec::new();
+    if let Some(patched) = describe_patch(patch) {
+        lines.push(format!("Updated the workflow {label}: {patched}."));
+    }
+    match updated {
+        Updated::Patched => lines.push(format!(
+            "Its version stays v{}.",
+            latest_version(workflow).version
+        )),
+        Updated::Version { made: true } => lines.push(format!(
+            "Made the version v{} (digest {}) of the workflow {label}: its suite, {}, passed against it.",
+            version.version,
+            short_digest(&version.digest),
+            plural(version.tests.len(), "test")
+        )),
+        Updated::Version { made: false } => lines.push(format!(
+            "The workflow {label} already has this content as its version v{}: no version was made.",
+            version.version
+        )),
+        Updated::Tests => lines.push(format!(
+            "Changed the suite of the workflow {label}: it holds {}, each passing against its version v{}, which stays its latest. Its next version keeps them.",
+            plural(
+                workflow
+                    .suite
+                    .iter()
+                    .filter(|entry| entry.retired_at.is_none())
+                    .count(),
+                "test"
+            ),
+            latest_version(workflow).version
+        )),
+    }
+    if let Some(declarations) = &version.declarations
+        && !declarations.prompt.trim().is_empty()
+    {
+        lines.push(format!(
+            "Code starts it from \"rewind:workflows\" once an action set pins it: {}",
+            truncate_end(declarations.prompt.trim(), limits.value)
+        ));
+    }
+    lines.push(format!(
+        "Run it with run_workflow({}).",
+        args(&[("workflow", json!(workflow_reference(workflow)))])
+    ));
+    lines.join("\n")
+}
+
+/// The first 12 digits of a digest.
+fn short_digest(digest: &str) -> &str {
+    digest.get(..12).unwrap_or(digest)
+}
+
+/// What `get_workflow` reads: the workflow, and each test of its suite.
 #[derive(Debug, Clone)]
 pub struct WorkflowDetails {
-    /// Every version, newest first.
-    pub versions: Vec<Workflow>,
-    /// The source of the latest version.
-    pub source: String,
-    /// The tests of the latest version's suite, in its order.
-    pub tests: Vec<SuiteEntry>,
+    pub workflow: Workflow,
+    /// The tests of its suite, in its order.
+    pub tests: Vec<ReadTest>,
+    /// `update_workflow` is one of the tools.
+    pub updates: bool,
 }
 
 /// A test of a suite as `get_workflow` reads it: the test, or why it cannot be read.
 #[derive(Debug, Clone)]
-pub struct SuiteEntry {
+pub struct ReadTest {
     pub name: String,
     pub digest: String,
     pub test: Option<Test>,
     pub unreadable: Option<String>,
 }
 
-/// A workflow, for the model to repair or extend it: its source, schemas, suite and lineage.
+/// The most versions `get_workflow` lists.
+const LISTED_VERSIONS: usize = 20;
+
+/// A workflow, for the model to repair or extend it: who it is, its version's code and
+/// interface, its suite, the tests that left it, and its versions.
 pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> String {
-    let Some(latest) = details.versions.first() else {
-        return "The workflow has no version.".to_owned();
+    let workflow = &details.workflow;
+    let version = &workflow.version;
+    let versions = &workflow.versions;
+    let scope = match &workflow.namespace {
+        Some(namespace) => format!("the namespace {}", namespace.as_str()),
+        None => match &workflow.promoted_at {
+            Some(at) => format!("the organization (promoted {at})"),
+            None => "the organization".to_owned(),
+        },
     };
     let mut lines = vec![format!(
-        "The workflow {}, saved {}: its latest version, of {}.",
-        workflow_ref(&latest.name, &latest.digest),
-        latest.created_at,
-        plural(details.versions.len(), "version")
+        "The workflow {}, of {scope}.",
+        workflow_label(workflow)
     )];
-    if let Some(parent) = &latest.base {
+    if let Some(source) = &workflow.source {
         lines.push(format!(
-            "It derives from the version {}.",
-            version_ref(parent, &details.versions)
+            "It is a fork of the organization's workflow {}, whose version v{} it last took.",
+            source.workflow, source.version
         ));
     }
-    if let Some(description) = &latest.description {
+    let description = workflow.description.as_deref().or_else(|| {
+        latest_version(workflow)
+            .comment
+            .as_ref()
+            .and_then(|comment| comment.description.as_deref())
+    });
+    if let Some(description) = description {
         lines.push(format!(
             "Description: {}",
             truncate_end(description, limits.value)
         ));
     }
+    let from = version
+        .base
+        .as_ref()
+        .map(|base| format!(", from {}", version_ref(base, versions)))
+        .unwrap_or_default();
     lines.push(format!(
-        "Input schema: {}",
-        truncate_end(&json(&latest.input), limits.value)
+        "Its version v{} of {} (digest {}), made {}{from}.",
+        version.version,
+        plural(versions.len().max(1), "version"),
+        short_digest(&version.digest),
+        version.created_at
     ));
-    lines.push(format!(
-        "Output schema: {}",
-        truncate_end(&json(&latest.output), limits.value)
-    ));
-    if latest.signals.is_empty() {
-        lines.push("Signals: none.".to_owned());
+    lines.push(format!("Action set: {}", version.action_set));
+    if version.input.is_none() && version.output.is_none() && version.signals.is_none() {
+        lines.push(
+            "Interface: none. It takes any input, returns any output and accepts any signal name."
+                .to_owned(),
+        );
     } else {
-        lines.push("Signals:".to_owned());
-        for (name, schema) in &latest.signals {
-            lines.push(format!(
-                "- {}: {}",
-                quoted(name),
-                truncate_end(&json(schema), limits.value)
-            ));
+        let schema = |schema: &Option<Value>| {
+            truncate_end(
+                &json(schema.as_ref().unwrap_or(&Value::Bool(true))),
+                limits.value,
+            )
+        };
+        lines.push(format!("Input schema: {}", schema(&version.input)));
+        lines.push(format!("Output schema: {}", schema(&version.output)));
+        match version
+            .signals
+            .as_ref()
+            .filter(|signals| !signals.is_empty())
+        {
+            None => lines.push("Signals: none.".to_owned()),
+            Some(signals) => {
+                lines.push("Signals:".to_owned());
+                for (name, schema) in signals {
+                    lines.push(format!(
+                        "- {}: {}",
+                        quoted(name),
+                        truncate_end(&json(schema), limits.value)
+                    ));
+                }
+            }
         }
     }
-    lines.push("Source:".to_owned());
-    lines.push(truncate_middle(
-        details.source.trim_end(),
-        limits.transcript,
-    ));
+    if !version.secrets.is_empty() {
+        let secrets: serde_json::Map<String, Value> = version
+            .secrets
+            .iter()
+            .map(|(server, secret)| (server.clone(), Value::from(secret.as_str())))
+            .collect();
+        lines.push(format!(
+            "Secrets its runs use: {}",
+            json(&Value::Object(secrets))
+        ));
+    }
+    if let Some(declarations) = &version.declarations
+        && !declarations.prompt.trim().is_empty()
+    {
+        lines.push(format!(
+            "Code starts it from \"rewind:workflows\" once an action set pins it: {}",
+            truncate_end(declarations.prompt.trim(), limits.value)
+        ));
+    }
+    lines.push("Code:".to_owned());
+    lines.push(truncate_middle(workflow.code.trim_end(), limits.transcript));
 
     if details.tests.is_empty() {
         lines.push("Its suite is empty: it has no test.".to_owned());
     } else {
+        let reuse = if details.updates {
+            "give a digest in update_workflow's `tests` or `replace` to reuse a test"
+        } else {
+            "give a digest in test_workflow's `tests` to run a test against a code"
+        };
         lines.push(format!(
-            "Its suite, {}, which every version derived from it must pass (give a digest in save_workflow's `tests` or `replace` to reuse a test):",
+            "Its suite, {}, which its next version must pass ({reuse}):",
             plural(details.tests.len(), "test")
         ));
         let room = (limits.output / details.tests.len()).max(limits.value);
@@ -862,7 +1061,7 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
                     format!(
                         ", recorded from run {} of {}",
                         origin.run,
-                        version_ref(&origin.version, &details.versions)
+                        version_ref(&origin.version, versions)
                     )
                 })
                 .unwrap_or_default();
@@ -871,44 +1070,78 @@ pub fn describe_workflow_details(details: &WorkflowDetails, limits: &Limits) -> 
         }
     }
 
-    lines.push("Lineage, newest first:".to_owned());
-    for version in &details.versions {
-        let from = version.base.as_ref().map_or_else(
+    let left: Vec<_> = workflow
+        .suite
+        .iter()
+        .filter(|entry| entry.retired_at.is_some())
+        .collect();
+    if !left.is_empty() {
+        lines.push("Tests that left its suite, and why:".to_owned());
+        for entry in left {
+            lines.push(format!(
+                "- {} ({}), {}: {}",
+                quoted(&truncate_end(&entry.name, limits.line)),
+                short_digest(&entry.digest),
+                entry
+                    .retired_at
+                    .map(|at| format!("left {at}"))
+                    .unwrap_or_default(),
+                truncate_end(
+                    entry.reason.as_deref().unwrap_or("no reason given"),
+                    limits.value
+                )
+            ));
+        }
+    }
+
+    lines.push("Its versions, newest first:".to_owned());
+    for listed in versions.iter().take(LISTED_VERSIONS) {
+        let from = listed.base.as_ref().map_or_else(
             || ", the first version".to_owned(),
-            |parent| format!(", from {}", version_ref(parent, &details.versions)),
+            |base| format!(", from {}", version_ref(base, versions)),
         );
+        let mut changes = Vec::new();
+        for replaced in &listed.replaced {
+            changes.push(format!(
+                "replaced {}",
+                quoted(&truncate_end(&replaced.name, limits.line))
+            ));
+        }
+        for retired in &listed.retired {
+            changes.push(format!(
+                "retired {}",
+                quoted(&truncate_end(&retired.name, limits.line))
+            ));
+        }
+        let changes = if changes.is_empty() {
+            String::new()
+        } else {
+            format!("; {}", changes.join(", "))
+        };
         lines.push(format!(
-            "- {}, saved {}{from}: {}.",
-            workflow_ref(&version.name, &version.digest),
-            version.created_at,
-            plural(version.tests.len(), "test")
+            "- v{}, made {}{from}: {}{changes}.",
+            listed.version,
+            listed.created_at,
+            plural(listed.tests.len(), "test")
         ));
-        for replaced in &version.replaced {
-            lines.push(format!(
-                "  replaced {}: {}",
-                quoted(&truncate_end(&replaced.name, limits.line)),
-                truncate_end(&replaced.reason, limits.value)
-            ));
-        }
-        for retired in &version.retired {
-            lines.push(format!(
-                "  retired {}: {}",
-                quoted(&truncate_end(&retired.name, limits.line)),
-                truncate_end(&retired.reason, limits.value)
-            ));
-        }
+    }
+    if versions.len() > LISTED_VERSIONS {
+        lines.push(format!(
+            "… and {} older.",
+            plural(versions.len() - LISTED_VERSIONS, "version")
+        ));
     }
     lines.join("\n")
 }
 
-/// `triage@4be1c07a9d3e` when the version is one of `versions`, otherwise its first 12 digits.
-fn version_ref(version: &str, versions: &[Workflow]) -> String {
+/// `v3` when the digest is one of `versions`, otherwise its first 12 digits.
+fn version_ref(digest: &str, versions: &[WorkflowVersion]) -> String {
     versions
         .iter()
-        .find(|candidate| candidate.digest == version)
+        .find(|candidate| candidate.digest == digest)
         .map_or_else(
-            || version.get(..12).unwrap_or(version).to_owned(),
-            |known| workflow_ref(&known.name, &known.digest),
+            || short_digest(digest).to_owned(),
+            |known| format!("v{}", known.version),
         )
 }
 
@@ -971,8 +1204,14 @@ pub fn cassette_summary(cassette: &Value) -> String {
     )
 }
 
-/// The tests a recording stored, and the runs it left out.
-pub fn describe_recorded(workflow: &str, recorded: &RecordedTests, limits: &Limits) -> String {
+/// The tests a recording stored, and the runs it left out. `updates` when `update_workflow` is
+/// one of the tools.
+pub fn describe_recorded(
+    workflow: &str,
+    recorded: &RecordedTests,
+    updates: bool,
+    limits: &Limits,
+) -> String {
     let mut lines = Vec::new();
     if recorded.tests.is_empty() {
         lines.push(format!(
@@ -1008,9 +1247,13 @@ pub fn describe_recorded(workflow: &str, recorded: &RecordedTests, limits: &Limi
         }
     }
     if !recorded.tests.is_empty() {
-        lines.push(format!(
-            "They join no suite yet: pass their digests in save_workflow's `tests` to add them to the suite of {workflow}'s next version, or {{ \"from\": \"<digest>\", \"expect\": {{…}} }} to give a failed run the expectation it should have met."
-        ));
+        lines.push(if updates {
+            format!(
+                "They join no suite yet: pass their digests in update_workflow's `tests` to add them to the suite of {workflow}, or {{ \"test\": \"<digest>\", \"expect\": {{…}} }} to give a failed run the expectation it should have met."
+            )
+        } else {
+            "They join no suite: pass their digests in test_workflow's `tests` to run them against a code, or { \"test\": \"<digest>\", \"expect\": {…} } to give a failed run the expectation it should have met.".to_owned()
+        });
     }
     lines.join("\n")
 }
@@ -1046,7 +1289,10 @@ pub fn describe_runs(runs: &[RunSummary], more: bool, status: Option<RunStatus>)
             parts.push(format!("a fork of {parent}"));
         }
         if let Some(workflow) = &run.workflow {
-            parts.push(format!("a run of the workflow {workflow}"));
+            parts.push(format!(
+                "a run of the workflow {}",
+                run_workflow_reference(workflow)
+            ));
         }
         if let Some(started_by) = &run.started_by {
             parts.push(format!("started by {started_by}"));
@@ -1135,10 +1381,10 @@ pub fn plural(count: usize, noun: &str) -> String {
 /// never use.
 fn permission_phrase(permission: Permission) -> Option<&'static str> {
     Some(match permission {
-        Permission::RunsRead => "read runs and record tests",
+        Permission::RunsRead => "read runs and workflows and record tests",
         Permission::RunsStart => "check, test, run and retry workflows",
         Permission::RunsControl => "signal and cancel runs",
-        Permission::ActionsRead => "read action sets and workflows",
+        Permission::ActionsRead => "read action sets",
         Permission::NamespacesRead => "list namespaces",
         _ => return None,
     })
@@ -1297,7 +1543,7 @@ const LISTED_ACTIONS: usize = 20;
 /// `list_action_sets`: each action set's id, servers, actions and workflows.
 pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> String {
     if list.action_sets.is_empty() {
-        return "No action set in this organization: a code can only use the built-in `webhook`. An action set is registered with POST /v1/action-sets, outside these tools.".to_owned();
+        return "No action set in this organization: a code can only use the built-in `signalUrl`. An action set is registered with POST /v1/action-sets, outside these tools.".to_owned();
     }
     let mut lines = vec![format!(
         "{}: give one's id as `action_set`.",
@@ -1342,7 +1588,7 @@ pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> St
         }
     }
     lines.push(
-        "Read the declarations of the actions you need with search_actions before you write a code."
+        "Read the declarations of the actions you need with search_actions before you write code."
             .to_owned(),
     );
     lines.join("\n")
@@ -1377,7 +1623,7 @@ mod tests {
                     permissions: &[Permission::TokensWrite]
                 },
             ]),
-            "You reach 2 organizations: give one as `organization`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests, read action sets and workflows.\n- id org_2: these tools can do nothing there."
+            "You reach 2 organizations: give one as `organization`, by its id or its name.\n- Acme (id org_1): you may read runs and workflows and record tests, read action sets.\n- id org_2: these tools can do nothing there."
         );
 
         let action_sets: rewind_api::action_sets::ActionSetList = serde_json::from_value(json!({
@@ -1439,11 +1685,11 @@ mod tests {
     }
 
     #[test]
-    fn every_text_a_script_a_server_or_a_tool_wrote_is_bounded() {
+    fn every_text_a_code_a_server_or_an_action_wrote_is_bounded() {
         let limits = Limits::for_output(64 * 1024);
         let long = "m".repeat(3_000_000);
         let run: Run = serde_json::from_value(json!({
-            "id": "r", "handle": "alice/script/r", "namespace": "alice", "status": "failed", "codeDigest": "s", "actionSet": "t", "epoch": 1,
+            "id": "r", "handle": "alice/wf-7k2m9q/r", "namespace": "alice", "status": "failed", "codeDigest": "s", "actionSet": "t", "epoch": 1,
             "mode": "live", "labels": {}, "traceId": "0", "historyLen": 3,
             "createdAt": "2026-11-12T00:00:00Z", "updatedAt": "2026-11-12T00:00:00Z",
             "expiresAt": "2026-11-13T00:00:00Z",
@@ -1511,34 +1757,56 @@ mod tests {
         assert_eq!(describe_page("T", "ab", 0, 4, |_| String::new()), "T:\nab");
     }
 
-    // The texts of the SDK's tests (`sdk/typescript/test/agent-tools.test.ts`), from the same
-    // answers of the server.
+    // The answers of the server, as the tools read them.
 
     const RUN_ID: &str = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10";
     const VERSION: &str = "4be1c07a9d3e0000000000000000000000000000000000000000000000000000";
+    const ID: &str = "wf_7k2m9q4x8d1c";
 
     fn results(value: Value) -> Vec<TestResult> {
         serde_json::from_value(value).unwrap()
     }
 
-    /// The SDK's `workflow()` fixture.
-    fn workflow(overrides: Value) -> Workflow {
-        let mut workflow = json!({
-            "name": "triage",
-            "digest": VERSION,
+    /// A version of `triage`, with an interface: its number, digest and tests from `overrides`.
+    fn version(overrides: Value) -> Value {
+        let mut version = json!({
             "version": 3,
-            "description": "Triage the stale issues of a repository, after approval.",
-            "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+            "digest": VERSION,
             "codeDigest": "cd".repeat(32),
+            "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
             "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
             "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
             "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } },
             "labels": { "conversation": "c-42" },
+            "secrets": { "github": "ns/github" },
             "createdAt": "2026-11-12T10:00:00Z",
             "declarations": {
                 "dts": "declare module \"rewind:workflows\" {\n  export const triage: Workflow<{ repo: string }, { closed: number }, { approval: { close: boolean } }>;\n}",
                 "prompt": "triage.start({ repo: string }) → run · run.signal(\"approval\", { close: boolean }) · run.result() → { closed: number } · Triage the stale issues of a repository, after approval."
-            }
+            },
+            "tests": []
+        });
+        for (key, value) in overrides.as_object().cloned().unwrap_or_default() {
+            version[key] = value;
+        }
+        version
+    }
+
+    /// The workflow `triage` of the namespace user_2fQ81, its versions newest first: the first
+    /// one shown.
+    fn workflow(overrides: Value, versions: Vec<Value>) -> Workflow {
+        let mut workflow = json!({
+            "id": ID,
+            "shortId": "wf-7k2m9q",
+            "name": "triage",
+            "description": "Triage the stale issues of a repository, after approval.",
+            "namespace": "user_2fQ81",
+            "labels": { "conversation": "c-42" },
+            "createdAt": "2026-11-10T10:00:00Z",
+            "version": versions[0],
+            "code": "export default async () => ({ closed: 0 });\n",
+            "versions": versions,
+            "suite": []
         });
         for (key, value) in overrides.as_object().cloned().unwrap_or_default() {
             workflow[key] = value;
@@ -1651,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_save_or_retry_says_what_the_model_may_do() {
+    fn a_refused_version_or_retry_says_what_the_model_may_do() {
         let limits = Limits::default();
         let tests = results(json!([
             {
@@ -1662,25 +1930,40 @@ mod tests {
             },
             { "name": "closes once approved", "passed": true, "status": "completed", "calls": {}, "failures": [], "transcript": "#0" }
         ]));
+        let failing = [
+            "1 of 2 tests did not pass.",
+            "FAIL \"closes nothing without approval\" (failed): it ran, and expectations do not hold:",
+            "  - github.close_issue was called 1 time, expected 0",
+            "  The run completed.",
+            "  Output: {\"closed\":1}",
+            "  Calls: github.close_issue ×1",
+            "  Transcript:",
+            "#0 run_started\n#1 signal approval\n#2 call github.close_issue",
+            "PASS \"closes once approved\"",
+        ]
+        .join("\n");
         assert_eq!(
-            describe_save_refused(
-                "1 test of 2 did not pass: the version was not saved",
+            describe_gate_refused(
+                "1 test of 2 did not pass: no version was made",
                 &tests,
                 "triage",
+                true,
+                3,
                 &limits
             ),
             [
-                "The workflow was not saved: 1 test of 2 did not pass: the version was not saved",
-                "1 of 2 tests did not pass.",
-                "FAIL \"closes nothing without approval\" (failed): it ran, and expectations do not hold:",
-                "  - github.close_issue was called 1 time, expected 0",
-                "  The run completed.",
-                "  Output: {\"closed\":1}",
-                "  Calls: github.close_issue ×1",
-                "  Transcript:",
-                "#0 run_started\n#1 signal approval\n#2 call github.close_issue",
-                "PASS \"closes once approved\"",
-                "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or replace it in `replace` (its state or its expected result is out of date), with a reason.",
+                "No version was made: 1 test of 2 did not pass: no version was made",
+                &failing,
+                "Every test must pass: there is no way around it. If the code is wrong, fix it, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage\"}) before you call update_workflow again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or replace it in `replace` (its state or its expected result is out of date), with a reason.",
+            ]
+            .join("\n")
+        );
+        assert_eq!(
+            describe_gate_refused("1 test of 2 did not pass", &tests, "triage", false, 3, &limits),
+            [
+                "The suite was not changed: 1 test of 2 did not pass",
+                &failing,
+                "A test joins the suite only once it passes against the latest version, v3. If the test is wrong, fix it. If the workflow must change to pass it, give its new `code` with the test: the version is made with it once the whole suite passes.",
             ]
             .join("\n")
         );
@@ -1695,15 +1978,24 @@ mod tests {
                 "transcript": "#0 run_started\n#1 call github.close_issue"
             }
         ]));
-        let workflow = workflow_ref("triage", VERSION);
-        assert_eq!(
+        let run_workflow: RunWorkflow = serde_json::from_value(
+            json!({ "id": ID, "name": "triage", "version": 3, "digest": VERSION }),
+        )
+        .unwrap();
+        let workflow = run_workflow_reference(&run_workflow);
+        assert_eq!(workflow, "triage@v3");
+        let refused = |updates| {
             describe_retry_refused(
                 RUN_ID,
                 "1 test of the suite of triage did not pass against the corrected code",
                 &tests,
                 Some(&workflow),
-                &limits
-            ),
+                updates,
+                &limits,
+            )
+        };
+        assert_eq!(
+            refused(true),
             [
                 &format!("Run {RUN_ID} was not retried: 1 test of the suite of triage did not pass against the corrected code"),
                 "1 of 2 tests did not pass.",
@@ -1715,44 +2007,99 @@ mod tests {
                 "  Calls: github.close_issue ×1, github.list_issues ×1",
                 "  Transcript:",
                 "#0 run_started\n#1 call github.close_issue",
-                "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the code, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or replacing its tests with a reason, and start a new run of it.",
+                "A fix must keep every behavior the suite of triage@v3 pins: there is no way around it. Fix the code, and check it with test_workflow({\"code\":\"…\",\"workflow\":\"triage@v3\"}) before you try again. If a behavior must change on purpose, make the workflow's next version with update_workflow, retiring or replacing its tests with a reason, and run it.",
             ]
             .join("\n")
+        );
+        assert!(
+            refused(false).ends_with("which these tools do not make: tell the person."),
+            "{}",
+            refused(false)
         );
     }
 
     #[test]
-    fn a_saved_workflow_says_how_to_import_it() {
-        let saved = workflow(json!({}));
+    fn an_update_says_what_changed_and_how_to_run_it() {
+        let limits = Limits::default();
+        let patch = PatchWorkflow {
+            name: Some(Some("triage".into())),
+            description: Some(None),
+        };
+        let v4 = version(json!({ "version": 4, "digest": "ab".repeat(32), "tests": [
+            { "name": "closes once approved", "digest": "11".repeat(32) }
+        ] }));
+        let made = workflow(json!({}), vec![v4, version(json!({}))]);
         assert_eq!(
-            describe_workflow(&saved, &Limits::default()),
+            describe_update(&made, &patch, Updated::Version { made: true }, &limits),
             [
-                "Saved the workflow triage@4be1c07a9d3e. Your next workflows can import it:",
-                "import { triage } from \"rewind:workflows\";",
-                &saved.declarations.prompt,
-                "Its declaration:",
-                &saved.declarations.dts,
+                &format!("Updated the workflow triage (id {ID}): named it triage and removed its description."),
+                &format!("Made the version v4 (digest abababababab) of the workflow triage (id {ID}): its suite, 1 test, passed against it."),
+                &format!("Code starts it from \"rewind:workflows\" once an action set pins it: {}", made.version.declarations.as_ref().unwrap().prompt),
+                "Run it with run_workflow({\"workflow\":\"triage\"}).",
             ]
             .join("\n")
         );
+        // A workflow without a name shows as its comment's first line, and runs by its id.
+        let unnamed = workflow(
+            json!({ "name": null, "description": null }),
+            vec![version(json!({
+                "declarations": null,
+                "comment": { "title": "Triage stale issues" }
+            }))],
+        );
         assert_eq!(
-            describe_workflow_refusal(
-                "the workflow name \"class\" is a reserved word of JavaScript",
-                &[],
-                &Limits::default()
+            describe_update(
+                &unnamed,
+                &PatchWorkflow::default(),
+                Updated::Version { made: false },
+                &limits
             ),
-            "The workflow was not saved: the workflow name \"class\" is a reserved word of JavaScript"
+            [
+                format!("The workflow {ID} (no name; it shows as \"Triage stale issues\") already has this content as its version v3: no version was made."),
+                format!("Run it with run_workflow({{\"workflow\":\"{ID}\"}})."),
+            ]
+            .join("\n")
+        );
+        let tested = workflow(
+            json!({ "suite": [
+                { "name": "a", "digest": "11".repeat(32), "addedAt": "2026-11-12T10:00:00Z" },
+                { "name": "b", "digest": "22".repeat(32), "addedAt": "2026-11-12T10:00:00Z", "retiredAt": "2026-11-13T10:00:00Z", "reason": "gone" }
+            ] }),
+            vec![version(json!({ "declarations": null }))],
+        );
+        assert!(
+            describe_update(&tested, &PatchWorkflow::default(), Updated::Tests, &limits)
+                .starts_with(&format!("Changed the suite of the workflow triage (id {ID}): it holds 1 test, each passing against its version v3, which stays its latest.")),
+        );
+        assert_eq!(
+            describe_update(
+                &tested,
+                &PatchWorkflow {
+                    name: None,
+                    description: Some(Some("d".into()))
+                },
+                Updated::Patched,
+                &limits
+            ),
+            [
+                &format!("Updated the workflow triage (id {ID}): gave it a new description."),
+                "Its version stays v3.",
+                "Run it with run_workflow({\"workflow\":\"triage\"}).",
+            ]
+            .join("\n")
         );
     }
 
     #[test]
-    fn a_workflow_reads_with_its_suite_and_its_lineage() {
+    fn a_workflow_reads_with_its_suite_the_tests_that_left_it_and_its_versions() {
         let parent_version = "e4".repeat(32);
         let first_version = "a1".repeat(32);
         let inline_digest = format!("4814d92093ac{}", "0".repeat(52));
         let recorded_digest = format!("ca978112ca1b{}", "0".repeat(52));
         let foreign = "b2".repeat(32);
-        let latest = workflow(json!({
+        let old = "3e".repeat(32);
+        let retired = "2e".repeat(32);
+        let latest = version(json!({
             "base": parent_version,
             "tests": [
                 { "name": "closes nothing without approval", "digest": inline_digest },
@@ -1760,23 +2107,35 @@ mod tests {
                 { "name": "recorded 0193a5c4-0000-7000-8000-000000000000", "digest": foreign }
             ],
             "replaced": [{
-                "name": "closes nothing without approval", "old": "3e".repeat(32), "new": inline_digest,
+                "name": "closes nothing without approval", "old": old, "new": inline_digest,
                 "reason": "the message names the repository"
             }],
             "retired": [{
-                "name": "asks before closing", "digest": "2e".repeat(32),
+                "name": "asks before closing", "digest": retired,
                 "reason": "under 5 stale issues, it closes without asking"
             }]
         }));
-        let parent = workflow(json!({
-            "digest": parent_version,
-            "createdAt": "2026-11-11T10:00:00Z",
+        let parent = version(json!({
+            "version": 2, "digest": parent_version, "createdAt": "2026-11-11T10:00:00Z",
             "base": first_version,
-            "tests": [{ "name": "asks before closing", "digest": "2e".repeat(32) }]
+            "tests": [{ "name": "asks before closing", "digest": retired }]
         }));
-        let first = workflow(json!({
-            "digest": first_version, "createdAt": "2026-11-10T10:00:00Z", "tests": []
+        let first = version(json!({
+            "version": 1, "digest": first_version, "createdAt": "2026-11-10T10:00:00Z"
         }));
+        let suite = json!([
+            { "name": "asks before closing", "digest": retired, "addedAt": "2026-11-11T10:00:00Z",
+              "retiredAt": "2026-11-12T10:00:00Z", "reason": "under 5 stale issues, it closes without asking" },
+            { "name": "closes nothing without approval", "digest": old, "addedAt": "2026-11-11T10:00:00Z",
+              "retiredAt": "2026-11-12T10:00:00Z", "reason": "the message names the repository" },
+            { "name": "closes nothing without approval", "digest": inline_digest, "addedAt": "2026-11-12T10:00:00Z" },
+            { "name": format!("recorded {RUN_ID}"), "digest": recorded_digest, "addedAt": "2026-11-12T10:00:00Z" },
+            { "name": "recorded 0193a5c4-0000-7000-8000-000000000000", "digest": foreign, "addedAt": "2026-11-12T10:00:00Z" }
+        ]);
+        let triage = workflow(
+            json!({ "suite": suite, "source": { "workflow": "wf_0rg4n1z4t10n", "version": 7 } }),
+            vec![latest, parent, first],
+        );
         let inline = json!({
             "name": "closes nothing without approval",
             "input": { "repo": "acme/api" },
@@ -1802,22 +2161,21 @@ mod tests {
             "from": { "run": RUN_ID, "version": parent_version, "namespace": "user_2fQ81" }
         });
         let details = WorkflowDetails {
-            versions: vec![latest.clone(), parent, first],
-            source: "export default async () => ({ closed: 0 });\n".into(),
+            workflow: triage.clone(),
             tests: vec![
-                SuiteEntry {
+                ReadTest {
                     name: "closes nothing without approval".into(),
                     digest: inline_digest.clone(),
                     test: Some(serde_json::from_value(inline).unwrap()),
                     unreadable: None,
                 },
-                SuiteEntry {
+                ReadTest {
                     name: format!("recorded {RUN_ID}"),
                     digest: recorded_digest.clone(),
                     test: Some(serde_json::from_value(recorded).unwrap()),
                     unreadable: None,
                 },
-                SuiteEntry {
+                ReadTest {
                     name: "recorded 0193a5c4-0000-7000-8000-000000000000".into(),
                     digest: foreign.clone(),
                     test: None,
@@ -1827,45 +2185,75 @@ mod tests {
                     ),
                 },
             ],
+            updates: true,
         };
-        let short = |version: &str| version[..12].to_owned();
+        let shown = &triage.version;
         assert_eq!(
             describe_workflow_details(&details, &Limits::default()),
             [
-                "The workflow triage@4be1c07a9d3e, saved 2026-11-12T10:00:00Z: its latest version, of 3 versions.".to_owned(),
-                format!("It derives from the version triage@{}.", short(&parent_version)),
+                format!("The workflow triage (id {ID}), of the namespace user_2fQ81."),
+                "It is a fork of the organization's workflow wf_0rg4n1z4t10n, whose version v7 it last took.".to_owned(),
                 "Description: Triage the stale issues of a repository, after approval.".to_owned(),
-                format!("Input schema: {}", json(&latest.input)),
-                format!("Output schema: {}", json(&latest.output)),
+                "Its version v3 of 3 versions (digest 4be1c07a9d3e), made 2026-11-12T10:00:00Z, from v2.".to_owned(),
+                "Action set: 9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4".to_owned(),
+                format!("Input schema: {}", json(shown.input.as_ref().unwrap())),
+                format!("Output schema: {}", json(shown.output.as_ref().unwrap())),
                 "Signals:".to_owned(),
-                format!("- \"approval\": {}", json(&latest.signals["approval"])),
-                "Source:".to_owned(),
+                format!("- \"approval\": {}", json(&shown.signals.as_ref().unwrap()["approval"])),
+                "Secrets its runs use: {\"github\":\"ns/github\"}".to_owned(),
+                format!("Code starts it from \"rewind:workflows\" once an action set pins it: {}", shown.declarations.as_ref().unwrap().prompt),
+                "Code:".to_owned(),
                 "export default async () => ({ closed: 0 });".to_owned(),
-                "Its suite, 3 tests, which every version derived from it must pass (give a digest in save_workflow's `tests` or `replace` to reuse a test):".to_owned(),
+                "Its suite, 3 tests, which its next version must pass (give a digest in update_workflow's `tests` or `replace` to reuse a test):".to_owned(),
                 format!("Test \"closes nothing without approval\" ({inline_digest}):"),
-                // `JSON.stringify` keeps the order the server writes a test's fields in.
+                // The order the server writes a test's fields in.
                 "{\"name\":\"closes nothing without approval\",\"input\":{\"repo\":\"acme/api\"},\"world\":{\"actions\":{\"github.list_issues\":[{\"returns\":[{\"number\":4}]}]}},\"signals\":[{\"name\":\"approval\",\"payload\":{\"close\":false}}],\"expect\":{\"output\":{\"closed\":0},\"calls\":[{\"action\":\"github.close_issue\",\"times\":0}]}}".to_owned(),
-                format!(
-                    "Test \"recorded {RUN_ID}\" ({recorded_digest}), recorded from run {RUN_ID} of triage@{}:",
-                    short(&parent_version)
-                ),
+                format!("Test \"recorded {RUN_ID}\" ({recorded_digest}), recorded from run {RUN_ID} of v2:"),
                 format!(
                     "{{\"name\":\"recorded {RUN_ID}\",\"input\":{{\"repo\":\"acme/api\"}},\"seed\":\"{}\",\"world\":{{\"cassette\":{{\"summary\":\"3 recorded calls matched by_args (github.list_issues ×1, github.close_issue ×2), 1 signal (approval)\"}}}},\"expect\":{{\"status\":\"completed\",\"output\":{{\"closed\":2}}}},\"from\":{{\"run\":\"{RUN_ID}\",\"version\":\"{parent_version}\",\"namespace\":\"user_2fQ81\"}}}}",
                     "07".repeat(32)
                 ),
                 format!("Test \"recorded 0193a5c4-0000-7000-8000-000000000000\" ({foreign}): it cannot be read: reading this test needs runs:read in the namespace it was recorded from"),
-                "Lineage, newest first:".to_owned(),
-                format!("- triage@4be1c07a9d3e, saved 2026-11-12T10:00:00Z, from triage@{}: 3 tests.", short(&parent_version)),
-                "  replaced \"closes nothing without approval\": the message names the repository".to_owned(),
-                "  retired \"asks before closing\": under 5 stale issues, it closes without asking".to_owned(),
-                format!(
-                    "- triage@{}, saved 2026-11-11T10:00:00Z, from triage@{}: 1 test.",
-                    short(&parent_version),
-                    short(&first_version)
-                ),
-                format!("- triage@{}, saved 2026-11-10T10:00:00Z, the first version: 0 tests.", short(&first_version)),
+                "Tests that left its suite, and why:".to_owned(),
+                "- \"asks before closing\" (2e2e2e2e2e2e), left 2026-11-12T10:00:00Z: under 5 stale issues, it closes without asking".to_owned(),
+                "- \"closes nothing without approval\" (3e3e3e3e3e3e), left 2026-11-12T10:00:00Z: the message names the repository".to_owned(),
+                "Its versions, newest first:".to_owned(),
+                "- v3, made 2026-11-12T10:00:00Z, from v2: 3 tests; replaced \"closes nothing without approval\", retired \"asks before closing\".".to_owned(),
+                "- v2, made 2026-11-11T10:00:00Z, from v1: 1 test.".to_owned(),
+                "- v1, made 2026-11-10T10:00:00Z, the first version: 0 tests.".to_owned(),
             ]
             .join("\n")
+        );
+
+        // A workflow of the organization without a name, a comment or an interface.
+        let bare = workflow(
+            json!({ "name": null, "description": null, "namespace": null }),
+            vec![version(json!({
+                "version": 1, "input": null, "output": null, "signals": null, "secrets": {},
+                "declarations": null
+            }))],
+        );
+        let text = describe_workflow_details(
+            &WorkflowDetails {
+                workflow: bare,
+                tests: Vec::new(),
+                updates: false,
+            },
+            &Limits::default(),
+        );
+        assert!(
+            text.starts_with(&format!(
+                "The workflow {ID} (no name; it shows as wf-7k2m9q), of the organization.\nIts version v1 of 1 version (digest 4be1c07a9d3e), made 2026-11-12T10:00:00Z.\nAction set: 9f2c"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("\nInterface: none. It takes any input, returns any output and accepts any signal name.\nCode:\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\nIts suite is empty: it has no test.\n"),
+            "{text}"
         );
     }
 
@@ -1888,23 +2276,28 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            describe_recorded("triage", &recorded, &limits),
+            describe_recorded("triage", &recorded, true, &limits),
             [
                 "Recorded 2 tests from the runs of triage, one per path:".to_owned(),
                 format!("- {} \"recorded {RUN_ID}\", from run {RUN_ID} (completed): github.list_issues · signal approval · github.close_issue×n → completed", "9f".repeat(32)),
                 format!("- {} \"recorded r-2\", from run r-2 (failed): github.list_issues → failed", "8e".repeat(32)),
                 "Skipped 1 run:".to_owned(),
                 "- r-big: its test would be larger than 4 MiB".to_owned(),
-                "They join no suite yet: pass their digests in save_workflow's `tests` to add them to the suite of triage's next version, or { \"from\": \"<digest>\", \"expect\": {…} } to give a failed run the expectation it should have met.".to_owned(),
+                "They join no suite yet: pass their digests in update_workflow's `tests` to add them to the suite of triage, or { \"test\": \"<digest>\", \"expect\": {…} } to give a failed run the expectation it should have met.".to_owned(),
             ]
             .join("\n")
+        );
+        assert!(
+            describe_recorded("triage", &recorded, false, &limits).ends_with(
+                "They join no suite: pass their digests in test_workflow's `tests` to run them against a code, or { \"test\": \"<digest>\", \"expect\": {…} } to give a failed run the expectation it should have met."
+            )
         );
         let none = RecordedTests {
             tests: vec![],
             skipped: vec![],
         };
         assert_eq!(
-            describe_recorded("triage", &none, &limits),
+            describe_recorded("triage", &none, true, &limits),
             "No test was recorded: no completed or failed run of triage was selected."
         );
     }
@@ -1917,36 +2310,55 @@ mod tests {
             "actionSet": "t", "epoch": 1, "mode": "live", "labels": {}, "traceId": "0", "historyLen": 4,
             "createdAt": "2026-11-12T10:00:00Z", "updatedAt": "2026-11-12T10:00:01Z",
             "expiresAt": "2026-12-12T10:00:00Z",
-            "workflow": { "name": "triage", "digest": VERSION, "version": 3 },
+            "workflow": { "id": ID, "name": "triage", "digest": VERSION, "version": 3 },
             "startedBy": {
-                "run": "source-1", "handle": "user_2fQ81/digest/06bqx3k9f2ms", "seq": 2,
+                "run": "source-1", "handle": "user_2fQ81/wf-0a1b2c/06bqx3k9f2ms", "seq": 2,
                 "detached": true
             }
         }))
         .unwrap();
-        // A run is named by its handle, and so are the runs it names.
+        // A run is named by its handle, and so are the runs it names; its workflow by its name,
+        // its id and its version.
         assert_eq!(
             describe_run(&run, &RunExtras::default(), &Limits::default())
                 .lines()
                 .next()
                 .unwrap(),
-            "Run user_2fQ81/triage/06bqx3k9f2mt (a run of the workflow triage@4be1c07a9d3e, started by run user_2fQ81/digest/06bqx3k9f2ms, detached) completed."
+            format!(
+                "Run user_2fQ81/triage/06bqx3k9f2mt (a run of the workflow triage@v3, id {ID}; started by run user_2fQ81/wf-0a1b2c/06bqx3k9f2ms, detached) completed."
+            )
         );
         let summary: RunSummary = serde_json::from_value(json!({
-            "id": "r2", "handle": "user_2fQ81/triage/06bqx3k9f2mv", "namespace": "user_2fQ81",
+            "id": "r2", "handle": "user_2fQ81/wf-7k2m9q/06bqx3k9f2mv", "namespace": "user_2fQ81",
             "status": "active", "quarantined": false, "codeDigest": "s",
-            "headline": "", "actionSet": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
+            "actionSet": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
             "lastActivityAt": "2026-11-12T10:00:00Z", "calls": 1, "errors": 0, "historyLen": 3,
-            "waitingFor": [], "workflow": "triage", "startedBy": "r1"
+            "waitingFor": [], "workflow": { "id": ID, "digest": VERSION, "version": 1 },
+            "startedBy": "r1"
         }))
         .unwrap();
         assert_eq!(
             describe_runs(&[summary], false, None),
             [
                 "1 run, most recent first:",
-                "- user_2fQ81/triage/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow triage, started by r1",
+                &format!("- user_2fQ81/wf-7k2m9q/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow {ID}@v1, started by r1"),
             ]
             .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_check_says_which_workflow_already_has_the_code() {
+        let checked: CheckResult = serde_json::from_value(json!({
+            "ok": true, "diagnostics": [],
+            "workflow": { "id": ID, "name": "triage", "version": 3, "digest": VERSION }
+        }))
+        .unwrap();
+        assert_eq!(
+            describe_check(&checked, &Limits::default()),
+            format!(
+                "The code type-checks.\nThis code is already the version v3 of the workflow triage (id {ID}): running it is a run of that workflow."
+            )
         );
     }
 }

@@ -4,7 +4,9 @@
 //!
 //! The rows are read as they were written: events and inbox items in the stored format v1
 //! (`rewind-format`), payload values in their canonical JSON, digests in hex, labels, scopes and
-//! secrets as JSON objects, booleans as integers, times in milliseconds.
+//! secrets as JSON objects, booleans as integers, times in milliseconds. A run's workflow is the
+//! catalog's: the version of the digest its row names, which the schema migration of the
+//! workflow model moved into `workflow_versions`, with its workflow.
 
 use rewind_core::{
     Digest, Epoch, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunId, SecretRef, Seq,
@@ -15,8 +17,8 @@ use rewind_engine::ports::legacy::{
 };
 use rewind_engine::ports::{
     ForkSource, InboxItem, NamespaceName, ParkKind, ParkReason, PayloadRecord, Quarantine,
-    QuarantineKind, RunMetadata, RunRef, RunWorkflow, StartedBy, TaskState, TraceContext, Trigger,
-    Watcher,
+    QuarantineKind, RunMetadata, RunRef, RunWorkflow, StartedBy, TaskState, TenantId, TraceContext,
+    Trigger, Watcher,
 };
 use turso::{Connection, Row, Value};
 
@@ -131,8 +133,43 @@ fn park_kind(name: &str) -> Result<ParkKind, Error> {
 const RUN_COLUMNS: &str = "id, tenant, namespace, script, toolset, epoch, expires_at, \
     expiry_enqueued, quarantine_kind, quarantine_reason, quarantine_since, quarantine_retried_by, \
     failures, attempts, labels, traceparent, tracestate, parent, parent_at, idempotency_key, \
-    created_at, updated_at, ended_at, archive_document, workflow, workflow_version, started_by, \
+    created_at, updated_at, ended_at, archive_document, workflow_version, started_by, \
     started_seq, detached, scope, secrets, origin, suffix_len";
+
+/// The workflow a run set aside ran, from the digest of the saved version its row names: the
+/// version of that digest the schema migration of the workflow model moved into
+/// `workflow_versions`, with its workflow. A saved version has an interface when its document
+/// has schemas, as every saved version did. `None` for a digest no version has.
+async fn run_workflow(
+    connection: &Connection,
+    tenant: &TenantId,
+    version: Option<Digest>,
+) -> Result<Option<RunWorkflow>, Error> {
+    let Some(version) = version else {
+        return Ok(None);
+    };
+    let row = sql::query_row(
+        connection,
+        "SELECT w.id, w.name, v.version, json_type(v.document, '$.schemas') IS NOT NULL \
+         FROM workflow_versions v JOIN workflows w ON w.tenant = v.tenant AND w.id = v.workflow \
+         WHERE v.tenant = ? AND v.digest = ? ORDER BY v.workflow, v.version LIMIT 1",
+        vec![sql::tenant(tenant), sql::digest(version)],
+    )
+    .await?;
+    row.map(|row| {
+        let id = row.text(0)?;
+        Ok(RunWorkflow {
+            id: id
+                .parse()
+                .map_err(|_| corrupt(format!("invalid workflow id {id:?}")))?,
+            name: row.opt_text(1)?,
+            version: row.u32(2)?,
+            digest: version,
+            interface: row.boolean(3)?,
+        })
+    })
+    .transpose()
+}
 
 fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
     let id = sql::parse_run_id(&row.text(0)?)?;
@@ -160,27 +197,20 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
             at: row.opt_u64(18)?,
         }),
     };
-    let workflow = match row.opt_text(24)? {
-        None => None,
-        Some(name) => Some(RunWorkflow {
-            name,
-            version: row.digest(25)?,
-        }),
-    };
-    let started_by = match row.opt_run_id(26)? {
+    let started_by = match row.opt_run_id(25)? {
         None => None,
         Some(run) => Some(StartedBy {
             run,
-            seq: Seq(u32_of(row.u64(27)?)?),
-            detached: row.boolean(28)?,
+            seq: Seq(u32_of(row.u64(26)?)?),
+            detached: row.boolean(27)?,
         }),
     };
     Ok(LegacyRun {
         run: RunRef::new(row.tenant(1)?, id),
         namespace: NamespaceName::new(namespace.clone())
             .map_err(|_| corrupt(format!("invalid namespace {namespace:?}")))?,
-        origin: row.text(31)?,
-        suffix_len: row.suffix_len(32)?,
+        origin: row.text(30)?,
+        suffix_len: row.suffix_len(31)?,
         code: row.digest(3)?,
         action_set: row.digest(4)?,
         epoch: Epoch(u32_of(row.u64(5)?)?),
@@ -193,10 +223,11 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
             labels: decode_labels(&row.text(14)?)?,
             trace_context,
             source: parent,
-            workflow,
+            // Read from the catalog by the version's digest, at column 24: `run_workflow`.
+            workflow: None,
             started_by,
-            allowed_labels: decode_labels(&row.text(29)?)?,
-            secrets: server_secrets(&row.text(30)?)?,
+            allowed_labels: decode_labels(&row.text(28)?)?,
+            secrets: server_secrets(&row.text(29)?)?,
         },
         idempotency_key: row.opt_text(19)?,
         created_at: row.ts(20)?,
@@ -388,6 +419,8 @@ impl TursoLegacy {
         let mut runs = Vec::with_capacity(rows.len());
         for row in &rows {
             let mut run = run_from_row(row)?;
+            run.metadata.workflow =
+                run_workflow(&connection, &run.run.tenant, row.opt_digest(24)?).await?;
             fill(&connection, &mut run).await?;
             runs.push(run);
         }

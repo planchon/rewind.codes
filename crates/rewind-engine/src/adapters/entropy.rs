@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rewind_core::{PartitionId, RunId, Seed, Timestamp};
+use rewind_core::{PartitionId, RunId, Seed, Timestamp, WorkflowId};
 
 use crate::ports::Entropy;
 
@@ -91,11 +91,15 @@ impl Entropy for SystemEntropy {
 }
 
 /// Deterministic run ids and seeds, derived from a base and a counter: tests and recorded
-/// scenarios get the same ids and seeds on every run.
+/// scenarios get the same ids and seeds on every run. Workflow ids come from a counter of their
+/// own: a run that creates its workflow draws the run ids and seeds it drew before workflows
+/// had ids.
 #[derive(Debug)]
 pub struct SeededEntropy {
     base: u64,
     counter: AtomicU64,
+    /// The workflow ids drawn so far.
+    workflows: AtomicU64,
     /// The millisecond and the random bits every run id of a partition shares, but the last 8.
     shared: Option<(Timestamp, u64)>,
     /// The run ids of partitions drawn so far.
@@ -107,6 +111,7 @@ impl SeededEntropy {
         Self {
             base,
             counter: AtomicU64::new(0),
+            workflows: AtomicU64::new(0),
             shared: None,
             drawn: AtomicU64::new(0),
         }
@@ -168,7 +173,17 @@ impl Entropy for SeededEntropy {
         }
         Seed::from_bytes(bytes)
     }
+
+    fn workflow_id(&self) -> WorkflowId {
+        let drawn = self.workflows.fetch_add(1, Ordering::SeqCst);
+        WorkflowId::from_bits(splitmix64(
+            self.base.rotate_left(17) ^ WORKFLOW_STREAM ^ drawn.rotate_left(40),
+        ))
+    }
 }
+
+/// What sets the stream of a [`SeededEntropy`]'s workflow ids apart from its run ids' and seeds'.
+const WORKFLOW_STREAM: u64 = 0x5746_5f73_7472_6561;
 
 /// SplitMix64: a fast, well-distributed mix of a 64-bit state. Not cryptographic.
 fn splitmix64(state: u64) -> u64 {

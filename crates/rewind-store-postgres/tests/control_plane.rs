@@ -1,5 +1,5 @@
-//! The control plane on Postgres in Docker: the conformance suites of `CatalogStore` and
-//! `Cluster`, each check on a new database; a node's liveness across connections and processes
+//! The control plane on Postgres in Docker: the conformance suites of `CatalogStore`,
+//! `CatalogMigration` and `Cluster`, each check on a new database; a node's liveness across connections and processes
 //! (a lock freed by a killed process wakes its watcher at once); the changes that access and
 //! secrets send; payloads above Postgres' limit; namespaces whose rows have no partition.
 
@@ -68,6 +68,8 @@ async fn the_control_plane_conforms_on_postgres() {
         })
     })
     .await;
+    conformance::catalog::run_migration(|| block_on(async { postgres.store().await.catalog() }))
+        .await;
     conformance::cluster::run_all(|| {
         block_on(async {
             let store = postgres.store().await;

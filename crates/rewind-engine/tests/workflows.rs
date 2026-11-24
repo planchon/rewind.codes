@@ -10,24 +10,22 @@ use std::collections::BTreeMap;
 
 use rewind_core::{
     ActionSet, Code, Command, Completion, Digest, Event, HistoryEvent, JsonValue, Lifecycle,
-    RunMode, RunStatus, Seq, ServerSecrets, WorkflowSchemas, end_signal_name, ended_run,
+    PinnedWorkflow, RunMode, RunStatus, Seq, ServerSecrets, WorkflowSchemas, end_signal_name,
+    ended_run,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, Created, Diagnostic, DiagnosticSource, Enqueued, Handoff,
-    NamespaceName, RunMetadata, RunRef, Severity, StartedBy, StoredWorkflow, TenantId,
-    WorkflowDeclarations,
+    NamespaceName, RunMetadata, RunRef, Severity, StartedBy, TenantId, WorkflowScope,
 };
-use rewind_engine::secrets::SecretRights;
-use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{
-    ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun, StartWorkflow,
+    CreateWorkflow, ForkRun, StartError, StartRun, StartWorkflow, WorkflowError, WrittenWorkflow,
 };
 use serde_json::json;
 use support::plane::World;
-use support::{FakeExecutor, RecordingDispatcher, kit};
+use support::{FakeExecutor, RecordingDispatcher, maker, workflow_kit};
 
 async fn status(world: &mut World, run: &RunRef) -> RunStatus {
     world.view(run).await.head.status
@@ -85,8 +83,20 @@ fn schemas() -> WorkflowSchemas {
 }
 
 /// `triage` waits for `approval`, then completes with how many issues it closed. A
-/// cancellation fails it with `CancelledError`, as the glue does.
+/// cancellation fails it with `CancelledError`, as the glue does. `waiter` waits for `approval`
+/// too, in a code no workflow has.
 fn triage(executor: FakeExecutor) -> FakeExecutor {
+    let executor = executor.with(
+        "waiter",
+        |run| run.await_signal("approval"),
+        |run, delivery| match delivery {
+            Handoff::SignalReceived { name, .. } if name == "approval" => {
+                run.complete(json!("approved"));
+            }
+            Handoff::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
+            _ => {}
+        },
+    );
     executor.with(
         "triage",
         |run| run.await_signal("approval"),
@@ -179,12 +189,12 @@ fn others(executor: FakeExecutor) -> FakeExecutor {
         )
 }
 
-/// A world where `triage` is registered, and the action set that pins it.
-async fn registered() -> (World, StoredWorkflow, ActionSet) {
+/// A world where `triage` is an organization's workflow, and the action set that pins it.
+async fn registered() -> (World, WrittenWorkflow, ActionSet) {
     registered_with(RecordingDispatcher::echo()).await
 }
 
-async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkflow, ActionSet) {
+async fn registered_with(dispatcher: RecordingDispatcher) -> (World, WrittenWorkflow, ActionSet) {
     let world = World::new(others(parent(triage(FakeExecutor::new()))), dispatcher).await;
     world
         .plane
@@ -196,35 +206,45 @@ async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkf
         )
         .await
         .unwrap();
-    let stored = world
+    let written = world
         .edge
-        .register_workflow(
+        .create_workflow(
             register("triage", schemas()),
-            &StaticTypeChecker::default(),
-            &kit(),
+            &workflow_kit(&StaticTypeChecker::default()),
         )
         .await
         .unwrap();
     let action_set = ActionSet::from_harness_actions(["notify"])
         .unwrap()
-        .with_workflows([stored.workflow.pinned()])
+        .with_workflows([pinned(&written)])
         .unwrap();
-    (world, stored, action_set)
+    (world, written, action_set)
 }
 
-fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
-    RegisterWorkflow {
+/// What an action set pins of a workflow's version.
+fn pinned(written: &WrittenWorkflow) -> PinnedWorkflow {
+    PinnedWorkflow {
+        name: written.workflow.name.clone().unwrap(),
+        id: written.workflow.id.clone(),
+        version: written.version.version,
+        digest: written.version.digest,
+        description: written.workflow.description.clone(),
+        schemas: written.version.document.interface().cloned().unwrap(),
+    }
+}
+
+fn register(name: &str, schemas: WorkflowSchemas) -> CreateWorkflow {
+    CreateWorkflow {
         tenant: TenantId::local(),
-        name: name.into(),
+        scope: WorkflowScope::Organization,
+        name: Some(name.into()),
         description: Some("Triage the stale issues of a repository.".into()),
         code: Code::new("triage"),
         action_set: child_action_set().digest(),
-        schemas,
-        labels: BTreeMap::new(),
+        interface: Some(schemas),
         secrets: ServerSecrets::new(),
-        secret_rights: SecretRights::NamespaceOnly,
-        declarations: WorkflowDeclarations::default(),
-        suite: SuiteChanges::default(),
+        tests: Vec::new(),
+        maker: maker(),
     }
 }
 
@@ -241,14 +261,14 @@ fn start_parent(action_set: &ActionSet, input: JsonValue) -> StartRun {
 
 /// A run of `triage`'s version in `namespace`.
 fn of_version(
-    stored: &StoredWorkflow,
+    stored: &WrittenWorkflow,
     namespace: NamespaceName,
     input: JsonValue,
 ) -> StartWorkflow {
     StartWorkflow {
         tenant: TenantId::local(),
         namespace,
-        version: stored.workflow.version(),
+        reference: format!("triage@v{}", stored.version.version),
         input,
         ttl: None,
         metadata: RunMetadata::default(),
@@ -301,8 +321,18 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
     assert_eq!(head.action_set, child_action_set().digest());
     let workflow = head.metadata.workflow.clone().unwrap();
     assert_eq!(
-        (workflow.name.as_str(), workflow.version),
-        ("triage", stored.workflow.version())
+        (
+            workflow.id,
+            workflow.name.as_deref(),
+            workflow.version,
+            workflow.digest
+        ),
+        (
+            stored.workflow.id.clone(),
+            Some("triage"),
+            1,
+            stored.version.digest
+        )
     );
     assert_eq!(
         head.metadata.started_by,
@@ -389,7 +419,7 @@ async fn signals_to_a_run_of_a_workflow_are_checked_against_its_version() {
     world.idle().await;
     assert_eq!(
         world.view(&run).await.head.metadata.workflow.unwrap().name,
-        "triage"
+        Some("triage".to_owned())
     );
 
     let refused = |result: Result<Enqueued, EdgeError>| match result {
@@ -418,14 +448,38 @@ async fn signals_to_a_run_of_a_workflow_are_checked_against_its_version() {
     );
     assert!(reserved.contains("reserved"), "{reserved}");
 
-    // A run that is no workflow's takes any name, but not Rewind's.
-    let ad_hoc = world
+    // A run given the code of a version is a run of that version: its signals are checked.
+    let of_its_code = world
         .run(StartRun::new(
             Code::new("triage"),
             child_action_set(),
             json!({}),
         ))
         .await;
+    let workflow = world
+        .view(&of_its_code)
+        .await
+        .head
+        .metadata
+        .workflow
+        .unwrap();
+    assert_eq!(
+        (workflow.id, workflow.version),
+        (stored.workflow.id.clone(), 1)
+    );
+    refused(world.signal(&of_its_code, "anything", json!(1), None).await);
+    // A run of a version without an interface, as a run given new code makes it, takes any
+    // name, but not Rewind's.
+    let ad_hoc = world
+        .run(StartRun::new(
+            Code::new("waiter"),
+            child_action_set(),
+            json!({}),
+        ))
+        .await;
+    let workflow = world.view(&ad_hoc).await.head.metadata.workflow.unwrap();
+    assert_ne!(workflow.id, stored.workflow.id);
+    assert!(!workflow.interface);
     assert_eq!(
         world
             .signal(&ad_hoc, "anything", json!(1), None)
@@ -464,44 +518,62 @@ async fn a_start_is_refused_when_its_input_does_not_match() {
     };
     assert!(message.contains("input.repo"), "{message}");
     let mut elsewhere = of_version(&stored, local(), json!({}));
-    elsewhere.version = Digest::of(b"nothing");
+    elsewhere.reference = format!("triage@{}", Digest::of(b"nothing").to_hex());
     assert!(matches!(
         start_workflow(&mut world, elsewhere).await,
         Err(StartError::WorkflowNotFound(_))
     ));
+    let mut nameless = of_version(&stored, local(), json!({}));
+    nameless.reference = "nothing".into();
+    assert!(matches!(
+        start_workflow(&mut world, nameless).await,
+        Err(StartError::WorkflowNotFound(_))
+    ));
+    let mut malformed = of_version(&stored, local(), json!({}));
+    malformed.reference = "triage@v1x".into();
+    assert!(matches!(
+        start_workflow(&mut world, malformed).await,
+        Err(StartError::InvalidWorkflowReference(_))
+    ));
 }
 
 #[tokio::test]
-async fn registering_checks_the_name_the_schemas_the_action_set_and_the_types() {
+async fn creating_checks_the_name_the_schemas_the_action_set_and_the_types() {
     let (world, stored, _) = registered().await;
     let checker = StaticTypeChecker::default();
+    let kit = workflow_kit(&checker);
+    let create = |request| world.edge.create_workflow(request, &kit);
     assert!(matches!(
-        world
-            .edge
-            .register_workflow(register("default", schemas()), &checker, &kit())
-            .await,
-        Err(RegisterError::Invalid(_))
+        create(register("default", schemas())).await,
+        Err(WorkflowError::Invalid(_))
+    ));
+    assert!(matches!(
+        create(register("wf_triage", schemas())).await,
+        Err(WorkflowError::Invalid(_))
     ));
     let mut unusable = schemas();
     unusable.output = json!({ "$ref": "https://schemas.example.com/out.json" });
     assert!(matches!(
-        world.edge.register_workflow(register("triage", unusable), &checker, &kit()).await,
-        Err(RegisterError::Schema { which, .. }) if which == "output"
+        create(register("other", unusable)).await,
+        Err(WorkflowError::Schema { which, .. }) if which == "output"
     ));
-    let mut elsewhere = register("triage", schemas());
+    let mut elsewhere = register("other", schemas());
     elsewhere.action_set = Digest::of(b"unknown");
     assert!(matches!(
-        world
-            .edge
-            .register_workflow(elsewhere, &checker, &kit())
-            .await,
-        Err(RegisterError::ActionSetNotFound(_))
+        create(elsewhere).await,
+        Err(WorkflowError::ActionSetNotFound(_))
     ));
-    let mut broken = register("triage", schemas());
+    let mut broken = register("other", schemas());
     broken.code = Code::new("syntax error here");
     assert!(matches!(
-        world.edge.register_workflow(broken, &checker, &kit()).await,
-        Err(RegisterError::InvalidCode(_))
+        create(broken).await,
+        Err(WorkflowError::InvalidCode(_))
+    ));
+    let mut described = register("other", schemas());
+    described.description = Some("x".repeat(2_001));
+    assert!(matches!(
+        create(described).await,
+        Err(WorkflowError::DescriptionTooLong(2_001))
     ));
     let error = Diagnostic {
         line: 1,
@@ -516,33 +588,49 @@ async fn registering_checks_the_name_the_schemas_the_action_set_and_the_types() 
     assert!(matches!(
         world
             .edge
-            .register_workflow(register("triage", schemas()), &refusing, &kit())
+            .create_workflow(register("other", schemas()), &workflow_kit(&refusing))
             .await,
-        Err(RegisterError::TypeErrors(_))
+        Err(WorkflowError::TypeErrors(_))
     ));
 
-    // Saving the same version again changes nothing; a new description is a new version.
-    let again = world
-        .edge
-        .register_workflow(register("triage", schemas()), &checker, &kit())
-        .await
-        .unwrap();
-    assert_eq!(again, stored);
-    let mut next = register("triage", schemas());
-    next.description = None;
-    let next = world
-        .edge
-        .register_workflow(next, &checker, &kit())
-        .await
-        .unwrap();
-    assert_ne!(next.workflow.version(), stored.workflow.version());
+    // Creating it again (a retry whose answer was lost) answers the workflow it created; the
+    // name with other content is taken.
+    let again = create(register("triage", schemas())).await.unwrap();
+    assert_eq!(
+        (&again.workflow.id, again.version.version, again.created),
+        (&stored.workflow.id, 1, false)
+    );
+    let mut other = register("triage", schemas());
+    other.code = Code::new("parent");
+    assert!(matches!(
+        create(other).await,
+        Err(WorkflowError::NameTaken(_))
+    ));
+    // Without a name, a code its scope already has answers that code's workflow.
+    let mut nameless = register("triage", schemas());
+    nameless.name = None;
+    nameless.interface = None;
+    let found = create(nameless).await.unwrap();
+    assert_eq!(
+        (&found.workflow.id, found.created),
+        (&stored.workflow.id, false)
+    );
+    // In a namespace, it is another workflow, without an interface.
+    let mut in_namespace = register("triage", schemas());
+    in_namespace.name = None;
+    in_namespace.interface = None;
+    in_namespace.scope = WorkflowScope::Namespace(local());
+    let created = create(in_namespace).await.unwrap();
+    assert!(created.created);
+    assert_ne!(created.workflow.id, stored.workflow.id);
+    assert_eq!(created.version.document.interface(), None);
     let versions = world
         .plane
         .catalog
-        .workflow_versions(&TenantId::local(), "triage", &BTreeMap::new())
+        .versions(&TenantId::local(), &stored.workflow.id, &BTreeMap::new())
         .await
         .unwrap();
-    assert_eq!(versions.len(), 2);
+    assert_eq!(versions.len(), 1);
 }
 
 #[tokio::test]
@@ -562,7 +650,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_allowed_labels()
         .await
         .unwrap()
         .run;
-    let mut ad_hoc = StartRun::new(Code::new("triage"), child_action_set(), json!({}));
+    let mut ad_hoc = StartRun::new(Code::new("waiter"), child_action_set(), json!({}));
     ad_hoc.metadata.labels = scope.clone();
     let ad_hoc = world.start(ad_hoc).await.unwrap().run;
     let unknown: rewind_core::RunId = "0193a5c4-0000-7000-8000-00000000abcd".parse().unwrap();
@@ -624,7 +712,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_allowed_labels()
         "{failed:?}"
     );
 
-    // A version saved without the scope's labels is not started from a scoped run: it may use
+    // A version made without the scope's labels is not started from a scoped run: it may use
     // the organization's secrets of other labels.
     let mut scoped = StartRun::new(Code::new("starter"), action_set.clone(), json!({}));
     scoped.metadata.allowed_labels = scope.clone();
@@ -633,7 +721,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_allowed_labels()
     let failed = failure(&mut world, &run).await;
     assert!(
         failed.as_deref().is_some_and(
-            |message| message.contains("was not saved under this run's allowed labels")
+            |message| message.contains("was not made under this run's allowed labels")
         ),
         "{failed:?}"
     );

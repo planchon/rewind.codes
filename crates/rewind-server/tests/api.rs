@@ -18,6 +18,7 @@ use rewind_api::action_sets::{ActionPolicy, CreateActionSet, HarnessAction};
 use rewind_api::calls::{
     CallState, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
 };
+use rewind_api::checks::CheckRequest;
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamMessage};
 use rewind_api::headers::IdempotencyKey;
@@ -25,10 +26,10 @@ use rewind_api::runs::{
     CancelRun, ExportAs, FailureQuery, ForkRun, RunFilter, RunSort, RunStatsQuery, StartRun,
     WaitKind, Waiting,
 };
-use rewind_api::scripts::{CheckRequest, ScriptFilter};
 use rewind_api::webhooks::{
     CreateSubscription, SignedHeaders, Webhook, WebhookSecret, WebhookType,
 };
+use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
 use support::{TaskWorker, TestServer, eventually, wait};
@@ -150,19 +151,30 @@ async fn a_run_starts_waits_and_is_read_back() {
     })
     .await;
     assert_eq!(listed.status, RunStatus::Completed);
-    assert_eq!(listed.headline, "import { sleep } from \"rewind\";");
-    let scripts = harness
-        .list_scripts(&ScriptFilter {
-            digest: Some(run.code_digest.clone()),
-            ..ScriptFilter::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(scripts.scripts.len(), 1);
-    assert_eq!(scripts.scripts[0].runs.completed, 1);
-    let code = harness.get_script(&run.code_digest).await.unwrap();
-    assert_eq!(code.source, SLEEP);
-    assert_eq!(code.runs.completed, 1);
+    let of = run.workflow.clone().unwrap();
+    assert_eq!(listed.workflow.as_ref(), Some(&of));
+    // The run created its workflow, which counts it.
+    let workflows = eventually(|| async {
+        let page = harness
+            .list_workflows(&WorkflowQuery {
+                code: Some(run.code_digest.clone()),
+                ..WorkflowQuery::default()
+            })
+            .await
+            .unwrap();
+        (page.workflows.len() == 1 && page.workflows[0].runs.completed == 1).then_some(page)
+    })
+    .await;
+    assert_eq!(workflows.workflows[0].id, of.id);
+    let workflow = harness.get_workflow(&of.id).await.unwrap();
+    assert_eq!(workflow.code, SLEEP);
+    assert_eq!(
+        (
+            workflow.version.version,
+            workflow.version.code_digest.as_str()
+        ),
+        (1, run.code_digest.as_str())
+    );
 
     harness.delete_run(&run.id).await.unwrap();
     assert_eq!(
@@ -1134,13 +1146,19 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
     let my_input = input(&scoped, mine.id.clone()).await;
 
     // Workflows: only those of the runs the key sees.
-    eventually(|| async { scoped.get_script(&mine.code_digest).await.ok() }).await;
-    assert_eq!(
-        problem(scoped.get_script(&theirs.code_digest).await.unwrap_err()).kind(),
-        Some(ProblemType::NotFound),
-        "the code of a run the key does not see"
+    let mine_of = mine.workflow.clone().unwrap().id;
+    let theirs_of = theirs.workflow.clone().unwrap().id;
+    assert_ne!(
+        mine_of, theirs_of,
+        "a key limited to labels has its own workflow"
     );
-    reader.get_script(&theirs.code_digest).await.unwrap();
+    scoped.get_workflow(&mine_of).await.unwrap();
+    assert_eq!(
+        problem(scoped.get_workflow(&theirs_of).await.unwrap_err()).kind(),
+        Some(ProblemType::NotFound),
+        "the workflow of a run the key does not see"
+    );
+    reader.get_workflow(&theirs_of).await.unwrap();
 
     // Payloads: through a run the key sees, which references them.
     assert_eq!(

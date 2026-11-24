@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rewind_core::{
-    ActionFailure, ActionSet, Annotation, Code, Command, Completion, Event, HistoryEvent, RunMode,
-    RunOutcome, RunState, RunStatus, Workflow, WorkflowSchemas,
+    ActionFailure, ActionSet, Annotation, Code, Command, Completion, Event, HistoryEvent,
+    PinnedWorkflow, RunMode, RunOutcome, RunState, RunStatus, WorkflowId, WorkflowSchemas,
+    WorkflowVersion,
 };
 use rewind_engine::ports::{
     ActionDeclarations, ActionDispatcher, Call, CallAuth, CatalogStore, CodeExecutor, Dispatched,
-    Predicate, RunRef, TenantId,
+    NewWorkflow, Predicate, RunRef, TenantId, WorkflowCreated, WorkflowScope,
 };
 use rewind_engine::{ReplayVerdict, StartError, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
@@ -114,21 +115,38 @@ async fn harness_with(
         .compile(&code, &child_action_set)
         .unwrap();
     catalog.put_code(&tenant, &code, &compiled).await.unwrap();
-    let workflow = Workflow::new(
-        "triage",
-        None,
-        code.digest(),
-        child_action_set.digest(),
-        schemas(),
-    )
-    .unwrap();
-    let stored = catalog
-        .put_workflow(&tenant, &workflow, world.now())
+    let version = WorkflowVersion::new(code.digest(), child_action_set.digest())
+        .with_interface(Some(schemas()))
+        .unwrap();
+    let id = WorkflowId::from_bits(7);
+    let created = catalog
+        .create_workflow(
+            &tenant,
+            &NewWorkflow {
+                id: id.clone(),
+                scope: WorkflowScope::Organization,
+                name: Some("triage".into()),
+                description: None,
+                labels: BTreeMap::new(),
+                source: None,
+                created_by: "key:test".into(),
+                version: version.clone(),
+            },
+            world.now(),
+        )
         .await
         .unwrap();
+    assert!(matches!(created, WorkflowCreated::Created(_)));
     let action_set = ActionSet::from_harness_actions(["notify"])
         .unwrap()
-        .with_workflows([stored.workflow.pinned()])
+        .with_workflows([PinnedWorkflow {
+            name: "triage".into(),
+            id,
+            version: 1,
+            digest: version.digest(),
+            description: None,
+            schemas: schemas(),
+        }])
         .unwrap();
     Harness { world, action_set }
 }

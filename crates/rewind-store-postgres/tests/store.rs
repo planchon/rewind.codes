@@ -1,25 +1,27 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
 //! migrations, the keys of version 1 becoming keys and grants, servers starting together, what a
 //! call dropped half-way leaves, secrets at rest, the master key replaced and the credentials of
-//! version 9 dropped, the handles and numbers given to what version 12 stored, the byte order of
-//! tenants, and owners demoting each other at once.
+//! version 9 dropped, the handles and numbers given to what version 12 stored, the saved
+//! workflows of version 15 becoming the workflow model's, the byte order of tenants, and owners
+//! demoting each other at once.
 //!
 //! The checks share one Postgres container, each on a new database.
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use futures_util::future::join_all;
 use rewind_core::{
-    Digest, RunId, SecretName, Suite, SuiteTest, Timestamp, Workflow, WorkflowSchemas,
+    Digest, RunId, SecretName, Suite, SuiteTest, Timestamp, WorkflowId, WorkflowVersion,
 };
 use rewind_engine::ports::legacy::LegacyRuns;
 use rewind_engine::ports::{
-    AccessStore, ApiKey, CatalogStore, Grant, GrantDeletion, GrantWrite, NamespaceName, NewSecret,
-    Principal, Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
-    TestRecord,
+    AccessStore, ApiKey, CatalogMigration, CatalogStore, CodeTitle, Grant, GrantDeletion,
+    GrantWrite, NamespaceName, NewSecret, NewVersion, NewWorkflow, Principal, RunWorkflow,
+    ScopeFilter, Secret, SecretError, SecretId, SecretReader, SecretStore, StoredWorkflow,
+    SuiteMember, Tenant, TenantId, TestRecord, WorkflowCreated, WorkflowFilter, WorkflowScope,
 };
 use rewind_store_postgres::{Config, Error, MasterKey, MasterKeys, PostgresStore, SCHEMA_VERSION};
 use support::Postgres;
@@ -62,6 +64,7 @@ async fn the_database_behind_the_store() {
     check!(two_rewraps_at_once_change_each_data_key_once);
     check!(the_credentials_of_version_9_are_dropped);
     check!(runs_and_workflows_of_version_12_get_handles_and_numbers);
+    check!(saved_workflows_of_version_15_become_workflows);
 }
 
 async fn a_new_database_gets_the_current_schema(postgres: &Postgres) {
@@ -495,8 +498,8 @@ async fn two_rewraps_at_once_change_each_data_key_once(postgres: &Postgres) {
     }
 }
 
-/// The migrations released before run handles, version 1 first.
-const RELEASED: [&str; 13] = [
+/// The migrations released before the workflow model, version 1 first.
+const RELEASED: [&str; 15] = [
     include_str!("../migrations/0001_schema.sql"),
     include_str!("../migrations/0002_access.sql"),
     include_str!("../migrations/0003_workflows.sql"),
@@ -510,6 +513,8 @@ const RELEASED: [&str; 13] = [
     include_str!("../migrations/0011_run_orders.sql"),
     include_str!("../migrations/0012_run_changes.sql"),
     include_str!("../migrations/0013_run_handles.sql"),
+    include_str!("../migrations/0014_control_plane.sql"),
+    include_str!("../migrations/0015_legacy.sql"),
 ];
 
 /// Migrations 1 to `n`: a database as a build of schema version `n` left it.
@@ -599,20 +604,30 @@ async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
     assert_eq!(store.master_keys_in_use().await, Ok(vec![key().id()]));
 }
 
-/// A version of the workflow `name` that runs `code`.
-fn workflow(name: &str, code: &str) -> Workflow {
-    Workflow::new(
-        name,
-        None,
-        Digest::of(code.as_bytes()),
-        Digest::of(b"action_set"),
-        WorkflowSchemas {
-            input: serde_json::json!({ "type": "object" }),
-            output: serde_json::json!({}),
-            signals: BTreeMap::new(),
-        },
-    )
-    .expect("a valid workflow")
+/// A version of the saved workflow `name` that runs `code`, as a build before the workflow model
+/// stored it in `workflows.document` (the names of before the renames: `script`, `toolset`), and
+/// its digest. `fields` are set over it; a `null` removes one.
+fn saved_version(name: &str, code: &str, fields: serde_json::Value) -> (String, Digest) {
+    let mut document = serde_json::json!({
+        "v": 1,
+        "name": name,
+        "script": Digest::of(code.as_bytes()).to_hex(),
+        "toolset": Digest::of(b"action_set").to_hex(),
+        "schemas": { "input": { "type": "object" }, "output": {}, "signals": {} },
+    });
+    if let (Some(document), serde_json::Value::Object(fields)) = (document.as_object_mut(), fields)
+    {
+        for (field, value) in fields {
+            if value.is_null() {
+                document.remove(&field);
+            } else {
+                document.insert(field, value);
+            }
+        }
+    }
+    let text = rewind_core::canonical_json(&document);
+    let digest = Digest::of(text.as_bytes());
+    (text, digest)
 }
 
 /// The runs and workflow versions of a server of schema version 12 get handles and numbers once
@@ -620,7 +635,9 @@ fn workflow(name: &str, code: &str) -> Workflow {
 /// `legacy` for `migrate-runs`. Runs of a tenant whose ids share their first 64 bits take the
 /// full suffix; the others keep the short one, as do the runs of another tenant. A run's origin
 /// is its workflow, or `script`. Versions are numbered by workflow and tenant, by their creation,
-/// then in the order they were stored, and a new one takes the next number.
+/// then in the order they were stored, and keep their numbers in the workflow model (migration
+/// 16), where a new one takes the next number. A run of a saved version is a run of its
+/// workflow's version.
 async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Postgres) {
     use rewind_core::{MAX_SUFFIX_LEN, SUFFIX_LEN, run_suffix};
 
@@ -635,7 +652,8 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
         .await
         .expect("apply migrations 1 to 12");
 
-    let triage = workflow("triage", "t1");
+    let none = serde_json::json!({});
+    let triage = saved_version("triage", "t1", none.clone());
     let ms = 1_795_383_896_000;
     // Two runs of `acme` made in one millisecond with the same 12 bits after it, as ids were
     // before handles; a third with other bits; a run of `beta` with the twins' bits.
@@ -650,8 +668,8 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
     );
     let runs = [
         ("acme", twin, None),
-        ("acme", other_twin, None),
-        ("acme", alone, Some(&triage)),
+        ("acme", other_twin, Some(("triage", Digest::of(b"gone")))),
+        ("acme", alone, Some(("triage", triage.1))),
         ("beta", elsewhere, None),
     ];
     for (tenant, id, workflow) in runs {
@@ -664,34 +682,34 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
         .bind(id.as_uuid())
         .bind(Digest::of(b"script").as_bytes().to_vec())
         .bind(Digest::of(b"action_set").as_bytes().to_vec())
-        .bind(workflow.map(|workflow| workflow.name()))
-        .bind(workflow.map(|workflow| workflow.version().as_bytes().to_vec()))
+        .bind(workflow.map(|(name, _)| name))
+        .bind(workflow.map(|(_, version)| version.as_bytes().to_vec()))
         .execute(&pool)
         .await
         .expect("a run of version 12");
     }
     // Versions of `triage` in `acme`: two created at once, then one created before them but
     // stored last; one of another workflow, and one of `triage` in `beta`.
-    let second = workflow("triage", "t2");
-    let first = workflow("triage", "t3");
-    let digest = workflow("digest", "d1");
-    let theirs = workflow("triage", "x1");
+    let second = saved_version("triage", "t2", none.clone());
+    let first = saved_version("triage", "t3", none.clone());
+    let digest = saved_version("digest", "d1", none.clone());
+    let theirs = saved_version("triage", "x1", none);
     let versions = [
-        ("acme", &triage, 10),
-        ("acme", &second, 10),
-        ("acme", &first, 5),
-        ("acme", &digest, 1),
-        ("beta", &theirs, 1),
+        ("acme", "triage", &triage, 10),
+        ("acme", "triage", &second, 10),
+        ("acme", "triage", &first, 5),
+        ("acme", "digest", &digest, 1),
+        ("beta", "triage", &theirs, 1),
     ];
-    for (tenant, workflow, created_at) in versions {
+    for (tenant, name, (document, version), created_at) in versions {
         sqlx::query(
             "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
              VALUES ($1, $2, $3, $4, '{}', $5)",
         )
         .bind(tenant)
-        .bind(workflow.version().as_bytes().to_vec())
-        .bind(workflow.name())
-        .bind(rewind_format::encode_workflow(workflow))
+        .bind(version.as_bytes().to_vec())
+        .bind(name)
+        .bind(document)
         .bind(created_at)
         .execute(&pool)
         .await
@@ -702,19 +720,19 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
     let store = postgres.connect(&database).await;
     assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
     let acme = TenantId::new("acme").expect("tenant");
-    let beta = TenantId::new("beta").expect("tenant");
-    let set_aside: BTreeMap<RunId, (String, String, usize)> = store
+    let set_aside = store
         .legacy()
         .runs(None, 10)
         .await
-        .expect("the runs set aside")
-        .into_iter()
+        .expect("the runs set aside");
+    let handles: BTreeMap<RunId, (String, String, usize)> = set_aside
+        .iter()
         .map(|run| {
             (
                 run.run.id,
                 (
                     run.run.tenant.to_string(),
-                    run.origin,
+                    run.origin.clone(),
                     usize::from(run.suffix_len),
                 ),
             )
@@ -723,54 +741,423 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
     let handle =
         |tenant: &str, origin: &str, len: usize| (tenant.to_owned(), origin.to_owned(), len);
     assert_eq!(
-        set_aside,
+        handles,
         BTreeMap::from([
             (twin, handle("acme", "script", MAX_SUFFIX_LEN)),
-            (other_twin, handle("acme", "script", MAX_SUFFIX_LEN)),
+            (other_twin, handle("acme", "triage", MAX_SUFFIX_LEN)),
             (alone, handle("acme", "triage", SUFFIX_LEN)),
             (elsewhere, handle("beta", "script", SUFFIX_LEN)),
         ]),
         "a run of a workflow is its workflow's; the runs of another tenant do not count"
     );
+    let triage_id = WorkflowId::of_saved("acme", "triage");
+    let workflows: BTreeMap<RunId, Option<RunWorkflow>> = set_aside
+        .into_iter()
+        .map(|run| (run.run.id, run.metadata.workflow))
+        .collect();
+    assert_eq!(
+        workflows,
+        BTreeMap::from([
+            (twin, None),
+            (other_twin, None),
+            (
+                alone,
+                Some(RunWorkflow {
+                    id: triage_id.clone(),
+                    name: Some("triage".into()),
+                    version: 2,
+                    digest: triage.1,
+                    interface: true,
+                })
+            ),
+            (elsewhere, None),
+        ]),
+        "a run of a saved version runs its workflow's version; one of a version the catalog \
+         does not have, none"
+    );
 
-    let catalog = store.catalog();
-    let number = |tenant: &TenantId, workflow: &Workflow| {
-        let (tenant, version) = (tenant.clone(), workflow.version());
-        let catalog = &catalog;
-        async move {
-            catalog
-                .get_workflow(&tenant, version)
-                .await
-                .expect("get_workflow")
-                .expect("the version is kept")
-                .number
-        }
+    let number = |tenant: &str, version: Digest| {
+        postgres.psql(
+            &database,
+            &format!(
+                "SELECT w.name || ' ' || v.version FROM workflow_versions v \
+                 JOIN workflows w ON w.tenant = v.tenant AND w.id = v.workflow \
+                 WHERE v.tenant = '{tenant}' AND v.digest = '\\x{}'",
+                version.to_hex()
+            ),
+        )
     };
-    assert_eq!(number(&acme, &first).await, 1, "created first");
-    assert_eq!(number(&acme, &triage).await, 2, "stored before the other");
-    assert_eq!(number(&acme, &second).await, 3);
-    assert_eq!(number(&acme, &digest).await, 1);
-    assert_eq!(number(&beta, &theirs).await, 1);
-    let numbered = catalog
-        .workflow_number(&acme, "triage", 1)
-        .await
-        .expect("workflow_number")
-        .expect("version 1");
-    assert_eq!(numbered.workflow, first);
+    assert_eq!(number("acme", first.1), "triage 1", "created first");
+    assert_eq!(
+        number("acme", triage.1),
+        "triage 2",
+        "stored before the other"
+    );
+    assert_eq!(number("acme", second.1), "triage 3");
+    assert_eq!(number("acme", digest.1), "digest 1");
+    assert_eq!(number("beta", theirs.1), "triage 1");
+    let catalog = store.catalog();
     let next = catalog
-        .put_workflow(&acme, &workflow("triage", "t4"), T0)
+        .put_version(
+            &acme,
+            &triage_id,
+            &NewVersion {
+                document: WorkflowVersion::new(Digest::of(b"t4"), Digest::of(b"action_set")),
+                pulled: None,
+            },
+            T0,
+        )
         .await
-        .expect("put_workflow");
-    assert_eq!(next.number, 4, "a new version takes the next number");
+        .expect("put_version");
+    assert_eq!(next.version, 4, "a new version takes the next number");
     assert_eq!(
         catalog
-            .put_workflow(&acme, &triage, T0)
+            .workflow(&acme, &triage_id)
             .await
-            .expect("put_workflow")
-            .number,
-        2,
-        "a version put again keeps its number"
+            .expect("workflow")
+            .map(|workflow| workflow.latest),
+        Some(4)
     );
+}
+
+/// What a server of schema version 15 saved becomes the workflow model's (migration 16): each
+/// saved workflow the organization's, its id derived from its tenant and name, with its name, its
+/// latest version's description, its first version's labels, its versions numbered as they were
+/// and their documents as they are, the codes they ran (each the first workflow's to run it) and
+/// the suite of its latest version, with the tests older versions left and why. The titles people
+/// gave codes wait for `rename-data`; the permission to write scripts, toolsets or actions writes
+/// workflows.
+async fn saved_workflows_of_version_15_become_workflows(postgres: &Postgres) {
+    use serde_json::json;
+
+    let database = postgres.create_database();
+    let pool = sqlx::PgPool::connect(&postgres.url(&database))
+        .await
+        .expect("connect");
+    sqlx::migrate::Migrator::new(Released(15))
+        .await
+        .expect("migrations 1 to 15")
+        .run(&pool)
+        .await
+        .expect("apply migrations 1 to 15");
+
+    let hex = |text: &str| Digest::of(text.as_bytes()).to_hex();
+    let test = |name: &str| Digest::of(name.as_bytes());
+    let (a, b, b2, c, erased) = (test("a"), test("b"), test("b2"), test("c"), test("erased"));
+    for digest in [a, b, b2, c] {
+        sqlx::query(
+            "INSERT INTO tests (tenant, digest, namespace, size, reserved_at) \
+             VALUES ('acme', $1, NULL, 100, 1)",
+        )
+        .bind(digest.as_bytes().to_vec())
+        .execute(&pool)
+        .await
+        .expect("a test of version 15");
+    }
+    let suite = |tests: &[(&str, Digest)]| {
+        tests
+            .iter()
+            .map(|(name, test)| json!({ "name": name, "test": test.to_hex() }))
+            .collect::<Vec<_>>()
+    };
+    // `triage`: version 1 as written before the code was named so; version 2, under labels,
+    // named so, retires `a` and replaces `b`; version 3 takes `a` back.
+    let v1 = saved_version(
+        "triage",
+        "t1",
+        json!({ "description": "Triage.", "tests": suite(&[("a", a), ("b", b)]) }),
+    );
+    let v2 = saved_version(
+        "triage",
+        "t2",
+        json!({
+            "script": null,
+            "toolset": null,
+            "code": hex("t2"),
+            "action_set": hex("action_set"),
+            "description": "Triage issues.",
+            "labels": { "env": "dev" },
+            "tests": suite(&[("b", b2), ("c", c)]),
+            "retired": [{ "name": "a", "test": a.to_hex(), "reason": "deprecated" }],
+            "replaced": [{
+                "name": "b", "old": b.to_hex(), "new": b2.to_hex(), "reason": "out of date"
+            }],
+        }),
+    );
+    let v3 = saved_version(
+        "triage",
+        "t2",
+        json!({
+            "description": "Triage the issues.",
+            "tests": suite(&[("a", a), ("b", b2), ("c", c)]),
+        }),
+    );
+    // `digest` runs `triage`'s first code, after it; the row of its test was erased.
+    let digest = saved_version("digest", "t1", json!({ "tests": suite(&[("d", erased)]) }));
+    let gym = saved_version("prod_gym", "g1", json!({}));
+    let saved = [
+        ("acme", "triage", &v1, "{}", 10, 1),
+        ("acme", "digest", &digest, "{}", 15, 1),
+        ("acme", "triage", &v2, r#"{"env": "dev"}"#, 20, 2),
+        ("acme", "triage", &v3, "{}", 30, 3),
+        ("dax-staging", "prod_gym", &gym, "{}", 5, 1),
+    ];
+    for (tenant, name, (document, version), labels, created_at, number) in saved {
+        sqlx::query(
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at, number) \
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)",
+        )
+        .bind(tenant)
+        .bind(version.as_bytes().to_vec())
+        .bind(name)
+        .bind(document)
+        .bind(labels)
+        .bind(created_at)
+        .bind(number)
+        .execute(&pool)
+        .await
+        .expect("a saved version of version 15");
+    }
+    let creator = format!("key:{}", Digest::of(b"key").to_hex());
+    for statement in [
+        "INSERT INTO script_titles (tenant, digest, title, description, updated_by, updated_at) \
+         VALUES ('acme', sha256('t3'), 'Weekly report', 'Sends it.', 'member:user_1', 1)"
+            .to_owned(),
+        "INSERT INTO roles (tenant, name, description, permissions, created_at, updated_at) \
+         VALUES ('acme', 'writer', '', '{scripts:write,runs:read}', 1, 1), \
+                ('acme', 'saver', '', '{toolsets:write}', 1, 1), \
+                ('acme', 'reader', '', '{runs:read}', 1, 1)"
+            .to_owned(),
+        format!(
+            "INSERT INTO tokens (hash, tenant, namespace, permissions, labels, expires_at, \
+             created_by, created_at) \
+             VALUES (sha256('token'), 'acme', 'alice', '{{scripts:write,workflows:write}}', \
+             '{{}}', 9000000000000, '{creator}', 1)"
+        ),
+        format!(
+            "INSERT INTO token_keys (kid, tenant, name, jwk, permissions, created_by, \
+             created_at) \
+             VALUES ('rk_1', 'acme', 'signer', '{{}}', '{{actions:write,runs:read}}', \
+             '{creator}', 1)"
+        ),
+    ] {
+        sqlx::query(&statement)
+            .execute(&pool)
+            .await
+            .expect("a row of version 15");
+    }
+    pool.close().await;
+
+    let store = postgres.connect(&database).await;
+    assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+    let catalog = store.catalog();
+    let acme = TenantId::new("acme").expect("tenant");
+    let triage_id = WorkflowId::of_saved("acme", "triage");
+    let digest_id = WorkflowId::of_saved("acme", "digest");
+    assert_eq!(
+        postgres.psql(
+            &database,
+            "SELECT id FROM workflows WHERE tenant = 'dax-staging' AND name = 'prod_gym'"
+        ),
+        "wf_rs1wp4r9g4hf",
+        "the id SQL derives is WorkflowId::of_saved's"
+    );
+    assert_eq!(triage_id.as_str(), "wf_e2nzwv04tf3f");
+    let saved_workflow =
+        |id: &WorkflowId, name: &str, description: Option<&str>, created_at, latest| {
+            StoredWorkflow {
+                id: id.clone(),
+                scope: WorkflowScope::Organization,
+                name: Some(name.to_owned()),
+                description: description.map(str::to_owned),
+                labels: BTreeMap::new(),
+                source: None,
+                created_by: "rename-data".into(),
+                created_at: Timestamp(created_at),
+                promoted_at: None,
+                latest,
+            }
+        };
+    let mut expected = vec![
+        saved_workflow(&digest_id, "digest", None, 15, 1),
+        saved_workflow(&triage_id, "triage", Some("Triage the issues."), 10, 3),
+    ];
+    expected.sort_by(|one, other| one.id.cmp(&other.id));
+    assert_eq!(
+        catalog
+            .list_workflows(&WorkflowFilter {
+                tenant: acme.clone(),
+                scope: ScopeFilter::All,
+                code: None,
+                labels: BTreeMap::new(),
+                after: None,
+                limit: 10,
+            })
+            .await
+            .expect("list_workflows"),
+        expected,
+        "the organization's, by id; the latest version's description, the first's labels"
+    );
+    assert_eq!(
+        postgres.psql(
+            &database,
+            "SELECT string_agg(v.version || ' ' || encode(v.digest, 'hex') || ' ' \
+                 || encode(v.code, 'hex') || ' ' || v.labels::text || ' ' || v.created_at, ', ' \
+                 ORDER BY v.version) \
+             FROM workflow_versions v WHERE v.tenant = 'acme' AND v.workflow = 'wf_e2nzwv04tf3f'"
+        ),
+        format!(
+            "1 {} {} {{}} 10, 2 {} {} {{\"env\": \"dev\"}} 20, 3 {} {} {{}} 30",
+            v1.1.to_hex(),
+            hex("t1"),
+            v2.1.to_hex(),
+            hex("t2"),
+            v3.1.to_hex(),
+            hex("t2")
+        ),
+        "its versions keep their numbers and digests; the code of a document of either shape"
+    );
+    assert_eq!(
+        postgres.psql(
+            &database,
+            &format!(
+                "SELECT document FROM workflow_versions \
+                 WHERE tenant = 'acme' AND digest = '\\x{}'",
+                v2.1.to_hex()
+            )
+        ),
+        v2.0,
+        "documents stay as they are, for rename-data"
+    );
+    assert_eq!(
+        postgres.psql(
+            &database,
+            "SELECT string_agg(c.namespace || ' ' || encode(c.code, 'hex') || ' ' \
+                 || c.labels::text || ' ' || w.name || ' ' || c.added_at, ', ' ORDER BY c.ordinal) \
+             FROM workflow_codes c JOIN workflows w ON w.tenant = c.tenant AND w.id = c.workflow \
+             WHERE c.tenant = 'acme'"
+        ),
+        format!(
+            "* {t1} {{}} triage 10, * {t2} {{\"env\": \"dev\"}} triage 20, * {t2} {{}} triage 30",
+            t1 = hex("t1"),
+            t2 = hex("t2")
+        ),
+        "each code under each set of labels, the first workflow's to run it, in that order"
+    );
+    let member =
+        |name: &str, digest, added_at, retired_at: Option<u64>, reason: Option<&str>| SuiteMember {
+            name: name.to_owned(),
+            digest,
+            added_at: Timestamp(added_at),
+            retired_at: retired_at.map(Timestamp),
+            reason: reason.map(str::to_owned),
+        };
+    assert_eq!(
+        catalog.suite(&acme, &triage_id).await.expect("suite"),
+        [
+            member("a", a, 30, None, None),
+            member("b", b, 10, Some(20), Some("out of date")),
+            member("b", b2, 20, None, None),
+            member("c", c, 20, None, None),
+        ],
+        "the latest version's tests, each since the version that took it last; the tests that \
+         left, when and why"
+    );
+    assert_eq!(
+        catalog.suite(&acme, &digest_id).await.expect("suite"),
+        [],
+        "a test whose row is gone is left out"
+    );
+    assert_eq!(
+        catalog.code_titles().await.expect("code_titles"),
+        [CodeTitle {
+            tenant: acme.clone(),
+            code: Digest::of(b"t3"),
+            title: "Weekly report".into(),
+            description: Some("Sends it.".into()),
+        }]
+    );
+
+    let permissions = |names: &[&str]| -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    };
+    let role = |name: &'static str| {
+        let (store, acme) = (&store, &acme);
+        async move {
+            store
+                .get_role(acme, name)
+                .await
+                .expect("get_role")
+                .expect("the role")
+                .permissions
+        }
+    };
+    assert_eq!(
+        role("writer").await,
+        permissions(&["runs:read", "workflows:write"])
+    );
+    assert_eq!(
+        role("saver").await,
+        permissions(&["toolsets:write", "workflows:write"])
+    );
+    assert_eq!(role("reader").await, permissions(&["runs:read"]));
+    assert_eq!(
+        store
+            .find_token(Digest::of(b"token"))
+            .await
+            .expect("find_token")
+            .expect("the token")
+            .permissions,
+        permissions(&["workflows:write"])
+    );
+    assert_eq!(
+        store
+            .find_token_key("rk_1")
+            .await
+            .expect("find_token_key")
+            .expect("the token key")
+            .permissions,
+        permissions(&["actions:write", "runs:read", "workflows:write"])
+    );
+    assert_eq!(
+        postgres.psql(
+            &database,
+            "SELECT permissions::text FROM roles WHERE name = 'writer'"
+        ),
+        "{runs:read,workflows:write}",
+        "sorted by their bytes"
+    );
+
+    // The workflow model goes on from there.
+    let next = catalog
+        .put_version(
+            &acme,
+            &triage_id,
+            &NewVersion {
+                document: WorkflowVersion::new(Digest::of(b"t4"), Digest::of(b"action_set")),
+                pulled: None,
+            },
+            T0,
+        )
+        .await
+        .expect("put_version");
+    assert_eq!(next.version, 4);
+    assert_eq!(
+        catalog
+            .suite(&acme, &triage_id)
+            .await
+            .expect("suite")
+            .iter()
+            .filter(|member| member.is_current())
+            .count(),
+        0,
+        "a version without tests retires them"
+    );
+    let named = catalog
+        .workflow_named(&acme, None, "triage", &BTreeMap::new())
+        .await
+        .expect("workflow_named");
+    assert_eq!(named.map(|workflow| workflow.id), Some(triage_id));
 }
 
 /// Tenants are ordered by their bytes, as the domain orders them, whatever the database's
@@ -795,38 +1182,37 @@ async fn tenants_are_in_byte_order(postgres: &Postgres) {
     assert_eq!(listed, names);
 }
 
-/// A version of the workflow `triage` whose suite is `tests`.
-fn version_with_tests(tests: &[TestRecord]) -> Workflow {
-    Workflow::new(
-        "triage",
-        None,
-        Digest::of(b"script"),
-        Digest::of(b"action_set"),
-        WorkflowSchemas {
-            input: serde_json::json!({ "type": "object" }),
-            output: serde_json::json!({}),
-            signals: BTreeMap::new(),
-        },
-    )
-    .expect("a valid workflow")
-    .with_suite(Suite {
-        base: None,
-        tests: tests
-            .iter()
-            .enumerate()
-            .map(|(n, test)| SuiteTest {
-                name: format!("test {n}"),
-                test: test.digest,
-            })
-            .collect(),
-        retired: Vec::new(),
-        replaced: Vec::new(),
-    })
-    .expect("a valid suite")
+/// A workflow named `triage` whose version 1's suite is `tests`.
+fn workflow_with_tests(tests: &[TestRecord]) -> NewWorkflow {
+    let version = WorkflowVersion::new(Digest::of(b"code"), Digest::of(b"action_set"))
+        .with_suite(Suite {
+            base: None,
+            tests: tests
+                .iter()
+                .enumerate()
+                .map(|(n, test)| SuiteTest {
+                    name: format!("test {n}"),
+                    test: test.digest,
+                })
+                .collect(),
+            retired: Vec::new(),
+            replaced: Vec::new(),
+        })
+        .expect("a valid suite");
+    NewWorkflow {
+        id: WorkflowId::from_bits(7),
+        scope: WorkflowScope::Organization,
+        name: Some("triage".into()),
+        description: None,
+        labels: BTreeMap::new(),
+        source: None,
+        created_by: "key:k1".into(),
+        version,
+    }
 }
 
-/// A version written with its suite, cancelled at any point (the caller timed out, its task was
-/// aborted), is written whole or not at all; and the store keeps working.
+/// A workflow created with its version and suite, cancelled at any point (the caller timed out,
+/// its task was aborted), is written whole or not at all; and the store keeps working.
 async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
     let database = postgres.create_database();
     let catalog = postgres.connect(&database).await.catalog();
@@ -842,35 +1228,36 @@ async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
         .reserve_tests(&tenant, &tests, T0)
         .await
         .expect("reserve_tests");
-    let version = version_with_tests(&tests);
-    let references = || {
+    let workflow = workflow_with_tests(&tests);
+    let rows = || {
         postgres.psql(
             &database,
             &format!(
-                "SELECT count(*) FROM workflow_tests WHERE version = '\\x{}'",
-                version.version()
+                "SELECT (SELECT count(*) FROM workflow_versions WHERE workflow = '{id}') || ' ' \
+                     || (SELECT count(*) FROM workflow_codes WHERE workflow = '{id}') || ' ' \
+                     || (SELECT count(*) FROM workflow_tests WHERE workflow = '{id}')",
+                id = workflow.id
             ),
         )
     };
     let mut written = false;
     for step in 0..400u64 {
-        let put = catalog.put_workflow(&tenant, &version, T0);
-        let outcome = tokio::time::timeout(Duration::from_micros(step * 25), put).await;
+        let create = catalog.create_workflow(&tenant, &workflow, T0);
+        let outcome = tokio::time::timeout(Duration::from_micros(step * 25), create).await;
         let found = catalog
-            .get_workflow(&tenant, version.version())
+            .workflow(&tenant, &workflow.id)
             .await
-            .expect("get_workflow");
+            .expect("workflow");
         match found {
-            None => assert_eq!(
-                references(),
-                "0",
-                "a version not written references nothing"
-            ),
+            None => assert_eq!(rows(), "0 0 0", "a workflow not written has nothing"),
             Some(stored) => {
-                assert_eq!(stored.workflow, version);
-                assert_eq!(references(), tests.len().to_string());
+                assert_eq!(stored.name.as_deref(), Some("triage"));
+                assert_eq!(rows(), format!("1 1 {}", tests.len()));
                 if let Ok(result) = outcome {
-                    result.expect("a write that returned succeeded");
+                    assert!(
+                        matches!(result, Ok(WorkflowCreated::Created(_))),
+                        "a write that returned succeeded: {result:?}"
+                    );
                 }
                 written = true;
                 break;

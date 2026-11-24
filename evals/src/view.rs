@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use rewind_api::calls::{CallState, ParkedReason};
+use rewind_api::checks::{CheckResult, Diagnostic, Location, Severity};
 use rewind_api::common::{
     AbortReason, ActionFailure, Callsite, Labels, LogLevel, PAYLOAD_VALUE_LIMIT, Payload,
     RunStatus, timestamp,
@@ -19,14 +20,14 @@ use rewind_api::common::{ErrorInfo, FailedCall};
 use rewind_api::runs::{
     ForkSource, LogLine, Quarantine, QuarantineCause, Run, RunSummary, RunWait, WaitKind, Waiting,
 };
-use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity, TitleSource};
 use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEvent, Lifecycle, RunOutcome, RunState, Seq,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CatalogStore, InvalidCode, NamespaceName, ParkKind, QuarantineKind, RunRef, StoredWorkflow,
+    CatalogStore, InvalidCode, NamespaceName, ParkKind, QuarantineKind, RunRef, StoredVersion,
+    StoredWorkflow,
 };
 
 use crate::world::World;
@@ -56,19 +57,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     let named = |handle: Option<&rewind_core::RunHandle>, run: rewind_core::RunId| {
         handle.map_or_else(|| run.to_string(), ToString::to_string)
     };
-    let workflow = match &record.metadata.workflow {
-        Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
-            name: workflow.name.clone(),
-            digest: workflow.version.to_hex(),
-            version: world
-                .catalog()
-                .get_workflow(&run.tenant, workflow.version)
-                .await
-                .map_err(|error| unavailable(error.to_string()))?
-                .map_or(0, |stored| stored.number),
-        }),
-        None => None,
-    };
+    let workflow = record.metadata.workflow.as_ref().map(run_workflow);
     // Every payload loaded, as the server loads those it shows.
     let history = world.history(run).await?;
     let state = RunState::from_history(&history).map_err(|error| {
@@ -106,9 +95,6 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     } else {
         waiting(world, run, &history, &state).await?
     };
-    let script_title = script_title(world, &run.tenant, record.code)
-        .await?
-        .map(|(title, _, _)| title);
     Ok(Run {
         id: run.id.to_string(),
         handle: record.handle().to_string(),
@@ -122,7 +108,6 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
             reason: quarantine.reason.clone(),
         }),
         code_digest: record.code.to_hex(),
-        script_title,
         action_set: record.action_set.to_hex(),
         epoch: record.epoch.0,
         mode: started.map_or(rewind_api::common::RunMode::Live, |started| {
@@ -168,30 +153,17 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
     })
 }
 
-/// A code's title, its description and where they come from, as the server shows them: the
-/// title a person gave the code, else the comment at the top of its source.
-pub async fn script_title(
-    world: &World,
-    tenant: &rewind_engine::ports::TenantId,
-    code: rewind_core::Digest,
-) -> Result<Option<(String, Option<String>, TitleSource)>, EdgeError> {
-    let catalog = world.catalog();
-    let failed = |error: rewind_engine::ports::CatalogError| unavailable(error.to_string());
-    if let Some((_, given)) = catalog
-        .script_titles(tenant, &[code])
-        .await
-        .map_err(failed)?
-        .into_iter()
-        .next()
-    {
-        return Ok(Some((given.title, given.description, TitleSource::Person)));
+/// The workflow a run is a run of, as the API shows it (`rewind-server`'s
+/// `views::run_workflow`).
+pub fn run_workflow(
+    workflow: &rewind_engine::ports::RunWorkflow,
+) -> rewind_api::workflows::RunWorkflow {
+    rewind_api::workflows::RunWorkflow {
+        id: workflow.id.to_string(),
+        name: workflow.name.clone(),
+        version: workflow.version,
+        digest: workflow.digest.to_hex(),
     }
-    Ok(catalog
-        .get_code(tenant, code)
-        .await
-        .map_err(failed)?
-        .and_then(|stored| rewind_core::code_doc(stored.code.source()))
-        .map(|doc| (doc.title, doc.description, TitleSource::Comment)))
 }
 
 async fn waiting(
@@ -326,9 +298,6 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
         code_digest: run.code.to_hex(),
-        // The code's title is not the index's: the caller gives it.
-        script_title: None,
-        headline: run.headline.clone(),
         action_set: run.action_set.to_hex(),
         labels: Labels::from(run.labels.clone()),
         started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
@@ -355,7 +324,7 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
             .collect(),
         wakes_at: run.wakes_at.map(timestamp),
         source: run.source.map(|parent| parent.to_string()),
-        workflow: run.workflow.clone(),
+        workflow: run.workflow.as_ref().map(run_workflow),
         started_by: run.started_by.map(|run| run.to_string()),
     })
 }
@@ -497,13 +466,17 @@ pub fn invalid_code_diagnostic(invalid: &InvalidCode) -> Diagnostic {
 }
 
 /// `POST /v1/check`, from the checker's diagnostics.
-pub fn check_result(diagnostics: &[rewind_engine::ports::Diagnostic]) -> CheckResult {
+pub fn check_result(
+    diagnostics: &[rewind_engine::ports::Diagnostic],
+    workflow: Option<rewind_api::workflows::RunWorkflow>,
+) -> CheckResult {
     let diagnostics: Vec<Diagnostic> = diagnostics.iter().map(diagnostic).collect();
     CheckResult {
         ok: !diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         diagnostics,
+        workflow,
     }
 }
 
@@ -516,49 +489,129 @@ fn namespace_of(
         .map_err(|_| unavailable(format!("run {} has an invalid namespace", run.id)))
 }
 
-/// A workflow version, as `GET /v1/workflows/{name}` shows it (`rewind-server`'s
-/// `http/workflows.rs`, `view`): its declaration generated as an action set that pins it alone
-/// generates it.
-pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
-    use rewind_api::workflows::{ReplacedTest, RetiredTest, SuiteTest};
+/// A workflow, as `GET /v1/workflows/{id}` shows it (`rewind-server`'s `http/workflows.rs`,
+/// `view`): `shown`, the version it shows with its code, its versions the agent sees and its
+/// suite.
+pub async fn workflow(
+    world: &World,
+    workflow: &StoredWorkflow,
+    shown: &StoredVersion,
+) -> Result<rewind_api::workflows::Workflow, EdgeError> {
+    use rewind_api::workflows::{CodeComment, SuiteEntry, Workflow, WorkflowSource};
 
-    let workflow = &stored.workflow;
-    let declarations = rewind_core::ActionSet::empty()
-        .with_workflows([workflow.pinned()])
-        .map(|action_set| rewind_codegen::generate(&action_set, &BTreeMap::new()))
-        .ok();
-    let name = format!("{}.{}", rewind_core::WORKFLOWS_GROUP, workflow.name());
-    let declaration = declarations
-        .as_ref()
-        .and_then(|generated| generated.actions.iter().find(|action| action.name == name));
-    rewind_api::workflows::Workflow {
-        name: workflow.name().to_owned(),
-        digest: workflow.version().to_hex(),
-        version: stored.number,
-        description: workflow.description().map(str::to_owned),
-        action_set: workflow.action_set().to_hex(),
-        code_digest: workflow.code().to_hex(),
-        input: workflow.schemas().input.clone(),
-        output: workflow.schemas().output.clone(),
-        signals: workflow.schemas().signals.clone(),
+    let tenant = rewind_engine::ports::TenantId::local();
+    let catalog = world.catalog();
+    let failed = |error: rewind_engine::ports::CatalogError| unavailable(error.to_string());
+    let code = catalog
+        .get_code(&tenant, shown.document.code())
+        .await
+        .map_err(failed)?
+        .map(|stored| stored.code.source().to_owned())
+        .unwrap_or_default();
+    let comment = rewind_core::code_doc(&code).map(|doc| CodeComment {
+        title: doc.title,
+        description: doc.description,
+    });
+    let versions = catalog
+        .versions(&tenant, &workflow.id, &world.labels)
+        .await
+        .map_err(failed)?
+        .iter()
+        .map(|version| version_view(workflow, version, None))
+        .collect();
+    let suite = catalog
+        .suite(&tenant, &workflow.id)
+        .await
+        .map_err(failed)?
+        .into_iter()
+        .map(|member| SuiteEntry {
+            name: member.name,
+            digest: member.digest.to_hex(),
+            added_at: timestamp(member.added_at),
+            retired_at: member.retired_at.map(timestamp),
+            reason: member.reason,
+        })
+        .collect();
+    Ok(Workflow {
+        id: workflow.id.to_string(),
+        short_id: workflow.id.short(),
+        name: workflow.name.clone(),
+        description: workflow.description.clone(),
+        namespace: workflow.scope.namespace().and_then(|namespace| {
+            rewind_api::namespaces::NamespaceName::new(namespace.as_str()).ok()
+        }),
+        source: workflow.source.as_ref().map(|source| WorkflowSource {
+            workflow: source.workflow.to_string(),
+            version: source.version,
+        }),
+        labels: Labels::from(workflow.labels.clone()),
+        created_at: timestamp(workflow.created_at),
+        promoted_at: workflow.promoted_at.map(timestamp),
+        version: version_view(workflow, shown, comment),
+        code,
+        versions,
+        suite,
+    })
+}
+
+/// A version as the API shows it, with the suite it passed.
+fn version_view(
+    workflow: &StoredWorkflow,
+    stored: &StoredVersion,
+    comment: Option<rewind_api::workflows::CodeComment>,
+) -> rewind_api::workflows::WorkflowVersion {
+    use rewind_api::workflows::{ReplacedTest, RetiredTest, SuiteTest, WorkflowVersion};
+
+    let document = &stored.document;
+    let schemas = document.interface();
+    let declarations = match (&workflow.name, schemas) {
+        (Some(name), Some(schemas)) => {
+            let pinned = rewind_core::PinnedWorkflow {
+                name: name.clone(),
+                id: workflow.id.clone(),
+                version: stored.version,
+                digest: stored.digest,
+                description: workflow.description.clone(),
+                schemas: schemas.clone(),
+            };
+            let action = format!("{}.{name}", rewind_core::WORKFLOWS_GROUP);
+            rewind_core::ActionSet::empty()
+                .with_workflows([pinned])
+                .ok()
+                .map(|action_set| rewind_codegen::generate(&action_set, &BTreeMap::new()))
+                .and_then(|generated| {
+                    generated
+                        .actions
+                        .iter()
+                        .find(|declaration| declaration.name == action)
+                        .map(|declaration| rewind_api::action_sets::Declarations {
+                            dts: declaration.typescript.clone(),
+                            prompt: declaration.prompt.clone(),
+                        })
+                })
+        }
+        _ => None,
+    };
+    let suite = document.suite();
+    WorkflowVersion {
+        version: stored.version,
+        digest: stored.digest.to_hex(),
+        code_digest: document.code().to_hex(),
+        comment,
+        action_set: document.action_set().to_hex(),
+        input: schemas.map(|schemas| schemas.input.clone()),
+        output: schemas.map(|schemas| schemas.output.clone()),
+        signals: schemas.map(|schemas| schemas.signals.clone()),
         labels: Labels::from(stored.labels.clone()),
-        secrets: workflow
+        secrets: document
             .secrets()
             .iter()
             .map(|(server, secret)| (server.to_owned(), secret.to_string()))
             .collect(),
         created_at: timestamp(stored.created_at),
-        declarations: rewind_api::action_sets::Declarations {
-            dts: declaration
-                .map(|declaration| declaration.typescript.clone())
-                .unwrap_or_default(),
-            prompt: declaration
-                .map(|declaration| declaration.prompt.clone())
-                .unwrap_or_default(),
-        },
-        base: workflow.suite().base.map(|parent| parent.to_hex()),
-        tests: workflow
-            .suite()
+        declarations,
+        base: suite.base.map(|base| base.to_hex()),
+        tests: suite
             .tests
             .iter()
             .map(|test| SuiteTest {
@@ -566,8 +619,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
                 digest: test.test.to_hex(),
             })
             .collect(),
-        retired: workflow
-            .suite()
+        retired: suite
             .retired
             .iter()
             .map(|retired| RetiredTest {
@@ -576,8 +628,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
                 reason: retired.reason.clone(),
             })
             .collect(),
-        replaced: workflow
-            .suite()
+        replaced: suite
             .replaced
             .iter()
             .map(|replaced| ReplacedTest {
@@ -676,7 +727,9 @@ pub fn action_set(
             .iter()
             .map(|workflow| rewind_api::workflows::PinnedWorkflow {
                 name: workflow.name.clone(),
-                digest: workflow.version.to_hex(),
+                id: workflow.id.to_string(),
+                version: workflow.version,
+                digest: workflow.digest.to_hex(),
                 description: workflow.description.clone(),
             })
             .collect(),

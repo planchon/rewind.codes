@@ -6,7 +6,7 @@
 //! code:
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
-//!   table: [`action_sets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the history
+//!   table: [`action_sets`], [`workflows`], [`checks`], [`runs`] (with [`events`], the history
 //!   events and the event stream), [`calls`], [`webhooks`], [`reading`], [`organization`],
 //!   [`access`] (with the catalog of permissions and the built-in roles), [`namespaces`] (the
 //!   end users, their quotas and their tokens), [`connections`] (a person's connections and the
@@ -37,6 +37,7 @@ pub mod action_sets;
 pub mod admin;
 pub mod auth;
 pub mod calls;
+pub mod checks;
 mod client;
 pub mod common;
 pub mod connections;
@@ -52,7 +53,6 @@ pub mod query;
 pub mod reading;
 pub mod routes;
 pub mod runs;
-pub mod scripts;
 pub mod secrets;
 pub mod testing;
 pub mod webhooks;

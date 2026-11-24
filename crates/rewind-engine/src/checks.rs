@@ -6,11 +6,11 @@
 
 use std::time::Duration;
 
-use rewind_core::{JsonValue, Workflow, is_reserved_signal};
+use rewind_core::{JsonValue, WorkflowVersion, is_reserved_signal};
 
 use crate::plane::NodeConfig;
 use crate::ports::{
-    CatalogStore, NamespaceName, RunHead, SecretError, SecretStore, Tenant, TenantId,
+    CatalogStore, NamespaceName, RunHead, SecretError, SecretStore, Tenant, TenantId, VersionRef,
     limits as namespace_limits,
 };
 use crate::schema::Validator;
@@ -88,20 +88,26 @@ pub(crate) async fn signal<C: CatalogStore>(
             SignalRefused::Reserved(name.to_owned()).to_string(),
         ));
     }
-    let Some(of) = &head.metadata.workflow else {
+    // A run of a version without an interface accepts any signal name.
+    let Some(of) = head.metadata.workflow.as_ref().filter(|of| of.interface) else {
         return Ok(());
     };
     let stored = catalog
-        .get_workflow(&head.run.tenant, of.version)
+        .version(&head.run.tenant, &of.id, VersionRef::Number(of.version))
         .await
         .map_err(|error| SignalCheck::Unavailable(error.to_string()))?
         .ok_or_else(|| {
             SignalCheck::Unavailable(format!(
-                "the workflow version {} of run {} is not stored",
-                of.version, head.run.id
+                "the version {} of workflow {} of run {} is not stored",
+                of.version, of.id, head.run.id
             ))
         })?;
-    declared(&stored.workflow, head, name, payload).map_err(SignalCheck::Refused)
+    let workflow = format!(
+        "{}@v{}",
+        of.name.as_deref().unwrap_or(of.id.as_str()),
+        of.version
+    );
+    declared(&stored.document, &workflow, head, name, payload).map_err(SignalCheck::Refused)
 }
 
 /// Why a signal is refused.
@@ -112,14 +118,17 @@ pub(crate) enum SignalCheck {
 }
 
 fn declared(
-    workflow: &Workflow,
+    version: &WorkflowVersion,
+    workflow: &str,
     head: &RunHead,
     name: &str,
     payload: &JsonValue,
 ) -> Result<(), String> {
-    let Some(schema) = workflow.schemas().signals.get(name) else {
-        let declared: Vec<String> = workflow
-            .schemas()
+    let Some(schemas) = version.interface() else {
+        return Ok(());
+    };
+    let Some(schema) = schemas.signals.get(name) else {
+        let declared: Vec<String> = schemas
             .signals
             .keys()
             .map(|name| format!("{name:?}"))
@@ -148,13 +157,13 @@ fn declared(
 }
 
 /// Refuses a run of a version whose `ns/` secrets do not exist in the run's namespace. The
-/// version's secrets are not checked against anyone's rights: they were when it was saved.
+/// version's secrets are not checked against anyone's rights: they were when it was made.
 pub(crate) async fn version_secrets<S: SecretStore>(
     secrets: &S,
     now: rewind_core::Timestamp,
     tenant: &TenantId,
     namespace: &NamespaceName,
-    workflow: &Workflow,
+    workflow: &WorkflowVersion,
 ) -> Result<Result<(), RefusedSecrets>, SecretError> {
     if workflow.secrets().is_empty() {
         return Ok(Ok(()));

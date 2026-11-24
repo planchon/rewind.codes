@@ -12,6 +12,8 @@
 //!   server, in virtual time.
 //! - `rewind test` on a cassette recorded from a run of the embedded server.
 //! - `rewind fork` of a failed run, which reuses its recorded calls.
+//! - `rewind workflows`: a workflow created, run by its code, refused a version its suite fails,
+//!   renamed, shown and listed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -229,6 +231,78 @@ fn a_run_sleeps_is_interrupted_and_resumes_in_another_process() {
     assert_eq!(ran.code, 6, "{ran:?}");
     let ran = project.rewind(&["status", "01890000-0000-7000-8000-000000000000"]);
     assert_eq!(ran.code, 6, "an unknown run: {ran:?}");
+}
+
+/// `rewind workflows`: a workflow created from a file with its first suite, the run of its code
+/// that is a run of it, its next version through its suite, a name changed, its runs listed.
+#[test]
+fn a_workflow_is_created_run_updated_and_renamed_through_the_binary() {
+    let project = Project::new();
+    let code = |n: u32| {
+        format!("/** Count to {n} */\nexport default async function main() {{\n  return {n};\n}}\n")
+    };
+    project.write("count.ts", &code(1));
+    project.write("count2.ts", &code(2));
+    project.write(
+        "count.tests.json",
+        &json!([{ "name": "returns one", "input": {}, "expect": { "status": "completed", "output": 1 } }])
+            .to_string(),
+    );
+    let (exit, created) = project.json(&[
+        "workflows",
+        "create",
+        "count.ts",
+        "--name",
+        "count",
+        "--tests",
+        "count.tests.json",
+    ]);
+    assert_eq!(exit, 0, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        (
+            &created["name"],
+            &created["namespace"],
+            &created["version"]["version"]
+        ),
+        (&json!("count"), &json!("local"), &json!(1)),
+        "{created}"
+    );
+
+    // A run of its code is a run of it.
+    let (exit, run) = project.json(&["run", "count.ts"]);
+    assert_eq!(exit, 0, "{run}");
+    assert_eq!(run["workflow"]["id"], json!(id), "{run}");
+    assert!(run["handle"].as_str().unwrap().contains("/count/"), "{run}");
+
+    // Its next version passes its suite, or is refused with the tests that failed.
+    let ran = project.rewind(&["workflows", "update", "count", "--code", "count2.ts"]);
+    assert_eq!(ran.code, 1, "tests failed: {ran:?}");
+    let ran = project.rewind(&["workflows", "update", "count", "--name", "counter"]);
+    assert_eq!(ran.code, 0, "{ran:?}");
+    assert!(ran.stdout.contains("updated counter"), "{}", ran.stdout);
+    let (exit, shown) = project.json(&["workflows", "show", "counter"]);
+    assert_eq!(exit, 0, "{shown}");
+    assert_eq!(shown["id"], json!(id));
+    assert_eq!(shown["suite"][0]["name"], "returns one", "{shown}");
+    let ran = project.rewind(&["workflows", "show", "counter", "--code"]);
+    assert!(ran.stdout.contains("return 1;"), "{}", ran.stdout);
+
+    let (exit, listed) = project.json(&["workflows", "list"]);
+    assert_eq!(exit, 0, "{listed}");
+    assert!(
+        listed["workflows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|workflow| workflow["id"] == json!(id)),
+        "{listed}"
+    );
+    let (exit, runs) = project.json(&["runs", "--workflow", &id]);
+    assert_eq!(exit, 0, "{runs}");
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 1, "{runs}");
+    let ran = project.rewind(&["workflows", "show", "nothing"]);
+    assert_eq!(ran.code, 6, "{ran:?}");
 }
 
 #[test]

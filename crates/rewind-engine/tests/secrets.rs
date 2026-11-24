@@ -20,15 +20,17 @@ use rewind_engine::plane::NodeConfig;
 use rewind_engine::ports::{
     ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, Day, Dispatched, Handoff,
     NamespaceName, NewSecret, Page, ParkKind, PutSecret, RunOrder, RunQuery, RunRef, Scope, Secret,
-    SecretExpiredReason, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription,
-    TaskState, TenantId, WebhookKind, WorkflowDeclarations,
+    SecretExpiredReason, SecretId, SecretReader, SecretStore, Subscription, TaskState, TenantId,
+    WebhookKind, WorkflowScope,
 };
 use rewind_engine::secrets::{RefusedSecrets, SecretProblem, SecretRights};
-use rewind_engine::suites::SuiteChanges;
-use rewind_engine::{ForkError, ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun};
+use rewind_engine::{
+    CreateWorkflow, ForkError, ForkRun, StartError, StartRun, WorkflowError, WorkflowMaker,
+    WrittenWorkflow,
+};
 use serde_json::json;
 use support::plane::{World, config};
-use support::{FakeExecutor, FakeRun, RecordingDispatcher, kit};
+use support::{FakeExecutor, FakeRun, RecordingDispatcher, workflow_kit};
 
 // -------------------------------------------------------------------------------------------
 // Helpers
@@ -756,23 +758,32 @@ async fn a_fork_inherits_its_source_s_secrets_checked_against_its_caller() {
 // -------------------------------------------------------------------------------------------
 // Workflow versions
 
-fn save(secrets: &[(&str, &str)], rights: &RightsTo) -> RegisterWorkflow {
-    RegisterWorkflow {
+/// An organization's workflow of the code `caller`, named after its secrets.
+fn save(secrets: &[(&str, &str)], rights: &RightsTo) -> CreateWorkflow {
+    let name = secrets
+        .iter()
+        .map(|(server, secret)| format!("{server}_{}", secret.replace('/', "_")))
+        .collect::<Vec<_>>()
+        .join("_");
+    CreateWorkflow {
         tenant: tenant(),
-        name: "triage".into(),
+        scope: WorkflowScope::Organization,
+        name: Some(format!("triage_{name}")),
         description: None,
         code: Code::new("caller"),
         action_set: action_set().digest(),
-        schemas: WorkflowSchemas {
+        interface: Some(WorkflowSchemas {
             input: json!({ "type": "object" }),
             output: json!({}),
             signals: BTreeMap::new(),
-        },
-        labels: BTreeMap::new(),
+        }),
         secrets: server_secrets(secrets),
-        secret_rights: rights.rights(),
-        declarations: WorkflowDeclarations::default(),
-        suite: SuiteChanges::default(),
+        tests: Vec::new(),
+        maker: WorkflowMaker {
+            labels: BTreeMap::new(),
+            secret_rights: rights.rights(),
+            principal: "key:test".into(),
+        },
     }
 }
 
@@ -790,21 +801,21 @@ async fn saving() -> World {
 
 async fn register(
     world: &World,
-    request: RegisterWorkflow,
-) -> Result<StoredWorkflow, RegisterError> {
+    request: CreateWorkflow,
+) -> Result<WrittenWorkflow, WorkflowError> {
     world
         .edge
-        .register_workflow(request, &StaticTypeChecker::default(), &kit())
+        .create_workflow(request, &workflow_kit(&StaticTypeChecker::default()))
         .await
 }
 
 #[tokio::test]
-async fn a_version_is_saved_with_secrets_its_saver_may_use() {
+async fn a_version_is_made_with_secrets_its_maker_may_use() {
     let world = saving().await;
     put(&world, organization("github"), "ghp_org", &[]).await;
 
-    let saver_refused = |error: RegisterError| match error {
-        RegisterError::SecretRequired(refused) => refused.problems,
+    let saver_refused = |error: WorkflowError| match error {
+        WorkflowError::SecretRequired(refused) => refused.problems,
         other => panic!("expected secret-required, got {other:?}"),
     };
     assert_eq!(
@@ -847,7 +858,7 @@ async fn a_version_is_saved_with_secrets_its_saver_may_use() {
         .await
         .unwrap();
     assert_eq!(
-        org.workflow.secrets(),
+        org.version.document.secrets(),
         &server_secrets(&[("github", "org/github")])
     );
     // An ns/ secret has no namespace yet: only its name is checked.
@@ -857,24 +868,23 @@ async fn a_version_is_saved_with_secrets_its_saver_may_use() {
     )
     .await
     .unwrap();
-    assert_ne!(per_user.workflow.version(), org.workflow.version());
+    assert_ne!(per_user.version.digest, org.version.digest);
 }
 
 #[tokio::test]
 async fn a_run_of_a_version_checks_only_that_its_namespace_s_secrets_exist() {
     let mut world = saving().await;
-    let version = register(
+    let written = register(
         &world,
         save(&[("github", "ns/github")], &RightsTo::Namespace),
     )
     .await
-    .unwrap()
-    .workflow
-    .version();
+    .unwrap();
+    let reference = written.workflow.id.to_string();
     let request = |namespace: NamespaceName| StartWorkflow {
         tenant: tenant(),
         namespace,
-        version,
+        reference: reference.clone(),
         input: json!({ "action": "github.get_issue" }),
         ttl: None,
         metadata: Default::default(),

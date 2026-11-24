@@ -408,11 +408,32 @@ fn decode_test(document: &str) -> Result<rewind_core::Test, String> {
         .ok_or_else(|| "not a document of this test format".to_owned())
 }
 
-/// What a save needs to run a suite, without TypeScript handlers.
+/// What a gate needs to run a suite, without TypeScript handlers.
 pub fn kit() -> rewind_engine::suites::TestKit<'static, rewind_engine::testing::NoHandlerLoader> {
     rewind_engine::suites::TestKit {
         loader: &rewind_engine::testing::NoHandlerLoader,
         format: test_format(),
         options: rewind_engine::testing::TestOptions::default(),
+    }
+}
+
+/// What a workflow's writes need: `checker`, the tests' kit, and declarations of interfaces
+/// that declare nothing.
+pub fn workflow_kit<K>(
+    checker: &K,
+) -> rewind_engine::edge::WorkflowKit<'_, K, rewind_engine::testing::NoHandlerLoader> {
+    rewind_engine::edge::WorkflowKit {
+        checker,
+        tests: kit(),
+        declare: |_, _| rewind_engine::ports::WorkflowDeclarations::default(),
+    }
+}
+
+/// A maker of workflows with every right and no labels.
+pub fn maker() -> rewind_engine::WorkflowMaker {
+    rewind_engine::WorkflowMaker {
+        labels: std::collections::BTreeMap::new(),
+        secret_rights: rewind_engine::secrets::SecretRights::NamespaceOnly,
+        principal: "key:test".into(),
     }
 }

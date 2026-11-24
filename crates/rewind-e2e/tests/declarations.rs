@@ -387,34 +387,43 @@ async fn names_that_are_not_reserved_words_check_and_start() {
 // -------------------------------------------------------------------------------------------
 // Workflows: `rewind:workflows` as codegen declares it, and a workflow's own declarations
 
-fn triage() -> rewind_core::Workflow {
-    rewind_core::Workflow::new(
-        "triage",
-        Some("Triage the stale issues of a repository.".into()),
-        Code::new(TRIAGE).digest(),
-        action_set(false).digest(),
-        rewind_core::WorkflowSchemas {
-            input: json!({
+fn triage() -> rewind_core::PinnedWorkflow {
+    let schemas = triage_schemas();
+    let version =
+        rewind_core::WorkflowVersion::new(Code::new(TRIAGE).digest(), action_set(false).digest())
+            .with_interface(Some(schemas.clone()))
+            .unwrap();
+    rewind_core::PinnedWorkflow {
+        name: "triage".into(),
+        id: rewind_core::WorkflowId::of_saved("local", "triage"),
+        version: 1,
+        digest: version.digest(),
+        description: Some("Triage the stale issues of a repository.".into()),
+        schemas,
+    }
+}
+
+fn triage_schemas() -> rewind_core::WorkflowSchemas {
+    rewind_core::WorkflowSchemas {
+        input: json!({
+            "type": "object",
+            "properties": { "repo": { "type": "string" } },
+            "required": ["repo"],
+        }),
+        output: json!({
+            "type": "object",
+            "properties": { "closed": { "type": "integer" } },
+            "required": ["closed"],
+        }),
+        signals: BTreeMap::from([(
+            "approval".to_owned(),
+            json!({
                 "type": "object",
-                "properties": { "repo": { "type": "string" } },
-                "required": ["repo"],
+                "properties": { "close": { "type": "boolean" } },
+                "required": ["close"],
             }),
-            output: json!({
-                "type": "object",
-                "properties": { "closed": { "type": "integer" } },
-                "required": ["closed"],
-            }),
-            signals: BTreeMap::from([(
-                "approval".to_owned(),
-                json!({
-                    "type": "object",
-                    "properties": { "close": { "type": "boolean" } },
-                    "required": ["close"],
-                }),
-            )]),
-        },
-    )
-    .unwrap()
+        )]),
+    }
 }
 
 const TRIAGE: &str = r#"import { crm } from "rewind:actions";
@@ -445,9 +454,7 @@ export default async function main(input: { repos: string[] }) {
 
 #[tokio::test]
 async fn a_script_that_starts_a_pinned_workflow_checks_and_starts() {
-    let action_set = action_set(false)
-        .with_workflows([triage().pinned()])
-        .unwrap();
+    let action_set = action_set(false).with_workflows([triage()]).unwrap();
     assert_eq!(summary(&check(PARENT, &action_set).await), []);
     assert_eq!(compile(PARENT, &action_set), Ok(()));
 
@@ -481,8 +488,7 @@ async fn a_workflow_the_action_set_does_not_pin_is_refused_by_both() {
 
 #[tokio::test]
 async fn a_workflow_s_script_is_checked_against_its_own_schemas() {
-    let workflow = triage();
-    let own = rewind_codegen::workflow_declarations("triage", workflow.schemas());
+    let own = rewind_codegen::workflow_declarations("triage", &triage_schemas());
     let declarations = rewind_codegen::generate(&action_set(false), &BTreeMap::new());
     let check_workflow = |source: String| {
         let own = own.clone();

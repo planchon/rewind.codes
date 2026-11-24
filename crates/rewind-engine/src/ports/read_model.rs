@@ -181,8 +181,8 @@ pub struct RunSummary {
     pub mode: Option<RunMode>,
     pub labels: BTreeMap<String, String>,
     pub source: Option<RunId>,
-    /// For a run of a workflow, the workflow's name.
-    pub workflow: Option<String>,
+    /// The workflow it is a run of, and its version; `None` for a test run.
+    pub workflow: Option<crate::ports::records::RunWorkflow>,
     /// For a run a code started, that run.
     pub started_by: Option<RunId>,
     /// `recorded_at` of `run_started`, once committed.
@@ -298,8 +298,6 @@ pub enum Predicate {
         key: String,
         values: Vec<TextMatch>,
     },
-    /// The code's digest, in lowercase hexadecimal, starts with one of these.
-    Script(Vec<String>),
     /// The action set's digest, in lowercase hexadecimal, starts with one of these.
     ActionSet(Vec<String>),
     /// The run scheduled at least one call to an action one of these matches.
@@ -327,7 +325,7 @@ pub enum Predicate {
     Errors(Range<u64>),
     /// Forks of this run.
     Source(RunId),
-    /// Runs of a workflow whose name one of these matches.
+    /// Runs of a workflow whose name or id one of these matches.
     Workflow(Vec<TextMatch>),
     /// Runs this run started.
     StartedBy(RunId),

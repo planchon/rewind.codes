@@ -41,8 +41,9 @@ use std::time::Duration;
 
 use rewind_core::{
     Action, ActionAuth, ActionRoute, ActionSet, Builtin, Code, Command, Event, HistoryEvent,
-    Lifecycle, McpServer, McpTransport, RunExport, RunId, RunOutcome, RunState, SecretPlacement,
-    SecretRef, ServerSecrets, Timestamp, Workflow, WorkflowSchemas,
+    Lifecycle, McpServer, McpTransport, PinnedWorkflow, RunExport, RunId, RunOutcome, RunState,
+    SecretPlacement, SecretRef, ServerSecrets, Timestamp, WorkflowId, WorkflowSchemas,
+    WorkflowVersion,
 };
 use rewind_engine::adapters::SeededEntropy;
 use rewind_engine::ports::{CodeExecutor, Entropy, RunRef, TenantId};
@@ -59,6 +60,33 @@ pub const T0: Timestamp = Timestamp(1_767_225_600_000);
 
 /// The environment variable that turns recording on, for the corpus tests.
 pub const RECORD: &str = "REWIND_E2E_RECORD";
+
+/// A workflow of a scenario: an organization's, at its version 1.
+#[derive(Debug, Clone)]
+pub struct CaseWorkflow {
+    pub name: String,
+    pub id: WorkflowId,
+    pub description: Option<String>,
+    pub version: WorkflowVersion,
+}
+
+impl CaseWorkflow {
+    /// As an action set pins it.
+    pub fn pinned(&self) -> PinnedWorkflow {
+        PinnedWorkflow {
+            name: self.name.clone(),
+            id: self.id.clone(),
+            version: 1,
+            digest: self.version.digest(),
+            description: self.description.clone(),
+            schemas: self
+                .version
+                .interface()
+                .cloned()
+                .expect("a scenario's workflow has its interface"),
+        }
+    }
+}
 
 /// What to do with the history a case produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,29 +194,36 @@ impl Case {
         Ok(case)
     }
 
-    /// The scenario's workflows, each with the scenario's actions as its action set.
-    pub fn workflows(&self) -> Result<Vec<Workflow>, String> {
+    /// The scenario's workflows, the organization's of the tenant `local`, each at its version 1
+    /// with the scenario's actions as its action set; its id is the one a workflow of that name
+    /// saved before the workflow model took ([`WorkflowId::of_saved`]), so the pinned action
+    /// set, and the history that records its digest, never change.
+    pub fn workflows(&self) -> Result<Vec<CaseWorkflow>, String> {
         let action_set = scenario_action_set(&self.scenario)?.digest();
         self.scenario
             .workflows
             .iter()
             .map(|(name, case)| {
-                let secrets = server_secrets(&case.secrets).map_err(|err| {
-                    format!("{}/scenario.json: workflow {name}: {err}", self.name)
-                })?;
-                Workflow::new(
-                    name.clone(),
-                    case.description.clone(),
-                    self.workflow_scripts[name].digest(),
-                    action_set,
-                    WorkflowSchemas {
-                        input: case.input.clone(),
-                        output: case.output.clone(),
-                        signals: case.signals.clone(),
-                    },
-                )
-                .map(|workflow| workflow.with_secrets(secrets))
-                .map_err(|err| format!("{}/scenario.json: workflow {name}: {err}", self.name))
+                let invalid =
+                    |err: String| format!("{}/scenario.json: workflow {name}: {err}", self.name);
+                let secrets = server_secrets(&case.secrets).map_err(invalid)?;
+                rewind_core::check_workflow_name(name).map_err(|err| invalid(err.to_string()))?;
+                let schemas = WorkflowSchemas {
+                    input: case.input.clone(),
+                    output: case.output.clone(),
+                    signals: case.signals.clone(),
+                };
+                let version =
+                    WorkflowVersion::new(self.workflow_scripts[name].digest(), action_set)
+                        .with_interface(Some(schemas))
+                        .map_err(|err| invalid(err.to_string()))?
+                        .with_secrets(secrets);
+                Ok(CaseWorkflow {
+                    name: name.clone(),
+                    id: WorkflowId::of_saved("local", name),
+                    description: case.description.clone(),
+                    version,
+                })
             })
             .collect()
     }
@@ -208,7 +243,7 @@ impl Case {
         scenario_action_set(&self.scenario)
             .and_then(|action_set| {
                 action_set
-                    .with_workflows(workflows.iter().map(Workflow::pinned))
+                    .with_workflows(workflows.iter().map(CaseWorkflow::pinned))
                     .map_err(|err| err.to_string())
             })
             .expect("the actions were checked when the case was loaded")

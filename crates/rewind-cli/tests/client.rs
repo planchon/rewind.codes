@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use rewind_api::action_sets::{ActionSet, CreateActionSet, Declarations};
 use rewind_api::admin::ServerInfo;
+use rewind_api::checks::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_api::common::ErrorInfo;
 use rewind_api::common::{Callsite, Labels, Payload, RunMode, RunStatus, Timestamp};
 use rewind_api::problem::{self, Problem, ProblemType};
@@ -22,7 +23,6 @@ use rewind_api::runs::{
     CancelRun, ForkRun, ForkSource, Run, RunPage, RunSummary, SignalAccepted, StartRun, Transcript,
     Waiting,
 };
-use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_cli::{Console, Exit};
 use serde_json::{Value, json};
 
@@ -65,7 +65,6 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         status,
         quarantine: None,
         code_digest: "aa".repeat(32),
-        script_title: None,
         action_set: "bb".repeat(32),
         epoch: 1,
         mode: RunMode::Live,
@@ -368,8 +367,6 @@ async fn list(
             status: run.status,
             quarantined: run.quarantine.is_some(),
             code_digest: run.code_digest.clone(),
-            script_title: run.script_title.clone(),
-            headline: "export default async () => 1;".into(),
             action_set: run.action_set.clone(),
             labels: run.labels.clone(),
             started_at: run.created_at,
@@ -471,6 +468,7 @@ async fn check(
     axum::Json(CheckResult {
         ok: true,
         diagnostics: Vec::new(),
+        workflow: None,
     })
     .into_response()
 }

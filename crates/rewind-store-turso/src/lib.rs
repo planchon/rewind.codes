@@ -1,11 +1,11 @@
 //! The embedded store of Rewind on Turso Database (`archi/06-storage-and-scale.md`, "Backends";
 //! `archi/07-code-architecture.md`, "Embedded server and CLI").
 //!
-//! The embedded control plane: [`TursoCatalog`] (`CatalogStore`, [`TursoStore::catalog`]) and
-//! [`TursoCluster`] (`Cluster`: its members live in the process, its partition map in the
-//! database), with access and secrets below. Every write of the catalog, of access and of
-//! secrets sends what it changed once it committed, through a broadcast inside the process
-//! ([`TursoStore::changes`]).
+//! The embedded control plane: [`TursoCatalog`] (`CatalogStore` and `CatalogMigration`,
+//! [`TursoStore::catalog`]) and [`TursoCluster`] (`Cluster`: its members live in the process,
+//! its partition map in the database), with access and secrets below. Every write of the
+//! catalog, of access and of secrets sends what it changed once it committed, through a
+//! broadcast inside the process ([`TursoStore::changes`]).
 //!
 //! [`TursoStore`] implements, on the same database file:
 //!

@@ -227,9 +227,13 @@ fn used(usage: &SecretUsage) -> String {
         lines.push("workflows whose latest version uses it:".to_owned());
         for workflow in &usage.workflows {
             lines.push(format!(
-                "  {}@{} for {}",
-                workflow.name,
-                &workflow.digest[..12.min(workflow.digest.len())],
+                "  {}@v{} ({}) for {}",
+                workflow
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| crate::render::short_id(&workflow.workflow)),
+                workflow.version,
+                workflow.workflow,
                 workflow.servers.join(", ")
             ));
         }

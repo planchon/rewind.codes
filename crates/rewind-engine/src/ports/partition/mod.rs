@@ -30,7 +30,7 @@ use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Seq, Shape, Timestam
 
 pub use counters::{
     ActionCounts, CounterDelta, Counters, FailureCounts, Gauges, Hour, LATEST_RUNS, LatestRun,
-    RunCounts, Scope, ScriptCounts, Sketch, Window,
+    RunCounts, Scope, Sketch, Window, WorkflowCounts,
 };
 pub use outbox::{Admission, OutboxChange, OutboxEntry, OutboxId, Projection, TenantState};
 pub use run::{Attempt, RunHead, TaskChange, TaskRecord, Watcher};

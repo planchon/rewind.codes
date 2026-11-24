@@ -9,14 +9,17 @@ pub const ACTION_SET_DECLARATIONS: &str = "/v1/action-sets/{id}/declarations";
 pub const ACTION_SET_SEARCH: &str = "/v1/action-sets/{id}/search";
 
 pub const WORKFLOWS: &str = "/v1/workflows";
-pub const WORKFLOW: &str = "/v1/workflows/{name}";
-pub const WORKFLOW_RECORD: &str = "/v1/workflows/{name}/record";
+pub const WORKFLOW: &str = "/v1/workflows/{id}";
+pub const WORKFLOW_VERSIONS: &str = "/v1/workflows/{id}/versions";
+pub const WORKFLOW_TESTS: &str = "/v1/workflows/{id}/tests";
+pub const WORKFLOW_PROMOTE: &str = "/v1/workflows/{id}/promote";
+pub const WORKFLOW_FORK: &str = "/v1/workflows/{id}/fork";
+pub const WORKFLOW_PULL: &str = "/v1/workflows/{id}/pull";
+pub const WORKFLOW_RECORD: &str = "/v1/workflows/{id}/record";
 pub const TEST_DOCUMENT: &str = "/v1/tests/{digest}";
 
 pub const CHECK: &str = "/v1/check";
 pub const TEST: &str = "/v1/test";
-pub const SCRIPTS: &str = "/v1/scripts";
-pub const SCRIPT: &str = "/v1/scripts/{digest}";
 
 pub const RUNS: &str = "/v1/runs";
 pub const RUN_STATS: &str = "/v1/runs/stats";
@@ -125,7 +128,7 @@ pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server"
 pub const MCP: &str = "/mcp";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 114] = [
+pub const OPERATIONS: [(&str, &str); 117] = [
     ("POST", ACTION_SETS),
     ("GET", ACTION_SETS),
     ("GET", ACTION_SET_DECLARATIONS),
@@ -133,13 +136,16 @@ pub const OPERATIONS: [(&str, &str); 114] = [
     ("POST", WORKFLOWS),
     ("GET", WORKFLOWS),
     ("GET", WORKFLOW),
+    ("PATCH", WORKFLOW),
+    ("POST", WORKFLOW_VERSIONS),
+    ("POST", WORKFLOW_TESTS),
+    ("POST", WORKFLOW_PROMOTE),
+    ("POST", WORKFLOW_FORK),
+    ("POST", WORKFLOW_PULL),
     ("POST", WORKFLOW_RECORD),
     ("GET", TEST_DOCUMENT),
     ("POST", CHECK),
     ("POST", TEST),
-    ("GET", SCRIPTS),
-    ("GET", SCRIPT),
-    ("PATCH", SCRIPT),
     ("POST", RUNS),
     ("GET", RUNS),
     ("GET", RUN_STATS),

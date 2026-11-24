@@ -240,11 +240,10 @@ pub(super) async fn list(
             .map(|pair| input::label_filter(pair))
             .collect::<Result<_, _>>()?,
         action: args.action,
-        script: args.script,
         error: args.error,
         quarantined: args.quarantined.then_some(true),
         source: args.source,
-        workflow: None,
+        workflow: args.workflow,
         started_by: None,
         started_after: None,
         started_before: None,

@@ -10,7 +10,7 @@ use rewind_api::Problem;
 use rewind_api::common::{Callsite, Labels, timestamp};
 use rewind_api::query::{self, Comparison, Filter, Pattern, TimeValue, WaitKind};
 use rewind_api::runs::{DurationStats, RunFilter, RunSort, RunWait, WaitCounts};
-use rewind_core::{ActionFailureKind, Digest, RunId, RunMode};
+use rewind_core::{ActionFailureKind, RunId, RunMode};
 use rewind_engine::ports::{
     self, Predicate, Range, RunOrder, RunQuery, Scope, SearchCursor, Term, TextMatch, WaitingFor,
 };
@@ -79,11 +79,6 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
     if let Some(action) = &filter.action {
         refuse_nul_in_filter("action", action)?;
         with(Predicate::Action(vec![TextMatch::Exact(action.clone())]));
-    }
-    if let Some(code) = &filter.script {
-        let digest = Digest::from_hex(code)
-            .map_err(|_| ApiError::invalid(format!("script {code:?}: expected a digest")))?;
-        with(Predicate::Script(vec![digest.to_hex()]));
     }
     if let Some(error) = &filter.error {
         refuse_nul_in_filter("error", error)?;
@@ -155,7 +150,6 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
         Filter::Duration(range) => Predicate::Duration(counts(range)),
         Filter::Calls(range) => Predicate::Calls(counts(range)),
         Filter::Errors(range) => Predicate::Errors(counts(range)),
-        Filter::Script(prefixes) => Predicate::Script(prefixes),
         Filter::ActionSet(prefixes) => Predicate::ActionSet(prefixes),
         Filter::Id(prefixes) => Predicate::Id(prefixes),
         // The parser checked the form of the id.
@@ -351,9 +345,6 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
         code_digest: run.code.to_hex(),
-        // The code's title is not the read model's: the caller gives it.
-        script_title: None,
-        headline: run.headline.clone(),
         action_set: run.action_set.to_hex(),
         labels: Labels::from(run.labels.clone()),
         started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
@@ -380,7 +371,7 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
             .collect(),
         wakes_at: run.wakes_at.map(timestamp),
         source: run.source.map(|parent| parent.to_string()),
-        workflow: run.workflow.clone(),
+        workflow: run.workflow.as_ref().map(crate::views::run_workflow),
         started_by: run.started_by.map(|run| run.to_string()),
     }
 }

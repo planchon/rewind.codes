@@ -311,6 +311,7 @@ impl Apply<'_> {
                 .get::<record::Gauges>(&key)
                 .await?
                 .map(codec::gauges_of)
+                .transpose()?
                 .unwrap_or_default();
             subtract(&mut gauges, &held);
             gauges.add(&holds);
@@ -459,7 +460,7 @@ impl Apply<'_> {
                         .and_then(|rest| rest.try_into().ok())
                         .map(|bytes: [u8; 4]| rewind_engine::ports::Hour(u32::from_be_bytes(bytes)))
                         .ok_or_else(|| codec::corrupt("an hour's key"))?;
-                    let counts = codec::counters_of(decode::<record::Counters>(&value)?);
+                    let counts = codec::counters_of(decode::<record::Counters>(&value)?)?;
                     self.delete(&key)?;
                     self.delete(keys::tenant_hour(&tenant, hour, &namespace).as_bytes())?;
                     // What the namespace consumed stays in its tenant's counts.
@@ -827,6 +828,7 @@ impl Apply<'_> {
                     .get::<record::Counters>(&at)
                     .await?
                     .map(codec::counters_of)
+                    .transpose()?
                     .unwrap_or_default();
                 total.add(&counts);
                 let total = codec::counters_record(&total);
@@ -879,11 +881,11 @@ fn subtract(gauges: &mut Gauges, held: &Gauges) {
             }
         }
     }
-    for (code, count) in &held.scripts {
-        if let Some(left) = gauges.scripts.get_mut(code) {
+    for (workflow, count) in &held.workflows {
+        if let Some(left) = gauges.workflows.get_mut(workflow) {
             *left = left.saturating_sub(*count);
             if *left == 0 {
-                gauges.scripts.remove(code);
+                gauges.workflows.remove(workflow);
             }
         }
     }

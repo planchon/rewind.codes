@@ -3,24 +3,33 @@
 //! control plane"). The in-memory `MemoryCatalog` of `rewind-engine` is the reference of every
 //! behavior here; both pass the same conformance suite.
 //!
-//! The catalog keeps workflows, action sets, workflows, tests, workflow_tests, tenants, namespaces
-//! with each one's `partition`, and subscriptions. Every call holds the store's one connection;
-//! a write that changes something sends its change once it committed, while it still holds the
-//! connection, so changes leave in commit order ([`TursoStore::changes`]). A write that changes
-//! nothing sends nothing. Rows of namespaces created before the `partition` column have none:
-//! `ensure_namespace` places the one it is asked for, [`TursoCatalog::place_namespaces`] all of
-//! them.
+//! The catalog keeps code and action sets; workflows, their versions, the codes each scope has
+//! seen and their suites; tests, tenants, namespaces with each one's `partition`, and
+//! subscriptions; and, for `CatalogMigration`, the titles people gave codes before the workflow
+//! model. Every call holds the store's one connection; a write that changes something sends its
+//! change once it committed, while it still holds the connection, so changes leave in commit
+//! order ([`TursoStore::changes`]). A write that changes nothing sends nothing. Rows of
+//! namespaces created before the `partition` column have none: `ensure_namespace` places the one
+//! it is asked for, [`TursoCatalog::place_namespaces`] all of them.
+//!
+//! Labels are JSON objects in their columns. Whether a row's labels carry a caller's is asked in
+//! SQL (`carries!`): the caller's labels are bound as a JSON object, and each of them must be
+//! one of the row's.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
-use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
+use rewind_core::{
+    ActionSet, Code, Digest, PartitionId, RunId, Timestamp, WorkflowId, WorkflowVersion,
+};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogError, CatalogStore, CompiledCode, ControlPlaneChange,
-    DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
-    RunRef, ScriptTitle, Secret, StoredActionSet, StoredCode, StoredWorkflow, Subscription,
-    TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, WorkflowFilter,
+    ActionDeclarations, CatalogError, CatalogMigration, CatalogStore, CodeTitle, CompiledCode,
+    ControlPlaneChange, DeleteNamespace, DisplayName, DropNamespace, Labels, Namespace,
+    NamespaceName, NamespaceWrite, NewVersion, NewWorkflow, Quotas, RunRef, ScopeFilter, Secret,
+    StoredActionSet, StoredCode, StoredVersion, StoredWorkflow, Subscription, SuiteChange,
+    SuiteMember, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, VersionRef,
+    WorkflowCreated, WorkflowFilter, WorkflowPatch, WorkflowScope, WorkflowSource, WorkflowWrite,
     namespace_partition,
 };
 use turso::{Connection, Row, Value};
@@ -29,7 +38,9 @@ use crate::codec::{decode_event_types, decode_labels, encode_event_types, encode
 use crate::namespaces::{
     self as tenancy, display_name_of, quota_columns, quota_values, quotas_from_row,
 };
-use crate::sql::{self, Columns, digest, int, limit, ms, opt_text, tenant, text, transaction, ts};
+use crate::sql::{
+    self, Columns, digest, int, limit, ms, opt_text, opt_ts, tenant, text, transaction, ts,
+};
 use crate::{Error, TursoStore};
 
 impl From<Error> for CatalogError {
@@ -54,37 +65,6 @@ impl TursoStore {
     }
 }
 
-/// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
-macro_rules! workflow_columns {
-    () => {
-        "version, document, labels, created_at, number"
-    };
-}
-
-fn workflow_from_row(row: &Row) -> Result<StoredWorkflow, Error> {
-    let version = row.digest(0)?;
-    let workflow = rewind_format::decode_workflow(&row.text(1)?)
-        .map_err(|err| Error::Corrupt(format!("workflow {version}: {err}")))?;
-    if workflow.version() != version {
-        return Err(Error::Corrupt(format!(
-            "workflow {version} does not hash to its key"
-        )));
-    }
-    Ok(StoredWorkflow {
-        workflow,
-        labels: decode_labels(&row.text(2)?)?,
-        created_at: row.ts(3)?,
-        number: row.u32(4)?,
-    })
-}
-
-/// Whether a version's labels hold all of `required`.
-fn carries(labels: &BTreeMap<String, String>, required: &BTreeMap<String, String>) -> bool {
-    required
-        .iter()
-        .all(|(key, value)| labels.get(key) == Some(value))
-}
-
 fn action_set_from_row(row: &Row, key: Digest, first: usize) -> Result<StoredActionSet, Error> {
     let action_set = rewind_format::decode_action_set(&row.text(first)?)
         .map_err(|err| Error::Corrupt(format!("action set {key}: {err}")))?;
@@ -102,12 +82,16 @@ fn action_set_from_row(row: &Row, key: Digest, first: usize) -> Result<StoredAct
     })
 }
 
-/// A version referencing a test the catalog cannot keep for it.
+/// A suite referencing a test the catalog cannot keep for it.
 fn missing_test(test: Digest) -> CatalogError {
     CatalogError::Conflict(format!(
         "the test {test} has no row, or its deletion has started: reserve it and write its blob \
-         again before saving the version"
+         again before giving it to a suite"
     ))
+}
+
+fn no_workflow(id: &WorkflowId) -> CatalogError {
+    CatalogError::Conflict(format!("the workflow {id} does not exist"))
 }
 
 fn name_of(name: String) -> Result<NamespaceName, Error> {
@@ -127,6 +111,402 @@ fn namespace_changed(tenant_id: &TenantId, name: &NamespaceName) -> ControlPlane
         tenant: tenant_id.clone(),
         name: name.clone(),
     }
+}
+
+fn workflow_changed(tenant_id: &TenantId, id: &WorkflowId) -> ControlPlaneChange {
+    ControlPlaneChange::Workflow {
+        tenant: tenant_id.clone(),
+        id: id.clone(),
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// Workflows
+
+/// The condition that the labels of the JSON object column `$column` carry every label of the
+/// JSON object bound to its one `?`: the caller's. `{}` is carried by every row.
+macro_rules! carries {
+    ($column:literal) => {
+        concat!(
+            "NOT EXISTS (SELECT 1 FROM json_each(?) AS wanted WHERE NOT EXISTS (",
+            "SELECT 1 FROM json_each(",
+            $column,
+            ") AS held WHERE held.key = wanted.key AND held.value = wanted.value))"
+        )
+    };
+}
+
+/// The columns of a [`StoredWorkflow`] of `workflows w`, read by [`workflow_from_row`].
+macro_rules! workflow_columns {
+    () => {
+        "w.id, w.namespace, w.name, w.description, w.labels, w.source_workflow, \
+         w.source_version, w.created_by, w.created_at, w.promoted_at, w.latest"
+    };
+}
+
+/// The columns of a [`StoredVersion`] of `workflow_versions v`, read by [`version_from_row`].
+macro_rules! version_columns {
+    () => {
+        "v.workflow, v.version, v.digest, v.document, v.labels, v.created_at"
+    };
+}
+
+/// How many columns [`workflow_columns!`] reads.
+const WORKFLOW_COLUMN_COUNT: usize = 11;
+
+/// The `namespace` of the organization's workflows and codes.
+const ORGANIZATION: &str = "*";
+
+/// A scope as the `namespace` columns write it.
+fn scope_value(scope: &WorkflowScope) -> Value {
+    text(scope.to_string())
+}
+
+fn scope_of(namespace: String) -> Result<WorkflowScope, Error> {
+    if namespace == ORGANIZATION {
+        return Ok(WorkflowScope::Organization);
+    }
+    name_of(namespace).map(WorkflowScope::Namespace)
+}
+
+fn workflow_id(id: &str) -> Result<WorkflowId, Error> {
+    id.parse()
+        .map_err(|err: rewind_core::InvalidWorkflowId| Error::Corrupt(err.to_string()))
+}
+
+fn labels_value(labels: &Labels) -> Value {
+    text(encode_labels(labels))
+}
+
+fn workflow_from_row(row: &Row) -> Result<StoredWorkflow, Error> {
+    let source = match row.opt_text(5)? {
+        None => None,
+        Some(workflow) => Some(WorkflowSource {
+            workflow: workflow_id(&workflow)?,
+            version: row.u32(6)?,
+        }),
+    };
+    Ok(StoredWorkflow {
+        id: workflow_id(&row.text(0)?)?,
+        scope: scope_of(row.text(1)?)?,
+        name: row.opt_text(2)?,
+        description: row.opt_text(3)?,
+        labels: decode_labels(&row.text(4)?)?,
+        source,
+        created_by: row.text(7)?,
+        created_at: row.ts(8)?,
+        promoted_at: row.opt_ts(9)?,
+        latest: row.u32(10)?,
+    })
+}
+
+/// A version read from its columns, from `first` on.
+fn version_from_row(row: &Row, first: usize) -> Result<StoredVersion, Error> {
+    let digest = row.digest(first + 2)?;
+    Ok(StoredVersion {
+        workflow: workflow_id(&row.text(first)?)?,
+        version: row.u32(first + 1)?,
+        document: version_document(&row.text(first + 3)?, digest)?,
+        digest,
+        labels: decode_labels(&row.text(first + 4)?)?,
+        created_at: row.ts(first + 5)?,
+    })
+}
+
+/// The version a stored document describes. A version the schema migration of the workflow
+/// model moved (`schema::V14`) keeps the document it was saved with, in the names of before the
+/// rename release, until `rewind server rename-data` rewrites it: until then it cannot be read.
+fn version_document(json: &str, digest: Digest) -> Result<WorkflowVersion, Error> {
+    rewind_format::decode_workflow_version(json)
+        .map_err(|err| Error::Corrupt(format!("workflow version {digest}: {err}")))
+}
+
+async fn find_workflow(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    id: &WorkflowId,
+) -> Result<Option<StoredWorkflow>, Error> {
+    let row = sql::query_row(
+        connection,
+        concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows w WHERE w.tenant = ? AND w.id = ?"
+        ),
+        vec![tenant(tenant_id), text(id.as_str())],
+    )
+    .await?;
+    row.map(|row| workflow_from_row(&row)).transpose()
+}
+
+/// The workflow of `scope` named `name`, if any.
+async fn named(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    scope: &WorkflowScope,
+    name: &str,
+) -> Result<Option<StoredWorkflow>, Error> {
+    let row = sql::query_row(
+        connection,
+        concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows w WHERE w.tenant = ? AND w.namespace = ? AND w.name = ?"
+        ),
+        vec![tenant(tenant_id), scope_value(scope), text(name)],
+    )
+    .await?;
+    row.map(|row| workflow_from_row(&row)).transpose()
+}
+
+/// The workflow that first had `code` in `scope` under labels carrying `labels`, and its latest
+/// version with that code carrying them: the first row of `workflow_codes` whose workflow has
+/// such a version.
+async fn with_code(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    scope: &WorkflowScope,
+    code: Digest,
+    labels: &Labels,
+) -> Result<Option<(StoredWorkflow, StoredVersion)>, Error> {
+    let row = sql::query_row(
+        connection,
+        concat!(
+            "SELECT ",
+            workflow_columns!(),
+            ", ",
+            version_columns!(),
+            " FROM workflow_codes c \
+             JOIN workflows w ON w.tenant = c.tenant AND w.id = c.workflow \
+             JOIN workflow_versions v ON v.tenant = c.tenant AND v.workflow = c.workflow \
+                 AND v.code = c.code AND ",
+            carries!("v.labels"),
+            " WHERE c.tenant = ? AND c.namespace = ? AND c.code = ? AND ",
+            carries!("c.labels"),
+            " ORDER BY c.added_order, v.version DESC LIMIT 1"
+        ),
+        vec![
+            labels_value(labels),
+            tenant(tenant_id),
+            scope_value(scope),
+            digest(code),
+            labels_value(labels),
+        ],
+    )
+    .await?;
+    row.map(|row| {
+        Ok((
+            workflow_from_row(&row)?,
+            version_from_row(&row, WORKFLOW_COLUMN_COUNT)?,
+        ))
+    })
+    .transpose()
+}
+
+/// Adds `code` to the `workflow_codes` of `scope` under `labels` for the workflow `id`, unless
+/// the scope has it there: after every row of its tenant.
+async fn add_code(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    scope: &WorkflowScope,
+    version: &WorkflowVersion,
+    id: &WorkflowId,
+    now: Timestamp,
+) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "INSERT OR IGNORE INTO workflow_codes (tenant, namespace, labels, code, workflow, \
+         added_at, added_order) \
+         SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(added_order), 0) + 1 FROM workflow_codes \
+         WHERE tenant = ?",
+        vec![
+            tenant(tenant_id),
+            scope_value(scope),
+            labels_value(version.labels()),
+            digest(version.code()),
+            text(id.as_str()),
+            ts(now),
+            tenant(tenant_id),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Moves the codes of the workflow `id` from its scope `from` to `to`, each keeping its place in
+/// the order; a code `to` has already under the same labels keeps its workflow.
+async fn move_codes(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    id: &WorkflowId,
+    from: &WorkflowScope,
+    to: &WorkflowScope,
+) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "DELETE FROM workflow_codes WHERE tenant = ? AND namespace = ? AND workflow = ? \
+         AND EXISTS (SELECT 1 FROM workflow_codes there \
+                     WHERE there.tenant = workflow_codes.tenant AND there.namespace = ? \
+                     AND there.labels = workflow_codes.labels \
+                     AND there.code = workflow_codes.code)",
+        vec![
+            tenant(tenant_id),
+            scope_value(from),
+            text(id.as_str()),
+            scope_value(to),
+        ],
+    )
+    .await?;
+    sql::execute(
+        connection,
+        "UPDATE workflow_codes SET namespace = ? WHERE tenant = ? AND namespace = ? AND workflow = ?",
+        vec![
+            scope_value(to),
+            tenant(tenant_id),
+            scope_value(from),
+            text(id.as_str()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// A test without a row, or whose deletion has started, among `tests`.
+async fn find_missing_test(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    tests: impl IntoIterator<Item = Digest>,
+) -> Result<Option<Digest>, Error> {
+    for test in tests.into_iter().collect::<BTreeSet<_>>() {
+        let live = sql::query_row(
+            connection,
+            "SELECT 1 FROM tests WHERE tenant = ? AND digest = ? AND deletion_started_at IS NULL",
+            vec![tenant(tenant_id), digest(test)],
+        )
+        .await?;
+        if live.is_none() {
+            return Ok(Some(test));
+        }
+    }
+    Ok(None)
+}
+
+/// Makes `test` the test `name` of a suite: a member that left under that name and digest joins
+/// again at `now`; one already in it stays.
+async fn join(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    id: &WorkflowId,
+    name: &str,
+    test: Digest,
+    now: Timestamp,
+) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "INSERT INTO workflow_tests (tenant, workflow, name, digest, added_at, retired_at, \
+         reason) VALUES (?, ?, ?, ?, ?, NULL, NULL) \
+         ON CONFLICT (tenant, workflow, name, digest) DO UPDATE SET \
+         added_at = excluded.added_at, retired_at = NULL, reason = NULL \
+         WHERE workflow_tests.retired_at IS NOT NULL",
+        vec![
+            tenant(tenant_id),
+            text(id.as_str()),
+            text(name),
+            digest(test),
+            ts(now),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Makes the current member `name` of digest `test` leave its suite at `now`, for `reason`.
+async fn retire(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    id: &WorkflowId,
+    (name, test): (&str, Digest),
+    reason: Option<&str>,
+    now: Timestamp,
+) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "UPDATE workflow_tests SET retired_at = ?, reason = ? \
+         WHERE tenant = ? AND workflow = ? AND name = ? AND digest = ? AND retired_at IS NULL",
+        vec![
+            ts(now),
+            opt_text(reason),
+            tenant(tenant_id),
+            text(id.as_str()),
+            text(name),
+            digest(test),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Every test a workflow's suite holds or held, by name, then when it joined.
+async fn suite_of(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    id: &WorkflowId,
+) -> Result<Vec<SuiteMember>, Error> {
+    let rows = sql::query(
+        connection,
+        "SELECT name, digest, added_at, retired_at, reason FROM workflow_tests \
+         WHERE tenant = ? AND workflow = ? ORDER BY name, added_at, digest",
+        vec![tenant(tenant_id), text(id.as_str())],
+    )
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(SuiteMember {
+                name: row.text(0)?,
+                digest: row.digest(1)?,
+                added_at: row.ts(2)?,
+                retired_at: row.opt_ts(3)?,
+                reason: row.opt_text(4)?,
+            })
+        })
+        .collect()
+}
+
+/// Stores the version `number` of the workflow `id`, its code in its scope's `workflow_codes`.
+async fn insert_version(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    workflow: (&WorkflowId, &WorkflowScope),
+    number: u32,
+    document: &WorkflowVersion,
+    now: Timestamp,
+) -> Result<StoredVersion, Error> {
+    let (id, scope) = workflow;
+    sql::execute(
+        connection,
+        "INSERT INTO workflow_versions (tenant, workflow, version, digest, code, document, \
+         labels, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        vec![
+            tenant(tenant_id),
+            text(id.as_str()),
+            int(u64::from(number)),
+            digest(document.digest()),
+            digest(document.code()),
+            text(rewind_format::encode_workflow_version(document)),
+            labels_value(document.labels()),
+            ts(now),
+        ],
+    )
+    .await?;
+    add_code(connection, tenant_id, scope, document, id, now).await?;
+    Ok(StoredVersion {
+        workflow: id.clone(),
+        version: number,
+        document: document.clone(),
+        digest: document.digest(),
+        labels: document.labels().clone(),
+        created_at: now,
+    })
 }
 
 // -------------------------------------------------------------------------------------------
@@ -307,11 +687,57 @@ impl TursoCatalog {
         self.send([namespace_changed(tenant_id, name)]);
         Ok(true)
     }
+
+    /// Moves a workflow into `to` with its codes, at `promoted_at` for a promotion: `Written` as
+    /// it is when it is there already, `NameTaken` when `to` has a workflow of its name.
+    async fn move_workflow(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        to: &WorkflowScope,
+        promoted_at: Option<Timestamp>,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        let connection = self.store.connection().await?;
+        let connection = &*connection;
+        let (written, moved) = transaction(connection, async {
+            let Some(mut workflow) = find_workflow(connection, tenant_id, id).await? else {
+                return Ok::<_, Error>((WorkflowWrite::NotFound, false));
+            };
+            if workflow.scope == *to {
+                return Ok((WorkflowWrite::Written(workflow), false));
+            }
+            if let Some(name) = &workflow.name
+                && named(connection, tenant_id, to, name).await?.is_some()
+            {
+                return Ok((WorkflowWrite::NameTaken, false));
+            }
+            move_codes(connection, tenant_id, id, &workflow.scope, to).await?;
+            workflow.scope = to.clone();
+            workflow.promoted_at = promoted_at.or(workflow.promoted_at);
+            sql::execute(
+                connection,
+                "UPDATE workflows SET namespace = ?, promoted_at = ? WHERE tenant = ? AND id = ?",
+                vec![
+                    scope_value(to),
+                    opt_ts(workflow.promoted_at),
+                    tenant(tenant_id),
+                    text(id.as_str()),
+                ],
+            )
+            .await?;
+            Ok((WorkflowWrite::Written(workflow), true))
+        })
+        .await?;
+        if moved {
+            self.send([workflow_changed(tenant_id, id)]);
+        }
+        Ok(written)
+    }
 }
 
 impl CatalogStore for TursoCatalog {
     // ---------------------------------------------------------------------------------------
-    // Workflows and action sets
+    // Code and action sets
 
     async fn put_code(
         &self,
@@ -320,7 +746,7 @@ impl CatalogStore for TursoCatalog {
         compiled: &CompiledCode,
     ) -> Result<(), CatalogError> {
         let connection = self.store.connection().await?;
-        let inserted = sql::execute(
+        sql::execute(
             &connection,
             "INSERT OR IGNORE INTO scripts (tenant, digest, source, transpiled, source_map) \
              VALUES (?, ?, ?, ?, ?)",
@@ -333,12 +759,6 @@ impl CatalogStore for TursoCatalog {
             ],
         )
         .await?;
-        if inserted > 0 {
-            self.send([ControlPlaneChange::Script {
-                tenant: tenant_id.clone(),
-                digest: code.digest(),
-            }]);
-        }
         Ok(())
     }
 
@@ -368,92 +788,6 @@ impl CatalogStore for TursoCatalog {
                 source_map: row.text(2)?,
             },
         }))
-    }
-
-    async fn set_script_title(
-        &self,
-        tenant_id: &TenantId,
-        code: Digest,
-        title: Option<&ScriptTitle>,
-    ) -> Result<bool, CatalogError> {
-        let connection = self.store.connection().await?;
-        let connection = &*connection;
-        let stored = transaction(connection, async {
-            let stored = sql::query_row(
-                connection,
-                "SELECT 1 FROM scripts WHERE tenant = ? AND digest = ?",
-                vec![tenant(tenant_id), digest(code)],
-            )
-            .await?;
-            if stored.is_none() {
-                return Ok::<_, CatalogError>(false);
-            }
-            match title {
-                Some(title) => {
-                    sql::execute(
-                        connection,
-                        "INSERT OR REPLACE INTO script_titles (tenant, digest, title, \
-                         description, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        vec![
-                            tenant(tenant_id),
-                            digest(code),
-                            text(title.title.as_str()),
-                            opt_text(title.description.as_deref()),
-                            text(title.updated_by.as_str()),
-                            ts(title.updated_at),
-                        ],
-                    )
-                    .await?
-                }
-                None => {
-                    sql::execute(
-                        connection,
-                        "DELETE FROM script_titles WHERE tenant = ? AND digest = ?",
-                        vec![tenant(tenant_id), digest(code)],
-                    )
-                    .await?
-                }
-            };
-            Ok(true)
-        })
-        .await?;
-        if stored {
-            self.send([ControlPlaneChange::Script {
-                tenant: tenant_id.clone(),
-                digest: code,
-            }]);
-        }
-        Ok(stored)
-    }
-
-    async fn script_titles(
-        &self,
-        tenant_id: &TenantId,
-        scripts: &[Digest],
-    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
-        let connection = self.store.connection().await?;
-        let mut titles = BTreeMap::new();
-        for code in scripts.iter().collect::<BTreeSet<_>>() {
-            let row = sql::query_row(
-                &connection,
-                "SELECT title, description, updated_by, updated_at FROM script_titles \
-                 WHERE tenant = ? AND digest = ?",
-                vec![tenant(tenant_id), digest(*code)],
-            )
-            .await?;
-            if let Some(row) = row {
-                titles.insert(
-                    *code,
-                    ScriptTitle {
-                        title: row.text(0)?,
-                        description: row.opt_text(1)?,
-                        updated_by: row.text(2)?,
-                        updated_at: row.ts(3)?,
-                    },
-                );
-            }
-        }
-        Ok(titles.into_iter().collect())
     }
 
     async fn put_action_set(
@@ -523,234 +857,504 @@ impl CatalogStore for TursoCatalog {
     // ---------------------------------------------------------------------------------------
     // Workflows
 
-    async fn put_workflow(
+    async fn create_workflow(
         &self,
         tenant_id: &TenantId,
-        workflow: &Workflow,
+        workflow: &NewWorkflow,
         now: Timestamp,
-    ) -> Result<StoredWorkflow, CatalogError> {
-        let labels = workflow.labels();
+    ) -> Result<WorkflowCreated, CatalogError> {
         let connection = self.store.connection().await?;
         let connection = &*connection;
-        let version = workflow.version();
-        let (stored, inserted) = transaction(connection, async {
-            let existing = sql::query_row(
-                connection,
-                concat!(
-                    "SELECT ",
-                    workflow_columns!(),
-                    " FROM workflows WHERE tenant = ? AND version = ?"
-                ),
-                vec![tenant(tenant_id), digest(version)],
-            )
-            .await?;
-            if let Some(existing) = existing {
-                return Ok((workflow_from_row(&existing)?, false));
-            }
-            // A new version references only tests whose blobs are kept: rows not being deleted.
-            let tests: BTreeSet<Digest> = workflow.suite().tests.iter().map(|t| t.test).collect();
-            for test in &tests {
-                let live = sql::query_row(
-                    connection,
-                    "SELECT 1 FROM tests WHERE tenant = ? AND digest = ? \
-                     AND deletion_started_at IS NULL",
-                    vec![tenant(tenant_id), digest(*test)],
-                )
-                .await?;
-                if live.is_none() {
-                    return Err(missing_test(*test));
+        let version = &workflow.version;
+        let created = transaction(connection, async {
+            match &workflow.name {
+                Some(name) => {
+                    if named(connection, tenant_id, &workflow.scope, name)
+                        .await?
+                        .is_some()
+                    {
+                        return Ok(WorkflowCreated::NameTaken);
+                    }
+                }
+                None => {
+                    if let Some((existing, _)) = with_code(
+                        connection,
+                        tenant_id,
+                        &workflow.scope,
+                        version.code(),
+                        version.labels(),
+                    )
+                    .await?
+                    {
+                        return Ok(WorkflowCreated::Existing(existing));
+                    }
                 }
             }
-            for test in &tests {
-                sql::execute(
-                    connection,
-                    "INSERT OR IGNORE INTO workflow_tests (tenant, version, digest) \
-                     VALUES (?, ?, ?)",
-                    vec![tenant(tenant_id), digest(version), digest(*test)],
-                )
-                .await?;
+            let tests = version.suite().tests.iter().map(|test| test.test);
+            if let Some(test) = find_missing_test(connection, tenant_id, tests).await? {
+                return Err(missing_test(test));
             }
-            // Only the versions of one workflow are compared by the order they were stored in,
-            // and numbered: a new version takes the next number of its workflow.
-            let (order, number) = match sql::query_row(
-                connection,
-                "SELECT COALESCE(MAX(stored_order), 0) + 1, COALESCE(MAX(number), 0) + 1 \
-                 FROM workflows WHERE tenant = ? AND name = ?",
-                vec![tenant(tenant_id), text(workflow.name())],
-            )
-            .await?
+            if find_workflow(connection, tenant_id, &workflow.id)
+                .await?
+                .is_some()
             {
-                Some(row) => (row.u64(0)?, row.u32(1)?),
-                None => (1, 1),
-            };
+                return Err(CatalogError::Conflict(format!(
+                    "the workflow {} exists already",
+                    workflow.id
+                )));
+            }
+            let source = workflow.source.as_ref();
             sql::execute(
                 connection,
-                "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
-                 stored_order, number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO workflows (tenant, id, namespace, name, description, labels, \
+                 source_workflow, source_version, created_by, created_at, promoted_at, latest) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)",
                 vec![
                     tenant(tenant_id),
-                    digest(version),
-                    text(workflow.name()),
-                    text(rewind_format::encode_workflow(workflow)),
-                    text(encode_labels(labels)),
+                    text(workflow.id.as_str()),
+                    scope_value(&workflow.scope),
+                    opt_text(workflow.name.as_deref()),
+                    opt_text(workflow.description.as_deref()),
+                    labels_value(&workflow.labels),
+                    opt_text(source.map(|source| source.workflow.as_str())),
+                    source.map_or(Value::Null, |source| int(u64::from(source.version))),
+                    text(workflow.created_by.as_str()),
                     ts(now),
-                    int(order),
-                    int(u64::from(number)),
                 ],
             )
             .await?;
-            let stored = StoredWorkflow {
-                workflow: workflow.clone(),
-                labels: labels.clone(),
+            insert_version(
+                connection,
+                tenant_id,
+                (&workflow.id, &workflow.scope),
+                1,
+                version,
+                now,
+            )
+            .await?;
+            for test in &version.suite().tests {
+                join(
+                    connection,
+                    tenant_id,
+                    &workflow.id,
+                    &test.name,
+                    test.test,
+                    now,
+                )
+                .await?;
+            }
+            Ok(WorkflowCreated::Created(StoredWorkflow {
+                id: workflow.id.clone(),
+                scope: workflow.scope.clone(),
+                name: workflow.name.clone(),
+                description: workflow.description.clone(),
+                labels: workflow.labels.clone(),
+                source: workflow.source.clone(),
+                created_by: workflow.created_by.clone(),
                 created_at: now,
-                number,
-            };
-            Ok::<_, CatalogError>((stored, true))
+                promoted_at: None,
+                latest: 1,
+            }))
         })
         .await?;
-        if inserted {
-            self.send([ControlPlaneChange::Workflow {
-                tenant: tenant_id.clone(),
-                name: workflow.name().to_owned(),
-                version,
-            }]);
+        if let WorkflowCreated::Created(stored) = &created {
+            self.send([workflow_changed(tenant_id, &stored.id)]);
         }
-        Ok(stored)
+        Ok(created)
     }
 
-    async fn get_workflow(
+    async fn workflow(
         &self,
         tenant_id: &TenantId,
-        version: Digest,
+        id: &WorkflowId,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
         let connection = self.store.connection().await?;
-        let row = sql::query_row(
-            &connection,
-            concat!(
-                "SELECT ",
-                workflow_columns!(),
-                " FROM workflows WHERE tenant = ? AND version = ?"
-            ),
-            vec![tenant(tenant_id), digest(version)],
-        )
-        .await?;
-        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+        Ok(find_workflow(&connection, tenant_id, id).await?)
     }
 
-    async fn workflow_number(
+    async fn workflow_named(
         &self,
         tenant_id: &TenantId,
+        namespace: Option<&NamespaceName>,
         name: &str,
-        number: u32,
+        labels: &Labels,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
         let connection = self.store.connection().await?;
-        let row = sql::query_row(
-            &connection,
-            concat!(
-                "SELECT ",
-                workflow_columns!(),
-                " FROM workflows WHERE tenant = ? AND name = ? AND number = ?"
-            ),
-            vec![tenant(tenant_id), text(name), int(u64::from(number))],
-        )
-        .await?;
-        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
-    }
-
-    async fn workflow_versions(
-        &self,
-        tenant_id: &TenantId,
-        name: &str,
-        labels: &BTreeMap<String, String>,
-    ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        let connection = self.store.connection().await?;
-        let rows = sql::query(
-            &connection,
-            concat!(
-                "SELECT ",
-                workflow_columns!(),
-                " FROM workflows WHERE tenant = ? AND name = ? \
-                 ORDER BY created_at DESC, stored_order DESC"
-            ),
-            vec![tenant(tenant_id), text(name)],
-        )
-        .await?;
-        let mut versions = Vec::new();
-        for row in &rows {
-            // Labels are filtered here: a version's labels are one JSON column.
-            if carries(&decode_labels(&row.text(2)?)?, labels) {
-                versions.push(workflow_from_row(row)?);
+        let scopes = namespace
+            .map(|namespace| WorkflowScope::Namespace(namespace.clone()))
+            .into_iter()
+            .chain([WorkflowScope::Organization]);
+        for scope in scopes {
+            let row = sql::query_row(
+                &connection,
+                concat!(
+                    "SELECT ",
+                    workflow_columns!(),
+                    " FROM workflows w WHERE w.tenant = ? AND w.namespace = ? AND w.name = ? \
+                     AND EXISTS (SELECT 1 FROM workflow_versions v \
+                                 WHERE v.tenant = w.tenant AND v.workflow = w.id AND ",
+                    carries!("v.labels"),
+                    ")"
+                ),
+                vec![
+                    tenant(tenant_id),
+                    scope_value(&scope),
+                    text(name),
+                    labels_value(labels),
+                ],
+            )
+            .await?;
+            if let Some(row) = row {
+                return Ok(Some(workflow_from_row(&row)?));
             }
         }
-        Ok(versions)
+        Ok(None)
     }
 
-    async fn workflows_with_code(
+    async fn workflow_with_code(
         &self,
         tenant_id: &TenantId,
+        namespace: &NamespaceName,
         code: Digest,
-        labels: &BTreeMap<String, String>,
-    ) -> Result<Vec<StoredWorkflow>, CatalogError> {
+        labels: &Labels,
+    ) -> Result<Option<(StoredWorkflow, StoredVersion)>, CatalogError> {
         let connection = self.store.connection().await?;
-        // The code is read from the version's document: a tenant has few versions.
-        let rows = sql::query(
-            &connection,
-            concat!(
-                "SELECT ",
-                workflow_columns!(),
-                " FROM workflows WHERE tenant = ? AND json_extract(document, '$.code') = ? \
-                 ORDER BY created_at DESC, stored_order DESC"
-            ),
-            vec![tenant(tenant_id), text(code.to_hex())],
-        )
-        .await?;
-        let mut versions = Vec::new();
-        for row in &rows {
-            if carries(&decode_labels(&row.text(2)?)?, labels) {
-                versions.push(workflow_from_row(row)?);
+        let scopes = [
+            WorkflowScope::Namespace(namespace.clone()),
+            WorkflowScope::Organization,
+        ];
+        for scope in &scopes {
+            if let Some(found) = with_code(&connection, tenant_id, scope, code, labels).await? {
+                return Ok(Some(found));
             }
         }
-        Ok(versions)
+        Ok(None)
     }
 
-    async fn latest_workflows(
+    async fn list_workflows(
         &self,
         filter: &WorkflowFilter,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        if filter.limit == Some(0) {
+        if filter.limit == 0 {
             return Ok(Vec::new());
         }
         let connection = self.store.connection().await?;
-        let mut query = concat!(
+        let mut statement = concat!(
             "SELECT ",
             workflow_columns!(),
-            ", name FROM workflows WHERE tenant = ?"
+            " FROM workflows w WHERE w.tenant = ?"
         )
         .to_owned();
         let mut params = vec![tenant(&filter.tenant)];
         if let Some(after) = &filter.after {
-            query.push_str(" AND name > ?");
+            statement.push_str(" AND w.id > ?");
             params.push(text(after.as_str()));
         }
-        // Each workflow's versions, newest first: the first carrying the labels is its latest.
-        query.push_str(" ORDER BY name, created_at DESC, stored_order DESC");
-        let rows = sql::query_dynamic(&connection, &query, params).await?;
-        let mut latest: Vec<StoredWorkflow> = Vec::new();
-        let mut seen: Option<String> = None;
-        for row in &rows {
-            if filter.limit.is_some_and(|max| latest.len() >= max) {
-                break;
+        match &filter.scope {
+            ScopeFilter::All => {}
+            ScopeFilter::Visible(namespace) => {
+                statement.push_str(" AND w.namespace IN (?, ?)");
+                params.extend([text(ORGANIZATION), text(namespace.as_str())]);
             }
-            let name = row.text(5)?;
-            if seen.as_deref() == Some(name.as_str()) {
-                continue;
+            ScopeFilter::Organization => {
+                statement.push_str(" AND w.namespace = ?");
+                params.push(text(ORGANIZATION));
             }
-            if carries(&decode_labels(&row.text(2)?)?, &filter.labels) {
-                latest.push(workflow_from_row(row)?);
-                seen = Some(name);
+            ScopeFilter::Namespace(namespace) => {
+                statement.push_str(" AND w.namespace = ?");
+                params.push(text(namespace.as_str()));
             }
         }
-        Ok(latest)
+        statement.push_str(
+            " AND EXISTS (SELECT 1 FROM workflow_versions v \
+             WHERE v.tenant = w.tenant AND v.workflow = w.id",
+        );
+        if let Some(code) = filter.code {
+            statement.push_str(" AND v.code = ?");
+            params.push(digest(code));
+        }
+        statement.push_str(concat!(
+            " AND ",
+            carries!("v.labels"),
+            ") ORDER BY w.id LIMIT ?"
+        ));
+        params.extend([labels_value(&filter.labels), limit(filter.limit)]);
+        let rows = sql::query_dynamic(&connection, &statement, params).await?;
+        Ok(rows
+            .iter()
+            .map(workflow_from_row)
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn update_workflow(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        patch: &WorkflowPatch,
+        _now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        let connection = self.store.connection().await?;
+        let connection = &*connection;
+        let written = transaction(connection, async {
+            let Some(mut workflow) = find_workflow(connection, tenant_id, id).await? else {
+                return Ok::<_, Error>(WorkflowWrite::NotFound);
+            };
+            if let Some(Some(name)) = &patch.name
+                && named(connection, tenant_id, &workflow.scope, name)
+                    .await?
+                    .is_some_and(|other| other.id != *id)
+            {
+                return Ok(WorkflowWrite::NameTaken);
+            }
+            if let Some(name) = &patch.name {
+                workflow.name.clone_from(name);
+            }
+            if let Some(description) = &patch.description {
+                workflow.description.clone_from(description);
+            }
+            sql::execute(
+                connection,
+                "UPDATE workflows SET name = ?, description = ? WHERE tenant = ? AND id = ?",
+                vec![
+                    opt_text(workflow.name.as_deref()),
+                    opt_text(workflow.description.as_deref()),
+                    tenant(tenant_id),
+                    text(id.as_str()),
+                ],
+            )
+            .await?;
+            Ok(WorkflowWrite::Written(workflow))
+        })
+        .await?;
+        if let WorkflowWrite::Written(_) = &written {
+            self.send([workflow_changed(tenant_id, id)]);
+        }
+        Ok(written)
+    }
+
+    async fn put_version(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        version: &NewVersion,
+        now: Timestamp,
+    ) -> Result<StoredVersion, CatalogError> {
+        let connection = self.store.connection().await?;
+        let connection = &*connection;
+        let document = &version.document;
+        let suite = document.suite();
+        let stored = transaction(connection, async {
+            let Some(workflow) = find_workflow(connection, tenant_id, id).await? else {
+                return Err(no_workflow(id));
+            };
+            let tests = suite.tests.iter().map(|test| test.test);
+            if let Some(test) = find_missing_test(connection, tenant_id, tests).await? {
+                return Err(missing_test(test));
+            }
+            let number = workflow.latest + 1;
+            let stored = insert_version(
+                connection,
+                tenant_id,
+                (id, &workflow.scope),
+                number,
+                document,
+                now,
+            )
+            .await?;
+            // The suite becomes the version's: the tests it no longer has leave with the reason
+            // it gives their name.
+            let reason = |name: &str| {
+                suite
+                    .retired
+                    .iter()
+                    .find(|retired| retired.name == name)
+                    .map(|retired| retired.reason.as_str())
+                    .or_else(|| {
+                        suite
+                            .replaced
+                            .iter()
+                            .find(|replaced| replaced.name == name)
+                            .map(|replaced| replaced.reason.as_str())
+                    })
+            };
+            for member in suite_of(connection, tenant_id, id).await? {
+                if member.is_current() && suite.test(&member.name) != Some(member.digest) {
+                    let leaving = (member.name.as_str(), member.digest);
+                    retire(
+                        connection,
+                        tenant_id,
+                        id,
+                        leaving,
+                        reason(&member.name),
+                        now,
+                    )
+                    .await?;
+                }
+            }
+            for test in &suite.tests {
+                join(connection, tenant_id, id, &test.name, test.test, now).await?;
+            }
+            let source_version = workflow
+                .source
+                .map(|source| version.pulled.unwrap_or(source.version));
+            sql::execute(
+                connection,
+                "UPDATE workflows SET latest = ?, source_version = ? WHERE tenant = ? AND id = ?",
+                vec![
+                    int(u64::from(number)),
+                    source_version.map_or(Value::Null, |pulled| int(u64::from(pulled))),
+                    tenant(tenant_id),
+                    text(id.as_str()),
+                ],
+            )
+            .await?;
+            Ok::<_, CatalogError>(stored)
+        })
+        .await?;
+        self.send([workflow_changed(tenant_id, id)]);
+        Ok(stored)
+    }
+
+    async fn versions(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        labels: &Labels,
+    ) -> Result<Vec<StoredVersion>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let rows = sql::query(
+            &connection,
+            concat!(
+                "SELECT ",
+                version_columns!(),
+                " FROM workflow_versions v WHERE v.tenant = ? AND v.workflow = ? AND ",
+                carries!("v.labels"),
+                " ORDER BY v.version DESC"
+            ),
+            vec![tenant(tenant_id), text(id.as_str()), labels_value(labels)],
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| version_from_row(row, 0))
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn version(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        version: VersionRef,
+    ) -> Result<Option<StoredVersion>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let row = match version {
+            VersionRef::Number(number) => {
+                sql::query_row(
+                    &connection,
+                    concat!(
+                        "SELECT ",
+                        version_columns!(),
+                        " FROM workflow_versions v \
+                         WHERE v.tenant = ? AND v.workflow = ? AND v.version = ?"
+                    ),
+                    vec![tenant(tenant_id), text(id.as_str()), int(u64::from(number))],
+                )
+                .await?
+            }
+            VersionRef::Digest(key) => {
+                sql::query_row(
+                    &connection,
+                    concat!(
+                        "SELECT ",
+                        version_columns!(),
+                        " FROM workflow_versions v \
+                         WHERE v.tenant = ? AND v.workflow = ? AND v.digest = ? \
+                         ORDER BY v.version DESC LIMIT 1"
+                    ),
+                    vec![tenant(tenant_id), text(id.as_str()), digest(key)],
+                )
+                .await?
+            }
+        };
+        Ok(row.map(|row| version_from_row(&row, 0)).transpose()?)
+    }
+
+    async fn change_suite(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        change: &SuiteChange,
+        now: Timestamp,
+    ) -> Result<Vec<SuiteMember>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let connection = &*connection;
+        let suite = transaction(connection, async {
+            if find_workflow(connection, tenant_id, id).await?.is_none() {
+                return Err(no_workflow(id));
+            }
+            let joining = change
+                .added
+                .iter()
+                .map(|test| test.test)
+                .chain(change.replaced.iter().map(|replaced| replaced.new));
+            if let Some(test) = find_missing_test(connection, tenant_id, joining).await? {
+                return Err(missing_test(test));
+            }
+            let leaving: Vec<(&str, Digest, &str)> = change
+                .retired
+                .iter()
+                .map(|retired| (retired.name.as_str(), retired.test, retired.reason.as_str()))
+                .chain(change.replaced.iter().map(|replaced| {
+                    (
+                        replaced.name.as_str(),
+                        replaced.old,
+                        replaced.reason.as_str(),
+                    )
+                }))
+                .collect();
+            let members = suite_of(connection, tenant_id, id).await?;
+            for (name, test, _) in &leaving {
+                if !members.iter().any(|member| {
+                    member.is_current() && member.name == *name && member.digest == *test
+                }) {
+                    return Err(CatalogError::Conflict(format!(
+                        "the suite of {id} has no test {name:?} of digest {test}"
+                    )));
+                }
+            }
+            for (name, test, reason) in leaving {
+                retire(connection, tenant_id, id, (name, test), Some(reason), now).await?;
+            }
+            for replaced in &change.replaced {
+                join(connection, tenant_id, id, &replaced.name, replaced.new, now).await?;
+            }
+            for test in &change.added {
+                join(connection, tenant_id, id, &test.name, test.test, now).await?;
+            }
+            Ok(suite_of(connection, tenant_id, id).await?)
+        })
+        .await?;
+        self.send([workflow_changed(tenant_id, id)]);
+        Ok(suite)
+    }
+
+    async fn suite(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+    ) -> Result<Vec<SuiteMember>, CatalogError> {
+        let connection = self.store.connection().await?;
+        Ok(suite_of(&connection, tenant_id, id).await?)
+    }
+
+    async fn promote_workflow(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        self.move_workflow(tenant_id, id, &WorkflowScope::Organization, Some(now))
+            .await
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1290,16 +1894,95 @@ impl CatalogStore for TursoCatalog {
         name: &NamespaceName,
     ) -> Result<DropNamespace, CatalogError> {
         let connection = self.store.connection().await?;
-        let dropped = sql::execute(
+        let connection = &*connection;
+        let dropped = transaction(connection, async {
+            let dropped = sql::execute(
+                connection,
+                "DELETE FROM namespaces WHERE tenant = ? AND name = ? \
+                 AND deleting_since IS NOT NULL",
+                vec![tenant(tenant_id), text(name.as_str())],
+            )
+            .await?;
+            if dropped == 0 {
+                return Ok::<_, Error>(None);
+            }
+            // Its workflows go with it, with their versions, suites and codes; the
+            // organization's stay.
+            let scope = || vec![tenant(tenant_id), text(name.as_str())];
+            let workflows = sql::query(
+                connection,
+                "SELECT id FROM workflows WHERE tenant = ? AND namespace = ? ORDER BY id",
+                scope(),
+            )
+            .await?
+            .iter()
+            .map(|row| workflow_id(&row.text(0)?))
+            .collect::<Result<Vec<_>, Error>>()?;
+            for statement in [
+                "DELETE FROM workflow_tests WHERE tenant = ? AND workflow IN \
+                 (SELECT id FROM workflows WHERE tenant = ? AND namespace = ?)",
+                "DELETE FROM workflow_versions WHERE tenant = ? AND workflow IN \
+                 (SELECT id FROM workflows WHERE tenant = ? AND namespace = ?)",
+            ] {
+                let params = vec![tenant(tenant_id), tenant(tenant_id), text(name.as_str())];
+                sql::execute(connection, statement, params).await?;
+            }
+            for statement in [
+                "DELETE FROM workflow_codes WHERE tenant = ? AND namespace = ?",
+                "DELETE FROM workflows WHERE tenant = ? AND namespace = ?",
+            ] {
+                sql::execute(connection, statement, scope()).await?;
+            }
+            Ok(Some(workflows))
+        })
+        .await?;
+        let Some(workflows) = dropped else {
+            return Ok(DropNamespace::NotFound);
+        };
+        self.send(
+            std::iter::once(namespace_changed(tenant_id, name))
+                .chain(workflows.iter().map(|id| workflow_changed(tenant_id, id))),
+        );
+        Ok(DropNamespace::Dropped)
+    }
+}
+
+impl CatalogMigration for TursoCatalog {
+    async fn code_titles(&self) -> Result<Vec<CodeTitle>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let rows = sql::query(
             &connection,
-            "DELETE FROM namespaces WHERE tenant = ? AND name = ? AND deleting_since IS NOT NULL",
-            vec![tenant(tenant_id), text(name.as_str())],
+            "SELECT tenant, digest, title, description FROM code_titles ORDER BY tenant, digest",
+            Vec::new(),
         )
         .await?;
-        if dropped == 0 {
-            return Ok(DropNamespace::NotFound);
-        }
-        self.send([namespace_changed(tenant_id, name)]);
-        Ok(DropNamespace::Dropped)
+        Ok(rows
+            .iter()
+            .map(|row| {
+                Ok(CodeTitle {
+                    tenant: row.tenant(0)?,
+                    code: row.digest(1)?,
+                    title: row.text(2)?,
+                    description: row.opt_text(3)?,
+                })
+            })
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn scope_workflow(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowId,
+        namespace: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        let scope = WorkflowScope::Namespace(namespace.clone());
+        self.move_workflow(tenant_id, id, &scope, None).await
+    }
+
+    async fn drop_code_titles(&self) -> Result<(), CatalogError> {
+        let connection = self.store.connection().await?;
+        sql::execute(&connection, "DELETE FROM code_titles", Vec::new()).await?;
+        Ok(())
     }
 }

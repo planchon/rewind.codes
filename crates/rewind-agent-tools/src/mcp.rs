@@ -22,7 +22,9 @@ use crate::render::{
     Limits, MCP_RESULT_LIMIT, OrganizationView, describe_action_sets, describe_namespaces,
     describe_orgs, truncate_middle,
 };
-use crate::tools::{AgentError, AgentToolResult, Failure, HandleOptions, Session, finish, result};
+use crate::tools::{
+    AgentError, AgentToolResult, Failure, HandleOptions, Session, carries_code, finish, result,
+};
 
 /// The longest wait of the MCP set: Claude gives a call 240 s.
 pub const MCP_MAX_WAIT: Duration = Duration::from_secs(200);
@@ -110,11 +112,14 @@ impl McpTools {
             return Err(AgentError::UnknownTool(name.to_owned()));
         }
         let call = HandleOptions::default();
-        let handled = match parse(name, input) {
-            Ok(values) => self.dispatch(api, name, &values, &call).await,
-            Err(error) => Err(error.into()),
+        let (handled, carried) = match parse(name, input) {
+            Ok(values) => (
+                self.dispatch(api, name, &values, &call).await,
+                carries_code(name, &values),
+            ),
+            Err(error) => (Err(error.into()), false),
         };
-        finish(name, handled, &self.limits)
+        finish(name, carried, handled, &self.limits)
     }
 
     async fn dispatch<A: McpApi>(
@@ -159,6 +164,8 @@ impl McpTools {
             max_wait: self.max_wait,
             ttl: None,
             call,
+            // No tool of the MCP set changes a workflow.
+            updates: false,
         };
         match name {
             "list_secrets" => {
@@ -181,12 +188,12 @@ impl McpTools {
     }
 }
 
-/// What checks, tests and runs a code names its namespace: the end user it acts for.
+/// What checks, tests and runs names its namespace: the end user it acts for.
 fn require_namespace(values: &Values) -> Result<(), InputError> {
     match values.get("namespace") {
         Some(Value::String(name)) if !name.is_empty() => Ok(()),
         _ => Err(InputError::new(
-            "`namespace` must be a non-empty string: the namespace (the end user) the code acts for, a name list_namespaces gives or a new one.",
+            "`namespace` must be a non-empty string: the namespace (the end user) the workflow acts for, a name list_namespaces gives or a new one.",
         )),
     }
 }

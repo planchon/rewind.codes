@@ -21,10 +21,11 @@
 //!   `"apis":[…]` when it calls APIs, a server's or an API's `"auth":{…}` when its calls carry a
 //!   secret or a signature, and `"workflows":[…]` when it pins workflows, in its canonical form,
 //!   so that its bytes hash to the action set's digest;
-//! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"code":…,
-//!   "action_set":…,"v":1}`, with its suite (`base`, `tests`, `retired`, `replaced`) when it has
-//!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
-//!   when it uses secrets, in its canonical form, so that its bytes hash to the version;
+//! - a **workflow version** (the `workflow_versions` table): `{"code":…,"action_set":…,"v":1}`,
+//!   with `"schemas":{…}` when it has an interface, its suite (`base`, `tests`, `retired`,
+//!   `replaced`) when it has one, `"labels":{…}` when it was made under a grant limited to labels
+//!   and `"secrets":{…}` when it uses secrets, in its canonical form, so that its bytes hash to
+//!   its digest;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
 //!   its canonical form, so that its bytes hash to the test's digest;
 //! - the **partition records** ([`partition`]): one record per kind of thing a partition holds
@@ -40,7 +41,8 @@ pub mod partition;
 mod v1;
 
 use rewind_core::{
-    ActionSet, Cassette, Code, Digest, Event, RunExport, RunId, Test, Workflow, canonical_json,
+    ActionSet, Cassette, Code, Digest, Event, RunExport, RunId, Test, WorkflowVersion,
+    canonical_json,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -207,14 +209,14 @@ pub fn decode_action_set(json: &str) -> Result<ActionSet, FormatError> {
 }
 
 /// The workflow version document, in its canonical form (RFC 8785): its bytes hash to
-/// [`Workflow::version`].
-pub fn encode_workflow(workflow: &Workflow) -> String {
-    canonical_json(&v1::workflow_document(workflow))
+/// [`WorkflowVersion::digest`].
+pub fn encode_workflow_version(version: &WorkflowVersion) -> String {
+    canonical_json(&v1::workflow_document(version))
 }
 
 /// Decodes a workflow version document, of any supported version. Its invariants are checked
-/// ([`Workflow::new`]).
-pub fn decode_workflow(json: &str) -> Result<Workflow, FormatError> {
+/// ([`WorkflowVersion::with_interface`], [`WorkflowVersion::with_suite`]).
+pub fn decode_workflow_version(json: &str) -> Result<WorkflowVersion, FormatError> {
     let mut object = parse_object(json)?;
     match take_version(&mut object)? {
         Version::V1 => {

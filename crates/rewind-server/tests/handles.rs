@@ -1,21 +1,18 @@
-//! Runs named by their handles, workflows' titles and workflows' version numbers over HTTP, on
-//! the embedded server (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Code
-//! titles"): a handle names a run wherever its id does, a run and its summary show their handle
-//! and their code's title, a person's title comes before the comment's, and `name@v<number>`
-//! names a workflow's version.
+//! Runs named by their handles and workflows' version numbers over HTTP, on the embedded server
+//! (`archi/06-storage-and-scale.md`, "Run handles"; `archi/04-tools.md`, "Workflow names"): a
+//! handle names a run wherever its id does, a run and its summary show their handle and their
+//! workflow, a run's origin is its workflow's name, else its short id, and `name@v<number>` names
+//! a workflow's version.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;
 
-use std::collections::BTreeMap;
-
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::CreateActionSet;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
-use rewind_api::scripts::{ScriptFilter, SetScriptTitle, TitleSource};
-use rewind_api::workflows::{CreateWorkflow, WorkflowQuery};
+use rewind_api::workflows::{CreateVersion, CreateWorkflow, PatchWorkflow, WorkflowQuery};
 use rewind_api::{Problem, ProblemType};
 use rewind_core::SUFFIX_LEN;
 use serde_json::json;
@@ -41,27 +38,22 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn titled(title: Option<&str>, description: Option<&str>) -> SetScriptTitle {
-    SetScriptTitle {
-        title: title.map(str::to_owned),
-        description: description.map(str::to_owned),
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_handle_names_a_run_wherever_its_id_does() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
 
-    // The handle: the namespace, the code's title as a slug, the run's suffix.
+    // The handle: the namespace, the short id of the workflow the run created (it has no
+    // name), the run's suffix.
     let run = harness
         .start_run(&StartRun::new(APPROVAL), None)
         .await
         .unwrap();
-    let prefix = format!("{}/wait-for-approval/", test_namespace().as_str());
+    let of = run.workflow.clone().unwrap();
+    let short = format!("wf-{}", &of.id[3..9]);
+    let prefix = format!("{}/{short}/", test_namespace().as_str());
     assert!(run.handle.starts_with(&prefix), "{}", run.handle);
     assert_eq!(run.handle.len(), prefix.len() + SUFFIX_LEN);
-    assert_eq!(run.script_title.as_deref(), Some("Wait for approval"));
 
     // Its state, its transcript and a signal, by its handle.
     let read = harness.get_run(&run.handle, None).await.unwrap();
@@ -84,7 +76,7 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     // was asked.
     let suffix = run.handle.rsplit('/').next().unwrap();
     for wrong in [
-        format!("bob/wait-for-approval/{suffix}"),
+        format!("bob/{short}/{suffix}"),
         format!("{}/digest/{suffix}", test_namespace().as_str()),
         format!("{prefix}zzzzzzzzzzzz"),
     ] {
@@ -154,14 +146,14 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
     );
     assert_eq!(refused.status, 400, "{}", refused.detail);
 
-    // The summaries show the handle and the code's title.
+    // The summaries show the handle and the workflow.
     let listed = eventually(|| async {
         let page = harness.list_runs(&RunFilter::default()).await.unwrap();
         page.runs.into_iter().find(|summary| summary.id == run.id)
     })
     .await;
     assert_eq!(listed.handle, run.handle);
-    assert_eq!(listed.script_title.as_deref(), Some("Wait for approval"));
+    assert_eq!(listed.workflow, Some(of));
 
     // Cancelled and erased by its handle.
     let cancelled = harness
@@ -184,151 +176,111 @@ async fn a_handle_names_a_run_wherever_its_id_does() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_person_titles_a_script_over_its_comment() {
+async fn a_run_s_handle_takes_its_workflow_s_name_else_its_short_id() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness
         .start_run(&StartRun::new(APPROVAL), None)
         .await
         .unwrap();
-    let code = run.code_digest.clone();
+    let of = run.workflow.clone().unwrap();
+    assert_eq!((of.name.as_deref(), of.version), (None, 1));
 
-    // The comment's title and description, until a person gives others. A key bound to a
-    // namespace reads the code once the read model lists its run.
-    let read = eventually(|| async { harness.get_script(&code).await.ok() }).await;
+    // The workflow the run created shows the comment at the top of its code, display only.
+    let workflow = harness.get_workflow(&of.id).await.unwrap();
+    let comment = workflow.version.comment.clone().unwrap();
     assert_eq!(
-        (read.title.as_deref(), read.title_source),
-        (Some("Wait for approval"), Some(TitleSource::Comment))
+        (comment.title.as_str(), comment.description.as_deref()),
+        (
+            "Wait for approval",
+            Some("Waits for the signal `approval`, and returns its payload.")
+        )
     );
+    assert_eq!(workflow.name, None);
     assert_eq!(
-        read.description.as_deref(),
-        Some("Waits for the signal `approval`, and returns its payload.")
+        workflow.namespace.as_ref().map(|name| name.as_str()),
+        Some(test_namespace().as_str())
     );
 
-    // A person's title, trimmed, for the whole organization.
-    let given = harness
-        .set_script_title(
-            &code,
-            &titled(
-                Some("  Approve a deploy  "),
-                Some(" Asks the on-call person. "),
-            ),
+    // Named, its next runs take its name; the first keeps its own handle.
+    let named = harness
+        .update_workflow(
+            &of.id,
+            &PatchWorkflow {
+                name: Some(Some("approve_deploy".into())),
+                description: Some(Some("Asks the on-call person.".into())),
+            },
         )
         .await
         .unwrap();
     assert_eq!(
-        (
-            given.title.as_deref(),
-            given.description.as_deref(),
-            given.title_source
-        ),
-        (
-            Some("Approve a deploy"),
-            Some("Asks the on-call person."),
-            Some(TitleSource::Person)
-        )
+        (named.id.as_str(), named.version.version),
+        (of.id.as_str(), 1),
+        "a name keeps its id and makes no version"
     );
-    assert_eq!(given.source, APPROVAL, "the source does not change");
-    assert_eq!(
-        harness
-            .get_run(&run.id, None)
-            .await
-            .unwrap()
-            .script_title
-            .as_deref(),
-        Some("Approve a deploy")
-    );
-    let listed = eventually(|| async {
-        harness
-            .list_scripts(&ScriptFilter::default())
-            .await
-            .unwrap()
-            .scripts
-            .into_iter()
-            .find(|summary| summary.digest == code)
-    })
-    .await;
-    assert_eq!(
-        (listed.title.as_deref(), listed.title_source),
-        (Some("Approve a deploy"), Some(TitleSource::Person))
-    );
-    let summary = eventually(|| async {
-        let page = harness.list_runs(&RunFilter::default()).await.unwrap();
-        page.runs.into_iter().find(|summary| summary.id == run.id)
-    })
-    .await;
-    assert_eq!(summary.script_title.as_deref(), Some("Approve a deploy"));
-    // A new run of the code takes its origin from the person's title; the first keeps its own.
     let again = harness
         .start_run(&StartRun::new(APPROVAL), None)
         .await
         .unwrap();
     let origin = |handle: &str| handle.split('/').nth(1).unwrap().to_owned();
-    assert_eq!(origin(&again.handle), "approve-a-deploy");
+    assert_eq!(origin(&again.handle), "approve_deploy");
+    let again_of = again.workflow.unwrap();
+    assert_eq!(
+        (again_of.id.as_str(), again_of.name.as_deref()),
+        (of.id.as_str(), Some("approve_deploy"))
+    );
     assert_eq!(
         origin(&harness.get_run(&run.id, None).await.unwrap().handle),
-        "wait-for-approval"
+        format!("wf-{}", &of.id[3..9])
     );
 
-    // Removed, the comment's show again.
-    let removed = harness
-        .set_script_title(&code, &titled(None, None))
-        .await
-        .unwrap();
-    assert_eq!(
-        (removed.title.as_deref(), removed.title_source),
-        (Some("Wait for approval"), Some(TitleSource::Comment))
-    );
-
-    // A title out of bounds is refused, and nothing changes.
-    for (title, description) in [
-        ("   ", None),
-        (&*"t".repeat(121), None),
-        ("Approve", Some("d".repeat(2_001))),
-    ] {
+    // A name out of bounds is refused, and nothing changes.
+    for name in ["has space", "default", "wf_approve", &"t".repeat(65)] {
         let refused = problem(
             harness
-                .set_script_title(&code, &titled(Some(title), description.as_deref()))
+                .update_workflow(
+                    &of.id,
+                    &PatchWorkflow {
+                        name: Some(Some(name.to_owned())),
+                        description: None,
+                    },
+                )
                 .await
                 .unwrap_err(),
         );
         assert_eq!(
             (refused.status, refused.kind()),
-            (422, Some(ProblemType::InvalidTitle)),
+            (422, Some(ProblemType::InvalidWorkflow)),
             "{}",
             refused.detail
         );
     }
     assert_eq!(
-        harness.get_script(&code).await.unwrap().title_source,
-        Some(TitleSource::Comment)
+        harness.get_workflow(&of.id).await.unwrap().name.as_deref(),
+        Some("approve_deploy")
     );
-    // A code the tenant does not have, or that is no digest.
-    for unknown in ["00".repeat(32), "nope".to_owned()] {
-        let missing = problem(
-            harness
-                .set_script_title(&unknown, &titled(Some("Anything"), None))
-                .await
-                .unwrap_err(),
-        );
-        assert_eq!(missing.status, 404, "{}", missing.detail);
-    }
-    // A reader may read the title, not give one.
+    // A reader may read the workflow, not name it.
     let reader = server.key(BuiltInRole::Reader, &[]).await;
     let forbidden = problem(
         reader
-            .set_script_title(&code, &titled(Some("Mine"), None))
+            .update_workflow(
+                &of.id,
+                &PatchWorkflow {
+                    name: Some(None),
+                    description: None,
+                },
+            )
             .await
             .unwrap_err(),
     );
     assert_eq!(forbidden.status, 403);
     assert!(
-        forbidden.detail.contains("`scripts:write`"),
+        forbidden.detail.contains("`workflows:write`"),
         "{}",
         forbidden.detail
     );
 
-    // A code without a comment has no title.
+    // A code without a comment: a workflow without a comment, its runs named by its short id.
     let bare = harness
         .start_run(
             &StartRun::new("export default async function main() {\n  return 1;\n}\n"),
@@ -336,13 +288,11 @@ async fn a_person_titles_a_script_over_its_comment() {
         )
         .await
         .unwrap();
-    assert_eq!(bare.script_title, None);
-    assert!(bare.handle.contains("/script/"), "{}", bare.handle);
-    let read = eventually(|| async { harness.get_script(&bare.code_digest).await.ok() }).await;
-    assert_eq!(
-        (read.title, read.description, read.title_source),
-        (None, None, None)
-    );
+    let bare_of = bare.workflow.unwrap();
+    assert_ne!(bare_of.id, of.id);
+    assert_eq!(origin(&bare.handle), format!("wf-{}", &bare_of.id[3..9]));
+    let read = harness.get_workflow(&bare_of.id).await.unwrap();
+    assert_eq!(read.version.comment, None);
     server.stop().await;
 }
 
@@ -356,33 +306,37 @@ export default async function main(input: { repo: string }) {
 
 fn triage(action_set: &str, code: &str) -> CreateWorkflow {
     CreateWorkflow {
-        name: "triage".into(),
+        name: Some("triage".into()),
         description: None,
         action_set: action_set.into(),
         code: code.into(),
-        input: json!({
+        input: Some(json!({
             "type": "object",
             "properties": { "repo": { "type": "string" } },
             "required": ["repo"],
-        }),
-        output: json!({
+        })),
+        output: Some(json!({
             "type": "object",
             "properties": { "closed": { "type": "integer" } },
             "required": ["closed"],
-        }),
-        signals: BTreeMap::from([(
+        })),
+        signals: Some(std::collections::BTreeMap::from([(
             "approval".to_owned(),
             json!({
                 "type": "object",
                 "properties": { "close": { "type": "boolean" } },
                 "required": ["close"],
             }),
-        )]),
-        base: None,
+        )])),
         tests: Vec::new(),
-        replace: Vec::new(),
-        retire: Vec::new(),
         secrets: Default::default(),
+    }
+}
+
+fn new_code(code: &str) -> CreateVersion {
+    CreateVersion {
+        code: Some(code.into()),
+        ..CreateVersion::default()
     }
 }
 
@@ -398,21 +352,22 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
         .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
-    // Saved again, a version keeps its number.
+    // The same code again makes no version; new code is the next.
     let again = harness
-        .create_workflow(&triage(&action_set.id, TRIAGE))
+        .create_version("triage", &new_code(TRIAGE))
         .await
         .unwrap();
     assert_eq!(
-        (again.digest.as_str(), again.version),
-        (first.digest.as_str(), 1)
+        (again.version.digest.as_str(), again.version.version),
+        (first.version.digest.as_str(), 1)
     );
     let second = harness
-        .create_workflow(&triage(&action_set.id, &TRIAGE.replace("? 3", "? 4")))
+        .create_version("triage", &new_code(&TRIAGE.replace("? 3", "? 4")))
         .await
         .unwrap();
-    assert_eq!((first.version, second.version), (1, 2));
-    let versions = harness.workflow_versions("triage").await.unwrap();
+    assert_eq!((first.version.version, second.version.version), (1, 2));
+    assert_eq!(second.id, first.id);
+    let versions = harness.get_workflow("triage").await.unwrap();
     assert_eq!(
         versions
             .versions
@@ -421,11 +376,16 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
             .collect::<Vec<_>>(),
         [2, 1]
     );
-    let latest = harness
+    let listed = harness
         .list_workflows(&WorkflowQuery::default())
         .await
         .unwrap();
-    assert_eq!(latest.workflows[0].version, 2);
+    let latest = listed
+        .workflows
+        .iter()
+        .find(|workflow| workflow.id == first.id)
+        .unwrap();
+    assert_eq!(latest.latest.version, 2);
 
     // `triage@v1` names the first version; a run of it shows the number and is named after
     // its workflow.
@@ -435,8 +395,12 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
     let run = harness.start_run(&start, None).await.unwrap();
     let workflow = run.workflow.unwrap();
     assert_eq!(
-        (workflow.digest.as_str(), workflow.version),
-        (first.digest.as_str(), 1)
+        (
+            workflow.digest.as_str(),
+            workflow.version,
+            workflow.id.as_str()
+        ),
+        (first.version.digest.as_str(), 1, first.id.as_str())
     );
     assert!(run.handle.contains("/triage/"), "{}", run.handle);
 

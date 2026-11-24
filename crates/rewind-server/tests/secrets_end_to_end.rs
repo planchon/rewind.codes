@@ -812,7 +812,7 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
         "/v1/runs/stats".to_owned(),
         "/v1/secrets".to_owned(),
         "/v1/action-sets".to_owned(),
-        "/v1/scripts".to_owned(),
+        "/v1/workflows".to_owned(),
         "/v1/actions/stats".to_owned(),
         "/v1/subscriptions".to_owned(),
         "/v1/organization/signing-keys".to_owned(),
@@ -824,6 +824,9 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
         let history: Value = serde_json::from_str(&body).unwrap();
         let events = history["historyLen"].as_u64().unwrap();
         assert!(events > 0);
+        if let Some(workflow) = history["workflow"]["id"].as_str() {
+            paths.push(format!("/v1/workflows/{workflow}"));
+        }
         paths.extend([
             format!("/v1/runs/{run}"),
             format!("/v1/runs/{run}/export"),

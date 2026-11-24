@@ -109,12 +109,20 @@ pub struct ForkSource {
     pub at: Option<u64>,
 }
 
+/// The workflow a run is a run of, and the version it executes: the workflow's id, its name
+/// when the run was created, the version's number and digest, and whether the version has an
+/// interface (its runs then accept only the signals it declares).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunWorkflow {
-    pub name: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub version: u32,
     #[serde(with = "with::digest")]
-    pub version: Digest,
+    pub digest: Digest,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub interface: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -403,7 +411,7 @@ pub struct Summary {
     )]
     pub source: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<String>,
+    pub workflow: Option<RunWorkflow>,
     #[serde(
         default,
         with = "with::run_id_opt",
@@ -473,18 +481,13 @@ pub struct Counters {
     pub durations: Sketch,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub cpu_ms: u64,
+    /// By workflow id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub workflows: BTreeMap<String, RunCounts>,
+    pub workflows: BTreeMap<String, WorkflowCounts>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub failures: BTreeMap<String, FailureCounts>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub actions: BTreeMap<String, ActionCounts>,
-    #[serde(
-        default,
-        with = "with::digest_map",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub scripts: BTreeMap<Digest, ScriptCounts>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -529,12 +532,9 @@ pub struct FailureCounts {
     pub signature: String,
     pub error: String,
     pub runs: u64,
-    #[serde(
-        default,
-        with = "with::digest_map",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub scripts: BTreeMap<Digest, u64>,
+    /// By workflow id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflows: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lines: BTreeMap<u32, u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -564,9 +564,10 @@ pub struct ActionCounts {
     pub latency: Sketch,
 }
 
+/// The runs of one workflow.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ScriptCounts {
+pub struct WorkflowCounts {
     #[serde(default, skip_serializing_if = "RunCounts::is_empty")]
     pub runs: RunCounts,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -595,12 +596,9 @@ pub struct Gauges {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub waiting: BTreeMap<WaitingFor, u64>,
     pub quarantined: u64,
-    #[serde(
-        default,
-        with = "with::digest_map",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub scripts: BTreeMap<Digest, u64>,
+    /// The runs kept, by workflow id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflows: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -839,8 +837,9 @@ pub struct Admission {
     #[serde(with = "with::run_id")]
     pub run: RunId,
     pub namespace: String,
-    #[serde(with = "with::digest")]
-    pub code: Digest,
+    /// The id of the workflow the run is a run of; none for a test run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     pub admitted_at: u64,
 }
 
@@ -1016,27 +1015,6 @@ mod with {
             Option::<String>::deserialize(d)?
                 .map(|hex| parse_digest(&hex).map_err(D::Error::custom))
                 .transpose()
-        }
-    }
-
-    /// A map keyed by digests, written as an object keyed by their hex.
-    pub(super) mod digest_map {
-        use super::*;
-
-        pub(crate) fn serialize<S: Serializer, V: Serialize>(
-            map: &BTreeMap<Digest, V>,
-            s: S,
-        ) -> Result<S::Ok, S::Error> {
-            s.collect_map(map.iter().map(|(digest, value)| (digest.to_hex(), value)))
-        }
-
-        pub(crate) fn deserialize<'de, D: Deserializer<'de>, V: Deserialize<'de>>(
-            d: D,
-        ) -> Result<BTreeMap<Digest, V>, D::Error> {
-            BTreeMap::<String, V>::deserialize(d)?
-                .into_iter()
-                .map(|(hex, value)| Ok((parse_digest(&hex).map_err(D::Error::custom)?, value)))
-                .collect()
         }
     }
 

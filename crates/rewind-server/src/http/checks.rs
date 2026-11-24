@@ -1,14 +1,17 @@
-//! Workflows: type-checking (`POST /v1/check`). Tests (`POST /v1/test`) are in [`super::testing`].
+//! Checks of a workflow's code: type-checking (`POST /v1/check`), which reads the workflow that
+//! has the code and creates nothing. Tests (`POST /v1/test`) are in [`super::testing`].
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
 use rewind_api::access::Permission;
-use rewind_api::scripts::{CheckRequest, CheckResult, Severity};
+use rewind_api::checks::{CheckRequest, CheckResult, Severity};
 use rewind_core::Code;
 use rewind_engine::StartError;
-use rewind_engine::ports::{CatalogStore, CodeExecutor, Quotas, Tenant, TypeChecker, limits};
+use rewind_engine::ports::{
+    CatalogStore, CodeExecutor, Quotas, RunWorkflow, Tenant, TypeChecker, limits,
+};
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -60,10 +63,23 @@ pub(super) async fn check(
     };
     let code = Code::new(request.code);
     check_lines(&code, &bounds)?;
+    // The workflow a run of this code would be a run of: the namespace's, else the
+    // organization's (`archi/03-execution.md`, "Starting a run"). A check creates none.
+    let workflow = match &caller.namespace {
+        Some(namespace) => app
+            .catalog()
+            .workflow_with_code(&caller.tenant, namespace, code.digest(), &caller.labels)
+            .await?
+            .map(|(workflow, version)| {
+                crate::views::run_workflow(&RunWorkflow::of(&workflow, &version))
+            }),
+        None => None,
+    };
     if let Err(invalid) = app.plane.executor.compile(&code, &stored.action_set) {
         return Ok(Json(CheckResult {
             ok: false,
             diagnostics: vec![invalid_code_diagnostic(&invalid)],
+            workflow,
         }));
     }
     let diagnostics: Vec<_> = app
@@ -78,5 +94,6 @@ pub(super) async fn check(
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         diagnostics,
+        workflow,
     }))
 }

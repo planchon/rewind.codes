@@ -10,16 +10,22 @@
 //! numbers of workflow versions; version 12 each namespace's partition, the partition map, and
 //! `legacy_runs`; version 13 set the tables of runs those versions also hold aside, as
 //! `legacy_*`, which `rewind server migrate-runs` reads and drops (`archi/08-decisions.md`,
-//! "Taken while writing the object-storage spec"); nothing else reads them).
+//! "Taken while writing the object-storage spec"; nothing else reads them); version 14 moved
+//! the saved workflows and the titles of codes to the workflow model: workflows with an id and a
+//! scope, their versions, the codes each scope has seen and their suites).
 //!
 //! The tables of the control plane are those of `archi/06-storage-and-scale.md`, with these
 //! differences:
 //!
 //! - every key starts with the tenant;
-//! - `workflows.stored_order` numbers each workflow's versions (by tenant and name) in the
-//!   order they were stored, which breaks the ties of `created_at` when they are listed newest
-//!   first; `workflows.number` is the version's number among them, as people name it
-//!   (`triage v12`), unique by tenant and name;
+//! - `workflows.namespace` is `*` for the organization's workflows; `workflows.latest` is the
+//!   number of a workflow's latest version, which `workflow_versions` holds too;
+//! - `workflow_versions.code` is the code of the version's document, which lists and lookups by
+//!   code read; `workflow_codes.added_order` numbers the rows of a tenant in the order they were
+//!   written, which tells the workflow that first had a code in a scope; `workflow_tests.reason`
+//!   is why a test left its suite, its retirement's or its replacement's;
+//! - `code_titles` holds the titles people gave codes before the workflow model, until
+//!   `rewind server rename-data` turns them into names (`CatalogMigration`);
 //! - `data_keys` holds each tenant's data key, encrypted by a master key whose id `master_key`
 //!   records, apart from `tenants`: a tenant without settings (the embedded `local`) still has
 //!   secrets;
@@ -35,20 +41,21 @@
 //!   JSON object from tenant to access (`read`, `run`) and its `labels` a JSON object; a
 //!   connection's `expires_at` is when its latest refresh token lapses, which its purge reads.
 
+use rewind_core::WorkflowId;
 use turso::Connection;
 
 use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
 const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
-    [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
+    [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -904,6 +911,224 @@ ALTER TABLE tenants DROP COLUMN payload_grace_ms;
 ALTER TABLE tenants RENAME COLUMN archive_retention_ms TO retention_ms;
 "#;
 
+/// The workflow model (`archi/06-storage-and-scale.md`, "The control plane" and "Rewriting the
+/// stored names": workflows). A workflow has an id, a scope (a namespace, or the organization:
+/// `*`), a name unique in its scope when it has one, its versions numbered from 1, the codes its
+/// scope has seen under each set of labels (`workflow_codes`, in the order they were written) and
+/// its suite: every test it holds or held, with when and why it left (`workflow_tests`).
+///
+/// What the saved workflows of version 13 become (`rewind server rename-data` does the rest, from
+/// the runs):
+///
+/// - each saved workflow, by its tenant and name, is an organization's workflow whose id is
+///   [`WorkflowId::of_saved`], computed in Rust before these statements (`saved_workflow_ids`:
+///   SQL has no SHA-256); its description is its latest version's document's, its labels and
+///   creation its first version's, its creator `rename-data`;
+/// - its versions keep their numbers, digests, documents (in the names they were saved in, which
+///   `rename-data` rewrites), labels and creation; a version's code is its document's `code`, or
+///   `script` in a document saved before that rename;
+/// - each code of a version, under the version's labels, belongs in the organization's
+///   `workflow_codes` to the first workflow created among those that have it there, from that
+///   workflow's first version with it;
+/// - a workflow's suite is its latest version's tests, each from the first version of the run of
+///   versions up to the latest that lists it; a test an older version listed and the latest does
+///   not left with the first later version that no longer lists it, for the reason that version
+///   gives its name, if any. Only tests that have a row are kept.
+///
+/// The titles people gave codes wait in `code_titles` for `rename-data`, without who set them
+/// and when. Every stored permission set (roles', tokens', token keys') holding `scripts:write`
+/// holds `workflows:write` instead, and one holding `toolsets:write` or `actions:write` holds
+/// `workflows:write` too (`archi/06-storage-and-scale.md`, "Rewriting the stored names").
+const V14: &str = r#"
+ALTER TABLE workflows RENAME TO saved_versions;
+ALTER TABLE workflow_tests RENAME TO saved_version_tests;
+
+CREATE TABLE workflows (
+    tenant TEXT NOT NULL,
+    id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    name TEXT,
+    description TEXT,
+    labels TEXT NOT NULL,
+    source_workflow TEXT,
+    source_version INTEGER,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    promoted_at INTEGER,
+    latest INTEGER NOT NULL,
+    PRIMARY KEY (tenant, id)
+) STRICT;
+
+CREATE TABLE workflow_versions (
+    tenant TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    digest TEXT NOT NULL,
+    code TEXT NOT NULL,
+    document TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant, workflow, version)
+) STRICT;
+
+CREATE TABLE workflow_codes (
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    code TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    added_order INTEGER NOT NULL,
+    PRIMARY KEY (tenant, namespace, labels, code)
+) STRICT;
+
+CREATE TABLE workflow_tests (
+    tenant TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    name TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    retired_at INTEGER,
+    reason TEXT,
+    PRIMARY KEY (tenant, workflow, name, digest)
+) STRICT;
+
+-- The versions, numbered as they were, under the id of their workflow.
+INSERT INTO workflow_versions (tenant, workflow, version, digest, code, document, labels,
+                               created_at)
+SELECT v.tenant, ids.id, v.number, v.version,
+       COALESCE(json_extract(v.document, '$.code'), json_extract(v.document, '$.script')),
+       v.document, v.labels, v.created_at
+FROM saved_versions v
+JOIN saved_workflow_ids ids ON ids.tenant = v.tenant AND ids.name = v.name;
+
+-- The organization's workflows, from their first and latest versions.
+INSERT INTO workflows (tenant, id, namespace, name, description, labels, source_workflow,
+                       source_version, created_by, created_at, promoted_at, latest)
+SELECT ids.tenant, ids.id, '*', ids.name, json_extract(latest.document, '$.description'),
+       first.labels, NULL, NULL, 'rename-data', first.created_at, NULL, latest.version
+FROM saved_workflow_ids ids
+JOIN workflow_versions first ON first.tenant = ids.tenant AND first.workflow = ids.id
+    AND first.version = (SELECT MIN(v.version) FROM workflow_versions v
+                         WHERE v.tenant = ids.tenant AND v.workflow = ids.id)
+JOIN workflow_versions latest ON latest.tenant = ids.tenant AND latest.workflow = ids.id
+    AND latest.version = (SELECT MAX(v.version) FROM workflow_versions v
+                          WHERE v.tenant = ids.tenant AND v.workflow = ids.id);
+
+-- Each code under each set of labels, to the first workflow created among those that have it.
+INSERT INTO workflow_codes (tenant, namespace, labels, code, workflow, added_at, added_order)
+SELECT tenant, '*', labels, code, workflow, added_at,
+       row_number() OVER (PARTITION BY tenant ORDER BY added_at, labels, code)
+FROM (
+    SELECT v.tenant, v.labels, v.code, v.workflow, MIN(v.created_at) AS added_at,
+           row_number() OVER (PARTITION BY v.tenant, v.labels, v.code
+                              ORDER BY w.created_at, w.name) AS rank
+    FROM workflow_versions v
+    JOIN workflows w ON w.tenant = v.tenant AND w.id = v.workflow
+    GROUP BY v.tenant, v.labels, v.code, v.workflow, w.created_at, w.name
+)
+WHERE rank = 1;
+
+-- The tests each version lists, by name and digest.
+CREATE TABLE saved_suite_tests (
+    tenant TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    PRIMARY KEY (tenant, workflow, name, digest, version)
+) STRICT;
+INSERT INTO saved_suite_tests (tenant, workflow, version, name, digest)
+SELECT v.tenant, v.workflow, v.version, json_extract(t.value, '$.name'),
+       json_extract(t.value, '$.test')
+FROM workflow_versions v, json_each(v.document, '$.tests') AS t;
+
+-- Each test of a suite, from the first version of the last run of versions that list it; one
+-- the latest version does not list left with the version after that run.
+INSERT INTO workflow_tests (tenant, workflow, name, digest, added_at, retired_at, reason)
+SELECT s.tenant, s.workflow, s.name, s.digest, joined.created_at, left_by.created_at,
+       COALESCE(
+           (SELECT json_extract(r.value, '$.reason')
+            FROM json_each(left_by.document, '$.retired') AS r
+            WHERE json_extract(r.value, '$.name') = s.name),
+           (SELECT json_extract(r.value, '$.reason')
+            FROM json_each(left_by.document, '$.replaced') AS r
+            WHERE json_extract(r.value, '$.name') = s.name))
+FROM (
+    SELECT last.tenant, last.workflow, last.name, last.digest, last.version,
+           1 + COALESCE((
+               SELECT MAX(v.version) FROM workflow_versions v
+               WHERE v.tenant = last.tenant AND v.workflow = last.workflow
+                 AND v.version < last.version
+                 AND NOT EXISTS (
+                     SELECT 1 FROM saved_suite_tests x
+                     WHERE x.tenant = v.tenant AND x.workflow = v.workflow
+                       AND x.version = v.version AND x.name = last.name
+                       AND x.digest = last.digest)), 0) AS first
+    FROM (
+        SELECT tenant, workflow, name, digest, MAX(version) AS version
+        FROM saved_suite_tests
+        GROUP BY tenant, workflow, name, digest
+    ) last
+) s
+JOIN workflow_versions joined ON joined.tenant = s.tenant AND joined.workflow = s.workflow
+    AND joined.version = s.first
+LEFT JOIN workflow_versions left_by ON left_by.tenant = s.tenant
+    AND left_by.workflow = s.workflow AND left_by.version = s.version + 1
+WHERE EXISTS (SELECT 1 FROM tests t WHERE t.tenant = s.tenant AND t.digest = s.digest);
+
+DROP TABLE saved_suite_tests;
+DROP TABLE saved_version_tests;
+DROP TABLE saved_versions;
+DROP TABLE saved_workflow_ids;
+
+CREATE UNIQUE INDEX workflows_by_name ON workflows (tenant, namespace, name)
+    WHERE name IS NOT NULL;
+CREATE INDEX workflows_by_namespace ON workflows (tenant, namespace, id);
+CREATE INDEX workflow_versions_by_digest ON workflow_versions (tenant, digest);
+CREATE INDEX workflow_codes_by_code ON workflow_codes (tenant, namespace, code, added_order);
+CREATE INDEX workflow_tests_by_test ON workflow_tests (tenant, digest);
+
+ALTER TABLE script_titles RENAME TO code_titles;
+ALTER TABLE code_titles DROP COLUMN updated_by;
+ALTER TABLE code_titles DROP COLUMN updated_at;
+
+-- workflows:write replaces scripts:write and saving under toolsets:write (actions:write).
+UPDATE roles SET permissions = (
+    SELECT json_group_array(value) FROM (
+        SELECT CASE value WHEN 'scripts:write' THEN 'workflows:write' ELSE value END AS value
+        FROM json_each(roles.permissions)
+        UNION
+        SELECT 'workflows:write' WHERE EXISTS (
+            SELECT 1 FROM json_each(roles.permissions)
+            WHERE value IN ('toolsets:write', 'actions:write'))
+        ORDER BY value))
+WHERE EXISTS (SELECT 1 FROM json_each(roles.permissions)
+              WHERE value IN ('scripts:write', 'toolsets:write', 'actions:write'));
+UPDATE tokens SET permissions = (
+    SELECT json_group_array(value) FROM (
+        SELECT CASE value WHEN 'scripts:write' THEN 'workflows:write' ELSE value END AS value
+        FROM json_each(tokens.permissions)
+        UNION
+        SELECT 'workflows:write' WHERE EXISTS (
+            SELECT 1 FROM json_each(tokens.permissions)
+            WHERE value IN ('toolsets:write', 'actions:write'))
+        ORDER BY value))
+WHERE EXISTS (SELECT 1 FROM json_each(tokens.permissions)
+              WHERE value IN ('scripts:write', 'toolsets:write', 'actions:write'));
+UPDATE token_keys SET permissions = (
+    SELECT json_group_array(value) FROM (
+        SELECT CASE value WHEN 'scripts:write' THEN 'workflows:write' ELSE value END AS value
+        FROM json_each(token_keys.permissions)
+        UNION
+        SELECT 'workflows:write' WHERE EXISTS (
+            SELECT 1 FROM json_each(token_keys.permissions)
+            WHERE value IN ('toolsets:write', 'actions:write'))
+        ORDER BY value))
+WHERE EXISTS (SELECT 1 FROM json_each(token_keys.permissions)
+              WHERE value IN ('scripts:write', 'toolsets:write', 'actions:write'));
+"#;
+
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
 pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
     migrate_to(connection, SCHEMA_VERSION).await
@@ -926,13 +1151,53 @@ async fn migrate_to(connection: &Connection, target: u32) -> Result<(), Error> {
     }
     let migrations = MIGRATIONS.iter().take(target as usize);
     for (from, migration) in migrations.enumerate().skip(found as usize) {
-        let to = (from + 1).to_string();
+        let to = from + 1;
         sql::transaction(connection, async {
+            prepare(connection, to).await?;
             connection.execute_batch(migration).await?;
-            set_meta(connection, VERSION_KEY, Some(&to)).await
+            set_meta(connection, VERSION_KEY, Some(&to.to_string())).await
         })
         .await?;
         tracing::info!(version = %to, "migrated the schema of the embedded store");
+    }
+    Ok(())
+}
+
+/// What a migration needs that SQL cannot compute, written in Rust and run in its transaction
+/// before its statements: the ids of the saved workflows, for version 14.
+async fn prepare(connection: &Connection, to: usize) -> Result<(), Error> {
+    if to == 14 {
+        saved_workflow_ids(connection).await?;
+    }
+    Ok(())
+}
+
+/// The id of each workflow saved before the workflow model, by its tenant and name, in
+/// `saved_workflow_ids`, which [`V14`] reads and drops: [`WorkflowId::of_saved`] hashes with
+/// SHA-256, which SQL does not have.
+async fn saved_workflow_ids(connection: &Connection) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "CREATE TABLE saved_workflow_ids (tenant TEXT NOT NULL, name TEXT NOT NULL, \
+         id TEXT NOT NULL, PRIMARY KEY (tenant, name)) STRICT",
+        Vec::new(),
+    )
+    .await?;
+    let saved = sql::query(
+        connection,
+        "SELECT DISTINCT tenant, name FROM workflows ORDER BY tenant, name",
+        Vec::new(),
+    )
+    .await?;
+    for row in &saved {
+        let (tenant, name) = (row.text(0)?, row.text(1)?);
+        let id = WorkflowId::of_saved(&tenant, &name);
+        sql::execute(
+            connection,
+            "INSERT INTO saved_workflow_ids (tenant, name, id) VALUES (?, ?, ?)",
+            vec![text(tenant), text(name), text(id.as_str())],
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1028,6 +1293,69 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    /// The versions the migration wrote, as their rows hold them, newest first: their number,
+    /// digest, code, whether their document has `schemas`, labels and creation. A moved version
+    /// keeps the document it was saved with, in the names of before the rename release, which
+    /// the catalog reads once `rewind server rename-data` rewrote it: its row is read here.
+    async fn version_rows(
+        store: &TursoStore,
+        tenant: &str,
+        workflow: &rewind_core::WorkflowId,
+    ) -> Vec<(
+        u32,
+        Digest,
+        Digest,
+        bool,
+        BTreeMap<String, String>,
+        Timestamp,
+    )> {
+        let connection = store.connection().await.expect("connection");
+        sql::query(
+            &connection,
+            "SELECT version, digest, code, json_extract(document, '$.schemas') IS NOT NULL, \
+             labels, created_at FROM workflow_versions WHERE tenant = ? AND workflow = ? \
+             ORDER BY version DESC",
+            vec![text(tenant), text(workflow.as_str())],
+        )
+        .await
+        .expect("the versions' rows")
+        .iter()
+        .map(|row| {
+            (
+                row.u32(0).expect("version"),
+                row.digest(1).expect("digest"),
+                row.digest(2).expect("code"),
+                row.u32(3).expect("interface") == 1,
+                crate::codec::decode_labels(&row.text(4).expect("labels")).expect("labels"),
+                row.ts(5).expect("created_at"),
+            )
+        })
+        .collect()
+    }
+
+    /// The codes the migration wrote: each code of the organization, its labels and its
+    /// workflow, in the order they were written.
+    async fn code_rows(store: &TursoStore, tenant: &str) -> Vec<(Digest, String, String)> {
+        let connection = store.connection().await.expect("connection");
+        sql::query(
+            &connection,
+            "SELECT code, labels, workflow FROM workflow_codes WHERE tenant = ? \
+             AND namespace = '*' ORDER BY added_order",
+            vec![text(tenant)],
+        )
+        .await
+        .expect("the codes' rows")
+        .iter()
+        .map(|row| {
+            (
+                row.digest(0).expect("code"),
+                row.text(1).expect("labels"),
+                row.text(2).expect("workflow"),
+            )
+        })
+        .collect()
     }
 
     #[tokio::test]
@@ -1199,12 +1527,13 @@ mod tests {
         store.put(&tenant, &secret, T0).await.expect("put");
         assert_eq!(store.master_keys_in_use().await, Ok(vec![key.id()]));
     }
-    /// A run as version 10 kept it: before handles.
+    /// A run as version 10 kept it: before handles, with the name and digest of the saved
+    /// workflow version it ran, if any.
     async fn run_of_version_10(
         connection: &turso::Connection,
         id: RunId,
         tenant: &str,
-        workflow: Option<&str>,
+        workflow: Option<(&str, Digest)>,
     ) {
         sql::execute(
             connection,
@@ -1220,67 +1549,82 @@ mod tests {
                 ts(at(86_400 * 30)),
                 ts(T0),
                 ts(T0),
-                opt_text(workflow),
-                workflow.map_or(turso::Value::Null, |name| {
-                    digest(Digest::of(name.as_bytes()))
-                }),
+                opt_text(workflow.map(|(name, _)| name)),
+                workflow.map_or(turso::Value::Null, |(_, version)| digest(version)),
             ],
         )
         .await
         .expect("a run of version 10");
     }
 
+    /// A workflow version as the builds before the workflow model saved it, in the names of
+    /// then: its document's text, with its workflow's name, and its digest, which the text
+    /// hashes to.
+    fn saved_document(document: &serde_json::Value) -> (String, Digest) {
+        let text = rewind_core::canonical_json(document);
+        let digest = Digest::of(text.as_bytes());
+        (text, digest)
+    }
+
+    /// The document of a saved version of `name` whose code is the digest of `code`.
+    fn saved(name: &str, code: &str) -> serde_json::Value {
+        serde_json::json!({
+            "v": 1,
+            "name": name,
+            "code": Digest::of(code.as_bytes()).to_hex(),
+            "action_set": Digest::of(b"action_set").to_hex(),
+            "schemas": { "input": { "type": "object" }, "output": {}, "signals": {} },
+        })
+    }
+
+    /// The labels of a saved document, as its row keeps them.
+    fn labels_of(document: &serde_json::Value) -> String {
+        let labels: BTreeMap<String, String> = document
+            .get("labels")
+            .map(|labels| serde_json::from_value(labels.clone()).expect("labels"))
+            .unwrap_or_default();
+        encode_labels(&labels)
+    }
+
     /// A workflow version as version 10 kept it: without its number.
     async fn version_of_version_10(
         connection: &turso::Connection,
         tenant: &str,
-        workflow: &rewind_core::Workflow,
+        document: &serde_json::Value,
         created_at: Timestamp,
         stored_order: u64,
-    ) {
+    ) -> Digest {
+        let (json, version) = saved_document(document);
         sql::execute(
             connection,
             "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
              stored_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
             vec![
                 text(tenant),
-                digest(workflow.version()),
-                text(workflow.name()),
-                text(rewind_format::encode_workflow(workflow)),
-                text(encode_labels(workflow.labels())),
+                digest(version),
+                text(document["name"].as_str().expect("a name")),
+                text(json),
+                text(labels_of(document)),
                 ts(created_at),
                 sql::int(stored_order),
             ],
         )
         .await
         .expect("a workflow version of version 10");
-    }
-
-    fn workflow(name: &str, code: &str) -> rewind_core::Workflow {
-        rewind_core::Workflow::new(
-            name,
-            None,
-            Digest::of(code.as_bytes()),
-            Digest::of(b"action_set"),
-            rewind_core::WorkflowSchemas {
-                input: serde_json::json!({ "type": "object" }),
-                output: serde_json::json!({}),
-                signals: BTreeMap::new(),
-            },
-        )
-        .expect("a valid workflow")
+        version
     }
 
     /// The runs and workflow versions of a database of version 10 get handles and numbers
-    /// (version 11, as released), and the runs keep them set aside for `migrate-runs`. Runs of a
-    /// tenant whose ids share their first 64 bits take the full suffix; a run's origin is its
-    /// workflow, or `script`. Versions are numbered by creation, ties in the order they were
-    /// stored, and a new one takes the next number.
+    /// (version 11, as released), and the runs keep them set aside for `migrate-runs`, each with
+    /// the workflow version it ran as the workflow model moved it. Runs of a tenant whose ids
+    /// share their first 64 bits take the full suffix; a run's origin is its workflow, or
+    /// `script`. Versions are numbered by creation, ties in the order they were stored, and a
+    /// new one takes the next number.
     #[tokio::test]
     async fn runs_and_versions_of_version_10_get_handles_and_numbers() {
-        use rewind_core::{SUFFIX_LEN, run_suffix};
-        use rewind_engine::ports::CatalogStore;
+        use rewind_core::{SUFFIX_LEN, WorkflowId, WorkflowVersion, run_suffix};
         use rewind_engine::ports::legacy::LegacyRuns;
+        use rewind_engine::ports::{CatalogStore, NewVersion, RunWorkflow};
 
         let ms = 1_795_383_896_000;
         // Two runs of `acme` whose first 64 bits are the same, a third apart from them, and a run
@@ -1296,32 +1640,32 @@ mod tests {
             run_suffix(plain, SUFFIX_LEN),
             "the short suffix does not tell the pair apart"
         );
-        // Versions created out of the order they were stored in, two of them at the same time.
-        let (late, early, tied) = (
-            workflow("triage", "v1"),
-            workflow("triage", "v2"),
-            workflow("triage", "v3"),
-        );
         let dir = tempfile::TempDir::new().expect("temporary directory");
         let path = dir.path().join("control.db");
-        {
-            // The database as a build of version 10 left it.
+        let (late, early, tied) = {
+            // The database as a build of version 10 left it, with versions created out of the
+            // order they were stored in, two of them at the same time.
             let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
                 .build()
                 .await
                 .expect("create the file");
             let connection = database.connect().expect("connect");
             migrate_to(&connection, 10).await.expect("version 10");
-            run_of_version_10(&connection, triage, "acme", Some("triage")).await;
+            let late =
+                version_of_version_10(&connection, "acme", &saved("triage", "v1"), at(5), 1).await;
+            let early =
+                version_of_version_10(&connection, "acme", &saved("triage", "v2"), at(2), 2).await;
+            let tied =
+                version_of_version_10(&connection, "acme", &saved("triage", "v3"), at(5), 3).await;
+            version_of_version_10(&connection, "acme", &saved("digest", "d1"), at(1), 1).await;
+            version_of_version_10(&connection, "beta", &saved("triage", "x"), at(1), 1).await;
+            run_of_version_10(&connection, triage, "acme", Some(("triage", late))).await;
             run_of_version_10(&connection, plain, "acme", None).await;
             run_of_version_10(&connection, apart, "acme", None).await;
-            run_of_version_10(&connection, theirs, "beta", None).await;
-            version_of_version_10(&connection, "acme", &late, at(5), 1).await;
-            version_of_version_10(&connection, "acme", &early, at(2), 2).await;
-            version_of_version_10(&connection, "acme", &tied, at(5), 3).await;
-            version_of_version_10(&connection, "acme", &workflow("digest", "d1"), at(1), 1).await;
-            version_of_version_10(&connection, "beta", &workflow("triage", "x"), at(1), 1).await;
-        }
+            let unknown = Some(("triage", Digest::of(b"no such version")));
+            run_of_version_10(&connection, theirs, "beta", unknown).await;
+            (late, early, tied)
+        };
 
         let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
             .await
@@ -1349,50 +1693,481 @@ mod tests {
                 (triage, handle("acme", "triage", 25)),
                 (plain, handle("acme", "script", 25)),
                 (apart, handle("acme", "script", 12)),
-                (theirs, handle("beta", "script", 12)),
+                (theirs, handle("beta", "triage", 12)),
             ]),
             "the workflow's name; another tenant's run does not lengthen a suffix"
         );
+        let ran: BTreeMap<RunId, Option<RunWorkflow>> = store
+            .legacy()
+            .runs(None, 10)
+            .await
+            .expect("the runs set aside")
+            .into_iter()
+            .map(|run| (run.run.id, run.metadata.workflow))
+            .collect();
+        let saved_triage = WorkflowId::of_saved("acme", "triage");
+        assert_eq!(
+            ran[&triage],
+            Some(RunWorkflow {
+                id: saved_triage.clone(),
+                name: Some("triage".into()),
+                version: 2,
+                digest: late,
+                interface: true,
+            }),
+            "the version it ran, by its digest"
+        );
+        assert_eq!(ran[&plain], None);
+        assert_eq!(ran[&theirs], None, "a digest no version has");
 
         let catalog = store.catalog();
-        let none = BTreeMap::new();
-        let numbered: Vec<(Digest, u32)> = catalog
-            .workflow_versions(&acme, "triage", &none)
+        let numbered: Vec<(Digest, u32)> = version_rows(&store, "acme", &saved_triage)
             .await
-            .expect("workflow_versions")
-            .iter()
-            .map(|stored| (stored.workflow.version(), stored.number))
+            .into_iter()
+            .map(|(version, digest, ..)| (digest, version))
             .collect();
         assert_eq!(
             numbered,
-            [
-                (tied.version(), 3),
-                (late.version(), 2),
-                (early.version(), 1)
-            ],
+            [(tied, 3), (late, 2), (early, 1)],
             "numbered by creation, ties in the order they were stored"
         );
-        let number = |tenant: &TenantId, name: &str| {
-            let (catalog, tenant, name) = (&catalog, tenant.clone(), name.to_owned());
+        let first = |tenant: &TenantId, name: &str| {
+            let (store, tenant) = (&store, tenant.clone());
+            let id = WorkflowId::of_saved(tenant.as_str(), name);
             async move {
-                catalog
-                    .workflow_number(&tenant, &name, 1)
+                version_rows(store, tenant.as_str(), &id)
                     .await
-                    .expect("workflow_number")
-                    .map(|stored| stored.workflow.name().to_owned())
+                    .into_iter()
+                    .find(|(version, ..)| *version == 1)
+                    .map(|(_, _, code, ..)| code)
             }
         };
-        assert_eq!(number(&acme, "digest").await.as_deref(), Some("digest"));
-        assert_eq!(number(&beta, "triage").await.as_deref(), Some("triage"));
+        assert_eq!(first(&acme, "digest").await, Some(Digest::of(b"d1")));
+        assert_eq!(first(&beta, "triage").await, Some(Digest::of(b"x")));
         let next = catalog
-            .put_workflow(&acme, &workflow("triage", "v4"), at(6))
+            .put_version(
+                &acme,
+                &saved_triage,
+                &NewVersion {
+                    document: WorkflowVersion::new(Digest::of(b"v4"), Digest::of(b"action_set")),
+                    pulled: None,
+                },
+                at(6),
+            )
             .await
-            .expect("put_workflow");
-        assert_eq!(next.number, 4, "a new version takes the next number");
-        let again = catalog
-            .put_workflow(&acme, &late, at(7))
+            .expect("put_version");
+        assert_eq!(next.version, 4, "a new version takes the next number");
+    }
+
+    /// A workflow version as version 13 kept it, numbered, with the rows of its suite.
+    async fn version_of_version_13(
+        connection: &turso::Connection,
+        document: &serde_json::Value,
+        created_at: Timestamp,
+        number: u32,
+    ) -> Digest {
+        let (json, version) = saved_document(document);
+        sql::execute(
+            connection,
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
+             stored_order, number) VALUES ('acme', ?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                digest(version),
+                text(document["name"].as_str().expect("a name")),
+                text(json),
+                text(labels_of(document)),
+                ts(created_at),
+                sql::int(u64::from(number)),
+                sql::int(u64::from(number)),
+            ],
+        )
+        .await
+        .expect("a workflow version of version 13");
+        for test in document["tests"].as_array().into_iter().flatten() {
+            sql::execute(
+                connection,
+                "INSERT INTO workflow_tests (tenant, version, digest) VALUES ('acme', ?, ?)",
+                vec![
+                    digest(version),
+                    text(test["test"].as_str().expect("a test")),
+                ],
+            )
             .await
-            .expect("put_workflow");
-        assert_eq!(again.number, 2, "a version put again keeps its number");
+            .expect("a test of its suite");
+        }
+        version
+    }
+
+    /// The saved workflows of version 13 move to the workflow model (version 14): each is an
+    /// organization's workflow with the id its tenant and name give it, its versions numbered as
+    /// they were (a document saved with `script` or `code`), its codes, and its suite as its
+    /// versions made it, the tests that left it with when and why. The titles of codes wait for
+    /// `rename-data`, and the permissions to save scripts or under toolsets become
+    /// `workflows:write`.
+    #[tokio::test]
+    async fn the_saved_workflows_of_version_13_move_to_the_workflow_model() {
+        use rewind_core::{WorkflowId, WorkflowVersion};
+        use rewind_engine::ports::{
+            CatalogMigration, CatalogStore, CodeTitle, NewVersion, ScopeFilter, StoredWorkflow,
+            SuiteMember, WorkflowFilter, WorkflowScope,
+        };
+        use serde_json::json;
+
+        let test = |name: &str| Digest::of(name.as_bytes());
+        let code = |text: &str| Digest::of(text.as_bytes());
+        let dev = labels(&[("env", "dev")]);
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("control.db");
+        let (gym_v1, triage_v1, triage_v2, triage_v3) = {
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("create the file");
+            let connection = database.connect().expect("connect");
+            migrate_to(&connection, 13).await.expect("version 13");
+            for name in ["a", "b", "b2", "c"] {
+                sql::execute(
+                    &connection,
+                    "INSERT INTO tests (tenant, digest, namespace, size, reserved_at) \
+                     VALUES ('acme', ?, NULL, 10, ?)",
+                    vec![digest(test(name)), ts(T0)],
+                )
+                .await
+                .expect("a test");
+            }
+            // `gym`, created first, has the code of triage's first version.
+            let gym_v1 =
+                version_of_version_13(&connection, &saved("gym", "triage v1"), T0, 1).await;
+            // A document saved before `code` was named so.
+            let mut first = saved("triage", "triage v1");
+            let fields = first.as_object_mut().expect("an object");
+            let script = fields.remove("code").expect("a code");
+            fields.insert("script".into(), script);
+            fields.insert("description".into(), json!("First"));
+            fields.insert(
+                "tests".into(),
+                json!([
+                    { "name": "a", "test": test("a").to_hex() },
+                    { "name": "b", "test": test("b").to_hex() },
+                ]),
+            );
+            let triage_v1 = version_of_version_13(&connection, &first, at(1), 1).await;
+            let mut second = saved("triage", "triage v2");
+            let fields = second.as_object_mut().expect("an object");
+            fields.insert("base".into(), json!(triage_v1.to_hex()));
+            fields.insert(
+                "tests".into(),
+                json!([
+                    { "name": "b", "test": test("b2").to_hex() },
+                    { "name": "c", "test": test("c").to_hex() },
+                ]),
+            );
+            fields.insert(
+                "retired".into(),
+                json!([{ "name": "a", "test": test("a").to_hex(), "reason": "deprecated" }]),
+            );
+            fields.insert(
+                "replaced".into(),
+                json!([{
+                    "name": "b",
+                    "old": test("b").to_hex(),
+                    "new": test("b2").to_hex(),
+                    "reason": "out of date",
+                }]),
+            );
+            let triage_v2 = version_of_version_13(&connection, &second, at(2), 2).await;
+            // The latest, under labels: `a` back, `c` retired, a test whose row is gone.
+            let mut third = saved("triage", "triage v1");
+            let fields = third.as_object_mut().expect("an object");
+            fields.insert("description".into(), json!("Triage the stale issues"));
+            fields.insert("labels".into(), json!({ "env": "dev" }));
+            fields.insert("base".into(), json!(triage_v2.to_hex()));
+            fields.insert(
+                "tests".into(),
+                json!([
+                    { "name": "a", "test": test("a").to_hex() },
+                    { "name": "b", "test": test("b2").to_hex() },
+                    { "name": "gone", "test": test("gone").to_hex() },
+                ]),
+            );
+            fields.insert(
+                "retired".into(),
+                json!([{ "name": "c", "test": test("c").to_hex(), "reason": "flaky" }]),
+            );
+            let triage_v3 = version_of_version_13(&connection, &third, at(3), 3).await;
+
+            sql::execute(
+                &connection,
+                "INSERT INTO script_titles (tenant, digest, title, description, updated_by, \
+                 updated_at) VALUES ('acme', ?, 'Triage', 'Triage the issues', 'member:ada', ?)",
+                vec![digest(code("triage v2")), ts(T0)],
+            )
+            .await
+            .expect("a title");
+            for (name, permissions) in [
+                ("writer", r#"["runs:read","scripts:write"]"#),
+                ("builder", r#"["runs:read","toolsets:write"]"#),
+                ("reader", r#"["runs:read"]"#),
+            ] {
+                sql::execute(
+                    &connection,
+                    "INSERT INTO roles (tenant, name, description, permissions, created_at, \
+                     updated_at) VALUES ('acme', ?, '', ?, ?, ?)",
+                    vec![text(name), text(permissions), ts(T0), ts(T0)],
+                )
+                .await
+                .expect("a role");
+            }
+            sql::execute(
+                &connection,
+                "INSERT INTO tokens (hash, tenant, namespace, permissions, labels, expires_at, \
+                 created_by, created_at) VALUES (?, 'acme', 'alice', \
+                 '[\"actions:write\",\"scripts:write\"]', '{}', ?, 'member:ada', ?)",
+                vec![digest(Digest::of(b"token")), ts(at(3_600)), ts(T0)],
+            )
+            .await
+            .expect("a token");
+            sql::execute(
+                &connection,
+                "INSERT INTO token_keys (kid, tenant, name, jwk, permissions, created_by, \
+                 created_at) VALUES ('k1', 'acme', 'signer', '{}', '[\"scripts:write\"]', \
+                 'member:ada', ?)",
+                vec![ts(T0)],
+            )
+            .await
+            .expect("a token key");
+            (gym_v1, triage_v1, triage_v2, triage_v3)
+        };
+
+        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
+            .await
+            .expect("open and migrate");
+        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+        let catalog = store.catalog();
+        let acme = tenant_id("acme");
+        let none = BTreeMap::new();
+        let (triage, gym) = (
+            WorkflowId::of_saved("acme", "triage"),
+            WorkflowId::of_saved("acme", "gym"),
+        );
+        assert_eq!(triage.as_str(), "wf_e2nzwv04tf3f");
+        assert_eq!(
+            catalog.workflow(&acme, &triage).await.expect("workflow"),
+            Some(StoredWorkflow {
+                id: triage.clone(),
+                scope: WorkflowScope::Organization,
+                name: Some("triage".into()),
+                description: Some("Triage the stale issues".into()),
+                labels: none.clone(),
+                source: None,
+                created_by: "rename-data".into(),
+                created_at: at(1),
+                promoted_at: None,
+                latest: 3,
+            }),
+            "its latest version's description, its first version's labels"
+        );
+        let gym_workflow = catalog
+            .workflow(&acme, &gym)
+            .await
+            .expect("workflow")
+            .expect("gym");
+        assert_eq!(
+            (
+                gym_workflow.description,
+                gym_workflow.created_at,
+                gym_workflow.latest
+            ),
+            (None, T0, 1)
+        );
+
+        let read = version_rows(&store, "acme", &triage).await;
+        assert_eq!(
+            read,
+            [
+                (3, triage_v3, code("triage v1"), true, dev.clone(), at(3)),
+                (2, triage_v2, code("triage v2"), true, none.clone(), at(2)),
+                (1, triage_v1, code("triage v1"), true, none.clone(), at(1)),
+            ],
+            "numbered as they were, under their digests; a code saved as `script` reads as one"
+        );
+        assert_eq!(
+            version_rows(&store, "acme", &gym)
+                .await
+                .into_iter()
+                .map(|(version, digest, ..)| (version, digest))
+                .collect::<Vec<_>>(),
+            [(1, gym_v1)]
+        );
+
+        // Each code to the first workflow created among those that have it, under its labels.
+        let workflow = |id: &WorkflowId| id.to_string();
+        assert_eq!(
+            code_rows(&store, "acme").await,
+            [
+                (code("triage v1"), "{}".to_owned(), workflow(&gym)),
+                (code("triage v2"), "{}".to_owned(), workflow(&triage)),
+                (
+                    code("triage v1"),
+                    r#"{"env":"dev"}"#.to_owned(),
+                    workflow(&triage)
+                ),
+            ]
+        );
+        let mut both = vec![gym.clone(), triage.clone()];
+        both.sort();
+        assert_eq!(
+            catalog
+                .list_workflows(&WorkflowFilter {
+                    tenant: acme.clone(),
+                    scope: ScopeFilter::Organization,
+                    code: Some(code("triage v1")),
+                    labels: none.clone(),
+                    after: None,
+                    limit: 10,
+                })
+                .await
+                .expect("list_workflows")
+                .into_iter()
+                .map(|workflow| workflow.id)
+                .collect::<Vec<_>>(),
+            both
+        );
+
+        // The suite as the versions made it: `a` joined again with the latest, `b` replaced,
+        // `c` retired, the test without a row left out.
+        let member =
+            |name: &str, test: Digest, added: u64, left: Option<(u64, &str)>| SuiteMember {
+                name: name.into(),
+                digest: test,
+                added_at: at(added),
+                retired_at: left.map(|(at_second, _)| at(at_second)),
+                reason: left.map(|(_, reason)| reason.into()),
+            };
+        assert_eq!(
+            catalog.suite(&acme, &triage).await.expect("suite"),
+            [
+                member("a", test("a"), 3, None),
+                member("b", test("b"), 1, Some((2, "out of date"))),
+                member("b", test("b2"), 2, None),
+                member("c", test("c"), 2, Some((3, "flaky"))),
+            ]
+        );
+        assert_eq!(catalog.suite(&acme, &gym).await.expect("suite"), []);
+
+        assert_eq!(
+            catalog.code_titles().await.expect("code_titles"),
+            [CodeTitle {
+                tenant: acme.clone(),
+                code: code("triage v2"),
+                title: "Triage".into(),
+                description: Some("Triage the issues".into()),
+            }]
+        );
+        catalog.drop_code_titles().await.expect("drop_code_titles");
+        assert_eq!(catalog.code_titles().await.expect("code_titles"), []);
+
+        let permissions = |names: &[&str]| -> std::collections::BTreeSet<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let role = |name: &'static str| {
+            let (store, acme) = (&store, acme.clone());
+            async move {
+                store
+                    .get_role(&acme, name)
+                    .await
+                    .expect("get_role")
+                    .expect("the role")
+                    .permissions
+            }
+        };
+        assert_eq!(
+            role("writer").await,
+            permissions(&["runs:read", "workflows:write"])
+        );
+        assert_eq!(
+            role("builder").await,
+            permissions(&["runs:read", "toolsets:write", "workflows:write"])
+        );
+        assert_eq!(role("reader").await, permissions(&["runs:read"]));
+        assert_eq!(
+            store
+                .find_token(Digest::of(b"token"))
+                .await
+                .expect("find_token")
+                .expect("the token")
+                .permissions,
+            permissions(&["actions:write", "workflows:write"])
+        );
+        assert_eq!(
+            store
+                .find_token_key("k1")
+                .await
+                .expect("find_token_key")
+                .expect("the key")
+                .permissions,
+            permissions(&["workflows:write"])
+        );
+        let stored = {
+            let connection = store.connection().await.expect("connection");
+            sql::query_row(
+                &connection,
+                "SELECT permissions FROM roles WHERE tenant = 'acme' AND name = 'builder'",
+                Vec::new(),
+            )
+            .await
+            .expect("the role's row")
+            .expect("a row")
+            .text(0)
+            .expect("text")
+        };
+        assert_eq!(
+            stored, r#"["runs:read","toolsets:write","workflows:write"]"#,
+            "sorted, as the store writes them"
+        );
+        let left: Vec<String> = {
+            let connection = store.connection().await.expect("connection");
+            sql::query(
+                &connection,
+                "SELECT name FROM sqlite_master WHERE name LIKE 'saved_%' \
+                 OR name IN ('script_titles', 'workflows_by_number') ORDER BY name",
+                Vec::new(),
+            )
+            .await
+            .expect("the schema")
+            .iter()
+            .map(|row| row.text(0).expect("a name"))
+            .collect()
+        };
+        assert_eq!(
+            left,
+            Vec::<String>::new(),
+            "the tables of version 13 are gone"
+        );
+
+        let next = catalog
+            .put_version(
+                &acme,
+                &triage,
+                &NewVersion {
+                    document: WorkflowVersion::new(code("triage v4"), Digest::of(b"action_set")),
+                    pulled: None,
+                },
+                at(4),
+            )
+            .await
+            .expect("put_version");
+        assert_eq!(next.version, 4, "a moved workflow takes new versions");
+        assert_eq!(
+            catalog
+                .suite(&acme, &triage)
+                .await
+                .expect("suite")
+                .iter()
+                .filter(|member| member.is_current())
+                .count(),
+            0,
+            "the new version has no tests"
+        );
     }
 }

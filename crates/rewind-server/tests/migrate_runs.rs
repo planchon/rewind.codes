@@ -4,8 +4,10 @@
 //! time moving nothing; then a server on the result reads every run back as the tables held it,
 //! named by the handle they gave it, and lets the live ones go on: a timer fires, signals and a
 //! webhook end them, a workflow run's end reaches its starter, harness calls in flight are handed
-//! again. The fixtures are as a build of schema version 12 (Postgres) and 10 (Turso) left them:
-//! the server runs the migrations that give runs their handles, then those of the run plane.
+//! again. The fixtures are as a build of schema version 12 (Postgres) and 10 (Turso) left them,
+//! their documents as `rename-data` writes them: the server runs the migrations that give runs
+//! their handles, those of the run plane and of the workflow model; between the move and the
+//! server, `rename-data`'s step gives every run a workflow.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -20,7 +22,11 @@ use rewind_api::Client;
 use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::RunStatus;
 use rewind_api::runs::ExportAs;
+use rewind_core::WorkflowId;
+use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::ports::legacy::{LegacyBlobs, LegacyHistory, LegacyRuns};
+use rewind_engine::ports::{CatalogMigration, WorkflowScope};
+use rewind_engine::rename::CodeUse;
 use rewind_server::{MigrateArgs, ServerArgs, migrate_runs};
 use serde_json::{Value, json};
 use support::{ADMIN_KEY, Postgres, TaskWorker, copy_tree, eventually};
@@ -61,9 +67,30 @@ fn master_key() -> String {
 /// The event names of each run's history, and its handle, as the set-aside tables hold them.
 type Histories = BTreeMap<String, (Vec<&'static str>, String)>;
 
-async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Histories {
+/// The histories of the set-aside runs, and what each used, as `rename-data` reads it from the
+/// runs' records.
+async fn histories<L: LegacyRuns, B: LegacyBlobs>(
+    legacy: &L,
+    blobs: &B,
+) -> (Histories, Vec<CodeUse>) {
     let mut histories = BTreeMap::new();
+    let mut uses = Vec::new();
     for run in legacy.runs(None, 100).await.unwrap() {
+        uses.push(CodeUse {
+            tenant: run.run.tenant.clone(),
+            namespace: run.namespace.clone(),
+            run: run.run.id,
+            code: run.code,
+            action_set: run.action_set,
+            secrets: run.metadata.secrets.clone(),
+            labels: run.metadata.allowed_labels.clone(),
+            version: run
+                .metadata
+                .workflow
+                .as_ref()
+                .map(|workflow| workflow.digest),
+            started_at: run.created_at,
+        });
         let handle = rewind_core::RunHandle::new(
             run.namespace.as_str(),
             &run.origin,
@@ -87,7 +114,64 @@ async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Hist
             ),
         );
     }
-    histories
+    (histories, uses)
+}
+
+/// `rename-data`'s step for the workflows, on the catalog the runs moved beside: every run gets
+/// a workflow, the saved `triage` that one namespace ran becomes that namespace's, and the step
+/// run again changes nothing.
+async fn rename_workflows<C: CatalogMigration>(catalog: &C, uses: &[CodeUse]) {
+    let now = rewind_core::Timestamp(1_800_000_000_000);
+    let renamed = rewind_engine::rename::workflows(catalog, &SystemEntropy, uses, now)
+        .await
+        .unwrap();
+    assert_eq!(renamed.runs.len(), uses.len(), "{renamed:?}");
+    let child = renamed.runs[&CHILD.parse::<rewind_core::RunId>().unwrap()].clone();
+    let tenant = &uses[0].tenant;
+    let triage = WorkflowId::of_saved(tenant.as_str(), "triage");
+    assert_eq!(
+        (&child.id, child.name.as_deref(), child.version),
+        (&triage, Some("triage"), 1)
+    );
+    let ran: std::collections::BTreeSet<_> = uses
+        .iter()
+        .filter(|used| used.run.to_string() == CHILD)
+        .map(|used| used.namespace.clone())
+        .collect();
+    let namespace = ran.into_iter().next().unwrap();
+    assert_eq!(
+        renamed.scoped,
+        [(tenant.clone(), triage.clone(), namespace.clone())],
+        "the saved workflow one namespace ran is that namespace's"
+    );
+    let moved = catalog.workflow(tenant, &triage).await.unwrap().unwrap();
+    assert_eq!(moved.scope, WorkflowScope::Namespace(namespace));
+    // Every other code that ran got a workflow of the namespace of its first run.
+    assert!(!renamed.created.is_empty());
+    for (_, created) in &renamed.created {
+        assert!(
+            matches!(created.scope, WorkflowScope::Namespace(_)),
+            "{created:?}"
+        );
+        assert_eq!(created.latest, 1);
+    }
+    for used in uses {
+        let workflow = &renamed.runs[&used.run];
+        assert_eq!(
+            renamed.codes[&(used.tenant.clone(), used.namespace.clone(), used.code)],
+            workflow.id,
+            "{used:?}"
+        );
+    }
+
+    let again = rewind_engine::rename::workflows(catalog, &SystemEntropy, uses, now)
+        .await
+        .unwrap();
+    assert_eq!(again.runs, renamed.runs);
+    assert!(
+        again.scoped.is_empty() && again.created.is_empty(),
+        "{again:?}"
+    );
 }
 
 fn status(run: &rewind_api::runs::Run) -> RunStatus {
@@ -302,6 +386,7 @@ async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
         )
         .await
     };
+    let (expected, uses) = expected;
     let dir_text = dir.display().to_string();
 
     // The embedded server refuses a directory whose runs did not move, and says how.
@@ -368,6 +453,7 @@ async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
     .await
     .unwrap();
     assert!(store.legacy().runs(None, 1).await.unwrap().is_empty());
+    rename_workflows(&store.catalog(), &uses).await;
     drop(store);
 
     // A server on the directory: the runs read back, and the live ones go on.
@@ -430,6 +516,7 @@ async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archiv
         store.close().await;
         expected
     };
+    let (expected, uses) = expected;
     let key = master_key();
     let url = postgres.url();
     let bucket_text = bucket.display().to_string();
@@ -495,6 +582,16 @@ async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archiv
             bucket.join(format!("runs/acme/{run}/1.json")).exists(),
             "{run}"
         );
+    }
+    {
+        let store = rewind_store_postgres::PostgresStore::connect(
+            &rewind_store_postgres::Config::new(postgres.url()),
+            rewind_store_postgres::MasterKey::from_bytes([9; 32]),
+        )
+        .await
+        .unwrap();
+        rename_workflows(&store.catalog(), &uses).await;
+        store.close().await;
     }
 
     let running =

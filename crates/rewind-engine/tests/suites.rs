@@ -1,5 +1,5 @@
-//! The gate: a version is saved only if its suite, inherited from its base, passes; tests are
-//! retired and updated with a reason; tests recorded from runs, one per path
+//! The gate: a version is made only if the workflow's suite passes; tests are retired and
+//! replaced with a reason; tests added alone; tests recorded from runs, one per path
 //! (`archi/05-testing-and-observability.md`, "Suites and the gate", "Tests recorded from runs").
 
 #![allow(clippy::unwrap_used)]
@@ -17,13 +17,13 @@ use rewind_engine::edge::{RecordFrom, RecordingError};
 use rewind_engine::ports::BlobStore as _;
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, Handoff, NamespaceName, StoreError, TenantId,
-    WorkflowDeclarations,
 };
+use rewind_engine::ports::{WorkflowScope, current_suite};
 use rewind_engine::suites::{
     Recorder, ReplaceWith, SuiteChanges, SuiteError, TestInput, TestReplacement, TestRetirement,
 };
 use rewind_engine::testing::TestProblem;
-use rewind_engine::{RegisterError, RegisterWorkflow};
+use rewind_engine::{ChangeTests, CreateWorkflow, MakeVersion, WorkflowError, WrittenWorkflow};
 use serde_json::json;
 use support::plane::World;
 use support::*;
@@ -72,20 +72,84 @@ fn schemas() -> WorkflowSchemas {
     }
 }
 
-fn save(code: &str, suite: SuiteChanges) -> RegisterWorkflow {
-    RegisterWorkflow {
-        tenant: TenantId::local(),
-        name: "triage".into(),
-        description: None,
-        code: Code::new(code),
-        action_set: action_set().digest(),
-        schemas: schemas(),
-        labels: BTreeMap::new(),
-        secrets: Default::default(),
-        secret_rights: Default::default(),
-        declarations: WorkflowDeclarations::default(),
-        suite,
+/// Makes the next version of the organization's `triage` from `code`, through the gate: its
+/// first version when it has none yet, whose suite is the tests given.
+async fn save(
+    world: &World,
+    code: &str,
+    suite: SuiteChanges,
+) -> Result<WrittenWorkflow, WorkflowError> {
+    save_with(world, code, None, suite).await
+}
+
+async fn save_with(
+    world: &World,
+    code: &str,
+    interface: Option<WorkflowSchemas>,
+    suite: SuiteChanges,
+) -> Result<WrittenWorkflow, WorkflowError> {
+    let checker = StaticTypeChecker::default();
+    let kit = workflow_kit(&checker);
+    let existing = world
+        .plane
+        .catalog
+        .workflow_named(&TenantId::local(), None, "triage", &BTreeMap::new())
+        .await
+        .unwrap();
+    match existing {
+        None => {
+            assert!(suite.replace.is_empty() && suite.retire.is_empty());
+            world
+                .edge
+                .create_workflow(
+                    CreateWorkflow {
+                        tenant: TenantId::local(),
+                        scope: WorkflowScope::Organization,
+                        name: Some("triage".into()),
+                        description: None,
+                        code: Code::new(code),
+                        action_set: action_set().digest(),
+                        interface: Some(interface.unwrap_or_else(schemas)),
+                        secrets: Default::default(),
+                        tests: suite.tests,
+                        maker: maker(),
+                    },
+                    &kit,
+                )
+                .await
+        }
+        Some(workflow) => {
+            world
+                .edge
+                .make_version(
+                    MakeVersion {
+                        tenant: TenantId::local(),
+                        workflow,
+                        code: Some(Code::new(code)),
+                        action_set: None,
+                        interface,
+                        secrets: None,
+                        suite,
+                        maker: maker(),
+                    },
+                    &kit,
+                )
+                .await
+        }
     }
+}
+
+/// The versions of `triage`, newest first.
+async fn versions(
+    world: &World,
+    written: &WrittenWorkflow,
+) -> Vec<rewind_engine::ports::StoredVersion> {
+    world
+        .plane
+        .catalog
+        .versions(&TenantId::local(), &written.workflow.id, &BTreeMap::new())
+        .await
+        .unwrap()
 }
 
 /// Closes issue 4 of acme/api, and expects one closed.
@@ -125,29 +189,23 @@ async fn setup() -> World {
 }
 
 #[tokio::test]
-async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
+async fn a_version_passes_the_workflow_s_suite_and_records_it() {
     let world = setup().await;
-    let checker = StaticTypeChecker::default();
-    let v1 = world
-        .edge
-        .register_workflow(
-            save(
-                "v1",
-                SuiteChanges {
-                    tests: vec![TestInput::Inline(Box::new(closes()))],
-                    ..SuiteChanges::default()
-                },
-            ),
-            &checker,
-            &kit(),
-        )
-        .await
-        .unwrap();
-    let suite = v1.workflow.suite();
+    let v1 = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![TestInput::Inline(Box::new(closes()))],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
+    let suite = v1.version.document.suite().clone();
     assert_eq!(suite.base, None);
     assert_eq!(suite.tests.len(), 1);
     assert_eq!(suite.tests[0].name, "closes one");
-    // The test is stored, under the digest the version holds.
+    // The test is stored, under the digest the version holds, and is the workflow's suite.
     let digest = suite.tests[0].test;
     assert!(
         world
@@ -167,13 +225,17 @@ async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
             .unwrap(),
         Some(closes())
     );
+    let members = world
+        .plane
+        .catalog
+        .suite(&TenantId::local(), &v1.workflow.id)
+        .await
+        .unwrap();
+    assert_eq!(current_suite(&members), suite.tests);
 
-    // v2 regresses: the inherited test refuses it, and nothing is stored.
-    let refused = world
-        .edge
-        .register_workflow(save("v2", SuiteChanges::default()), &checker, &kit())
-        .await;
-    let Err(RegisterError::TestsFailed(reports)) = refused else {
+    // v2 regresses: the suite refuses it, and nothing is stored.
+    let refused = save(&world, "v2", SuiteChanges::default()).await;
+    let Err(WorkflowError::TestsFailed(reports)) = refused else {
         panic!("{refused:?}");
     };
     assert_eq!(reports.len(), 1);
@@ -183,40 +245,33 @@ async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
         reports[0].failures,
         ["the output is {\"closed\":0}, which does not contain {\"closed\":1}"]
     );
-    let versions = world
-        .plane
-        .catalog
-        .workflow_versions(&TenantId::local(), "triage", &BTreeMap::new())
-        .await
-        .unwrap();
-    assert_eq!(versions.len(), 1, "nothing was stored");
+    assert_eq!(versions(&world, &v1).await.len(), 1, "nothing was stored");
 
-    // Updating the test's expectation, with a reason, lets v2 through.
+    // Replacing the test's expectation, with a reason, lets v2 through.
     let updated = Expectations {
         output: Some(json!({ "closed": 0 })),
         ..closes().expect
     };
-    let v2 = world
-        .edge
-        .register_workflow(
-            save(
-                "v2",
-                SuiteChanges {
-                    replace: vec![TestReplacement {
-                        name: "closes one".into(),
-                        reason: "closed issues are counted elsewhere now".into(),
-                        with: ReplaceWith::Expect(updated.clone()),
-                    }],
-                    ..SuiteChanges::default()
-                },
-            ),
-            &checker,
-            &kit(),
-        )
-        .await
-        .unwrap();
-    let suite = v2.workflow.suite();
-    assert_eq!(suite.base, Some(v1.workflow.version()));
+    let v2 = save(
+        &world,
+        "v2",
+        SuiteChanges {
+            replace: vec![TestReplacement {
+                name: "closes one".into(),
+                reason: "closed issues are counted elsewhere now".into(),
+                with: ReplaceWith::Expect(updated.clone()),
+            }],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (v2.workflow.id.clone(), v2.version.version),
+        (v1.workflow.id.clone(), 2)
+    );
+    let suite = v2.version.document.suite();
+    assert_eq!(suite.base, Some(v1.version.digest));
     assert_eq!(suite.replaced.len(), 1);
     assert_eq!(suite.replaced[0].old, digest);
     assert_eq!(suite.replaced[0].new, suite.tests[0].test);
@@ -233,25 +288,40 @@ async fn a_version_inherits_its_base_s_suite_and_is_saved_only_if_it_passes() {
         .unwrap();
     assert_eq!(replaced.expect, updated);
     assert_eq!(replaced.name, "closes one");
+    let members = world
+        .plane
+        .catalog
+        .suite(&TenantId::local(), &v2.workflow.id)
+        .await
+        .unwrap();
+    assert_eq!(current_suite(&members), suite.tests);
+    assert_eq!(
+        members.len(),
+        2,
+        "the replaced test left the suite with its reason"
+    );
+    assert_eq!(
+        members
+            .iter()
+            .find(|member| member.digest == digest)
+            .and_then(|member| member.reason.clone()),
+        Some("closed issues are counted elsewhere now".to_owned())
+    );
 }
 
 #[tokio::test]
-async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
+async fn retiring_and_replacing_need_a_reason_and_name_tests_of_the_suite() {
     let world = setup().await;
-    let checker = StaticTypeChecker::default();
-    let with = |suite: SuiteChanges| save("v1", suite);
-    world
-        .edge
-        .register_workflow(
-            with(SuiteChanges {
-                tests: vec![TestInput::Inline(Box::new(closes()))],
-                ..SuiteChanges::default()
-            }),
-            &checker,
-            &kit(),
-        )
-        .await
-        .unwrap();
+    save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![TestInput::Inline(Box::new(closes()))],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
     let retire = |names: &[&str], reason: &str| TestRetirement {
         names: names.iter().map(|name| (*name).to_owned()).collect(),
         reason: reason.into(),
@@ -269,7 +339,7 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
                 retire: vec![retire(&["closes two"], "gone")],
                 ..SuiteChanges::default()
             },
-            "retire names \"closes two\", which the base's suite does not have (it has \
+            "retire names \"closes two\", which the workflow's suite does not have (it has \
              \"closes one\")",
         ),
         (
@@ -294,132 +364,178 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
         ),
     ];
     for (changes, message) in cases {
-        let mut request = save("v2", changes);
-        request.description = Some("v2".into());
-        match world
-            .edge
-            .register_workflow(request, &checker, &kit())
-            .await
-        {
-            Err(RegisterError::Suite(error)) => assert_eq!(error.to_string(), message),
+        match save(&world, "v2", changes).await {
+            Err(WorkflowError::Suite(error)) => assert_eq!(error.to_string(), message),
             other => panic!("{message}: {other:?}"),
         }
     }
 
-    // Retired with a reason, the regression is saved, and the reason stays in the lineage.
-    let v2 = world
-        .edge
-        .register_workflow(
-            save(
-                "v2",
-                SuiteChanges {
-                    retire: vec![retire(&["closes one"], "v2 only counts, it closes nothing")],
-                    ..SuiteChanges::default()
-                },
-            ),
-            &checker,
-            &kit(),
-        )
-        .await
-        .unwrap();
-    let suite = v2.workflow.suite();
+    // Retired with a reason, the regression is made a version, and the reason stays in the
+    // lineage.
+    let v2 = save(
+        &world,
+        "v2",
+        SuiteChanges {
+            retire: vec![retire(&["closes one"], "v2 only counts, it closes nothing")],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
+    let suite = v2.version.document.suite();
     assert!(suite.tests.is_empty());
     assert_eq!(suite.retired.len(), 1);
     assert_eq!(suite.retired[0].reason, "v2 only counts, it closes nothing");
 }
 
 #[tokio::test]
-async fn an_unchanged_save_returns_the_version_saved_first() {
+async fn an_unchanged_version_answers_the_latest() {
     let world = setup().await;
-    let checker = StaticTypeChecker::default();
-    let suite = || SuiteChanges {
-        tests: vec![TestInput::Inline(Box::new(closes()))],
-        ..SuiteChanges::default()
-    };
-    let first = world
-        .edge
-        .register_workflow(save("v1", suite()), &checker, &kit())
-        .await
-        .unwrap();
-    let again = world
-        .edge
-        .register_workflow(save("v1", SuiteChanges::default()), &checker, &kit())
-        .await
-        .unwrap();
-    assert_eq!(again, first);
+    let first = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![TestInput::Inline(Box::new(closes()))],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
+    let again = save(&world, "v1", SuiteChanges::default()).await.unwrap();
+    assert_eq!(
+        (again.version.clone(), again.created),
+        (first.version.clone(), false)
+    );
 }
 
 #[tokio::test]
-async fn a_save_sent_again_returns_the_version_it_made() {
+async fn a_version_sent_again_answers_the_version_it_made() {
     let world = setup().await;
-    let checker = StaticTypeChecker::default();
-    let first = || {
-        save(
-            "v1",
-            SuiteChanges {
-                tests: vec![TestInput::Inline(Box::new(closes()))],
-                ..SuiteChanges::default()
-            },
-        )
+    let first = || SuiteChanges {
+        tests: vec![TestInput::Inline(Box::new(closes()))],
+        ..SuiteChanges::default()
     };
-    let v1 = world
-        .edge
-        .register_workflow(first(), &checker, &kit())
-        .await
-        .unwrap();
-    let again = world
-        .edge
-        .register_workflow(first(), &checker, &kit())
-        .await;
-    assert_eq!(again.unwrap(), v1, "its test is not added a second time");
+    let v1 = save(&world, "v1", first()).await.unwrap();
+    let again = save(&world, "v1", first()).await.unwrap();
+    assert_eq!(
+        (again.version, again.created),
+        (v1.version.clone(), false),
+        "its test is not added a second time"
+    );
 
     // A version that retires the test and adds another, sent twice: the second answers the
-    // first, rather than retiring a test the version no longer has.
+    // first, rather than retiring a test the suite no longer has.
     let second = || {
         let mut renamed = closes();
         renamed.name = "closes issue 4".into();
-        let mut request = save(
-            "v1",
-            SuiteChanges {
-                tests: vec![TestInput::Inline(Box::new(renamed))],
-                retire: vec![TestRetirement {
-                    names: vec!["closes one".into()],
-                    reason: "renamed".into(),
-                }],
-                ..SuiteChanges::default()
-            },
-        );
-        request.description = Some("v2".into());
-        request
+        SuiteChanges {
+            tests: vec![TestInput::Inline(Box::new(renamed))],
+            retire: vec![TestRetirement {
+                names: vec!["closes one".into()],
+                reason: "renamed".into(),
+            }],
+            ..SuiteChanges::default()
+        }
     };
-    let v2 = world
-        .edge
-        .register_workflow(second(), &checker, &kit())
+    let other = Some(WorkflowSchemas {
+        input: json!({ "type": "object" }),
+        ..schemas()
+    });
+    let v2 = save_with(&world, "v1", other.clone(), second())
         .await
         .unwrap();
-    assert_eq!(v2.workflow.suite().base, Some(v1.workflow.version()));
-    let again = world
-        .edge
-        .register_workflow(second(), &checker, &kit())
-        .await;
-    assert_eq!(again.unwrap(), v2);
+    assert_eq!(v2.version.document.suite().base, Some(v1.version.digest));
+    let again = save_with(&world, "v1", other, second()).await.unwrap();
+    assert_eq!((again.version, again.created), (v2.version, false));
+}
 
-    // Named as the base, the version itself gets the changes, which do not apply to it.
-    let mut onto = second();
-    onto.suite.base = Some(v2.workflow.version());
-    match world.edge.register_workflow(onto, &checker, &kit()).await {
-        Err(RegisterError::Suite(error)) => assert!(
-            error.to_string().starts_with("retire names \"closes one\""),
-            "{error}"
-        ),
-        other => panic!("{other:?}"),
-    }
+#[tokio::test]
+async fn tests_added_alone_join_the_suite_without_a_version() {
+    let world = setup().await;
+    let checker = StaticTypeChecker::default();
+    let kit = workflow_kit(&checker);
+    let v1 = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![TestInput::Inline(Box::new(closes()))],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
+    let change = |suite: SuiteChanges| ChangeTests {
+        tenant: TenantId::local(),
+        workflow: v1.workflow.clone(),
+        suite,
+        maker: maker(),
+    };
+    // A test that does not pass against the latest version is refused.
+    let mut wrong = closes();
+    wrong.name = "closes two".into();
+    wrong.expect.output = Some(json!({ "closed": 2 }));
+    let refused = world
+        .edge
+        .change_tests(
+            change(SuiteChanges {
+                tests: vec![TestInput::Inline(Box::new(wrong))],
+                ..SuiteChanges::default()
+            }),
+            &kit,
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(WorkflowError::TestsFailed(_))),
+        "{refused:?}"
+    );
+    let mut right = closes();
+    right.name = "closes four".into();
+    let (_, suite) = world
+        .edge
+        .change_tests(
+            change(SuiteChanges {
+                tests: vec![TestInput::Inline(Box::new(right))],
+                retire: vec![TestRetirement {
+                    names: vec!["closes one".into()],
+                    reason: "named after its issue".into(),
+                }],
+                ..SuiteChanges::default()
+            }),
+            &kit,
+        )
+        .await
+        .unwrap();
+    let names: Vec<String> = current_suite(&suite)
+        .into_iter()
+        .map(|test| test.name)
+        .collect();
+    assert_eq!(names, ["closes four"]);
+    assert_eq!(versions(&world, &v1).await.len(), 1, "no version");
+    // The next version lists them, and the retirement made since with its reason.
+    let other = Some(WorkflowSchemas {
+        input: json!({ "type": "object" }),
+        ..schemas()
+    });
+    let v2 = save_with(&world, "v1", other, SuiteChanges::default())
+        .await
+        .unwrap();
+    let document = v2.version.document.suite();
+    assert_eq!(
+        document
+            .tests
+            .iter()
+            .map(|test| test.name.as_str())
+            .collect::<Vec<_>>(),
+        ["closes four"]
+    );
+    assert_eq!(document.retired.len(), 1);
+    assert_eq!(document.retired[0].name, "closes one");
+    assert_eq!(document.retired[0].reason, "named after its issue");
 }
 
 #[tokio::test]
 async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
     let world = setup().await;
-    let checker = StaticTypeChecker::default();
     let mut recorded = closes();
     recorded.name = "recorded".into();
     recorded.from = Some(TestFromRun {
@@ -443,51 +559,41 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
             .unwrap(),
         digests
     );
-    // Given by digest, with a new expectation.
-    let v1 = world
-        .edge
-        .register_workflow(
-            save(
-                "v1",
-                SuiteChanges {
-                    tests: vec![
-                        TestInput::Stored(digests[0]),
-                        TestInput::From {
-                            test: digests[0],
-                            expect: Expectations::default(),
-                        },
-                    ],
-                    ..SuiteChanges::default()
+    // Given by digest, with a new expectation: both are named "recorded", the second is a
+    // duplicate.
+    let v1 = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![
+                TestInput::Stored(digests[0]),
+                TestInput::From {
+                    test: digests[0],
+                    expect: Expectations::default(),
                 },
-            ),
-            &checker,
-            &kit(),
-        )
-        .await;
-    // Both are named "recorded": the second is a duplicate.
+            ],
+            ..SuiteChanges::default()
+        },
+    )
+    .await;
     assert!(matches!(
         v1,
-        Err(RegisterError::Suite(SuiteError::Duplicate(_)))
+        Err(WorkflowError::Suite(SuiteError::Duplicate(_)))
     ));
-    let v1 = world
-        .edge
-        .register_workflow(
-            save(
-                "v1",
-                SuiteChanges {
-                    tests: vec![
-                        TestInput::Stored(digests[0]),
-                        TestInput::Inline(Box::new(closes())),
-                    ],
-                    ..SuiteChanges::default()
-                },
-            ),
-            &checker,
-            &kit(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(v1.workflow.suite().tests.len(), 2);
+    let v1 = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![
+                TestInput::Stored(digests[0]),
+                TestInput::Inline(Box::new(closes())),
+            ],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(v1.version.document.suite().tests.len(), 2);
 
     // Alice's namespace is erased: her test goes.
     world
@@ -496,14 +602,14 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
         .drop_tests(&[(TenantId::local(), digests[0])], true)
         .await
         .unwrap();
-    let mut next = save("v1", SuiteChanges::default());
-    next.description = Some("the same, described".into());
-    let v2 = world
-        .edge
-        .register_workflow(next, &checker, &kit())
+    let other = Some(WorkflowSchemas {
+        input: json!({ "type": "object" }),
+        ..schemas()
+    });
+    let v2 = save_with(&world, "v1", other, SuiteChanges::default())
         .await
         .unwrap();
-    let suite = v2.workflow.suite();
+    let suite = v2.version.document.suite();
     assert_eq!(
         suite
             .tests
@@ -516,23 +622,18 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
     assert_eq!(suite.retired[0].name, "recorded");
     assert_eq!(suite.retired[0].reason, ERASED_TEST_REASON);
     // A test unknown by digest cannot be given.
-    let unknown = world
-        .edge
-        .register_workflow(
-            save(
-                "v1",
-                SuiteChanges {
-                    tests: vec![TestInput::Stored(digests[0])],
-                    ..SuiteChanges::default()
-                },
-            ),
-            &checker,
-            &kit(),
-        )
-        .await;
+    let unknown = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![TestInput::Stored(digests[0])],
+            ..SuiteChanges::default()
+        },
+    )
+    .await;
     assert!(matches!(
         unknown,
-        Err(RegisterError::Suite(SuiteError::UnknownTest(_)))
+        Err(WorkflowError::Suite(SuiteError::UnknownTest(_)))
     ));
 }
 
@@ -644,8 +745,8 @@ async fn recording_keeps_the_newest_run_of_each_path() {
     let _: &[TestSignal] = &test.signals;
 }
 
-/// The workflow `closer`, saved without tests over the actions `a` and `b`.
-async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow {
+/// The workflow `closer` of the namespace alice, made without tests over the actions `a` and `b`.
+async fn closer_workflow(world: &World) -> WrittenWorkflow {
     let action_set = ActionSet::from_harness_actions(["a", "b", "cleanup"]).unwrap();
     world
         .plane
@@ -657,17 +758,27 @@ async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow 
         )
         .await
         .unwrap();
-    let mut save = save("closer", SuiteChanges::default());
-    save.name = "closer".into();
-    save.action_set = action_set.digest();
-    save.schemas = WorkflowSchemas {
-        input: json!({ "type": "object" }),
-        output: json!({}),
-        signals: BTreeMap::from([("approval".to_owned(), json!({}))]),
-    };
     world
         .edge
-        .register_workflow(save, &StaticTypeChecker::default(), &kit())
+        .create_workflow(
+            CreateWorkflow {
+                tenant: TenantId::local(),
+                scope: WorkflowScope::Namespace(NamespaceName::new("alice").unwrap()),
+                name: Some("closer".into()),
+                description: None,
+                code: Code::new("closer"),
+                action_set: action_set.digest(),
+                interface: Some(WorkflowSchemas {
+                    input: json!({ "type": "object" }),
+                    output: json!({}),
+                    signals: BTreeMap::from([("approval".to_owned(), json!({}))]),
+                }),
+                secrets: Default::default(),
+                tests: Vec::new(),
+                maker: maker(),
+            },
+            &workflow_kit(&StaticTypeChecker::default()),
+        )
         .await
         .unwrap()
 }
@@ -681,7 +792,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         let mut start = rewind_engine::StartWorkflow {
             tenant: TenantId::local(),
             namespace: NamespaceName::new("alice").unwrap(),
-            version: version.workflow.version(),
+            reference: "closer".into(),
             input: json!({ "count": count }),
             ttl: None,
             metadata: Default::default(),
@@ -697,7 +808,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         runs.push(created.run);
         world.idle().await;
     }
-    // A run that is no workflow's.
+    // A run of another workflow: the same code, run in another namespace, is another workflow.
     let other = world.run(request("closer", json!({ "count": 1 }))).await;
 
     let scope = rewind_engine::ports::Scope::Tenant(TenantId::local());
@@ -707,7 +818,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         .edge
         .record_tests(
             &mut gateway,
-            "closer",
+            &version.workflow.id,
             RecordFrom::Search { scope, query },
             20,
             test_format(),
@@ -744,7 +855,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         .unwrap();
     assert_eq!(stored, recording.recorded[0].test);
     let origin = stored.from.unwrap();
-    assert_eq!(origin.version, version.workflow.version());
+    assert_eq!(origin.version, version.version.digest);
     assert_eq!(origin.namespace, "alice");
     assert_eq!(
         world
@@ -768,7 +879,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         .edge
         .record_tests(
             &mut gateway,
-            "closer",
+            &version.workflow.id,
             RecordFrom::Runs(vec![runs[3].clone(), runs[1].clone()]),
             20,
             test_format(),
@@ -783,7 +894,7 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
         .edge
         .record_tests(
             &mut gateway,
-            "closer",
+            &version.workflow.id,
             RecordFrom::Runs(vec![other.clone()]),
             20,
             test_format(),
@@ -796,26 +907,21 @@ async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_te
 }
 
 #[tokio::test]
-async fn the_daily_job_deletes_the_tests_no_version_references_after_their_grace() {
+async fn the_daily_job_deletes_the_tests_no_suite_references_after_their_grace() {
     let world = setup().await;
     let suites = world.edge.suites(test_format());
     let mut kept = closes();
     kept.name = "kept".into();
-    let v1 = world
-        .edge
-        .register_workflow(
-            save(
-                "v1",
-                SuiteChanges {
-                    tests: vec![TestInput::Inline(Box::new(kept))],
-                    ..SuiteChanges::default()
-                },
-            ),
-            &StaticTypeChecker::default(),
-            &kit(),
-        )
-        .await
-        .unwrap();
+    let v1 = save(
+        &world,
+        "v1",
+        SuiteChanges {
+            tests: vec![TestInput::Inline(Box::new(kept))],
+            ..SuiteChanges::default()
+        },
+    )
+    .await
+    .unwrap();
     let mut loose = closes();
     loose.name = "loose".into();
     let loose = suites
@@ -842,7 +948,7 @@ async fn the_daily_job_deletes_the_tests_no_version_references_after_their_grace
         None,
         "its blob is deleted"
     );
-    let referenced = v1.workflow.suite().tests[0].test;
+    let referenced = v1.version.document.suite().tests[0].test;
     assert!(
         suites
             .load_test(&tenant, referenced)

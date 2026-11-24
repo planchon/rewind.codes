@@ -1,4 +1,4 @@
-use rewind_core::{PartitionId, RunId, Seed, Timestamp};
+use rewind_core::{PartitionId, RunId, Seed, Timestamp, WorkflowId};
 
 /// The current time. Every timestamp the engine writes comes from here.
 pub trait Clock: Send + Sync {
@@ -12,7 +12,7 @@ pub trait VirtualTime: Clock {
     fn advance_to(&self, at: Timestamp);
 }
 
-/// Run ids and seeds.
+/// Run ids, workflow ids and seeds.
 pub trait Entropy: Send + Sync {
     fn run_id(&self) -> RunId;
 
@@ -22,4 +22,12 @@ pub trait Entropy: Send + Sync {
     fn run_id_in(&self, partition: PartitionId) -> RunId;
 
     fn seed(&self) -> Seed;
+
+    /// A workflow's id (`wf_` and 12 characters): 60 bits of a seed.
+    fn workflow_id(&self) -> WorkflowId {
+        let seed = self.seed();
+        let mut bits = [0u8; 8];
+        bits.copy_from_slice(&seed.as_bytes()[..8]);
+        WorkflowId::from_bits(u64::from_le_bytes(bits))
+    }
 }

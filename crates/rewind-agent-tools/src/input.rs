@@ -94,12 +94,52 @@ pub(crate) fn optional_strings(
     }
 }
 
-pub(crate) fn require_object<'v>(values: &'v Values, key: &str) -> Result<&'v Value, InputError> {
+/// A field of a JSON merge patch: absent leaves it, `null` removes it, a non-empty string gives
+/// it.
+pub(crate) fn optional_patch(
+    values: &Values,
+    key: &str,
+) -> Result<Option<Option<String>>, InputError> {
     match values.get(key) {
-        Some(value @ Value::Object(_)) => Ok(value),
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(value)) if !value.is_empty() => Ok(Some(Some(value.clone()))),
+        _ => Err(InputError::new(format!(
+            "`{key}` must be a non-empty string, or null to remove it."
+        ))),
+    }
+}
+
+/// A JSON Schema: an object, or a boolean (`true` takes anything).
+fn is_schema(value: &Value) -> bool {
+    value.is_object() || value.is_boolean()
+}
+
+pub(crate) fn optional_schema(values: &Values, key: &str) -> Result<Option<Value>, InputError> {
+    match values.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) if is_schema(value) => Ok(Some(value.clone())),
         _ => Err(InputError::new(format!(
             "`{key}` must be a JSON Schema: an object."
         ))),
+    }
+}
+
+/// `signals`: the JSON Schema of each signal's payload, by its name.
+pub(crate) fn optional_signals(
+    values: &Values,
+) -> Result<Option<std::collections::BTreeMap<String, Value>>, InputError> {
+    match values.get("signals") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(signals)) if signals.values().all(is_schema) => Ok(Some(
+            signals
+                .iter()
+                .map(|(name, schema)| (name.clone(), schema.clone()))
+                .collect(),
+        )),
+        _ => Err(InputError::new(
+            "`signals` must be an object of JSON Schemas by signal name.",
+        )),
     }
 }
 
@@ -113,7 +153,7 @@ pub(crate) fn optional_index(values: &Values, key: &str) -> Result<Option<u64>, 
     }
 }
 
-/// Tests as the model gave them: each an object (in full, or `{ from, expect }`) or a digest.
+/// Tests as the model gave them: each an object (in full, or `{ test, expect }`) or a digest.
 /// The server checks them.
 pub(crate) fn optional_tests(values: &Values, key: &str) -> Result<Option<Vec<Value>>, InputError> {
     match values.get(key) {
@@ -132,7 +172,7 @@ fn is_test_input(value: &Value) -> bool {
 pub(crate) fn optional_replacements(values: &Values) -> Result<Option<Vec<Value>>, InputError> {
     let invalid = || {
         InputError::new(
-            "`replace` must be an array of { name, reason, new?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
+            "`replace` must be an array of { name, reason, new?, expect? }: the name of a test of the suite, why it changes, and the test that replaces it or its new expectation.",
         )
     };
     let items = match values.get("replace") {
@@ -159,7 +199,7 @@ pub(crate) fn optional_replacements(values: &Values) -> Result<Option<Vec<Value>
 pub(crate) fn optional_retirements(values: &Values) -> Result<Option<Vec<Value>>, InputError> {
     let invalid = || {
         InputError::new(
-            "`retire` must be an array of { names, reason }: the names of inherited tests, and why they no longer hold.",
+            "`retire` must be an array of { names, reason }: the names of tests of the suite, and why they no longer hold.",
         )
     };
     let items = match values.get("retire") {
@@ -225,9 +265,22 @@ mod tests {
             "`a` must be an array of non-empty strings."
         );
         assert_eq!(
-            require_object(&values, "o").map_err(message).unwrap_err(),
+            optional_schema(&values, "o").map_err(message).unwrap_err(),
             "`o` must be a JSON Schema: an object."
         );
+        assert_eq!(
+            optional_patch(&values, "s").map_err(message).unwrap_err(),
+            "`s` must be a non-empty string, or null to remove it."
+        );
+        let patch = parse(
+            "x",
+            &json!({ "name": null, "description": "d", "input": true }),
+        )
+        .unwrap_or_default();
+        assert!(optional_patch(&patch, "name").is_ok_and(|name| name == Some(None)));
+        assert!(optional_patch(&patch, "missing").is_ok_and(|absent| absent.is_none()));
+        assert!(optional_schema(&patch, "input").is_ok_and(|input| input == Some(json!(true))));
+        assert!(optional_signals(&values).is_ok_and(|signals| signals.is_none()));
         assert!(optional_tests(&values, "t").is_err());
         assert!(optional_string(&values, "missing").is_ok_and(|value| value.is_none()));
     }

@@ -20,7 +20,7 @@ use std::fmt;
 use std::future::Future;
 
 use futures_util::Stream;
-use rewind_core::{Digest, Epoch, PartitionId};
+use rewind_core::{Digest, Epoch, PartitionId, WorkflowId};
 
 use crate::ports::access::Principal;
 use crate::ports::namespaces::NamespaceName;
@@ -222,18 +222,14 @@ pub enum ControlPlaneChange {
         tenant: TenantId,
         secret: SecretId,
     },
+    /// A workflow created, named, described, given a version or tests, promoted or moved.
     Workflow {
         tenant: TenantId,
-        name: String,
-        version: Digest,
+        id: WorkflowId,
     },
     Subscription {
         tenant: TenantId,
         id: String,
-    },
-    Script {
-        tenant: TenantId,
-        digest: Digest,
     },
     ActionSet {
         tenant: TenantId,

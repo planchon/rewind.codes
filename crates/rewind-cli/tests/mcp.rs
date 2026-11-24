@@ -10,7 +10,7 @@ use axum::Router;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use rewind_api::admin::ServerInfo;
-use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
+use rewind_api::checks::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_cli::{Console, Exit};
 use rmcp::ServiceExt as _;
 use rmcp::model::CallToolRequestParams;
@@ -65,11 +65,13 @@ fn app(seen: Seen) -> Router {
                                     frame: None,
                                     hint: None,
                                 }],
+                                workflow: None,
                             }
                         } else {
                             CheckResult {
                                 ok: true,
                                 diagnostics: Vec::new(),
+                                workflow: None,
                             }
                         })
                     }
@@ -123,7 +125,7 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .unwrap();
     assert_eq!(
         orgs.content[0].as_text().unwrap().text,
-        "You reach one organization: the tools act in it without `organization`.\n- id local: you may read runs and record tests, check, test, run and retry workflows, signal and cancel runs, read action sets and workflows, list namespaces."
+        "You reach one organization: the tools act in it without `organization`.\n- id local: you may read runs and workflows and record tests, check, test, run and retry workflows, signal and cancel runs, read action sets, list namespaces."
     );
 
     let checked = client
@@ -152,12 +154,12 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .await
         .unwrap();
     assert_eq!(refused.is_error, Some(true));
-    // A code without the comment its title is read from gets a note.
+    // A code without a comment at its top gets a note.
     assert_eq!(
         refused.content[0].as_text().unwrap().text,
         format!(
             "The code does not type-check: 1 error.\nworkflow.ts:1:7 error TS2322: Type 'number' is not assignable to type 'string'.\n{}",
-            rewind_agent_tools::render::UNTITLED_NOTE
+            rewind_agent_tools::render::COMMENT_NOTE
         )
     );
 

@@ -55,7 +55,13 @@ fn usage(reference: &str) -> Value {
     json!({
         "secret": secret(reference, None, json!({})),
         "activeRuns": ["run-1"], "activeTotal": 1, "waitingRuns": [], "waitingTotal": 0,
-        "workflows": [{ "name": "triage", "digest": version, "servers": ["github"] }]
+        "workflows": [{
+            "workflow": "wf_7k2m9q4x8d1c",
+            "name": "triage",
+            "version": 3,
+            "digest": version,
+            "servers": ["github"]
+        }]
     })
 }
 
@@ -227,7 +233,10 @@ async fn the_organization_s_secrets_are_listed_written_and_deleted() {
     let (exit, out, err) = server.rewind(&["secrets", "usage", "github"], "").await;
     assert_eq!(exit, Exit::Success, "{err}");
     assert!(out.contains("active runs using it: 1 (run-1)"), "{out}");
-    assert!(out.contains("triage@4be1c07a9d3e for github"), "{out}");
+    assert!(
+        out.contains("triage@v3 (wf_7k2m9q4x8d1c) for github"),
+        "{out}"
+    );
 
     let (exit, out, err) = server.rewind(&["secrets", "delete", "github"], "").await;
     assert_eq!(exit, Exit::Success, "{err}");

@@ -1,24 +1,23 @@
-//! The handlers of the agent tools, as the SDK's `AgentTools` handles them
-//! (`sdk/typescript/src/agent-tools/agent-tools.ts`): the same inputs, the same calls of `/v1`,
-//! the same checks of labels, the same bounded plain-text results.
+//! The handlers of the agent tools: what each sends to `/v1`, the checks of labels, the bounded
+//! plain-text results.
 //!
 //! A mistake the model can fix (a bad argument, a refused code, a run that has ended: a
 //! problem of `/v1` with a 4xx status but 401) is a result with `is_error`; a fault of the
 //! platform or of the harness is an [`AgentError`].
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
-use rewind_api::action_sets::{ActionSet, CreateActionSet, SearchQuery};
+use rewind_api::action_sets::SearchQuery;
+use rewind_api::checks::{CheckRequest, TestRequest};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{CancelRun, ForkRun, Run, RunFilter, StartRun};
-use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::testing::{TestInput, TestResult};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, TestReplacement, TestRetirement, Workflow,
+    ChangeTests, CreateVersion, PatchWorkflow, RecordTests, RunWorkflow, TestReplacement,
+    TestRetirement, Workflow,
 };
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
@@ -26,17 +25,18 @@ use serde_json::{Value, json};
 use crate::api::{Api, ApiError};
 use crate::definitions::{AGENT_TOOLS, NEEDS_ACTION_SET, ToolDefinition, definition};
 use crate::input::{
-    InputError, Values, optional_index, optional_replacements, optional_retirements,
-    optional_secrets, optional_string, optional_strings, optional_tests, require_object,
-    require_string,
+    InputError, Values, optional_index, optional_patch, optional_replacements,
+    optional_retirements, optional_schema, optional_secrets, optional_signals, optional_string,
+    optional_strings, optional_tests, require_string,
 };
 use crate::keys::{idempotency_key, run_key, sha256_hex};
 use crate::render::{
-    Limits, OUTPUT_LIMIT, RunExtras, SuiteEntry, UNTITLED_NOTE, WorkflowDetails, args,
-    describe_check, describe_matches, describe_page, describe_recorded, describe_refusal,
-    describe_retry_refused, describe_run, describe_runs, describe_save_refused, describe_secrets,
-    describe_test_results, describe_workflow, describe_workflow_details, describe_workflow_refusal,
-    event_text, json, quoted, truncate_end, truncate_middle, workflow_ref,
+    COMMENT_NOTE, Limits, OUTPUT_LIMIT, ReadTest, RunExtras, Updated, WorkflowDetails, args,
+    describe_check, describe_gate_refused, describe_matches, describe_page, describe_patch,
+    describe_recorded, describe_refusal, describe_refused, describe_retry_refused, describe_run,
+    describe_runs, describe_secrets, describe_test_results, describe_update,
+    describe_workflow_details, event_text, json, quoted, run_workflow_reference, truncate_end,
+    truncate_middle, workflow_label, workflow_reference,
 };
 
 /// What a tool call returns to the model, and to the harness.
@@ -48,17 +48,15 @@ pub struct AgentToolResult {
     pub is_error: bool,
     /// The run the call started or read (pending approvals, for example).
     pub run: Option<Run>,
-    /// The workflow `save_workflow` saved, or `get_workflow` read.
+    /// The workflow `update_workflow` changed, or `get_workflow` read.
     pub workflow: Option<Workflow>,
-    /// The action set `save_workflow` derived: the one the tools use from then on.
-    pub action_set: Option<ActionSet>,
     /// The outcome of each test: those `test_workflow` ran, or those of the suite that refused a
-    /// save (`save_workflow`) or a fork (`retry_run`).
+    /// version or a change of tests (`update_workflow`) or a fork (`retry_run`).
     pub tests: Option<Vec<TestResult>>,
-    /// For a call that hands in a code (`run_workflow`, `check_workflow`, `test_workflow`,
-    /// `retry_run`, `save_workflow`): whether the checks before anything runs passed it. `None`
-    /// when the call carried no code, or failed before the checks (a bad argument, another
-    /// refusal): what a harness measures as the first-try check rate.
+    /// For a call that hands in a code (`code` of `run_workflow`, `check_workflow`,
+    /// `test_workflow`, `retry_run`, `update_workflow`): whether the checks before anything runs
+    /// passed it. `None` when the call carried no code, or failed before the checks (a bad
+    /// argument, another refusal): what a harness measures as the first-try check rate.
     pub code: Option<CodeVerdict>,
 }
 
@@ -75,7 +73,6 @@ pub(crate) fn result(content: String, is_error: bool) -> AgentToolResult {
         is_error,
         run: None,
         workflow: None,
-        action_set: None,
         tests: None,
         code: None,
     }
@@ -103,6 +100,9 @@ pub enum AgentError {
 pub(crate) enum Failure {
     Input(InputError),
     Api(ApiError),
+    /// A refusal the handler wrote for the model, before the checks of a code or beside them:
+    /// a result with `is_error`, without a verdict on the code.
+    Refused(String),
     Agent(AgentError),
 }
 
@@ -120,29 +120,35 @@ impl From<ApiError> for Failure {
 
 pub(crate) type Handled = Result<AgentToolResult, Failure>;
 
-/// The tools that hand in a code.
-fn carries_code(name: &str) -> bool {
+/// Whether the call hands in a code: the tools that take one, given one.
+pub(crate) fn carries_code(name: &str, values: &Values) -> bool {
     matches!(
         name,
-        "run_workflow" | "check_workflow" | "test_workflow" | "retry_run" | "save_workflow"
-    )
+        "run_workflow" | "check_workflow" | "test_workflow" | "retry_run" | "update_workflow"
+    ) && values
+        .get("code")
+        .and_then(Value::as_str)
+        .is_some_and(|code| !code.is_empty())
 }
 
 /// A handler's outcome as the model reads it: a mistake it can fix is a result with
-/// `is_error`, the rest an error. Every result is bounded.
+/// `is_error`, the rest an error. Every result is bounded. `carried` when the call handed in a
+/// code.
 pub(crate) fn finish(
     name: &str,
+    carried: bool,
     handled: Handled,
     limits: &Limits,
 ) -> Result<AgentToolResult, AgentError> {
     let mut finished = match handled {
         Ok(mut handled) => {
-            if carries_code(name) && handled.code.is_none() {
+            if carried && handled.code.is_none() {
                 handled.code = Some(CodeVerdict::Passed);
             }
             handled
         }
         Err(Failure::Input(error)) => result(format!("{name}: {}", error.0), true),
+        Err(Failure::Refused(text)) => result(text, true),
         Err(Failure::Api(ApiError::Problem(problem))) if problem.is(ProblemType::InvalidCode) => {
             AgentToolResult {
                 code: Some(CodeVerdict::Refused),
@@ -191,6 +197,32 @@ fn from_values<T: serde::de::DeserializeOwned>(values: Vec<Value>) -> Result<Vec
         .collect()
 }
 
+/// What a run the tools start runs: a code, or a workflow named by a reference.
+#[derive(Debug, Clone, Copy)]
+enum Started<'a> {
+    Code(&'a str),
+    Workflow(&'a str),
+}
+
+/// Whether a run's workflow is the one `reference` names: its id or its name, and the version
+/// after `@` (`v12`, or the first digits of its digest) when it names one.
+fn names(workflow: &RunWorkflow, reference: &str) -> bool {
+    let (base, version) = match reference.split_once('@') {
+        Some((base, version)) => (base, Some(version)),
+        None => (reference, None),
+    };
+    let same = workflow.id == base || workflow.name.as_deref() == Some(base);
+    same && version.is_none_or(|version| {
+        match version
+            .strip_prefix('v')
+            .and_then(|number| number.parse::<u32>().ok())
+        {
+            Some(number) => workflow.version == number,
+            None => workflow.digest.starts_with(version),
+        }
+    })
+}
+
 /// Per call: the model's tool call id, used as the idempotency key, and the call's trace
 /// context.
 #[derive(Debug, Clone, Default)]
@@ -214,17 +246,49 @@ pub(crate) struct Session<'a, A> {
     pub(crate) max_wait: Duration,
     pub(crate) ttl: Option<Duration>,
     pub(crate) call: &'a HandleOptions,
+    /// `update_workflow` is one of the tools: the results point to it.
+    pub(crate) updates: bool,
 }
 
 impl<A: Api> Session<'_, A> {
+    /// Runs code, or a workflow by its id or its name.
     pub(crate) async fn run_workflow(&self, input: &Values) -> Handled {
-        let code = require_string(input, "code")?;
+        let code = optional_string(input, "code")?;
+        let workflow = optional_string(input, "workflow")?;
         let wait = self.wait_of(input.get("wait"))?;
         let secrets = optional_secrets(input)?;
+        let mut start = match (&code, &workflow) {
+            (Some(_), Some(_)) => {
+                return Err(InputError::new(
+                    "give `code` or `workflow`, not both: `code` runs new code, `workflow` an existing workflow by its id or its name.",
+                )
+                .into());
+            }
+            (None, None) => {
+                return Err(InputError::new(
+                    "give the `code` to run, or a `workflow` by its id or its name.",
+                )
+                .into());
+            }
+            (Some(code), None) => {
+                let mut start = StartRun::new(code.clone());
+                start.action_set.clone_from(&self.action_set);
+                start.secrets = secrets.unwrap_or_default();
+                start
+            }
+            (None, Some(workflow)) => {
+                if secrets.is_some_and(|secrets| !secrets.is_empty()) {
+                    return Err(InputError::new(
+                        "`secrets` goes with `code`: a run of a workflow uses the secrets its version names.",
+                    )
+                    .into());
+                }
+                let mut start = StartRun::new(String::new());
+                start.workflow = Some(workflow.clone());
+                start
+            }
+        };
         let key = run_key(self.labels, self.call.tool_call_id.as_deref());
-        let mut start = StartRun::new(code.clone());
-        start.secrets = secrets.unwrap_or_default();
-        start.action_set.clone_from(&self.action_set);
         start.input = input.get("input").cloned().unwrap_or_else(|| json!({}));
         start.wait = Some(wait.into());
         start.labels = Labels(self.labels.clone());
@@ -232,11 +296,17 @@ impl<A: Api> Session<'_, A> {
         start.traceparent.clone_from(&self.call.traceparent);
         start.tracestate.clone_from(&self.call.tracestate);
         let run = self.api.start_run(&start, key.as_ref()).await?;
-        self.check_answered(&run, &code, key.as_ref())?;
+        let started = match (&code, &workflow) {
+            (Some(code), _) => Started::Code(code),
+            (None, workflow) => Started::Workflow(workflow.as_deref().unwrap_or_default()),
+        };
+        self.check_answered(&run, started, key.as_ref())?;
         let failed = run.status == RunStatus::Failed;
         self.report(run, true, failed).await
     }
 
+    /// Diagnostics, the workflow that already has the code, and a note for a code without a
+    /// comment at its top.
     pub(crate) async fn check_workflow(&self, input: &Values) -> Handled {
         let check = CheckRequest {
             code: require_string(input, "code")?,
@@ -245,7 +315,7 @@ impl<A: Api> Session<'_, A> {
         let checked = self.api.check(&check).await?;
         let mut content = describe_check(&checked, &self.limits);
         if rewind_core::code_doc(&check.code).is_none() {
-            content = format!("{content}\n{UNTITLED_NOTE}");
+            content = format!("{content}\n{COMMENT_NOTE}");
         }
         Ok(AgentToolResult {
             code: Some(if checked.ok {
@@ -257,10 +327,17 @@ impl<A: Api> Session<'_, A> {
         })
     }
 
+    /// Tests against code, or against a workflow's version; the workflow's suite too.
     pub(crate) async fn test_workflow(&self, input: &Values) -> Handled {
-        let code = require_string(input, "code")?;
+        let code = optional_string(input, "code")?;
         let tests = optional_tests(input, "tests")?;
         let workflow = optional_string(input, "workflow")?;
+        if code.is_none() && workflow.is_none() {
+            return Err(InputError::new(
+                "give the `code` to test, or a `workflow` whose version the tests run against.",
+            )
+            .into());
+        }
         if tests.is_none() && workflow.is_none() {
             return Err(InputError::new(
                 "give `tests`, or a `workflow` whose suite runs against the code, or both.",
@@ -268,8 +345,9 @@ impl<A: Api> Session<'_, A> {
             .into());
         }
         let request = TestRequest {
-            code: Some(code),
-            action_set: self.action_set.clone(),
+            // A workflow's version runs with its own action set.
+            action_set: code.as_ref().and(self.action_set.clone()),
+            code,
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
             workflow,
         };
@@ -451,15 +529,13 @@ impl<A: Api> Session<'_, A> {
         let run = match self.api.fork_run(&run_id, &fork, key.as_ref()).await {
             Ok(run) => run,
             Err(ApiError::Problem(problem)) if problem.is(ProblemType::TestsFailed) => {
-                let workflow = parent
-                    .workflow
-                    .as_ref()
-                    .map(|workflow| workflow_ref(&workflow.name, &workflow.digest));
+                let workflow = parent.workflow.as_ref().map(run_workflow_reference);
                 let content = describe_retry_refused(
                     &parent.handle,
                     &problem.detail,
                     &problem.tests,
                     workflow.as_deref(),
+                    self.updates,
                     &self.limits,
                 );
                 return Ok(AgentToolResult {
@@ -470,7 +546,7 @@ impl<A: Api> Session<'_, A> {
             }
             Err(error) => return Err(error.into()),
         };
-        self.check_answered(&run, &code, key.as_ref())?;
+        self.check_answered(&run, Started::Code(&code), key.as_ref())?;
         let failed = run.status == RunStatus::Failed;
         self.report(run, true, failed).await
     }
@@ -513,110 +589,172 @@ impl<A: Api> Session<'_, A> {
         Ok(result(describe_matches(&query, &found.actions), false))
     }
 
-    /// `POST /v1/workflows` with the session's action set. The workflow, or what the model reads of
-    /// its refusal.
-    async fn create_workflow(
-        &self,
-        input: &Values,
-    ) -> Result<Result<Workflow, AgentToolResult>, Failure> {
-        let name = require_string(input, "name")?;
-        let description = require_string(input, "description")?;
-        let code = require_string(input, "code")?;
-        let schema_input = require_object(input, "input")?.clone();
-        let schema_output = require_object(input, "output")?.clone();
-        let signals = match input.get("signals") {
-            None | Some(Value::Null) => BTreeMap::new(),
-            Some(Value::Object(signals)) => signals
-                .iter()
-                .map(|(name, schema)| (name.clone(), schema.clone()))
-                .collect(),
-            Some(_) => {
-                return Err(InputError::new(
-                    "`signals` must be an object of JSON Schemas by signal name.",
-                )
-                .into());
-            }
+    /// Changes a workflow: its name and description (a merge patch), then its next version
+    /// (code, interface, secrets, with tests through its gate) or its suite alone.
+    pub(crate) async fn update_workflow(&self, input: &Values) -> Handled {
+        let reference = require_string(input, "workflow")?;
+        let patch = PatchWorkflow {
+            name: optional_patch(input, "name")?,
+            description: optional_patch(input, "description")?,
         };
+        let code = optional_string(input, "code")?;
+        let schema_input = optional_schema(input, "input")?;
+        let schema_output = optional_schema(input, "output")?;
+        let signals = optional_signals(input)?;
+        let secrets = optional_secrets(input)?;
         let tests = optional_tests(input, "tests")?;
         let replace = optional_replacements(input)?;
         let retire = optional_retirements(input)?;
-        let base = optional_string(input, "base")?;
-        let secrets = optional_secrets(input)?;
-        let action_set = self.needs_action_set("save_workflow")?;
-        // The body, as the API reads it.
-        let request = CreateWorkflow {
-            name: name.clone(),
-            description: Some(description),
-            action_set,
-            code,
-            input: schema_input,
-            output: schema_output,
-            signals,
-            base,
-            tests: from_values::<TestInput>(tests.unwrap_or_default())?,
-            replace: from_values::<TestReplacement>(replace.unwrap_or_default())?,
-            retire: from_values::<TestRetirement>(retire.unwrap_or_default())?,
-            secrets: secrets.unwrap_or_default(),
-        };
-        match self.api.create_workflow(&request).await {
-            Ok(workflow) => Ok(Ok(workflow)),
-            Err(ApiError::Problem(problem)) if problem.is(ProblemType::InvalidCode) => {
-                Ok(Err(AgentToolResult {
-                    code: Some(CodeVerdict::Refused),
-                    ..result(
-                        describe_workflow_refusal(
-                            &problem.detail,
-                            &problem.diagnostics,
-                            &self.limits,
-                        ),
-                        true,
-                    )
-                }))
-            }
-            Err(ApiError::Problem(problem))
-                if problem.is(ProblemType::InvalidWorkflow)
-                    || problem.is(ProblemType::InvalidTest) =>
-            {
-                Ok(Err(result(
-                    describe_workflow_refusal(&problem.detail, &problem.diagnostics, &self.limits),
-                    true,
-                )))
-            }
-            Err(ApiError::Problem(problem)) if problem.is(ProblemType::TestsFailed) => {
-                Ok(Err(AgentToolResult {
-                    tests: Some(problem.tests.clone()),
-                    ..result(
-                        describe_save_refused(&problem.detail, &problem.tests, &name, &self.limits),
-                        true,
-                    )
-                }))
-            }
-            Err(error) => Err(error.into()),
+        // The bodies, as the API reads them, before anything changes.
+        let tests = from_values::<TestInput>(tests.unwrap_or_default())?;
+        let replace = from_values::<TestReplacement>(replace.unwrap_or_default())?;
+        let retire = from_values::<TestRetirement>(retire.unwrap_or_default())?;
+        let patched = patch != PatchWorkflow::default();
+        let interface = schema_input.is_some() || schema_output.is_some() || signals.is_some();
+        let versioned = code.is_some() || interface || secrets.is_some();
+        let tested = !tests.is_empty() || !replace.is_empty() || !retire.is_empty();
+        if !patched && !versioned && !tested {
+            return Err(InputError::new(
+                "give what changes: a `name` or a `description`; `code`, an interface (`input`, `output`, `signals`) or `secrets` for a new version; or `tests`, `replace` and `retire` for its suite.",
+            )
+            .into());
         }
+        // The workflow, by its id from here on: a new name does not lose it.
+        let before = if patched {
+            self.api.update_workflow(&reference, &patch).await?
+        } else {
+            self.api.get_workflow(&reference).await?
+        };
+        if !versioned && !tested {
+            let content = describe_update(&before, &patch, Updated::Patched, &self.limits);
+            return Ok(AgentToolResult {
+                workflow: Some(before),
+                ..result(content, false)
+            });
+        }
+        let latest = before.versions.first().unwrap_or(&before.version);
+        let latest_number = latest.version;
+        let written = if versioned {
+            // Each part of the interface left out keeps its latest version's.
+            let (input, output, signals) = if interface {
+                (
+                    schema_input.or_else(|| latest.input.clone()),
+                    schema_output.or_else(|| latest.output.clone()),
+                    signals.or_else(|| latest.signals.clone()),
+                )
+            } else {
+                (None, None, None)
+            };
+            let version = CreateVersion {
+                // New code imports the actions of the tools' action set.
+                action_set: code.as_ref().and(self.action_set.clone()),
+                code,
+                input,
+                output,
+                signals,
+                secrets,
+                tests,
+                replace,
+                retire,
+            };
+            self.api.create_version(&before.id, &version).await
+        } else {
+            let change = ChangeTests {
+                tests,
+                replace,
+                retire,
+            };
+            self.api.change_tests(&before.id, &change).await
+        };
+        let problem = match written {
+            Ok(after) => {
+                let updated = if versioned {
+                    Updated::Version {
+                        made: after.version.version != latest_number,
+                    }
+                } else {
+                    Updated::Tests
+                };
+                let content = describe_update(&after, &patch, updated, &self.limits);
+                return Ok(AgentToolResult {
+                    workflow: Some(after),
+                    ..result(content, false)
+                });
+            }
+            Err(ApiError::Problem(problem)) if is_refusal(&problem) => problem,
+            Err(error) => return Err(error.into()),
+        };
+        // What the patch changed stays changed: the model reads it first.
+        let done = describe_patch(&patch).map(|patched| {
+            format!(
+                "Updated the workflow {}: {patched}.",
+                workflow_label(&before)
+            )
+        });
+        let refused = if problem.is(ProblemType::TestsFailed) {
+            describe_gate_refused(
+                &problem.detail,
+                &problem.tests,
+                workflow_reference(&before),
+                versioned,
+                latest_number,
+                &self.limits,
+            )
+        } else {
+            let what = if problem.is(ProblemType::InvalidCode) {
+                "No version was made: the code was refused before anything ran"
+            } else if versioned {
+                "No version was made"
+            } else {
+                "The suite was not changed"
+            };
+            describe_refused(what, &problem.detail, &problem.diagnostics, &self.limits)
+        };
+        let content = match done {
+            Some(done) => format!("{done}\n{refused}"),
+            None => refused,
+        };
+        if problem.is(ProblemType::TestsFailed) || problem.is(ProblemType::InvalidCode) {
+            return Ok(AgentToolResult {
+                workflow: Some(before),
+                tests: problem
+                    .is(ProblemType::TestsFailed)
+                    .then(|| problem.tests.clone()),
+                code: problem
+                    .is(ProblemType::InvalidCode)
+                    .then_some(CodeVerdict::Refused),
+                ..result(content, true)
+            });
+        }
+        Err(Failure::Refused(content))
     }
 
-    /// A workflow for the model to repair or extend: the latest version's source and schemas,
-    /// its suite with each test (a test it may not read is said so), and the lineage.
+    /// A workflow for the model to repair or extend: who it is, its version's code and
+    /// interface, its suite with each test (a test it may not read is said so), the tests that
+    /// left it, and its versions.
     pub(crate) async fn get_workflow(&self, input: &Values) -> Handled {
-        let name = require_string(input, "name")?;
-        let versions = self.api.workflow_versions(&name).await?.versions;
-        let Some(latest) = versions.first().cloned() else {
-            return Err(InputError::new(format!("the workflow {name} has no version.")).into());
-        };
-        let code = self.api.get_script(&latest.code_digest);
-        let tests = stream::iter(latest.tests.iter().cloned())
-            .map(|test| async move {
-                match self.api.get_test(&test.digest).await {
-                    Ok(read) => Ok(SuiteEntry {
-                        name: test.name,
-                        digest: test.digest,
+        let reference = require_string(input, "workflow")?;
+        let workflow = self.api.get_workflow(&reference).await?;
+        // Collected first: the future that reads them stays `Send`.
+        let suite: Vec<_> = workflow
+            .suite
+            .iter()
+            .filter(|entry| entry.retired_at.is_none())
+            .cloned()
+            .collect();
+        let tests = stream::iter(suite)
+            .map(|entry| async move {
+                match self.api.get_test(&entry.digest).await {
+                    Ok(read) => Ok(ReadTest {
+                        name: entry.name,
+                        digest: entry.digest,
                         test: Some(read),
                         unreadable: None,
                     }),
                     Err(ApiError::Problem(problem)) if matches!(problem.status, 403 | 404) => {
-                        Ok(SuiteEntry {
-                            name: test.name,
-                            digest: test.digest,
+                        Ok(ReadTest {
+                            name: entry.name,
+                            digest: entry.digest,
                             test: None,
                             unreadable: Some(problem.detail),
                         })
@@ -625,16 +763,17 @@ impl<A: Api> Session<'_, A> {
                 }
             })
             .buffered(8)
-            .try_collect::<Vec<_>>();
-        let (code, tests) = futures_util::future::try_join(code, tests).await?;
+            .try_collect::<Vec<_>>()
+            .await?;
         let details = WorkflowDetails {
-            versions,
-            source: code.source,
+            workflow,
             tests,
+            updates: self.updates,
         };
+        let content = describe_workflow_details(&details, &self.limits);
         Ok(AgentToolResult {
-            workflow: Some(latest),
-            ..result(describe_workflow_details(&details, &self.limits), false)
+            workflow: Some(details.workflow),
+            ..result(content, false)
         })
     }
 
@@ -659,7 +798,7 @@ impl<A: Api> Session<'_, A> {
         };
         let recorded = self.api.record_tests(&workflow, &record).await?;
         Ok(result(
-            describe_recorded(&workflow, &recorded, &self.limits),
+            describe_recorded(&workflow, &recorded, self.updates, &self.limits),
             false,
         ))
     }
@@ -705,21 +844,26 @@ impl<A: Api> Session<'_, A> {
     /// labels, or two agents with the same labels whose tool call ids repeat, would get another
     /// conversation's run, or the run of an earlier code. Such a run is the harness's fault,
     /// never shown to the model: it must carry the agent's labels and be a run of this very
-    /// code.
+    /// code, or of the workflow named.
     fn check_answered(
         &self,
         run: &Run,
-        code: &str,
+        started: Started<'_>,
         key: Option<&IdempotencyKey>,
     ) -> Result<(), Failure> {
-        if key.is_none()
-            || (has_labels(&run.labels, self.labels) && run.code_digest == sha256_hex(code))
-        {
+        let same = match started {
+            Started::Code(code) => run.code_digest == sha256_hex(code),
+            Started::Workflow(reference) => run
+                .workflow
+                .as_ref()
+                .is_some_and(|workflow| names(workflow, reference)),
+        };
+        if key.is_none() || (has_labels(&run.labels, self.labels) && same) {
             return Ok(());
         }
         Err(Failure::Agent(AgentError::Harness(format!(
             "the tool call id {:?} is already the idempotency key of another run (of another \
-             code, or with other labels): give each tool call a unique id",
+             code or workflow, or with other labels): give each tool call a unique id",
             self.call.tool_call_id.as_deref().unwrap_or_default()
         ))))
     }
@@ -772,9 +916,9 @@ fn has_labels(labels: &Labels, required: &BTreeMap<String, String>) -> bool {
 /// How the agent tools of the SDK's set behave: the SDK's `AgentToolsOptions`.
 #[derive(Debug, Clone)]
 pub struct AgentOptions {
-    /// The action set the model's workflows import from `rewind:actions`. `search_actions`,
-    /// `save_workflow`, `get_workflow` and `record_tests` need one. Each workflow
-    /// `save_workflow` saves derives a new action set from it, which the later calls use.
+    /// The action set the model's code imports from `rewind:actions`: its runs, checks and
+    /// tests, and the versions `update_workflow` makes of new code, use it. `search_actions`
+    /// needs one.
     pub action_set: Option<String>,
     /// Set on every run the model starts. They scope `list_runs`, and the tools that take a run
     /// id refuse a run that does not carry them.
@@ -814,11 +958,6 @@ pub struct AgentTools<A> {
     options: AgentOptions,
     names: Vec<&'static str>,
     limits: Limits,
-    /// The action set of the model's workflows: the one given, then the last one `save_workflow`
-    /// derived.
-    current: Mutex<Option<String>>,
-    /// One derivation of the action set at a time, so concurrent saves all end up in it.
-    derivations: tokio::sync::Mutex<()>,
 }
 
 impl<A: Api> AgentTools<A> {
@@ -854,11 +993,9 @@ impl<A: Api> AgentTools<A> {
         let wait = options.wait.min(options.max_wait);
         Ok(Self {
             limits: Limits::for_output(options.output_limit),
-            current: Mutex::new(options.action_set.clone()),
             options: AgentOptions { wait, ..options },
             api,
             names,
-            derivations: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -875,16 +1012,6 @@ impl<A: Api> AgentTools<A> {
         self.names.contains(&name)
     }
 
-    /// The action set the model's workflows run with: the one given, or the last one `save_workflow`
-    /// derived from it. A harness that creates the agent tools again for each turn keeps it with
-    /// the conversation, and passes it as `action_set` the next time.
-    pub fn action_set(&self) -> Option<String> {
-        self.current
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
     /// Executes a tool call of the model. `input` is the call's arguments, an object or its JSON
     /// text. Mistakes the model can fix come back as a result with `is_error`; a fault of the
     /// platform or of the harness is an error.
@@ -899,96 +1026,40 @@ impl<A: Api> AgentTools<A> {
         }
         let session = Session {
             api: &self.api,
-            action_set: self.action_set(),
+            action_set: self.options.action_set.clone(),
             labels: &self.options.labels,
             limits: self.limits,
             default_wait: self.options.wait,
             max_wait: self.options.max_wait,
             ttl: self.options.ttl,
             call,
+            updates: self.has("update_workflow"),
         };
-        let handled = match crate::input::parse(name, input) {
-            Ok(values) => match name {
-                "run_workflow" => session.run_workflow(&values).await,
-                "check_workflow" => session.check_workflow(&values).await,
-                "test_workflow" => session.test_workflow(&values).await,
-                "get_run" => session.get_run(&values).await,
-                "list_runs" => session.list_runs(&values).await,
-                "signal_run" => session.signal_run(&values).await,
-                "cancel_run" => session.cancel_run(&values).await,
-                "retry_run" => session.retry_run(&values).await,
-                "search_actions" => session.search_actions(&values).await,
-                "list_secrets" => {
-                    let namespace = self.api.namespace();
-                    session.list_secrets(namespace.as_deref()).await
-                }
-                "save_workflow" => self.save_workflow(&session, &values).await,
-                "get_workflow" => session.get_workflow(&values).await,
-                "record_tests" => session.record_tests(&values).await,
-                other => Err(Failure::Agent(AgentError::UnknownTool(other.to_owned()))),
-            },
-            Err(error) => Err(error.into()),
-        };
-        finish(name, handled, &self.limits)
-    }
-
-    /// Saves a workflow with the agent's action set, then derives from that action set one that
-    /// pins this version of it: the later workflows of the model import it from `rewind:workflows`.
-    async fn save_workflow(&self, session: &Session<'_, A>, input: &Values) -> Handled {
-        let workflow = match session.create_workflow(input).await? {
-            Ok(workflow) => workflow,
-            Err(refused) => return Ok(refused),
-        };
-        let derived = match self.derive(&workflow).await {
-            Ok(derived) => derived,
-            Err(Failure::Api(ApiError::Problem(problem))) if is_refusal(&problem) => {
-                return Ok(AgentToolResult {
-                    workflow: Some(workflow.clone()),
-                    ..result(
-                        format!(
-                            "The workflow {} was saved, but your workflows cannot start it yet: \
-                             adding it to your tools failed: {}",
-                            workflow.name,
-                            truncate_end(&problem.detail, self.limits.value)
-                        ),
-                        true,
-                    )
-                });
+        let (handled, carried) = match crate::input::parse(name, input) {
+            Ok(values) => {
+                let handled = match name {
+                    "run_workflow" => session.run_workflow(&values).await,
+                    "check_workflow" => session.check_workflow(&values).await,
+                    "test_workflow" => session.test_workflow(&values).await,
+                    "get_run" => session.get_run(&values).await,
+                    "list_runs" => session.list_runs(&values).await,
+                    "signal_run" => session.signal_run(&values).await,
+                    "cancel_run" => session.cancel_run(&values).await,
+                    "retry_run" => session.retry_run(&values).await,
+                    "search_actions" => session.search_actions(&values).await,
+                    "list_secrets" => {
+                        let namespace = self.api.namespace();
+                        session.list_secrets(namespace.as_deref()).await
+                    }
+                    "update_workflow" => session.update_workflow(&values).await,
+                    "get_workflow" => session.get_workflow(&values).await,
+                    "record_tests" => session.record_tests(&values).await,
+                    other => Err(Failure::Agent(AgentError::UnknownTool(other.to_owned()))),
+                };
+                (handled, carries_code(name, &values))
             }
-            Err(failure) => return Err(failure),
+            Err(error) => (Err(error.into()), false),
         };
-        Ok(AgentToolResult {
-            action_set: Some(derived),
-            ..result(describe_workflow(&workflow, &self.limits), false)
-        }
-        .with_workflow(workflow))
-    }
-
-    /// The current action set with this version of the workflow pinned, which becomes the current
-    /// action set. One derivation at a time: each starts from the action set the previous one gave.
-    async fn derive(&self, workflow: &Workflow) -> Result<ActionSet, Failure> {
-        let _one_at_a_time = self.derivations.lock().await;
-        let base = self.action_set().ok_or_else(|| {
-            Failure::Agent(AgentError::Options(
-                "save_workflow needs an action set".into(),
-            ))
-        })?;
-        let action_set = self
-            .api
-            .create_action_set(&CreateActionSet {
-                base: Some(base),
-                workflows: vec![format!("{}@{}", workflow.name, workflow.digest)],
-                ..CreateActionSet::default()
-            })
-            .await?;
-        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(action_set.id.clone());
-        Ok(action_set)
-    }
-}
-
-impl AgentToolResult {
-    fn with_workflow(mut self, workflow: Workflow) -> Self {
-        self.workflow = Some(workflow);
-        self
+        finish(name, carried, handled, &self.limits)
     }
 }

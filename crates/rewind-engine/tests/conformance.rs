@@ -23,6 +23,11 @@ async fn memory_catalog_conforms() {
 }
 
 #[tokio::test]
+async fn memory_catalog_migration_conforms() {
+    conformance::catalog::run_migration(MemoryCatalog::new).await;
+}
+
+#[tokio::test]
 async fn memory_partitions_conform() {
     conformance::partition::run_all(MemoryPartitions::new).await;
 }

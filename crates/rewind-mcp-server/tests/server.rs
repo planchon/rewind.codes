@@ -14,9 +14,8 @@ use axum::response::{IntoResponse, Response};
 use rewind_agent_tools::definitions::MCP_TOOLS;
 use rewind_agent_tools::{Api, ApiError, McpApi, Organization};
 use rewind_api::access::Permission;
-use rewind_api::action_sets::{
-    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
-};
+use rewind_api::action_sets::{ActionSearchResults, ActionSetList, SearchQuery};
+use rewind_api::checks::{CheckRequest, CheckResult, TestRequest};
 use rewind_api::common::Duration;
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
@@ -24,11 +23,10 @@ use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
-use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
+    ChangeTests, CreateVersion, PatchWorkflow, RecordTests, RecordedTests, Workflow,
 };
 use rewind_api::{Problem, ProblemType};
 use rewind_mcp_server::{Connector, ConnectorError, INSTRUCTIONS};
@@ -68,10 +66,14 @@ fn organization(id: &str, name: Option<&str>, permissions: &[Permission]) -> Org
 /// What the fake API was asked: `{operation} org={id} ns={namespace}`.
 type Log = Arc<Mutex<Vec<String>>>;
 
-/// A run of the fake API: its handle is `alice/script/<id>`.
+/// The workflow of the fake API's runs and checks.
+const ID: &str = "wf_7k2m9q4x8d1c";
+
+/// A run of the fake API: its handle is `alice/wf-7k2m9q/<id>`, a run of `wf_7k2m9q4x8d1c@v1`.
 fn run(id: &str, output: Value) -> Run {
     serde_json::from_value(json!({
-        "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
+        "id": id, "handle": format!("alice/wf-7k2m9q/{id}"), "namespace": "alice",
+        "workflow": { "id": ID, "version": 1, "digest": "01".repeat(32) },
         "status": "completed", "codeDigest": "s", "actionSet": "t",
         "epoch": 1, "mode": "live", "labels": { "via": "claude" }, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
@@ -108,7 +110,10 @@ impl Api for FakeApi {
         start: &StartRun,
         _key: Option<&IdempotencyKey>,
     ) -> Result<Run, ApiError> {
-        self.saw("start_run");
+        self.saw(&format!(
+            "start_run workflow={}",
+            start.workflow.as_deref().unwrap_or("-")
+        ));
         let output = if start.code.contains("big") {
             json!("x".repeat(300_000))
         } else {
@@ -139,15 +144,15 @@ impl Api for FakeApi {
     }
 
     async fn run_transcript(&self, run: &str) -> Result<Transcript, ApiError> {
-        self.saw("run_trace");
-        Ok(serde_json::from_value(
-            json!({ "runId": run, "format": "llm", "text": "[0] run_started" }),
-        )
-        .unwrap())
+        self.saw("run_transcript");
+        Ok(Transcript {
+            run_id: run.into(),
+            text: "[0] run_started".into(),
+        })
     }
 
     async fn run_event(&self, _run: &str, _idx: u64) -> Result<HistoryEvent, ApiError> {
-        Err(unused("run_entry"))
+        Err(unused("run_event"))
     }
 
     async fn signal_run(
@@ -183,18 +188,22 @@ impl Api for FakeApi {
             "check action_set={}",
             check.action_set.as_deref().unwrap_or("-")
         ));
+        // A code a workflow of the namespace already has.
+        let workflow = check.code.contains("known").then(|| {
+            serde_json::from_value(
+                json!({ "id": ID, "name": "triage", "version": 3, "digest": "03".repeat(32) }),
+            )
+            .unwrap()
+        });
         Ok(CheckResult {
             ok: true,
             diagnostics: Vec::new(),
+            workflow,
         })
     }
 
     async fn test(&self, _test: &TestRequest) -> Result<TestReport, ApiError> {
         Err(unused("test"))
-    }
-
-    async fn get_script(&self, _digest: &str) -> Result<Script, ApiError> {
-        Err(unused("get_script"))
     }
 
     async fn get_payload(&self, _digest: &str, _run: &str) -> Result<Value, ApiError> {
@@ -203,13 +212,6 @@ impl Api for FakeApi {
 
     async fn get_test(&self, _digest: &str) -> Result<Test, ApiError> {
         Err(unused("get_test"))
-    }
-
-    async fn create_action_set(
-        &self,
-        _action_set: &CreateActionSet,
-    ) -> Result<ActionSet, ApiError> {
-        Err(unused("create_action_set"))
     }
 
     async fn search_actions(
@@ -226,12 +228,44 @@ impl Api for FakeApi {
         })
     }
 
-    async fn create_workflow(&self, _workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
-        Err(unused("create_workflow"))
+    async fn get_workflow(&self, workflow: &str) -> Result<Workflow, ApiError> {
+        self.saw(&format!("get_workflow {workflow}"));
+        let version = json!({
+            "version": 1, "digest": "01".repeat(32), "codeDigest": "cd".repeat(32),
+            "actionSet": "t", "labels": {}, "createdAt": "2026-11-19T10:00:00Z", "tests": [],
+            "comment": { "title": "Count to one" }
+        });
+        Ok(serde_json::from_value(json!({
+            "id": ID, "shortId": "wf-7k2m9q", "namespace": self.namespace,
+            "labels": {}, "createdAt": "2026-11-19T10:00:00Z",
+            "version": version, "code": "/** Count to one */\nexport default async () => 1;\n",
+            "versions": [version], "suite": []
+        }))
+        .unwrap())
     }
 
-    async fn workflow_versions(&self, _name: &str) -> Result<WorkflowVersions, ApiError> {
-        Err(unused("workflow_versions"))
+    async fn update_workflow(
+        &self,
+        _workflow: &str,
+        _patch: &PatchWorkflow,
+    ) -> Result<Workflow, ApiError> {
+        Err(unused("update_workflow"))
+    }
+
+    async fn create_version(
+        &self,
+        _workflow: &str,
+        _version: &CreateVersion,
+    ) -> Result<Workflow, ApiError> {
+        Err(unused("create_version"))
+    }
+
+    async fn change_tests(
+        &self,
+        _workflow: &str,
+        _tests: &ChangeTests,
+    ) -> Result<Workflow, ApiError> {
+        Err(unused("change_tests"))
     }
 
     async fn record_tests(
@@ -404,7 +438,7 @@ async fn the_tools_listed_are_those_one_organization_of_the_caller_allows() {
     let client = self::client(both).await;
     let tools = client.list_all_tools().await.unwrap();
     assert_eq!(names(&tools), MCP_TOOLS);
-    assert!(!names(&tools).contains(&"save_workflow"));
+    assert!(!names(&tools).contains(&"update_workflow"));
 }
 
 #[tokio::test]
@@ -553,7 +587,7 @@ async fn the_organization_is_one_by_default_and_named_by_id_or_name_otherwise() 
     let orgs = call(&client, "list_organizations", json!({})).await;
     assert_eq!(orgs.is_error, Some(false));
     assert!(
-        text(&orgs).starts_with("You reach 3 organizations: give one as `organization`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests,"),
+        text(&orgs).starts_with("You reach 3 organizations: give one as `organization`, by its id or its name.\n- Acme (id org_1): you may read runs and workflows and record tests,"),
         "{}",
         text(&orgs)
     );
@@ -587,7 +621,9 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
     .await;
     assert_eq!(ran.is_error, Some(false), "{}", text(&ran));
     assert!(
-        text(&ran).starts_with("Run alice/script/r1 completed"),
+        text(&ran).starts_with(&format!(
+            "Run alice/wf-7k2m9q/r1 (a run of the workflow {ID}@v1) completed"
+        )),
         "{}",
         text(&ran)
     );
@@ -598,7 +634,28 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
         "{}",
         text(&ran)
     );
-    assert_eq!(log.lock().unwrap()[0], "start_run org=org_2 ns=alice");
+    assert_eq!(
+        log.lock().unwrap()[0],
+        "start_run workflow=- org=org_2 ns=alice"
+    );
+
+    // A workflow by its name runs with its version's action set, whatever the call gives.
+    let by_name = call(
+        &client,
+        "run_workflow",
+        json!({ "organization": "Globex", "namespace": "alice", "action_set": "ts1", "workflow": "triage" }),
+    )
+    .await;
+    assert_eq!(by_name.is_error, Some(false), "{}", text(&by_name));
+    assert!(
+        text(&by_name).contains("\"actionSet\":null"),
+        "{}",
+        text(&by_name)
+    );
+    assert_eq!(
+        log.lock().unwrap().last().unwrap(),
+        "start_run workflow=triage org=org_2 ns=alice"
+    );
 }
 
 #[tokio::test]
@@ -616,7 +673,7 @@ async fn checking_testing_and_running_need_a_namespace() {
         assert_eq!(
             text(&refused),
             format!(
-                "{tool}: `namespace` must be a non-empty string: the namespace (the end user) the code acts for, a name list_namespaces gives or a new one."
+                "{tool}: `namespace` must be a non-empty string: the namespace (the end user) the workflow acts for, a name list_namespaces gives or a new one."
             )
         );
     }
@@ -645,6 +702,21 @@ async fn checking_testing_and_running_need_a_namespace() {
         log.lock().unwrap()[0],
         "check action_set=- org=org_1 ns=alice"
     );
+    // The namespace's workflow that already has the code, and the comment a code lacks.
+    let known = call(
+        &client,
+        "check_workflow",
+        json!({ "namespace": "alice", "code": "export default async () => 1; // known" }),
+    )
+    .await;
+    assert_eq!(known.is_error, Some(false));
+    assert!(
+        text(&known).starts_with(&format!(
+            "The code type-checks.\nThis code is already the version v3 of the workflow triage (id {ID}): running it is a run of that workflow.\nNote: the code does not start with a comment"
+        )),
+        "{}",
+        text(&known)
+    );
 
     let search = call(&client, "search_actions", json!({ "query": "issues" })).await;
     assert_eq!(
@@ -666,8 +738,8 @@ async fn a_result_holds_at_most_80_000_characters_and_pages_the_rest() {
     let content = text(&ran);
     assert!(content.len() <= 80_000, "{}", content.len());
     assert!(
-        content.starts_with("Run alice/script/r1 completed")
-            && content.contains("the first 40000 are shown, read the rest with get_run({\"run_id\":\"alice/script/r1\",\"offset\":40000})"),
+        content.starts_with("Run alice/wf-7k2m9q/r1 (a run of the workflow wf_7k2m9q4x8d1c@v1) completed")
+            && content.contains("the first 40000 are shown, read the rest with get_run({\"run_id\":\"alice/wf-7k2m9q/r1\",\"offset\":40000})"),
         "{}",
         &content[..300]
     );
@@ -693,13 +765,46 @@ async fn refusals_are_results_and_faults_are_errors() {
         "{broken}"
     );
 
-    let unknown = client
-        .call_tool(CallToolRequestParams::new("save_workflow"))
-        .await
-        .unwrap_err();
+    // No tool of the MCP set changes a workflow.
+    for name in ["update_workflow", "save_workflow"] {
+        let unknown = client
+            .call_tool(CallToolRequestParams::new(name))
+            .await
+            .unwrap_err();
+        assert!(
+            unknown.to_string().contains("is not one of Rewind's tools"),
+            "{unknown}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_workflow_is_read_by_its_id_or_its_name_in_the_namespace_given() {
+    let (connector, log) = FakeConnector::new(vec![organization("org_1", Some("Acme"), &READ)]);
+    let client = client(connector).await;
+    let read = call(
+        &client,
+        "get_workflow",
+        json!({ "workflow": "triage", "namespace": "alice" }),
+    )
+    .await;
+    assert_eq!(read.is_error, Some(false), "{}", text(&read));
     assert!(
-        unknown.to_string().contains("is not one of Rewind's tools"),
-        "{unknown}"
+        text(&read).starts_with(&format!(
+            "The workflow {ID} (no name; it shows as \"Count to one\"), of the namespace alice.\n"
+        )),
+        "{}",
+        text(&read)
+    );
+    // No update_workflow over MCP: the suite's digests go to test_workflow.
+    assert!(
+        text(&read).contains("Its suite is empty: it has no test."),
+        "{}",
+        text(&read)
+    );
+    assert_eq!(
+        log.lock().unwrap().last().unwrap(),
+        "get_workflow triage org=org_1 ns=alice"
     );
 }
 
@@ -871,6 +976,6 @@ async fn a_streamable_http_client_goes_from_initialize_to_a_tool_call() {
     assert_eq!(signalled.is_error, Some(false));
     assert_eq!(
         text(&signalled),
-        "Sent the signal \"approval\" to run alice/script/r9. Read what the run does next with get_run({\"run_id\":\"alice/script/r9\",\"wait\":\"30s\"})."
+        "Sent the signal \"approval\" to run alice/wf-7k2m9q/r9. Read what the run does next with get_run({\"run_id\":\"alice/wf-7k2m9q/r9\",\"wait\":\"30s\"})."
     );
 }

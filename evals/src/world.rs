@@ -9,8 +9,9 @@
 //! a timer.
 //!
 //! The agent's action set is registered as `POST /v1/action-sets` registers it, so that workflows
-//! are saved with it; workflows are saved and run as the server saves and runs them, at the node's
-//! edge, with the agent's labels as the labels of the key that saves them.
+//! are made with it; workflows are made and run as the server makes and runs them, at the node's
+//! edge, in the namespace `local`, with the agent's labels as the labels of the key that makes
+//! them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -21,7 +22,7 @@ use rewind_check::TsgoChecker;
 use rewind_core::{
     Action, ActionRoute, ActionSet, Builtin, Code, Command, Completion, Digest, Event,
     HistoryEvent, McpServer, McpTransport, ReplacedTest, RetiredTest, RunId, RunOutcome, RunState,
-    RunStatus, Seq, Timestamp,
+    RunStatus, Seq, Timestamp, WorkflowId,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -29,17 +30,18 @@ use rewind_engine::adapters::{
     SeededEntropy, Unrouted,
 };
 use rewind_engine::driver::{DriveError, Driver, PlaneClock};
-use rewind_engine::edge::{Edge, EdgeError, RecordFrom, Recording, RecordingError};
+use rewind_engine::edge::{Edge, EdgeError, RecordFrom, Recording, RecordingError, WorkflowKit};
 use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{
     ActionDeclarations, CallTask, CatalogError, CatalogStore, Clock, Created, Enqueued,
     NamespaceName, NodeId, Page, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow,
-    Scope, StoredWorkflow, TenantId, VirtualTime, WaitKind, WorkflowFilter,
+    Scope, ScopeFilter, StoredVersion, StoredWorkflow, TenantId, VirtualTime, WaitKind,
+    WorkflowDeclarations, WorkflowFilter,
 };
 use rewind_engine::suites::{LoadedTest, SuiteLoadError, TestFormat, TestKit};
 use rewind_engine::testing::TestOptions;
-use rewind_engine::{ForkError, ForkRun, StartError, StartRun, StartWorkflow};
+use rewind_engine::{ForkError, ForkRun, StartError, StartRun, StartWorkflow, WorkflowMaker};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
 use rewind_outbound::ActionEgress;
 use rewind_runtime::{SandboxLimits, TsHandlerLoader, V8Executor};
@@ -92,7 +94,7 @@ pub struct Reaction {
 }
 
 /// A run of a workflow that production starts after the conversation: the latest version of
-/// `workflow` the agent sees, with `input`. It shows whether what the agent saved works.
+/// `workflow` the agent sees, with `input`. It shows whether what the agent made works.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductionRun {
     pub workflow: &'static str,
@@ -391,6 +393,31 @@ impl World {
         }
     }
 
+    /// What a workflow's writes take: the type-checker, the suite's kit, and codegen's
+    /// declarations of an interface (`rewind-server`'s `workflows::kit`).
+    pub fn workflow_kit<'a>(
+        &'a self,
+        loader: &'a TsHandlerLoader,
+    ) -> WorkflowKit<'a, TsgoChecker, TsHandlerLoader> {
+        WorkflowKit {
+            checker: &self.checker,
+            tests: self.test_kit(loader),
+            declare,
+        }
+    }
+
+    /// The agent as the maker of a workflow: its labels, the organization's secrets it may use,
+    /// and the principal the audit log names.
+    pub fn maker(&self) -> WorkflowMaker {
+        WorkflowMaker {
+            labels: self.labels.clone(),
+            secret_rights: rewind_engine::secrets::SecretRights::Organization {
+                labels: BTreeMap::new(),
+            },
+            principal: "eval".to_owned(),
+        }
+    }
+
     // ---------------------------------------------------------------------------------------
     // The edge, each request stepped by the driver to its answer
 
@@ -492,7 +519,7 @@ impl World {
     /// Records tests from these runs of `workflow`, in this order, and stores them.
     pub async fn record_runs(
         &self,
-        workflow: &str,
+        workflow: &WorkflowId,
         runs: Vec<RunRef>,
         limit: usize,
     ) -> Result<Recording, RecordingError> {
@@ -538,12 +565,25 @@ impl World {
     // ---------------------------------------------------------------------------------------
     // Workflows
 
-    /// The versions of a workflow the agent sees, newest first.
-    pub async fn workflow_versions(&self, name: &str) -> Result<Vec<StoredWorkflow>, WorldError> {
-        Ok(self
-            .catalog()
-            .workflow_versions(&TenantId::local(), name, &self.labels)
-            .await?)
+    /// The namespace of the agent's runs and workflows.
+    pub fn namespace(&self) -> NamespaceName {
+        NamespaceName::new(NamespaceName::LOCAL).expect("`local` is a namespace's name")
+    }
+
+    /// The workflow a reference names among those the agent sees, and the version it names (its
+    /// latest without one), as `GET /v1/workflows/{id}` resolves it.
+    pub async fn resolve_workflow(
+        &self,
+        reference: &str,
+    ) -> Result<(StoredWorkflow, StoredVersion), rewind_engine::edge::ResolveError> {
+        self.edge
+            .resolve_workflow(
+                &TenantId::local(),
+                Some(&self.namespace()),
+                &self.labels,
+                reference,
+            )
+            .await
     }
 
     /// Starts a run of the latest version of a workflow the agent sees, with its labels, as
@@ -553,18 +593,10 @@ impl World {
             workflow: name.to_owned(),
             message,
         };
-        let latest = self
-            .workflow_versions(name)
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| refused("the agent sees no version of it".into()))?;
-        let namespace =
-            NamespaceName::new(NamespaceName::LOCAL).map_err(|error| refused(error.to_string()))?;
         let request = StartWorkflow {
             tenant: TenantId::local(),
-            namespace,
-            version: latest.workflow.version(),
+            namespace: self.namespace(),
+            reference: name.to_owned(),
             input,
             ttl: None,
             metadata: RunMetadata {
@@ -573,15 +605,18 @@ impl World {
             },
             idempotency_key: None,
         };
-        let created = {
-            let mut driver = self.driver.lock().await;
-            let mut gateway = driver.gateway(&self.at);
-            self.edge
-                .start_workflow(&mut gateway, request)
-                .await
-                .map_err(|error: StartError| refused(error.to_string()))?
-        };
+        let created = self
+            .start_by_reference(request)
+            .await
+            .map_err(|error| refused(error.to_string()))?;
         Ok(created.run)
+    }
+
+    /// Starts a run of a workflow named by a reference, at the edge.
+    pub async fn start_by_reference(&self, request: StartWorkflow) -> Result<Created, StartError> {
+        let mut driver = self.driver.lock().await;
+        let mut gateway = driver.gateway(&self.at);
+        self.edge.start_workflow(&mut gateway, request).await
     }
 
     /// After the conversation: the production runs, each started and driven until it ends.
@@ -603,40 +638,46 @@ impl World {
     pub async fn workflow_reports(&self) -> Result<Vec<WorkflowReport>, WorldError> {
         let tenant = TenantId::local();
         let catalog = self.catalog();
-        let latest = catalog
-            .latest_workflows(&WorkflowFilter {
+        let workflows = catalog
+            .list_workflows(&WorkflowFilter {
                 tenant: tenant.clone(),
+                scope: ScopeFilter::All,
+                code: None,
                 labels: BTreeMap::new(),
                 after: None,
-                limit: None,
+                limit: usize::MAX,
             })
             .await?;
         let suites = self.edge.suites(test_format());
         let mut reports = Vec::new();
-        for stored in latest {
+        for stored in workflows {
             let mut versions = catalog
-                .workflow_versions(&tenant, stored.workflow.name(), &BTreeMap::new())
+                .versions(&tenant, &stored.id, &BTreeMap::new())
                 .await?;
             versions.reverse();
             for version in versions {
-                let tests = suites.load_suite(&tenant, &version.workflow).await?;
-                let workflow = &version.workflow;
+                let document = &version.document;
+                let tests = suites.load_suite(&tenant, &document.suite().tests).await?;
                 reports.push(WorkflowReport {
-                    name: workflow.name().to_owned(),
-                    version: workflow.version(),
-                    base: workflow.suite().base,
-                    action_set: workflow.action_set(),
+                    id: stored.id.clone(),
+                    name: stored.name.clone(),
+                    number: version.version,
+                    version: version.digest,
+                    base: document.suite().base,
+                    action_set: document.action_set(),
                     code: catalog
-                        .get_code(&tenant, workflow.code())
+                        .get_code(&tenant, document.code())
                         .await?
                         .map(|stored| stored.code.source().to_owned())
                         .unwrap_or_default(),
                     tests,
-                    retired: workflow.suite().retired.clone(),
-                    replaced: workflow.suite().replaced.clone(),
+                    retired: document.suite().retired.clone(),
+                    replaced: document.suite().replaced.clone(),
                 });
             }
         }
+        // Oldest first: by when each version was made.
+        reports.sort_by_key(|report| (report.id.clone(), report.number));
         Ok(reports)
     }
 
@@ -963,7 +1004,12 @@ pub struct RunReport {
 /// A workflow version at the end of an episode.
 #[derive(Debug, Clone)]
 pub struct WorkflowReport {
-    pub name: String,
+    pub id: WorkflowId,
+    /// Its workflow's name, if it has one.
+    pub name: Option<String>,
+    /// Its number among its workflow's versions.
+    pub number: u32,
+    /// Its digest.
     pub version: Digest,
     /// The version it derives from.
     pub base: Option<Digest>,
@@ -981,6 +1027,15 @@ impl WorkflowReport {
     /// The test of its suite named `name`, loaded.
     pub fn test(&self, name: &str) -> Option<&LoadedTest> {
         self.tests.iter().find(|test| test.name == name)
+    }
+}
+
+/// The declarations `rewind-codegen` generates from a workflow's interface.
+fn declare(name: &str, schemas: &rewind_core::WorkflowSchemas) -> WorkflowDeclarations {
+    let generated = rewind_codegen::workflow_declarations(name, schemas);
+    WorkflowDeclarations {
+        signals: generated.signals,
+        entry: generated.entry,
     }
 }
 

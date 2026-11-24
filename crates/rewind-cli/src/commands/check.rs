@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
+use rewind_api::checks::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_check::TsgoChecker;
 use rewind_core::{ActionSet, Code};
 use rewind_engine::ports::{self, CodeExecutor, DiagnosticSource};
@@ -100,7 +100,12 @@ pub(crate) async fn check_locally(
     let ok = diagnostics
         .iter()
         .all(|diagnostic| diagnostic.severity != Severity::Error);
-    Ok(CheckResult { ok, diagnostics })
+    // Checked in this process: no server says which workflow has the code.
+    Ok(CheckResult {
+        ok,
+        diagnostics,
+        workflow: None,
+    })
 }
 
 /// A diagnostic of the type-checker, as the API writes it.

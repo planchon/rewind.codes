@@ -1,5 +1,5 @@
 //! Tests (`archi/05-testing-and-observability.md`, "Test runs"): `POST /v1/test`,
-//! `POST /v1/workflows/{name}/record`, `GET /v1/tests/{digest}`, and the suite a fork of a run
+//! `POST /v1/workflows/{id}/record`, `GET /v1/tests/{digest}`, and the suite a fork of a run
 //! of a workflow passes first.
 //!
 //! Running a test runs model-written code, on the node that answers, under its sandbox, each
@@ -13,18 +13,18 @@ use axum::Json;
 use axum::extract::{Path, State};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
-use rewind_api::scripts::TestRequest;
+use rewind_api::checks::TestRequest;
 use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem,
     TestReport as ApiTestReport, TestResult,
 };
 use rewind_api::workflows::{RecordTests, RecordedTest, RecordedTests, SkippedRun};
-use rewind_core::{ActionSet, Cassette, Code, Digest, Test, WorkflowSchemas};
+use rewind_core::{ActionSet, Cassette, Code, Digest, SuiteTest, Test, WorkflowSchemas};
 use rewind_engine::edge::{RecordFrom, RecordingError};
 use rewind_engine::ports::link::RunView;
-use rewind_engine::ports::{CatalogStore, StoredWorkflow, TenantId};
+use rewind_engine::ports::{CatalogStore, TenantId, VersionRef, current_suite};
 use rewind_engine::suites::{
-    DEFAULT_RECORDED, MAX_RECORDED, SuiteError, SuiteLoadError, TestFormat, TestInput,
+    DEFAULT_RECORDED, MAX_RECORDED, SuiteLoadError, TestFormat, TestInput,
 };
 use rewind_engine::testing::{Subject, TestError, TestOptions, TestProblem, TestReport};
 use rewind_runtime::TsHandlerLoader;
@@ -76,8 +76,8 @@ pub(crate) fn input(input: ApiTestInput) -> Result<TestInput, ApiError> {
                 return Err(ApiError::new(
                     ProblemType::InvalidTest,
                     format!(
-                        "test {:?}: `origin` is set by recording, never given: record the run \
-                         with POST /v1/workflows/{{name}}/record and give its digest instead",
+                        "test {:?}: `from` is set by recording, never given: record the run \
+                         with POST /v1/workflows/{{id}}/record and give its digest instead",
                         test.name
                     ),
                 ));
@@ -149,10 +149,6 @@ pub(crate) fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
 
 pub(crate) fn suite_error(error: SuiteLoadError) -> ApiError {
     match error {
-        SuiteLoadError::Suite(SuiteError::BaseNotFound(version)) => ApiError::not_found(format!(
-            "no workflow version {version} that this caller sees: name the base as \
-             name@<version>, or leave it out to derive from the latest version"
-        )),
         SuiteLoadError::Suite(error) => ApiError::new(ProblemType::InvalidTest, error.to_string()),
         SuiteLoadError::Store(error) => error.into(),
         SuiteLoadError::Blob(error) => error.into(),
@@ -190,16 +186,16 @@ pub(crate) async fn run(
     }
 }
 
-/// The tests of a version's suite, those of an erased namespace left out.
+/// The tests of a suite, those of an erased namespace left out.
 pub(crate) async fn suite(
     app: &App,
     tenant: &TenantId,
-    stored: &StoredWorkflow,
+    suite: &[SuiteTest],
 ) -> Result<Vec<Test>, ApiError> {
     Ok(app
         .edge
         .suites(format())
-        .load_suite(tenant, &stored.workflow)
+        .load_suite(tenant, suite)
         .await
         .map_err(suite_error)?
         .into_iter()
@@ -223,15 +219,15 @@ pub(super) async fn test(
     Body(request): Body<TestRequest>,
 ) -> Result<Json<ApiTestReport>, ApiError> {
     caller.require(Permission::RunsStart)?;
-    let bounds = super::scripts::bounds(&app, &caller).await?;
+    let bounds = super::checks::bounds(&app, &caller).await?;
     let tenant = &caller.tenant;
     let version = match &request.workflow {
-        Some(reference) => Some(workflows::resolve(&app, tenant, &caller.labels, reference).await?),
+        Some(reference) => Some(workflows::resolve(&app, &caller, reference).await?),
         None => None,
     };
     let code = match (request.code, &version) {
         (Some(source), _) => Code::new(source),
-        (None, Some(version)) => source(&app, tenant, version.workflow.code()).await?,
+        (None, Some((_, version))) => source(&app, tenant, version.document.code()).await?,
         (None, None) => {
             return Err(ApiError::invalid(
                 "give `code`, or a `workflow` whose code the tests run against",
@@ -240,14 +236,14 @@ pub(super) async fn test(
     };
     let action_set: ActionSet = match (&request.action_set, &version) {
         (Some(id), _) => action_sets::stored(&app, tenant, id).await?.action_set,
-        (None, Some(version)) => {
-            action_sets::stored(&app, tenant, &version.workflow.action_set().to_hex())
+        (None, Some((_, version))) => {
+            action_sets::stored(&app, tenant, &version.document.action_set().to_hex())
                 .await?
                 .action_set
         }
         (None, None) => app.default_action_set(tenant).await?.action_set,
     };
-    super::scripts::check_lines(&code, &bounds)?;
+    super::checks::check_lines(&code, &bounds)?;
     let mut tests = Vec::with_capacity(request.tests.len());
     for given in request.tests {
         let given = input(given)?;
@@ -259,11 +255,14 @@ pub(super) async fn test(
                 .map_err(suite_error)?,
         );
     }
-    if let Some(version) = &version {
-        tests.extend(suite(&app, tenant, version).await?);
+    // The workflow's suite, as it is now: what its next version passes.
+    if let Some((workflow, _)) = &version {
+        let members = app.store.suite(tenant, &workflow.id).await?;
+        tests.extend(suite(&app, tenant, &current_suite(&members)).await?);
     }
-    let interface: Option<&WorkflowSchemas> =
-        version.as_ref().map(|version| version.workflow.schemas());
+    let interface: Option<&WorkflowSchemas> = version
+        .as_ref()
+        .and_then(|(_, version)| version.document.interface());
     let options = TestOptions {
         ttl: bounds.max_ttl.map(|max| max.min(app.config.default_ttl)),
         statics: None,
@@ -286,13 +285,13 @@ pub(super) async fn test(
 }
 
 /// `GET /v1/tests/{digest}`: a stored test. A recorded test holds its run's data: reading it
-/// also needs `runs:read` in its namespace.
+/// also needs to reach its namespace.
 pub(super) async fn get(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(digest): Path<String>,
 ) -> Result<Json<ApiTest>, ApiError> {
-    caller.require(Permission::ActionsRead)?;
+    caller.require(Permission::RunsRead)?;
     let not_found = || ApiError::not_found(format!("no test {digest} for this tenant"));
     let parsed = Digest::from_hex(&digest).map_err(|_| not_found())?;
     let record = app
@@ -316,26 +315,17 @@ pub(super) async fn get(
     Ok(Json(ApiTest::from_core(&test, encode_cassette)))
 }
 
-/// `POST /v1/workflows/{name}/record`: the workflow's completed and failed runs the caller
+/// `POST /v1/workflows/{id}/record`: the workflow's completed and failed runs the caller
 /// sees, newest first, one test per path.
 pub(super) async fn record(
     State(app): State<Arc<App>>,
     caller: Caller,
-    Path(name): Path<String>,
+    Path(reference): Path<String>,
     Body(request): Body<RecordTests>,
 ) -> Result<Json<RecordedTests>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let tenant = &caller.tenant;
-    if app
-        .store
-        .workflow_versions(tenant, &name, &caller.labels)
-        .await?
-        .is_empty()
-    {
-        return Err(ApiError::not_found(format!(
-            "no workflow {name} for this caller: list them with GET /v1/workflows"
-        )));
-    }
+    let workflow = workflows::find(&app, &caller, &reference).await?;
+    let name = workflow.reference();
     let limit = request
         .limit
         .map_or(DEFAULT_RECORDED, |limit| {
@@ -352,14 +342,7 @@ pub(super) async fn record(
         let mut runs = Vec::with_capacity(request.runs.len());
         for id in &request.runs {
             let view = app.run(&caller, id).await?;
-            if view
-                .head
-                .metadata
-                .workflow
-                .as_ref()
-                .map(|workflow| workflow.name.as_str())
-                != Some(name.as_str())
-            {
+            if view.head.metadata.workflow.as_ref().map(|of| &of.id) != Some(&workflow.id) {
                 return Err(ApiError::invalid(format!(
                     "run {id} is not a run of the workflow {name}"
                 )));
@@ -370,7 +353,7 @@ pub(super) async fn record(
     };
     let recording = app
         .edge
-        .record_tests(&mut app.gateway(), &name, from, limit, format())
+        .record_tests(&mut app.gateway(), &workflow.id, from, limit, format())
         .await
         .map_err(|error| match error {
             RecordingError::RunNotFound(run) => ApiError::run_not_found(&run.to_string()),
@@ -411,14 +394,18 @@ pub(crate) async fn gate_fork(app: &App, parent: &RunView, code: &Code) -> Resul
         return Ok(());
     };
     let tenant = &parent.head.run.tenant;
-    let Some(stored) = app.store.get_workflow(tenant, workflow.version).await? else {
+    let Some(stored) = app
+        .store
+        .version(tenant, &workflow.id, VersionRef::Number(workflow.version))
+        .await?
+    else {
         return Ok(());
     };
-    let tests = suite(app, tenant, &stored).await?;
+    let tests = suite(app, tenant, &stored.document.suite().tests).await?;
     if tests.is_empty() {
         return Ok(());
     }
-    let action_set = action_sets::stored(app, tenant, &stored.workflow.action_set().to_hex())
+    let action_set = action_sets::stored(app, tenant, &stored.document.action_set().to_hex())
         .await?
         .action_set;
     let reports = run(
@@ -426,15 +413,16 @@ pub(crate) async fn gate_fork(app: &App, parent: &RunView, code: &Code) -> Resul
         &Subject {
             code,
             action_set: &action_set,
-            interface: Some(stored.workflow.schemas()),
+            interface: stored.document.interface(),
         },
         &tests,
         &TestOptions::default(),
     )
     .await?;
     if reports.iter().any(|report| !report.passed) {
+        let name = workflow.name.as_deref().unwrap_or(workflow.id.as_str());
         return Err(tests_failed(
-            &format!("the suite of {}", stored.workflow),
+            &format!("the suite of {name}@v{}", workflow.version),
             &reports,
         ));
     }

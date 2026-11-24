@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use rewind_core::{Digest, RunId, Timestamp};
+use rewind_core::{RunId, Timestamp, WorkflowId};
 
 use crate::ports::namespaces::{NamespaceName, QuotaAlert};
 use crate::ports::telemetry::{LogRecord, Span};
@@ -81,6 +81,7 @@ pub struct TenantState {
 pub struct Admission {
     pub run: RunId,
     pub namespace: NamespaceName,
-    pub code: Digest,
+    /// The workflow the run is a run of; none for a test run.
+    pub workflow: Option<WorkflowId>,
     pub admitted_at: Timestamp,
 }

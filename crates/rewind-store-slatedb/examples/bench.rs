@@ -40,8 +40,8 @@ use rewind_engine::ports::partition::{Activation, CreateRun};
 use rewind_engine::ports::{
     Attempt, Batch, CallTask, Change, CounterDelta, Counters, DueTimer, Hour, InboxItem,
     IndexedSummary, NamespaceName, NodeId, PartitionError, PartitionLog, PartitionStore, RunCounts,
-    RunHead, RunMetadata, RunRef, RunSummary, TaskRecord, TaskRef, TaskState, TenantId,
-    TimerChange, TimerKind, Trigger, Wait, WaitKind,
+    RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow, TaskRecord, TaskRef, TaskState,
+    TenantId, TimerChange, TimerKind, Trigger, Wait, WaitKind,
 };
 use rewind_store_slatedb::{Options, SlatePartitions, Timers};
 use serde_json::json;
@@ -303,7 +303,13 @@ impl Runs {
                     mode: Some(RunMode::Live),
                     labels: BTreeMap::from([("agent".into(), "triage".into())]),
                     source: None,
-                    workflow: Some("triage".into()),
+                    workflow: Some(RunWorkflow {
+                        id: rewind_core::WorkflowId::from_bits(7),
+                        name: Some("triage".into()),
+                        version: 1,
+                        digest: Digest::of(b"version"),
+                        interface: false,
+                    }),
                     started_by: None,
                     started_at: None,
                     ended_at: None,

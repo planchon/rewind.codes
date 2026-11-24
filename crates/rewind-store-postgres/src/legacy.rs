@@ -4,8 +4,12 @@
 //!
 //! The rows are read as they were written: events and inbox items in the stored format v1
 //! (`rewind-format`), payload values in their canonical JSON, digests as their 32 bytes, labels,
-//! scopes and secrets as JSON objects, times in milliseconds. A page of runs is one query for
-//! the runs and one per table they hold rows in.
+//! scopes and secrets as JSON objects, times in milliseconds. A run of a saved workflow names its
+//! version by digest: its workflow is the one that has a version of that digest in the catalog
+//! (migration 16 kept the saved versions' digests), with that version's number, and the version
+//! has an interface when its document has `schemas`; a run whose version the catalog does not
+//! have is of no workflow. A page of runs is one query for the runs and their workflows, and one
+//! per table they hold rows in.
 
 use std::collections::BTreeMap;
 
@@ -115,12 +119,22 @@ fn park_kind(name: &str) -> Result<ParkKind, Error> {
     }
 }
 
-const RUN_COLUMNS: &str = "id, tenant, namespace, script, toolset, epoch, expires_at, \
-    expiry_enqueued, quarantine_kind, quarantine_reason, quarantine_since, quarantine_retried_by, \
-    failures, attempts, labels::text, traceparent, tracestate, parent, parent_at, \
-    idempotency_key, created_at, updated_at, ended_at, archive_document, workflow, \
-    workflow_version, started_by, started_seq, detached, scope::text, secrets::text, origin, \
-    suffix_len::bigint";
+/// The columns of a run (`r`) and of its workflow (`f`), read by [`run_from_row`].
+const RUN_COLUMNS: &str = "r.id, r.tenant, r.namespace, r.script, r.toolset, r.epoch, \
+    r.expires_at, r.expiry_enqueued, r.quarantine_kind, r.quarantine_reason, r.quarantine_since, \
+    r.quarantine_retried_by, r.failures, r.attempts, r.labels::text, r.traceparent, r.tracestate, \
+    r.parent, r.parent_at, r.idempotency_key, r.created_at, r.updated_at, r.ended_at, \
+    r.archive_document, f.id, r.workflow_version, r.started_by, r.started_seq, r.detached, \
+    r.scope::text, r.secrets::text, r.origin, r.suffix_len::bigint, f.name, f.version, \
+    f.interface";
+
+/// The workflow (`f`) of a run (`r`) of a saved workflow: the one whose version has the digest it
+/// ran, the first by id if several do.
+const RUN_WORKFLOW: &str = "LEFT JOIN LATERAL ( \
+    SELECT w.id, w.name, v.version, (v.document::jsonb -> 'schemas') IS NOT NULL AS interface \
+    FROM workflow_versions v JOIN workflows w ON w.tenant = v.tenant AND w.id = v.workflow \
+    WHERE v.tenant = r.tenant AND v.digest = r.workflow_version \
+    ORDER BY v.workflow, v.version LIMIT 1) f ON true";
 
 fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
     let id = run_id(row, 0)?;
@@ -150,9 +164,14 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
     };
     let workflow = match row.opt_text(24)? {
         None => None,
-        Some(name) => Some(RunWorkflow {
-            name,
-            version: row.digest(25)?,
+        Some(workflow) => Some(RunWorkflow {
+            id: workflow
+                .parse()
+                .map_err(|err: rewind_core::InvalidWorkflowId| corrupt(err.to_string()))?,
+            name: row.opt_text(33)?,
+            version: u32_of(row.u64(34)?)?,
+            digest: row.digest(25)?,
+            interface: row.boolean(35)?,
         }),
     };
     let suffix_len = row.u64(32)?;
@@ -247,8 +266,8 @@ impl PostgresLegacy {
             return Ok(Vec::new());
         }
         let rows = sqlx::query(&format!(
-            "SELECT {RUN_COLUMNS} FROM legacy.runs WHERE $1::uuid IS NULL OR id > $1 \
-             ORDER BY id LIMIT $2"
+            "SELECT {RUN_COLUMNS} FROM legacy.runs r {RUN_WORKFLOW} \
+             WHERE $1::uuid IS NULL OR r.id > $1 ORDER BY r.id LIMIT $2"
         ))
         .bind(after.map(|id| id.as_uuid()))
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))

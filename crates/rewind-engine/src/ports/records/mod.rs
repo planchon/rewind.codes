@@ -10,7 +10,7 @@ mod runs;
 mod tasks;
 mod workflows;
 
-use rewind_core::{ActionSet, Code, RunId, Timestamp};
+use rewind_core::{ActionSet, Code, RunId};
 
 pub use activation::{InboxItem, PayloadRecord, Trigger};
 pub use runs::{
@@ -21,7 +21,10 @@ pub use tasks::{
     CallTask, ParkKind, ParkReason, TaskRef, TaskState, TaskToken, deferred_timeout_failure,
 };
 pub use workflows::{
-    RunWorkflow, StartedBy, StoredWorkflow, TEST_GRACE, TestRecord, WorkflowFilter,
+    Labels, NewVersion, NewWorkflow, RunWorkflow, ScopeFilter, StartedBy, StoredVersion,
+    StoredWorkflow, SuiteChange, SuiteMember, TEST_GRACE, TestRecord, VersionRef, WorkflowCreated,
+    WorkflowFilter, WorkflowPatch, WorkflowScope, WorkflowSource, WorkflowWrite, carries,
+    current_suite,
 };
 
 use super::checker::ActionDeclarations;
@@ -33,17 +36,6 @@ use super::tenancy::RunRef;
 pub struct StoredCode {
     pub code: Code,
     pub compiled: CompiledCode,
-}
-
-/// The title and description a person gave a code, for the organization, over the comment at
-/// its top (`archi/04-tools.md`, "Script titles").
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptTitle {
-    pub title: String,
-    pub description: Option<String>,
-    /// Who set it: a principal, as the audit log names it.
-    pub updated_by: String,
-    pub updated_at: Timestamp,
 }
 
 /// A pinned action set as stored, with the declarations generated from it.

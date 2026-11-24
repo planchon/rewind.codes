@@ -20,13 +20,14 @@
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its tenant actor |
 //! | [`Edge::transcript`], [`Edge::transcript_event`] | | the run's head and history |
 //! | [`Edge::record_tests`] | the tests stored in the control plane | the runs searched, their history |
-//! | [`Edge::register_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
+//! | [`Edge::create_workflow`], [`Edge::make_version`], [`Edge::change_tests`], [`Edge::update_workflow`], [`Edge::promote_workflow`], [`Edge::fork_workflow`], [`Edge::pull_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
 
 mod test_runs;
 mod transcript;
 mod workflows;
 
 pub use test_runs::{RecordFrom, Recording, RecordingError};
+pub use workflows::{MIN_VERSION_DIGITS, ResolveError, WorkflowKit};
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -36,7 +37,7 @@ use std::time::Duration;
 
 use rewind_core::{
     Code, HistoryEvent, JsonValue, PartitionId, Payload, RunExport, RunHandle, RunId, RunMode,
-    RunStarted, SCRIPT_ORIGIN, Shape, code_doc, origin_slug,
+    RunStarted, SCRIPT_ORIGIN, Shape, WorkflowVersion, code_doc, origin_slug,
 };
 
 use crate::checks::{self, BoundsError};
@@ -48,14 +49,27 @@ use crate::ports::link::{
 };
 use crate::ports::{
     BlobOwner, CallTask, CatalogStore, Clock, CodeExecutor, Counters, Created, Enqueued, Entropy,
-    Found, Gauges, Month, NamespaceName, NamespaceWrite, Page, QuotaAlert, RunOrder, RunQuery,
-    RunRef, RunWorkflow, Scope, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken,
-    TenantId, TypeChecker, Usage, Window, home_partition, namespace_partition,
+    Found, Gauges, Labels, Month, NamespaceName, NamespaceWrite, NewWorkflow, Page, QuotaAlert,
+    RunOrder, RunQuery, RunRef, RunWorkflow, Scope, SearchPosition, StoreError, TaskRecord,
+    TaskRef, TaskToken, TenantId, TypeChecker, Usage, Window, WorkflowCreated, WorkflowScope,
+    home_partition, namespace_partition,
 };
 use crate::secrets::{self, SecretCheck};
 use crate::start::{StartError, StartRun, refuse_nul_in_metadata, type_check};
 use crate::text::{self, NulCharacter};
 use crate::workflows::StartWorkflow;
+
+/// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
+/// "Run handles"): its workflow's name, else its short id. A test run has no workflow: the first
+/// line of its code's top comment as a slug, else `script`, as before workflows had ids.
+fn origin_of(metadata: &crate::ports::RunMetadata, code: &Code) -> String {
+    match &metadata.workflow {
+        Some(workflow) => workflow.origin(),
+        None => code_doc(code.source())
+            .and_then(|doc| origin_slug(&doc.title))
+            .unwrap_or_else(|| SCRIPT_ORIGIN.to_owned()),
+    }
+}
 use crate::{payloads, projector};
 
 /// Why an edge's request failed.
@@ -230,6 +244,23 @@ impl<P: Plane> Edge<P> {
             .put_action_set(&request.tenant, &request.action_set, &request.declarations)
             .await
             .map_err(start_unavailable)?;
+        // The run is a run of the workflow its code is in the namespace or the organization,
+        // else of a new workflow of the namespace (`archi/03-execution.md`, "Starting a run").
+        let mut metadata = request.metadata;
+        if request.mode == RunMode::Live {
+            let workflow = self
+                .workflow_of_code(
+                    &request.tenant,
+                    &request.namespace,
+                    &request.code,
+                    &request.action_set,
+                    &metadata.secrets,
+                    &metadata.allowed_labels,
+                    &request.principal,
+                )
+                .await?;
+            metadata.workflow = Some(workflow);
+        }
         // The run is created now: its deadline is its TTL from then.
         let now = self.now();
         let started = |seed| RunStarted {
@@ -246,9 +277,7 @@ impl<P: Plane> Edge<P> {
             self.plane.entropy().run_id_in(namespace),
         );
         let seed = self.plane.entropy().seed();
-        let origin = self
-            .origin_of(&request.tenant, &request.code, &request.metadata)
-            .await?;
+        let origin = origin_of(&metadata, &request.code);
         self.create(
             gateway,
             namespace,
@@ -257,7 +286,7 @@ impl<P: Plane> Edge<P> {
                 namespace: request.namespace,
                 origin,
                 started: started(seed),
-                metadata: request.metadata,
+                metadata,
                 start_key: request.idempotency_key,
                 headline: projector::headline(request.code.source()),
                 created_at: now,
@@ -266,25 +295,37 @@ impl<P: Plane> Edge<P> {
         .await
     }
 
-    /// Starts a run of a workflow version (`POST /v1/runs` with a workflow): its input checked
-    /// against the version's schema, its secrets the version's.
+    /// Starts a run of a workflow (`POST /v1/runs` with a workflow): its id or its name, which
+    /// resolves in the run's namespace first, `@v12` or `@<digest>` for a version, else its
+    /// latest. The input is checked against the version's interface, if it has one; its code,
+    /// its action set and its secrets are the version's.
     pub async fn start_workflow<G: Gateway>(
         &self,
         gateway: &mut G,
         request: StartWorkflow,
     ) -> Result<Created, StartError> {
         let catalog = self.plane.catalog();
-        let stored = catalog
-            .get_workflow(&request.tenant, request.version)
+        let (workflow, version) = self
+            .resolve_workflow(
+                &request.tenant,
+                Some(&request.namespace),
+                &request.metadata.allowed_labels,
+                &request.reference,
+            )
             .await
-            .map_err(start_unavailable)?
-            .ok_or_else(|| StartError::WorkflowNotFound(request.version.to_hex()))?;
-        let workflow = stored.workflow;
-        if let Err(refused) = crate::schema::Validator::compile(&workflow.schemas().input)
-            .check("input", &request.input)
+            .map_err(|error| match error {
+                ResolveError::Invalid(message) => StartError::InvalidWorkflowReference(message),
+                ResolveError::NotFound(message) => StartError::WorkflowNotFound(message),
+                ResolveError::Store(error) => start_unavailable(error),
+            })?;
+        let document = &version.document;
+        let named = format!("{}@v{}", workflow.reference(), version.version);
+        if let Some(schemas) = document.interface()
+            && let Err(refused) =
+                crate::schema::Validator::compile(&schemas.input).check("input", &request.input)
         {
             return Err(StartError::InvalidInput(crate::workflows::refused_message(
-                &format!("the input schema of {workflow}"),
+                &format!("the input schema of {named}"),
                 refused,
             )));
         }
@@ -297,17 +338,17 @@ impl<P: Plane> Edge<P> {
                 max: bounds.max_ttl,
             })?;
         let code = catalog
-            .get_code(&request.tenant, workflow.code())
+            .get_code(&request.tenant, document.code())
             .await
             .map_err(start_unavailable)?
-            .ok_or_else(|| start_unavailable(format!("the code of {workflow} is not stored")))?;
+            .ok_or_else(|| start_unavailable(format!("the code of {named} is not stored")))?;
         bounds.check_lines(&code.code)?;
         match checks::version_secrets(
             self.plane.secrets(),
             self.now(),
             &request.tenant,
             &request.namespace,
-            &workflow,
+            document,
         )
         .await?
         {
@@ -315,11 +356,8 @@ impl<P: Plane> Edge<P> {
             Err(refused) => return Err(StartError::SecretRequired(refused)),
         }
         let mut metadata = request.metadata;
-        metadata.workflow = Some(RunWorkflow {
-            name: workflow.name().to_owned(),
-            version: workflow.version(),
-        });
-        metadata.secrets = workflow.secrets().clone();
+        metadata.workflow = Some(RunWorkflow::of(&workflow, &version));
+        metadata.secrets = document.secrets().clone();
         refuse_nul_in_metadata(&metadata, request.idempotency_key.as_deref())?;
         let epoch = *self
             .plane
@@ -340,10 +378,10 @@ impl<P: Plane> Edge<P> {
                 run,
                 namespace: request.namespace,
                 // A workflow's run is the run of its workflow.
-                origin: workflow.name().to_owned(),
+                origin: workflow.origin(),
                 started: RunStarted {
-                    code: workflow.code(),
-                    action_set: workflow.action_set(),
+                    code: document.code(),
+                    action_set: document.action_set(),
                     input,
                     seed,
                     epoch,
@@ -357,6 +395,70 @@ impl<P: Plane> Edge<P> {
             },
         )
         .await
+    }
+
+    /// The workflow a run given `code` is a run of (`archi/03-execution.md`, "Starting a run"):
+    /// the one that has it in the namespace, else in the organization, under the caller's
+    /// labels, at its latest version with that code; else a new workflow of the namespace, whose
+    /// version 1 is that code, without an interface, with the run's action set and secrets.
+    #[allow(clippy::too_many_arguments)]
+    async fn workflow_of_code(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        code: &Code,
+        action_set: &rewind_core::ActionSet,
+        secrets: &rewind_core::ServerSecrets,
+        labels: &Labels,
+        principal: &str,
+    ) -> Result<RunWorkflow, StartError> {
+        let catalog = self.plane.catalog();
+        if let Some((workflow, version)) = catalog
+            .workflow_with_code(tenant, namespace, code.digest(), labels)
+            .await
+            .map_err(start_unavailable)?
+        {
+            return Ok(RunWorkflow::of(&workflow, &version));
+        }
+        let version = WorkflowVersion::new(code.digest(), action_set.digest())
+            .with_labels(labels.clone())
+            .with_secrets(secrets.clone());
+        let created = catalog
+            .create_workflow(
+                tenant,
+                &NewWorkflow {
+                    id: self.plane.entropy().workflow_id(),
+                    scope: WorkflowScope::Namespace(namespace.clone()),
+                    name: None,
+                    description: None,
+                    labels: labels.clone(),
+                    source: None,
+                    created_by: principal.to_owned(),
+                    version,
+                },
+                self.now(),
+            )
+            .await
+            .map_err(start_unavailable)?;
+        let workflow = match created {
+            WorkflowCreated::Created(workflow) | WorkflowCreated::Existing(workflow) => workflow,
+            WorkflowCreated::NameTaken => {
+                return Err(start_unavailable("a workflow without a name took a name"));
+            }
+        };
+        let version = catalog
+            .versions(tenant, &workflow.id, labels)
+            .await
+            .map_err(start_unavailable)?
+            .into_iter()
+            .find(|version| version.document.code() == code.digest())
+            .ok_or_else(|| {
+                start_unavailable(format!(
+                    "the workflow {} has no version of its code",
+                    workflow.id
+                ))
+            })?;
+        Ok(RunWorkflow::of(&workflow, &version))
     }
 
     /// Forks a run with a corrected code (`POST /v1/runs/{id}/fork`). The fork lives in its
@@ -428,7 +530,7 @@ impl<P: Plane> Edge<P> {
         bounds.check_lines(&request.code).map_err(start_failed)?;
         let refused = |nul| ForkError::Start(StartError::NulCharacter(nul));
         text::refuse_nul("the code", request.code.source()).map_err(refused)?;
-        let metadata = crate::ports::RunMetadata {
+        let mut metadata = crate::ports::RunMetadata {
             labels: request.labels.unwrap_or(head.metadata.labels.clone()),
             trace_context: request.trace_context,
             source: Some(crate::ports::ForkSource {
@@ -498,6 +600,27 @@ impl<P: Plane> Edge<P> {
             .put_code(&source.tenant, &request.code, &compiled)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?;
+        // A fork given no new code is a run of its source's version; one with new code is a
+        // run of the workflow its code is in the namespace, else of a new one
+        // (`archi/03-execution.md`, "Forks").
+        if source_started.mode == RunMode::Live {
+            metadata.workflow = match &head.metadata.workflow {
+                Some(of) if request.code.digest() == source_started.code => Some(of.clone()),
+                _ => Some(
+                    self.workflow_of_code(
+                        &source.tenant,
+                        &head.namespace,
+                        &request.code,
+                        &action_set,
+                        &metadata.secrets,
+                        &metadata.allowed_labels,
+                        &request.principal,
+                    )
+                    .await
+                    .map_err(start_failed)?,
+                ),
+            };
+        }
         let run = RunRef::new(
             source.tenant.clone(),
             self.plane.entropy().run_id_in(partition),
@@ -525,34 +648,6 @@ impl<P: Plane> Edge<P> {
         self.create(gateway, partition, start)
             .await
             .map_err(start_failed)
-    }
-
-    /// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
-    /// "Run handles"): its workflow's name; else its code's title as a slug, the title a
-    /// person gave the code or else the one of the comment at its top; else `script`.
-    async fn origin_of(
-        &self,
-        tenant: &TenantId,
-        code: &Code,
-        metadata: &crate::ports::RunMetadata,
-    ) -> Result<String, StartError> {
-        if let Some(workflow) = &metadata.workflow {
-            return Ok(workflow.name.clone());
-        }
-        let given = self
-            .plane
-            .catalog()
-            .script_titles(tenant, &[code.digest()])
-            .await
-            .map_err(start_unavailable)?
-            .into_iter()
-            .next()
-            .map(|(_, title)| title.title);
-        let title = given.or_else(|| code_doc(code.source()).map(|doc| doc.title));
-        Ok(title
-            .as_deref()
-            .and_then(origin_slug)
-            .unwrap_or_else(|| SCRIPT_ORIGIN.to_owned()))
     }
 
     async fn create<G: Gateway>(

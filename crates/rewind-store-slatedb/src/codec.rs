@@ -12,16 +12,16 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rewind_core::{Event, Lifecycle, Seq, Timestamp};
+use rewind_core::{Event, Lifecycle, Seq, Timestamp, WorkflowId};
 use rewind_engine::ports::{
     ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, DueTimer, Ending,
     FailureCounts, ForkSource, Gauges, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
     NamespaceName, OutboxEntry, OutboxId, ParkKind, ParkReason, PartitionError, PayloadRecord,
     Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind,
-    RunCounts, RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow, ScriptCounts,
-    SecretExpiredReason, SignalUrlTarget, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy,
-    TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, TenantState, Threshold, TimerKind,
-    TraceContext, TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind,
+    RunCounts, RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow, SecretExpiredReason,
+    SignalUrlTarget, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, TaskPhase, TaskRecord,
+    TaskRef, TaskState, TenantId, TenantState, Threshold, TimerKind, TraceContext, TraceId,
+    Trigger, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind, WorkflowCounts,
 };
 use rewind_format::partition as record;
 
@@ -35,6 +35,42 @@ pub(crate) fn tenant(text: String) -> Result<TenantId, PartitionError> {
 
 pub(crate) fn namespace(text: String) -> Result<NamespaceName, PartitionError> {
     NamespaceName::stored(text).map_err(|err| corrupt(err.to_string()))
+}
+
+pub(crate) fn workflow_id(text: &str) -> Result<WorkflowId, PartitionError> {
+    text.parse()
+        .map_err(|err: rewind_core::InvalidWorkflowId| corrupt(err.to_string()))
+}
+
+fn run_workflow_record(workflow: &RunWorkflow) -> record::RunWorkflow {
+    record::RunWorkflow {
+        id: workflow.id.to_string(),
+        name: workflow.name.clone(),
+        version: workflow.version,
+        digest: workflow.digest,
+        interface: workflow.interface,
+    }
+}
+
+fn run_workflow_of(record: record::RunWorkflow) -> Result<RunWorkflow, PartitionError> {
+    Ok(RunWorkflow {
+        id: workflow_id(&record.id)?,
+        name: record.name,
+        version: record.version,
+        digest: record.digest,
+        interface: record.interface,
+    })
+}
+
+/// A map keyed by workflow ids, from its record's.
+fn by_workflow<V, W>(
+    record: BTreeMap<String, V>,
+    mut value: impl FnMut(V) -> W,
+) -> Result<BTreeMap<WorkflowId, W>, PartitionError> {
+    record
+        .into_iter()
+        .map(|(id, counts)| Ok((workflow_id(&id)?, value(counts))))
+        .collect()
 }
 
 /// Encodes a record.
@@ -95,7 +131,7 @@ pub fn head_of(record: record::RunHead) -> Result<RunHead, PartitionError> {
         waits: record.waits.into_iter().map(wait_of).collect(),
         expires_at: Timestamp(record.expires_at),
         history_len: record.history_len,
-        metadata: metadata_of(record.metadata),
+        metadata: metadata_of(record.metadata)?,
         idempotency_key: record.idempotency_key,
         created_at: Timestamp(record.created_at),
         updated_at: Timestamp(record.updated_at),
@@ -117,13 +153,7 @@ pub fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
             run: parent.run,
             at: parent.at,
         }),
-        workflow: metadata
-            .workflow
-            .as_ref()
-            .map(|workflow| record::RunWorkflow {
-                name: workflow.name.clone(),
-                version: workflow.version,
-            }),
+        workflow: metadata.workflow.as_ref().map(run_workflow_record),
         started_by: metadata.started_by.map(|started| record::StartedBy {
             run: started.run,
             seq: started.seq.0,
@@ -134,8 +164,8 @@ pub fn metadata_record(metadata: &RunMetadata) -> record::Metadata {
     }
 }
 
-pub fn metadata_of(record: record::Metadata) -> RunMetadata {
-    RunMetadata {
+pub fn metadata_of(record: record::Metadata) -> Result<RunMetadata, PartitionError> {
+    Ok(RunMetadata {
         labels: record.labels,
         trace_context: record.trace_context.map(|context| TraceContext {
             traceparent: context.traceparent,
@@ -145,10 +175,7 @@ pub fn metadata_of(record: record::Metadata) -> RunMetadata {
             run: parent.run,
             at: parent.at,
         }),
-        workflow: record.workflow.map(|workflow| RunWorkflow {
-            name: workflow.name,
-            version: workflow.version,
-        }),
+        workflow: record.workflow.map(run_workflow_of).transpose()?,
         started_by: record.started_by.map(|started| StartedBy {
             run: started.run,
             seq: Seq(started.seq),
@@ -156,7 +183,7 @@ pub fn metadata_of(record: record::Metadata) -> RunMetadata {
         }),
         allowed_labels: record.allowed_labels,
         secrets: record.secrets,
-    }
+    })
 }
 
 pub fn quarantine_kind_record(kind: QuarantineKind) -> record::QuarantineKind {
@@ -511,7 +538,7 @@ pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
         mode: summary.mode.map(Into::into),
         labels: summary.labels.clone(),
         source: summary.source,
-        workflow: summary.workflow.clone(),
+        workflow: summary.workflow.as_ref().map(run_workflow_record),
         started_by: summary.started_by,
         started_at: summary.started_at.map(|at| at.0),
         ended_at: summary.ended_at.map(|at| at.0),
@@ -559,7 +586,7 @@ pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionEr
             mode: record.mode.map(Into::into),
             labels: record.labels,
             source: record.source,
-            workflow: record.workflow,
+            workflow: record.workflow.map(run_workflow_of).transpose()?,
             started_by: record.started_by,
             started_at: record.started_at.map(Timestamp),
             ended_at: record.ended_at.map(Timestamp),
@@ -641,7 +668,15 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
         workflows: counters
             .workflows
             .iter()
-            .map(|(name, runs)| (name.clone(), runs_record(runs)))
+            .map(|(id, runs)| {
+                let runs = record::WorkflowCounts {
+                    runs: runs_record(&runs.runs),
+                    actions: runs.actions.clone(),
+                    first_started_at: runs.first_started_at.map(|at| at.0),
+                    last_started_at: runs.last_started_at.map(|at| at.0),
+                };
+                (id.to_string(), runs)
+            })
             .collect(),
         failures: counters
             .failures
@@ -651,7 +686,11 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
                     signature: failures.signature.clone(),
                     error: failures.error.clone(),
                     runs: failures.runs,
-                    scripts: failures.scripts.clone(),
+                    workflows: failures
+                        .workflows
+                        .iter()
+                        .map(|(id, &runs)| (id.to_string(), runs))
+                        .collect(),
                     lines: failures.lines.clone(),
                     latest: failures
                         .latest
@@ -686,33 +725,21 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
                 (action.clone(), calls)
             })
             .collect(),
-        scripts: counters
-            .scripts
-            .iter()
-            .map(|(&code, runs)| {
-                let runs = record::ScriptCounts {
-                    runs: runs_record(&runs.runs),
-                    actions: runs.actions.clone(),
-                    first_started_at: runs.first_started_at.map(|at| at.0),
-                    last_started_at: runs.last_started_at.map(|at| at.0),
-                };
-                (code, runs)
-            })
-            .collect(),
     }
 }
 
-pub fn counters_of(record: record::Counters) -> Counters {
-    Counters {
+pub fn counters_of(record: record::Counters) -> Result<Counters, PartitionError> {
+    Ok(Counters {
         created: record.created,
         runs: runs_of(record.runs),
         durations: sketch_of(record.durations),
         cpu: Duration::from_millis(record.cpu_ms),
-        workflows: record
-            .workflows
-            .into_iter()
-            .map(|(name, runs)| (name, runs_of(runs)))
-            .collect(),
+        workflows: by_workflow(record.workflows, |runs| WorkflowCounts {
+            runs: runs_of(runs.runs),
+            actions: runs.actions,
+            first_started_at: runs.first_started_at.map(Timestamp),
+            last_started_at: runs.last_started_at.map(Timestamp),
+        })?,
         namespaces: BTreeMap::new(),
         failures: record
             .failures
@@ -722,7 +749,7 @@ pub fn counters_of(record: record::Counters) -> Counters {
                     signature: failures.signature,
                     error: failures.error,
                     runs: failures.runs,
-                    scripts: failures.scripts,
+                    workflows: by_workflow(failures.workflows, |runs| runs)?,
                     lines: failures.lines,
                     latest: failures
                         .latest
@@ -735,9 +762,9 @@ pub fn counters_of(record: record::Counters) -> Counters {
                         })
                         .collect(),
                 };
-                (fingerprint, failures)
+                Ok((fingerprint, failures))
             })
-            .collect(),
+            .collect::<Result<_, PartitionError>>()?,
         actions: record
             .actions
             .into_iter()
@@ -757,20 +784,7 @@ pub fn counters_of(record: record::Counters) -> Counters {
                 (action, calls)
             })
             .collect(),
-        scripts: record
-            .scripts
-            .into_iter()
-            .map(|(code, runs)| {
-                let runs = ScriptCounts {
-                    runs: runs_of(runs.runs),
-                    actions: runs.actions,
-                    first_started_at: runs.first_started_at.map(Timestamp),
-                    last_started_at: runs.last_started_at.map(Timestamp),
-                };
-                (code, runs)
-            })
-            .collect(),
-    }
+    })
 }
 
 pub fn waiting_record(kind: WaitingFor) -> record::WaitingFor {
@@ -806,12 +820,16 @@ pub fn gauges_record(gauges: &Gauges) -> record::Gauges {
             .map(|(&kind, &count)| (waiting_record(kind), count))
             .collect(),
         quarantined: gauges.quarantined,
-        scripts: gauges.scripts.clone(),
+        workflows: gauges
+            .workflows
+            .iter()
+            .map(|(id, &runs)| (id.to_string(), runs))
+            .collect(),
     }
 }
 
-pub fn gauges_of(record: record::Gauges) -> Gauges {
-    Gauges {
+pub fn gauges_of(record: record::Gauges) -> Result<Gauges, PartitionError> {
+    Ok(Gauges {
         active_runs: record.active_runs,
         waiting: record
             .waiting
@@ -819,8 +837,8 @@ pub fn gauges_of(record: record::Gauges) -> Gauges {
             .map(|(kind, count)| (waiting_of(kind), count))
             .collect(),
         quarantined: record.quarantined,
-        scripts: record.scripts,
-    }
+        workflows: by_workflow(record.workflows, |runs| runs)?,
+    })
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1143,7 +1161,7 @@ pub fn tenant_state_record(state: &TenantState) -> record::TenantState {
             .map(|admission| record::Admission {
                 run: admission.run,
                 namespace: admission.namespace.to_string(),
-                code: admission.code,
+                workflow: admission.workflow.as_ref().map(ToString::to_string),
                 admitted_at: admission.admitted_at.0,
             })
             .collect(),
@@ -1164,7 +1182,7 @@ pub fn tenant_state_of(record: record::TenantState) -> Result<TenantState, Parti
                 Ok(Admission {
                     run: admission.run,
                     namespace: namespace(admission.namespace)?,
-                    code: admission.code,
+                    workflow: admission.workflow.as_deref().map(workflow_id).transpose()?,
                     admitted_at: Timestamp(admission.admitted_at),
                 })
             })

@@ -554,7 +554,7 @@ impl<P: Plane> Owner<P> {
                     generation: self.generation,
                     run: start.run.id,
                     namespace: start.namespace.clone(),
-                    code: start.started.code,
+                    workflow: start.metadata.workflow.as_ref().map(|of| of.id.clone()),
                     at: start.created_at,
                 })),
             },
@@ -771,7 +771,14 @@ impl<P: Plane> Owner<P> {
             }
             return;
         }
-        if slot.head.metadata.workflow.is_none() && signal.key.is_none() {
+        // A run of a version without an interface takes any signal: nothing to read first.
+        let declares = slot
+            .head
+            .metadata
+            .workflow
+            .as_ref()
+            .is_some_and(|workflow| workflow.interface);
+        if !declares && signal.key.is_none() {
             self.enqueue_signal(*signal, reply, false);
             return;
         }

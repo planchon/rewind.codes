@@ -294,3 +294,137 @@ mod tests {
         assert_eq!(seed.as_bytes(), &[0xab; 32]);
     }
 }
+
+/// The characters of a workflow's id after `wf_`: Crockford's base32, lower case, without `i`,
+/// `l`, `o` and `u`, as a run's handle writes its suffix.
+const WORKFLOW_ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+/// How many characters follow `wf_` in a workflow's id.
+pub const WORKFLOW_ID_CHARS: usize = 12;
+
+/// How many of them a workflow's short id keeps, after `wf-`.
+pub const WORKFLOW_SHORT_ID_CHARS: usize = 6;
+
+/// The id the API gives a workflow when it creates it (`archi/01-product.md`, "Workflows"):
+/// `wf_` and 12 characters of Crockford's base32 in lower case, `wf_7k2m9q4x8d1c`. It never
+/// changes, whatever its name, its description or its versions. A workflow's name never starts
+/// with `wf_`, so a name never reads as an id.
+///
+/// The core only names workflows: drawing an id is non-deterministic, and happens behind the
+/// engine's `Entropy` port.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkflowId(String);
+
+/// The prefix of every workflow's id.
+pub const WORKFLOW_ID_PREFIX: &str = "wf_";
+
+impl WorkflowId {
+    /// The id whose 60 bits are the low 60 bits of `bits`, the first character the highest.
+    pub fn from_bits(bits: u64) -> Self {
+        let mut id = String::with_capacity(WORKFLOW_ID_PREFIX.len() + WORKFLOW_ID_CHARS);
+        id.push_str(WORKFLOW_ID_PREFIX);
+        for index in (0..WORKFLOW_ID_CHARS).rev() {
+            let digit = (bits >> (5 * index)) & 0x1f;
+            id.push(char::from(WORKFLOW_ID_ALPHABET[digit as usize]));
+        }
+        Self(id)
+    }
+
+    /// The id a workflow saved before workflows had ids takes when the catalog moves to the
+    /// workflow model: the low 60 bits of the first 8 bytes of the SHA-256 of
+    /// `rewind:workflow:<tenant>/<name>`, read big-endian. The same in every store, so a migration in SQL and one in
+    /// Rust give a saved workflow the same id, and what pins it can be rewritten without reading
+    /// the catalog.
+    pub fn of_saved(tenant: &str, name: &str) -> Self {
+        let digest = crate::Digest::of(format!("rewind:workflow:{tenant}/{name}").as_bytes());
+        let mut first = [0u8; 8];
+        first.copy_from_slice(&digest.as_bytes()[..8]);
+        Self::from_bits(u64::from_be_bytes(first))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Its short id, how a workflow without a name shows and the origin of its runs' handles:
+    /// `wf-` and the first 6 characters after `wf_` (`wf-7k2m9q`).
+    pub fn short(&self) -> String {
+        let chars = &self.0[WORKFLOW_ID_PREFIX.len()..];
+        format!("wf-{}", &chars[..WORKFLOW_SHORT_ID_CHARS])
+    }
+
+    /// Whether `text` is shaped as an id, so that it names a workflow by its id, never by a
+    /// name.
+    pub fn is_id(text: &str) -> bool {
+        text.parse::<WorkflowId>().is_ok()
+    }
+}
+
+impl fmt::Display for WorkflowId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "invalid workflow id {0:?}: expected wf_ and 12 characters of Crockford's base32 in lower \
+     case, such as wf_7k2m9q4x8d1c"
+)]
+pub struct InvalidWorkflowId(pub String);
+
+impl FromStr for WorkflowId {
+    type Err = InvalidWorkflowId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let valid = s.strip_prefix(WORKFLOW_ID_PREFIX).is_some_and(|chars| {
+            chars.len() == WORKFLOW_ID_CHARS
+                && chars.bytes().all(|b| WORKFLOW_ID_ALPHABET.contains(&b))
+        });
+        if valid {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(InvalidWorkflowId(s.to_owned()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod workflow_id_tests {
+    use super::*;
+
+    #[test]
+    fn a_workflow_id_is_wf_and_12_base32_characters() {
+        let id = WorkflowId::from_bits(0x0123_4567_89ab_cdef);
+        assert_eq!(id.as_str().len(), 15);
+        assert!(id.as_str().starts_with("wf_"));
+        assert_eq!(id.as_str().parse::<WorkflowId>(), Ok(id.clone()));
+        assert_eq!(id.short().len(), 9);
+        assert!(id.short().starts_with("wf-"));
+        assert_eq!(&id.short()[3..], &id.as_str()[3..9]);
+        assert_eq!(
+            WorkflowId::of_saved("acme", "triage"),
+            WorkflowId::of_saved("acme", "triage")
+        );
+        assert_eq!(
+            WorkflowId::of_saved("acme", "triage").as_str(),
+            "wf_e2nzwv04tf3f",
+            "the stores' migrations compute the same"
+        );
+        assert_eq!(
+            WorkflowId::of_saved("dax-staging", "prod_gym").as_str(),
+            "wf_rs1wp4r9g4hf"
+        );
+        let wf: WorkflowId = "wf_7k2m9q4x8d1c".parse().unwrap();
+        assert_eq!(wf.short(), "wf-7k2m9q");
+        for bad in [
+            "wf_7k2m9q4x8d1",
+            "wf_7k2m9q4x8d1cc",
+            "wf_7K2M9Q4X8D1C",
+            "wf_7k2m9q4x8dlc",
+            "triage",
+        ] {
+            assert!(bad.parse::<WorkflowId>().is_err(), "{bad}");
+        }
+    }
+}

@@ -27,7 +27,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use rewind_api::scripts::TestRequest;
+use rewind_api::checks::TestRequest;
 use rewind_api::testing::{Test as ApiTest, TestInput, TestReport, TestResult};
 use rewind_core::{Code, Test};
 use rewind_engine::StartError;
@@ -133,7 +133,7 @@ pub(super) async fn test(
 }
 
 /// The tests of a file, with the cassettes and handlers it names read in.
-fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
+pub(super) fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
     let base = path.parent().map(Path::to_owned).unwrap_or_default();
     let mut tests: Vec<Value> = match input::read_json::<Value>(path)? {
         Value::Array(tests) => tests,

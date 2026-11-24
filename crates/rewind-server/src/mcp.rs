@@ -21,9 +21,8 @@ use axum::http::{HeaderValue, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use rewind_agent_tools::{Api, ApiError as ToolError, McpApi, Organization};
-use rewind_api::action_sets::{
-    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
-};
+use rewind_api::action_sets::{ActionSearchResults, ActionSetList, SearchQuery};
+use rewind_api::checks::{CheckRequest, CheckResult, TestRequest};
 use rewind_api::common::Duration;
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
@@ -31,11 +30,10 @@ use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
-use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
+    ChangeTests, CreateVersion, PatchWorkflow, RecordTests, RecordedTests, Workflow,
 };
 use rewind_api::{Client, ProblemType, routes};
 use rewind_mcp_server::{Connector, ConnectorError, http_service};
@@ -277,23 +275,12 @@ impl Api for ServerApi {
         Api::test(&self.local, test).await
     }
 
-    async fn get_script(&self, digest: &str) -> Result<Script, ToolError> {
-        Api::get_script(&self.local, digest).await
-    }
-
     async fn get_payload(&self, digest: &str, run: &str) -> Result<Value, ToolError> {
         Api::get_payload(&self.local, digest, run).await
     }
 
     async fn get_test(&self, digest: &str) -> Result<Test, ToolError> {
         Api::get_test(&self.local, digest).await
-    }
-
-    async fn create_action_set(
-        &self,
-        action_set: &CreateActionSet,
-    ) -> Result<ActionSet, ToolError> {
-        Api::create_action_set(&self.local, action_set).await
     }
 
     async fn search_actions(
@@ -304,13 +291,34 @@ impl Api for ServerApi {
         Api::search_actions(&self.local, action_set, query).await
     }
 
-    /// The gate runs the version's suite: on a worker.
-    async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ToolError> {
-        Api::create_workflow(&self.local, workflow).await
+    async fn get_workflow(&self, workflow: &str) -> Result<Workflow, ToolError> {
+        Api::get_workflow(&self.local, workflow).await
     }
 
-    async fn workflow_versions(&self, name: &str) -> Result<WorkflowVersions, ToolError> {
-        Api::workflow_versions(&self.local, name).await
+    async fn update_workflow(
+        &self,
+        workflow: &str,
+        patch: &PatchWorkflow,
+    ) -> Result<Workflow, ToolError> {
+        Api::update_workflow(&self.local, workflow, patch).await
+    }
+
+    /// The gate runs the workflow's suite: on a worker.
+    async fn create_version(
+        &self,
+        workflow: &str,
+        version: &CreateVersion,
+    ) -> Result<Workflow, ToolError> {
+        Api::create_version(&self.local, workflow, version).await
+    }
+
+    /// The new tests run against the latest version: on a worker.
+    async fn change_tests(
+        &self,
+        workflow: &str,
+        tests: &ChangeTests,
+    ) -> Result<Workflow, ToolError> {
+        Api::change_tests(&self.local, workflow, tests).await
     }
 
     async fn record_tests(

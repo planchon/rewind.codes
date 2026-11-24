@@ -2,9 +2,9 @@
 
 use std::fmt::Write as _;
 
+use rewind_api::checks::{Diagnostic, Severity};
 use rewind_api::common::{Payload, RunStatus};
 use rewind_api::runs::{Run, RunSummary, Waiting};
-use rewind_api::scripts::{Diagnostic, Severity};
 
 /// A run's state: its status, then what it returned, how it failed, or what it waits for.
 pub(crate) fn run(run: &Run) -> String {
@@ -159,7 +159,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
         "STARTED".to_owned(),
         "CALLS".to_owned(),
         "ERRORS".to_owned(),
-        "SCRIPT".to_owned(),
+        "WORKFLOW".to_owned(),
         "LABELS".to_owned(),
     ]];
     for run in runs {
@@ -176,11 +176,11 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
             run.started_at.to_string(),
             run.calls.to_string(),
             run.errors.to_string(),
-            // The code's title, else its first line.
-            shorten(
-                run.script_title.as_deref().unwrap_or(&run.headline),
-                HEADLINE_CHARS,
-            ),
+            // Its workflow's name, else its short id.
+            run.workflow
+                .as_ref()
+                .map(|workflow| shorten(&workflow_label(workflow), NAME_CHARS))
+                .unwrap_or_default(),
             run.labels
                 .iter()
                 .map(|(key, value)| format!("{key}={value}"))
@@ -191,8 +191,24 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
     table(&rows)
 }
 
-/// Characters of a code's title or first line in `rewind runs`.
-const HEADLINE_CHARS: usize = 40;
+/// Characters of a workflow's name in `rewind runs`.
+const NAME_CHARS: usize = 40;
+
+/// How a run's workflow shows: its name, else its short id (`wf-7k2m9q`).
+pub(crate) fn workflow_label(workflow: &rewind_api::workflows::RunWorkflow) -> String {
+    workflow
+        .name
+        .clone()
+        .unwrap_or_else(|| short_id(&workflow.id))
+}
+
+/// `wf-` and the first 6 characters of an id after `wf_`.
+pub(crate) fn short_id(id: &str) -> String {
+    match id.strip_prefix("wf_") {
+        Some(chars) => format!("wf-{}", chars.chars().take(6).collect::<String>()),
+        None => id.to_owned(),
+    }
+}
 
 fn shorten(text: &str, chars: usize) -> String {
     match text.char_indices().nth(chars) {
@@ -299,10 +315,10 @@ fn snake_case(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use rewind_api::checks::Location;
     use rewind_api::common::ErrorInfo;
     use rewind_api::common::{Callsite, Labels, RunMode};
     use rewind_api::runs::{Quarantine, QuarantineCause};
-    use rewind_api::scripts::Location;
     use serde_json::json;
 
     use super::*;
@@ -315,7 +331,6 @@ mod tests {
             status: RunStatus::Active,
             quarantine: None,
             code_digest: "s".into(),
-            script_title: None,
             action_set: "t".into(),
             epoch: 1,
             mode: RunMode::Live,

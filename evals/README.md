@@ -10,7 +10,7 @@ the numbers ([08](../archi/08-decisions.md#taken-while-building-the-evals-novemb
 ```
 model ──► system prompt (introduction, the rewind module, the action set in one rendering)
   │        + the agent tools: run_workflow, check_workflow, test_workflow, get_run, list_runs,
-  │          signal_run, cancel_run, retry_run, search_tools, save_workflow, get_workflow,
+  │          signal_run, cancel_run, retry_run, search_actions, update_workflow, get_workflow,
   │          record_tests
   ▼
 agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──► run plane in process:
@@ -24,15 +24,16 @@ agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──
 1. The task's world starts: its fake servers, the action set pinned from them (discovery through
    `McpDispatcher`), the declarations from `rewind-codegen`, and the run plane at Monday
    2026-03-02T09:00:00Z in virtual time. The task's setup, if it has one, is played first, with
-   the agent's labels: runs of scripts, workflows saved through the gate with their suite (on
+   the agent's labels: runs of code, workflows created through the gate with their suite (on
    the action set as it was then, for a server that changed since), runs of those workflows.
 2. The model gets the task and loops: generate a code, check it, run it, fix it. Each tool
    call is handled by `rewind-agent-tools`, the SDK's agent tools in Rust, with the same text
    back: 256 KiB pages, diagnostics with code frames, the trace up to a failure, the tests that
    did not pass. They reach the world through their port `Api`, which the world implements as
    the server answers (`src/api.rs`). A `wait` elapses in virtual time. The agent is a caller
-   limited to its labels: the runs and workflows it creates carry them, a run without them is
-   not found, and `save_workflow` derives the action set its later scripts use, as the SDK does.
+   limited to its labels, in the namespace `local`: the runs and workflows it creates carry its
+   labels, a run without them is not found; a run of new code creates a workflow, and
+   `update_workflow` names it or makes its next version through its suite.
 3. When the model answers (or after 30 turns), the world goes on in virtual time, up to 60
    days: sleeping runs wake up, the world answers signal waits as the task says, servers call
    their webhooks. Then production runs the workflows the task names: the latest version the
@@ -93,8 +94,8 @@ input, `{{run_id}}` stands for the last run id the tool results gave.
 Each run writes to its output directory:
 
 - `summary.md`: per model and rendering, the first-try check pass rate, task success, model
-  turns, scripts, the share of episodes where the model wrote tests (`test_workflow`,
-  `save_workflow`), the fixes the gate refused per episode, tokens and errors; then each
+  turns, codes submitted, the share of episodes where the model wrote tests (`test_workflow`,
+  `update_workflow`), the fixes the gate refused per episode, tokens and errors; then each
   task's successes per column, and why each failed episode failed.
 - `report.json`: the same summaries, and every episode's record.
 - `transcripts/`: each episode's system prompt and turns, tool results included.

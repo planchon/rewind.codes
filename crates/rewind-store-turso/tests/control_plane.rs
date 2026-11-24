@@ -1,6 +1,6 @@
-//! The embedded control plane: the conformance suites of `CatalogStore` and `Cluster`, each check
-//! on a new database file; the changes that access and secrets send; namespaces whose rows have
-//! no partition; the partition map kept across a restart.
+//! The embedded control plane: the conformance suites of `CatalogStore`, `CatalogMigration` and
+//! `Cluster`, each check on a new database file; the changes that access and secrets send;
+//! namespaces whose rows have no partition; the partition map kept across a restart.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
@@ -70,6 +70,13 @@ async fn the_catalog_conforms() {
         })
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_catalog_migration_conforms() {
+    let dir = TempDir::new().expect("temporary directory");
+    let path = paths(&dir);
+    conformance::catalog::run_migration(|| block_on(async { open(&path()).await.catalog() })).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

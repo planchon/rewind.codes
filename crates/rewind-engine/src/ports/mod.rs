@@ -72,7 +72,8 @@ pub use access::{
 pub use archive::{ArchiveError, RunArchive, SealedAttempt};
 pub use blob::{BlobError, BlobOwner, BlobStore};
 pub use catalog::{
-    CatalogError, CatalogStore, NamespaceFilter, NamespacePage, TEST_DELETION_TIMEOUT,
+    CatalogError, CatalogMigration, CatalogStore, CodeTitle, NamespaceFilter, NamespacePage,
+    TEST_DELETION_TIMEOUT,
 };
 pub use checker::{
     ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
@@ -108,8 +109,8 @@ pub use partition::{
     ActionCounts, Admission, Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters,
     DueTimer, FailureCounts, Found, Gauges, Hour, IndexedSummary, LATEST_RUNS, LatestRun,
     OutboxChange, OutboxEntry, OutboxId, Page, PartitionError, PartitionLog, PartitionStore,
-    Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, ScriptCounts, SearchPosition,
-    Sketch, TaskChange, TaskRecord, TenantState, TimerChange, TimerKind, Watcher, Window,
+    Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, SearchPosition, Sketch,
+    TaskChange, TaskRecord, TenantState, TimerChange, TimerKind, Watcher, Window, WorkflowCounts,
     home_partition, namespace_partition,
 };
 pub use read_model::{
@@ -117,11 +118,13 @@ pub use read_model::{
     SearchCursor, TaskPhase, Term, TextMatch, Wait, WaitKind, WaitingFor,
 };
 pub use records::{
-    CallTask, Created, Enqueued, ForkSource, InboxItem, ParkKind, ParkReason, PayloadRecord,
-    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
-    SignalUrlTarget, SignalUrlToken, StartedBy, StoreError, StoredActionSet, StoredCode,
-    StoredWorkflow, TEST_GRACE, TaskRef, TaskState, TaskToken, TestRecord, TraceContext, Trigger,
-    WorkflowFilter, deferred_timeout_failure,
+    CallTask, Created, Enqueued, ForkSource, InboxItem, Labels, NewVersion, NewWorkflow, ParkKind,
+    ParkReason, PayloadRecord, QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata,
+    RunWorkflow, ScopeFilter, SignalUrlTarget, SignalUrlToken, StartedBy, StoreError,
+    StoredActionSet, StoredCode, StoredVersion, StoredWorkflow, SuiteChange, SuiteMember,
+    TEST_GRACE, TaskRef, TaskState, TaskToken, TestRecord, TraceContext, Trigger, VersionRef,
+    WorkflowCreated, WorkflowFilter, WorkflowPatch, WorkflowScope, WorkflowSource, WorkflowWrite,
+    carries, current_suite, deferred_timeout_failure,
 };
 pub use secrets::{
     DailyReads, LastRead, MasterKeyId, NewSecret, PrivateKey, PublicKey, PutSecret,

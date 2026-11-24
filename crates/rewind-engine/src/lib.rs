@@ -27,14 +27,17 @@
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
 //! - [`test`]: test runs: the dispatcher that answers from a test's rules, handlers,
 //!   cassette and static responses.
-//! - [`suites`]: the suites of workflow versions, composed from their base's and stored as
-//!   blobs in the control plane; tests recorded from runs.
+//! - [`suites`]: the suites of workflows, composed from the workflow's and stored as blobs in the
+//!   control plane; tests recorded from runs.
 //! - [`testing`]: tests run in virtual time against a code, several at once, each on a run
 //!   plane of its own in the driver; the checks of a test against its action set and its
 //!   workflow's interface.
 //! - [`transcript`]: the transcript of a run.
 //! - [`migrate`]: `rewind server migrate-runs`, the runs of the set-aside tables moved into their
 //!   partitions and the archive, once.
+//! - [`rename`]: what `rewind server rename-data` does to the catalog to give every run a
+//!   workflow: saved workflows scoped by the namespaces that ran them, a workflow for each code
+//!   run without one, the titles people gave codes turned into names.
 //! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions),
 //!   archive, link between nodes, blobs, access, secrets, telemetry and webhooks; a fake
 //!   identity provider; static action responses and type-checking; system and virtual time;
@@ -69,6 +72,7 @@ pub mod plane;
 pub mod ports;
 pub mod projector;
 pub mod quotas;
+pub mod rename;
 pub mod replay;
 pub mod router;
 pub mod schema;
@@ -93,4 +97,7 @@ pub use replay::ReplayVerdict;
 pub use start::{StartError, StartRun};
 pub use tasks::{Backoff, idempotency_key};
 pub use text::NulCharacter;
-pub use workflows::{RegisterError, RegisterWorkflow, SignalRefused, StartWorkflow};
+pub use workflows::{
+    ChangeTests, CreateWorkflow, ForkWorkflow, MAX_DESCRIPTION_CHARS, MakeVersion, PullWorkflow,
+    SignalRefused, StartWorkflow, WorkflowError, WorkflowMaker, WrittenWorkflow,
+};

@@ -25,8 +25,8 @@ use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
 use rewind_engine::ports::link::{HarnessFailure, StreamAttach, StreamId, StreamMessage};
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, Clock, CodeExecutor, Entropy, NamespaceName, NewSecret,
-    NodeId, ParkKind, Predicate, RunOrder, RunQuery, RunRef, Scope, Secret, SecretId, SecretStore,
-    TaskRef, TaskState, TenantId, Term, VirtualTime,
+    NewWorkflow, NodeId, ParkKind, Predicate, RunOrder, RunQuery, RunRef, Scope, Secret, SecretId,
+    SecretStore, TaskRef, TaskState, TenantId, Term, VirtualTime, WorkflowScope,
 };
 use rewind_engine::{ForkRun, Limits, ReplayVerdict, StartRun};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -51,6 +51,10 @@ impl Entropy for CorpusEntropy {
 
     fn seed(&self) -> Seed {
         self.0.seed()
+    }
+
+    fn workflow_id(&self) -> rewind_core::WorkflowId {
+        self.0.workflow_id()
     }
 }
 
@@ -458,7 +462,7 @@ async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
         .await
         .map_err(fail)?;
     for workflow in case.workflows()? {
-        let name = workflow.name().to_owned();
+        let name = workflow.name.clone();
         let code = &case.workflow_scripts[&name];
         let compiled = world
             .plane
@@ -470,7 +474,20 @@ async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
             .await
             .map_err(fail)?;
         catalog
-            .put_workflow(&tenant, &workflow, world.plane.clock.now())
+            .create_workflow(
+                &tenant,
+                &NewWorkflow {
+                    id: workflow.id.clone(),
+                    scope: WorkflowScope::Organization,
+                    name: Some(name.clone()),
+                    description: workflow.description.clone(),
+                    labels: Default::default(),
+                    source: None,
+                    created_by: "e2e".to_owned(),
+                    version: workflow.version.clone(),
+                },
+                world.plane.clock.now(),
+            )
             .await
             .map_err(|err| format!("workflow {name}: {err}"))?;
     }

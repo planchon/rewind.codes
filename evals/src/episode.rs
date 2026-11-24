@@ -8,9 +8,9 @@ use std::time::Instant;
 
 use rewind_check::TsgoChecker;
 use rewind_core::{Code, RunId, WorkflowSchemas};
-use rewind_engine::RegisterWorkflow;
-use rewind_engine::ports::{TenantId, WorkflowDeclarations};
-use rewind_engine::suites::{SuiteChanges, TestInput};
+use rewind_engine::CreateWorkflow;
+use rewind_engine::ports::{TenantId, WorkflowScope};
+use rewind_engine::suites::TestInput;
 use rewind_runtime::TsHandlerLoader;
 use serde::Serialize;
 use serde_json::json;
@@ -50,8 +50,8 @@ pub fn labels(episode: &str) -> BTreeMap<String, String> {
     BTreeMap::from([("eval".to_owned(), episode.to_owned())])
 }
 
-/// The tests a tool call gives: `test_workflow`'s and `save_workflow`'s `tests`, and the tests
-/// `save_workflow` replacements.
+/// The tests a tool call gives: `test_workflow`'s and `update_workflow`'s `tests`, and
+/// `update_workflow`'s replacements.
 fn tests_given(name: &str, input: &serde_json::Value) -> usize {
     let input = match input {
         serde_json::Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
@@ -65,7 +65,7 @@ fn tests_given(name: &str, input: &serde_json::Value) -> usize {
     };
     match name {
         "test_workflow" => count("tests"),
-        "save_workflow" => count("tests") + count("replace"),
+        "update_workflow" => count("tests") + count("replace"),
         _ => 0,
     }
 }
@@ -93,15 +93,15 @@ pub struct EpisodeRecord {
     /// Model turns: requests to its API.
     pub iterations: usize,
     /// Workflows submitted (`run_workflow`, `check_workflow`, `test_workflow`, `retry_run`,
-    /// `save_workflow`).
+    /// `update_workflow`).
     pub scripts: usize,
     /// Workflows refused by the checks.
     pub refused: usize,
     /// Tests the model wrote, unprompted or not: those it gave `test_workflow` and
-    /// `save_workflow`, replacements included.
+    /// `update_workflow`, replacements included.
     pub tests_written: usize,
     /// Fixes the gate refused because a test of a workflow's suite did not pass
-    /// (`save_workflow`, `retry_run`).
+    /// (`update_workflow`, `retry_run`).
     pub gate_refusals: usize,
     /// Runs the agent started, forks included.
     pub runs: usize,
@@ -251,7 +251,6 @@ async fn converse(
                     is_error: true,
                     run: None,
                     workflow: None,
-                    action_set: None,
                     tests: None,
                     code: None,
                 },
@@ -267,8 +266,8 @@ async fn converse(
             }
             record.tests_written += tests_given(&call.name, &call.input);
             // The gate refused a fix: a test of a workflow's suite did not pass, so
-            // `save_workflow` saved nothing, or `retry_run` started no fork.
-            let gated = matches!(call.name.as_str(), "save_workflow" | "retry_run");
+            // `update_workflow` made nothing, or `retry_run` started no fork.
+            let gated = matches!(call.name.as_str(), "update_workflow" | "retry_run");
             if gated && handled.is_error && handled.tests.is_some() {
                 record.gate_refusals += 1;
             }
@@ -303,7 +302,7 @@ async fn converse(
     Ok(())
 }
 
-/// Plays the task's setup with the agent's labels: saves its workflows, starts its runs and
+/// Plays the task's setup with the agent's labels: creates its workflows, starts its runs and
 /// drives each as far as it goes. The ids of the runs.
 async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
     let mut ids = Vec::new();
@@ -318,7 +317,7 @@ async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
                     .run
             }
             Setup::Workflow(workflow) => {
-                save_workflow(world, &workflow()).await?;
+                create_workflow(world, &workflow()).await?;
                 continue;
             }
             Setup::WorkflowRun { workflow, input } => world
@@ -335,9 +334,9 @@ async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
     Ok(ids)
 }
 
-/// Saves a workflow of the setup through the gate, with the agent's labels, on the action set it
-/// was written for.
-async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), String> {
+/// Creates a workflow of the setup through the gate, in the namespace `local`, with the agent's
+/// labels, on the action set it was written for.
+async fn create_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), String> {
     let refused = |error: String| {
         format!(
             "the setup's workflow {} was refused: {error}",
@@ -361,39 +360,27 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
             .map_err(refused)?;
         tests.push(TestInput::Inline(Box::new(test)));
     }
-    let schemas = WorkflowSchemas {
-        input: workflow.input.clone(),
-        output: workflow.output.clone(),
-        signals: workflow.signals.clone(),
-    };
-    let generated = rewind_codegen::workflow_declarations(workflow.name, &schemas);
     let loader = TsHandlerLoader::default();
     world
         .edge
-        .register_workflow(
-            RegisterWorkflow {
+        .create_workflow(
+            CreateWorkflow {
                 tenant: TenantId::local(),
-                name: workflow.name.to_owned(),
+                scope: WorkflowScope::Namespace(world.namespace()),
+                name: Some(workflow.name.to_owned()),
                 description: Some(workflow.description.to_owned()),
                 code: Code::new(workflow.code),
                 action_set: action_set.digest(),
-                schemas,
-                labels: world.labels.clone(),
+                interface: Some(WorkflowSchemas {
+                    input: workflow.input.clone(),
+                    output: workflow.output.clone(),
+                    signals: workflow.signals.clone(),
+                }),
                 secrets: Default::default(),
-                secret_rights: rewind_engine::secrets::SecretRights::Organization {
-                    labels: Default::default(),
-                },
-                declarations: WorkflowDeclarations {
-                    signals: generated.signals,
-                    entry: generated.entry,
-                },
-                suite: SuiteChanges {
-                    tests,
-                    ..SuiteChanges::default()
-                },
+                tests,
+                maker: world.maker(),
             },
-            &*world.checker,
-            &world.test_kit(&loader),
+            &world.workflow_kit(&loader),
         )
         .await
         .map_err(|err| refused(err.to_string()))?;

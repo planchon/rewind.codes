@@ -17,9 +17,11 @@
 //! `{"type":"stdio","command":…,"args":[…],"env":{…}}`. Optional fields are omitted when
 //! absent: `description`, `schemas.output`, `policy.execution_timeout_ms`, `route.group`.
 //!
-//! An action set that pins workflows also has `"workflows":[{"name":"triage","version":"<sha-256>",
-//! "description":…,"schemas":{"input":…,"output":…,"signals":{"approval":…}}}]`; one that pins
-//! none has no `workflows`. The workflows' built-ins are derived from them, never written.
+//! An action set that pins workflows also has `"workflows":[{"name":"triage","id":"wf_…",
+//! "version":12,"digest":"<sha-256>","description":…,"schemas":{"input":…,"output":…,
+//! "signals":{"approval":…}}}]` (`version` the pinned version's number, `digest` its document's);
+//! one that pins none has no `workflows`. The workflows' built-ins are derived from them, never
+//! written.
 //!
 //! How calls authenticate (`archi/04-tools.md`, "Authenticating calls") is a server's or an
 //! API's `auth`, left out when calls carry nothing: `{"type":"rewind"}`,
@@ -33,13 +35,13 @@
 //! "idempotency_key":false,"method":"post","parameters":[{"in":"path","name":"id"}],
 //! "path":"/measures/{id}"}`; no other action has one.
 //!
-//! The workflow version document (the `workflows` table) is
-//! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"code":"<sha-256>",
-//! "action_set":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
-//! `labels`, the scope of a grant limited to labels it was saved under, is omitted when empty:
-//! a version saved tenant-wide keeps the document it had before versions carried labels. So is
-//! `secrets`, its secrets (`{"github":"ns/github","zendesk":"org/zendesk"}`): a version
-//! that uses none keeps the document it had before versions carried them.
+//! The workflow version document (the `workflow_versions` table) is
+//! `{"action_set":"<sha-256>","code":"<sha-256>","labels":{"env":"dev"},"schemas":{…},"v":1}`, in
+//! its canonical form, so that its bytes hash to the version's digest. Its workflow's name and
+//! description are not part of it: they are the workflow's. `schemas`, its interface, is omitted
+//! for a version without one, which accepts any input, output and signal name. `labels`, the
+//! scope of a grant limited to labels it was made under, is omitted when empty, and so is
+//! `secrets`, its secrets (`{"github":"ns/github","zendesk":"org/zendesk"}`), when it uses none.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -48,7 +50,7 @@ use rewind_core::{
     Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, ApiOperation, ApiParameter,
     Builtin, Digest, HttpMethod, McpServer, McpTransport, ParameterLocation, PinnedWorkflow,
     ReplacedTest, RetiredTest, SecretEncoding, SecretPlacement, SecretRef, ServerSecrets, Suite,
-    SuiteTest, Workflow, WorkflowSchemas,
+    SuiteTest, WorkflowId, WorkflowSchemas, WorkflowVersion,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,7 +70,9 @@ struct ActionSetV1 {
 #[serde(deny_unknown_fields)]
 struct PinnedWorkflowV1 {
     name: String,
-    version: String,
+    id: String,
+    version: u32,
+    digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     schemas: WorkflowSchemasV1,
@@ -85,12 +89,10 @@ struct WorkflowSchemasV1 {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkflowV1 {
-    name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
     code: String,
     action_set: String,
-    schemas: WorkflowSchemasV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schemas: Option<WorkflowSchemasV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -346,7 +348,12 @@ pub(crate) fn decode_action_set(document: Value) -> Result<ActionSet, String> {
         .into_iter()
         .map(|workflow| {
             Ok(PinnedWorkflow {
-                version: digest(&workflow.version, "the version of a workflow")?,
+                id: workflow
+                    .id
+                    .parse::<WorkflowId>()
+                    .map_err(|err| format!("workflow {:?}: {err}", workflow.name))?,
+                version: workflow.version,
+                digest: digest(&workflow.digest, "the digest of a workflow's version")?,
                 name: workflow.name,
                 description: workflow.description,
                 schemas: schemas_from_dto(workflow.schemas),
@@ -360,14 +367,12 @@ pub(crate) fn decode_action_set(document: Value) -> Result<ActionSet, String> {
 
 /// The workflow version document as a JSON value, `"v"` included. The caller writes it in
 /// canonical form.
-pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
+pub(crate) fn workflow_document(workflow: &WorkflowVersion) -> Value {
     let suite = workflow.suite();
     let dto = WorkflowV1 {
-        name: workflow.name().to_owned(),
-        description: workflow.description().map(str::to_owned),
         code: workflow.code().to_hex(),
         action_set: workflow.action_set().to_hex(),
-        schemas: schemas_dto(workflow.schemas()),
+        schemas: workflow.interface().map(schemas_dto),
         base: suite.base.map(|parent| parent.to_hex()),
         tests: suite
             .tests
@@ -411,7 +416,7 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
 }
 
 /// Decodes the fields of a v1 workflow version document, its version already taken out.
-pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
+pub(crate) fn decode_workflow(document: Value) -> Result<WorkflowVersion, String> {
     let dto: WorkflowV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
     let secrets = dto
         .secrets
@@ -461,13 +466,11 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
             })
             .collect::<Result<_, String>>()?,
     };
-    Workflow::new(
-        dto.name,
-        dto.description,
+    WorkflowVersion::new(
         digest(&dto.code, "\"code\"")?,
         digest(&dto.action_set, "\"action_set\"")?,
-        schemas_from_dto(dto.schemas),
     )
+    .with_interface(dto.schemas.map(schemas_from_dto))
     .and_then(|workflow| workflow.with_suite(suite))
     .map(|workflow| workflow.with_labels(dto.labels).with_secrets(secrets))
     .map_err(|err| err.to_string())
@@ -476,7 +479,9 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
 fn pinned_dto(workflow: &PinnedWorkflow) -> PinnedWorkflowV1 {
     PinnedWorkflowV1 {
         name: workflow.name.clone(),
-        version: workflow.version.to_hex(),
+        id: workflow.id.to_string(),
+        version: workflow.version,
+        digest: workflow.digest.to_hex(),
         description: workflow.description.clone(),
         schemas: schemas_dto(&workflow.schemas),
     }

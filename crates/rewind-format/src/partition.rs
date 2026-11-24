@@ -24,10 +24,10 @@ pub use crate::v1::partition::{
     ActionCounts, Admission, Attribute, Callsite, Counters, Ending, FailureCounts, FailureKind,
     ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log, Metadata, Mode, Outbox,
     ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
-    QuotaKind, RunCounts, RunHead, RunWorkflow, ScriptCounts, SecretExpiredReason, Shape,
-    SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status,
-    Summary, Task, TaskPhase, TaskState, TenantState, Threshold, Timer, TimerKind, TraceContext,
-    Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind,
+    QuotaKind, RunCounts, RunHead, RunWorkflow, SecretExpiredReason, Shape, SignalKey,
+    SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status, Summary, Task,
+    TaskPhase, TaskState, TenantState, Threshold, Timer, TimerKind, TraceContext, Wait, WaitKind,
+    WaitingFor, Watcher, Webhook, WebhookKind, WorkflowCounts,
 };
 
 /// A partition record: what [`encode`] writes and [`decode`] reads.

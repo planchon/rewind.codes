@@ -1,6 +1,6 @@
 //! Reading across runs, for the dashboard: action statistics and payloads on demand
 //! (`archi/05-testing-and-observability.md`, "Read model" and "Dashboard"). The list of
-//! workflows is in [`crate::scripts`], the list of runs in [`crate::runs`].
+//! workflows is in [`crate::workflows`], the list of runs in [`crate::runs`].
 
 use std::collections::BTreeMap;
 

@@ -11,7 +11,7 @@ use rewind_core::{
     ActionFailure, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Annotation, Callsite,
     CancelReason, Code, Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle,
     LogLevel, PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus, SecretRef, Seed, Seq,
-    Shape, Timestamp,
+    Shape, Timestamp, WorkflowId,
 };
 use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
@@ -29,11 +29,11 @@ use rewind_engine::ports::{
     NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionGeneration,
     PayloadRecord, Predicate, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range, RunCounts, RunHead, RunMetadata,
-    RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, ScriptCounts, SealedAttempt,
-    SearchCursor, SecretExpiredReason, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy,
-    StoredActionSet, StoredCode, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken, TenantId,
-    Term, TextMatch, Threshold, TimerChange, TimerKind, TraceContext, TraceId, Trigger, Usage,
-    Wait, WaitKind, WaitingFor, Webhook, WebhookKind, Window,
+    RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, SealedAttempt, SearchCursor,
+    SecretExpiredReason, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, StoredActionSet,
+    StoredCode, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, Term, TextMatch,
+    Threshold, TimerChange, TimerKind, TraceContext, TraceId, Trigger, Usage, Wait, WaitKind,
+    WaitingFor, Webhook, WebhookKind, Window, WorkflowCounts,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -98,6 +98,20 @@ fn trace_context() -> TraceContext {
     }
 }
 
+fn workflow_id() -> WorkflowId {
+    WorkflowId::from_bits(0x0123_4567_89ab_cdef)
+}
+
+fn flow() -> RunWorkflow {
+    RunWorkflow {
+        id: workflow_id(),
+        name: Some("triage".into()),
+        version: 3,
+        digest: digest("v3"),
+        interface: true,
+    }
+}
+
 fn metadata() -> RunMetadata {
     let mut secrets = rewind_core::ServerSecrets::new();
     secrets.insert("github", SecretRef::parse("ns/github").unwrap());
@@ -108,10 +122,7 @@ fn metadata() -> RunMetadata {
             run: run_id(9),
             at: Some(4),
         }),
-        workflow: Some(RunWorkflow {
-            name: "triage".into(),
-            version: digest("v1"),
-        }),
+        workflow: Some(flow()),
         started_by: Some(StartedBy {
             run: run_id(8),
             seq: Seq(2),
@@ -223,7 +234,7 @@ fn summary(n: u128) -> RunSummary {
         mode: Some(RunMode::Live),
         labels: labels(),
         source: Some(run_id(9)),
-        workflow: Some("triage".into()),
+        workflow: Some(flow()),
         started_by: Some(run_id(8)),
         started_at: Some(T),
         ended_at: Some(at(7)),
@@ -458,7 +469,15 @@ fn counters() -> Counters {
         runs: run_counts(),
         durations: sketch(),
         cpu: Duration::new(3, 141_592_653),
-        workflows: BTreeMap::from([("triage".to_owned(), run_counts())]),
+        workflows: BTreeMap::from([(
+            workflow_id(),
+            WorkflowCounts {
+                runs: run_counts(),
+                actions: BTreeSet::from(["srv.a".to_owned()]),
+                first_started_at: Some(T),
+                last_started_at: Some(at(9)),
+            },
+        )]),
         namespaces: BTreeMap::from([(user(), run_counts())]),
         failures: BTreeMap::from([(
             "0123456789abcdef".to_owned(),
@@ -466,7 +485,7 @@ fn counters() -> Counters {
                 signature: "TypeError: <var> is undefined".into(),
                 error: "TypeError".into(),
                 runs: 2,
-                scripts: BTreeMap::from([(digest("script"), 2)]),
+                workflows: BTreeMap::from([(workflow_id(), 2)]),
                 lines: BTreeMap::from([(3, 2)]),
                 latest: vec![LatestRun {
                     run: run_id(3),
@@ -487,15 +506,6 @@ fn counters() -> Counters {
                 latency: sketch(),
             },
         )]),
-        scripts: BTreeMap::from([(
-            digest("script"),
-            ScriptCounts {
-                runs: run_counts(),
-                actions: BTreeSet::from(["srv.a".to_owned()]),
-                first_started_at: Some(T),
-                last_started_at: Some(at(9)),
-            },
-        )]),
     }
 }
 
@@ -504,7 +514,7 @@ fn gauges() -> Gauges {
         active_runs: 3,
         waiting: BTreeMap::from([(WaitingFor::Signal, 2), (WaitingFor::Parked, 1)]),
         quarantined: 1,
-        scripts: BTreeMap::from([(digest("script"), 3)]),
+        workflows: BTreeMap::from([(workflow_id(), 3)]),
     }
 }
 
@@ -679,7 +689,6 @@ fn every_predicate() -> Vec<Predicate> {
                 TextMatch::Prefix("tri".into()),
             ],
         },
-        Predicate::Script(vec!["ab".into()]),
         Predicate::ActionSet(vec!["cd".into()]),
         Predicate::Action(vec![TextMatch::Prefix("srv.".into())]),
         Predicate::Error {
@@ -972,7 +981,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             generation: PartitionGeneration(7),
             run: run_id(1),
             namespace: user(),
-            code: digest("script"),
+            workflow: Some(workflow_id()),
             at: T,
         }),
         TenantRequest::Counts(CountsReport {

@@ -55,7 +55,7 @@ impl FromStr for Rendering {
 const INTRODUCTION: &str = "\
 You solve tasks by writing TypeScript workflows that Rewind runs for you, through the tools \
 run_workflow, check_workflow, test_workflow, get_run, list_runs, signal_run, cancel_run, retry_run, \
-search_actions, save_workflow, get_workflow and record_tests.
+search_actions, update_workflow, get_workflow and record_tests.
 
 - A code is one ES module whose default export is `async function main(input)`. What `main` \
 returns is the run's output, as JSON.
@@ -67,8 +67,9 @@ no `fetch`, no file system and no `process`.
 - run_workflow type-checks the code before running it: fix what the diagnostics say and run it \
 again. When a run fails halfway, retry_run starts it again with a corrected code, without \
 repeating the calls it already made.
-- A workflow is a code saved with a name and schemas (save_workflow). Each version carries \
-its tests, which every later version must pass: a version is saved only if they all do.
+- Every code that runs is a workflow, with an id; a name, a description and an interface are \
+given with update_workflow, which also makes its next version from new code. Each workflow has \
+a suite of tests that every new version must pass: a version is made only if they all do.
 - When the task is done, answer with a short summary of what you did, and the answer if the \
 task asks a question.";
 

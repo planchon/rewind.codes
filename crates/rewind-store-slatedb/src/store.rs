@@ -430,7 +430,7 @@ impl PartitionLog for SlateLog {
             .records::<record::Gauges>(&keys::Key::new(keys::GAUGES))
             .await?
         {
-            counted.insert(namespace_of(&key)?, codec::gauges_of(gauges));
+            counted.insert(namespace_of(&key)?, codec::gauges_of(gauges)?);
         }
         for key in self.keys(&keys::Key::new(keys::COUNTED)).await? {
             counted.entry(namespace_of(&key)?).or_default();
@@ -702,7 +702,7 @@ impl PartitionLog for SlateLog {
             .await
             .map_err(|err| self.error(err))?;
         while let Some(entry) = iterator.next().await.map_err(|err| self.error(err))? {
-            let counts = codec::counters_of(decode(&entry.value)?);
+            let counts = codec::counters_of(decode(&entry.value)?)?;
             let namespace = match scope.namespace() {
                 Some(namespace) => namespace.clone(),
                 None => {
@@ -727,6 +727,7 @@ impl PartitionLog for SlateLog {
                 .get::<record::Gauges>(keys::gauges(scope.tenant(), namespace))
                 .await?
                 .map(codec::gauges_of)
+                .transpose()?
                 .unwrap_or_default()),
             None => {
                 let mut total = Gauges::default();
@@ -734,7 +735,7 @@ impl PartitionLog for SlateLog {
                     .records::<record::Gauges>(&keys::gauges_of(scope.tenant()))
                     .await?
                 {
-                    total.add(&codec::gauges_of(gauges));
+                    total.add(&codec::gauges_of(gauges)?);
                 }
                 Ok(total)
             }

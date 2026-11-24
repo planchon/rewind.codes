@@ -1,18 +1,17 @@
 //! The `CatalogStore` port: the control plane's catalog (`archi/07-code-architecture.md`,
 //! "`CatalogStore`"; `archi/06-storage-and-scale.md`, "The control plane").
 //!
-//! Workflows, action sets and workflow versions by digest, the index of tests and the suite of each
-//! version; tenants; namespaces, with their partition, display name, exceptions and erasure;
-//! subscriptions. It is written at the pace of people, and every write sends its
+//! Code and action sets by digest; workflows, their versions, the codes each scope has seen and
+//! their suites; the index of tests; tenants; namespaces, with their partition, display name,
+//! exceptions and erasure; subscriptions. It is written at the pace of people, and every write sends its
 //! [`ControlPlaneChange`](crate::ports::cluster::ControlPlaneChange) in the same transaction, which
 //! every process receives through [`Membership::changes`](crate::ports::cluster::Membership).
 
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, WorkflowId};
 
 use crate::ports::checker::ActionDeclarations;
 use crate::ports::executor::CompiledCode;
@@ -20,7 +19,9 @@ use crate::ports::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
 };
 use crate::ports::records::{
-    ScriptTitle, StoredActionSet, StoredCode, StoredWorkflow, TestRecord, WorkflowFilter,
+    Labels, NewVersion, NewWorkflow, StoredActionSet, StoredCode, StoredVersion, StoredWorkflow,
+    SuiteChange, SuiteMember, TestRecord, VersionRef, WorkflowCreated, WorkflowFilter,
+    WorkflowPatch, WorkflowWrite,
 };
 use crate::ports::tenancy::{RunRef, Tenant, TenantId};
 use crate::ports::webhooks::Subscription;
@@ -82,34 +83,47 @@ pub struct NamespacePage {
 ///
 /// - **Tenants.** Every key starts with the tenant: a code, an action set, a version, a test, a
 ///   namespace or a subscription of one tenant is never visible to another.
-/// - **Content.** Workflows and action sets are stored by digest, and a second put changes nothing.
-///   Only workflows that compile are stored.
-/// - **Titles.** `set_script_title` gives a stored code the title and description a person
-///   wrote, or removes them, and answers `false` for a code the tenant does not have;
-///   `script_titles` reads them for the workflows that have one.
-/// - **Workflows.** A version is immutable: a second `put_workflow` of a version changes nothing
-///   and returns the first. `workflow_versions` lists a name's versions carrying `labels`,
-///   newest first (created last first, then stored last first): the first is the latest;
-///   `workflows_with_code` lists the versions of any name whose code is `code`, in the
-///   same order; `latest_workflows` gives the latest version of each name, by name. A new
-///   version takes the next number of its name in its tenant, from 1 in the order they were
-///   stored; `workflow_number` finds a version by its number, whatever its labels.
+/// - **Content.** Code and action sets are stored by digest, and a second put changes nothing.
+///   Only code that compiles is stored.
+/// - **Workflows** (`archi/07-code-architecture.md`, "`CatalogStore`"). A workflow's id is the
+///   engine's, its scope a namespace or the organization, its name unique in its scope.
+///   `create_workflow` writes a workflow, its version 1, its suite (version 1's tests) and its
+///   code in `workflow_codes`, in one transaction: without a name, for a code its scope already
+///   has under labels the version carries, it answers `Existing` with that workflow and changes
+///   nothing; a name its scope already has is `NameTaken`. `workflow_named` resolves a name in
+///   the namespace given, then among the organization's workflows; `workflow_with_code` reads
+///   `workflow_codes` in the namespace then in the organization, the workflow that first had the
+///   code there under labels that carry the caller's, and its latest version with that code.
+///   Both, `list_workflows` and `versions` see only the workflows and the versions carrying the
+///   caller's labels; `workflow` and `version` see them whatever their labels.
+/// - **Versions.** A version is immutable. `put_version` takes the next number of its workflow,
+///   from 1, under a lock of the workflow; it writes the version's code in `workflow_codes` when
+///   its scope has not seen it under those labels, and makes the workflow's suite the version's
+///   tests (the tests it no longer has leave with the reason the version gives); with `pulled`, it
+///   moves the fork's `source` to that version. `versions` lists them newest first.
+/// - **Suites.** `change_suite` adds, replaces and retires tests of a workflow's suite without a
+///   version; `suite` reads every test it holds or held. A test replaced or retired leaves with
+///   its reason; one added again under its name and digest joins again.
+/// - **Names and scopes.** `update_workflow` sets a workflow's name and description without a
+///   version. `promote_workflow` moves a namespace's workflow to the organization, with its id,
+///   versions, suite and codes, unless the organization has its name (`NameTaken`).
 /// - **Tests.** `reserve_tests` inserts a test's row, or makes an existing one new again, before
-///   its blob is written, and returns the digests whose deletion has started. `put_workflow`
-///   writes the rows of `workflow_tests` from the version's suite, and refuses (`Conflict`) a
-///   new version that references a test without a row, or whose deletion has started.
-///   `unreferenced_tests` marks the rows no version references, stored more than
-///   [`TEST_GRACE`](crate::ports::TEST_GRACE) ago, and returns them; their blobs are deleted,
-///   then `drop_tests` removes the rows still marked. With `erased`, it removes the given rows
-///   whatever references them.
+///   its blob is written, and returns the digests whose deletion has started. `create_workflow`,
+///   `put_version` and `change_suite` refuse (`Conflict`) a test without a row, or whose deletion
+///   has started. `unreferenced_tests` marks the rows no suite references (a test that left a
+///   suite still belongs to it), stored more than [`TEST_GRACE`](crate::ports::TEST_GRACE) ago,
+///   and returns them; their blobs are deleted, then `drop_tests` removes the rows still marked.
+///   With `erased`, it removes the given rows whatever references them, and the suites' rows
+///   that reference them.
 /// - **Namespaces.** `ensure_namespace` and `put_namespace` create a namespace at its first use
 ///   with the tenant's defaults and its partition, [`namespace_partition`]; the partition of a
 ///   namespace never changes. A namespace being deleted is left as it is (`Deleting`).
 ///   `delete_namespace` marks it; `namespaces_to_erase` lists the marked ones, the oldest mark
-///   first; `drop_namespace` removes a marked one, once its partition holds nothing of it.
+///   first; `drop_namespace` removes a marked one, with its workflows, their versions, codes and
+///   suites, once its partition holds nothing of it.
 /// - **Changes.** Every write sends what it changed as a `ControlPlaneChange`, in the same
-///   transaction: a code, an action set, a workflow version, a test, a subscription, a tenant, a
-///   namespace.
+///   transaction: an action set, a workflow (created, named, described, given a version or
+///   tests, promoted, moved), a test, a subscription, a tenant, a namespace.
 /// - **Time.** The catalog never reads a clock: every method that depends on time takes `now`.
 ///
 /// [`namespace_partition`]: crate::ports::partition::namespace_partition
@@ -131,23 +145,6 @@ pub trait CatalogStore: Send + Sync {
         tenant: &TenantId,
         digest: Digest,
     ) -> impl Future<Output = Result<Option<StoredCode>, CatalogError>> + Send;
-
-    /// Sets the title a person gave a stored code, or removes it (`None`)
-    /// (`archi/04-tools.md`, "Script titles"). `false` when the tenant has no such code:
-    /// nothing is stored.
-    fn set_script_title(
-        &self,
-        tenant: &TenantId,
-        code: Digest,
-        title: Option<&ScriptTitle>,
-    ) -> impl Future<Output = Result<bool, CatalogError>> + Send;
-
-    /// The titles people gave these workflows, for those that have one.
-    fn script_titles(
-        &self,
-        tenant: &TenantId,
-        scripts: &[Digest],
-    ) -> impl Future<Output = Result<Vec<(Digest, ScriptTitle)>, CatalogError>> + Send;
 
     /// Stores a pinned action set and its declarations. Idempotent by digest: a second put changes
     /// nothing.
@@ -171,56 +168,115 @@ pub trait CatalogStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<StoredActionSet>, CatalogError>> + Send;
 
     // ---------------------------------------------------------------------------------------
-    // Workflows
+    // Workflows (`archi/01-product.md`, "Workflows")
 
-    /// Stores a workflow version, visible to the principals that see its labels
-    /// ([`Workflow::labels`]), and returns it as stored, with a row of `workflow_tests` for each
-    /// test of its suite, in one transaction. Idempotent by version. A new version takes the
-    /// next number of its workflow in its tenant (1 for the first).
-    fn put_workflow(
+    /// Creates a workflow with its version 1, its suite and its code, in one transaction.
+    /// Without a name, for a code its scope already has under labels its version carries:
+    /// `Existing`, that workflow, unchanged. A name its scope already has: `NameTaken`.
+    fn create_workflow(
         &self,
         tenant: &TenantId,
-        workflow: &Workflow,
+        workflow: &NewWorkflow,
         now: Timestamp,
-    ) -> impl Future<Output = Result<StoredWorkflow, CatalogError>> + Send;
+    ) -> impl Future<Output = Result<WorkflowCreated, CatalogError>> + Send;
 
-    fn get_workflow(
+    /// A workflow by its id, whatever its labels and its scope.
+    fn workflow(
         &self,
         tenant: &TenantId,
-        version: Digest,
+        id: &WorkflowId,
     ) -> impl Future<Output = Result<Option<StoredWorkflow>, CatalogError>> + Send;
 
-    /// The version `number` of the workflow `name`, whatever its labels.
-    fn workflow_number(
+    /// The workflow named `name` in `namespace`, else the organization's of that name: a
+    /// namespace's shadows the organization's. Without a namespace, the organization's alone.
+    /// Only a workflow one of whose versions carries `labels`.
+    fn workflow_named(
         &self,
         tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
         name: &str,
-        number: u32,
+        labels: &Labels,
     ) -> impl Future<Output = Result<Option<StoredWorkflow>, CatalogError>> + Send;
 
-    /// The versions of the workflow `name` that carry all of `labels`, newest first.
-    fn workflow_versions(
+    /// The workflow that first had `code` in `namespace` under labels carrying `labels`, else in
+    /// the organization, and its latest version with that code carrying `labels`.
+    fn workflow_with_code(
         &self,
         tenant: &TenantId,
-        name: &str,
-        labels: &BTreeMap<String, String>,
-    ) -> impl Future<Output = Result<Vec<StoredWorkflow>, CatalogError>> + Send;
-
-    /// The versions of any workflow whose code is `code` and that carry all of `labels`,
-    /// newest first.
-    fn workflows_with_code(
-        &self,
-        tenant: &TenantId,
+        namespace: &NamespaceName,
         code: Digest,
-        labels: &BTreeMap<String, String>,
-    ) -> impl Future<Output = Result<Vec<StoredWorkflow>, CatalogError>> + Send;
+        labels: &Labels,
+    ) -> impl Future<Output = Result<Option<(StoredWorkflow, StoredVersion)>, CatalogError>> + Send;
 
-    /// The latest version of each workflow of the tenant, among the versions that carry all of
-    /// the filter's labels, by name.
-    fn latest_workflows(
+    /// The workflows the filter holds, by id, after `filter.after`.
+    fn list_workflows(
         &self,
         filter: &WorkflowFilter,
     ) -> impl Future<Output = Result<Vec<StoredWorkflow>, CatalogError>> + Send;
+
+    /// Sets a workflow's name and description, without a version: its id never changes.
+    fn update_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        patch: &WorkflowPatch,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<WorkflowWrite, CatalogError>> + Send;
+
+    /// Stores the next version of a workflow, numbered after its latest, under a lock of the
+    /// workflow, and makes the workflow's suite the version's tests. `Conflict` for a workflow
+    /// that does not exist, or a test without a row.
+    fn put_version(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        version: &NewVersion,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<StoredVersion, CatalogError>> + Send;
+
+    /// The versions of a workflow that carry all of `labels`, newest first.
+    fn versions(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        labels: &Labels,
+    ) -> impl Future<Output = Result<Vec<StoredVersion>, CatalogError>> + Send;
+
+    /// A version of a workflow by its number or its digest, whatever its labels.
+    fn version(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        version: VersionRef,
+    ) -> impl Future<Output = Result<Option<StoredVersion>, CatalogError>> + Send;
+
+    /// Adds, replaces and retires tests of a workflow's suite, without a version, and returns
+    /// the suite. `Conflict` for a workflow that does not exist, a test without a row, or a test
+    /// replaced or retired that is not in the suite.
+    fn change_suite(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        change: &SuiteChange,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<SuiteMember>, CatalogError>> + Send;
+
+    /// Every test a workflow's suite holds or held, by name, then when it joined.
+    fn suite(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+    ) -> impl Future<Output = Result<Vec<SuiteMember>, CatalogError>> + Send;
+
+    /// Moves a namespace's workflow to the organization, with its id, its versions, its suite
+    /// and its codes; a code the organization had already keeps the organization's workflow.
+    /// An organization's workflow is returned as it is.
+    fn promote_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<WorkflowWrite, CatalogError>> + Send;
 
     // ---------------------------------------------------------------------------------------
     // Tests (`archi/05-testing-and-observability.md`, "Suites and the gate")
@@ -250,7 +306,7 @@ pub trait CatalogStore: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Digest>, CatalogError>> + Send;
 
-    /// Marks as being deleted, and returns, up to `limit` tests that no version references,
+    /// Marks as being deleted, and returns, up to `limit` tests that no suite references,
     /// stored or reserved at least `TEST_GRACE` before `now`, whose deletion has not started,
     /// or started at least [`TEST_DELETION_TIMEOUT`] ago.
     fn unreferenced_tests(
@@ -260,7 +316,7 @@ pub trait CatalogStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<(TenantId, Digest)>, CatalogError>> + Send;
 
     /// Removes the rows of the given tests once their blobs are deleted: those still marked and
-    /// that no version references; with `erased`, every given row, with the rows of
+    /// that no suite references; with `erased`, every given row, with the rows of
     /// `workflow_tests` that reference it. Returns how many rows were removed.
     fn drop_tests(
         &self,
@@ -413,4 +469,38 @@ pub trait CatalogStore: Send + Sync {
         run: &RunRef,
         partition: PartitionId,
     ) -> impl Future<Output = Result<(), CatalogError>> + Send;
+}
+
+/// A title a person gave a code before the rename release, with its description
+/// (`archi/04-tools.md`, "Workflow names": the migration). The schema migration of the workflow
+/// model keeps them for [`CatalogMigration`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeTitle {
+    pub tenant: TenantId,
+    pub code: Digest,
+    pub title: String,
+    pub description: Option<String>,
+}
+
+/// What `rewind server rename-data` needs of the catalog beyond [`CatalogStore`] to give every run
+/// a workflow ([`crate::rename::workflows`]): the titles people gave codes, and the move of an
+/// organization's workflow into the namespace that ran it.
+pub trait CatalogMigration: CatalogStore {
+    /// The titles people gave codes that the catalog still holds: none once
+    /// [`drop_code_titles`](Self::drop_code_titles) ran.
+    fn code_titles(&self) -> impl Future<Output = Result<Vec<CodeTitle>, CatalogError>> + Send;
+
+    /// Moves an organization's workflow into `namespace`, with its versions, its suite and its
+    /// codes: what a saved workflow that one namespace ran becomes. `NameTaken` when the
+    /// namespace has a workflow of its name.
+    fn scope_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<WorkflowWrite, CatalogError>> + Send;
+
+    /// Forgets the titles people gave codes, once each became a name or was listed.
+    fn drop_code_titles(&self) -> impl Future<Output = Result<(), CatalogError>> + Send;
 }

@@ -1,11 +1,11 @@
 //! The agent tools of Rewind, in Rust (`archi/01-product.md`, "Agent tools";
 //! `archi/07-code-architecture.md`, "Crates").
 //!
-//! The tools a model uses to write, check, test, run, follow and repair its workflows, as the
-//! TypeScript SDK defines them (`sdk/typescript/src/agent-tools/`), which stays the reference:
+//! The tools a model uses to write, check, test, run, follow and repair its workflows, named by
+//! their id or their name:
 //!
-//! - [`definitions`]: the tools for a model. The SDK's set, word for word; the MCP set, with
-//!   `save_workflow` out, `list_organizations`, `list_namespaces` and `list_action_sets` in, `organization`,
+//! - [`definitions`]: the tools for a model. The SDK's set; the MCP set, with `update_workflow`
+//!   out, `list_organizations`, `list_namespaces` and `list_action_sets` in, `organization`,
 //!   `namespace` and `action_set` as arguments, and each tool's title, annotations and permission.
 //! - [`AgentTools`]: the handlers of the SDK's set over a port [`Api`], one method per operation
 //!   of `/v1` they call, with `rewind-api`'s DTOs; [`McpTools`] those of the MCP set over

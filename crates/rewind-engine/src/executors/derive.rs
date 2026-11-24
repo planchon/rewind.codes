@@ -117,7 +117,7 @@ pub(crate) fn summary_of(
             mode: state.mode(),
             labels: metadata.labels.clone(),
             source: metadata.source.map(|parent| parent.run),
-            workflow: metadata.workflow.as_ref().map(|of| of.name.clone()),
+            workflow: metadata.workflow.clone(),
             started_by: metadata.started_by.as_ref().map(|by| by.run),
             started_at,
             ended_at,
@@ -345,7 +345,7 @@ pub(crate) fn counters_of(
     now: Timestamp,
 ) -> Vec<CounterDelta> {
     let mut hours: BTreeMap<Hour, Counters> = BTreeMap::new();
-    let workflow = head.metadata.workflow.as_ref().map(|of| of.name.clone());
+    let workflow = head.metadata.workflow.as_ref().map(|of| of.id.clone());
     let started_at = summary.summary.started_at;
     for entry in &history[from.min(history.len())..] {
         match &entry.event {
@@ -353,26 +353,23 @@ pub(crate) fn counters_of(
                 let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
                 counters.runs.started += 1;
                 if let Some(workflow) = &workflow {
-                    counters
-                        .workflows
-                        .entry(workflow.clone())
-                        .or_default()
-                        .started += 1;
+                    let runs = counters.workflows.entry(workflow.clone()).or_default();
+                    runs.runs.started += 1;
+                    runs.first_started_at = Some(entry.recorded_at);
+                    runs.last_started_at = Some(entry.recorded_at);
                 }
-                let code = counters.scripts.entry(head.code).or_default();
-                code.runs.started += 1;
-                code.first_started_at = Some(entry.recorded_at);
-                code.last_started_at = Some(entry.recorded_at);
             }
             Event::Command(Command::ScheduleCall { action, .. }) => {
                 let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
                 counters.actions.entry(action.clone()).or_default().calls += 1;
-                counters
-                    .scripts
-                    .entry(head.code)
-                    .or_default()
-                    .actions
-                    .insert(action.clone());
+                if let Some(workflow) = &workflow {
+                    counters
+                        .workflows
+                        .entry(workflow.clone())
+                        .or_default()
+                        .actions
+                        .insert(action.clone());
+                }
             }
             Event::Completion(Completion::CallCompleted { seq, .. }) => {
                 if let Some((at, action)) = openings.call(*seq) {
@@ -411,18 +408,11 @@ pub(crate) fn counters_of(
                     .workflows
                     .entry(workflow.clone())
                     .or_default()
+                    .runs
                     .ended
                     .entry(status)
                     .or_default() += 1;
             }
-            *counters
-                .scripts
-                .entry(head.code)
-                .or_default()
-                .runs
-                .ended
-                .entry(status)
-                .or_default() += 1;
             if let Some(ending) = &summary.summary.ending {
                 counters.failures.insert(
                     ending.fingerprint.clone(),
@@ -430,7 +420,7 @@ pub(crate) fn counters_of(
                         signature: ending.signature.clone(),
                         error: ending.error.clone(),
                         runs: 1,
-                        scripts: BTreeMap::from([(head.code, 1)]),
+                        workflows: workflow.iter().map(|id| (id.clone(), 1)).collect(),
                         lines: ending.line.map(|line| (line, 1)).into_iter().collect(),
                         latest: vec![LatestRun {
                             run: head.run.id,

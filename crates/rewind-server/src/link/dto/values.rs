@@ -419,7 +419,7 @@ impl TryFrom<Counters> for engine::Counters {
     type Error = Invalid;
 
     fn try_from(counters: Counters) -> Result<Self, Invalid> {
-        let mut decoded = codec::counters_of(counters.counts);
+        let mut decoded = codec::counters_of(counters.counts)?;
         decoded.cpu = counters.cpu;
         decoded.namespaces = counters
             .namespaces
@@ -552,7 +552,6 @@ pub enum Predicate {
         key: String,
         values: Vec<TextMatch>,
     },
-    Script(Vec<String>),
     ActionSet(Vec<String>),
     Action(Vec<TextMatch>),
     Error {
@@ -690,7 +689,6 @@ impl From<&engine::Predicate> for Predicate {
                 key: key.clone(),
                 values: matchers(values),
             },
-            P::Script(prefixes) => Predicate::Script(prefixes.clone()),
             P::ActionSet(prefixes) => Predicate::ActionSet(prefixes.clone()),
             P::Action(actions) => Predicate::Action(matchers(actions)),
             P::Error { names, kinds } => Predicate::Error {
@@ -738,7 +736,6 @@ impl TryFrom<Predicate> for engine::Predicate {
                 key,
                 values: matchers_of(values),
             },
-            Predicate::Script(prefixes) => P::Script(prefixes),
             Predicate::ActionSet(prefixes) => P::ActionSet(prefixes),
             Predicate::Action(actions) => P::Action(matchers_of(actions)),
             Predicate::Error { names, kinds } => P::Error {

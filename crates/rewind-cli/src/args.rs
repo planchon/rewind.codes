@@ -93,7 +93,8 @@ pub(crate) enum Command {
     /// The namespaces (the end users) and their use; one namespace; their limits; erase one.
     #[command(subcommand)]
     Namespaces(NamespacesCommand),
-    /// Record tests from a workflow's past runs.
+    /// The workflows: list, show, create, update, promote, fork and pull them; record tests
+    /// from their past runs.
     #[command(subcommand)]
     Workflows(WorkflowsCommand),
     /// The organization's secrets, or a namespace's with --namespace: never a value.
@@ -111,12 +112,111 @@ pub(crate) enum Command {
     Mcp,
 }
 
+/// A workflow, as the commands name it: its id (`wf_…`) or its name, which resolves in the
+/// namespace first, then among the organization's workflows.
+const WORKFLOW_HELP: &str = "The workflow: its id (wf_…) or its name";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowsCommand {
+    /// The workflows of the namespace and of the organization, by id, each with its latest
+    /// version and what its runs did in the last 30 days.
+    List {
+        /// Only the namespace's, or only the organization's.
+        #[arg(long, value_enum)]
+        scope: Option<WorkflowScopeArg>,
+        /// Only the workflows one of whose versions has this code: its digest.
+        #[arg(long, value_name = "DIGEST")]
+        code: Option<String>,
+        /// At most this many workflows: 50 by default, 500 at most.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// The next page: the id the previous page printed.
+        #[arg(long, value_name = "ID")]
+        after: Option<String>,
+    },
+    /// One workflow: its scope, its versions newest first and its suite; `@v12` or `@<digest>`
+    /// after it shows that version.
+    Show {
+        #[arg(help = WORKFLOW_HELP)]
+        workflow: String,
+        /// Print the code of the version shown.
+        #[arg(long)]
+        code: bool,
+    },
+    /// Creates a workflow from a code, with its version 1, through its gate: in the namespace
+    /// --namespace names, else the organization's.
+    Create {
+        /// The TypeScript code.
+        code: PathBuf,
+        /// Its name, unique in its scope: an identifier (letters, digits, _ and $).
+        #[arg(long)]
+        name: Option<String>,
+        /// What it does, for a model and a person: display only.
+        #[arg(long)]
+        description: Option<String>,
+        /// The action set: the id of a registered action set, or an action set file to
+        /// register. Without it, an empty one.
+        #[arg(long, value_name = "ID|FILE")]
+        action_set: Option<String>,
+        /// Its interface: a JSON file of { "input", "output", "signals" } schemas. Without it,
+        /// any input, output and signal.
+        #[arg(long, value_name = "FILE")]
+        interface: Option<PathBuf>,
+        /// Its first suite: a tests file, as `rewind test` reads it.
+        #[arg(long, value_name = "FILE")]
+        tests: Option<PathBuf>,
+        /// A secret its runs use: `github=ns/github`, `zendesk=org/zendesk`. Repeat for several.
+        #[arg(long = "secret", value_name = "SERVER=SCOPE/NAME")]
+        secrets: Vec<String>,
+    },
+    /// Names or describes a workflow; makes its next version through its gate (--code,
+    /// --interface, --action-set, --secret), with the tests of --tests; or, with --tests alone,
+    /// adds them to its suite.
+    Update {
+        #[arg(help = WORKFLOW_HELP)]
+        workflow: String,
+        /// Its new name; an empty one removes it.
+        #[arg(long)]
+        name: Option<String>,
+        /// Its new description; an empty one removes it.
+        #[arg(long)]
+        description: Option<String>,
+        /// The code of its next version.
+        #[arg(long, value_name = "FILE")]
+        code: Option<PathBuf>,
+        /// The interface of its next version: a JSON file of { "input", "output", "signals" }.
+        #[arg(long, value_name = "FILE")]
+        interface: Option<PathBuf>,
+        /// The action set of its next version: an id, or a file to register.
+        #[arg(long, value_name = "ID|FILE")]
+        action_set: Option<String>,
+        /// Tests for its suite: a tests file.
+        #[arg(long, value_name = "FILE")]
+        tests: Option<PathBuf>,
+        /// The secrets of its next version, in place of its latest version's.
+        #[arg(long = "secret", value_name = "SERVER=SCOPE/NAME")]
+        secrets: Vec<String>,
+    },
+    /// Moves a namespace's workflow to the organization, with its id, versions and suite.
+    Promote {
+        #[arg(help = WORKFLOW_HELP)]
+        workflow: String,
+    },
+    /// Forks an organization's workflow into the namespace --namespace names: its latest
+    /// version, or the one `@v12` names.
+    Fork {
+        #[arg(help = WORKFLOW_HELP)]
+        workflow: String,
+    },
+    /// A fork takes its source's latest version once its own suite passes.
+    Pull {
+        #[arg(help = WORKFLOW_HELP)]
+        workflow: String,
+    },
     /// Record tests from the workflow's past runs, one per path they took; print their digests,
-    /// which a save of the workflow takes in `tests`.
+    /// which `rewind workflows update --tests` takes.
     Record {
-        /// The workflow's name.
+        #[arg(help = WORKFLOW_HELP)]
         name: String,
         /// Which runs, in the query language of `rewind runs`: its completed and failed runs,
         /// newest first, by default.
@@ -129,6 +229,22 @@ pub(crate) enum WorkflowsCommand {
         #[arg(long)]
         limit: Option<u32>,
     },
+}
+
+/// The scope `rewind workflows list` lists.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum WorkflowScopeArg {
+    Namespace,
+    Organization,
+}
+
+impl From<WorkflowScopeArg> for rewind_api::workflows::WorkflowScope {
+    fn from(scope: WorkflowScopeArg) -> Self {
+        match scope {
+            WorkflowScopeArg::Namespace => Self::Namespace,
+            WorkflowScopeArg::Organization => Self::Organization,
+        }
+    }
 }
 
 /// `rewind secrets`: the organization's secrets, or those of the namespace `--namespace` names
@@ -318,9 +434,9 @@ pub(crate) struct RunsArgs {
     /// Only runs that called this action.
     #[arg(long)]
     pub(crate) action: Option<String>,
-    /// Only runs of this code (its digest).
+    /// Only runs of this workflow: its id or its name.
     #[arg(long)]
-    pub(crate) script: Option<String>,
+    pub(crate) workflow: Option<String>,
     /// Only runs whose calls failed with this kind, or that failed with this error name.
     #[arg(long)]
     pub(crate) error: Option<String>,

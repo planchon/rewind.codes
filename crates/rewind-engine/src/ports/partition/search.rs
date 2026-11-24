@@ -71,7 +71,6 @@ impl IndexedSummary {
                 .labels
                 .get(key)
                 .is_some_and(|value| values.iter().any(|matcher| matcher.matches(value))),
-            Predicate::Script(prefixes) => hex_prefix(&summary.code, prefixes),
             Predicate::ActionSet(prefixes) => hex_prefix(&summary.action_set, prefixes),
             Predicate::Action(matchers) => self
                 .actions
@@ -102,10 +101,15 @@ impl IndexedSummary {
             Predicate::Calls(range) => range.contains(&summary.calls),
             Predicate::Errors(range) => range.contains(&summary.errors),
             Predicate::Source(parent) => summary.source == Some(*parent),
-            Predicate::Workflow(matchers) => summary
-                .workflow
-                .as_deref()
-                .is_some_and(|name| matchers.iter().any(|matcher| matcher.matches(name))),
+            Predicate::Workflow(matchers) => summary.workflow.as_ref().is_some_and(|workflow| {
+                matchers.iter().any(|matcher| {
+                    matcher.matches(workflow.id.as_str())
+                        || workflow
+                            .name
+                            .as_deref()
+                            .is_some_and(|name| matcher.matches(name))
+                })
+            }),
             Predicate::StartedBy(run) => summary.started_by == Some(*run),
             Predicate::Fingerprint(fingerprints) => summary
                 .ending

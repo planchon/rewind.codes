@@ -13,8 +13,10 @@
 //! - [`Cassette`]: the handlers recorded from a run, derived from its history.
 //! - [`Shape`]: the type of an action's results, as observed in histories.
 //! - [`RunId`] and [`PartitionId`]: a run id names the partition its run lives in.
-//! - [`Workflow`]: a code with a name and a typed interface, that workflows start and signal;
-//!   [`RunEnd`], how a run's end reaches the runs that watch it; its [`Suite`] of tests.
+//! - [`WorkflowId`] and [`WorkflowVersion`]: a workflow, the template of its runs, and its
+//!   versions, each with its code, its action set, its optional interface and the [`Suite`] of
+//!   tests it passed; [`PinnedWorkflow`], a version an action set pins, which code starts and
+//!   signals; [`RunEnd`], how a run's end reaches the runs that watch it.
 //! - [`Test`]: the world a run meets and what the outside must see at the end; [`RunPath`],
 //!   the path a run took.
 //! - [`RunHandle`]: a run's readable name, `<namespace>/<origin>/<suffix>`, whose suffix is the
@@ -65,7 +67,10 @@ pub use handle::{
     is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours, suffix_ranges,
 };
 pub use history::{HistoryError, validate_history};
-pub use ids::{Epoch, PartitionId, RunId, Seed, Seq};
+pub use ids::{
+    Epoch, InvalidWorkflowId, PartitionId, RunId, Seed, Seq, WORKFLOW_ID_CHARS, WORKFLOW_ID_PREFIX,
+    WORKFLOW_SHORT_ID_CHARS, WorkflowId,
+};
 pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
 pub use run_export::{RunExport, RunExportError};
@@ -83,9 +88,10 @@ pub use test::{
 };
 pub use time::{DurationError, Timestamp, parse_duration};
 pub use workflow::{
-    ERASED_TEST_REASON, InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, ReplacedTest,
-    RetiredTest, RunEnd, Suite, SuiteTest, WORKFLOWS_GROUP, Workflow, WorkflowOp, WorkflowSchemas,
-    end_signal_name, ended_run, is_reserved_signal, starter_ended,
+    ERASED_TEST_REASON, InvalidWorkflow, MAX_WORKFLOW_NAME_CHARS, PinnedWorkflow,
+    RESERVED_SIGNAL_PREFIX, ReplacedTest, RetiredTest, RunEnd, Suite, SuiteTest, WORKFLOWS_GROUP,
+    WorkflowOp, WorkflowSchemas, WorkflowVersion, check_workflow_name, end_signal_name, ended_run,
+    is_reserved_signal, starter_ended,
 };
 
 /// The JSON value type carried by payloads.

@@ -144,8 +144,12 @@ pub struct SecretUsage {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowSecrets {
-    pub name: String,
-    /// The version's digest (SHA-256, lowercase hex).
+    /// The workflow's id.
+    pub workflow: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Its latest version's number, and digest (SHA-256, lowercase hex).
+    pub version: u32,
     pub digest: String,
     /// The servers and APIs it uses the secret for.
     pub servers: Vec<String>,

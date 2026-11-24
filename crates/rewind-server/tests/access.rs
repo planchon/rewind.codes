@@ -12,12 +12,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use rewind_api::access::{BuiltInRole, CreateApiKey, OPERATOR, Permission};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::calls::{CallStreamQuery, CompleteCall};
+use rewind_api::checks::CheckRequest;
 use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
-use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
-use rewind_api::workflows::WorkflowQuery;
+use rewind_api::workflows::{PatchWorkflow, WorkflowQuery};
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_core::Timestamp;
 use rewind_engine::ports::{AccessStore, Role, TenantId};
@@ -87,14 +87,13 @@ enum Request {
     ApproveCall,
     ListSubscriptions,
     DeleteSubscription,
-    ListScripts,
-    SetScriptTitle,
+    UpdateWorkflow,
     ActionStats,
     ListApiKeys,
     RevokeApiKey,
 }
 
-const REQUESTS: [Request; 19] = [
+const REQUESTS: [Request; 18] = [
     Request::ListActionSets,
     Request::CreateActionSet,
     Request::ListWorkflows,
@@ -109,8 +108,7 @@ const REQUESTS: [Request; 19] = [
     Request::ApproveCall,
     Request::ListSubscriptions,
     Request::DeleteSubscription,
-    Request::ListScripts,
-    Request::SetScriptTitle,
+    Request::UpdateWorkflow,
     Request::ActionStats,
     Request::ListApiKeys,
     Request::RevokeApiKey,
@@ -131,11 +129,13 @@ impl Request {
     /// The permission of 07's table.
     fn permission(self) -> Permission {
         match self {
-            Request::ListActionSets | Request::ListWorkflows => Permission::ActionsRead,
+            Request::ListActionSets => Permission::ActionsRead,
             Request::CreateActionSet => Permission::ActionsWrite,
-            Request::SetScriptTitle => Permission::ScriptsWrite,
+            Request::UpdateWorkflow => Permission::WorkflowsWrite,
             Request::Check | Request::ForkRun => Permission::RunsStart,
-            Request::ListRuns | Request::ListScripts | Request::ActionStats => Permission::RunsRead,
+            Request::ListRuns | Request::ListWorkflows | Request::ActionStats => {
+                Permission::RunsRead
+            }
             Request::CancelRun => Permission::RunsControl,
             Request::ReleaseRun | Request::GiveUpRun => Permission::RunsQuarantine,
             Request::DeleteRun => Permission::RunsDelete,
@@ -191,13 +191,12 @@ impl Request {
             Request::ApproveCall => outcome(client.approve_call("unknown").await),
             Request::ListSubscriptions => outcome(client.list_subscriptions().await),
             Request::DeleteSubscription => outcome(client.delete_subscription("unknown").await),
-            Request::ListScripts => outcome(client.list_scripts(&ScriptFilter::default()).await),
-            Request::SetScriptTitle => outcome(
+            Request::UpdateWorkflow => outcome(
                 client
-                    .set_script_title(
-                        &"00".repeat(32),
-                        &SetScriptTitle {
-                            title: Some("Count to one".into()),
+                    .update_workflow(
+                        "wf_0000000000zz",
+                        &PatchWorkflow {
+                            name: Some(Some("count".into())),
                             description: None,
                         },
                     )

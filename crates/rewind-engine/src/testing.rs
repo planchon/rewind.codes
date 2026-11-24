@@ -660,6 +660,10 @@ impl Entropy for TestEntropy {
     fn seed(&self) -> Seed {
         self.seed.unwrap_or_else(|| self.inner.seed())
     }
+
+    fn workflow_id(&self) -> rewind_core::WorkflowId {
+        self.inner.workflow_id()
+    }
 }
 
 #[cfg(test)]

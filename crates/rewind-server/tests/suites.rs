@@ -6,16 +6,15 @@
 
 mod support;
 
-use std::collections::BTreeMap;
-
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::CreateActionSet;
+use rewind_api::checks::TestRequest;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{ForkRun, StartRun};
-use rewind_api::scripts::TestRequest;
 use rewind_api::testing::{Test, TestFrom, TestInput, TestProblem};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, TestReplacement, TestRetirement, WorkflowQuery,
+    ChangeTests, CreateVersion, CreateWorkflow, RecordTests, TestReplacement, TestRetirement,
+    WorkflowQuery,
 };
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
@@ -48,33 +47,38 @@ fn problem(error: rewind_api::Error) -> Problem {
 
 fn triage(action_set: &str, code: &str) -> CreateWorkflow {
     CreateWorkflow {
-        name: "triage".into(),
+        name: Some("triage".into()),
         description: None,
         action_set: action_set.into(),
         code: code.into(),
-        input: json!({
+        input: Some(json!({
             "type": "object",
             "properties": { "repo": { "type": "string" } },
             "required": ["repo"],
-        }),
-        output: json!({
+        })),
+        output: Some(json!({
             "type": "object",
             "properties": { "closed": { "type": "integer" } },
             "required": ["closed"],
-        }),
-        signals: BTreeMap::from([(
+        })),
+        signals: Some(std::collections::BTreeMap::from([(
             "approval".to_owned(),
             json!({
                 "type": "object",
                 "properties": { "close": { "type": "boolean" } },
                 "required": ["close"],
             }),
-        )]),
-        base: None,
+        )])),
         tests: Vec::new(),
-        replace: Vec::new(),
-        retire: Vec::new(),
         secrets: Default::default(),
+    }
+}
+
+/// The next version of a workflow: this code, the rest its latest version's.
+fn code(code: &str) -> CreateVersion {
+    CreateVersion {
+        code: Some(code.into()),
+        ..CreateVersion::default()
     }
 }
 
@@ -90,7 +94,7 @@ fn closes_three() -> Test {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
+async fn a_version_is_made_only_when_the_workflow_s_suite_passes() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = harness
@@ -101,16 +105,18 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     let mut first = triage(&action_set.id, TRIAGE);
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     let v1 = harness.create_workflow(&first).await.unwrap();
-    assert_eq!(v1.base, None);
-    assert_eq!(v1.tests.len(), 1);
-    assert_eq!(v1.tests[0].name, "closes three once approved");
-    let stored = harness.get_test(&v1.tests[0].digest).await.unwrap();
+    assert_eq!(v1.version.version, 1);
+    assert_eq!(v1.version.base, None);
+    assert_eq!(v1.version.tests.len(), 1);
+    assert_eq!(v1.version.tests[0].name, "closes three once approved");
+    assert_eq!(v1.suite.len(), 1);
+    let stored = harness.get_test(&v1.version.tests[0].digest).await.unwrap();
     assert_eq!(stored, closes_three());
 
-    // The regression is refused by the inherited test, and nothing is saved.
+    // The regression is refused by the suite, and nothing is made.
     let refused = problem(
         harness
-            .create_workflow(&triage(&action_set.id, TWO))
+            .create_version("triage", &code(TWO))
             .await
             .unwrap_err(),
     );
@@ -131,9 +137,13 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
         "{}",
         refused.detail
     );
+    assert_eq!(
+        harness.get_workflow("triage").await.unwrap().versions.len(),
+        1
+    );
 
-    // Updating the expectation with a reason saves it, its base the first version.
-    let mut second = triage(&action_set.id, TWO);
+    // Replacing the expectation with a reason makes it, its base the first version.
+    let mut second = code(TWO);
     second.replace = vec![TestReplacement {
         name: "closes three once approved".into(),
         reason: "two issues are kept open for the next sprint".into(),
@@ -143,59 +153,107 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
                 .unwrap(),
         ),
     }];
-    let v2 = harness.create_workflow(&second).await.unwrap();
-    assert_eq!(v2.base.as_deref(), Some(v1.digest.as_str()));
-    assert_eq!(v2.replaced.len(), 1);
-    assert_eq!(v2.replaced[0].old, v1.tests[0].digest);
-    assert_eq!(v2.replaced[0].new, v2.tests[0].digest);
+    let v2 = harness.create_version("triage", &second).await.unwrap();
+    assert_eq!((v2.id.as_str(), v2.version.version), (v1.id.as_str(), 2));
+    let made = &v2.version;
+    assert_eq!(made.base.as_deref(), Some(v1.version.digest.as_str()));
+    assert_eq!(made.replaced.len(), 1);
+    assert_eq!(made.replaced[0].old, v1.version.tests[0].digest);
+    assert_eq!(made.replaced[0].new, made.tests[0].digest);
 
-    // Retiring needs a reason, and names an inherited test.
-    let mut retired = triage(&action_set.id, TRIAGE);
+    // Retiring needs a reason, and names a test of the suite.
+    let mut retired = code(TRIAGE);
     retired.retire = vec![TestRetirement {
         names: vec!["closes four".into()],
         reason: "gone".into(),
     }];
     assert_eq!(
-        problem(harness.create_workflow(&retired).await.unwrap_err()).kind(),
+        problem(
+            harness
+                .create_version("triage", &retired)
+                .await
+                .unwrap_err()
+        )
+        .kind(),
         Some(ProblemType::InvalidTest)
     );
     retired.retire[0].names = vec!["closes three once approved".into()];
-    let v3 = harness.create_workflow(&retired).await.unwrap();
-    assert!(v3.tests.is_empty());
-    assert_eq!(v3.retired[0].reason, "gone");
+    let v3 = harness.create_version("triage", &retired).await.unwrap();
+    assert_eq!(v3.version.version, 3);
+    assert!(v3.version.tests.is_empty());
+    assert_eq!(v3.version.retired[0].reason, "gone");
+    // The suite keeps every test it held, with why each left.
+    assert_eq!(v3.suite.len(), 2);
+    assert!(v3.suite.iter().all(|test| test.retired_at.is_some()));
 
-    // The versions whose code is TRIAGE, newest first: the code's page shows their suites.
+    // Tests join the suite on their own, against the latest version, without a version.
+    let mut fails = closes_three();
+    fails.name = "closes two".into();
+    fails.expect = serde_json::from_value(json!({ "output": { "closed": 2 } })).unwrap();
+    let refused = problem(
+        harness
+            .change_tests(
+                "triage",
+                &ChangeTests {
+                    tests: vec![TestInput::Inline(Box::new(fails))],
+                    ..ChangeTests::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(refused.kind(), Some(ProblemType::TestsFailed));
+    let joined = harness
+        .change_tests(
+            "triage",
+            &ChangeTests {
+                tests: vec![TestInput::Inline(Box::new(closes_three()))],
+                ..ChangeTests::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(joined.version.version, 3, "no version");
+    assert!(
+        joined
+            .suite
+            .iter()
+            .any(|test| test.name == "closes three once approved" && test.retired_at.is_none())
+    );
+
+    // The workflows one of whose versions has TRIAGE.
     let with_code = |code: &str| WorkflowQuery {
-        script: Some(code.to_owned()),
+        code: Some(code.to_owned()),
         ..WorkflowQuery::default()
     };
     let page = harness
-        .list_workflows(&with_code(&v1.code_digest))
+        .list_workflows(&with_code(&v1.version.code_digest))
         .await
         .unwrap();
-    let versions: Vec<&str> = page.workflows.iter().map(|w| w.digest.as_str()).collect();
-    assert_eq!(versions, [v3.digest.as_str(), v1.digest.as_str()]);
+    let ids: Vec<&str> = page.workflows.iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(ids, [v1.id.as_str()]);
+    assert_eq!(page.workflows[0].latest.version, 3);
     assert_eq!(page.next, None);
     assert!(harness.list_workflows(&with_code("nope")).await.is_err());
 
     // A test given inline cannot claim to be recorded.
-    let mut forged = triage(&action_set.id, TRIAGE);
+    let mut forged = code(TRIAGE.replace("? 3", "? 3 ").as_str());
     let mut test = closes_three();
     test.name = "forged".into();
     test.from = Some(rewind_api::testing::TestFromRun {
         run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10".into(),
-        version: v1.digest.clone(),
+        version: v1.version.digest.clone(),
         namespace: "alice".into(),
     });
     forged.tests = vec![TestInput::Inline(Box::new(test))];
     assert_eq!(
-        problem(harness.create_workflow(&forged).await.unwrap_err()).kind(),
+        problem(harness.create_version("triage", &forged).await.unwrap_err()).kind(),
         Some(ProblemType::InvalidTest)
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
+async fn a_key_limited_to_labels_sees_the_versions_made_under_them() {
     let server = TestServer::start(&[]).await;
     let tenant_wide = server.key(BuiltInRole::Harness, &[]).await;
     let dev = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
@@ -205,31 +263,50 @@ async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
         .unwrap();
     let mut first = triage(&action_set.id, TRIAGE);
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
-    let v1 = tenant_wide.create_workflow(&first).await.unwrap();
-
-    // The first version under env=dev starts its own lineage: no base, no test to pass.
-    let ours = dev
-        .create_workflow(&triage(&action_set.id, TWO))
-        .await
-        .unwrap();
-    assert_eq!((ours.base.as_deref(), ours.tests.len()), (None, 0));
-    // It cannot name a base it does not see.
-    let mut named = triage(&action_set.id, TRIAGE);
-    named.base = Some(v1.digest.clone());
+    let tenant_wide_triage = tenant_wide.create_workflow(&first).await.unwrap();
+    // A version made tenant-wide carries no label: env=dev does not see it.
     assert_eq!(
-        problem(dev.create_workflow(&named).await.unwrap_err()).status,
+        problem(dev.get_workflow("triage").await.unwrap_err()).status,
+        404
+    );
+    assert_eq!(
+        problem(dev.get_workflow(&tenant_wide_triage.id).await.unwrap_err()).status,
         404
     );
 
-    // A tenant-wide save sees env=dev's version, the newest, but derives from its own lineage:
-    // the regression fails the test it inherits.
+    // env=dev's workflow, which the tenant-wide key sees; its next version, made tenant-wide,
+    // passes its suite, and env=dev does not see it.
+    let mut ours = triage(&action_set.id, TRIAGE);
+    ours.name = Some("dev_triage".into());
+    ours.tests = vec![TestInput::Inline(Box::new(closes_three()))];
+    let ours = dev.create_workflow(&ours).await.unwrap();
+    assert_eq!(ours.labels.get("env").map(String::as_str), Some("dev"));
     let refused = problem(
         tenant_wide
-            .create_workflow(&triage(&action_set.id, TWO))
+            .create_version("dev_triage", &code(TWO))
             .await
             .unwrap_err(),
     );
     assert_eq!(refused.kind(), Some(ProblemType::TestsFailed));
+    let mut retired = code(TWO);
+    retired.retire = vec![TestRetirement {
+        names: vec!["closes three once approved".into()],
+        reason: "closes two now".into(),
+    }];
+    let v2 = tenant_wide
+        .create_version("dev_triage", &retired)
+        .await
+        .unwrap();
+    assert_eq!(v2.version.version, 2);
+    let seen = dev.get_workflow("dev_triage").await.unwrap();
+    assert_eq!(seen.version.version, 1);
+    assert_eq!(
+        seen.versions
+            .iter()
+            .map(|version| version.version)
+            .collect::<Vec<_>>(),
+        [1]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -269,7 +346,7 @@ async fn post_test_runs_a_workflows_suite_against_a_candidate() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
+async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_the_gate() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = harness
@@ -325,15 +402,23 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
         .unwrap();
     assert_eq!(named.tests[0].run, runs[0]);
 
-    // The recorded tests join a suite by digest, through the gate.
-    let mut saved = triage(&action_set.id, TRIAGE);
-    saved.description = Some("with its recorded tests".into());
-    saved.tests = vec![
-        TestInput::Digest(recorded.tests[0].digest.clone()),
-        TestInput::Digest(named.tests[0].digest.clone()),
-    ];
-    let version = harness.create_workflow(&saved).await.unwrap();
-    assert_eq!(version.tests.len(), 2);
+    // The recorded tests join the suite by digest, through the gate, with a version that lists
+    // them.
+    let version = harness
+        .create_version(
+            "triage",
+            &CreateVersion {
+                tests: vec![
+                    TestInput::Digest(recorded.tests[0].digest.clone()),
+                    TestInput::Digest(named.tests[0].digest.clone()),
+                ],
+                ..CreateVersion::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(version.version.version, 2);
+    assert_eq!(version.version.tests.len(), 2);
 
     // Corrected with `from`, a recorded test pins a new behavior without its cassette.
     let corrected = harness
@@ -355,7 +440,10 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     start.workflow = Some("triage".into());
     start.input = json!({ "repo": "acme/api" });
     let run = harness.start_run(&start, None).await.unwrap();
-    assert_eq!(run.workflow.as_ref().unwrap().digest, version.digest);
+    assert_eq!(
+        run.workflow.as_ref().unwrap().digest,
+        version.version.digest
+    );
     harness
         .signal_run(&run.id, "approval", &json!({ "close": true }), None)
         .await
@@ -366,7 +454,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     let refused = problem(harness.fork_run(&run.id, &fork, None).await.unwrap_err());
     assert_eq!(refused.kind(), Some(ProblemType::TestsFailed));
     assert!(
-        refused.detail.contains("tests of the suite of triage@"),
+        refused.detail.contains("tests of the suite of triage@v2"),
         "{}",
         refused.detail
     );

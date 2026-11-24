@@ -34,6 +34,18 @@ pub(crate) struct Views<'a> {
     pub(crate) app: &'a App,
 }
 
+/// The workflow a run is a run of, as the API shows it.
+pub(crate) fn run_workflow(
+    workflow: &rewind_engine::ports::RunWorkflow,
+) -> rewind_api::workflows::RunWorkflow {
+    rewind_api::workflows::RunWorkflow {
+        id: workflow.id.to_string(),
+        name: workflow.name.clone(),
+        version: workflow.version,
+        digest: workflow.digest.to_hex(),
+    }
+}
+
 /// A call's id in the API, from its task: `{run_id}.{seq}`.
 pub(crate) fn call_id(task: &TaskRef) -> String {
     format!("{}.{}", task.run.id, task.seq.0)
@@ -258,31 +270,11 @@ impl Views<'_> {
                 deliveries: record.task.delivery,
             })
             .collect();
-        let tenant = &head.run.tenant;
-        let script_title = self
-            .app
-            .titles(tenant, [head.code])
-            .await?
-            .remove(&head.code)
-            .map(|title| title.title);
         // A run named by a handle, or by its id once it is erased.
         let named = |handle: Option<&rewind_core::RunHandle>, run: rewind_core::RunId| {
             handle.map_or_else(|| run.to_string(), ToString::to_string)
         };
-        let workflow = match &head.metadata.workflow {
-            Some(workflow) => Some(rewind_api::workflows::RunWorkflow {
-                name: workflow.name.clone(),
-                digest: workflow.version.to_hex(),
-                // A version is never erased: 0 would say its row is gone.
-                version: self
-                    .app
-                    .catalog()
-                    .get_workflow(tenant, workflow.version)
-                    .await?
-                    .map_or(0, |stored| stored.number),
-            }),
-            None => None,
-        };
+        let workflow = head.metadata.workflow.as_ref().map(run_workflow);
         Ok(Run {
             id: head.run.id.to_string(),
             handle: head.handle().to_string(),
@@ -296,7 +288,6 @@ impl Views<'_> {
                 reason: quarantine.reason.clone(),
             }),
             code_digest: head.code.to_hex(),
-            script_title,
             action_set: head.action_set.to_hex(),
             epoch: head.epoch.0,
             // Only live runs are stored: test runs live in memory (`POST /v1/test`).

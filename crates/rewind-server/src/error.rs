@@ -3,7 +3,7 @@
 
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use rewind_api::scripts::{Diagnostic, Location, Severity};
+use rewind_api::checks::{Diagnostic, Location, Severity};
 use rewind_api::{Problem, ProblemType};
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
@@ -360,9 +360,8 @@ impl From<StartError> for ApiError {
             ),
             StartError::Checker(error) => error.into(),
             StartError::Store(error) => error.into(),
-            StartError::WorkflowNotFound(version) => {
-                Self::not_found(format!("no workflow version {version} for this tenant"))
-            }
+            StartError::WorkflowNotFound(message) => Self::not_found(message),
+            StartError::InvalidWorkflowReference(message) => Self::invalid(message),
             StartError::InvalidInput(message) => Self::new(ProblemType::InvalidInput, message),
             StartError::SecretRequired(ref refused) => {
                 Self::secret_required(error.to_string(), refused)

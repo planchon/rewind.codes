@@ -126,12 +126,11 @@ fn write_workflow(out: &mut String, workflow: &PinnedWorkflow) {
     let doc = Doc {
         description: Some(match workflow.description.as_deref().map(str::trim) {
             Some(description) if !description.is_empty() => {
-                format!("{description}\n\nVersion {}.", workflow.version.short())
+                format!("{description}\n\nVersion {}.", workflow.version)
             }
             _ => format!(
                 "The workflow {}, version {}.",
-                workflow.name,
-                workflow.version.short()
+                workflow.name, workflow.version
             ),
         }),
         tags: Vec::new(),
@@ -297,18 +296,19 @@ pub fn workflow_declarations(name: &str, schemas: &WorkflowSchemas) -> WorkflowD
 mod tests {
     use std::collections::BTreeMap;
 
-    use rewind_core::{Digest, Workflow};
+    use rewind_core::Digest;
     use serde_json::json;
 
     use super::*;
 
     fn triage() -> PinnedWorkflow {
-        Workflow::new(
-            "triage",
-            Some("Triage the stale issues of a repository, after approval.".into()),
-            Digest::of(b"script"),
-            Digest::of(b"action_set"),
-            WorkflowSchemas {
+        PinnedWorkflow {
+            name: "triage".into(),
+            id: "wf_7k2m9q4x8d1c".parse().unwrap(),
+            version: 12,
+            digest: Digest::of(b"version"),
+            description: Some("Triage the stale issues of a repository, after approval.".into()),
+            schemas: WorkflowSchemas {
                 input: json!({
                     "type": "object",
                     "properties": { "repo": { "type": "string" } },
@@ -331,16 +331,14 @@ mod tests {
                     ("pr merged".to_owned(), json!(true)),
                 ]),
             },
-        )
-        .unwrap()
-        .pinned()
+        }
     }
 
     #[test]
     fn a_pinned_workflow_is_a_typed_export() {
         let workflow = triage();
         let module = module(std::slice::from_ref(&workflow));
-        let version = workflow.version.short();
+        let version = workflow.version;
         assert_eq!(
             module,
             format!(

@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, Workflow};
+use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, WorkflowId};
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryAccess, MemoryCatalog, MemoryCluster, MemoryMembership,
     MemorySecrets,
@@ -31,15 +31,17 @@ use rewind_engine::adapters::{
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    AccessStore, ActionDeclarations, ApiKey, CatalogError, CatalogStore, ClientKind, Cluster,
-    ClusterError, CodeRedemption, CompiledCode, Connection, ConnectionToken, ControlPlaneChange,
-    Day, DeleteNamespace, Departed, DisplayName, DropNamespace, Grant, GrantClaim, GrantDeletion,
-    GrantWrite, MasterKeyId, Moves, Namespace, NamespaceName, NamespaceWrite, NewConnection,
-    NewSecret, NewToken, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization,
-    PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef,
-    ScriptTitle, Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader,
-    SecretStore, SigningKey, StoreError, StoredActionSet, StoredCode, StoredWorkflow, Subscription,
-    Tenant, TenantId, TestRecord, Token, TokenKey, UserId, WorkflowFilter,
+    AccessStore, ActionDeclarations, ApiKey, CatalogError, CatalogMigration, CatalogStore,
+    ClientKind, Cluster, ClusterError, CodeRedemption, CodeTitle, CompiledCode, Connection,
+    ConnectionToken, ControlPlaneChange, Day, DeleteNamespace, Departed, DisplayName,
+    DropNamespace, Grant, GrantClaim, GrantDeletion, GrantWrite, Labels, MasterKeyId, Moves,
+    Namespace, NamespaceName, NamespaceWrite, NewConnection, NewSecret, NewToken, NewVersion,
+    NewWorkflow, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization, PartitionMap,
+    Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef, Secret,
+    SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader, SecretStore, SigningKey,
+    StoreError, StoredActionSet, StoredCode, StoredVersion, StoredWorkflow, Subscription,
+    SuiteChange, SuiteMember, Tenant, TenantId, TestRecord, Token, TokenKey, UserId, VersionRef,
+    WorkflowCreated, WorkflowFilter, WorkflowPatch, WorkflowWrite,
 };
 use rewind_store_postgres::{PostgresCatalog, PostgresCluster, PostgresMembership, PostgresStore};
 use rewind_store_turso::{TursoCatalog, TursoCluster, TursoMembership, TursoStore};
@@ -630,23 +632,6 @@ impl CatalogStore for Catalog {
         catalog!(self, catalog => catalog.get_code(tenant, digest).await)
     }
 
-    async fn set_script_title(
-        &self,
-        tenant: &TenantId,
-        code: Digest,
-        title: Option<&ScriptTitle>,
-    ) -> Result<bool, CatalogError> {
-        catalog!(self, catalog => catalog.set_script_title(tenant, code, title).await)
-    }
-
-    async fn script_titles(
-        &self,
-        tenant: &TenantId,
-        scripts: &[Digest],
-    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
-        catalog!(self, catalog => catalog.script_titles(tenant, scripts).await)
-    }
-
     async fn put_action_set(
         &self,
         tenant: &TenantId,
@@ -671,55 +656,113 @@ impl CatalogStore for Catalog {
         catalog!(self, catalog => catalog.list_action_sets(tenant).await)
     }
 
-    async fn put_workflow(
+    async fn create_workflow(
         &self,
         tenant: &TenantId,
-        workflow: &Workflow,
+        workflow: &NewWorkflow,
         now: Timestamp,
-    ) -> Result<StoredWorkflow, CatalogError> {
-        catalog!(self, catalog => catalog.put_workflow(tenant, workflow, now).await)
+    ) -> Result<WorkflowCreated, CatalogError> {
+        catalog!(self, catalog => catalog.create_workflow(tenant, workflow, now).await)
     }
 
-    async fn get_workflow(
+    async fn workflow(
         &self,
         tenant: &TenantId,
-        version: Digest,
+        id: &WorkflowId,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
-        catalog!(self, catalog => catalog.get_workflow(tenant, version).await)
+        catalog!(self, catalog => catalog.workflow(tenant, id).await)
     }
 
-    async fn workflow_number(
+    async fn workflow_named(
         &self,
         tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
         name: &str,
-        number: u32,
+        labels: &Labels,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
-        catalog!(self, catalog => catalog.workflow_number(tenant, name, number).await)
+        catalog!(self, catalog => catalog.workflow_named(tenant, namespace, name, labels).await)
     }
 
-    async fn workflow_versions(
+    async fn workflow_with_code(
         &self,
         tenant: &TenantId,
-        name: &str,
-        labels: &BTreeMap<String, String>,
-    ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        catalog!(self, catalog => catalog.workflow_versions(tenant, name, labels).await)
-    }
-
-    async fn workflows_with_code(
-        &self,
-        tenant: &TenantId,
+        namespace: &NamespaceName,
         code: Digest,
-        labels: &BTreeMap<String, String>,
-    ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        catalog!(self, catalog => catalog.workflows_with_code(tenant, code, labels).await)
+        labels: &Labels,
+    ) -> Result<Option<(StoredWorkflow, StoredVersion)>, CatalogError> {
+        catalog!(self, catalog => catalog.workflow_with_code(tenant, namespace, code, labels).await)
     }
 
-    async fn latest_workflows(
+    async fn list_workflows(
         &self,
         filter: &WorkflowFilter,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        catalog!(self, catalog => catalog.latest_workflows(filter).await)
+        catalog!(self, catalog => catalog.list_workflows(filter).await)
+    }
+
+    async fn update_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        patch: &WorkflowPatch,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        catalog!(self, catalog => catalog.update_workflow(tenant, id, patch, now).await)
+    }
+
+    async fn put_version(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        version: &NewVersion,
+        now: Timestamp,
+    ) -> Result<StoredVersion, CatalogError> {
+        catalog!(self, catalog => catalog.put_version(tenant, id, version, now).await)
+    }
+
+    async fn versions(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        labels: &Labels,
+    ) -> Result<Vec<StoredVersion>, CatalogError> {
+        catalog!(self, catalog => catalog.versions(tenant, id, labels).await)
+    }
+
+    async fn version(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        version: VersionRef,
+    ) -> Result<Option<StoredVersion>, CatalogError> {
+        catalog!(self, catalog => catalog.version(tenant, id, version).await)
+    }
+
+    async fn change_suite(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        change: &SuiteChange,
+        now: Timestamp,
+    ) -> Result<Vec<SuiteMember>, CatalogError> {
+        catalog!(self, catalog => catalog.change_suite(tenant, id, change, now).await)
+    }
+
+    async fn suite(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+    ) -> Result<Vec<SuiteMember>, CatalogError> {
+        catalog!(self, catalog => catalog.suite(tenant, id).await)
+    }
+
+    async fn promote_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        catalog!(self, catalog => catalog.promote_workflow(tenant, id, now).await)
     }
 
     async fn reserve_tests(
@@ -906,23 +949,6 @@ impl CatalogStore for ControlPlane {
         self.catalog().get_code(tenant, digest).await
     }
 
-    async fn set_script_title(
-        &self,
-        tenant: &TenantId,
-        code: Digest,
-        title: Option<&ScriptTitle>,
-    ) -> Result<bool, CatalogError> {
-        self.catalog().set_script_title(tenant, code, title).await
-    }
-
-    async fn script_titles(
-        &self,
-        tenant: &TenantId,
-        scripts: &[Digest],
-    ) -> Result<Vec<(Digest, ScriptTitle)>, CatalogError> {
-        self.catalog().script_titles(tenant, scripts).await
-    }
-
     async fn put_action_set(
         &self,
         tenant: &TenantId,
@@ -949,57 +975,117 @@ impl CatalogStore for ControlPlane {
         self.catalog().list_action_sets(tenant).await
     }
 
-    async fn put_workflow(
+    async fn create_workflow(
         &self,
         tenant: &TenantId,
-        workflow: &Workflow,
+        workflow: &NewWorkflow,
         now: Timestamp,
-    ) -> Result<StoredWorkflow, CatalogError> {
-        self.catalog().put_workflow(tenant, workflow, now).await
+    ) -> Result<WorkflowCreated, CatalogError> {
+        self.catalog().create_workflow(tenant, workflow, now).await
     }
 
-    async fn get_workflow(
+    async fn workflow(
         &self,
         tenant: &TenantId,
-        version: Digest,
+        id: &WorkflowId,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
-        self.catalog().get_workflow(tenant, version).await
+        self.catalog().workflow(tenant, id).await
     }
 
-    async fn workflow_number(
+    async fn workflow_named(
         &self,
         tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
         name: &str,
-        number: u32,
+        labels: &Labels,
     ) -> Result<Option<StoredWorkflow>, CatalogError> {
-        self.catalog().workflow_number(tenant, name, number).await
-    }
-
-    async fn workflow_versions(
-        &self,
-        tenant: &TenantId,
-        name: &str,
-        labels: &BTreeMap<String, String>,
-    ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        self.catalog().workflow_versions(tenant, name, labels).await
-    }
-
-    async fn workflows_with_code(
-        &self,
-        tenant: &TenantId,
-        code: Digest,
-        labels: &BTreeMap<String, String>,
-    ) -> Result<Vec<StoredWorkflow>, CatalogError> {
         self.catalog()
-            .workflows_with_code(tenant, code, labels)
+            .workflow_named(tenant, namespace, name, labels)
             .await
     }
 
-    async fn latest_workflows(
+    async fn workflow_with_code(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        code: Digest,
+        labels: &Labels,
+    ) -> Result<Option<(StoredWorkflow, StoredVersion)>, CatalogError> {
+        self.catalog()
+            .workflow_with_code(tenant, namespace, code, labels)
+            .await
+    }
+
+    async fn list_workflows(
         &self,
         filter: &WorkflowFilter,
     ) -> Result<Vec<StoredWorkflow>, CatalogError> {
-        self.catalog().latest_workflows(filter).await
+        self.catalog().list_workflows(filter).await
+    }
+
+    async fn update_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        patch: &WorkflowPatch,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        self.catalog().update_workflow(tenant, id, patch, now).await
+    }
+
+    async fn put_version(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        version: &NewVersion,
+        now: Timestamp,
+    ) -> Result<StoredVersion, CatalogError> {
+        self.catalog().put_version(tenant, id, version, now).await
+    }
+
+    async fn versions(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        labels: &Labels,
+    ) -> Result<Vec<StoredVersion>, CatalogError> {
+        self.catalog().versions(tenant, id, labels).await
+    }
+
+    async fn version(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        version: VersionRef,
+    ) -> Result<Option<StoredVersion>, CatalogError> {
+        self.catalog().version(tenant, id, version).await
+    }
+
+    async fn change_suite(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        change: &SuiteChange,
+        now: Timestamp,
+    ) -> Result<Vec<SuiteMember>, CatalogError> {
+        self.catalog().change_suite(tenant, id, change, now).await
+    }
+
+    async fn suite(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+    ) -> Result<Vec<SuiteMember>, CatalogError> {
+        self.catalog().suite(tenant, id).await
+    }
+
+    async fn promote_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        self.catalog().promote_workflow(tenant, id, now).await
     }
 
     async fn reserve_tests(
@@ -1252,5 +1338,49 @@ impl Membership for ServerMembership {
 
     async fn leave(self) -> Result<(), ClusterError> {
         member!(self, member => member.leave().await)
+    }
+}
+
+impl CatalogMigration for Catalog {
+    async fn code_titles(&self) -> Result<Vec<CodeTitle>, CatalogError> {
+        catalog!(self, catalog => catalog.code_titles().await)
+    }
+
+    async fn scope_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        catalog!(self, catalog => catalog.scope_workflow(tenant, id, namespace, now).await)
+    }
+
+    async fn drop_code_titles(&self) -> Result<(), CatalogError> {
+        catalog!(self, catalog => catalog.drop_code_titles().await)
+    }
+}
+
+/// The control plane is its catalog's migration too: what `rewind server rename-data` reads and
+/// writes beyond the catalog ([`rewind_engine::rename::workflows`]).
+impl CatalogMigration for ControlPlane {
+    async fn code_titles(&self) -> Result<Vec<CodeTitle>, CatalogError> {
+        self.catalog().code_titles().await
+    }
+
+    async fn scope_workflow(
+        &self,
+        tenant: &TenantId,
+        id: &WorkflowId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<WorkflowWrite, CatalogError> {
+        self.catalog()
+            .scope_workflow(tenant, id, namespace, now)
+            .await
+    }
+
+    async fn drop_code_titles(&self) -> Result<(), CatalogError> {
+        self.catalog().drop_code_titles().await
     }
 }

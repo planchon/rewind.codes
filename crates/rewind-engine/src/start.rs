@@ -37,6 +37,9 @@ pub struct StartRun {
     pub idempotency_key: Option<String>,
     /// What the caller may use.
     pub secret_rights: SecretRights,
+    /// Who starts it, a principal as the audit log names it: the creator of the workflow the
+    /// start creates, when its code is new to its namespace.
+    pub principal: String,
 }
 
 impl StartRun {
@@ -56,6 +59,7 @@ impl StartRun {
             metadata: RunMetadata::default(),
             idempotency_key: None,
             secret_rights: SecretRights::NamespaceOnly,
+            principal: "local".to_owned(),
         }
     }
 }
@@ -87,15 +91,18 @@ pub enum StartError {
     #[error("the executor supports no determinism epoch")]
     NoEpoch,
     /// The namespace's limit or the tenant's ceiling of `active_runs`, `runs_per_month` or
-    /// `scripts` is reached.
+    /// `workflows` is reached.
     #[error("the {} quota {} is reached: {} of {}", scope_name(.0), .0.quota, .0.used, .0.limit)]
     QuotaExceeded(QuotaExceeded),
     /// The namespace is being erased: it takes no run.
     #[error("the namespace is being erased: it takes no run")]
     NamespaceDeleting,
-    /// No such workflow version in the tenant.
-    #[error("workflow version {0} not found")]
+    /// No workflow or version of that reference that the caller sees.
+    #[error("{0}")]
     WorkflowNotFound(String),
+    /// A reference that cannot name a workflow or a version.
+    #[error("{0}")]
+    InvalidWorkflowReference(String),
     /// A secret is missing, takes no secret, names a secret that does not exist or one the
     /// caller may not use (`archi/04-tools.md`, "Secrets"): 422 `secret-required`, whose
     /// message lists the secrets the caller may use instead.

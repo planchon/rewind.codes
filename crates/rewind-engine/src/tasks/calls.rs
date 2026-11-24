@@ -39,7 +39,7 @@ use crate::ports::{
     ActionDispatcher, BlobOwner, Call, CallAuth, CallClaims, CatalogStore, Clock, CodeExecutor,
     Dispatched, Entropy, ParkKind, ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata,
     RunRef, RunWorkflow, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord, TaskRef,
-    TaskToken,
+    TaskToken, VersionRef,
 };
 use crate::tasks::idempotency_key;
 use crate::tasks::{redacted, secret_texts};
@@ -339,7 +339,9 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
                     )
                     .await
                 }
-                WorkflowOp::Signal => signal_child(plane, &*log, &call, &head, &workflow).await,
+                WorkflowOp::Signal => {
+                    signal_child(plane, &*log, &call, &head, &action_set, &workflow).await
+                }
             };
         }
         ActionRoute::Builtin(Builtin::Workflow {
@@ -596,11 +598,19 @@ async fn start_child<P: Plane>(
     let Some(pinned) = action_set.workflow(name) else {
         return failed(format!("this run's action set pins no workflow {name}"));
     };
-    let workflow = match plane.catalog().get_workflow(tenant, pinned.version).await {
-        Ok(Some(stored)) => stored.workflow,
-        Ok(None) => return failed(format!("the workflow version {pinned} is not stored")),
+    // The pinned version, even when the run's namespace has forked the workflow since: the
+    // declarations the code was checked against stay true (`archi/03-execution.md`, "Workflows
+    // across runs").
+    let version = match plane
+        .catalog()
+        .version(tenant, &pinned.id, VersionRef::Number(pinned.version))
+        .await
+    {
+        Ok(Some(stored)) if stored.digest == pinned.digest => stored,
+        Ok(_) => return failed(format!("the workflow version {pinned} is not stored")),
         Err(error) => return not_sent(format!("the workflow could not be read: {error}")),
     };
+    let workflow = &version.document;
     let args = match StartArgs::parse(&call.args) {
         Ok(args) => args,
         Err(message) => return failed(message),
@@ -622,8 +632,8 @@ async fn start_child<P: Plane>(
         .all(|(key, value)| workflow.labels().get(key) == Some(value))
     {
         return failed(format!(
-            "the workflow version {pinned} was not saved under this run's allowed labels ({}): a run \
-             started under labels starts only the versions saved under them",
+            "the workflow version {pinned} was not made under this run's allowed labels ({}): a run \
+             started under labels starts only the versions made under them",
             allowed
                 .iter()
                 .map(|(key, value)| format!("{key}={value}"))
@@ -638,7 +648,7 @@ async fn start_child<P: Plane>(
         }
         Err(checks::BoundsError::Deleting) => {
             return failed(format!(
-                "no run of {workflow} was started: the namespace is being erased: it takes no run"
+                "no run of {pinned} was started: the namespace is being erased: it takes no run"
             ));
         }
     };
@@ -653,11 +663,11 @@ async fn start_child<P: Plane>(
     };
     let code = match plane.catalog().get_code(tenant, workflow.code()).await {
         Ok(Some(stored)) => stored.code,
-        Ok(None) => return not_sent(format!("the code of {workflow} is not stored")),
+        Ok(None) => return not_sent(format!("the code of {pinned} is not stored")),
         Err(error) => return not_sent(format!("the workflow's code could not be read: {error}")),
     };
     if let Err(error) = bounds.check_lines(&code) {
-        return failed(format!("no run of {workflow} was started: {error}"));
+        return failed(format!("no run of {pinned} was started: {error}"));
     }
     let input = Payload::Value(args.input);
     let size = payloads::value_size(&input).unwrap_or_default();
@@ -671,10 +681,10 @@ async fn start_child<P: Plane>(
         return not_sent("this node supports no determinism epoch".into());
     };
     let now = plane.clock().now();
-    match checks::version_secrets(plane.secrets(), now, tenant, &head.namespace, &workflow).await {
+    match checks::version_secrets(plane.secrets(), now, tenant, &head.namespace, workflow).await {
         Ok(Ok(())) => {}
         Ok(Err(refused)) => {
-            return unavailable(format!("no run of {workflow} was started: {refused}"));
+            return unavailable(format!("no run of {pinned} was started: {refused}"));
         }
         Err(error) => {
             return not_sent(format!("the workflow's secrets could not be read: {error}"));
@@ -685,8 +695,11 @@ async fn start_child<P: Plane>(
         trace_context: call.trace_context.clone(),
         source: None,
         workflow: Some(RunWorkflow {
-            name: workflow.name().to_owned(),
-            version: workflow.version(),
+            id: pinned.id.clone(),
+            name: Some(pinned.name.clone()),
+            version: version.version,
+            digest: version.digest,
+            interface: workflow.interface().is_some(),
         }),
         started_by: Some(StartedBy {
             run: call.run.id,
@@ -720,7 +733,7 @@ async fn start_child<P: Plane>(
         run: child,
         namespace: head.namespace.clone(),
         // A workflow's run is the run of its workflow.
-        origin: workflow.name().to_owned(),
+        origin: pinned.name.clone(),
         started: RunStarted {
             code: workflow.code(),
             action_set: workflow.action_set(),
@@ -745,6 +758,7 @@ async fn signal_child<P: Plane>(
     log: &LogOf<P>,
     call: &Call,
     head: &RunHead,
+    action_set: &rewind_core::ActionSet,
     name: &str,
 ) -> CallOutcome {
     let args = match SignalArgs::parse(&call.args) {
@@ -772,7 +786,8 @@ async fn signal_child<P: Plane>(
     if !in_scope {
         return invisible();
     }
-    if found.metadata.workflow.as_ref().map(|of| of.name.as_str()) != Some(name) {
+    let pinned = action_set.workflow(name).map(|pinned| &pinned.id);
+    if pinned.is_none() || found.metadata.workflow.as_ref().map(|of| &of.id) != pinned {
         return failed(format!("run {} is not a run of workflow {name}", args.run));
     }
     if found.is_ended() {

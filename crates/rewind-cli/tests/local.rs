@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rewind_api::scripts::CheckResult;
+use rewind_api::checks::CheckResult;
 use rewind_api::testing::TestReport;
 use rewind_cli::{Console, Exit};
 use serde_json::{Value, json};

@@ -26,6 +26,7 @@ use crate::admin::ServerInfo;
 use crate::calls::{
     CallStreamMessage, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
 };
+use crate::checks::{CheckRequest, CheckResult, TestRequest};
 use crate::common::Duration;
 use crate::events::{Change, EventsQuery, HistoryEvent, StreamMessage};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
@@ -46,13 +47,14 @@ use crate::runs::{
     CancelRun, ExportAs, ExportQuery, FailureQuery, FingerprintPage, ForkRun, GetRunQuery, Run,
     RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Transcript,
 };
-use crate::scripts::{
-    CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, SetScriptTitle, TestRequest,
-};
 use crate::secrets::{
     Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
 };
 use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
+use crate::workflows::{
+    ChangeTests, CreateVersion, CreateWorkflow, PatchWorkflow, RecordTests, RecordedTests,
+    Workflow, WorkflowPage, WorkflowQuery,
+};
 
 /// The base URL of the embedded server: requests go to its socket, whatever the host.
 const EMBEDDED_BASE: &str = "http://localhost";
@@ -199,35 +201,6 @@ impl Client {
         self.json(request).await
     }
 
-    /// `POST /v1/workflows`.
-    pub async fn create_workflow(
-        &self,
-        workflow: &crate::workflows::CreateWorkflow,
-    ) -> Result<crate::workflows::Workflow, Error> {
-        let request = self
-            .request(Method::POST, routes::WORKFLOWS, &[])?
-            .json(workflow);
-        self.json(request).await
-    }
-
-    /// `GET /v1/workflows`.
-    pub async fn list_workflows(
-        &self,
-        query: &crate::workflows::WorkflowQuery,
-    ) -> Result<crate::workflows::WorkflowPage, Error> {
-        let request = self.request_with(Method::GET, routes::WORKFLOWS, &[], query)?;
-        self.json(request).await
-    }
-
-    /// `GET /v1/workflows/{name}`.
-    pub async fn workflow_versions(
-        &self,
-        name: &str,
-    ) -> Result<crate::workflows::WorkflowVersions, Error> {
-        let request = self.request(Method::GET, routes::WORKFLOW, &[name])?;
-        self.json(request).await
-    }
-
     /// `GET /v1/action-sets/{id}/declarations`.
     pub async fn action_set_declarations(
         &self,
@@ -260,24 +233,86 @@ impl Client {
     // ---------------------------------------------------------------------------------------
     // Workflows
 
-    /// `POST /v1/check`.
-    pub async fn check(&self, check: &CheckRequest) -> Result<CheckResult, Error> {
-        let request = self.request(Method::POST, routes::CHECK, &[])?.json(check);
+    /// `POST /v1/workflows`: in the client's namespace, else the organization's.
+    pub async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, Error> {
+        let request = self
+            .request(Method::POST, routes::WORKFLOWS, &[])?
+            .json(workflow);
         self.json(request).await
     }
 
-    /// `POST /v1/test`.
-    pub async fn test(&self, test: &TestRequest) -> Result<crate::testing::TestReport, Error> {
-        let request = self.request(Method::POST, routes::TEST, &[])?.json(test);
+    /// `GET /v1/workflows`.
+    pub async fn list_workflows(&self, query: &WorkflowQuery) -> Result<WorkflowPage, Error> {
+        let request = self.request_with(Method::GET, routes::WORKFLOWS, &[], query)?;
         self.json(request).await
     }
 
-    /// `POST /v1/workflows/{name}/record`.
+    /// `GET /v1/workflows/{id}`: by its id or its name, `@v12` or `@<digest>` for a version.
+    pub async fn get_workflow(&self, workflow: &str) -> Result<Workflow, Error> {
+        let request = self.request(Method::GET, routes::WORKFLOW, &[workflow])?;
+        self.json(request).await
+    }
+
+    /// `PATCH /v1/workflows/{id}`.
+    pub async fn update_workflow(
+        &self,
+        workflow: &str,
+        patch: &PatchWorkflow,
+    ) -> Result<Workflow, Error> {
+        let request = self
+            .request(Method::PATCH, routes::WORKFLOW, &[workflow])?
+            .json(patch);
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{id}/versions`.
+    pub async fn create_version(
+        &self,
+        workflow: &str,
+        version: &CreateVersion,
+    ) -> Result<Workflow, Error> {
+        let request = self
+            .request(Method::POST, routes::WORKFLOW_VERSIONS, &[workflow])?
+            .json(version);
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{id}/tests`.
+    pub async fn change_tests(
+        &self,
+        workflow: &str,
+        tests: &ChangeTests,
+    ) -> Result<Workflow, Error> {
+        let request = self
+            .request(Method::POST, routes::WORKFLOW_TESTS, &[workflow])?
+            .json(tests);
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{id}/promote`.
+    pub async fn promote_workflow(&self, workflow: &str) -> Result<Workflow, Error> {
+        let request = self.request(Method::POST, routes::WORKFLOW_PROMOTE, &[workflow])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{id}/fork`: into the client's namespace; `@v12` forks that version.
+    pub async fn fork_workflow(&self, workflow: &str) -> Result<Workflow, Error> {
+        let request = self.request(Method::POST, routes::WORKFLOW_FORK, &[workflow])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{id}/pull`.
+    pub async fn pull_workflow(&self, workflow: &str) -> Result<Workflow, Error> {
+        let request = self.request(Method::POST, routes::WORKFLOW_PULL, &[workflow])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{id}/record`.
     pub async fn record_tests(
         &self,
         workflow: &str,
-        record: &crate::workflows::RecordTests,
-    ) -> Result<crate::workflows::RecordedTests, Error> {
+        record: &RecordTests,
+    ) -> Result<RecordedTests, Error> {
         let request = self
             .request(Method::POST, routes::WORKFLOW_RECORD, &[workflow])?
             .json(record);
@@ -290,27 +325,15 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/scripts`.
-    pub async fn list_scripts(&self, filter: &ScriptFilter) -> Result<ScriptPage, Error> {
-        let request = self.request_with(Method::GET, routes::SCRIPTS, &[], filter)?;
+    /// `POST /v1/check`.
+    pub async fn check(&self, check: &CheckRequest) -> Result<CheckResult, Error> {
+        let request = self.request(Method::POST, routes::CHECK, &[])?.json(check);
         self.json(request).await
     }
 
-    /// `GET /v1/scripts/{digest}`.
-    pub async fn get_script(&self, digest: &str) -> Result<Script, Error> {
-        let request = self.request(Method::GET, routes::SCRIPT, &[digest])?;
-        self.json(request).await
-    }
-
-    /// `PATCH /v1/scripts/{digest}`.
-    pub async fn set_script_title(
-        &self,
-        digest: &str,
-        title: &SetScriptTitle,
-    ) -> Result<Script, Error> {
-        let request = self
-            .request(Method::PATCH, routes::SCRIPT, &[digest])?
-            .json(title);
+    /// `POST /v1/test`.
+    pub async fn test(&self, test: &TestRequest) -> Result<crate::testing::TestReport, Error> {
+        let request = self.request(Method::POST, routes::TEST, &[])?.json(test);
         self.json(request).await
     }
 

@@ -316,7 +316,7 @@ impl StreamMessage {
 /// One change of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
 /// whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
 /// summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
-/// durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
+/// durable; for `workflow`, `secret`, `namespace` and `connection`, what changed in the
 /// control plane, by its name or id (the client reads again the views that show it); for
 /// `resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:
 /// the stream is not resumed, the client reads again what it shows. While it sends nothing else,
@@ -326,10 +326,8 @@ impl StreamMessage {
 pub enum Change {
     /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
     Run(Box<RunSummary>),
-    /// `script`: the organization's runs ran a code for the first time, or a person gave it a
-    /// title or removed it.
-    Script(ScriptChanged),
-    /// `workflow`: a workflow has a new version.
+    /// `workflow`: a workflow was created, named, described, given a version or tests,
+    /// promoted, forked or pulled.
     Workflow(WorkflowChanged),
     /// `secret`: a secret was put or deleted.
     Secret(SecretChanged),
@@ -343,22 +341,13 @@ pub enum Change {
     Resync(Resync),
 }
 
-/// The data of a `script` event: a code the organization's runs ran for the first time, which
-/// `GET /v1/scripts` now lists, or whose title a person gave or removed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptChanged {
-    /// SHA-256 of the TypeScript source, lowercase hex.
-    pub digest: String,
-}
-
-/// The data of a `workflow` event: the version a workflow was saved as.
+/// The data of a `workflow` event: the workflow that changed, which `GET /v1/workflows/{id}`
+/// reads again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowChanged {
-    pub name: String,
-    /// The digest of the new version, as `GET /v1/workflows/{name}` lists it.
-    pub digest: String,
+    /// Its id, `wf_` and 12 characters.
+    pub workflow: String,
 }
 
 /// The data of a `secret` event: a secret put (created or given a new value) or deleted.
@@ -396,12 +385,11 @@ pub struct ConnectionChanged {
 pub struct Resync {}
 
 impl Change {
-    /// The SSE `event` field: `run`, `script`, `workflow`, `secret`, `namespace`, `connection`
-    /// or `resync`.
+    /// The SSE `event` field: `run`, `workflow`, `secret`, `namespace`, `connection` or
+    /// `resync`.
     pub fn sse_event(&self) -> &'static str {
         match self {
             Change::Run(_) => "run",
-            Change::Script(_) => "script",
             Change::Workflow(_) => "workflow",
             Change::Secret(_) => "secret",
             Change::Namespace(_) => "namespace",
@@ -415,7 +403,6 @@ impl Change {
     pub fn from_sse(event: &str, data: &str) -> Result<Option<Self>, serde_json::Error> {
         Ok(match event {
             "run" => Some(Change::Run(Box::new(serde_json::from_str(data)?))),
-            "script" => Some(Change::Script(serde_json::from_str(data)?)),
             "workflow" => Some(Change::Workflow(serde_json::from_str(data)?)),
             "secret" => Some(Change::Secret(serde_json::from_str(data)?)),
             "namespace" => Some(Change::Namespace(serde_json::from_str(data)?)),
@@ -525,7 +512,6 @@ mod tests {
             "status": "active",
             "quarantined": false,
             "codeDigest": "ab",
-            "headline": "// x",
             "actionSet": "cd",
             "labels": {},
             "startedAt": "2026-11-09T10:00:00Z",
@@ -557,18 +543,10 @@ mod tests {
     fn a_control_plane_change_names_what_changed() {
         let cases = [
             (
-                "script",
-                json!({ "digest": "ab" }),
-                Change::Script(ScriptChanged {
-                    digest: "ab".into(),
-                }),
-            ),
-            (
                 "workflow",
-                json!({ "name": "triage", "digest": "cd" }),
+                json!({ "workflow": "wf_7k2m9q4x8d1c" }),
                 Change::Workflow(WorkflowChanged {
-                    name: "triage".into(),
-                    digest: "cd".into(),
+                    workflow: "wf_7k2m9q4x8d1c".into(),
                 }),
             ),
             (
@@ -616,7 +594,12 @@ mod tests {
                 "{name}"
             );
         }
-        assert!(Change::from_sse("script", "{}").is_err());
+        assert!(Change::from_sse("workflow", "{}").is_err());
+        assert_eq!(
+            Change::from_sse("script", "{}").unwrap(),
+            None,
+            "an event no more"
+        );
         assert!(Change::from_sse("connection", "{}").is_err());
     }
 }

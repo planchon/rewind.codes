@@ -46,7 +46,6 @@ mod migrate;
 mod oauth;
 mod serve;
 mod streams;
-mod titles;
 mod tokens;
 mod usage;
 mod views;

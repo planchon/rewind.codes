@@ -6,6 +6,7 @@ mod action_sets;
 mod admin;
 mod calls;
 mod changes;
+mod checks;
 mod connections;
 mod dashboard;
 mod events;
@@ -16,7 +17,6 @@ mod organization;
 mod reading;
 mod roles;
 pub(crate) mod runs;
-mod scripts;
 mod search;
 mod secrets;
 mod sign_in;
@@ -63,13 +63,19 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             routes::WORKFLOWS,
             post(workflows::create).get(workflows::list),
         )
-        .route(routes::WORKFLOW, get(workflows::versions))
+        .route(
+            routes::WORKFLOW,
+            get(workflows::get).patch(workflows::update),
+        )
+        .route(routes::WORKFLOW_VERSIONS, post(workflows::version))
+        .route(routes::WORKFLOW_TESTS, post(workflows::tests))
+        .route(routes::WORKFLOW_PROMOTE, post(workflows::promote))
+        .route(routes::WORKFLOW_FORK, post(workflows::fork))
+        .route(routes::WORKFLOW_PULL, post(workflows::pull))
         .route(routes::WORKFLOW_RECORD, post(testing::record))
         .route(routes::TEST_DOCUMENT, get(testing::get))
-        .route(routes::CHECK, post(scripts::check))
+        .route(routes::CHECK, post(checks::check))
         .route(routes::TEST, post(testing::test))
-        .route(routes::SCRIPTS, get(stats::scripts))
-        .route(routes::SCRIPT, get(reading::code).patch(reading::set_title))
         .route(routes::RUNS, post(runs::start).get(runs::list))
         .route(routes::RUN_STATS, get(stats::runs))
         .route(routes::RUN_FAILURES, get(stats::failures))

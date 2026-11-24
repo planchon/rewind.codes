@@ -21,7 +21,7 @@ use crate::common::{Duration, RunMode, RunStatus, Timestamp};
 use crate::namespaces::NamespaceName;
 
 /// The fields of the language, in the order error messages list them.
-pub const FIELDS: [&str; 21] = [
+pub const FIELDS: [&str; 20] = [
     "status",
     "action",
     "error",
@@ -33,7 +33,6 @@ pub const FIELDS: [&str; 21] = [
     "duration",
     "calls",
     "errors",
-    "script",
     "action_set",
     "id",
     "source",
@@ -94,8 +93,6 @@ pub enum Filter {
     Duration(Comparison<u64>),
     Calls(Comparison<u64>),
     Errors(Comparison<u64>),
-    /// Lowercase hexadecimal prefixes of the code's digest.
-    Script(Vec<String>),
     /// Lowercase hexadecimal prefixes of the action set's digest.
     ActionSet(Vec<String>),
     /// Lowercase prefixes of the run's id, hyphenated as a UUID is.
@@ -384,14 +381,7 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
         "duration" => Filter::Duration(comparison(name, operand, duration_value, Alone::Refused)?),
         "calls" => Filter::Calls(comparison(name, operand, count_value, Alone::Exact)?),
         "errors" => Filter::Errors(comparison(name, operand, count_value, Alone::Exact)?),
-        "script" | "action_set" => {
-            let prefixes = hex_prefixes(name, operand, false)?;
-            if name == "script" {
-                Filter::Script(prefixes)
-            } else {
-                Filter::ActionSet(prefixes)
-            }
-        }
+        "action_set" => Filter::ActionSet(hex_prefixes(name, operand, false)?),
         "id" => Filter::Id(hex_prefixes(name, operand, true)?),
         "source" => Filter::Source(run_id(operand)?),
         "workflow" => Filter::Workflow(patterns(operand)?),
@@ -944,10 +934,10 @@ mod tests {
     fn digests_and_ids_are_prefixes_of_eight_digits_at_least() {
         assert_eq!(
             filters(
-                "script:9F2C4E1A id:0193a5c4b2 source:0193A5C4-B2E1-7C3D-8E4F-0A1B2C3D4E5F fingerprint:00112233445566aa"
+                "action_set:9F2C4E1A id:0193a5c4b2 source:0193A5C4-B2E1-7C3D-8E4F-0A1B2C3D4E5F fingerprint:00112233445566aa"
             ),
             vec![
-                (false, Filter::Script(vec!["9f2c4e1a".into()])),
+                (false, Filter::ActionSet(vec!["9f2c4e1a".into()])),
                 (false, Filter::Id(vec!["0193a5c4-b2".into()])),
                 (
                     false,
@@ -957,7 +947,7 @@ mod tests {
             ]
         );
         assert!(
-            error("script:9f2c")
+            error("action_set:9f2c")
                 .message
                 .contains("8 hexadecimal digits")
         );

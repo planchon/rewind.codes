@@ -34,8 +34,8 @@ use rewind_core::RunStatus;
 use rewind_core::{MAX_SECRET_VALUE_BYTES, SecretName};
 use rewind_engine::ports::{
     CallClaims, CatalogStore, Day, NamespaceWrite, NewSecret, Page, Predicate, PublicKey,
-    PutSecret as Put, RunOrder, RunRef, SCAN_BUDGET, Scope, Secret, SecretId, SecretMeta,
-    SecretNamespace, SecretStore, TenantId, Term, WaitingFor, WorkflowFilter,
+    PutSecret as Put, RunOrder, RunRef, SCAN_BUDGET, Scope, ScopeFilter, Secret, SecretId,
+    SecretMeta, SecretNamespace, SecretStore, TenantId, Term, WaitingFor, WorkflowFilter,
 };
 
 use crate::app::App;
@@ -397,18 +397,32 @@ async fn usage_of(
             .collect()
     };
     let mut workflows = Vec::new();
-    let latest = app
+    let seen = app
         .catalog()
-        .latest_workflows(&WorkflowFilter {
+        .list_workflows(&WorkflowFilter {
             tenant: caller.tenant.clone(),
+            scope: match &caller.namespace {
+                Some(namespace) => ScopeFilter::Visible(namespace.clone()),
+                None => ScopeFilter::All,
+            },
+            code: None,
             labels: caller.labels.clone(),
             after: None,
-            limit: Some(1_000),
+            limit: 1_000,
         })
         .await?;
-    for stored in latest {
-        let servers: Vec<String> = stored
-            .workflow
+    for workflow in seen {
+        let Some(latest) = app
+            .catalog()
+            .versions(&caller.tenant, &workflow.id, &caller.labels)
+            .await?
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let servers: Vec<String> = latest
+            .document
             .secrets()
             .iter()
             .filter(|(_, secret)| {
@@ -420,8 +434,10 @@ async fn usage_of(
             .collect();
         if !servers.is_empty() {
             workflows.push(WorkflowSecrets {
-                name: stored.workflow.name().to_owned(),
-                digest: stored.workflow.version().to_hex(),
+                workflow: workflow.id.to_string(),
+                name: workflow.name.clone(),
+                version: latest.version,
+                digest: latest.digest.to_hex(),
                 servers,
             });
         }

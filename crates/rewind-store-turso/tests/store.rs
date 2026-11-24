@@ -6,10 +6,13 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::path::Path;
 
-use rewind_core::{ActionSet, Code, RunId, SecretName, Timestamp, Workflow, WorkflowSchemas};
+use rewind_core::{
+    ActionSet, Code, RunId, SecretName, Timestamp, WorkflowId, WorkflowSchemas, WorkflowVersion,
+};
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, CompiledCode, NamespaceName, NamespaceWrite, NewSecret,
-    Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
+    NewWorkflow, Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
+    VersionRef, WorkflowCreated, WorkflowScope,
 };
 use rewind_store_turso::{Error, MasterKey, MasterKeys, SCHEMA_VERSION, TursoStore};
 use serde_json::json;
@@ -78,18 +81,23 @@ async fn the_catalog_survives_a_restart() {
     let partitions = NonZeroU16::MIN;
     let code = Code::new("export default async () => 1;");
     let action_set = ActionSet::default();
-    let workflow = Workflow::new(
-        "triage",
-        None,
-        code.digest(),
-        action_set.digest(),
-        WorkflowSchemas {
+    let version = WorkflowVersion::new(code.digest(), action_set.digest())
+        .with_interface(Some(WorkflowSchemas {
             input: json!({ "type": "object" }),
             output: json!({}),
             signals: BTreeMap::new(),
-        },
-    )
-    .expect("a valid workflow");
+        }))
+        .expect("a valid interface");
+    let workflow = NewWorkflow {
+        id: WorkflowId::from_bits(7),
+        scope: WorkflowScope::Namespace(alice.clone()),
+        name: Some("triage".into()),
+        description: None,
+        labels: BTreeMap::new(),
+        source: None,
+        created_by: "key:k1".into(),
+        version: version.clone(),
+    };
     let placed = {
         let catalog = open(&path).await.catalog();
         catalog
@@ -115,10 +123,14 @@ async fn the_catalog_survives_a_restart() {
             .put_action_set(&tenant, &action_set, &ActionDeclarations::default())
             .await
             .expect("put_action_set");
-        catalog
-            .put_workflow(&tenant, &workflow, T0)
+        let created = catalog
+            .create_workflow(&tenant, &workflow, T0)
             .await
-            .expect("put_workflow");
+            .expect("create_workflow");
+        assert!(
+            matches!(created, WorkflowCreated::Created(_)),
+            "{created:?}"
+        );
         placed
     };
 
@@ -151,11 +163,19 @@ async fn the_catalog_survives_a_restart() {
     );
     assert_eq!(
         catalog
-            .get_workflow(&tenant, workflow.version())
+            .workflow(&tenant, &workflow.id)
             .await
-            .expect("get_workflow")
-            .map(|stored| stored.workflow),
-        Some(workflow)
+            .expect("workflow")
+            .and_then(|stored| stored.name),
+        Some("triage".to_owned())
+    );
+    assert_eq!(
+        catalog
+            .version(&tenant, &workflow.id, VersionRef::Number(1))
+            .await
+            .expect("version")
+            .map(|stored| stored.document),
+        Some(version)
     );
 }
 

@@ -20,6 +20,7 @@ use futures_util::StreamExt;
 use rewind_api::access::{BuiltInRole, Permission, PutRole};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::calls::{CallStreamQuery, CompleteCall};
+use rewind_api::checks::{CheckRequest, TestRequest};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::EventsQuery;
 use rewind_api::namespaces::{
@@ -31,7 +32,6 @@ use rewind_api::organization::{Principal, TokenKind};
 use rewind_api::problem::QuotaReached;
 use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
-use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{ADMIN_KEY, TestServer, eventually, wait};
@@ -267,12 +267,16 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         refused(alice.run_events(&his.id, &EventsQuery::default()).await),
         (404, Some(ProblemType::NotFound))
     );
+    let his_workflow = his.workflow.clone().unwrap().id;
     assert_eq!(
-        refused(alice.get_script(&his.code_digest).await),
+        refused(alice.get_workflow(&his_workflow).await),
         (404, Some(ProblemType::NotFound)),
-        "a code her namespace never ran"
+        "a workflow of another namespace"
     );
-    alice.get_script(&hers.code_digest).await.unwrap();
+    alice
+        .get_workflow(&hers.workflow.clone().unwrap().id)
+        .await
+        .unwrap();
     let her_input = hers.input.clone().unwrap().digest;
     // Read once the run's first activation has committed its input.
     let input = eventually(|| async { alice.get_payload(&her_input, &hers.id).await.ok() }).await;
@@ -296,16 +300,18 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         (page.runs.len() == 2).then_some(())
     })
     .await;
-    let scripts = alice
-        .list_scripts(&rewind_api::scripts::ScriptFilter::default())
+    let workflows = alice
+        .list_workflows(&rewind_api::workflows::WorkflowQuery::default())
         .await
         .unwrap();
-    assert!(
-        scripts
-            .scripts
-            .iter()
-            .all(|code| code.digest != his.code_digest)
-    );
+    assert!(!workflows.workflows.is_empty());
+    assert!(workflows.workflows.iter().all(|workflow| {
+        workflow.id != his_workflow
+            && workflow
+                .namespace
+                .as_ref()
+                .is_none_or(|name| *name == ns("alice"))
+    }));
     let stats = alice
         .run_stats(&rewind_api::runs::RunStatsQuery::default())
         .await

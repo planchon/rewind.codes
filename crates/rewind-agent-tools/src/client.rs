@@ -2,9 +2,8 @@
 //! `Rewind-Organization` and its `Rewind-Namespace`. The CLI's `rewind mcp` reaches the embedded
 //! server through it, and `rewind-server` the nodes.
 
-use rewind_api::action_sets::{
-    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
-};
+use rewind_api::action_sets::{ActionSearchResults, ActionSetList, SearchQuery};
+use rewind_api::checks::{CheckRequest, CheckResult, TestRequest};
 use rewind_api::common::Duration;
 use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
@@ -12,11 +11,10 @@ use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Transcript,
 };
-use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestReport};
 use rewind_api::workflows::{
-    CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
+    ChangeTests, CreateVersion, PatchWorkflow, RecordTests, RecordedTests, Workflow,
 };
 use rewind_api::{Client, Error};
 use serde_json::Value;
@@ -88,20 +86,12 @@ impl Api for Client {
         Ok(Client::test(self, test).await?)
     }
 
-    async fn get_script(&self, digest: &str) -> Result<Script, ApiError> {
-        Ok(Client::get_script(self, digest).await?)
-    }
-
     async fn get_payload(&self, digest: &str, run: &str) -> Result<Value, ApiError> {
         Ok(Client::get_payload(self, digest, run).await?)
     }
 
     async fn get_test(&self, digest: &str) -> Result<Test, ApiError> {
         Ok(Client::get_test(self, digest).await?)
-    }
-
-    async fn create_action_set(&self, action_set: &CreateActionSet) -> Result<ActionSet, ApiError> {
-        Ok(Client::create_action_set(self, action_set).await?)
     }
 
     async fn search_actions(
@@ -112,12 +102,32 @@ impl Api for Client {
         Ok(Client::search_actions(self, action_set, query).await?)
     }
 
-    async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
-        Ok(Client::create_workflow(self, workflow).await?)
+    async fn get_workflow(&self, workflow: &str) -> Result<Workflow, ApiError> {
+        Ok(Client::get_workflow(self, workflow).await?)
     }
 
-    async fn workflow_versions(&self, name: &str) -> Result<WorkflowVersions, ApiError> {
-        Ok(Client::workflow_versions(self, name).await?)
+    async fn update_workflow(
+        &self,
+        workflow: &str,
+        patch: &PatchWorkflow,
+    ) -> Result<Workflow, ApiError> {
+        Ok(Client::update_workflow(self, workflow, patch).await?)
+    }
+
+    async fn create_version(
+        &self,
+        workflow: &str,
+        version: &CreateVersion,
+    ) -> Result<Workflow, ApiError> {
+        Ok(Client::create_version(self, workflow, version).await?)
+    }
+
+    async fn change_tests(
+        &self,
+        workflow: &str,
+        tests: &ChangeTests,
+    ) -> Result<Workflow, ApiError> {
+        Ok(Client::change_tests(self, workflow, tests).await?)
     }
 
     async fn record_tests(

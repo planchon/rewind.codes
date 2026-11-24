@@ -1,14 +1,14 @@
-//! Suites: the tests a workflow version carries, inherited from its base, and tests recorded
+//! Suites: a workflow's tests, which each new version passes and records, and tests recorded
 //! from runs (`archi/05-testing-and-observability.md`, "Suites and the gate", "Tests recorded
 //! from runs", "Where tests are stored").
 //!
 //! ```text
-//! base's suite ── load (blobs) ── erased? → retired ─┐
-//!                                  retire (reason) ────┤
-//!                                  replace (reason) ───┼─► suite ─► run_tests ─► all pass?
-//!                                  tests (inline,      │                          │
-//!                                    digest, from) ────┘                 reserve rows, put blobs,
-//!                                                                         put_workflow
+//! the workflow's suite ── load (blobs) ── erased? → retired ─┐
+//!                                        retire (reason) ───────┤
+//!                                        replace (reason) ──────┼─► suite ─► run_tests ─► all pass?
+//!                                        tests (inline,         │                         │
+//!                                          digest, from) ───────┘               reserve rows, put blobs,
+//!                                                                               put_version / change_suite
 //! runs, newest first ─► Recorder (one per RunPath, Test::record) ─► store_tests ─► digests
 //! ```
 //!
@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
     Digest, ERASED_TEST_REASON, Expectations, HistoryEvent, RecordError, ReplacedTest, RetiredTest,
-    RunId, RunPath, Suite, SuiteTest, Test, TestFromRun, Timestamp, Workflow,
+    RunId, RunPath, Suite, SuiteTest, Test, TestFromRun, Timestamp,
 };
 
 use crate::ports::{
@@ -100,12 +100,9 @@ pub struct TestRetirement {
     pub reason: String,
 }
 
-/// What a save says about its suite.
+/// What a new version or a change of tests says about the workflow's suite.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SuiteChanges {
-    /// The version it derives from: the latest version of the same name saved under the
-    /// caller's labels when `None`.
-    pub base: Option<Digest>,
     pub tests: Vec<TestInput>,
     pub replace: Vec<TestReplacement>,
     pub retire: Vec<TestRetirement>,
@@ -113,19 +110,14 @@ pub struct SuiteChanges {
 
 impl SuiteChanges {
     pub fn is_empty(&self) -> bool {
-        self.base.is_none()
-            && self.tests.is_empty()
-            && self.replace.is_empty()
-            && self.retire.is_empty()
+        self.tests.is_empty() && self.replace.is_empty() && self.retire.is_empty()
     }
 }
 
 /// A suite that cannot be composed. The messages are written for a model.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SuiteError {
-    #[error("the base version {0} does not exist, or the caller does not see it")]
-    BaseNotFound(Digest),
-    #[error("{verb} {name:?}, which the base's suite does not have{known}")]
+    #[error("{verb} {name:?}, which the workflow's suite does not have{known}")]
     NotInherited {
         verb: &'static str,
         name: String,
@@ -165,7 +157,7 @@ pub enum SuiteLoadError {
     Corrupt { digest: Digest, message: String },
 }
 
-/// A test of a version's suite as loaded: `None` once its namespace was erased.
+/// A test of a suite as loaded: `None` once its namespace was erased.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedTest {
     pub name: String,
@@ -173,11 +165,14 @@ pub struct LoadedTest {
     pub test: Option<Test>,
 }
 
-/// A suite composed for a new version: the tests to run, and the suite to write.
+/// A suite composed for a new version or a change of tests: the tests to run, and the suite to
+/// write.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComposedSuite {
     /// Every test of the suite, by name.
     pub tests: Vec<Test>,
+    /// The tests given, and the replacements: what a change of tests alone runs.
+    pub new: Vec<Test>,
     pub suite: Suite,
 }
 
@@ -223,14 +218,14 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
             .map_err(|message| SuiteLoadError::Corrupt { digest, message })
     }
 
-    /// The tests of a version's suite, in its order; an erased test is `None`.
+    /// The tests of a suite, in its order; an erased test is `None`.
     pub async fn load_suite(
         &self,
         tenant: &TenantId,
-        workflow: &Workflow,
+        suite: &[SuiteTest],
     ) -> Result<Vec<LoadedTest>, SuiteLoadError> {
-        let mut loaded = Vec::with_capacity(workflow.suite().tests.len());
-        for entry in &workflow.suite().tests {
+        let mut loaded = Vec::with_capacity(suite.len());
+        for entry in suite {
             loaded.push(LoadedTest {
                 name: entry.name.clone(),
                 digest: entry.test,
@@ -269,30 +264,31 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
         Ok(test)
     }
 
-    /// Composes the suite of a new version: the base's tests, those of an erased namespace
-    /// left out, minus `retire`, with `replace` applied, plus `tests`.
+    /// Composes a suite from the workflow's suite `current`: its tests, those of an erased
+    /// namespace left out, minus `retire`, with `replace` applied, plus `tests`. The suite
+    /// written derives from `base`.
     pub async fn compose_suite(
         &self,
         tenant: &TenantId,
-        parent: Option<&Workflow>,
+        base: Option<Digest>,
+        current: &[SuiteTest],
         changes: &SuiteChanges,
     ) -> Result<ComposedSuite, SuiteLoadError> {
         let mut retired = Vec::new();
         let mut replaced = Vec::new();
+        let mut new = Vec::new();
         // name → (digest, test)
         let mut suite: BTreeMap<String, (Digest, Test)> = BTreeMap::new();
-        if let Some(parent) = parent {
-            for loaded in self.load_suite(tenant, parent).await? {
-                match loaded.test {
-                    Some(test) => {
-                        suite.insert(loaded.name, (loaded.digest, test));
-                    }
-                    None => retired.push(RetiredTest {
-                        name: loaded.name,
-                        test: loaded.digest,
-                        reason: ERASED_TEST_REASON.to_owned(),
-                    }),
+        for loaded in self.load_suite(tenant, current).await? {
+            match loaded.test {
+                Some(test) => {
+                    suite.insert(loaded.name, (loaded.digest, test));
                 }
+                None => retired.push(RetiredTest {
+                    name: loaded.name,
+                    test: loaded.digest,
+                    reason: ERASED_TEST_REASON.to_owned(),
+                }),
             }
         }
         let inherited: BTreeSet<String> = suite.keys().cloned().collect();
@@ -356,14 +352,15 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
                 ReplaceWith::Test(input) => self.resolve_test(tenant, input).await?,
             };
             replacement.name = given.name.clone();
-            let (new, _) = self.format.document(&replacement);
+            let (digest, _) = self.format.document(&replacement);
             replaced.push(ReplacedTest {
                 name: given.name.clone(),
                 old,
-                new,
+                new: digest,
                 reason: given.reason.clone(),
             });
-            suite.insert(given.name.clone(), (new, replacement));
+            new.push(replacement.clone());
+            suite.insert(given.name.clone(), (digest, replacement));
         }
         for input in &changes.tests {
             let test = self.resolve_test(tenant, input).await?;
@@ -371,6 +368,7 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
                 return Err(SuiteError::Duplicate(test.name).into());
             }
             let (digest, _) = self.format.document(&test);
+            new.push(test.clone());
             suite.insert(test.name.clone(), (digest, test));
         }
         let mut tests = Vec::with_capacity(suite.len());
@@ -390,8 +388,9 @@ impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
         }
         Ok(ComposedSuite {
             tests,
+            new,
             suite: Suite {
-                base: parent.map(Workflow::version),
+                base,
                 tests: entries,
                 retired,
                 replaced,
@@ -435,7 +434,7 @@ pub const CLEANED_AT_ONCE: usize = 500;
 
 /// The control plane's daily job of tests (`archi/06-storage-and-scale.md`, "Retention and
 /// deletion"; `archi/05-testing-and-observability.md`, "Where tests are stored"): deletes the
-/// tests no version references, stored more than [`TEST_GRACE`](crate::ports::TEST_GRACE)
+/// tests no suite references, stored more than [`TEST_GRACE`](crate::ports::TEST_GRACE)
 /// before `now`. It marks their rows, deletes their blobs, then drops the rows still marked, a
 /// batch at a time until none is left. Returns how many rows it dropped.
 ///

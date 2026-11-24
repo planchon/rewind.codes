@@ -17,8 +17,8 @@
 //! {"k":"token_key","t":"acme","kid":"rk_…"}             {"k":"grant","t":"acme","p":"member:…"}
 //! {"k":"role","t":"acme","n":"triager"}                 {"k":"connection","id":"cn_…"}
 //! {"k":"secret","t":"acme","ns":"*","n":"github"}       {"k":"subscription","t":"acme","id":"s1"}
-//! {"k":"workflow","t":"acme","n":"triage","v":"<hex>"}  {"k":"script","t":"acme","d":"<hex>"}
-//! {"k":"action_set","t":"acme","d":"<hex>"}             {"k":"test","t":"acme","d":"<hex>"}
+//! {"k":"workflow","t":"acme","id":"wf_7k2m9q4x8d1c"}    {"k":"test","t":"acme","d":"<hex>"}
+//! {"k":"action_set","t":"acme","d":"<hex>"}
 //! {"k":"partition_map","n":["node-a","node-b"],"p":[[0,0,3],[1,1,2],[2,null,0]]}
 //! {"k":"nodes"}
 //! ```
@@ -32,7 +32,7 @@
 //! identical to one sent earlier in the same transaction). The frames of one transaction reach
 //! every listener together and in order, so a [`Decoder`] joins them back.
 
-use rewind_core::{Digest, PartitionId};
+use rewind_core::{Digest, PartitionId, WorkflowId};
 use rewind_engine::ports::{
     ControlPlaneChange, NamespaceName, NodeId, PartitionGeneration, PartitionMap, PartitionOwner,
     Principal, SecretId, SecretNamespace, TenantId,
@@ -103,16 +103,11 @@ enum Payload {
     },
     Workflow {
         t: String,
-        n: String,
-        v: String,
+        id: String,
     },
     Subscription {
         t: String,
         id: String,
-    },
-    Script {
-        t: String,
-        d: String,
     },
     ActionSet {
         t: String,
@@ -183,22 +178,13 @@ impl From<&ControlPlaneChange> for Payload {
                 ns: secret.namespace.as_str().to_owned(),
                 n: secret.name.as_str().to_owned(),
             },
-            ControlPlaneChange::Workflow {
-                tenant,
-                name,
-                version,
-            } => Payload::Workflow {
+            ControlPlaneChange::Workflow { tenant, id } => Payload::Workflow {
                 t: text(tenant),
-                n: name.clone(),
-                v: version.to_hex(),
+                id: id.to_string(),
             },
             ControlPlaneChange::Subscription { tenant, id } => Payload::Subscription {
                 t: text(tenant),
                 id: id.clone(),
-            },
-            ControlPlaneChange::Script { tenant, digest } => Payload::Script {
-                t: text(tenant),
-                d: digest.to_hex(),
             },
             ControlPlaneChange::ActionSet { tenant, digest } => Payload::ActionSet {
                 t: text(tenant),
@@ -303,18 +289,13 @@ impl TryFrom<Payload> for ControlPlaneChange {
                     name: rewind_core::SecretName::new(n).map_err(bad)?,
                 },
             },
-            Payload::Workflow { t, n, v } => ControlPlaneChange::Workflow {
+            Payload::Workflow { t, id } => ControlPlaneChange::Workflow {
                 tenant: tenant_of(t)?,
-                name: n,
-                version: digest_of(&v)?,
+                id: id.parse::<WorkflowId>().map_err(bad)?,
             },
             Payload::Subscription { t, id } => ControlPlaneChange::Subscription {
                 tenant: tenant_of(t)?,
                 id,
-            },
-            Payload::Script { t, d } => ControlPlaneChange::Script {
-                tenant: tenant_of(t)?,
-                digest: digest_of(&d)?,
             },
             Payload::ActionSet { t, d } => ControlPlaneChange::ActionSet {
                 tenant: tenant_of(t)?,
@@ -530,16 +511,11 @@ mod tests {
             },
             ControlPlaneChange::Workflow {
                 tenant: acme.clone(),
-                name: "triage".into(),
-                version: digest,
+                id: WorkflowId::from_bits(0x0123_4567_89ab_cdef),
             },
             ControlPlaneChange::Subscription {
                 tenant: acme.clone(),
                 id: "s1".into(),
-            },
-            ControlPlaneChange::Script {
-                tenant: acme.clone(),
-                digest,
             },
             ControlPlaneChange::ActionSet {
                 tenant: acme.clone(),
@@ -568,6 +544,35 @@ mod tests {
         })
         .unwrap();
         assert_eq!(frames, [r#"{"k":"namespace","t":"acme","n":"alice"}"#]);
+        let frames = encode(&ControlPlaneChange::Workflow {
+            tenant: tenant("acme"),
+            id: "wf_7k2m9q4x8d1c".parse().unwrap(),
+        })
+        .unwrap();
+        assert_eq!(
+            frames,
+            [r#"{"k":"workflow","t":"acme","id":"wf_7k2m9q4x8d1c"}"#]
+        );
+    }
+
+    #[test]
+    fn a_workflow_is_named_by_its_id() {
+        assert!(
+            Decoder::new()
+                .feed(r#"{"k":"workflow","t":"acme","id":"triage"}"#)
+                .is_err()
+        );
+        assert!(
+            Decoder::new()
+                .feed(r#"{"k":"workflow","t":"acme","n":"triage","v":"00"}"#)
+                .is_err(),
+            "the payload of a build before the workflow model"
+        );
+        assert!(
+            Decoder::new()
+                .feed(r#"{"k":"script","t":"acme","d":"00"}"#)
+                .is_err()
+        );
     }
 
     #[test]
