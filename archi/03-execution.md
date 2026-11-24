@@ -271,7 +271,7 @@ version: most releases leave it unchanged.
 The glue is observable in subtle ways too: the line numbers of its own frames can appear in
 `error.stack`. Errors the glue creates (`ToolError`, `CancelledError`, `DeadlockError`) carry
 no glue frame, and the stack recorded in `fail_run` drops them. The epoch corpus records the
-rest, so such a change shows up in CI.
+rest, so such a change shows up in its tests.
 
 - **Glue, generators, library and codegen** are JavaScript embedded in the binary. A
   build keeps the versions of every epoch that may still have live runs, and uses the one
@@ -285,8 +285,8 @@ rest, so such a change shows up in CI.
   sends it to a node whose build does ([activations](#activations)).
 - The same mechanism gives a tenant its own sandboxed pool of executors when it needs one
   (`--pool <name>`): the owners send that tenant's activations to the pool's nodes.
-- A corpus of recorded journals, kept per epoch, is replayed in CI. A change that breaks
-  an epoch the build claims to support fails the build.
+- A corpus of recorded journals, kept per epoch, is replayed by the tests run before every
+  commit. A change that breaks an epoch the build claims to support fails them.
 
 ## Non-determinism and quarantine
 

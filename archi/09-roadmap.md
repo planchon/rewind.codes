@@ -58,10 +58,10 @@ What is left of 0.1 is not code:
   reaching the bucket with the `api` service's `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
   once its `REWIND_S3_*` key and endpoint, which take precedence, are removed; the dashboard,
   SDK 0.5.0 on npm with Dax moved to the task stream in the same release.
-- Older and still open: the evals with real models (they need API keys), a run of the CI workflow
-  on GitHub, the gVisor profile on a Linux host, the example `examples/testing` (it pins the
-  published SDK), a connection made from claude.ai and Claude Code against a deployment, and
-  criterion 8 of [0.1 is done when](#01-is-done-when) against WorkOS Staging on this build.
+- Older and still open: the evals with real models (they need API keys), the gVisor profile on a
+  Linux host, the example `examples/testing` (it pins the published SDK), a connection made from
+  claude.ai and Claude Code against a deployment, and criterion 8 of [0.1 is done
+  when](#01-is-done-when) against WorkOS Staging on this build.
 
 How it got here, each part built with its tests and reviewed, its choices in
 [08](08-decisions.md):

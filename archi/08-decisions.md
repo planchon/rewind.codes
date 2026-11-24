@@ -6,6 +6,102 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 - **Architecture (approved)**: proposed during design and approved for 0.1.
 - **Technical (open to challenge)**: taken during design or implementation, delegated.
 
+## Index
+
+Read this index, then only the sections of your work. Add each new section here.
+
+- [Product](#product)
+  - [Taken after the layering](#taken-after-the-layering-november-2026)
+  - [Taken for the dashboard's debugger and search](#taken-for-the-dashboards-debugger-and-search-november-2026)
+  - [Taken for accounts, organizations and access](#taken-for-accounts-organizations-and-access-november-2026)
+  - [Taken for namespaces](#taken-for-namespaces-november-2026)
+  - [Taken for Claude as a harness](#taken-for-claude-as-a-harness-november-2026)
+  - [Taken for secrets and API toolsets](#taken-for-secrets-and-api-toolsets-november-2026)
+  - [Taken for the object-storage rewrite](#taken-for-the-object-storage-rewrite-november-2026)
+  - [Taken for the development loop](#taken-for-the-development-loop-november-2026)
+- [Architecture (approved for 0.1)](#architecture-approved-for-01)
+- [Technical (open to challenge)](#technical-open-to-challenge)
+  - [Taken while implementing the layering](#taken-while-implementing-the-layering-november-2026)
+  - [Taken while freezing the HTTP API and the sandbox lib](#taken-while-freezing-the-http-api-and-the-sandbox-lib-november-2026)
+  - [Taken while freezing the contracts in code](#taken-while-freezing-the-contracts-in-code-november-2026)
+  - [Taken while building the TypeScript SDK](#taken-while-building-the-typescript-sdk-november-2026)
+  - [Taken while implementing the tool tasks](#taken-while-implementing-the-tool-tasks-november-2026)
+  - [Taken while building the dashboard](#taken-while-building-the-dashboard-november-2026)
+  - [Taken while building the dashboard's sign-in and organization views](#taken-while-building-the-dashboards-sign-in-and-organization-views-november-2026)
+  - [Taken while building the runtime](#taken-while-building-the-runtime-november-2026)
+  - [Taken while building the engine's activation side](#taken-while-building-the-engines-activation-side-november-2026)
+  - [Taken while building the embedded store](#taken-while-building-the-embedded-store-november-2026)
+  - [Taken while integrating the branches](#taken-while-integrating-the-branches-november-2026)
+  - [Taken while building the blob stores](#taken-while-building-the-blob-stores-november-2026)
+  - [Taken while building the type-checker](#taken-while-building-the-type-checker-november-2026)
+  - [Taken while building the tools](#taken-while-building-the-tools-november-2026)
+  - [Taken while integrating the tools](#taken-while-integrating-the-tools-november-2026)
+  - [Taken while building OpenTelemetry](#taken-while-building-opentelemetry-november-2026)
+  - [Taken while building the production store](#taken-while-building-the-production-store-november-2026)
+  - [Taken while building the server](#taken-while-building-the-server-november-2026)
+  - [Taken while finishing service telemetry](#taken-while-finishing-service-telemetry-november-2026)
+  - [Taken while building the CLI](#taken-while-building-the-cli-november-2026)
+  - [Taken while building the evals](#taken-while-building-the-evals-november-2026)
+  - [Taken while building the acceptance suite](#taken-while-building-the-acceptance-suite-november-2026)
+  - [Taken while reviewing the core, the format and the engine](#taken-while-reviewing-the-core-the-format-and-the-engine-november-2026)
+  - [Taken while reviewing the server, the API and the CLI](#taken-while-reviewing-the-server-the-api-and-the-cli-november-2026)
+  - [Taken while reviewing the SDK and the dashboard](#taken-while-reviewing-the-sdk-and-the-dashboard-november-2026)
+  - [Taken while fixing the review of the webhooks and the key scopes](#taken-while-fixing-the-review-of-the-webhooks-and-the-key-scopes-november-2026)
+  - [Taken while reviewing the sandbox and the checker](#taken-while-reviewing-the-sandbox-and-the-checker-november-2026)
+  - [Taken while fixing the review of the engine and the stores](#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)
+  - [Taken while reviewing the tools and OpenTelemetry](#taken-while-reviewing-the-tools-and-opentelemetry-november-2026)
+  - [Taken while fixing the runs that kill their workers and the lookups with a NUL](#taken-while-fixing-the-runs-that-kill-their-workers-and-the-lookups-with-a-nul-november-2026)
+  - [Taken while fixing the review of MCP egress and toolset names](#taken-while-fixing-the-review-of-mcp-egress-and-toolset-names-november-2026)
+  - [Taken while building operations](#taken-while-building-operations-november-2026)
+  - [Taken while bounding the sandbox's memory](#taken-while-bounding-the-sandboxs-memory-november-2026)
+  - [Taken while running the workers under gVisor](#taken-while-running-the-workers-under-gvisor-november-2026)
+  - [Taken while designing the dashboard's debugger and search](#taken-while-designing-the-dashboards-debugger-and-search-november-2026)
+  - [Taken while building the dashboard's debugger and search](#taken-while-building-the-dashboards-debugger-and-search-november-2026)
+  - [Taken while building the dashboard's namespaces](#taken-while-building-the-dashboards-namespaces-november-2026)
+  - [Taken while deploying Rewind on Railway and Vercel](#taken-while-deploying-rewind-on-railway-and-vercel-november-2026)
+  - [Taken while publishing the SDK on npm](#taken-while-publishing-the-sdk-on-npm-november-2026)
+  - [Taken while building workflows across runs](#taken-while-building-workflows-across-runs-november-2026)
+  - [Taken while closing the namespaces](#taken-while-closing-the-namespaces-november-2026)
+  - [Taken while merging the namespaces and the workflows](#taken-while-merging-the-namespaces-and-the-workflows-november-2026)
+  - [Taken for the dashboard's redesign](#taken-for-the-dashboards-redesign-november-2026)
+  - [Taken while polishing the dashboard](#taken-while-polishing-the-dashboard-november-2026)
+  - [Taken for the dashboard's type scale](#taken-for-the-dashboards-type-scale-november-2026)
+  - [Taken for the documentation](#taken-for-the-documentation-november-2026)
+  - [Taken while building the release gate](#taken-while-building-the-release-gate-november-2026)
+  - [Taken for workflow test suites](#taken-for-workflow-test-suites-november-2026)
+  - [Taken while building workflow test suites](#taken-while-building-workflow-test-suites-november-2026)
+  - [Taken while integrating Dax](#taken-while-integrating-dax-november-2026)
+  - [Taken while designing the MCP server](#taken-while-designing-the-mcp-server-november-2026)
+  - [Taken while building the agent tools and the MCP server](#taken-while-building-the-agent-tools-and-the-mcp-server-november-2026)
+  - [Taken while building the dashboard's Connect Claude](#taken-while-building-the-dashboards-connect-claude-november-2026)
+  - [Taken while building connections and OAuth](#taken-while-building-connections-and-oauth-november-2026)
+  - [Taken for namespaces' display names](#taken-for-namespaces-display-names-november-2026)
+  - [Taken for the dashboard's plain URLs](#taken-for-the-dashboards-plain-urls-november-2026)
+  - [Taken while freezing the contracts of secrets and API toolsets](#taken-while-freezing-the-contracts-of-secrets-and-api-toolsets-november-2026)
+  - [Taken while building the stores of secrets](#taken-while-building-the-stores-of-secrets-november-2026)
+  - [Taken while building API tools and signed calls](#taken-while-building-api-tools-and-signed-calls-november-2026)
+  - [Taken while building the SDK's and the dashboard's secrets](#taken-while-building-the-sdks-and-the-dashboards-secrets-november-2026)
+  - [Taken while building the attachments of secrets](#taken-while-building-the-attachments-of-secrets-november-2026)
+  - [Taken while fixing the security review of secrets](#taken-while-fixing-the-security-review-of-secrets-november-2026)
+  - [Taken while proving secrets and signed calls end to end](#taken-while-proving-secrets-and-signed-calls-end-to-end-november-2026)
+  - [Taken for the table of runs](#taken-for-the-table-of-runs-november-2026)
+  - [Taken for the live dashboard](#taken-for-the-live-dashboard-november-2026)
+  - [Taken while building the live dashboard](#taken-while-building-the-live-dashboard-november-2026)
+  - [Taken while writing the object-storage spec](#taken-while-writing-the-object-storage-spec-november-2026)
+  - [Taken while freezing the run plane's contracts in code](#taken-while-freezing-the-run-planes-contracts-in-code-november-2026)
+  - [Taken while building the clients of the run plane](#taken-while-building-the-clients-of-the-run-plane-november-2026)
+  - [Taken while building the partitions on SlateDB](#taken-while-building-the-partitions-on-slatedb-november-2026)
+  - [Taken while building the control plane of the run plane](#taken-while-building-the-control-plane-of-the-run-plane-november-2026)
+  - [Taken while building the actors of the run plane](#taken-while-building-the-actors-of-the-run-plane-november-2026)
+  - [Taken while cutting the server over to the run plane](#taken-while-cutting-the-server-over-to-the-run-plane-november-2026)
+  - [Taken while bringing the release gate to GO on the run plane](#taken-while-bringing-the-release-gate-to-go-on-the-run-plane-november-2026)
+  - [Taken for the dashboard's sidebar and run page](#taken-for-the-dashboards-sidebar-and-run-page-november-2026)
+  - [Taken for script titles and run handles](#taken-for-script-titles-and-run-handles-november-2026)
+  - [Taken while building script titles and run handles](#taken-while-building-script-titles-and-run-handles-november-2026)
+  - [Taken while bringing script titles and run handles to the run plane](#taken-while-bringing-script-titles-and-run-handles-to-the-run-plane-november-2026)
+  - [Taken while bringing main's CI to green after the release](#taken-while-bringing-mains-ci-to-green-after-the-release-november-2026)
+  - [Taken while redeploying the hosted node](#taken-while-redeploying-the-hosted-node-november-2026)
+
 ## Product
 
 | Decision | Notes |
@@ -399,6 +495,25 @@ Postgres, and that nothing polls but the scheduler.
 | **The embedded server is one node** (C7): one partition, SlateDB on local files, Turso for the control plane, the node link in process | A separate embedded store | The CLI runs the code production runs. |
 | **The control plane notifies its changes** (C9): every write sends its change in the same transaction (`NOTIFY`), and every process listens | Reading the control plane on every request | Caches stay right without a timer; the dashboard's stream carries scripts, workflows, secrets, namespaces and connections. |
 | **SlateDB 0.18** (C10), its compactor in the writer's process, the WAL flushed by the committer after each batch | Another embedded store on object storage | Writer fencing, atomic write batches and conditional puts on S3. |
+
+### Taken for the development loop (November 2026)
+
+The owner found that everything took too long (24 November 2026). Measured that day on the
+development machine (8 cores, 16 GiB): `cargo test --workspace` took 4 min 17 s, one binary after
+the other; a worktree's `target/` reached 43 GB; every cargo command rebuilt `rewind-server` and
+its test binaries for 40 s; CI took about 20 minutes per push to main.
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| **Build time and disk come first.** No debug symbols by default (`[profile.dev] debug = false`): a command that needs line numbers or a debugger asks for them (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`) | Debug info, or line tables, by default | The owner's choice. A cold build of every test went to 3 min 50 s with an empty compiler cache |
+| **No Rust in GitHub Actions.** `scripts/gate.sh` checks the workspace on the developer's machine before a commit lands on main (fmt, clippy with `-D warnings`, every test with the Docker ones required, doctests, rustdoc); the release gate (`acceptance/release.sh`) checks the image and the reference deployment under load before a release. GitHub Actions keeps the pnpm packages, the deploys of the sites on Vercel and the SDK's publication on npm | CI on every push; a release gate workflow started by hand | The owner's choice: waiting for CI slowed every change, and the image's release build took 11 of its 20 minutes. The same checks run locally |
+| **The server is deployed from the developer's machine** by the `deploy` skill (`.claude/skills/deploy`): the gate, the release gate for a release, `railway up --service node` with the commit as the deployment's message once the owner says yes, then the health check, `/v1/server`, the logs and a smoke run | A deploy job in CI | Railway builds the image itself from the uploaded tree; a deploy of production needs the owner's go |
+| **cargo-nextest runs the tests** (`.config/nextest.toml`): every test in its own process, the binaries side by side | `cargo test`, one binary after the other | 1,274 tests in 76 s instead of 4 min 17 s. A test that meets a known race on a loaded machine runs alone (`threads-required`), with the race named |
+| **One worktree per feature**: its steps (contract, engine, API, dashboard, docs, reviews, fixes) work in it one after the other | A worktree per step | Each new worktree is a cold build and 20 to 40 GB; the retries took nine |
+| **sccache keeps 50 GiB** (the machine's `~/Library/Application Support/Mozilla.sccache/config`) | Its 10 GiB default | One build of the workspace filled 10 GiB, evicting what the other worktrees would reuse |
+| **`rewind-server`'s build script fails on a watched dashboard source that does not exist** | Watching it anyway | Cargo runs a build script again on every build while a watched path is missing: after `biome.json` became `biome.jsonc`, every cargo command rebuilt the server and its test binaries (40 s) |
+| **This file opens with an index of its sections**; a new section is added to it | Reading the file whole | It is 460 KB: an agent reads the index, then the sections of its work |
+| **`CLAUDE.md`** at the root holds the development loop (which command when), the worktree rule and where landing and deploying are described; the dashboard's rules stay in their skill | Rediscovering the loop in each session | Agents ran the whole workspace's tests to check one crate |
 
 ## Architecture (approved for 0.1)
 
@@ -907,9 +1022,9 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The load generator is a tooling crate, `rewind-load`, a client of the API through `rewind-api`: its own fake MCP server (`rmcp`, a tool that fails transiently once per call) and host tool, runs with an MCP call, a host call, a retried call, a sleep and a signal sent twice with one key. It checks every output, and that each call reached its tool exactly as many times as the run's `attempts` say, read once the read model holds the run (the projector fills it after the commit; the lag is reported and bounded). Latencies: the start request, start to first MCP call, a host result accepted to the next MCP call (an activation and its dispatch), start to the end seen through the API. Thresholds given on the command line fail the load | A script driving the SDK; counting calls without the run's attempts; reading attempts as the run ends | The API is the boundary operators load. A retry is not a duplicate: only the attempts the server records tell them apart, and the read model lags the journal under load. |
 | With `REWIND_DASHBOARD_DIST`, `rewind-server`'s build script reruns when that directory changes | Watching the variable only | A cached target directory (the image's cache mount) kept the file list of an older dashboard build, whose files were gone. |
 | `deploy/acceptance.sh` is criterion 6 of 0.1, run by `acceptance/run.sh`: the limit tests, then the reference deployment as a Compose project of its own (port, subnet, `COMPOSE_ENV_FILES` written by `init.sh <file>`, images tagged by process), the walls, two loads with the thresholds of 09, and the SDK's bound against it; it removes its containers, volumes and images, and exits with 0 only when every step passed | Running the loads against an operator's deployment | The acceptance must run anywhere, beside anything, and leave nothing behind. |
-| The limits are tested through the HTTP API in `rewind-server/tests/limits.rs`, at the server's defaults; the quota's 429 stays in `api.rs`; the 256 KiB bound of `run_script` is tested by the SDK against a live server when `REWIND_LIVE_URL` and `REWIND_LIVE_KEY` are set (`test/live.test.ts`), in CI against the reference deployment | A second copy in the load generator | One suite per limit, run by `cargo test`. |
+| The limits are tested through the HTTP API in `rewind-server/tests/limits.rs`, at the server's defaults; the quota's 429 stays in `api.rs`; the 256 KiB bound of `run_script` is tested by the SDK against a live server when `REWIND_LIVE_URL` and `REWIND_LIVE_KEY` are set (`test/live.test.ts`), by `deploy/acceptance.sh` against the reference deployment | A second copy in the load generator | One suite per limit, run by `cargo test`. |
 | A run aborted at the history cap ends with at most two entries past it: the trigger that would cross the cap, committed with `run_aborted` (03) | Reserving two entries below the cap | What the script records is capped; the abort is the host's. |
-| CI on GitHub Actions: Rust (fmt, clippy, the API's tests with the OpenAPI staleness test, the e2e corpus, every other test, docs), the SDK, the dashboard, the image (cache mounts kept in the Actions cache with `buildkit-cache-dance`, layers in the BuildKit cache), and the reference deployment under load, under runc and under gVisor. `REWIND_REQUIRE_DOCKER` makes the tests that start Postgres, MinIO or a Collector fail instead of skipping | Services declared in the workflow | The tests start their own containers, with their own names and ports; a test that silently skips proves nothing. |
+| The Rust workspace is checked by `scripts/gate.sh` on the developer's machine (fmt, clippy, the API's tests with the OpenAPI staleness test, the e2e corpus, every other test, doctests, docs), and the image and the reference deployment under load by the release gate; GitHub Actions checks only the pnpm packages ([Taken for the development loop](#taken-for-the-development-loop-november-2026)). `REWIND_REQUIRE_DOCKER` makes the tests that start Postgres, MinIO or a Collector fail instead of skipping | Services declared in the workflow | The tests start their own containers, with their own names and ports; a test that silently skips proves nothing. |
 
 ### Taken while bounding the sandbox's memory (November 2026)
 
@@ -933,7 +1048,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The holders are healthy once their route is set; a gVisor worker starts after its holder is healthy | Starting with the holder | A sandbox copies the namespace's addresses and routes when it starts and removes them from the namespace: a route set later never reaches it. |
 | Under gVisor, `check-walls.sh` checks from `walls`, a gVisor sandbox with the workers' runtime and `resolv.conf` (`x-gvisor`) in a holder of its own, both started for the check and removed after; it picks by the runtime of the worker in the holder's namespace, and checks from the holder under runc as before | Checking from the holder; probing from the worker's sandbox | The sandbox took the holder's addresses, so its checks failed, and nothing else can run in that namespace. The worker's image has no tools, and should keep none. |
 | The previous epoch's pool under gVisor is the profile `previous-epoch-gvisor`, instead of `REWIND_PREVIOUS_RUNTIME` | A runtime variable | A pool under gVisor also needs the relay and the wait for its holder, which a variable cannot add. |
-| CI loads the deployment a second time, with 100 KiB payloads | One load without payloads | Only payloads above 64 KiB reach S3: without them the workers' way to MinIO goes unchecked. |
+| `deploy/acceptance.sh` loads the deployment a second time, with 100 KiB payloads | One load without payloads | Only payloads above 64 KiB reach S3: without them the workers' way to MinIO goes unchecked. |
 
 ### Taken while designing the dashboard's debugger and search (November 2026)
 
@@ -1109,7 +1224,7 @@ From the owner's review of a run cancelled at its deadline (`dev_notifications`,
 | Setup A runs behind an edge that routes as `deploy/edge/Caddyfile` does (`POST /v1/test` to the workers, the rest to the api server), and allows MCP servers and webhooks on 127.0.0.1 so the fixtures are reachable; setup B, with a deployed server's defaults, proves the egress refusals | One setup | One server cannot both reach the fixtures on the loopback and refuse the loopback. |
 | A canary secret made for each run is set as credentials; every answer is searched for it as it is recorded, and every log and Collector file at the end. Every exchange is recorded, and a 5xx a check did not declare (`allow5xx`) fails the gate, as does a panic in a log | Checking leaks and 5xx only where a check looks | A leak or a fault in a path no check meant to test still shows. |
 | Each problem type of `api/README.md` must be provoked by a full run, except `internal`, `identity-unavailable` and `last-owner`: the gate has no WorkOS, so no member, and keys never count as owners; the permission matrix must cover every operation of `api/openapi.json`, and hold and refuse every permission | Lists kept by hand | A new endpoint, permission or problem type without a check fails the gate. |
-| The GitHub workflow `release-gate.yml` is started by hand and leaves the load test out (PARTIAL); publishing the SDK does not wait for it | Running on tags; gating `release-sdk.yml` | The owner runs the gate locally before a release, the load test included. |
+| The release gate runs on the developer's machine, the load test included, before a release (the `deploy` skill); publishing the SDK does not wait for it | A GitHub workflow started by hand, without the load test (removed with Rust from GitHub Actions, [development loop](#taken-for-the-development-loop-november-2026)); running on tags; gating `release-sdk.yml` | The owner runs the gate locally before a release, the load test included. |
 | A host tool's `inputSchema` and `outputSchema` that cannot be compiled refuse the toolset (422 `invalid-toolset`); an MCP server's schemas are still taken as listed, and a call of a tool whose schema cannot be compiled is refused | Refusing the calls only, for host tools too | The harness writes host tools' schemas: it learns at registration, as `api/README.md` says. A server's tools are not the tenant's to fix. |
 | A call of `require(…)` refuses the script at start, unless the script binds the name `require` itself (a function, a class, a variable or a parameter) | Leaving it to a `ReferenceError` at run time | 03 refuses "a `require`" at start; `rewind check` already reports it, and a start with `check: false` must refuse it too. |
 | Without WorkOS, a layer answers 404 on every route of `/auth` before its handler reads the body or the cookies | The 404 from each handler | A handler's body was parsed first: a malformed body answered 400, which told a caller the route exists. |

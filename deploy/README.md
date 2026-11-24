@@ -228,7 +228,9 @@ separate pools (`archi/06-storage-and-scale.md`, "Sandboxed nodes").
     `walls`, a gVisor sandbox with the nodes' network settings in a holder of its own. It
     starts both for the check and removes them after.
 
-  The profile is not tested on Docker Desktop, which has no `runsc`; CI runs it on Linux.
+  The profile is not tested on Docker Desktop or OrbStack, which have no `runsc`: test it on a
+  Linux host (`COMPOSE_PROFILES=gvisor`, `./check-walls.sh`, then the loads of
+  [Load and limit tests](#load-and-limit-tests)).
 
 **The nodes' allow-list.** Add your MCP servers, the APIs and OpenAPI documents your toolsets
 name, the hosts your toolsets' `http` tools allow, and the receivers of your webhook

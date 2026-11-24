@@ -38,8 +38,9 @@ Dependencies only point down; `rewind-architecture-tests` fails the build otherw
 ## Commands
 
 ```sh
-cargo test --workspace                                       # everything (TZ=UTC is set by .cargo/config.toml)
-cargo clippy --workspace --all-targets -- -D warnings
+scripts/gate.sh                                              # before a commit: fmt, clippy, every test, docs (needs Docker)
+cargo nextest run -p rewind-engine                           # one crate's tests (TZ=UTC is set by .cargo/config.toml)
+cargo nextest run --workspace                                # every test (cargo install cargo-nextest)
 cargo test -p rewind-e2e                                     # the end-to-end corpus
 cargo test -p rewind-e2e red::deadlock                       # one case
 REWIND_E2E_RECORD=1 cargo test -p rewind-e2e --test corpus   # record the journals again, then review the diff

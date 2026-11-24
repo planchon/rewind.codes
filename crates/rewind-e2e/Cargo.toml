@@ -1,6 +1,6 @@
 [package]
 name = "rewind-e2e"
-description = "End-to-end corpus of Rewind: recorded scenarios, replayed in CI, per determinism epoch."
+description = "End-to-end corpus of Rewind: recorded scenarios, replayed by its tests, per determinism epoch."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

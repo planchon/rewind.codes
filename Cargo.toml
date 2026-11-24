@@ -125,6 +125,12 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `rewind-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
 uuid = { version = "1", default-features = false }
 
+# Build time and disk come first (archi/08-decisions.md, "Taken for the development loop"): no
+# debug symbols by default, in the binaries or in the tests. A session that needs a debugger or
+# line numbers asks for them: `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (or `full`).
+[profile.dev]
+debug = false
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

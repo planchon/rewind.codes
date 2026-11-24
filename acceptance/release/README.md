@@ -36,8 +36,7 @@ end, even after Ctrl-C.
 | load | Criterion 6: `deploy/acceptance.sh`, the reference deployment under load, and the limits | Its own Compose project |
 
 A failure does not stop the run: every later stage still runs, so one report shows everything
-that is broken. The GitHub workflow (`.github/workflows/release-gate.yml`, started by hand) runs
-`--skip-load`.
+that is broken. It runs on the developer's machine, before a release (`.claude/skills/deploy`).
 
 ## Setups
 

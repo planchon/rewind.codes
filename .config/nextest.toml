@@ -1,0 +1,23 @@
+# cargo-nextest, the test runner of the workspace (CLAUDE.md, scripts/gate.sh): every test in its
+# own process, the test binaries side by side instead of one after the other
+# (archi/08-decisions.md, "Taken for the development loop"). Doctests are not run by nextest:
+# `cargo test --doc`.
+
+[profile.default]
+# One run shows every failure, not only the first.
+fail-fast = false
+# A test silent for 60 s is reported; one still running after 5 minutes is killed.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# Every run leaves its report, with the output of each failed test, in
+# target/nextest/default/junit.xml: a failure seen once can be read after the run.
+[profile.default.junit]
+path = "junit.xml"
+
+# This test kills its embedded server and sends a command that starts a new one. That server
+# writes `ready` before its node owns partition 0, so the command can get 503 "no node owns
+# partition 0": a loaded machine reveals that race. The test runs alone until the embedded server
+# waits for its partition before `ready`.
+[[profile.default.overrides]]
+filter = 'binary_id(rewind::cli) & test(=a_run_sleeps_is_interrupted_and_resumes_in_another_process)'
+threads-required = "num-test-threads"

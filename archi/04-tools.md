@@ -501,7 +501,7 @@ What tsgo sees:
 
 What type-checks exists at run time, and the reverse. The sandbox lib lives in
 `crates/rewind-runtime/lib/`, with `tsconfig.json` (tsgo's options) and `globals.json` (the
-declared names); a test in CI checks that the isolate's globals and the sandbox lib declare the
+declared names); a test checks that the isolate's globals and the sandbox lib declare the
 same names ([decided](08-decisions.md#taken-while-freezing-the-http-api-and-the-sandbox-lib-november-2026)).
 
 `rewind-check` drives tsgo, the native TypeScript 7 compiler, as a CLI, behind the `TypeChecker`

@@ -129,5 +129,7 @@ the team (vercel.com, Account settings, Tokens). The projects are not connected 
 repository on Vercel: a pull request deploys nothing. By hand, `vercel deploy --prod` in the
 site's directory, linked to its project, still works.
 
-The node is not deployed by CI ([The images](#the-images)): a commit that changes the API and the
-dashboard together reaches `app.rewind.codes` before the API, until `railway up` deploys it.
+The node is not deployed by CI ([The images](#the-images)), but from the developer's machine by
+the `deploy` skill ([`.claude/skills/deploy`](../../.claude/skills/deploy/SKILL.md)): a commit
+that changes the API and the dashboard together reaches `app.rewind.codes` before the API, until
+`railway up` deploys it.
