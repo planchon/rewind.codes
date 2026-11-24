@@ -247,10 +247,13 @@ function FilterGroup({
 export function FilterGroups({
   facets,
   q,
+  namespaces = true,
   onToggle,
 }: {
   facets: Facets | undefined;
   q: string;
+  /** The Namespace facet: over every namespace only, a namespace's scope being one. */
+  namespaces?: boolean;
   onToggle: (field: string, value: string) => void;
 }) {
   const access = useAccess();
@@ -258,14 +261,18 @@ export function FilterGroups({
   const titleOf = useScriptTitles();
   const groups: Group[] = [
     { field: "status", title: "Status", values: facets?.statuses ?? [], dot: true, open: true },
-    {
-      field: "namespace",
-      title: "Namespace",
-      values: facets?.namespaces ?? [],
-      open: true,
-      show: (name: string) => label(name) ?? name,
-      ...(access.can("namespaces:read") ? { search: "namespace" as const } : {}),
-    },
+    ...(namespaces
+      ? [
+          {
+            field: "namespace",
+            title: "Namespace",
+            values: facets?.namespaces ?? [],
+            open: true,
+            show: (name: string) => label(name) ?? name,
+            ...(access.can("namespaces:read") ? { search: "namespace" as const } : {}),
+          },
+        ]
+      : []),
     { field: "workflow", title: "Workflow", values: facets?.workflows ?? [], open: true },
     ...(facets?.labels ?? []).slice(0, 6).map((l, i) => ({
       field: `@${l.key}`,

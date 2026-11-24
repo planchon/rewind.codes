@@ -123,7 +123,7 @@ describe("the Namespaces view", () => {
     expect(requested("/v1/namespaces").some((u) => u.searchParams.get("prefix") === "acme")).toBe(
       true,
     );
-    expect(row("Acme Corp").querySelector("a")).toHaveAttribute("href", "/namespaces/user_7Kd02");
+    expect(row("Acme Corp").querySelector("a")).toHaveAttribute("href", "/ns/user_7Kd02");
   });
 
   it("shows an end user the customer blocked", async () => {
@@ -224,10 +224,13 @@ describe("the Namespaces view", () => {
   it("lists the alerts of the month, each sent to the webhooks", async () => {
     renderApp("/namespaces");
     const alerts = await screen.findByRole("region", { name: "Alerts this month" });
-    const items = within(alerts).getAllByRole("listitem");
-    expect(items.some((li) => /CPU 100%.*bob/.test(li.textContent ?? ""))).toBe(true);
-    expect(items.some((li) => /runs this month 80%.*user_7Kd02/.test(li.textContent ?? ""))).toBe(
-      true,
+    const items = () => within(alerts).getAllByRole("listitem");
+    expect(items().some((li) => /CPU 100%.*bob/.test(li.textContent ?? ""))).toBe(true);
+    // user_7Kd02 shows by its display name, once the names are read.
+    await waitFor(() =>
+      expect(
+        items().some((li) => /runs this month 80%.*Acme Corp/.test(li.textContent ?? "")),
+      ).toBe(true),
     );
   });
 
@@ -272,9 +275,105 @@ describe("the Namespaces view", () => {
   });
 });
 
-describe("a namespace's page", () => {
+/** The picker's button: it names the namespace shown. */
+const picker = () => screen.getByRole("button", { name: /^Namespace: / });
+
+describe("a namespace's scope", () => {
+  it("opens from the Namespaces list at its Overview, the picker and the sidebar showing it", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/namespaces");
+    await listed();
+    expect(picker()).toHaveAccessibleName("Namespace: all namespaces");
+    // Over every namespace, the sidebar shows no namespace and ends with Namespaces.
+    expect(screen.queryByRole("link", { name: /^Back to all namespaces/ })).toBeNull();
+    await user.click(within(row("bob")).getByRole("link", { name: "bob" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/ns/bob/overview"));
+    await waitFor(() => expect(picker()).toHaveAccessibleName("Namespace: bob"));
+    const back = screen.getByRole("link", { name: "Back to all namespaces (from bob)" });
+    expect(back).toHaveAttribute("href", "/overview");
+    const nav = screen.getByRole("navigation", { name: "Views" });
+    expect(within(nav).getByRole("link", { name: "Usage" })).toHaveAttribute(
+      "href",
+      "/ns/bob/usage",
+    );
+    expect(within(nav).queryByRole("link", { name: "Namespaces" })).toBeNull();
+    expect(within(nav).getByRole("link", { name: "Observability" })).toHaveAttribute(
+      "href",
+      "/ns/bob/observability",
+    );
+    // Its alerts of the month come first on its Overview.
+    expect(await screen.findByRole("region", { name: "Alerts" })).toBeInTheDocument();
+  });
+
+  it("reads its runs, statistics and scripts for that namespace only", async () => {
+    const { callsTo } = renderApp("/ns/bob/observability");
+    const table = await screen.findByRole("table");
+    await waitFor(() => expect(within(table).getAllByRole("row").length).toBeGreaterThan(1));
+    const runs = callsTo("/v1/runs");
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.every((c) => c.headers.get("Rewind-Namespace") === "bob")).toBe(true);
+    // The statistics are of the namespace: no query names it.
+    const stats = callsTo("/v1/runs/stats");
+    expect(stats.length).toBeGreaterThan(0);
+    for (const c of stats) {
+      expect(c.headers.get("Rewind-Namespace")).toBe("bob");
+      expect(new URL(c.url).searchParams.get("q")).toBeNull();
+    }
+    // No Namespace column or facet; handles leave the namespace out.
+    expect(within(table).queryByRole("columnheader", { name: /^Namespace/ })).toBeNull();
+    expect(screen.queryByText("Namespace", { selector: ".filter-title" })).toBeNull();
+    const handles = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector(".run-handle")?.textContent ?? "");
+    expect(handles.every((h) => h !== "" && !h.startsWith("bob/"))).toBe(true);
+  });
+
+  it("counts the scripts of its runs", async () => {
+    const { callsTo } = renderApp("/ns/bob/scripts");
+    await screen.findByRole("table");
+    await waitFor(() =>
+      expect(callsTo("/v1/scripts").some((c) => c.headers.get("Rewind-Namespace") === "bob")).toBe(
+        true,
+      ),
+    );
+  });
+
+  it("keeps the view and its query when the picker changes the scope", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/observability?q=status%3Acompleted");
+    await screen.findByRole("table");
+    await user.click(picker());
+    const search = await screen.findByRole("combobox", { name: "Find a namespace" });
+    expect(search).toHaveFocus();
+    // Every namespace first, then the most active.
+    const list = screen.getByRole("listbox", { name: "Scopes" });
+    expect(within(list).getAllByRole("option")[0]).toHaveTextContent("All namespaces");
+    await user.type(search, "acme");
+    await user.click(await within(list).findByRole("option", { name: /Acme Corp/ }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/ns/user_7Kd02/observability"),
+    );
+    expect(new URLSearchParams(router.state.location.search).get("q")).toBe("status:completed");
+    await user.click(picker());
+    await user.click(
+      within(await screen.findByRole("listbox", { name: "Scopes" })).getByRole("option", {
+        name: /All namespaces/,
+      }),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/observability"));
+    expect(new URLSearchParams(router.state.location.search).get("q")).toBe("status:completed");
+  });
+
+  it("opens an older link of a namespace's page in its scope", async () => {
+    const { router } = renderApp("/namespaces/bob");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/ns/bob/overview"));
+  });
+});
+
+describe("a namespace's Usage", () => {
   it("shows its CPU against its quota over the month, its alerts, tokens and exceptions", async () => {
-    renderApp("/namespaces/bob");
+    renderApp("/ns/bob/usage");
     const chart = await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
     expect(chart.getAttribute("aria-label")).toMatch(
       /3h 12m by .*, against a quota of 2h, 80% reached on .*, 100% on /,
@@ -289,106 +388,25 @@ describe("a namespace's page", () => {
     expect(within(alerts).getAllByText(/webhook sent/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("tokens")).toHaveTextContent("3");
     expect(screen.getByText("none: the defaults apply")).toBeInTheDocument();
-    // The month going on has no end: its query does not change as time passes.
-    const runs = screen.getByRole("link", { name: "Open in Observability →" });
-    expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
-      /^namespace:bob started:>=\S+$/,
-    );
-    expect(screen.getByRole("link", { name: "Open in Scripts →" })).toHaveAttribute(
-      "href",
-      "/scripts?q=namespace%3Abob",
-    );
-  });
-
-  it("shows how its runs went this month, then its runs and its scripts", async () => {
-    const { requested, callsTo } = renderApp("/namespaces/bob");
-    await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
-    const figures = await screen.findByRole("region", { name: /^Runs in / });
-    expect(within(figures).getByText("Runs started")).toBeInTheDocument();
-    expect(within(figures).getByText("Completed")).toBeInTheDocument();
-    expect(within(figures).getByText("Duration p95")).toBeInTheDocument();
-    // The statistics are of its runs, over the month, by day.
-    await waitFor(() =>
-      expect(
-        requested("/v1/runs/stats").some(
-          (u) =>
-            u.searchParams.get("q") === "namespace:bob" && u.searchParams.get("bucket") === "1d",
-        ),
-      ).toBe(true),
-    );
-    expect(screen.getByRole("region", { name: "What fails most" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Tools its runs call" })).toBeInTheDocument();
-    const runs = screen.getByRole("region", { name: "Its runs" });
-    await waitFor(() => expect(within(runs).getAllByRole("row").length).toBeGreaterThan(1));
-    const scripts = screen.getByRole("region", { name: "Its scripts" });
-    await waitFor(() => expect(within(scripts).getAllByRole("row").length).toBeGreaterThan(1));
-    // Its scripts are counted over its runs (the titles of every script are read apart).
-    expect(callsTo("/v1/scripts").some((c) => c.headers.get("Rewind-Namespace") === "bob")).toBe(
-      true,
-    );
-  });
-
-  it("filters and orders its runs from the table's headers, in the page's URL", async () => {
-    const user = userEvent.setup();
-    const { router, requested } = renderApp("/namespaces/bob");
-    const section = await screen.findByRole("region", { name: "Its runs" });
-    await waitFor(() => expect(within(section).getAllByRole("row").length).toBeGreaterThan(1));
-    // The scope is shown, and cannot be removed.
-    const chips = within(section).getByRole("group", { name: "Filters" });
-    expect(chips).toHaveTextContent("Namespace bob");
-    expect(within(chips).queryByRole("button", { name: /^Remove/ })).toBeNull();
-
-    await user.click(within(section).getByRole("button", { name: "Status" }));
-    const menu = await screen.findByRole("dialog", { name: "Status: order and filters" });
-    await user.click(within(menu).getByRole("button", { name: /^Status failed/ }));
-    await waitFor(() => expect(search(router).get("q")).toBe("status:failed"));
-    await waitFor(() =>
-      expect(
-        requested("/v1/runs").some((u) =>
-          /^namespace:bob started:>=\S+ status:failed$/.test(u.searchParams.get("q") ?? ""),
-        ),
-      ).toBe(true),
-    );
-    await user.keyboard("{Escape}");
-    expect(
-      within(section).getByRole("button", { name: "Remove the filter status:failed" }),
-    ).toBeVisible();
-
-    await user.click(within(section).getByRole("button", { name: "Duration" }));
-    const duration = await screen.findByRole("dialog", { name: "Duration: order and filters" });
-    await user.click(within(duration).getByRole("button", { name: "Longest first" }));
-    await waitFor(() => expect(search(router).get("sort")).toBe("duration"));
-    await waitFor(() =>
-      expect(requested("/v1/runs").some((u) => u.searchParams.get("sort") === "duration")).toBe(
-        true,
-      ),
-    );
-    expect(within(section).getByRole("columnheader", { name: "Duration" })).toHaveAttribute(
-      "aria-sort",
-      "descending",
-    );
-
-    // Removing the filter keeps the order.
-    await user.click(
-      within(section).getByRole("button", { name: "Remove the filter status:failed" }),
-    );
-    await waitFor(() => expect(search(router).get("q")).toBeNull());
-    expect(search(router).get("sort")).toBe("duration");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Usage");
   });
 
   it("shows its display name, its id on hover, and renames it", async () => {
     const user = userEvent.setup();
-    const { callsTo } = renderApp("/namespaces/chen");
+    const { callsTo } = renderApp("/ns/chen/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
-    const title = screen.getByRole("heading", { level: 1 });
-    expect(title).toHaveTextContent("Chen Logistics");
-    // The id stays one hover away, and in the card of the (i) beside the title.
-    await user.hover(within(title).getByText("Chen Logistics"));
-    const tip = await screen.findByText("Namespace", { selector: ".ns-tip-label" });
-    expect(tip.parentElement).toHaveTextContent("Namespace chen");
-    await user.unhover(within(title).getByText("Chen Logistics"));
-    await user.click(screen.getByRole("button", { name: "About this page" }));
-    expect(await screen.findByText(/^Id/)).toHaveTextContent("Id chen");
+    // The picker and the sidebar show its display name, its id on hover and in the (i) card.
+    await waitFor(() => expect(picker()).toHaveAccessibleName("Namespace: Chen Logistics"));
+    expect(picker()).toHaveAttribute("title", "Namespace chen");
+    const back = screen.getByRole("link", { name: "Back to all namespaces (from Chen Logistics)" });
+    expect(within(back).getByText("Chen Logistics")).toHaveAttribute(
+      "title",
+      "Chen Logistics (namespace chen)",
+    );
+    await user.click(screen.getByRole("button", { name: "About Usage" }));
+    expect(await screen.findByText(/the namespace/)).toHaveTextContent(
+      "Chen Logistics, the namespace chen",
+    );
 
     await user.click(screen.getByRole("button", { name: "Rename" }));
     const form = screen.getByRole("form", { name: "Rename Chen Logistics" });
@@ -399,9 +417,7 @@ describe("a namespace's page", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const [patch] = callsTo("/v1/namespaces/chen", "PATCH");
     expect(JSON.parse((await patch?.body) ?? "")).toEqual({ displayName: "Chen & Sons" });
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Chen & Sons"),
-    );
+    await waitFor(() => expect(picker()).toHaveAccessibleName("Namespace: Chen & Sons"));
 
     // Emptied, the name is removed and the views show the id again.
     await user.click(screen.getByRole("button", { name: "Rename" }));
@@ -411,13 +427,11 @@ describe("a namespace's page", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const second = callsTo("/v1/namespaces/chen", "PATCH")[1];
     expect(JSON.parse((await second?.body) ?? "")).toEqual({ displayName: null });
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("chen"),
-    );
+    await waitFor(() => expect(picker()).toHaveAccessibleName("Namespace: chen"));
   });
 
   it("gives its actions in the header one size", async () => {
-    renderApp("/namespaces/bob");
+    renderApp("/ns/bob/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
     for (const name of ["Rename", "Edit its limits", "Revoke its tokens", "Erase…"]) {
       const button = screen.getByRole("button", { name });
@@ -428,7 +442,7 @@ describe("a namespace's page", () => {
   });
 
   it("lists its exceptions with the defaults they replace", async () => {
-    renderApp("/namespaces/chen");
+    renderApp("/ns/chen/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
     expect(screen.getByText(/Runs per month:/).closest("li")).toHaveTextContent(
       "Runs per month: 20,000 (default 3,000)",
@@ -440,7 +454,7 @@ describe("a namespace's page", () => {
 
   it("reads another month", async () => {
     const user = userEvent.setup();
-    const { router, requested } = renderApp("/namespaces/alice");
+    const { router, requested } = renderApp("/ns/alice/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of alice/ });
     expect(screen.getByRole("button", { name: "The month after" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "The month before" }));
@@ -455,7 +469,7 @@ describe("a namespace's page", () => {
 
   it("changes its limits, revokes its tokens and erases it", async () => {
     const user = userEvent.setup();
-    const { callsTo } = renderApp("/namespaces/bob");
+    const { callsTo } = renderApp("/ns/bob/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
 
     await user.click(screen.getByRole("button", { name: "Edit its limits" }));
@@ -504,9 +518,8 @@ describe("a namespace's page", () => {
 
   it("shows its actions only to whoever holds their permission", async () => {
     // A reader sees, and changes nothing.
-    renderApp("/namespaces/bob", { world: graceWith(["runs:read", "namespaces:read"]) });
+    renderApp("/ns/bob/usage", { world: graceWith(["runs:read", "namespaces:read"]) });
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
-    expect(screen.getByRole("link", { name: "Open in Observability →" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit its limits" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Revoke its tokens" })).toBeNull();
@@ -514,7 +527,7 @@ describe("a namespace's page", () => {
   });
 
   it("offers to revoke the tokens to whoever holds tokens:write alone", async () => {
-    renderApp("/namespaces/bob", {
+    renderApp("/ns/bob/usage", {
       world: graceWith(["runs:read", "namespaces:read", "tokens:write"]),
     });
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
@@ -524,13 +537,13 @@ describe("a namespace's page", () => {
   });
 
   it("says when there is no such namespace", async () => {
-    renderApp("/namespaces/nobody");
+    renderApp("/ns/nobody/usage");
     expect(await screen.findByRole("alert")).toHaveTextContent(/404 · not-found/);
   });
 
   it("shows a new name at once, and undoes it with the server's message when refused", async () => {
     const user = userEvent.setup();
-    renderApp("/namespaces/chen");
+    renderApp("/ns/chen/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
     const gate = held();
     server.use(http.patch("*/v1/namespaces/:name", () => gate.answer));
@@ -540,9 +553,9 @@ describe("a namespace's page", () => {
     await user.clear(field);
     await user.type(field, "Chen & Sons");
     await user.click(within(form).getByRole("button", { name: "Save the name" }));
-    // The page shows it before the server answers; the dialog waits for the answer.
-    const title = () => screen.getByRole("heading", { level: 1, hidden: true });
-    await waitFor(() => expect(title()).toHaveTextContent("Chen & Sons"));
+    // The frame shows it before the server answers; the dialog waits for the answer.
+    const title = () => screen.getByRole("button", { name: /^Namespace: /, hidden: true });
+    await waitFor(() => expect(title()).toHaveAccessibleName("Namespace: Chen & Sons"));
     expect(within(form).getByRole("button", { name: "Saving…" })).toBeDisabled();
     expect(screen.getByRole("form", { name: "Rename Chen Logistics" })).toBe(form);
 
@@ -550,12 +563,12 @@ describe("a namespace's page", () => {
     expect(await within(form).findByRole("alert")).toHaveTextContent(
       /Could not rename it.*refused by the test/,
     );
-    expect(title()).toHaveTextContent("Chen Logistics");
+    expect(title()).toHaveAccessibleName("Namespace: Chen Logistics");
   });
 
   it("shows the erasure at once, and keeps its dialog until the server answers", async () => {
     const user = userEvent.setup();
-    renderApp("/namespaces/bob");
+    renderApp("/ns/bob/usage");
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
     const gate = held();
     server.use(http.delete("*/v1/namespaces/:name", () => gate.answer));

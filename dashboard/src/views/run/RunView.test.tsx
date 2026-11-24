@@ -36,6 +36,27 @@ describe("RunView", () => {
     expect(screen.getByRole("button", { name: "Copy run id" })).toBeInTheDocument();
   });
 
+  it("shows the run's namespace in the picker and the sidebar, which lead to its scope", async () => {
+    const world = createWorld({ now: NOW });
+    const run = find(world, (r) => r.labels.conversation === "c-42");
+    renderApp(`/runs/${handleOf(world, run)}`, { world });
+    await screen.findByText("Namespace", { selector: "dt" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Namespace: / })).toHaveAccessibleName(
+        "Namespace: alice",
+      ),
+    );
+    expect(
+      screen.getByRole("link", { name: "Back to all namespaces (from alice)" }),
+    ).toHaveAttribute("href", "/observability");
+    // Its details lead to its namespace's runs.
+    const term = screen.getByText("Namespace", { selector: "dt" });
+    expect(within(term.parentElement as HTMLElement).getByRole("link")).toHaveAttribute(
+      "href",
+      "/ns/alice/observability",
+    );
+  });
+
   it("shows a failed run: the error, its line, and each call next to the line that made it", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });

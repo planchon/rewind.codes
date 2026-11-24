@@ -1,7 +1,8 @@
 // The dashboard's client of the API: `/v1`, typed by the generated `paths` and authenticated
 // with a Bearer token (the operator's key, or a member's access token), and the sign-in routes
-// `/auth`, which read and write the session cookie and never see a token. It reads every namespace
-// of the organization, and names one (`Rewind-Namespace`) only for the scripts of one end user.
+// `/auth`, which read and write the session cookie and never see a token. Its reads of runs,
+// statistics and scripts cover every namespace of the organization, or the one they name
+// (`Rewind-Namespace`): the namespace a view is scoped to.
 import createClient from "openapi-fetch";
 import type {
   ApiKey,
@@ -167,6 +168,11 @@ function skewOf(response: Response): number {
   return Number.isFinite(at) ? at - Date.now() : 0;
 }
 
+/** The header that narrows a read to one namespace; nothing for every namespace. */
+function inNamespace(namespace: string | null): { headers?: { "Rewind-Namespace": string } } {
+  return namespace !== null ? { headers: { "Rewind-Namespace": namespace } } : {};
+}
+
 /** Whether a request goes to `/v1`, the only routes that take the Bearer token. */
 function isV1(url: string): boolean {
   return new URL(url).pathname.startsWith("/v1/");
@@ -235,16 +241,43 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/server"));
   }
 
-  async runs(query: ListRunsQuery, signal?: AbortSignal): Promise<RunPage> {
-    return this.unwrap(await this.client.GET("/v1/runs", { params: { query }, signal }));
+  /** The runs of every namespace, or of the one `namespace` names. */
+  async runs(
+    query: ListRunsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<RunPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/runs", { params: { query }, ...inNamespace(namespace), signal }),
+    );
   }
 
-  async runStats(query: RunStatsQuery, signal?: AbortSignal): Promise<RunStats> {
-    return this.unwrap(await this.client.GET("/v1/runs/stats", { params: { query }, signal }));
+  async runStats(
+    query: RunStatsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<RunStats> {
+    return this.unwrap(
+      await this.client.GET("/v1/runs/stats", {
+        params: { query },
+        ...inNamespace(namespace),
+        signal,
+      }),
+    );
   }
 
-  async failures(query: FailuresQuery, signal?: AbortSignal): Promise<FailureGroupPage> {
-    return this.unwrap(await this.client.GET("/v1/runs/failures", { params: { query }, signal }));
+  async failures(
+    query: FailuresQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<FailureGroupPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/runs/failures", {
+        params: { query },
+        ...inNamespace(namespace),
+        signal,
+      }),
+    );
   }
 
   async run(id: string, signal?: AbortSignal): Promise<Run> {
@@ -301,7 +334,7 @@ export class Api {
     return this.unwrap(
       await this.client.GET("/v1/scripts", {
         params: { query },
-        ...(namespace !== null ? { headers: { "Rewind-Namespace": namespace } } : {}),
+        ...inNamespace(namespace),
         signal,
       }),
     );
@@ -347,8 +380,18 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/toolsets", { signal })).toolsets;
   }
 
-  async toolStats(query: ToolStatsQuery, signal?: AbortSignal): Promise<ToolStatsPage> {
-    return this.unwrap(await this.client.GET("/v1/tools/stats", { params: { query }, signal }));
+  async toolStats(
+    query: ToolStatsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<ToolStatsPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/tools/stats", {
+        params: { query },
+        ...inNamespace(namespace),
+        signal,
+      }),
+    );
   }
 
   /** A payload's value, read through the run whose journal holds it, as the server requires. */

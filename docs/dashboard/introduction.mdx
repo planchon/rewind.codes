@@ -30,10 +30,11 @@ A server of your own without WorkOS asks for an API key instead, kept for the ta
 
 The dashboard has one sidebar:
 
-- **At its top**: the organization picker, and **Find** (press <kbd>F</kbd>): a run by its handle or its id, a view, the runs a query matches.
+- **At its top**: the organization picker, the end user you look at (when you look at one), and **Find** (press
+  <kbd>F</kbd>): a run by its handle or its id, a view, the runs a query matches.
 - **The views**: [Overview](/dashboard/overview), [Observability](/dashboard/observability), [Scripts](/dashboard/scripts),
-  [Testing](/dashboard/testing), [Tools](/dashboard/tools) and [Namespaces](/dashboard/namespaces); then
-  [Connect Claude](/claude), to use Rewind from Claude.
+  [Testing](/dashboard/testing), [Tools](/dashboard/tools), [Secrets](/dashboard/secrets), and
+  [Namespaces](/dashboard/namespaces) (or, for one end user, their [Usage](/dashboard/namespaces#one-end-user)).
 - **At its bottom**, the account menu: your [organization](/dashboard/organization) (members, roles, API keys,
   connections), your [connections](/claude#change-or-revoke-a-connection), the theme, the time zone (UTC or local), the
   server, and sign out.
@@ -52,8 +53,18 @@ The dashboard shows what your role allows. The run views need `runs:read`, Testi
 views `namespaces:read`, and each part of the organization its own permission. A member limited to labels
 (`agent:triage`) sees only the runs carrying them. See [Roles](/dashboard/organization#roles).
 
-The dashboard never picks an end user: it reads every namespace of your organization. A run's namespace is a column, a
-filter and the term `namespace:` of the [query language](/dashboard/query-language).
+## Every end user, or one
+
+Your organization › an end user › their runs, scripts and secrets. The picker at the left of every page's header
+chooses whom you look at: **All namespaces** (where the dashboard opens), or one end user, found by the start of their
+name or display name. The same views answer for one end user: their Overview, their runs, their scripts, their tools,
+their secrets, and their Usage in place of Namespaces. Picking another end user keeps the view you are on and your
+query; the sidebar then shows the end user under the organization picker, with ‹ to go back to every namespace. A run's
+page shows its end user the same way. Each end user has a mark, a small pattern drawn from their namespace's name.
+
+Over every namespace, a run's namespace is a column, a filter and the term `namespace:` of the
+[query language](/dashboard/query-language). What belongs to no end user is your organization's: its secrets and its
+workflows, which every end user's runs use.
 
 ## Live
 

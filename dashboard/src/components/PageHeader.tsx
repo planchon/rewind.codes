@@ -1,8 +1,12 @@
 // The head of a page, as on Vercel's dashboard: 56 px, the page's name (or where it is) in the
-// middle, its actions on the right, something to the left when the page has it. What the page is
-// opens from an (i) beside its name, never as a paragraph under it.
-import type { ReactNode } from "react";
+// middle, its actions on the right, on its left what the frame puts there (the namespace picker)
+// unless the page has its own. What the page is opens from an (i) beside its name, never as a
+// paragraph under it.
+import { createContext, type ReactNode, useContext } from "react";
 import { InfoCard } from "./InfoCard";
+
+/** What the frame shows at the left of every page's header: the namespace picker. */
+export const PageHeaderStart = createContext<ReactNode>(null);
 
 export function PageHeader({
   title,
@@ -23,9 +27,10 @@ export function PageHeader({
   start?: ReactNode;
   actions?: ReactNode;
 }) {
+  const framed = useContext(PageHeaderStart);
   return (
     <header className="page-header">
-      <div className="page-header-start">{start}</div>
+      <div className="page-header-start">{start ?? framed}</div>
       <div className="page-header-title">
         {crumbs && (
           <>

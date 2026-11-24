@@ -3,9 +3,10 @@
 // "Statistics"), which know no labels; no window of time, a script being what it is whenever it
 // ran. Searched with the query bar of the runs, which reads one
 // tool here, what `GET /v1/scripts` filters by, and one namespace, sent as `Rewind-Namespace`: the
-// scripts of one end user, counted over their runs.
+// scripts of one end user, counted over their runs. In a namespace's scope, that namespace's.
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
+import { useAt } from "../app/scope";
 import { Ago, Empty, Loading, ProblemView } from "../components/bits";
 import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
@@ -17,6 +18,7 @@ import { formatCount } from "../model/format";
 import { fieldTerm, joinQuery, queryLink, splitTerms } from "../model/query";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../model/types";
 import { useRunStats } from "../state/aggregates";
+import { useScopeNamespace } from "../state/scope";
 import { type ScriptList, useScriptList } from "../state/scripts";
 import { useListQuery, useRunQueryValues } from "./search";
 import { TableTop } from "./TableTop";
@@ -38,6 +40,7 @@ export function Outcomes({
   /** A term the links to the runs add: the namespace the counts are of. */
   scope?: string;
 }) {
+  const at = useAt();
   const total = totalRuns(counts);
   const present = RUN_STATUSES.filter((s) => counts[s] > 0);
   const title = present.map((s) => `${counts[s]} ${s}`).join(", ");
@@ -54,7 +57,7 @@ export function Outcomes({
           digest ? (
             <Link
               key={s}
-              to={queryLink("/observability", joinQuery(`status:${s} script:${digest}`, scope))}
+              to={queryLink(at("/observability"), joinQuery(`status:${s} script:${digest}`, scope))}
               className={`status ${s}`}
               title={`${counts[s]} ${s}`}
             >
@@ -83,6 +86,7 @@ function ScriptRow({
   onPickTool: (t: string) => void;
 }) {
   const navigate = useNavigate();
+  const at = useAt();
   const shown = script.tools.slice(0, 3);
   return (
     <tr
@@ -112,7 +116,7 @@ function ScriptRow({
       </td>
       <td className="right">
         <Link
-          to={queryLink("/observability", joinQuery(`script:${script.digest}`, scope))}
+          to={queryLink(at("/observability"), joinQuery(`script:${script.digest}`, scope))}
           className="num"
           title="Its runs"
         >
@@ -154,8 +158,8 @@ function ScriptRow({
 }
 
 /**
- * The table of scripts, shared by Scripts and a namespace's page: each script's runs by outcome,
- * its tools, when it last ran. `scope` is the term its links to the runs add.
+ * The table of scripts: each script's runs by outcome, its tools, when it last ran. `scope` is the
+ * term its links to the runs add; in a namespace's scope, they open that scope's runs.
  */
 export function ScriptTable({
   scripts,
@@ -241,14 +245,17 @@ function useScriptFacets() {
 
 export function ScriptsView() {
   const { q, setQ } = useListQuery(legacyScriptsQuery, LEGACY_NAMES);
+  const scoped = useScopeNamespace();
   const search = scriptsSearch(q);
+  // The scope's namespace, else the one the query names.
+  const namespace = scoped ?? search.namespace;
   const scripts = useScriptList({
     query: search.query,
-    namespace: search.namespace,
+    namespace,
     enabled: search.fault === null,
   });
   const suggestions = useScriptFacets();
-  const scope = search.namespace ? fieldTerm("namespace", search.namespace) : "";
+  const scope = scoped === null && namespace ? fieldTerm("namespace", namespace) : "";
 
   return (
     <div className="page">
@@ -257,10 +264,10 @@ export function ScriptsView() {
         info={
           <p>
             Every distinct source the runs
-            {search.namespace ? (
+            {namespace ? (
               <>
                 {" "}
-                of <NamespaceName name={search.namespace} />
+                of <NamespaceName name={namespace} />
               </>
             ) : null}{" "}
             executed, the most recently run first, with their runs by outcome and the tools they
@@ -276,7 +283,9 @@ export function ScriptsView() {
         values={suggestions.values}
         onTyping={suggestions.onTyping}
         fault={search.fault}
-        placeholder="namespace:alice tool:github.close_issue"
+        placeholder={
+          scoped === null ? "namespace:alice tool:github.close_issue" : "tool:github.close_issue"
+        }
       />
       {search.fault ? (
         <Empty>Fix the query to see the scripts: the term at fault is underlined above.</Empty>

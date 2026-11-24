@@ -14,6 +14,7 @@ import { waitingRuns } from "../../model/scope";
 import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../model/types";
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
+import { useScopeNamespace } from "../../state/scope";
 import { useScript } from "../../state/scripts";
 import { RunLabels } from "../RunCells";
 import { TableTop } from "../TableTop";
@@ -133,6 +134,7 @@ export function WaitingRuns({
   const now = useNow(10_000);
   const tabTerm = tab.kinds.length === 0 ? "waiting:*" : `waiting:${tab.kinds.join(",")}`;
   const runs = useRunSearch({ q: joinQuery(q, tabTerm), sort: "wakes", pageSize: 100 });
+  const everyNamespace = useScopeNamespace() === null;
   const fault = queryFault(runs.error);
   useEffect(() => onFault?.(queryFault(runs.error)), [runs.error, onFault]);
 
@@ -218,7 +220,12 @@ export function WaitingRuns({
                             className="row-link"
                             title="Open the run at its last step"
                           >
-                            <RunHandle handle={run.handle} id={run.id} whole />
+                            <RunHandle
+                              handle={run.handle}
+                              id={run.id}
+                              namespace={everyNamespace}
+                              whole
+                            />
                           </Link>
                         </span>
                         <span className="headline mono" title={run.headline}>

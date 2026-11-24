@@ -3,6 +3,7 @@
 // names itself to the links of its runs; a run opened from anywhere else goes back to every run.
 import { createContext, type ReactNode, useContext } from "react";
 import { useLocation } from "react-router";
+import { splitScope } from "../state/scope";
 
 const RunsFromContext = createContext<string | null>(null);
 
@@ -50,7 +51,7 @@ export function isRunName(text: string): boolean {
 export function runBackPath(state: unknown): string {
   if (state && typeof state === "object" && "from" in state) {
     const from = (state as { from: unknown }).from;
-    if (typeof from === "string" && from.startsWith("/observability")) return from;
+    if (typeof from === "string" && splitScope(from).path.startsWith("/observability")) return from;
   }
   return "/observability";
 }

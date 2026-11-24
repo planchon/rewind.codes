@@ -1,7 +1,9 @@
 // Pieces the namespace views share: a quota's use against its limit as a meter, an alert as a
-// chip, the form of six limits (in a dialog), and the gate of `namespaces:read`.
+// chip, a namespace's alerts of the month, the form of six limits (in a dialog), and the gate of
+// `namespaces:read`.
 import { type ReactNode, useState } from "react";
 import { NoPermission } from "../../app/NoPermission";
+import { Time } from "../../components/bits";
 import { Meter } from "../../components/Charts";
 import { DialogForm } from "../../components/FormDialog";
 import {
@@ -10,8 +12,10 @@ import {
   type Level,
   levelOf,
   type MeteredSpec,
+  monthLabel,
   parseQuotas,
   QUOTA_FIELDS,
+  QUOTA_KEYS,
   QUOTA_NAMES,
   type QuotaTexts,
   quotaTexts,
@@ -78,6 +82,43 @@ export function AlertChip({ alert }: { alert: QuotaAlert }) {
     <span className={`tag ${tone}`}>
       {QUOTA_NAMES[alert.quota]} {alert.threshold}%
     </span>
+  );
+}
+
+/**
+ * A namespace's alerts of the month, what needs attention first on its Overview and its Usage;
+ * nothing when it has none.
+ */
+export function NamespaceAlerts({
+  alerts,
+  month,
+}: {
+  alerts: readonly QuotaAlert[];
+  /** `2026-11`. */
+  month: string;
+}) {
+  if (alerts.length === 0) return null;
+  return (
+    <section className="panel" aria-label="Alerts">
+      <div className="panel-head">
+        <h2>Alerts in {monthLabel(month)}</h2>
+      </div>
+      <ul className="alert-list">
+        {alerts.map((a) => (
+          <li key={`${a.quota}-${a.threshold}`}>
+            <AlertChip alert={a} />
+            <span>
+              {QUOTA_NAMES[a.quota]} at {formatQuota(QUOTA_KEYS[a.quota], a.used)} of{" "}
+              {formatQuota(QUOTA_KEYS[a.quota], a.limit)}
+            </span>
+            <span className="end muted">
+              <Time ms={Date.parse(a.raisedAt)} />
+              {a.sentAt ? " · webhook sent" : " · not sent yet"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

@@ -220,9 +220,9 @@ describe("the Secrets view", () => {
 });
 
 describe("a namespace's secrets", () => {
-  it("lists the end user's own secrets on its page, and writes and deletes them", async () => {
+  it("lists the end user's own secrets in its scope, and writes and deletes them", async () => {
     const user = userEvent.setup();
-    const { callsTo } = renderApp("/namespaces/alice");
+    const { callsTo } = renderApp("/ns/alice/secrets");
     const section = await screen.findByRole("region", { name: "Its secrets" });
     await waitFor(() => expect(within(section).getByText("ns/github")).toBeInTheDocument());
     const github = secretRow("ns/github", section);
@@ -254,7 +254,7 @@ describe("a namespace's secrets", () => {
 
   it("never offers a grant limited to labels to write an end user's secret", async () => {
     const user = userEvent.setup();
-    renderApp("/namespaces/alice", {
+    renderApp("/ns/alice/secrets", {
       world: graceWith(["runs:read", "namespaces:read", "secrets:read", "secrets:write"], {
         agent: "triage",
       }),
@@ -262,15 +262,24 @@ describe("a namespace's secrets", () => {
     const section = await screen.findByRole("region", { name: "Its secrets" });
     await waitFor(() => expect(within(section).getByText("ns/github")).toBeInTheDocument());
     expect(within(section).queryByRole("button", { name: /new secret/i })).toBeNull();
-    // Why, in the card of the (i) beside the section's title.
-    await user.click(within(section).getByRole("button", { name: "About its secrets" }));
+    // Why, in the card of the (i) beside the page's title.
+    await user.click(screen.getByRole("button", { name: "About Secrets" }));
     expect(await screen.findByText(/Your grant is limited to labels/)).toBeInTheDocument();
   });
 
+  it("lists the organization's secrets after its own, to read only", async () => {
+    renderApp("/ns/alice/secrets");
+    const org = await screen.findByRole("region", { name: "The organization's secrets" });
+    await waitFor(() => expect(within(org).getByText("org/slack")).toBeInTheDocument());
+    expect(within(org).queryByRole("button", { name: /new secret/i })).toBeNull();
+    expect(within(org).queryByRole("button", { name: /^Delete / })).toBeNull();
+  });
+
   it("is not shown without secrets:read", async () => {
-    renderApp("/namespaces/alice", { world: graceWith(["runs:read", "namespaces:read"]) });
+    renderApp("/ns/alice/usage", { world: graceWith(["runs:read", "namespaces:read"]) });
     await screen.findByRole("img", { name: /^Cumulative CPU time of alice/ });
-    expect(screen.queryByRole("region", { name: "Its secrets" })).toBeNull();
+    const nav = screen.getByRole("navigation", { name: "Views" });
+    expect(within(nav).queryByRole("link", { name: "Secrets" })).toBeNull();
   });
 });
 
@@ -322,7 +331,7 @@ describe("a run's details", () => {
     const details = term.parentElement as HTMLElement;
     expect(within(details).getByRole("link", { name: "ns/github" })).toHaveAttribute(
       "href",
-      `/namespaces/${run.namespace}`,
+      `/ns/${run.namespace}/secrets`,
     );
     expect(within(details).getByRole("link", { name: "org/slack" })).toHaveAttribute(
       "href",

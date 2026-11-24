@@ -4,6 +4,7 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
+import { useAt } from "../../app/scope";
 import { Ago, Empty, IdLabel, Loading, ProblemView, RunHandle } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { StatusBadge } from "../../components/Status";
@@ -14,6 +15,7 @@ import { formatCount, formatDuration, isIdValue, splitLabel } from "../../model/
 import { joinQuery, labelTerm, queryLink } from "../../model/query";
 import { useFailures } from "../../state/aggregates";
 import { queryFault } from "../../state/errors";
+import { useScopeNamespace } from "../../state/scope";
 import { BUCKETS, WINDOW_WORDS, windowTerm } from "../search";
 
 export function FailureGroups({
@@ -27,6 +29,8 @@ export function FailureGroups({
 }) {
   const navigate = useNavigate();
   const linkState = useRunLinkState();
+  const at = useAt();
+  const everyNamespace = useScopeNamespace() === null;
   const width = RANGES[win];
   const { bucket, ms: bucketMs } = BUCKETS[win];
   // The groups of the query's namespace, or of the organization: the counters know no other term.
@@ -43,7 +47,7 @@ export function FailureGroups({
   const fault = queryFault(failures.error);
   const groupLink = (fingerprint: string) =>
     queryLink(
-      "/observability",
+      at("/observability"),
       joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)),
     );
 
@@ -157,7 +161,13 @@ export function FailureGroups({
                       state={linkState}
                       title="The run that ended last, on the step that failed"
                     >
-                      <RunHandle handle={g.latest.handle} id={g.latest.id} copy={false} whole />
+                      <RunHandle
+                        handle={g.latest.handle}
+                        id={g.latest.id}
+                        namespace={everyNamespace}
+                        copy={false}
+                        whole
+                      />
                     </Link>
                   </span>
                 </td>

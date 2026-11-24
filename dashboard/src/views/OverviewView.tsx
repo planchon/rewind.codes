@@ -1,13 +1,16 @@
 // Overview, the home page: the runs of a window by outcome over time, the share that completed,
 // durations, the runs waiting now, quarantined runs, what fails most and the failing tools. Every
-// figure, bar and row opens the runs behind it. Its figures are the statistics of the query's
-// namespace, or of the organization; the query's other terms narrow the runs its links open. Live:
-// its figures change in place within 10 s of a run's change.
+// figure, bar and row opens the runs behind it. Its figures are the statistics of its scope's
+// namespace (with that namespace's alerts of the month first), else of the query's namespace, or of
+// the organization; the query's other terms narrow the runs its links open. Live: its figures
+// change in place within 10 s of a run's change.
 import type { ReactNode } from "react";
 import { Link } from "react-router";
+import { useAt } from "../app/scope";
 import { useSettings } from "../app/settings";
 import { Empty, Loading, ProblemView } from "../components/bits";
 import { Meter, StackedBars, Tile } from "../components/Charts";
+import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { isCancellation } from "../model/ending";
@@ -16,9 +19,13 @@ import { formatCount, formatDuration, formatPercent, formatTime } from "../model
 import { fieldTerm, joinQuery, queryLink, queryTime } from "../model/query";
 import { statsScope, waitingRuns } from "../model/scope";
 import type { RunStatus } from "../model/types";
+import { useAccess } from "../state/access";
 import { useFailures, useRunStats, useToolStats } from "../state/aggregates";
 import { queryFault } from "../state/errors";
+import { useNamespaceDetail } from "../state/namespaces";
+import { useScopeNamespace } from "../state/scope";
 import { Seg } from "./FilterBits";
+import { NamespaceAlerts } from "./namespaces/bits";
 import {
   BUCKETS,
   useRunQueryValues,
@@ -48,7 +55,17 @@ function tickFormat(win: RangeKey, zone: "utc" | "local") {
   };
 }
 
+/** The alerts of the month of the namespace the view is scoped to, first; nothing without any. */
+function ScopeAlerts({ namespace }: { namespace: string }) {
+  const detail = useNamespaceDetail(namespace, null);
+  if (!detail.data) return null;
+  return <NamespaceAlerts alerts={detail.data.alerts} month={detail.data.month} />;
+}
+
 export function OverviewView() {
+  const namespace = useScopeNamespace();
+  const at = useAt();
+  const access = useAccess();
   const { q, setQ } = useSearchQuery();
   const [win, setWin] = useWindow();
   const { zone } = useSettings();
@@ -58,7 +75,7 @@ export function OverviewView() {
   const key = `${win}|${q}`;
   const withQ = q ? { q } : {};
 
-  const scope = statsScope(q);
+  const scope = statsScope(q, namespace);
   const current = useRunStats(`overview|${key}`, () => {
     const now = Date.now();
     return {
@@ -99,7 +116,7 @@ export function OverviewView() {
   const fault = queryFault(current.error);
   const started = windowTerm("started", win);
   const runsLink = (...terms: string[]) =>
-    queryLink("/observability", joinQuery(q, started, ...terms));
+    queryLink(at("/observability"), joinQuery(q, started, ...terms));
 
   let body: ReactNode;
   if (fault) {
@@ -147,14 +164,14 @@ export function OverviewView() {
             tone="good"
           />
           <Tile
-            to={queryLink("/observability/failures", q, win === "24h" ? {} : { window: win })}
+            to={queryLink(at("/observability/failures"), q, win === "24h" ? {} : { window: win })}
             label="Failed"
             value={formatCount(s.statuses.failed)}
             context={`+ ${formatCount(s.statuses.aborted)} aborted, ${formatCount(s.statuses.cancelled)} cancelled`}
             tone={failed > 0 ? "critical" : undefined}
           />
           <Tile
-            to={queryLink("/observability/waiting", q)}
+            to={queryLink(at("/observability/waiting"), q)}
             label="Waiting now"
             value={formatCount(waitingRuns(s.waiting))}
             context={`${formatCount(s.waiting.signal)} on a signal`}
@@ -167,7 +184,7 @@ export function OverviewView() {
             context={durations ? `p50 ${formatDuration(durations.p50)}` : "no run ended"}
           />
           <Tile
-            to={queryLink("/observability", joinQuery(q, "quarantined:yes"))}
+            to={queryLink(at("/observability"), joinQuery(q, "quarantined:yes"))}
             label="Quarantined"
             value={formatCount(s.quarantined)}
             context="held until an operator acts"
@@ -212,7 +229,11 @@ export function OverviewView() {
               <h2>What fails most</h2>
               <span className="end">
                 <Link
-                  to={queryLink("/observability/failures", q, win === "24h" ? {} : { window: win })}
+                  to={queryLink(
+                    at("/observability/failures"),
+                    q,
+                    win === "24h" ? {} : { window: win },
+                  )}
                 >
                   Every failure →
                 </Link>
@@ -248,7 +269,9 @@ export function OverviewView() {
             <header className="panel-head">
               <h2>Failing tools</h2>
               <span className="end">
-                <Link to={`/tools${win === "24h" ? "" : `?window=${win}`}`}>Every tool →</Link>
+                <Link to={`${at("/tools")}${win === "24h" ? "" : `?window=${win}`}`}>
+                  Every tool →
+                </Link>
               </span>
             </header>
             {failingTools.length === 0 ? (
@@ -286,8 +309,15 @@ export function OverviewView() {
           scope.narrowed &&
           !fault && (
             <p>
-              The figures count the runs of {scope.q ? <code>{scope.q}</code> : "the organization"}:
-              the other terms of the query narrow the runs each figure opens.
+              The figures count the runs of{" "}
+              {namespace !== null ? (
+                <NamespaceName name={namespace} />
+              ) : scope.q ? (
+                <code>{scope.q}</code>
+              ) : (
+                "the organization"
+              )}
+              : the other terms of the query narrow the runs each figure opens.
             </p>
           )
         }
@@ -300,6 +330,7 @@ export function OverviewView() {
           />
         }
       />
+      {namespace !== null && access.can("namespaces:read") && <ScopeAlerts namespace={namespace} />}
       <QueryBar
         value={q}
         onSubmit={setQ}

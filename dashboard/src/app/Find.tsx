@@ -6,7 +6,9 @@ import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { queryLink } from "../model/query";
 import { useAccess } from "../state/access";
+import { scopedPath } from "../state/scope";
 import { isRunName, runPath } from "./runLinks";
+import { useShownNamespace } from "./scope";
 
 interface Choice {
   key: string;
@@ -16,59 +18,59 @@ interface Choice {
   kind: "run" | "view" | "query";
 }
 
-/** The views one may go to, as the caller's permissions allow. */
+/** The views one may go to, as the caller's permissions allow, in the scope shown. */
 function useViews(): Choice[] {
   const access = useAccess();
+  const shown = useShownNamespace();
+  const at = (path: string) => scopedPath(path, shown);
   const reads = access.can("runs:read");
   const views: (Choice | false)[] = [
-    reads && { key: "overview", label: "Overview", to: "/overview", kind: "view" },
+    reads && { key: "overview", label: "Overview", to: at("/overview"), kind: "view" },
     reads && {
       key: "obs",
       label: "Observability",
       detail: "All runs",
-      to: "/observability",
+      to: at("/observability"),
       kind: "view",
     },
     reads && {
       key: "active",
       label: "Observability",
       detail: "Active runs",
-      to: "/observability/active",
+      to: at("/observability/active"),
       kind: "view",
     },
     reads && {
       key: "waiting",
       label: "Observability",
       detail: "Waiting runs",
-      to: "/observability/waiting",
+      to: at("/observability/waiting"),
       kind: "view",
     },
     reads && {
       key: "failures",
       label: "Observability",
       detail: "Failures",
-      to: "/observability/failures",
+      to: at("/observability/failures"),
       kind: "view",
     },
     reads &&
-      access.statistics && { key: "scripts", label: "Scripts", to: "/scripts", kind: "view" },
+      access.statistics && { key: "scripts", label: "Scripts", to: at("/scripts"), kind: "view" },
     access.can("toolsets:read") && {
       key: "testing",
       label: "Testing",
-      to: "/testing",
+      to: at("/testing"),
       kind: "view",
     },
-    reads && access.statistics && { key: "tools", label: "Tools", to: "/tools", kind: "view" },
-    access.can("namespaces:read") && {
-      key: "namespaces",
-      label: "Namespaces",
-      to: "/namespaces",
-      kind: "view",
-    },
+    reads && access.statistics && { key: "tools", label: "Tools", to: at("/tools"), kind: "view" },
+    access.can("namespaces:read") &&
+      (shown === null
+        ? { key: "namespaces", label: "Namespaces", to: "/namespaces", kind: "view" }
+        : { key: "usage", label: "Usage", to: at("/usage"), kind: "view" }),
     access.can("secrets:read") && {
       key: "secrets",
       label: "Secrets",
-      to: "/secrets",
+      to: at("/secrets"),
       kind: "view",
     },
     access.sections.length > 0 && {
@@ -109,6 +111,7 @@ export function FindDialog({
   const navigate = useNavigate();
   const views = useViews();
   const access = useAccess();
+  const shown = useShownNamespace();
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
 
@@ -124,11 +127,11 @@ export function FindDialog({
       out.push({
         key: "query",
         label: `Search the runs for ${t}`,
-        to: queryLink("/observability", t),
+        to: queryLink(scopedPath("/observability", shown), t),
         kind: "query",
       });
     return out;
-  }, [text, views, access]);
+  }, [text, views, access, shown]);
 
   const go = (choice: Choice | undefined) => {
     if (!choice) return;

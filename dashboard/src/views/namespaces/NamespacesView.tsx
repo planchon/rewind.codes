@@ -37,6 +37,7 @@ import {
   useQuotaAlerts,
   useSetNamespaceDefaults,
 } from "../../state/namespaces";
+import { scopedPath } from "../../state/scope";
 import { Seg } from "../FilterBits";
 import { useListQuery, useNamespaceNameValues } from "../search";
 import { TableTop } from "../TableTop";
@@ -65,9 +66,9 @@ function readOrder(params: URLSearchParams): NamespaceOrder {
   return ORDERS.some((o) => o.value === order) ? (order as NamespaceOrder) : "cpu";
 }
 
-/** A link to a namespace's page. */
+/** A link to a namespace's scope: the first view the caller may open there (its Overview). */
 export function namespacePath(name: string): string {
-  return `/namespaces/${encodeURIComponent(name)}`;
+  return scopedPath("/", name);
 }
 
 /** The limits that are not meters: the longest TTL and the longest script. */
@@ -246,7 +247,7 @@ function Namespaces() {
               <li key={`${a.namespace ?? "*"}-${a.quota}-${a.threshold}`}>
                 <AlertChip alert={a} />
                 {a.namespace ? (
-                  <Link to={namespacePath(a.namespace)}>
+                  <Link to={scopedPath("/usage", a.namespace)}>
                     <NamespaceName name={a.namespace} />
                   </Link>
                 ) : (

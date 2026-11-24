@@ -1,4 +1,5 @@
-// The table of runs, shared by Observability, a namespace's page and a script's page. With
+// The table of runs, shared by Observability and a script's page. In a namespace's scope, a run's
+// handle leaves its namespace out: the picker says it. With
 // `controls`, each header is a menu that orders the runs by its column and filters what it
 // shows (RunColumns.tsx). A run opened from it returns to the page it was opened from
 // (`useRunLinkState`).
@@ -19,6 +20,7 @@ import { formatCount, formatDuration, formatRelative } from "../model/format";
 import { countTerms, fieldTerm, queryLink } from "../model/query";
 import type { RunSummary } from "../model/types";
 import type { RunSearchView } from "../state/runs";
+import { scopedPath, useScopeNamespace } from "../state/scope";
 import { RunEnd, RunLabels } from "./RunCells";
 import {
   CallsHeader,
@@ -56,6 +58,8 @@ type Column = keyof typeof WIDTHS;
 
 /** The optional columns a row shows. */
 interface Cols {
+  /** The namespace the table is scoped to: its runs' handles leave it out. */
+  scope: string | null;
   namespace: boolean;
   script: boolean;
   started: boolean;
@@ -165,7 +169,7 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
             <RunHandle
               handle={run.handle}
               id={run.id}
-              namespace={!cols.namespace}
+              namespace={!cols.namespace && cols.scope === null}
               copy={false}
               whole
             />
@@ -177,7 +181,10 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
           )}
           {run.workflow && (
             <Link
-              to={queryLink("/observability", fieldTerm("workflow", run.workflow))}
+              to={queryLink(
+                scopedPath("/observability", cols.scope),
+                fieldTerm("workflow", run.workflow),
+              )}
               title={`A run of the workflow ${run.workflow}${run.startedBy ? `, started by the run ${run.startedBy}` : ""}`}
             >
               <span className="tag mono">{run.workflow}</span>
@@ -274,6 +281,7 @@ export function RunTable({
   empty,
 }: RunTableProps) {
   const navigate = useNavigate();
+  const scope = useScopeNamespace();
   const from = useRunLinkState()?.from;
   const linkState = useMemo(() => (from ? { from } : undefined), [from]);
   const now = useNow(5_000);
@@ -324,6 +332,7 @@ export function RunTable({
   const cols = useMemo<Cols>(() => {
     const on = new Set(colsKey.split(","));
     return {
+      scope,
       namespace: on.has("namespace"),
       script: on.has("script"),
       started: on.has("started"),
@@ -332,7 +341,7 @@ export function RunTable({
       wakes: on.has("wakes"),
       error: on.has("error"),
     };
-  }, [colsKey]);
+  }, [colsKey, scope]);
 
   if (search.status === "pending") return <Loading>Loading runs…</Loading>;
   if (search.status === "error")

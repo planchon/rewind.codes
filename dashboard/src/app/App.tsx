@@ -7,11 +7,12 @@ import {
   type RouteObject,
   RouterProvider,
   useLocation,
+  useParams,
   useRouteError,
 } from "react-router";
 import { ProblemView } from "../components/bits";
-import { fieldTerm, joinQuery } from "../model/query";
 import { useAccess } from "../state/access";
+import { isNamespaceName, scopedPath } from "../state/scope";
 import { SessionProvider, type SessionProviderProps, SessionState } from "../state/session";
 import { OverviewView } from "../views/OverviewView";
 import { ObservabilityView } from "../views/observability/ObservabilityView";
@@ -21,6 +22,7 @@ import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
 import { adoptHashRoute, restoreRoute } from "./pendingRoute";
+import { NamespaceScope, useAt } from "./scope";
 import { SettingsProvider } from "./settings";
 
 function RouteError() {
@@ -80,31 +82,98 @@ function Statistics({ children }: { children: ReactNode }) {
 
 /**
  * A link of an earlier version: `/runs`, `/waiting` and `/failures` open Observability with their
- * query, and the namespace filter they named (`?ns=bob`) becomes the term `namespace:bob`.
+ * query, in the scope of the namespace they named (`?ns=bob`).
  */
 function Moved({ to }: { to: string }) {
   const { search } = useLocation();
   const params = new URLSearchParams(search);
   const ns = params.get("ns");
   params.delete("ns");
-  if (ns) params.set("q", joinQuery(params.get("q"), fieldTerm("namespace", ns)));
+  const path = scopedPath(to, ns && isNamespaceName(ns) ? ns : null);
   const rest = params.toString();
-  return <Navigate to={rest ? `${to}?${rest}` : to} replace />;
+  return <Navigate to={rest ? `${path}?${rest}` : path} replace />;
 }
 
-/** The first view the caller may open. */
+/** A namespace's page of an earlier version (`/namespaces/bob`): its scope, at its Overview. */
+function NamespaceMoved() {
+  const { name = "" } = useParams();
+  const access = useAccess();
+  if (!isNamespaceName(name)) return <NotFound />;
+  const view = access.can("runs:read") && access.statistics ? "/overview" : "/usage";
+  return <Navigate to={scopedPath(view, name)} replace />;
+}
+
+/** The first view the caller may open, in the scope of the route. */
 function Home() {
   const access = useAccess();
+  const at = useAt();
+  const scoped = at("/") !== "/";
   if (access.can("runs:read"))
-    return <Navigate to={access.statistics ? "/overview" : "/observability"} replace />;
-  if (access.can("namespaces:read")) return <Navigate to="/namespaces" replace />;
-  if (access.can("secrets:read")) return <Navigate to="/secrets" replace />;
+    return <Navigate to={at(access.statistics ? "/overview" : "/observability")} replace />;
+  if (access.can("namespaces:read"))
+    return <Navigate to={scoped ? at("/usage") : "/namespaces"} replace />;
+  if (access.can("secrets:read")) return <Navigate to={at("/secrets")} replace />;
   if (access.sections.length > 0) return <Navigate to="/organization" replace />;
   return <CannotRead />;
 }
 
 /** A run's page, loaded when one is opened: the debugger, its parser and its source view. */
 const runView = async () => ({ Component: (await import("../views/run/RunView")).RunPage });
+
+/**
+ * The views of a scope (archi/05, "Namespaces"): the same over every namespace (at `/`) and in one
+ * namespace (under `/ns/:namespace`), which their reads follow.
+ */
+function scopeViews(): RouteObject[] {
+  return [
+    {
+      element: <Reading />,
+      children: [
+        {
+          path: "overview",
+          element: (
+            <Statistics>
+              <OverviewView />
+            </Statistics>
+          ),
+        },
+        { path: "observability", element: <ObservabilityView /> },
+        { path: "observability/:view", element: <ObservabilityView /> },
+        {
+          path: "scripts",
+          element: (
+            <Statistics>
+              <ScriptsView />
+            </Statistics>
+          ),
+        },
+        {
+          path: "tools",
+          element: (
+            <Statistics>
+              <ToolsView />
+            </Statistics>
+          ),
+        },
+      ],
+    },
+    // Testing reads the workflows with the toolsets (`toolsets:read`): its views check it.
+    {
+      path: "testing",
+      lazy: async () => ({
+        Component: (await import("../views/testing/TestingView")).TestingView,
+      }),
+    },
+    // The organization's secrets, or a namespace's then the organization's. The view checks
+    // `secrets:read`.
+    {
+      path: "secrets",
+      lazy: async () => ({
+        Component: (await import("../views/secrets/SecretsView")).SecretsView,
+      }),
+    },
+  ];
+}
 
 export const routes: RouteObject[] = [
   {
@@ -113,19 +182,10 @@ export const routes: RouteObject[] = [
     errorElement: <RouteError />,
     children: [
       { index: true, element: <Home /> },
+      ...scopeViews(),
       {
         element: <Reading />,
         children: [
-          {
-            path: "overview",
-            element: (
-              <Statistics>
-                <OverviewView />
-              </Statistics>
-            ),
-          },
-          { path: "observability", element: <ObservabilityView /> },
-          { path: "observability/:view", element: <ObservabilityView /> },
           { path: "runs", element: <Moved to="/observability" /> },
           { path: "waiting", element: <Moved to="/observability/waiting" /> },
           { path: "failures", element: <Moved to="/observability/failures" /> },
@@ -133,33 +193,10 @@ export const routes: RouteObject[] = [
           // is named by its UUID or by its handle, `namespace/origin/suffix` (`runPath`).
           { path: "runs/*", lazy: runView },
           {
-            path: "scripts",
-            element: (
-              <Statistics>
-                <ScriptsView />
-              </Statistics>
-            ),
-          },
-          {
             path: "scripts/:digest",
             lazy: async () => ({ Component: (await import("../views/ScriptView")).ScriptView }),
           },
-          {
-            path: "tools",
-            element: (
-              <Statistics>
-                <ToolsView />
-              </Statistics>
-            ),
-          },
         ],
-      },
-      // Testing reads the workflows with the toolsets (`toolsets:read`): its views check it.
-      {
-        path: "testing",
-        lazy: async () => ({
-          Component: (await import("../views/testing/TestingView")).TestingView,
-        }),
       },
       {
         path: "testing/:name",
@@ -179,18 +216,22 @@ export const routes: RouteObject[] = [
           Component: (await import("../views/namespaces/NamespacesView")).NamespacesView,
         }),
       },
+      { path: "namespaces/:name", element: <NamespaceMoved /> },
+      // One namespace's scope: the same views, and its Usage in place of Namespaces.
       {
-        path: "namespaces/:name",
-        lazy: async () => ({
-          Component: (await import("../views/namespaces/NamespaceView")).NamespaceView,
-        }),
-      },
-      // The organization's secrets; a namespace's are on its page. The view checks `secrets:read`.
-      {
-        path: "secrets",
-        lazy: async () => ({
-          Component: (await import("../views/secrets/SecretsView")).SecretsView,
-        }),
+        path: "ns/:namespace",
+        element: <NamespaceScope />,
+        children: [
+          { index: true, element: <Home /> },
+          ...scopeViews(),
+          {
+            path: "usage",
+            lazy: async () => ({
+              Component: (await import("../views/namespaces/NamespaceView")).NamespaceView,
+            }),
+          },
+          { path: "*", element: <NotFound /> },
+        ],
       },
       {
         path: "organization",

@@ -2,10 +2,11 @@
 // host-tool group), since the first call, for the organization or one end user. Searched with the query
 // bar of the runs, which reads `namespace:` and one `tool:` pattern (sent to the server), `tool:`
 // and a tool's name here; its figures are the Overview's tiles, and each group of tools folds under
-// its row.
+// its row. In a namespace's scope, the calls of that namespace's runs.
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
+import { useAt } from "../app/scope";
 import { Empty, Loading, ProblemView } from "../components/bits";
 import { Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
@@ -17,6 +18,7 @@ import { formatCount, formatDuration, formatPercent } from "../model/format";
 import { type FieldValues, fieldTerm, queryLink, TEXT_VALUES } from "../model/query";
 import type { ToolStats } from "../model/types";
 import { useToolStats } from "../state/aggregates";
+import { useScopeNamespace } from "../state/scope";
 import { useListQuery } from "./search";
 
 const LEGACY_NAMES = ["toolset"] as const;
@@ -183,6 +185,8 @@ function toolValues(tools: ToolStats[]): FieldValues {
 
 export function ToolsView() {
   const { q, setQ } = useListQuery(legacyToolsQuery, LEGACY_NAMES);
+  const at = useAt();
+  const scoped = useScopeNamespace() !== null;
   const search = toolsSearch(q);
   const stats = useToolStats(`tools:${search.namespace ?? ""}:${search.prefix ?? ""}`, () =>
     toToolStatsQuery(search),
@@ -223,7 +227,9 @@ export function ToolsView() {
         language={TOOLS_LANGUAGE}
         values={values}
         fault={search.fault}
-        placeholder="tool:github.* namespace:alice close_issue"
+        placeholder={
+          scoped ? "tool:github.* close_issue" : "tool:github.* namespace:alice close_issue"
+        }
       />
 
       {search.fault ? (
@@ -260,7 +266,7 @@ export function ToolsView() {
             />
             {slowest && (
               <Tile
-                to={queryLink("/observability", fieldTerm("tool", slowest.tool))}
+                to={queryLink(at("/observability"), fieldTerm("tool", slowest.tool))}
                 label="Slowest p95"
                 value={formatDuration(slowest.latencyMs.p95)}
                 context={slowest.tool}
@@ -318,7 +324,7 @@ export function ToolsView() {
                           <tr key={t.tool}>
                             <td className="mono tool-name">
                               <Link
-                                to={queryLink("/observability", fieldTerm("tool", t.tool))}
+                                to={queryLink(at("/observability"), fieldTerm("tool", t.tool))}
                                 title={`Runs that called ${t.tool}`}
                               >
                                 {t.tool}

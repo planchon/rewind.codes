@@ -41,12 +41,16 @@ export function useCanWriteSecrets(namespace: string | null): boolean {
 
 export function SecretList({
   namespace,
+  readOnly = false,
 }: {
   /** `null`: the organization's secrets. */
   namespace: string | null;
+  /** Listed only, written elsewhere: the organization's, in a namespace's scope. */
+  readOnly?: boolean;
 }) {
   const list = useSecrets(namespace);
-  const write = useCanWriteSecrets(namespace);
+  const canWrite = useCanWriteSecrets(namespace);
+  const write = canWrite && !readOnly;
   const names = useMemberNames();
   const now = useNow(60_000);
   const [writing, setWriting] = useState<{ existing: Secret | null } | null>(null);

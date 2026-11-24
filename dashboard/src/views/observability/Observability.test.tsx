@@ -303,8 +303,9 @@ describe("Observability: every run", () => {
 
   it("reads an older link: the runs, the waiting and the failures, a namespace filter", async () => {
     const { router } = renderApp("/runs?ns=bob&q=%40env%3Aprod");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/observability"));
-    expect(search(router).get("q")).toBe("@env:prod namespace:bob");
+    // The namespace it named is now its scope.
+    await waitFor(() => expect(router.state.location.pathname).toBe("/ns/bob/observability"));
+    expect(search(router).get("q")).toBe("@env:prod");
     expect(search(router).get("ns")).toBeNull();
     await router.navigate("/waiting?tab=tools");
     await waitFor(() => expect(router.state.location.pathname).toBe("/observability/waiting"));

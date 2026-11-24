@@ -86,8 +86,16 @@ For every view in the shot list:
 - The sidebar folds by a click on its right edge (a drag resizes it): no fold button.
 - Paddings are symmetric: the same space left and right of what a sidebar or a card holds. A
   scrollbar that takes room on one side breaks it: the sidebar's panes scroll without one.
-- **The page header holds the title (and its crumbs) and the actions, nothing else.** No status
-  beside a run's handle; mock and quarantine tags only, when they apply.
+- **The page header holds the title (and its crumbs) and the actions, nothing else**, and at its
+  left the namespace picker, on every page but the organization's. No status beside a run's
+  handle; mock and quarantine tags only, when they apply.
+- **The scope is always in sight.** In a namespace's scope (`/ns/<name>/`), the sidebar shows the
+  namespace under the organization picker, above Find: ‹, its mark, its display name; the row leads
+  back to the same view over every namespace, and stays above a page's own sidebar. A page of one
+  object of a namespace (a run) shows that namespace the same way. A view in a namespace's scope
+  says no namespace again: no Namespace column or facet, handles without their namespace.
+- **A namespace's mark is its pattern** (`NamespaceMark`), drawn from its name, wherever a
+  namespace stands as a scope (the picker, its list, the sidebar); the organization's mark is round.
 
 ### Text
 
@@ -208,3 +216,4 @@ What still breaks a rule, to fix when a change touches these views:
 | Tables again (23 Nov) | The corner and top border a different color when stuck; no ellipsis in a table: least widths and sideways scrolling |
 | This skill (23 Nov) | "I don't want to give the same feedback all the time, on small details": the rules in a skill, and a before/after review with screenshots as proof for every UI change |
 | Labels, names, windows (24 Nov) | Too many labels per run: past three, or too long, all in a card; the namespace's name rather than its id in a handle; no date filter on Scripts and Tools; then no text in the labels' card, never an id in a label (its key and a link instead), no "By kind" column in Tools; the labels' card padded "way too much", then "could be wider (~300 px max)", then "the border radius rule on the card: padding and radius look off" |
+| Hierarchy (24 Nov) | Organization › namespace › objects with a namespace picker; the namespace above the search input with a ‹ back to the organization's view; a pattern per namespace |

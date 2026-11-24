@@ -32,11 +32,13 @@ export interface StatsScope {
 }
 
 /**
- * The scope a query names for the statistics: its namespace when one term `namespace:<name>`
- * names a single namespace, asked for, not excluded; the tenant otherwise.
+ * The scope a query names for the statistics: in a namespace's scope (`namespace`), that namespace,
+ * sent as `Rewind-Namespace` with no query; otherwise its namespace when one term
+ * `namespace:<name>` names a single namespace, asked for, not excluded; the tenant otherwise.
  */
-export function statsScope(q: string | undefined): StatsScope {
+export function statsScope(q: string | undefined, namespace: string | null = null): StatsScope {
   const terms = splitTerms(q ?? "");
+  if (namespace !== null) return { q: undefined, offset: 0, narrowed: terms.length > 0 };
   const namespaces = terms.filter((t) => t.kind === "field" && t.field === "namespace");
   const term = namespaces.length === 1 ? namespaces[0] : undefined;
   const values = term ? operandValues(term.operand) : [];

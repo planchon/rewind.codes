@@ -22,6 +22,7 @@ import type { Run, Waiting } from "../../model/types";
 import { endedRunOf, workflowRef } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import { useRunExport } from "../../state/runs";
+import { scopedPath } from "../../state/scope";
 import { RunControls } from "./RunControls";
 import { endingOf, RunEndBanner } from "./RunEnd";
 
@@ -127,7 +128,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         <dt>Namespace</dt>
         <dd>
           <Link
-            to={queryLink("/observability", fieldTerm("namespace", run.namespace))}
+            to={scopedPath("/observability", run.namespace)}
             title="The end user the run acts for: their runs"
           >
             <NamespaceName name={run.namespace} />
@@ -265,9 +266,7 @@ function AttachedSecrets({ run }: { run: Run }) {
       {Object.entries(run.secrets ?? {})
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([server, ref]) => {
-          const to = ref.startsWith("org/")
-            ? "/secrets"
-            : `/namespaces/${encodeURIComponent(run.namespace)}`;
+          const to = scopedPath("/secrets", ref.startsWith("org/") ? null : run.namespace);
           return (
             <li key={server}>
               <span className="muted">{server}</span>{" "}
