@@ -788,10 +788,11 @@ select.input {
 }
 
 .seg {
+  --seg-pad: 3px;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3px;
+  padding: var(--seg-pad);
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--line);
@@ -804,7 +805,8 @@ select.input {
   min-width: 32px;
   padding: 0 12px;
   border: 0;
-  border-radius: var(--radius-sm);
+  /* Concentric with the control's corners. */
+  border-radius: calc(var(--radius-md) - var(--seg-pad));
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
@@ -837,9 +839,9 @@ select.input {
    choice, and a lighter one follows the pointer, as on Vercel's dashboard. 4px around the choice,
    36px in all, the height of the query bar beside it. */
 .seg.sliding {
+  --seg-pad: 4px;
   position: relative;
   isolation: isolate;
-  padding: 4px;
 }
 
 .seg.sliding button,
@@ -855,10 +857,10 @@ select.input {
 .seg-thumb,
 .seg-hover {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
+  top: var(--seg-pad);
+  bottom: var(--seg-pad);
   left: 0;
-  border-radius: var(--radius-sm);
+  border-radius: calc(var(--radius-md) - var(--seg-pad));
   pointer-events: none;
 }
 
@@ -1433,7 +1435,7 @@ table.grid .row-link {
   line-height: 20px;
   padding: 0 6px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-label);
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--line);
   font-family: var(--font-mono);

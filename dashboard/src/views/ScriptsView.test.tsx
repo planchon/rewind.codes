@@ -6,8 +6,8 @@ import { scriptDoc } from "../mocks/handles";
 import { renderApp, search } from "../test/app";
 
 describe("ScriptsView", () => {
-  it("lists every distinct script of the window with its runs by outcome and its tools", async () => {
-    renderApp("/scripts?window=30d");
+  it("lists every distinct script with its runs by outcome and its tools", async () => {
+    renderApp("/scripts");
     const table = await screen.findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(9);
@@ -40,21 +40,14 @@ describe("ScriptsView", () => {
     ).toBe(true);
   });
 
-  it("counts the window's runs, the last 24 hours by default", async () => {
-    const user = userEvent.setup();
-    const { router, requested } = renderApp("/scripts");
+  it("counts every run since the first, with no window of time", async () => {
+    const { requested } = renderApp("/scripts?window=24h");
     const table = await screen.findByRole("table");
-    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(7));
-    const since = (u: URL) => Date.parse(u.searchParams.get("since") ?? "");
-    const day = requested("/v1/scripts").at(-1) as URL;
-    expect(Date.now() - since(day)).toBeGreaterThanOrEqual(86_400_000 - 60_000);
-    expect(Date.now() - since(day)).toBeLessThan(86_400_000 + 60_000);
-
-    await user.click(screen.getByRole("button", { name: "30d" }));
-    await waitFor(() => expect(search(router).get("window")).toBe("30d"));
+    // Every script, the runs of 30 days ago too; an older link's window is ignored.
     await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(10));
-    const month = requested("/v1/scripts").at(-1) as URL;
-    expect(Date.now() - since(month)).toBeGreaterThanOrEqual(30 * 86_400_000 - 60_000);
+    expect(requested("/v1/scripts").at(-1)?.searchParams.has("since")).toBe(false);
+    expect(screen.queryByRole("group", { name: "Window" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "24h" })).toBeNull();
   });
 
   it("underlines a label, which the counters know nothing of, and what the list cannot read", async () => {
@@ -82,8 +75,11 @@ describe("ScriptsView", () => {
     );
     // chen runs the digest agent alone.
     await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
-    // Its display name, for its id.
-    expect(screen.getByText(/The sources the runs of/)).toHaveTextContent("Chen Logistics");
+    // What the page shows, with the namespace's display name for its id, opens from the (i).
+    await userEvent.setup().click(screen.getByRole("button", { name: "About Scripts" }));
+    expect(await screen.findByText(/Every distinct source the runs/)).toHaveTextContent(
+      "Chen Logistics",
+    );
     const runs = within(table).getAllByTitle("Its runs")[0] as HTMLElement;
     expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
       /^script:\S+ namespace:chen$/,

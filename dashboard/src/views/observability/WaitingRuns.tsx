@@ -5,7 +5,7 @@
 import { Fragment, type ReactNode, useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
-import { Empty, LabelList, Loading, ProblemView, RunHandle, useNow } from "../../components/bits";
+import { Empty, Loading, ProblemView, RunHandle, useNow } from "../../components/bits";
 import { StatusGlyph } from "../../components/Status";
 import { TableScroll } from "../../components/TableScroll";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
@@ -15,6 +15,7 @@ import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
 import { useScript } from "../../state/scripts";
+import { RunLabels } from "../RunCells";
 import { TableTop } from "../TableTop";
 
 type Tab = "all" | "signals" | "approvals" | "timers" | "tools";
@@ -207,22 +208,24 @@ export function WaitingRuns({
                   >
                     <td className="wrap waiting-run">
                       <span className="labels">
-                        <span className="status active">
-                          <StatusGlyph status="active" size={12} />
+                        <span className="waiting-run-id">
+                          <span className="status active">
+                            <StatusGlyph status="active" size={12} />
+                          </span>
+                          <Link
+                            to={runPath(run.handle)}
+                            state={linkState}
+                            className="row-link"
+                            title="Open the run at its last step"
+                          >
+                            <RunHandle handle={run.handle} id={run.id} whole />
+                          </Link>
                         </span>
-                        <Link
-                          to={runPath(run.handle)}
-                          state={linkState}
-                          className="row-link"
-                          title="Open the run at its last step"
-                        >
-                          <RunHandle handle={run.handle} id={run.id} whole />
-                        </Link>
                         <span className="headline mono" title={run.headline}>
                           {run.headline}
                         </span>
                       </span>
-                      <LabelList
+                      <RunLabels
                         labels={run.labels}
                         onPick={(pair) => {
                           const at = pair.indexOf(":");

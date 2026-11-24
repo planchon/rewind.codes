@@ -54,9 +54,6 @@ const WIDTHS = {
 
 type Column = keyof typeof WIDTHS;
 
-/** The characters of labels a run's cell shows, then "+N". */
-const LABEL_BUDGET = 44;
-
 /** The optional columns a row shows. */
 interface Cols {
   namespace: boolean;
@@ -187,7 +184,7 @@ const RunRow = memo(function RunRow({ run, now, cols, linkState, handlers }: Row
             </Link>
           )}
         </span>
-        <RunLabels labels={run.labels} onPick={handlers.pickLabel} budget={LABEL_BUDGET} />
+        <RunLabels labels={run.labels} onPick={handlers.pickLabel} />
       </td>
       <td>
         <span className="labels">

@@ -8,12 +8,13 @@ import { PenLine, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { runPath } from "../../app/runLinks";
-import { Ago, Empty, LabelList, Loading, RunHandle, RunId, useNow } from "../../components/bits";
+import { Ago, Empty, Loading, RunHandle, RunId, useNow } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { HoverCard } from "../../components/HoverCard";
 import { NamespaceName } from "../../components/NamespaceName";
+import { RowLabels } from "../../components/RowLabels";
 import { TableScroll } from "../../components/TableScroll";
 import { formatLabels } from "../../model/access";
 import { formatCount } from "../../model/format";
@@ -138,7 +139,7 @@ export function SecretList({
                   </td>
                   {org && (
                     <td className="wrap">
-                      <LabelList labels={s.labels ?? {}} />
+                      <RowLabels labels={s.labels ?? {}} empty />
                     </td>
                   )}
                   <td className="dim">

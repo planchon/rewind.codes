@@ -1,9 +1,10 @@
 // Members: the organization's memberships, each with its grant (role, allowed labels). Whoever
 // holds `members:manage` changes a grant or removes a member, within what they hold themselves.
 import { Fragment, useState } from "react";
-import { Ago, Empty, LabelList, Loading } from "../../components/bits";
+import { Ago, Empty, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { RowLabels } from "../../components/RowLabels";
 import { TableScroll } from "../../components/TableScroll";
 import { displayName } from "../../model/access";
 import type { Member, Role } from "../../model/types";
@@ -156,7 +157,7 @@ function Members() {
                         )}
                       </td>
                       <td className="wrap">
-                        <LabelList labels={m.grant?.allowedLabels ?? {}} />
+                        <RowLabels labels={m.grant?.allowedLabels ?? {}} empty />
                       </td>
                       <td className="dim">
                         {m.grant?.grantedAt ? (

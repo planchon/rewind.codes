@@ -2,9 +2,10 @@
 // `members:invite` invites an email with a role and allowed labels, resends and revokes.
 import { Send, UserPlus } from "lucide-react";
 import { useState } from "react";
-import { Ago, Empty, LabelList, Loading } from "../../components/bits";
+import { Ago, Empty, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { RowLabels } from "../../components/RowLabels";
 import { TableScroll } from "../../components/TableScroll";
 import type { Invitation, InvitationState } from "../../model/types";
 import { useAccess } from "../../state/access";
@@ -165,7 +166,7 @@ function Invitations() {
                       )}
                     </td>
                     <td className="wrap">
-                      <LabelList labels={inv.grant?.allowedLabels ?? {}} />
+                      <RowLabels labels={inv.grant?.allowedLabels ?? {}} empty />
                     </td>
                     <td>
                       <span className={`tag invitation-${inv.state}`}>{inv.state}</span>

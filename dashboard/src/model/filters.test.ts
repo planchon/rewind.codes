@@ -9,8 +9,6 @@ import {
   toToolStatsQuery,
 } from "./filters";
 
-const NOW = Date.parse("2026-11-12T10:00:00Z");
-
 describe("the Scripts' search", () => {
   it("sends one tool", () => {
     expect(scriptsSearch("tool:github.close_issue")).toEqual({
@@ -88,14 +86,12 @@ describe("the Tools' search", () => {
     expect(toolsSearch("toolset:079b3789").fault?.message).toMatch(/not per toolset/);
   });
 
-  it("reads a window of the last 24 hours, of a namespace and a prefix", () => {
-    expect(toToolStatsQuery("24h", { namespace: null, prefix: null }, NOW)).toEqual({
-      since: "2026-11-11T10:00:00.000Z",
-      until: "2026-11-12T10:00:00.000Z",
+  it("reads every call since the first, of a namespace and a prefix", () => {
+    expect(toToolStatsQuery({ namespace: null, prefix: null })).toEqual({
+      since: "1970-01-01T00:00:00.000Z",
     });
-    expect(toToolStatsQuery("1h", { namespace: "alice", prefix: "github." }, NOW)).toEqual({
-      since: "2026-11-12T09:00:00.000Z",
-      until: "2026-11-12T10:00:00.000Z",
+    expect(toToolStatsQuery({ namespace: "alice", prefix: "github." })).toEqual({
+      since: "1970-01-01T00:00:00.000Z",
       q: "namespace:alice",
       prefix: "github.",
     });

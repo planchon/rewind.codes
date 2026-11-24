@@ -63,7 +63,7 @@ describe("the mocked read model", () => {
       0,
     );
     expect(counted).toBe(stats.runs);
-    expect(stats.waiting).toMatchObject({ signal: 1, timer: 1, call: 1, host: 1, approval: 1 });
+    expect(stats.waiting).toMatchObject({ signal: 3, timer: 1, call: 1, host: 1, approval: 1 });
     expect(stats.facets.labels.map((l) => l.key)).toContain("agent");
     expect(stats.durations?.p50).toBeGreaterThan(0);
   });

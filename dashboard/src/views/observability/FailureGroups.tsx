@@ -4,13 +4,13 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
-import { Ago, Empty, Loading, ProblemView, RunHandle } from "../../components/bits";
+import { Ago, Empty, IdLabel, Loading, ProblemView, RunHandle } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { StatusBadge } from "../../components/Status";
 import { TableScroll } from "../../components/TableScroll";
 import { isCancellation } from "../../model/ending";
 import { RANGES, type RangeKey } from "../../model/filters";
-import { formatCount, formatDuration, splitLabel } from "../../model/format";
+import { formatCount, formatDuration, isIdValue, splitLabel } from "../../model/format";
 import { joinQuery, labelTerm, queryLink } from "../../model/query";
 import { useFailures } from "../../state/aggregates";
 import { queryFault } from "../../state/errors";
@@ -124,6 +124,15 @@ export function FailureGroups({
                   <span className="labels">
                     {g.labels.slice(0, 3).map((l) => {
                       const pair = splitLabel(l.value);
+                      if (pair && isIdValue(pair[1]))
+                        return (
+                          <IdLabel
+                            key={l.value}
+                            name={pair[0]}
+                            id={pair[1]}
+                            count={formatCount(l.runs)}
+                          />
+                        );
                       return (
                         <button
                           key={l.value}

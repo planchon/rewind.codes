@@ -1,6 +1,7 @@
 // Scripts: every distinct script executed (content-addressed, so deduplicated), with its runs by
-// outcome and the tools it called over a window, from the hourly counters (archi/05,
-// "Statistics"), which know no labels. Searched with the query bar of the runs, which reads one
+// outcome and the tools it called since its first run, from the hourly counters (archi/05,
+// "Statistics"), which know no labels; no window of time, a script being what it is whenever it
+// ran. Searched with the query bar of the runs, which reads one
 // tool here, what `GET /v1/scripts` filters by, and one namespace, sent as `Rewind-Namespace`: the
 // scripts of one end user, counted over their runs.
 import { useMemo } from "react";
@@ -11,20 +12,13 @@ import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
 import { TableScroll } from "../components/TableScroll";
-import {
-  legacyScriptsQuery,
-  RANGES,
-  type RangeKey,
-  SCRIPTS_LANGUAGE,
-  scriptsSearch,
-} from "../model/filters";
+import { legacyScriptsQuery, RANGES, SCRIPTS_LANGUAGE, scriptsSearch } from "../model/filters";
 import { formatCount } from "../model/format";
 import { fieldTerm, joinQuery, queryLink, splitTerms } from "../model/query";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../model/types";
 import { useRunStats } from "../state/aggregates";
 import { type ScriptList, useScriptList } from "../state/scripts";
-import { Seg } from "./FilterBits";
-import { useListQuery, useRunQueryValues, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
+import { useListQuery, useRunQueryValues } from "./search";
 import { TableTop } from "./TableTop";
 
 const LEGACY_NAMES = ["label", "tool"] as const;
@@ -205,7 +199,6 @@ export function ScriptTable({
         {list.length === 0 && <Empty>{empty}</Empty>}
         {scripts.hasMore && (
           <div className="list-foot">
-            <span className="num">{formatCount(list.length)} scripts shown</span>
             <button
               type="button"
               className="btn small"
@@ -248,11 +241,9 @@ function useScriptFacets() {
 
 export function ScriptsView() {
   const { q, setQ } = useListQuery(legacyScriptsQuery, LEGACY_NAMES);
-  const [win, setWin] = useWindow();
   const search = scriptsSearch(q);
   const scripts = useScriptList({
     query: search.query,
-    range: win,
     namespace: search.namespace,
     enabled: search.fault === null,
   });
@@ -263,25 +254,20 @@ export function ScriptsView() {
     <div className="page">
       <PageHeader
         title="Scripts"
-        actions={
-          <Seg<RangeKey>
-            label="Window"
-            value={win}
-            onChange={setWin}
-            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-          />
+        info={
+          <p>
+            Every distinct source the runs
+            {search.namespace ? (
+              <>
+                {" "}
+                of <NamespaceName name={search.namespace} />
+              </>
+            ) : null}{" "}
+            executed, the most recently run first, with their runs by outcome and the tools they
+            called.
+          </p>
         }
       />
-      <p className="page-intro">
-        {search.namespace ? (
-          <>
-            The sources the runs of <NamespaceName name={search.namespace} /> executed in{" "}
-            {WINDOW_WORDS[win]}, the most recently run first; their runs are that end user's.
-          </>
-        ) : (
-          `Every distinct source executed in ${WINDOW_WORDS[win]}, the most recently run first.`
-        )}
-      </p>
       <QueryBar
         value={q}
         onSubmit={setQ}
@@ -298,7 +284,6 @@ export function ScriptsView() {
         <ScriptTable
           scripts={scripts}
           scope={scope}
-          empty={`No script matches this search in ${WINDOW_WORDS[win]}.`}
           onPickTool={(tool) =>
             setQ(
               joinQuery(

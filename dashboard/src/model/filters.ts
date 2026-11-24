@@ -197,20 +197,21 @@ export function legacyToolsQuery(params: URLSearchParams): string | null {
   return legacy(params, (p) => p.getAll("toolset").map((t) => `toolset:${quoteValue(t)}`));
 }
 
-/** The statistics a search of the Tools asks for: a window of whole hours, a scope, a prefix. */
+/**
+ * The statistics a search of the Tools asks for: every call since the first (the server reads 24
+ * hours without `since`), of a scope, under a prefix.
+ */
 export function toToolStatsQuery(
-  window: RangeKey,
   search: Pick<ToolsSearch, "namespace" | "prefix">,
-  now: number,
 ): ToolStatsQuery {
-  const query: ToolStatsQuery = {
-    since: new Date(now - RANGES[window]).toISOString(),
-    until: new Date(now).toISOString(),
-  };
+  const query: ToolStatsQuery = { since: SINCE_THE_FIRST };
   if (search.namespace) query.q = `namespace:${quoteValue(search.namespace)}`;
   if (search.prefix) query.prefix = search.prefix;
   return query;
 }
+
+/** A `since` before every run: the statistics since the first. */
+export const SINCE_THE_FIRST = "1970-01-01T00:00:00.000Z";
 
 // Namespaces: `GET /v1/namespaces?prefix=…`
 

@@ -4,9 +4,10 @@
 // organization from a connection, in a dialog that asks once more; the person's other
 // organizations stay open to it.
 import { useState } from "react";
-import { Ago, Empty, LabelList, Loading } from "../../components/bits";
+import { Ago, Empty, Loading } from "../../components/bits";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
+import { RowLabels } from "../../components/RowLabels";
 import { TableScroll } from "../../components/TableScroll";
 import type { Connection } from "../../model/types";
 import { useAccess } from "../../state/access";
@@ -115,7 +116,7 @@ function OrganizationConnections() {
                     </td>
                     <td>{here ? <AccessTag access={here.access} /> : "–"}</td>
                     <td className="wrap">
-                      <LabelList labels={here?.allowedLabels ?? {}} />
+                      <RowLabels labels={here?.allowedLabels ?? {}} empty />
                     </td>
                     <td className="dim">
                       {c.lastUsedAt ? <Ago ms={Date.parse(c.lastUsedAt)} /> : "never"}

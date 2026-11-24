@@ -2,9 +2,10 @@
 // `api_keys:write` creates one (its secret is shown once) and revokes them.
 import { Check, Copy, KeyRound, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Ago, Empty, LabelList, Loading } from "../../components/bits";
+import { Ago, Empty, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { RowLabels } from "../../components/RowLabels";
 import { TableScroll } from "../../components/TableScroll";
 import type { ApiKey } from "../../model/types";
 import { useAccess } from "../../state/access";
@@ -215,7 +216,7 @@ function ApiKeys() {
                     <span className="tag">{k.role}</span>
                   </td>
                   <td className="wrap">
-                    <LabelList labels={k.allowedLabels} />
+                    <RowLabels labels={k.allowedLabels} empty />
                   </td>
                   <td className="dim">
                     <PrincipalName text={k.createdBy} names={names} keys={keys.data} />

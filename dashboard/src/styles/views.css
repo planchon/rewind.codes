@@ -172,10 +172,6 @@ table.grid.tools-table td.tool-name {
   color: var(--ink);
 }
 
-.tools-table td a.label {
-  text-decoration: none;
-}
-
 /* A row that folds the rows under it: the tools of a namespace, the namespaces of the organization */
 .group-toggle {
   display: inline-flex;
@@ -1742,8 +1738,16 @@ table.grid td.waiting-run {
   white-space: nowrap;
 }
 
-.waiting-run > .labels:last-child {
+.waiting-run > .row-labels {
   margin-top: 3px;
+}
+
+/* The run's status and its handle, never apart. */
+.waiting-run-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .wait-kind {
@@ -3368,18 +3372,46 @@ table.grid tr.row-defaults > * {
   max-width: 100%;
 }
 
-/* A run's labels in its cell: whole chips that never shrink, then "+N" (RunCells.tsx). */
-.run-labels {
-  display: flex;
-  flex-wrap: nowrap;
+/* A label whose value is an id: its key and a link's icon, a link to its runs (IdLabel). */
+.label.label-id {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
-  margin-top: 4px;
+  text-decoration: none;
+}
+
+.label.label-id svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.label.label-id .count {
+  margin-left: 0;
+}
+
+a.label:hover {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: var(--surface-3);
+}
+
+/* A row's labels: up to three whole chips on one line that never shrink, else one chip that
+   says how many there are (RowLabels.tsx). */
+.row-labels {
+  display: flex;
   min-width: 0;
 }
 
-.run-labels .label {
+.row-labels .labels {
+  flex-wrap: nowrap;
+}
+
+.row-labels .label {
   flex: none;
   max-width: none;
+}
+
+.run-cell > .row-labels {
+  margin-top: 4px;
 }
 
 .label.more {
@@ -3540,8 +3572,18 @@ table.grid td.end-td {
   color: var(--ink-3);
 }
 
-.labels-card .labels {
-  max-width: 360px;
+/* The card of a row's labels: the labels alone, side by side up to 300 px, as tight as a menu, as
+   wide as their longest line (RowLabels.tsx); its corners concentric with the chips': their radius
+   and the padding between them. */
+.hover-card.labels-card {
+  --labels-card-pad: 6px;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: var(--labels-card-pad);
+  border-radius: calc(var(--radius-label) + var(--labels-card-pad));
+}
+
+.shrunk-lines {
+  display: contents;
 }
 
 .labels-card .label {

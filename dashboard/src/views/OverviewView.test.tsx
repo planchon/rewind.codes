@@ -27,9 +27,9 @@ describe("OverviewView", () => {
     expect(failed.getAttribute("href")).toMatch(/^\/observability\/failures\?q=/);
     expect(failed).toHaveTextContent(/aborted, \d+ cancelled/);
     // Waiting now: whenever they started. The approval, the 10-day sleep, the claimed ask_user, the
-    // quarantined digest; not the triage of the test environment.
+    // quarantined digest, the two goals of a Dax user; not the triage of the test environment.
     const waiting = within(figures).getByRole("link", { name: /Waiting now/ });
-    await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*5\s*1 on a signal/));
+    await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*7\s*3 on a signal/));
     expect(waiting).toHaveAttribute("href", "/observability/waiting?q=%40env%3Aprod");
     expect(within(figures).getByRole("link", { name: /Duration p95/ })).toHaveTextContent(/p50/);
     const quarantined = within(figures).getByRole("link", { name: /Quarantined/ });

@@ -1,30 +1,23 @@
 // Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
-// host-tool group), over a window, for the organization or one end user. Searched with the query
+// host-tool group), since the first call, for the organization or one end user. Searched with the query
 // bar of the runs, which reads `namespace:` and one `tool:` pattern (sent to the server), `tool:`
 // and a tool's name here; its figures are the Overview's tiles, and each group of tools folds under
 // its row.
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Empty, Loading, ProblemView, Time } from "../components/bits";
+import { Empty, Loading, ProblemView } from "../components/bits";
 import { Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { TableScroll } from "../components/TableScroll";
 import { useTooltip } from "../components/Tooltip";
-import {
-  legacyToolsQuery,
-  type RangeKey,
-  TOOLS_LANGUAGE,
-  toolsSearch,
-  toToolStatsQuery,
-} from "../model/filters";
+import { legacyToolsQuery, TOOLS_LANGUAGE, toolsSearch, toToolStatsQuery } from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
 import { type FieldValues, fieldTerm, queryLink, TEXT_VALUES } from "../model/query";
 import type { ToolStats } from "../model/types";
 import { useToolStats } from "../state/aggregates";
-import { Seg } from "./FilterBits";
-import { useListQuery, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
+import { useListQuery } from "./search";
 
 const LEGACY_NAMES = ["toolset"] as const;
 
@@ -190,10 +183,9 @@ function toolValues(tools: ToolStats[]): FieldValues {
 
 export function ToolsView() {
   const { q, setQ } = useListQuery(legacyToolsQuery, LEGACY_NAMES);
-  const [win, setWin] = useWindow();
   const search = toolsSearch(q);
-  const stats = useToolStats(`tools:${win}:${search.namespace ?? ""}:${search.prefix ?? ""}`, () =>
-    toToolStatsQuery(win, search, Date.now()),
+  const stats = useToolStats(`tools:${search.namespace ?? ""}:${search.prefix ?? ""}`, () =>
+    toToolStatsQuery(search),
   );
   const tip = useTooltip();
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
@@ -220,21 +212,9 @@ export function ToolsView() {
       <PageHeader
         title="Tools"
         info={
-          stats.data && (
-            <p>
-              Latency, error rate and retries of the calls completed from{" "}
-              <Time ms={Date.parse(stats.data.since)} /> to{" "}
-              <Time ms={Date.parse(stats.data.until)} />.
-            </p>
-          )
-        }
-        actions={
-          <Seg<RangeKey>
-            label="Window"
-            value={win}
-            onChange={setWin}
-            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-          />
+          <p>
+            Latency, error rate and retries of every call the runs made, per tool, since the first.
+          </p>
         }
       />
       <QueryBar
@@ -255,9 +235,7 @@ export function ToolsView() {
       ) : tools.length === 0 ? (
         <div className="table-wrap">
           <Empty>
-            {all.length === 0
-              ? `No tool call completed in ${WINDOW_WORDS[win]}.`
-              : "No tool matches this search."}
+            {all.length === 0 ? "No run has called a tool yet." : "No tool matches this search."}
           </Empty>
         </div>
       ) : (
@@ -266,7 +244,7 @@ export function ToolsView() {
             <Tile
               label="Calls"
               value={formatCount(calls)}
-              context={`${formatCount(tools.length)} tool${tools.length === 1 ? "" : "s"} in ${WINDOW_WORDS[win]}`}
+              context={`${formatCount(tools.length)} tool${tools.length === 1 ? "" : "s"}`}
             />
             <Tile
               label="Failed"
@@ -296,7 +274,6 @@ export function ToolsView() {
                   <th>Tool</th>
                   <th className="right">Calls</th>
                   <th>Failed</th>
-                  <th>By kind</th>
                   <th className="right">Retries</th>
                   <th className="right">p50</th>
                   <th className="right">p95</th>
@@ -333,7 +310,6 @@ export function ToolsView() {
                           {formatCount(g.errors)}{" "}
                           <span className="dim">· {formatPercent(g.errors, g.calls)}</span>
                         </td>
-                        <td />
                         <td className="right num">{formatCount(g.retries)}</td>
                         <td colSpan={5} />
                       </tr>
@@ -364,26 +340,6 @@ export function ToolsView() {
                                   />
                                 </span>
                                 <span className="num dim">{formatPercent(t.errors, t.calls)}</span>
-                              </span>
-                            </td>
-                            <td>
-                              <span className="labels">
-                                {Object.entries(t.errorKinds)
-                                  .filter(([, n]) => n > 0)
-                                  .sort(([, a], [, b]) => b - a)
-                                  .map(([kind, n]) => (
-                                    <Link
-                                      key={kind}
-                                      className="label"
-                                      to={queryLink(
-                                        "/observability",
-                                        `${fieldTerm("tool", t.tool)} ${fieldTerm("error", kind)}`,
-                                      )}
-                                      title={`Runs where ${t.tool} failed with ${kind}`}
-                                    >
-                                      <span className="k">{kind}</span>&nbsp;{n}
-                                    </Link>
-                                  ))}
                               </span>
                             </td>
                             <td

@@ -142,16 +142,14 @@ describe("Observability: every run", () => {
     await waitFor(() => expect(search(router).get("q")).toBe("status:failed @env:staging"));
   });
 
-  it("shows the labels that fit, the others behind +N, and why a run ended in a card", async () => {
+  it("shows many labels as their count, them in a card, and why a run ended in a card", async () => {
     const user = userEvent.setup();
     const { router } = renderApp("/observability?q=%40goal%3A6afc64fdf4d56d8262048836");
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = within(rows()[0] as HTMLElement);
-    // Whole chips, never cut: those that fit, then +4 for the rest.
-    expect(row.getByRole("button", { name: "dax:iteration" })).toBeVisible();
-    expect(row.getByRole("button", { name: "env:development" })).toBeVisible();
-    expect(row.queryByRole("button", { name: /^goal:/ })).toBeNull();
-    await user.click(row.getByRole("button", { name: "4 more labels" }));
+    // More than three labels: none in the row, their count instead.
+    expect(row.queryByRole("button", { name: /^dax:/ })).toBeNull();
+    await user.click(row.getByRole("button", { name: "6 labels" }));
     const labels = await screen.findByRole("dialog", { name: "The run's 6 labels" });
     expect(labels).toHaveTextContent("routine:notifications_daily");
     await user.click(within(labels).getByRole("button", { name: /^kind:routine/ }));
@@ -336,6 +334,7 @@ describe("Observability: the waiting runs", () => {
       'signal "approval"',
       "sleep and timers",
       "host tool · ask_user",
+      'signal "notify"',
       "approval · ask_user",
       "tool call · github.list_pull_requests",
     ]);
@@ -345,9 +344,9 @@ describe("Observability: the waiting runs", () => {
     // Counts by tab, from the statistics of the waiting runs.
     const tabs = screen.getByRole("tablist", { name: "What the runs wait for" });
     await waitFor(() =>
-      expect(within(tabs).getByRole("tab", { name: /All/ })).toHaveTextContent("All 5"),
+      expect(within(tabs).getByRole("tab", { name: /All/ })).toHaveTextContent("All 7"),
     );
-    expect(within(tabs).getByRole("tab", { name: /Signals/ })).toHaveTextContent("Signals 1");
+    expect(within(tabs).getByRole("tab", { name: /Signals/ })).toHaveTextContent("Signals 3");
     expect(within(tabs).getByRole("tab", { name: /Approvals/ })).toHaveTextContent("Approvals 1");
     expect(within(tabs).getByRole("tab", { name: /Timers/ })).toHaveTextContent("Timers 1");
     expect(within(tabs).getByRole("tab", { name: /Tools/ })).toHaveTextContent("Tools 2");
@@ -373,14 +372,52 @@ describe("Observability: the waiting runs", () => {
     expect(within(approval).getByText("#2 ask_user")).toBeInTheDocument();
   });
 
+  it("names a run's namespace by its display name, and shows many labels as their count", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/observability/waiting");
+    const table = await screen.findByRole("table");
+    // chen is "Chen Logistics": its handle says so; the id stays in its link and its title.
+    const digest = within(table).getByText("daily-digest").closest("a") as HTMLElement;
+    await waitFor(() => expect(digest).toHaveTextContent(/^Chen Logistics\/daily-digest\//));
+    expect(digest.getAttribute("href")).toMatch(/^\/runs\/chen\/daily-digest\//);
+    // A namespace without one shows its id.
+    const goal = within(table).getAllByRole("button", { name: "6 labels" })[0] as HTMLElement;
+    const row = goal.closest("tr") as HTMLElement;
+    expect(within(row).getByText("6afc64fd2de4a3f3f4c9e127")).toBeInTheDocument();
+    // Six labels: none in the row, all in the card, each a filter.
+    expect(within(row).queryByRole("button", { name: /^dax:/ })).toBeNull();
+    await user.click(goal);
+    const card = await screen.findByRole("dialog", { name: "The run's 6 labels" });
+    // The card holds the labels and nothing else; an id never shows: its label is its key, a link
+    // to every run with it.
+    expect(card).toHaveTextContent(/^dax:iterationenv:prodgoaliterationkind:goalroutine$/);
+    expect(card).not.toHaveTextContent("6afbb6ae");
+    expect(within(card).getByRole("link", { name: "goal" })).toHaveAttribute(
+      "href",
+      "/observability?q=%40goal%3A6afbb6ae56fc7339557eb771",
+    );
+    expect(within(card).getByRole("link", { name: "goal" })).toHaveAttribute(
+      "title",
+      "goal:6afbb6ae56fc7339557eb771\nEvery run with this label",
+    );
+    // A word stays a filter of the list.
+    await user.click(within(card).getByRole("button", { name: /^kind:goal/ }));
+    await waitFor(() => expect(search(router).get("q")).toBe("@kind:goal"));
+  });
+
   it("reads each script once, whatever the number of its waiting runs", async () => {
     const { requested } = renderApp("/observability/waiting");
     await screen.findByRole("table");
     await waitFor(() =>
-      expect(document.querySelectorAll(".paused-line code:not(:empty)").length).toBe(5),
+      expect(document.querySelectorAll(".paused-line code:not(:empty)").length).toBe(7),
     );
-    // Two triage runs, two onboarding runs, one digest run.
-    for (const script of [SCRIPTS.TRIAGE, SCRIPTS.ONBOARDING, SCRIPTS.DIGEST])
+    // Two triage runs, two onboarding runs, one digest run, two notification runs.
+    for (const script of [
+      SCRIPTS.TRIAGE,
+      SCRIPTS.ONBOARDING,
+      SCRIPTS.DIGEST,
+      SCRIPTS.DEV_NOTIFICATIONS,
+    ])
       expect(requested(`/v1/scripts/${script.digest}`)).toHaveLength(1);
   });
 
