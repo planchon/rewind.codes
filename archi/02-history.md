@@ -89,9 +89,10 @@ reproduced by replay; `run_aborted` is the engine ending the run, and replay sto
 The run's state is a pure function of its history (`RunState::from_history` in
 `rewind-core`):
 
-- `status`: `queued` (only `run_started` enqueued: no step committed yet), `active`, `completed`,
-  `failed`, `cancelled` (a `fail_run` whose error is `CancelledError`), `aborted`. A run is
-  active until it has ended; the last four are its endings.
+- its phase: `queued` (only `run_started` enqueued: no step committed yet), active (not ended),
+  or one of the endings `completed`, `failed`, `cancelled` (a `fail_run` whose error is
+  `CancelledError`) and `aborted`. Active is not a status: the partition owner tells `running`
+  from `waiting` with the calls' states it stores ([statuses](03-execution.md#activations)).
 - pending calls (`seq → action`), pending timers (`seq → fire_at`), awaited signals.
 - `started_at`, `updated_at`.
 
