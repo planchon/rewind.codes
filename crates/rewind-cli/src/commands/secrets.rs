@@ -201,7 +201,7 @@ fn listed(list: &SecretList, namespace: Option<&NamespaceName>) -> String {
                         format!("{} (run {run}, {})", last.at, namespace.as_str())
                     }
                     (Some(run), None) => format!("{} (run {run})", last.at),
-                    (None, _) => format!("{} (toolset registration)", last.at),
+                    (None, _) => format!("{} (action set registration)", last.at),
                 },
             ),
         ]);

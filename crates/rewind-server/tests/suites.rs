@@ -9,11 +9,11 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::CreateActionSet;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{ForkRun, StartRun};
 use rewind_api::scripts::TestRequest;
 use rewind_api::testing::{Test, TestFrom, TestInput, TestProblem};
-use rewind_api::toolsets::CreateToolset;
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, TestRetirement, TestUpdate, WorkflowQuery,
 };
@@ -46,11 +46,11 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn triage(toolset: &str, script: &str) -> CreateWorkflow {
+fn triage(action_set: &str, script: &str) -> CreateWorkflow {
     CreateWorkflow {
         name: "triage".into(),
         description: None,
-        toolset: toolset.into(),
+        action_set: action_set.into(),
         script: script.into(),
         input: json!({
             "type": "object",
@@ -93,12 +93,12 @@ fn closes_three() -> Test {
 async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset::default())
+    let action_set = harness
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
 
-    let mut first = triage(&toolset.id, TRIAGE);
+    let mut first = triage(&action_set.id, TRIAGE);
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     let v1 = harness.create_workflow(&first).await.unwrap();
     assert_eq!(v1.parent, None);
@@ -110,7 +110,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     // The regression is refused by the inherited test, and nothing is saved.
     let refused = problem(
         harness
-            .create_workflow(&triage(&toolset.id, TWO))
+            .create_workflow(&triage(&action_set.id, TWO))
             .await
             .unwrap_err(),
     );
@@ -133,7 +133,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     );
 
     // Updating the expectation with a reason saves it, its parent the first version.
-    let mut second = triage(&toolset.id, TWO);
+    let mut second = triage(&action_set.id, TWO);
     second.update = vec![TestUpdate {
         name: "closes three once approved".into(),
         reason: "two issues are kept open for the next sprint".into(),
@@ -150,7 +150,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     assert_eq!(v2.updated[0].to, v2.tests[0].digest);
 
     // Retiring needs a reason, and names an inherited test.
-    let mut retired = triage(&toolset.id, TRIAGE);
+    let mut retired = triage(&action_set.id, TRIAGE);
     retired.retire = vec![TestRetirement {
         names: vec!["closes four".into()],
         reason: "gone".into(),
@@ -179,7 +179,7 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     assert!(harness.list_workflows(&with_script("nope")).await.is_err());
 
     // A test given inline cannot claim to be recorded.
-    let mut forged = triage(&toolset.id, TRIAGE);
+    let mut forged = triage(&action_set.id, TRIAGE);
     let mut test = closes_three();
     test.name = "forged".into();
     test.origin = Some(rewind_api::testing::TestOrigin {
@@ -199,22 +199,22 @@ async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
     let server = TestServer::start(&[]).await;
     let tenant_wide = server.key(BuiltInRole::Harness, &[]).await;
     let dev = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
-    let toolset = tenant_wide
-        .create_toolset(&CreateToolset::default())
+    let action_set = tenant_wide
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
-    let mut first = triage(&toolset.id, TRIAGE);
+    let mut first = triage(&action_set.id, TRIAGE);
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     let v1 = tenant_wide.create_workflow(&first).await.unwrap();
 
     // The first version under env=dev starts its own lineage: no parent, no test to pass.
     let ours = dev
-        .create_workflow(&triage(&toolset.id, TWO))
+        .create_workflow(&triage(&action_set.id, TWO))
         .await
         .unwrap();
     assert_eq!((ours.parent.as_deref(), ours.tests.len()), (None, 0));
     // It cannot name a parent it does not see.
-    let mut named = triage(&toolset.id, TRIAGE);
+    let mut named = triage(&action_set.id, TRIAGE);
     named.parent = Some(v1.version.clone());
     assert_eq!(
         problem(dev.create_workflow(&named).await.unwrap_err()).status,
@@ -225,7 +225,7 @@ async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
     // the regression fails the test it inherits.
     let refused = problem(
         tenant_wide
-            .create_workflow(&triage(&toolset.id, TWO))
+            .create_workflow(&triage(&action_set.id, TWO))
             .await
             .unwrap_err(),
     );
@@ -236,11 +236,11 @@ async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
 async fn post_test_runs_a_workflows_suite_against_a_candidate() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset::default())
+    let action_set = harness
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
-    let mut first = triage(&toolset.id, TRIAGE);
+    let mut first = triage(&action_set.id, TRIAGE);
     first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
     harness.create_workflow(&first).await.unwrap();
 
@@ -272,12 +272,12 @@ async fn post_test_runs_a_workflows_suite_against_a_candidate() {
 async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset::default())
+    let action_set = harness
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
     harness
-        .create_workflow(&triage(&toolset.id, TRIAGE))
+        .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
     let mut runs = Vec::new();
@@ -326,7 +326,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     assert_eq!(named.tests[0].run, runs[0]);
 
     // The recorded tests join a suite by digest, through the gate.
-    let mut saved = triage(&toolset.id, TRIAGE);
+    let mut saved = triage(&action_set.id, TRIAGE);
     saved.description = Some("with its recorded tests".into());
     saved.tests = vec![
         TestInput::Digest(recorded.tests[0].digest.clone()),
@@ -339,7 +339,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     let corrected = harness
         .test(&TestRequest {
             script: Some(TWO.into()),
-            toolset: Some(toolset.id.clone()),
+            action_set: Some(action_set.id.clone()),
             tests: vec![TestInput::From(TestFrom {
                 from: named.tests[0].digest.clone(),
                 expect: serde_json::from_value(json!({ "output": { "closed": 2 } })).unwrap(),

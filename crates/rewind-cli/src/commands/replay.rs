@@ -161,12 +161,12 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
         return Ok(report);
     }
     let executor = executor()?;
-    let compiled = executor.compile(&journal.script, &journal.toolset);
+    let compiled = executor.compile(&journal.script, &journal.action_set);
     let run = RunRef::new(TenantId::local(), journal.run);
     let input = ReplayInput {
         run: &run,
         compiled: compiled.as_ref(),
-        toolset: &journal.toolset,
+        action_set: &journal.action_set,
         history: &journal.entries,
     };
     match replay::replay(&executor, &replay::InJournal, input).await {

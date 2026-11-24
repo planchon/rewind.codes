@@ -11,7 +11,7 @@ use rewind_core::RunId;
 
 use super::namespaces::Quotas;
 
-/// The tenant a run, a script, a toolset or a payload belongs to: 1 to 64 ASCII letters,
+/// The tenant a run, a script, an action set or a payload belongs to: 1 to 64 ASCII letters,
 /// digits, `-` and `_`. It appears in storage keys and blob paths (`{tenant}/sha256/…`), hence
 /// the restricted alphabet.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

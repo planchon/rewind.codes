@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
-use rewind_core::{Epoch, Script, Timestamp, Toolset};
+use rewind_core::{ActionSet, Epoch, Script, Timestamp};
 use rewind_engine::ports::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
     ScriptInstance, StartScript,
@@ -75,8 +75,12 @@ impl ScriptExecutor for V8Executor {
         &self.epochs
     }
 
-    fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
-        compile::compile(script, toolset, epochs::latest())
+    fn compile(
+        &self,
+        script: &Script,
+        action_set: &ActionSet,
+    ) -> Result<CompiledScript, InvalidScript> {
+        compile::compile(script, action_set, epochs::latest())
     }
 
     fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {

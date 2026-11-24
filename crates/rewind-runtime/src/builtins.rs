@@ -1,6 +1,6 @@
 //! What the glue sends to the built-in tools, and what it expects back (`archi/04-tools.md`,
 //! "Routes"). The dispatcher that implements them (`rewind-mcp` for `http`, the engine for
-//! `webhook`) and whoever pins a toolset follow the same shapes, recorded in
+//! `webhook`) and whoever pins an action set follow the same shapes, recorded in
 //! `archi/08-decisions.md`.
 //!
 //! **`webhook(name)`** calls the tool `webhook` with `{"name": string}`, and resolves to its

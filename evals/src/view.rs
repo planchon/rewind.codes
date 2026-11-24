@@ -1,5 +1,5 @@
 //! The engine's state as the HTTP API `/v1` shows it (`rewind-api`'s DTOs), built as `rewind-server`
-//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`, `http/toolsets.rs`,
+//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`, `http/action_sets.rs`,
 //! `http/search.rs`), so that the agent tools render what they render from the server's answers:
 //! a run from its head and its history, a run of a list from its summary.
 //!
@@ -123,7 +123,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EdgeError> {
         }),
         script: record.script.to_hex(),
         script_title,
-        toolset: record.toolset.to_hex(),
+        action_set: record.action_set.to_hex(),
         epoch: record.epoch.0,
         mode: started.map_or(rewind_api::common::RunMode::Live, |started| {
             started.mode.into()
@@ -329,7 +329,7 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
         // The script's title is not the index's: the caller gives it.
         script_title: None,
         headline: run.headline.clone(),
-        toolset: run.toolset.to_hex(),
+        action_set: run.action_set.to_hex(),
         labels: Labels::from(run.labels.clone()),
         started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
         ended_at: run.ended_at.map(timestamp),
@@ -517,15 +517,15 @@ fn namespace_of(
 }
 
 /// A workflow version, as `GET /v1/workflows/{name}` shows it (`rewind-server`'s
-/// `http/workflows.rs`, `view`): its declaration generated as a toolset that pins it alone
+/// `http/workflows.rs`, `view`): its declaration generated as an action set that pins it alone
 /// generates it.
 pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
     use rewind_api::workflows::{RetiredTest, SuiteTest, UpdatedTest};
 
     let workflow = &stored.workflow;
-    let declarations = rewind_core::Toolset::empty()
+    let declarations = rewind_core::ActionSet::empty()
         .with_workflows([workflow.pinned()])
-        .map(|toolset| rewind_codegen::generate(&toolset, &BTreeMap::new()))
+        .map(|action_set| rewind_codegen::generate(&action_set, &BTreeMap::new()))
         .ok();
     let name = format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name());
     let declaration = declarations
@@ -536,7 +536,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
         version: workflow.version().to_hex(),
         number: stored.number,
         description: workflow.description().map(str::to_owned),
-        toolset: workflow.toolset().to_hex(),
+        action_set: workflow.action_set().to_hex(),
         script: workflow.script().to_hex(),
         input: workflow.schemas().input.clone(),
         output: workflow.schemas().output.clone(),
@@ -548,7 +548,7 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
             .map(|(server, secret)| (server.to_owned(), secret.to_string()))
             .collect(),
         created_at: timestamp(stored.created_at),
-        declarations: rewind_api::toolsets::Declarations {
+        declarations: rewind_api::action_sets::Declarations {
             dts: declaration
                 .map(|declaration| declaration.typescript.clone())
                 .unwrap_or_default(),
@@ -602,21 +602,21 @@ pub fn payload_of(event: &Event) -> Option<&rewind_core::Payload> {
     }
 }
 
-/// The servers of a toolset, with their tools counted (`rewind-server`'s `toolsets::servers`).
-fn servers(toolset: &rewind_core::Toolset) -> Vec<rewind_api::toolsets::ServerSummary> {
+/// The servers of an action set, with their tools counted (`rewind-server`'s `action_sets::servers`).
+fn servers(action_set: &rewind_core::ActionSet) -> Vec<rewind_api::action_sets::ServerSummary> {
     use rewind_core::{McpTransport, ToolRoute};
-    toolset
+    action_set
         .servers()
         .iter()
-        .map(|server| rewind_api::toolsets::ServerSummary {
+        .map(|server| rewind_api::action_sets::ServerSummary {
             name: server.name.clone(),
             transport: match server.transport {
-                McpTransport::Http { .. } => rewind_api::toolsets::McpTransport::Http,
-                McpTransport::Stdio { .. } => rewind_api::toolsets::McpTransport::Stdio,
+                McpTransport::Http { .. } => rewind_api::action_sets::McpTransport::Http,
+                McpTransport::Stdio { .. } => rewind_api::action_sets::McpTransport::Stdio,
             },
-            auth: rewind_api::toolsets::Auth::of_core(&server.auth),
+            auth: rewind_api::action_sets::Auth::of_core(&server.auth),
             tools: u32::try_from(
-                toolset
+                action_set
                     .tools()
                     .iter()
                     .filter(|tool| matches!(&tool.route, ToolRoute::Mcp { server: of } if *of == server.name))
@@ -627,17 +627,19 @@ fn servers(toolset: &rewind_core::Toolset) -> Vec<rewind_api::toolsets::ServerSu
         .collect()
 }
 
-/// A stored toolset, as `POST /v1/toolsets` shows it (`rewind-server`'s `toolsets::view`).
-pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::toolsets::Toolset {
-    use rewind_api::toolsets::{OnInterruption, Route, Tool, ToolPolicy};
+/// A stored action set, as `POST /v1/action-sets` shows it (`rewind-server`'s `action_sets::view`).
+pub fn action_set(
+    stored: &rewind_engine::ports::StoredActionSet,
+) -> rewind_api::action_sets::ActionSet {
+    use rewind_api::action_sets::{OnInterruption, Route, Tool, ToolPolicy};
     use rewind_core::{Interruption, ToolRoute};
-    let toolset = &stored.toolset;
-    rewind_api::toolsets::Toolset {
-        id: toolset.digest().to_hex(),
-        servers: servers(toolset),
+    let action_set = &stored.action_set;
+    rewind_api::action_sets::ActionSet {
+        id: action_set.digest().to_hex(),
+        servers: servers(action_set),
         // The evals' world has MCP servers only.
         apis: Vec::new(),
-        tools: toolset
+        tools: action_set
             .tools()
             .iter()
             .map(|tool| Tool {
@@ -671,7 +673,7 @@ pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::tool
                 },
             })
             .collect(),
-        workflows: toolset
+        workflows: action_set
             .workflows()
             .iter()
             .map(|workflow| rewind_api::workflows::PinnedWorkflow {
@@ -680,7 +682,7 @@ pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::tool
                 description: workflow.description.clone(),
             })
             .collect(),
-        declarations: rewind_api::toolsets::Declarations {
+        declarations: rewind_api::action_sets::Declarations {
             dts: stored.declarations.typescript.clone(),
             prompt: stored.declarations.prompt.clone(),
         },

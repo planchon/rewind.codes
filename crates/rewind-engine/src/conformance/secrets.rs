@@ -355,7 +355,7 @@ pub async fn reads_are_counted_per_day_with_the_last_read<S: SecretStore>(store:
     assert_eq!(listed, [all], "a listing gives the same metadata");
 }
 
-/// A toolset's registration reads a secret to list a server's tools before any run exists: the
+/// An action set's registration reads a secret to list a server's tools before any run exists: the
 /// read is counted, and the last read names no run until a run reads it again.
 pub async fn a_registration_s_read_names_no_run<S: SecretStore>(store: &S) {
     let acme = tenant("acme");

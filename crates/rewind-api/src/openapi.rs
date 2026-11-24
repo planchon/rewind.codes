@@ -32,7 +32,7 @@ use crate::webhooks::{
 #[openapi(
     info(
         title = "Rewind API",
-        description = "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, \
+        description = "The HTTP API /v1 of Rewind: action sets, scripts, runs, host-tool tasks, \
             webhooks, reading, the organization, access, namespaces and the server; and `/auth`, \
             the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
             (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
@@ -55,9 +55,9 @@ use crate::webhooks::{
     ),
     servers((url = "/", description = "The server that serves this document.")),
     paths(
-        operations::create_toolset,
-        operations::list_toolsets,
-        operations::get_toolset_declarations,
+        operations::create_action_set,
+        operations::list_action_sets,
+        operations::get_action_set_declarations,
         operations::search_tools,
         operations::create_workflow,
         operations::list_workflows,
@@ -186,7 +186,7 @@ use crate::webhooks::{
     modifiers(&Conventions),
     security(("bearer" = [])),
     tags(
-        (name = "toolsets", description = "Register and pin toolsets: their MCP servers, their APIs from OpenAPI documents and how each authenticates its calls; their declarations."),
+        (name = "action-sets", description = "Register and pin action sets: their MCP servers, their APIs from OpenAPI documents and how each authenticates its calls; their declarations."),
         (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
@@ -519,6 +519,10 @@ mod operations {
     use crate::access::{
         ApiKey, ApiKeyList, CreateApiKey, Grant, PermissionList, PutRole, Role, RoleList, SetGrant,
     };
+    use crate::action_sets::{
+        ActionSet, ActionSetList, CreateActionSet, DeclarationsQuery, DeclarationsText,
+        SearchQuery, ToolSearchResults,
+    };
     use crate::admin::ServerInfo;
     use crate::auth::{
         AuthConfig, AuthState, Callback, EmailVerification, GithubSignIn, MagicAuthRequest,
@@ -559,10 +563,6 @@ mod operations {
         CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamEvent, TaskStreamQuery,
     };
     use crate::testing::{Test, TestRun};
-    use crate::toolsets::{
-        CreateToolset, DeclarationsQuery, DeclarationsText, SearchQuery, ToolSearchResults,
-        Toolset, ToolsetList,
-    };
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
     use crate::workflows::{
         CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowPage, WorkflowQuery,
@@ -570,57 +570,57 @@ mod operations {
     };
 
     // ---------------------------------------------------------------------------------------
-    // Toolsets
+    // Action sets
 
-    /// Register and pin a toolset
+    /// Register and pin an action set
     ///
     /// Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents
     /// (one tool per operation), pins their schemas, policies and `auth`, and returns the
-    /// toolset with its declarations, for the model's prompt, and the API operations it left
-    /// out. Content-addressed: registering the same toolset again returns it (200). `secrets`
+    /// action set with its declarations, for the model's prompt, and the API operations it left
+    /// out. Content-addressed: registering the same action set again returns it (200). `secrets`
     /// attaches organization's secrets to list the tools of an MCP server that needs one
-    /// (`secrets:use`). Requires `toolsets:write`.
+    /// (`secrets:use`). Requires `actions:write`.
     #[utoipa::path(
-        post, path = "/v1/toolsets", tag = "toolsets", operation_id = "createToolset",
-        request_body = CreateToolset,
+        post, path = "/v1/action-sets", tag = "action-sets", operation_id = "createActionSet",
+        request_body = CreateActionSet,
         responses(
-            (status = 201, description = "Registered.", body = Toolset),
-            (status = 200, description = "Already registered.", body = Toolset),
-            (status = 422, description = "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-toolset`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`).", body = Problem, content_type = "application/problem+json"),
-            (status = 502, description = "An MCP server or an OpenAPI document's URL cannot be reached (`toolset-unavailable`).", body = Problem, content_type = "application/problem+json"),
+            (status = 201, description = "Registered.", body = ActionSet),
+            (status = 200, description = "Already registered.", body = ActionSet),
+            (status = 422, description = "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "An MCP server or an OpenAPI document's URL cannot be reached (`action-set-unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn create_toolset() {}
+    pub(super) fn create_action_set() {}
 
-    /// List the toolsets
+    /// List the action sets
     ///
-    /// The toolsets the tenant registered, by id, with their servers and tool names.
+    /// The action sets the tenant registered, by id, with their servers and tool names.
     #[utoipa::path(
-        get, path = "/v1/toolsets", tag = "toolsets", operation_id = "listToolsets",
-        responses((status = 200, description = "Every toolset of the tenant.", body = ToolsetList))
+        get, path = "/v1/action-sets", tag = "action-sets", operation_id = "listActionSets",
+        responses((status = 200, description = "Every action set of the tenant.", body = ActionSetList))
     )]
-    pub(super) fn list_toolsets() {}
+    pub(super) fn list_action_sets() {}
 
-    /// The toolset's declarations
+    /// The action set's declarations
     #[utoipa::path(
-        get, path = "/v1/toolsets/{id}/declarations", tag = "toolsets", operation_id = "getToolsetDeclarations",
-        params(("id" = String, Path, description = "The toolset's id."), DeclarationsQuery),
+        get, path = "/v1/action-sets/{id}/declarations", tag = "action-sets", operation_id = "getActionSetDeclarations",
+        params(("id" = String, Path, description = "The action set's id."), DeclarationsQuery),
         responses(
             (status = 200, description = "The declarations in the requested format.", body = DeclarationsText),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn get_toolset_declarations() {}
+    pub(super) fn get_action_set_declarations() {}
 
-    /// Search the toolset's tools (`search_tools`)
+    /// Search the action set's tools (`search_tools`)
     ///
-    /// For toolsets too large for the prompt: the declarations of the tools matching a query.
+    /// For action sets too large for the prompt: the declarations of the tools matching a query.
     #[utoipa::path(
-        get, path = "/v1/toolsets/{id}/search", tag = "toolsets", operation_id = "searchTools",
-        params(("id" = String, Path, description = "The toolset's id."), SearchQuery),
+        get, path = "/v1/action-sets/{id}/search", tag = "action-sets", operation_id = "searchTools",
+        params(("id" = String, Path, description = "The action set's id."), SearchQuery),
         responses(
             (status = 200, description = "The matching tools, best first.", body = ToolSearchResults),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn search_tools() {}
@@ -630,7 +630,7 @@ mod operations {
 
     /// Save a workflow (`save_workflow`)
     ///
-    /// Checks the workflow's script against its toolset and its own schemas, then runs its
+    /// Checks the workflow's script against its action set and its own schemas, then runs its
     /// suite: its parent's tests, minus those it retires and with those it updates, each with a
     /// reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
     /// every test passes. Saving the same workflow again returns the version saved first (200).
@@ -643,7 +643,7 @@ mod operations {
         responses(
             (status = 201, description = "Saved as a new version.", body = Workflow),
             (status = 200, description = "Saved earlier.", body = Workflow),
-            (status = 404, description = "No such toolset, or parent.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set, or parent.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
             (status = 503, description = "A server without the worker role, with tests to run (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
@@ -709,7 +709,7 @@ mod operations {
 
     /// Type-check a script (`check_script`)
     ///
-    /// Against the sandbox lib and the toolset's declarations, in strict mode, with the checks
+    /// Against the sandbox lib and the action set's declarations, in strict mode, with the checks
     /// at start and the checker's own rules. Nothing runs.
     #[utoipa::path(
         post, path = "/v1/check", tag = "scripts", operation_id = "checkScript",
@@ -717,7 +717,7 @@ mod operations {
         request_body = CheckRequest,
         responses(
             (status = 200, description = "The diagnostics; `ok` when none is an error.", body = CheckResult),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn check_script() {}
@@ -726,14 +726,14 @@ mod operations {
     ///
     /// In virtual time, each test against its world: rules, mock handlers and a cassette. No
     /// tool is really called. With `workflow`, the suite of that version runs too, against the
-    /// given script or toolset. Served by a server with the worker role.
+    /// given script or action set. Served by a server with the worker role.
     #[utoipa::path(
         post, path = "/v1/test", tag = "scripts", operation_id = "testScript",
         params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = TestRequest,
         responses(
             (status = 200, description = "Each test's outcome, and the expectations that do not hold.", body = TestRun),
-            (status = 404, description = "No such toolset, workflow or stored test.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set, workflow or stored test.", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The script was refused at start (`invalid-script`), or a test (`invalid-test`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -802,7 +802,7 @@ mod operations {
         responses(
             (status = 201, description = "Started.", body = Run),
             (status = 200, description = "Started earlier with the same `Idempotency-Key`.", body = Run),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
             (status = 413, description = "The input is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The script was refused before any run exists (`invalid-script`), with `diagnostics`; or the input does not match the workflow (`invalid-input`).", body = Problem, content_type = "application/problem+json"),
             (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
@@ -1059,7 +1059,7 @@ mod operations {
 
     /// Follow the host-tool tasks handed to this worker (server-sent events)
     ///
-    /// The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among
+    /// The tasks of the host tools it names (`actionSet`, `tools`), as they become ready, among
     /// the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
     /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
     /// `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
@@ -1075,7 +1075,7 @@ mod operations {
         params(TaskStreamQuery),
         responses(
             (status = 200, description = "A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`.", body = TaskStreamEvent, content_type = "text/event-stream"),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn stream_tasks() {}

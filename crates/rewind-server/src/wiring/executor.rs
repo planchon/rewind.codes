@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use rewind_core::{Epoch, Script, Timestamp, Toolset};
+use rewind_core::{ActionSet, Epoch, Script, Timestamp};
 use rewind_engine::ports::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
     ScriptInstance, StartScript,
@@ -27,8 +27,12 @@ impl ScriptExecutor for Executor {
         self.v8.epochs()
     }
 
-    fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
-        self.v8.compile(script, toolset)
+    fn compile(
+        &self,
+        script: &Script,
+        action_set: &ActionSet,
+    ) -> Result<CompiledScript, InvalidScript> {
+        self.v8.compile(script, action_set)
     }
 
     fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {

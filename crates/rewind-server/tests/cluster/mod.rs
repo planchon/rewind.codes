@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Stream, StreamExt as _};
-use rewind_core::{JsonValue, PartitionId, RunId, RunStatus, Script, Timestamp, Toolset};
+use rewind_core::{ActionSet, JsonValue, PartitionId, RunId, RunStatus, Script, Timestamp};
 use rewind_engine::StartRun;
 use rewind_engine::adapters::{
     ChangeStream, ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -317,7 +317,7 @@ impl World {
 
 /// A start of `source` in `namespace`, with no tool.
 pub fn start(source: &str, namespace: &NamespaceName, input: JsonValue) -> StartRun {
-    let mut request = StartRun::new(Script::new(source), Toolset::empty(), input);
+    let mut request = StartRun::new(Script::new(source), ActionSet::empty(), input);
     request.namespace = namespace.clone();
     request
 }

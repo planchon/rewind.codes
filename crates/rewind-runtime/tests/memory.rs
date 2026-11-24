@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use rewind_core::{Epoch, RunId, RunStatus, Script, Seed, Toolset};
+use rewind_core::{ActionSet, Epoch, RunId, RunStatus, Script, Seed};
 use rewind_engine::adapters::StaticDispatcher;
 use rewind_engine::ports::{Delivery, RunRef, ScriptExecutor, ScriptInstance, StartScript};
 use rewind_engine::{CacheConfig, StartRun};
@@ -45,9 +45,9 @@ fn start(executor: &V8Executor, input: u64) -> StartScript {
     StartScript {
         run_id: RunId::from_u128(1),
         compiled: executor
-            .compile(&Script::new(HOARDER), &Toolset::default())
+            .compile(&Script::new(HOARDER), &ActionSet::default())
             .unwrap(),
-        toolset: Toolset::default(),
+        action_set: ActionSet::default(),
         input: json!(input),
         seed: Seed::from_bytes([0; 32]),
         epoch: Epoch(1),
@@ -89,7 +89,7 @@ async fn three_hoarders(cache: CacheConfig) -> usize {
     .await;
     let mut runs: Vec<RunRef> = Vec::new();
     for _ in 0..3 {
-        let request = StartRun::new(Script::new(HOARDER), Toolset::default(), json!(2_000_000));
+        let request = StartRun::new(Script::new(HOARDER), ActionSet::default(), json!(2_000_000));
         runs.push(world.start(request).await.unwrap());
         world.idle().await;
     }

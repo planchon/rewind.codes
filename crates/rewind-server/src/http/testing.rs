@@ -18,7 +18,7 @@ use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
 };
 use rewind_api::workflows::{RecordTests, RecordedTest, RecordedTests, SkippedRun};
-use rewind_core::{Cassette, Digest, Script, Test, Toolset, WorkflowSchemas};
+use rewind_core::{ActionSet, Cassette, Digest, Script, Test, WorkflowSchemas};
 use rewind_engine::edge::{RecordFrom, RecordingError};
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{CatalogStore, StoredWorkflow, TenantId};
@@ -33,7 +33,7 @@ use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::Body;
-use crate::http::{search, toolsets, workflows};
+use crate::http::{action_sets, search, workflows};
 
 /// A run of tests may not take longer than this, in wall-clock time.
 const TESTS_TIMEOUT: Duration = Duration::from_secs(300);
@@ -237,14 +237,14 @@ pub(super) async fn test(
             ));
         }
     };
-    let toolset: Toolset = match (&request.toolset, &version) {
-        (Some(id), _) => toolsets::stored(&app, tenant, id).await?.toolset,
+    let action_set: ActionSet = match (&request.action_set, &version) {
+        (Some(id), _) => action_sets::stored(&app, tenant, id).await?.action_set,
         (None, Some(version)) => {
-            toolsets::stored(&app, tenant, &version.workflow.toolset().to_hex())
+            action_sets::stored(&app, tenant, &version.workflow.action_set().to_hex())
                 .await?
-                .toolset
+                .action_set
         }
-        (None, None) => app.default_toolset(tenant).await?.toolset,
+        (None, None) => app.default_action_set(tenant).await?.action_set,
     };
     super::scripts::check_lines(&script, &bounds)?;
     let mut tests = Vec::with_capacity(request.tests.len());
@@ -271,7 +271,7 @@ pub(super) async fn test(
         &app,
         &Subject {
             script: &script,
-            toolset: &toolset,
+            action_set: &action_set,
             interface,
         },
         &tests,
@@ -291,7 +291,7 @@ pub(super) async fn get(
     caller: Caller,
     Path(digest): Path<String>,
 ) -> Result<Json<ApiTest>, ApiError> {
-    caller.require(Permission::ToolsetsRead)?;
+    caller.require(Permission::ActionsRead)?;
     let not_found = || ApiError::not_found(format!("no test {digest} for this tenant"));
     let parsed = Digest::from_hex(&digest).map_err(|_| not_found())?;
     let record = app
@@ -421,14 +421,14 @@ pub(crate) async fn gate_fork(
     if tests.is_empty() {
         return Ok(());
     }
-    let toolset = toolsets::stored(app, tenant, &stored.workflow.toolset().to_hex())
+    let action_set = action_sets::stored(app, tenant, &stored.workflow.action_set().to_hex())
         .await?
-        .toolset;
+        .action_set;
     let reports = run(
         app,
         &Subject {
             script,
-            toolset: &toolset,
+            action_set: &action_set,
             interface: Some(stored.workflow.schemas()),
         },
         &tests,

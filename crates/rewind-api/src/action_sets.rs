@@ -1,4 +1,4 @@
-//! Toolsets: registering and pinning them, with their MCP servers, their APIs read from OpenAPI
+//! Action sets: registering and pinning them, with their MCP servers, their APIs read from OpenAPI
 //! documents and how each authenticates its calls; their declarations; search
 //! (`archi/04-tools.md`).
 
@@ -10,10 +10,10 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Duration;
 
-/// `POST /v1/toolsets`: MCP servers, APIs, host tools and the `http` tool, with a policy per
+/// `POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` tool, with a policy per
 /// tool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI
-/// documents, and pins their schemas. The toolset is content-addressed: registering the same
-/// toolset twice gives the same id. It holds no secret: a run attaches its secrets when it
+/// documents, and pins their schemas. The action set is content-addressed: registering the same
+/// action set twice gives the same id. It holds no secret: a run attaches its secrets when it
 /// starts.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,7 +35,7 @@ use crate::common::Duration;
         "policy": { "onInterruption": "at_most_once" }
     }]
 }))]
-pub struct CreateToolset {
+pub struct CreateActionSet {
     /// MCP servers. Their tools are called by Rewind and named `<server>.<tool>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp: Vec<McpServer>,
@@ -52,15 +52,15 @@ pub struct CreateToolset {
     pub http: Option<HttpTool>,
     /// The organization's secrets that list the tools of the MCP servers whose `auth` takes one,
     /// by server: `{ "github": "org/github" }`. Only `org/` secrets; no run keeps them, and they
-    /// are not part of the toolset's id. Requires `secrets:use`.
+    /// are not part of the action set's id. Requires `secrets:use`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: crate::secrets::Attachments,
     /// The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
     /// version, `triage@<version>` or `triage@v12` one version. The versions are pinned: the
-    /// toolset's scripts are checked against them, and start them, for their whole life.
+    /// action set's scripts are checked against them, and start them, for their whole life.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<String>,
-    /// Derives the toolset from a registered one: its servers, tools and workflows are kept as
+    /// Derives the action set from a registered one: its servers, tools and workflows are kept as
     /// pinned, without listing the servers again; `workflows` adds workflows or pins them again.
     /// `mcp`, `host` and `http` must then be empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,7 +144,7 @@ pub enum OpenApiDocument {
 }
 
 /// How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,
-/// "Authenticating calls"). Part of the pinned toolset; never a value.
+/// "Authenticating calls"). Part of the pinned action set; never a value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Auth {
@@ -173,8 +173,8 @@ pub enum Auth {
 }
 
 impl Auth {
-    /// The `auth` a toolset pins, what the server and the CLI pin alike. Whether it fits the
-    /// server's transport is checked when the toolset is built (`rewind_core::Toolset`).
+    /// The `auth` an action set pins, what the server and the CLI pin alike. Whether it fits the
+    /// server's transport is checked when the action set is built (`rewind_core::ActionSet`).
     pub fn to_core(&self) -> Result<rewind_core::ToolAuth, String> {
         use rewind_core::{SecretEncoding as Encoding, SecretPlacement, ToolAuth};
         Ok(match self {
@@ -280,7 +280,7 @@ pub struct HttpTool {
     pub policy: Option<ToolPolicy>,
 }
 
-/// A tool's policy, pinned in the toolset (`archi/04-tools.md`, "Policies"). Every field is
+/// A tool's policy, pinned in the action set (`archi/04-tools.md`, "Policies"). Every field is
 /// optional: what is not given takes its default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -318,14 +318,14 @@ pub enum OnInterruption {
     AtMostOnce,
 }
 
-/// A registered toolset, as pinned.
+/// A registered action set, as pinned.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Toolset {
-    /// The digest of the pinned toolset (SHA-256, lowercase hex). Runs record it.
+pub struct ActionSet {
+    /// The digest of the pinned action set (SHA-256, lowercase hex). Runs record it.
     pub id: String,
     pub servers: Vec<ServerSummary>,
-    /// Every tool a script of this toolset can call, sorted by name.
+    /// Every tool a script of this action set can call, sorted by name.
     pub tools: Vec<Tool>,
     /// Its APIs, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -340,7 +340,7 @@ pub struct Toolset {
     pub skipped: Vec<SkippedOperation>,
 }
 
-/// An API of a toolset, as pinned.
+/// An API of an action set, as pinned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiSummary {
@@ -367,17 +367,17 @@ pub struct SkippedOperation {
     pub reason: String,
 }
 
-/// `GET /v1/toolsets`: the toolsets registered by the tenant, by id.
+/// `GET /v1/action-sets`: the action sets registered by the tenant, by id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolsetList {
-    pub toolsets: Vec<ToolsetSummary>,
+pub struct ActionSetList {
+    pub action_sets: Vec<ActionSetSummary>,
 }
 
-/// A registered toolset, without its schemas and declarations.
+/// A registered action set, without its schemas and declarations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolsetSummary {
+pub struct ActionSetSummary {
     pub id: String,
     pub servers: Vec<ServerSummary>,
     /// Its APIs, sorted by name.
@@ -446,18 +446,18 @@ pub enum Route {
     Builtin,
 }
 
-/// The toolset's declarations, generated by `rewind-codegen`.
+/// The action set's declarations, generated by `rewind-codegen`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Declarations {
     /// `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the
-    /// `rewind:workflows` module when the toolset pins workflows.
+    /// `rewind:workflows` module when the action set pins workflows.
     pub dts: String,
     /// The compact rendering for the model's prompt, one line per tool.
     pub prompt: String,
 }
 
-/// `GET /v1/toolsets/{id}/declarations`.
+/// `GET /v1/action-sets/{id}/declarations`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct DeclarationsQuery {
@@ -494,7 +494,7 @@ pub struct DeclarationsText {
     pub text: String,
 }
 
-/// `GET /v1/toolsets/{id}/search`: `search_tools`, for toolsets too large for the prompt.
+/// `GET /v1/action-sets/{id}/search`: `search_tools`, for action sets too large for the prompt.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SearchQuery {
@@ -530,8 +530,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_toolset_of_the_product_overview_reads() {
-        let toolset: CreateToolset = serde_json::from_value(json!({
+    fn the_action_set_of_the_product_overview_reads() {
+        let action_set: CreateActionSet = serde_json::from_value(json!({
             "mcp": [{ "name": "github", "url": "https://mcp.example.com/github" }],
             "host": [{
                 "name": "ask_user",
@@ -542,18 +542,18 @@ mod tests {
             "http": { "allow": ["api.example.com"] }
         }))
         .unwrap();
-        let policy = toolset.host[0].policy.unwrap();
+        let policy = action_set.host[0].policy.unwrap();
         assert_eq!(policy.on_interruption, Some(OnInterruption::AtMostOnce));
         assert_eq!(policy.heartbeat_timeout.unwrap().as_millis(), 120_000);
         assert!(
-            serde_json::from_value::<CreateToolset>(json!({ "mcp": [], "tool": [] })).is_err(),
+            serde_json::from_value::<CreateActionSet>(json!({ "mcp": [], "tool": [] })).is_err(),
             "unknown fields are refused"
         );
     }
 
     #[test]
     fn apis_and_auth_read() {
-        let toolset: CreateToolset = serde_json::from_value(json!({
+        let action_set: CreateActionSet = serde_json::from_value(json!({
             "mcp": [{
                 "name": "github",
                 "url": "https://mcp.example.com/github",
@@ -567,7 +567,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            toolset.mcp[0].auth,
+            action_set.mcp[0].auth,
             Some(Auth::Secret {
                 header: Some("Authorization".into()),
                 format: Some("Bearer {secret}".into()),
@@ -575,24 +575,27 @@ mod tests {
                 env: None,
             })
         );
-        assert_eq!(toolset.apis[0].auth, Some(Auth::Rewind {}));
-        assert!(matches!(toolset.apis[0].openapi, OpenApiDocument::Url(_)));
+        assert_eq!(action_set.apis[0].auth, Some(Auth::Rewind {}));
         assert!(matches!(
-            toolset.apis[1].openapi,
+            action_set.apis[0].openapi,
+            OpenApiDocument::Url(_)
+        ));
+        assert!(matches!(
+            action_set.apis[1].openapi,
             OpenApiDocument::Document(_)
         ));
-        assert_eq!(toolset.secrets["github"], "org/github");
+        assert_eq!(action_set.secrets["github"], "org/github");
         assert!(
             serde_json::from_value::<Auth>(json!({ "type": "rewind", "header": "X" })).is_err(),
             "unknown fields are refused"
         );
         assert!(
-            serde_json::from_value::<CreateToolset>(json!({ "credentials": {} })).is_err(),
+            serde_json::from_value::<CreateActionSet>(json!({ "credentials": {} })).is_err(),
             "credentials are gone"
         );
         for auth in [
             Auth::Rewind {},
-            toolset.mcp[0].auth.clone().unwrap(),
+            action_set.mcp[0].auth.clone().unwrap(),
             Auth::Secret {
                 header: Some("Authorization".into()),
                 format: Some("Basic {secret}".into()),

@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use rewind_core::{Attachments, SecretRef, SecretScope, Timestamp, ToolAuth, Toolset};
+use rewind_core::{ActionSet, Attachments, SecretRef, SecretScope, Timestamp, ToolAuth};
 
 use crate::ports::{
     Day, NamespaceName, SecretError, SecretId, SecretNamespace, SecretStore, TenantId,
@@ -45,7 +45,7 @@ pub enum AttachmentProblem {
     /// The script imports this MCP server or API, whose `auth` takes a secret, and nothing is
     /// attached for it.
     Missing { server: String },
-    /// An attachment names a server or an API the toolset does not have, or one whose `auth`
+    /// An attachment names a server or an API the action set does not have, or one whose `auth`
     /// takes no secret.
     TakesNone { server: String },
     /// The secret does not exist: an `ns/` secret in the run's namespace, an `org/` secret in
@@ -67,7 +67,7 @@ impl fmt::Display for AttachmentProblem {
             ),
             AttachmentProblem::TakesNone { server } => write!(
                 f,
-                "{server} takes no secret: it is no server or API of the toolset whose calls \
+                "{server} takes no secret: it is no server or API of the action set whose calls \
                  carry one"
             ),
             AttachmentProblem::Unknown { server, secret } => {
@@ -145,7 +145,7 @@ pub(crate) struct AttachmentCheck<'a> {
     /// The run's namespace, where its `ns/` secrets are read; `None` for a version saved, which
     /// has none yet: its `ns/` secrets are checked by name only.
     pub(crate) namespace: Option<&'a NamespaceName>,
-    pub(crate) toolset: &'a Toolset,
+    pub(crate) action_set: &'a ActionSet,
     /// What the script imports from `rewind:tools`; `None`: every name.
     pub(crate) imports: Option<&'a BTreeSet<String>>,
     pub(crate) attachments: &'a Attachments,
@@ -153,7 +153,7 @@ pub(crate) struct AttachmentCheck<'a> {
 }
 
 /// Checks attachments (`archi/04-tools.md`, "Secrets": attaching): each names a server or an API
-/// of the toolset whose `auth` takes a secret, and a secret that exists and the caller may
+/// of the action set whose `auth` takes a secret, and a secret that exists and the caller may
 /// attach; each server or API the script imports whose `auth` takes a secret has one. A
 /// version's attachments ([`AttachRights::Version`]) were checked when it was saved: only its
 /// `ns/` secrets' existence in the run's namespace is. `Ok(Err(..))` lists every problem and
@@ -168,7 +168,7 @@ pub(crate) async fn check<S: SecretStore>(
     let version = *check.rights == AttachRights::Version;
     for (server, secret) in check.attachments.iter() {
         let takes_secret = check
-            .toolset
+            .action_set
             .auth(server)
             .is_some_and(ToolAuth::takes_secret);
         if !takes_secret && !version {
@@ -211,7 +211,7 @@ pub(crate) async fn check<S: SecretStore>(
         }
     }
     if !version {
-        for server in check.toolset.taking_secrets() {
+        for server in check.action_set.taking_secrets() {
             let imported = check.imports.is_none_or(|imports| imports.contains(server));
             if imported && check.attachments.get(server).is_none() {
                 problems.push(AttachmentProblem::Missing {

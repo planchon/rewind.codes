@@ -7,7 +7,7 @@
 //! - `script.ts`, the script;
 //! - `scenario.json`, its input, tools, steps and expectations ([`Scenario`]);
 //! - `journal.v1.json`, the journal document recorded from it (`rewind-format` v1): the run's id,
-//!   its script, its toolset and its entries, committed.
+//!   its script, its action set and its entries, committed.
 //!
 //! A case may fork its run with a corrected script (`fork` in the scenario): the expectations,
 //! the recorded journal and the replays are then the fork's.
@@ -40,9 +40,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rewind_core::{
-    Attachments, Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle,
-    McpServer, McpTransport, RunId, RunOutcome, RunState, Script, SecretPlacement, SecretRef,
-    Timestamp, Tool, ToolAuth, ToolRoute, Toolset, Workflow, WorkflowSchemas,
+    ActionSet, Attachments, Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument,
+    Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState, Script, SecretPlacement,
+    SecretRef, Timestamp, Tool, ToolAuth, ToolRoute, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
 use rewind_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId};
@@ -149,7 +149,8 @@ impl Case {
             workflow_scripts,
         };
         case.check_color()?;
-        scenario_toolset(&case.scenario).map_err(|err| format!("{name}/scenario.json: {err}"))?;
+        scenario_action_set(&case.scenario)
+            .map_err(|err| format!("{name}/scenario.json: {err}"))?;
         case.workflows()?;
         attachments(&case.scenario.secrets)
             .map_err(|err| format!("{name}/scenario.json: secrets: {err}"))?;
@@ -168,9 +169,9 @@ impl Case {
         Ok(case)
     }
 
-    /// The scenario's workflows, each with the scenario's tools as its toolset.
+    /// The scenario's workflows, each with the scenario's tools as its action set.
     pub fn workflows(&self) -> Result<Vec<Workflow>, String> {
-        let toolset = scenario_toolset(&self.scenario)?.digest();
+        let action_set = scenario_action_set(&self.scenario)?.digest();
         self.scenario
             .workflows
             .iter()
@@ -182,7 +183,7 @@ impl Case {
                     name.clone(),
                     case.description.clone(),
                     self.workflow_scripts[name].digest(),
-                    toolset,
+                    action_set,
                     WorkflowSchemas {
                         input: case.input.clone(),
                         output: case.output.clone(),
@@ -203,13 +204,13 @@ impl Case {
     /// the pinned schemas of `schemas` and `output_schemas` and the policies of `policies` (the
     /// default otherwise). In mock mode every call goes to the scenario's responses, whatever
     /// its route.
-    pub fn toolset(&self) -> Toolset {
+    pub fn action_set(&self) -> ActionSet {
         let workflows = self
             .workflows()
             .expect("the workflows were checked when the case was loaded");
-        scenario_toolset(&self.scenario)
-            .and_then(|toolset| {
-                toolset
+        scenario_action_set(&self.scenario)
+            .and_then(|action_set| {
+                action_set
                     .with_workflows(workflows.iter().map(Workflow::pinned))
                     .map_err(|err| err.to_string())
             })
@@ -276,7 +277,7 @@ impl Case {
 /// `schemas` pins the input schema of some tools, `output_schemas` the output schema of some
 /// MCP tools, and `policies` changes the default policy of some. The responses of `http` and of
 /// the MCP tools must be in the format their dispatcher returns.
-fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
+fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
     if let Some(unknown) = scenario
         .schemas
         .keys()
@@ -385,7 +386,7 @@ fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
             }
         };
     }
-    Toolset::new(servers, tools).map_err(|err| format!("tools: {err}"))
+    ActionSet::new(servers, tools).map_err(|err| format!("tools: {err}"))
 }
 
 /// The responses of a tool that are values are in the format its dispatcher returns: the
@@ -494,15 +495,15 @@ pub enum Replayed {
 }
 
 /// Replays a journal document's entries with a script on a fresh executor, without any store:
-/// the document holds the run's id and toolset.
+/// the document holds the run's id and action set.
 pub async fn replay_journal(case: &Case, journal: &JournalDocument, script: &Script) -> Replayed {
     let executor = executor(&case.scenario);
-    let compiled = executor.compile(script, &journal.toolset);
+    let compiled = executor.compile(script, &journal.action_set);
     let run = RunRef::new(TenantId::local(), journal.run);
     let input = ReplayInput {
         run: &run,
         compiled: compiled.as_ref(),
-        toolset: &journal.toolset,
+        action_set: &journal.action_set,
         history: &journal.entries,
     };
     match replay::replay(&executor, &replay::InJournal, input).await {

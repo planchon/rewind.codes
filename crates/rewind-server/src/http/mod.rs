@@ -2,6 +2,7 @@
 //! sign-in `/auth`, the inbound webhooks and the dashboard. The paths are `rewind_api::routes`;
 //! the DTOs are `rewind-api`'s.
 
+mod action_sets;
 mod admin;
 mod changes;
 mod connections;
@@ -23,7 +24,6 @@ mod subscriptions;
 mod tasks;
 mod testing;
 mod tokens;
-mod toolsets;
 mod workflows;
 
 use std::sync::Arc;
@@ -50,9 +50,15 @@ pub(crate) const BODY_LIMIT: usize = 16 * 1024 * 1024;
 /// WorkOS, a member's access token.
 pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router {
     let api = Router::new()
-        .route(routes::TOOLSETS, post(toolsets::create).get(toolsets::list))
-        .route(routes::TOOLSET_DECLARATIONS, get(toolsets::declarations))
-        .route(routes::TOOLSET_SEARCH, get(toolsets::search))
+        .route(
+            routes::ACTION_SETS,
+            post(action_sets::create).get(action_sets::list),
+        )
+        .route(
+            routes::ACTION_SET_DECLARATIONS,
+            get(action_sets::declarations),
+        )
+        .route(routes::ACTION_SET_SEARCH, get(action_sets::search))
         .route(
             routes::WORKFLOWS,
             post(workflows::create).get(workflows::list),

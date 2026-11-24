@@ -9,7 +9,7 @@
 //! Each client is checked when it is built and at each TCP connection it makes. A client that
 //! reached an address only the allow-list lets through notes it ([`Reached`]): its caller then
 //! never quotes what the server answered, as a tenant could otherwise read an internal service
-//! through the error messages of a toolset that points at it.
+//! through the error messages of an action set that points at it.
 //!
 //! | [`Redirects`] | For | Follows |
 //! | --- | --- | --- |

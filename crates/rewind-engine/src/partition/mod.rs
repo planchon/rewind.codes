@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
-use rewind_core::{Digest, Epoch, PartitionId, RunId, RunMode, Seq, Timestamp, Toolset};
+use rewind_core::{ActionSet, Digest, Epoch, PartitionId, RunId, RunMode, Seq, Timestamp};
 
 use crate::node::message::{Effect, Message, ReplyTo, job};
 use crate::org::{OrgActor, OrgEffect, OrgMsg};
@@ -232,7 +232,7 @@ pub(crate) struct Loaded {
     /// The ids of its inbox items, with when they were received.
     pub(crate) inbox: Vec<(u64, Timestamp)>,
     pub(crate) tasks: Vec<TaskRecord>,
-    pub(crate) toolset: Option<Toolset>,
+    pub(crate) action_set: Option<ActionSet>,
 }
 
 /// What the owner keeps of a run.
@@ -252,7 +252,7 @@ pub(crate) struct RunSlot<P: Plane> {
     /// Its inbox items, with when they were received.
     pub(crate) inbox: BTreeMap<u64, Timestamp>,
     pub(crate) tasks: BTreeMap<Seq, TaskRecord>,
-    pub(crate) toolset: Option<Arc<Toolset>>,
+    pub(crate) action_set: Option<Arc<ActionSet>>,
     /// The signal keys this owner enqueued.
     pub(crate) keys: BTreeSet<String>,
     /// An activation is in flight; what it was for.
@@ -278,7 +278,7 @@ impl<P: Plane> RunSlot<P> {
             mode: None,
             inbox: BTreeMap::new(),
             tasks: BTreeMap::new(),
-            toolset: None,
+            action_set: None,
             keys: BTreeSet::new(),
             busy: None,
             ending: false,
@@ -666,7 +666,7 @@ impl<P: Plane> Owner<P> {
                     summary,
                     inbox,
                     tasks,
-                    toolset,
+                    action_set,
                 } = *loaded;
                 let mut slot = RunSlot::new(head);
                 slot.mode = summary.as_ref().and_then(|summary| summary.summary.mode);
@@ -676,7 +676,7 @@ impl<P: Plane> Owner<P> {
                     .into_iter()
                     .map(|task| (task.task.task.seq, task))
                     .collect();
-                slot.toolset = toolset.map(Arc::new);
+                slot.action_set = action_set.map(Arc::new);
                 self.runs.insert(run, Entry::Present(Box::new(slot)));
             }
             Ok(None) => {
@@ -958,17 +958,17 @@ async fn load_run<P: Plane>(
         .map(|item| (item.id, item.received_at))
         .collect();
     let tasks = log.tasks(run).await?;
-    let toolset = plane
+    let action_set = plane
         .catalog()
-        .get_toolset(&run.tenant, head.toolset)
+        .get_action_set(&run.tenant, head.action_set)
         .await
         .map_err(|error| PartitionError::Backend(error.to_string()))?
-        .map(|stored| stored.toolset);
+        .map(|stored| stored.action_set);
     Ok(Some(Box::new(Loaded {
         head,
         summary,
         inbox,
         tasks,
-        toolset,
+        action_set,
     })))
 }

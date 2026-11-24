@@ -233,7 +233,7 @@ pub enum ControlPlaneChange {
         tenant: TenantId,
         digest: Digest,
     },
-    Toolset {
+    ActionSet {
         tenant: TenantId,
         digest: Digest,
     },

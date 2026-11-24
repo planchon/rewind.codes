@@ -12,7 +12,7 @@
 //! A test runs on a run plane of its own, stepped by the [`Driver`]: one node holding one
 //! partition, wired with in-memory adapters, a virtual clock started at the test's start and an
 //! entropy giving the test's seed; host tools are dispatched to the test's world as every other
-//! call. Its result is a function of the script, the toolset, the test and the epoch. The
+//! call. Its result is a function of the script, the action set, the test and the epoch. The
 //! script under test is a parameter ([`Subject`]).
 //! TypeScript mock handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
 //! isolate of their own.
@@ -26,9 +26,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use futures_util::stream;
 use rewind_core::{
-    AbortReason, Command, Event, HistoryEntry, JsonValue, Observed, ObservedCall, PartitionId,
-    RunId, RunMode, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, SignalWhen, Test,
-    Timestamp, ToolOutcome, Toolset, WorkflowOp, WorkflowSchemas,
+    AbortReason, ActionSet, Command, Event, HistoryEntry, JsonValue, Observed, ObservedCall,
+    PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed,
+    SignalWhen, Test, Timestamp, ToolOutcome, WorkflowOp, WorkflowSchemas,
 };
 
 use crate::adapters::{
@@ -50,12 +50,12 @@ pub const DEFAULT_START: Timestamp = Timestamp(1_767_225_600_000);
 /// How many tests of a suite run at once.
 pub const PARALLEL_TESTS: usize = 4;
 
-/// What a test runs against: a script, its toolset, and for a test of a workflow, the
+/// What a test runs against: a script, its action set, and for a test of a workflow, the
 /// workflow's interface, against which the test's input and signals are checked.
 #[derive(Debug, Clone, Copy)]
 pub struct Subject<'a> {
     pub script: &'a Script,
-    pub toolset: &'a Toolset,
+    pub action_set: &'a ActionSet,
     pub interface: Option<&'a WorkflowSchemas>,
 }
 
@@ -72,7 +72,7 @@ pub struct TestOptions {
 /// Why a test did not pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestProblem {
-    /// The test names tools, answers or args its toolset no longer has. It is not run.
+    /// The test names tools, answers or args its action set no longer has. It is not run.
     Stale,
     /// The workflow's interface refuses the test's input or signals. It is not run.
     Incompatible,
@@ -186,7 +186,7 @@ impl MockLoader for NoMockLoader {
 /// the answers and args it gives them, and for a test of a workflow its input and signals. The
 /// first problem found, with every reason for it.
 pub fn check_test(test: &Test, subject: &Subject<'_>) -> Option<(TestProblem, Vec<String>)> {
-    let stale = stale(test, subject.toolset);
+    let stale = stale(test, subject.action_set);
     if !stale.is_empty() {
         return Some((TestProblem::Stale, stale));
     }
@@ -200,24 +200,24 @@ pub fn check_test(test: &Test, subject: &Subject<'_>) -> Option<(TestProblem, Ve
     None
 }
 
-fn stale(test: &Test, toolset: &Toolset) -> Vec<String> {
+fn stale(test: &Test, action_set: &ActionSet) -> Vec<String> {
     let mut reasons = Vec::new();
     let mut missing: Vec<&str> = test
         .tools()
-        .filter(|tool| !toolset.contains(tool))
+        .filter(|tool| !action_set.contains(tool))
         .collect();
     missing.sort_unstable();
     missing.dedup();
     for tool in missing {
-        reasons.push(format!("the toolset has no tool {tool}"));
+        reasons.push(format!("the action set has no tool {tool}"));
     }
     for (name, rules) in &test.world.tools {
-        let Some(tool) = toolset.tool(name) else {
+        let Some(tool) = action_set.tool(name) else {
             continue;
         };
         // The answer to a start of a workflow is the child's output.
         let output = match WorkflowOp::of_tool(name) {
-            Some((workflow, WorkflowOp::Start)) => toolset
+            Some((workflow, WorkflowOp::Start)) => action_set
                 .workflow(workflow)
                 .map(|pinned| pinned.schemas.output.clone()),
             Some((_, WorkflowOp::Signal)) => None,
@@ -246,7 +246,7 @@ fn stale(test: &Test, toolset: &Toolset) -> Vec<String> {
         }
     }
     for call in &test.expect.calls {
-        let (Some(tool), Some(args)) = (toolset.tool(&call.tool), &call.args) else {
+        let (Some(tool), Some(args)) = (action_set.tool(&call.tool), &call.args) else {
             continue;
         };
         for key in undeclared(args, &tool.input_schema) {
@@ -327,7 +327,7 @@ where
         return Ok(Vec::new());
     }
     executor
-        .compile(subject.script, subject.toolset)
+        .compile(subject.script, subject.action_set)
         .map_err(StartError::InvalidScript)?;
     // The futures are collected before they are streamed: a closure kept in the stream's state
     // would make the future's `Send` depend on a higher-ranked lifetime the compiler cannot
@@ -412,7 +412,7 @@ where
     let mut world = TestWorld::new(executor.clone(), dispatcher, start, test.seed).await?;
     let mut request = StartRun::new(
         subject.script.clone(),
-        subject.toolset.clone(),
+        subject.action_set.clone(),
         test.input.clone(),
     );
     request.mode = RunMode::Mock;
@@ -669,7 +669,7 @@ mod tests {
 
     use super::*;
 
-    fn toolset() -> Toolset {
+    fn action_set() -> ActionSet {
         let mut list = Tool::new(
             "github.list_issues",
             ToolRoute::Host {
@@ -678,16 +678,16 @@ mod tests {
             json!({ "type": "object", "properties": { "state": { "type": "string" } } }),
         );
         list.output_schema = Some(json!({ "type": "array" }));
-        Toolset::new(Vec::new(), vec![list]).unwrap()
+        ActionSet::new(Vec::new(), vec![list]).unwrap()
     }
 
     #[test]
-    fn stale_tests_name_what_the_toolset_lost() {
-        let toolset = toolset();
+    fn stale_tests_name_what_the_action_set_lost() {
+        let action_set = action_set();
         let script = Script::new("export default async () => 1;");
         let subject = Subject {
             script: &script,
-            toolset: &toolset,
+            action_set: &action_set,
             interface: None,
         };
         let mut test = Test::new("lists");
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(
             reasons,
             vec![
-                "the toolset has no tool github.close_issue",
+                "the action set has no tool github.close_issue",
                 "rule 1 of github.list_issues answers what its output schema refuses: result: \
                  {\"issues\":[]} is not of type \"array\"",
                 "rule 1 of github.list_issues matches the args key \"status\", which its input \
@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn incompatible_tests_name_what_the_interface_refuses() {
-        let toolset = Toolset::empty();
+        let action_set = ActionSet::empty();
         let script = Script::new("export default async () => 1;");
         let interface = WorkflowSchemas {
             input: json!({ "type": "object", "required": ["repo"] }),
@@ -732,7 +732,7 @@ mod tests {
         };
         let subject = Subject {
             script: &script,
-            toolset: &toolset,
+            action_set: &action_set,
             interface: Some(&interface),
         };
         let mut test = Test::new("approves");

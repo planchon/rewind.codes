@@ -1,5 +1,5 @@
 {
-  "description": "A script imports a workflow its toolset does not pin: the start is refused before any run exists.",
+  "description": "A script imports a workflow its action set does not pin: the start is refused before any run exists.",
   "live": true,
   "workflows": {
     "triage": {

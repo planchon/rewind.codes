@@ -1,4 +1,4 @@
-//! One load: the toolset, the script, the runs driven through the API, the host-tool worker,
+//! One load: the action set, the script, the runs driven through the API, the host-tool worker,
 //! and the checks once every run has ended.
 //!
 //! Each run makes an MCP call (`fake.echo`), a host-tool call (`host.square`, answered by this
@@ -13,13 +13,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt as _;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
+use rewind_api::action_sets::{CreateActionSet, HostTool, McpServer};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskStreamEvent, TaskStreamQuery};
-use rewind_api::toolsets::{CreateToolset, HostTool, McpServer};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -117,7 +117,7 @@ struct Outcome {
 
 struct Shared {
     harness: Client,
-    toolset: String,
+    action_set: String,
     labels: Labels,
     id: String,
     script: String,
@@ -126,7 +126,7 @@ struct Shared {
     deadline: Instant,
 }
 
-/// Prepares the tenant's keys and the toolset, drives the runs, and checks them.
+/// Prepares the tenant's keys and the action set, drives the runs, and checks them.
 pub(crate) async fn run(
     admin: &Client,
     base_url: &str,
@@ -142,12 +142,12 @@ pub(crate) async fn run(
         .await?
         .with_namespace(namespace);
     let worker = key(admin, base_url, &settings.tenant, BuiltInRole::Worker).await?;
-    let toolset = harness
-        .create_toolset(&toolset(&settings.mcp_url))
+    let action_set = harness
+        .create_action_set(&action_set(&settings.mcp_url))
         .await
         .map_err(|error| {
             Error::new(format!(
-                "cannot register the toolset (the server must reach the fake MCP server at {}): \
+                "cannot register the action set (the server must reach the fake MCP server at {}): \
                  {error}",
                 settings.mcp_url
             ))
@@ -161,7 +161,7 @@ pub(crate) async fn run(
     );
     let shared = Arc::new(Shared {
         harness: harness.clone(),
-        toolset: toolset.id.clone(),
+        action_set: action_set.id.clone(),
         labels: [("load", id.as_str())].into_iter().collect(),
         id: id.clone(),
         script: SCRIPT.replace("SLEEP", &settings.sleep),
@@ -178,7 +178,7 @@ pub(crate) async fn run(
             tokio::spawn(host_worker(
                 worker.clone(),
                 TaskStreamQuery {
-                    toolset: Some(toolset.id.clone()),
+                    action_set: Some(action_set.id.clone()),
                     slots: Some(HOST_SLOTS),
                     worker: Some(format!("{id}-host-{index}")),
                     ..TaskStreamQuery::default()
@@ -233,7 +233,7 @@ pub(crate) async fn run(
     thresholds(&mut report, &settings.thresholds);
     if let Ok(stats) = harness
         .tool_stats(&ToolStatsFilter {
-            toolset: Some(toolset.id.clone()),
+            action_set: Some(action_set.id.clone()),
             since: Some(began),
             ..ToolStatsFilter::default()
         })
@@ -287,8 +287,8 @@ async fn key(
     Ok(Client::remote(base_url, key.key.as_deref())?)
 }
 
-fn toolset(mcp_url: &str) -> CreateToolset {
-    CreateToolset {
+fn action_set(mcp_url: &str) -> CreateActionSet {
+    CreateActionSet {
         mcp: vec![McpServer {
             name: "fake".into(),
             url: Some(mcp_url.to_owned()),
@@ -309,7 +309,7 @@ fn toolset(mcp_url: &str) -> CreateToolset {
             })),
             policy: None,
         }],
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     }
 }
 
@@ -460,7 +460,7 @@ async fn drive(shared: &Shared, n: usize) -> Outcome {
         return outcome;
     }
     let mut start = StartRun::new(shared.script.clone());
-    start.toolset = Some(shared.toolset.clone());
+    start.action_set = Some(shared.action_set.clone());
     start.input = json!({ "n": n, "pad": shared.pad });
     start.labels = shared.labels.clone();
     let Ok(key) = IdempotencyKey::new(format!("{}-{n}", shared.id)) else {

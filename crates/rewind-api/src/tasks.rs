@@ -27,20 +27,21 @@ use crate::namespaces::NamespaceName;
 /// `at_most_once` (`archi/04-tools.md`, "Tool task lifecycle").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskStreamQuery {
-    /// The toolset whose host tools this worker executes: only the tasks of runs of this toolset.
-    /// Without it, the tasks of the tools named in `tools`, whatever the toolset of their run (a
-    /// toolset derived from another, as saving a workflow does, keeps its host tools' names).
+    /// The action set whose host tools this worker executes: only the tasks of runs of this action set.
+    /// Without it, the tasks of the tools named in `tools`, whatever the action set of their run (a
+    /// action set derived from another, as saving a workflow does, keeps its host tools' names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
+    pub action_set: Option<String>,
     /// Only the tasks of runs of this namespace. An end user's token is limited to its own: it
     /// may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
     /// same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub namespace: Option<NamespaceName>,
-    /// Only these tools. Repeat for several. All the host tools of `toolset` when absent, every
-    /// host tool without `toolset` either.
+    /// Only these tools. Repeat for several. All the host tools of `actionSet` when absent, every
+    /// host tool without `actionSet` either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
     /// At most this many tasks in flight on this stream: handed, and neither completed, failed,
@@ -274,13 +275,13 @@ mod tests {
     #[test]
     fn the_stream_query_names_its_tools_and_slots() {
         let query: TaskStreamQuery = serde_json::from_value(json!({
-            "toolset": "ab",
+            "actionSet": "ab",
             "tools": ["ask_user"],
             "slots": 4,
             "worker": "w-1"
         }))
         .unwrap();
-        assert_eq!(query.toolset.as_deref(), Some("ab"));
+        assert_eq!(query.action_set.as_deref(), Some("ab"));
         assert_eq!(query.tools, ["ask_user"]);
         assert_eq!(query.slots, Some(4));
         assert_eq!(

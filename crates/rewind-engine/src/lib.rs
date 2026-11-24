@@ -30,7 +30,7 @@
 //! - [`suites`]: the suites of workflow versions, composed from their parent's and stored as
 //!   blobs in the control plane; tests recorded from runs.
 //! - [`testing`]: tests run in virtual time against a script, several at once, each on a run
-//!   plane of its own in the driver; the checks of a test against its toolset and its
+//!   plane of its own in the driver; the checks of a test against its action set and its
 //!   workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
 //! - [`migrate`]: `rewind server migrate-runs`, the runs of the set-aside tables moved into their

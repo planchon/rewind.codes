@@ -9,16 +9,16 @@ use utoipa::{IntoParams, ToSchema};
 use crate::common::Timestamp;
 use crate::testing::TestInput;
 
-/// `POST /v1/check`: type-checks a script against the sandbox lib and a toolset's
+/// `POST /v1/check`: type-checks a script against the sandbox lib and an action set's
 /// declarations, in strict mode, before anything runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckRequest {
     /// The TypeScript source: a single ES module whose default export is the entry point.
     pub script: String,
-    /// The toolset whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty.
+    /// The action set whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
+    pub action_set: Option<String>,
 }
 
 /// The diagnostics of a check. A script with only warnings passes.
@@ -115,7 +115,7 @@ pub struct Location {
 /// `POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,
 /// "Running tests"). The given tests run against the script; with `workflow`, that version's
 /// suite runs too, and its interface checks every test. This is how a candidate is checked
-/// before it is saved: a corrected script, or the version on a new toolset.
+/// before it is saved: a corrected script, or the version on a new action set.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
@@ -131,10 +131,10 @@ pub struct TestRequest {
     /// The TypeScript source. With `workflow`, the version's own when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
-    /// The toolset the script imports from `rewind:tools`. With `workflow`, the version's own
+    /// The action set the script imports from `rewind:tools`. With `workflow`, the version's own
     /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
+    pub action_set: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<TestInput>,
     /// A workflow, `triage` (its latest version), `triage@<version>` or `triage@v12`: its suite

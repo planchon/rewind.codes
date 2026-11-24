@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rewind_core::{Digest, RunHandle, RunId, Timestamp, Toolset};
+use rewind_core::{ActionSet, Digest, RunHandle, RunId, Timestamp};
 use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::node::runtime::NodeHandle;
@@ -20,7 +20,7 @@ use rewind_engine::plane::{NodeConfig, Plane, Wiring};
 use rewind_engine::ports::link::{RunView, SubscriptionKey};
 use rewind_engine::ports::{
     CatalogStore, Clock, ControlPlaneChange, PartitionMap, Quotas, Retention, RunRef,
-    StoredToolset, Tenant, TenantId, ToolDeclarations,
+    StoredActionSet, Tenant, TenantId, ToolDeclarations,
 };
 use rewind_store_slatedb::SlatePartitions;
 use rewind_workos::CookieSeal;
@@ -342,26 +342,29 @@ impl App {
         }
     }
 
-    /// The toolset of a run started without one: only the built-ins every toolset has.
-    pub(crate) async fn default_toolset(
+    /// The action set of a run started without one: only the built-ins every action set has.
+    pub(crate) async fn default_action_set(
         &self,
         tenant: &TenantId,
-    ) -> Result<StoredToolset, ApiError> {
-        let toolset = Toolset::new([], [self.tools.webhook_tool()]).map_err(ApiError::internal)?;
+    ) -> Result<StoredActionSet, ApiError> {
+        let action_set =
+            ActionSet::new([], [self.tools.webhook_tool()]).map_err(ApiError::internal)?;
         let catalog = self.catalog();
-        if let Some(stored) = catalog.get_toolset(tenant, toolset.digest()).await? {
+        if let Some(stored) = catalog.get_action_set(tenant, action_set.digest()).await? {
             return Ok(stored);
         }
         let generated = self
             .tools
-            .declarations(&toolset, &std::collections::BTreeMap::new());
+            .declarations(&action_set, &std::collections::BTreeMap::new());
         let declarations = ToolDeclarations {
             typescript: generated.typescript,
             prompt: generated.prompt,
         };
-        catalog.put_toolset(tenant, &toolset, &declarations).await?;
-        Ok(StoredToolset {
-            toolset,
+        catalog
+            .put_action_set(tenant, &action_set, &declarations)
+            .await?;
+        Ok(StoredActionSet {
+            action_set,
             declarations,
         })
     }

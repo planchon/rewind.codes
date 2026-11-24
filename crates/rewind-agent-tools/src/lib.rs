@@ -5,8 +5,8 @@
 //! TypeScript SDK defines them (`sdk/typescript/src/agent-tools/`), which stays the reference:
 //!
 //! - [`definitions`]: the tools for a model. The SDK's set, word for word; the MCP set, with
-//!   `save_workflow` out, `list_orgs`, `list_namespaces` and `list_toolsets` in, `org`,
-//!   `namespace` and `toolset` as arguments, and each tool's title, annotations and permission.
+//!   `save_workflow` out, `list_orgs`, `list_namespaces` and `list_action_sets` in, `org`,
+//!   `namespace` and `action_set` as arguments, and each tool's title, annotations and permission.
 //! - [`AgentTools`]: the handlers of the SDK's set over a port [`Api`], one method per operation
 //!   of `/v1` they call, with `rewind-api`'s DTOs; [`McpTools`] those of the MCP set over
 //!   [`McpApi`], which adds the operations that find what a caller reaches.

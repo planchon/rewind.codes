@@ -21,6 +21,9 @@ use axum::http::{HeaderValue, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use rewind_agent_tools::{Api, ApiError as ToolError, McpApi, Organization};
+use rewind_api::action_sets::{
+    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+};
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -31,7 +34,6 @@ use rewind_api::runs::{
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
-use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -287,16 +289,19 @@ impl Api for ServerApi {
         Api::get_test(&self.local, digest).await
     }
 
-    async fn create_toolset(&self, toolset: &CreateToolset) -> Result<Toolset, ToolError> {
-        Api::create_toolset(&self.local, toolset).await
+    async fn create_action_set(
+        &self,
+        action_set: &CreateActionSet,
+    ) -> Result<ActionSet, ToolError> {
+        Api::create_action_set(&self.local, action_set).await
     }
 
     async fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> Result<ToolSearchResults, ToolError> {
-        Api::search_tools(&self.local, toolset, query).await
+        Api::search_tools(&self.local, action_set, query).await
     }
 
     /// The gate runs the version's suite: on a worker.
@@ -337,7 +342,7 @@ impl McpApi for ServerApi {
         McpApi::list_namespaces(&self.local, query).await
     }
 
-    async fn list_toolsets(&self) -> Result<ToolsetList, ToolError> {
-        McpApi::list_toolsets(&self.local).await
+    async fn list_action_sets(&self) -> Result<ActionSetList, ToolError> {
+        McpApi::list_action_sets(&self.local).await
     }
 }

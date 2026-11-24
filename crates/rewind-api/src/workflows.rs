@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::action_sets::Declarations;
 use crate::common::{Labels, RunStatus, Timestamp};
 use crate::testing::{Expectations, TestInput};
-use crate::toolsets::Declarations;
 
 /// `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
-/// against its toolset and against its own schemas: its default export must take the input and
+/// against its action set and against its own schemas: its default export must take the input and
 /// return the output, and `signal()` only takes the declared names. Saving the same workflow
 /// again under the same labels returns the version saved first (200): the labels of a key limited
 /// to labels are part of the version, so such a key saves a version of its own.
@@ -21,7 +21,7 @@ use crate::toolsets::Declarations;
 #[schema(example = json!({
     "name": "triage",
     "description": "Triage the stale issues of a repository, after approval.",
-    "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+    "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
     "script": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
     "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
     "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
@@ -34,8 +34,8 @@ pub struct CreateWorkflow {
     /// Shown to the model in the declarations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// The id of the toolset its runs call, already registered.
-    pub toolset: String,
+    /// The id of the action set its runs call, already registered.
+    pub action_set: String,
     /// The TypeScript source: a single ES module whose default export is the entry point.
     pub script: String,
     /// JSON Schema of the input of `main`.
@@ -184,8 +184,8 @@ pub struct Workflow {
     pub number: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// The id of the toolset its runs call.
-    pub toolset: String,
+    /// The id of the action set its runs call.
+    pub action_set: String,
     /// Digest of its script (`GET /v1/scripts/{digest}`).
     pub script: String,
     #[schema(value_type = Object)]
@@ -252,7 +252,7 @@ pub struct WorkflowVersions {
     pub versions: Vec<Workflow>,
 }
 
-/// A workflow a toolset pins.
+/// A workflow an action set pins.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedWorkflow {
@@ -297,7 +297,7 @@ mod tests {
     fn a_workflow_reads_with_its_schemas() {
         let workflow: CreateWorkflow = serde_json::from_value(json!({
             "name": "triage",
-            "toolset": "00",
+            "actionSet": "00",
             "script": "export default async () => 1;",
             "input": {},
             "output": { "type": "integer" },
@@ -306,7 +306,7 @@ mod tests {
         assert!(workflow.signals.is_empty());
         assert!(
             serde_json::from_value::<CreateWorkflow>(json!({
-                "name": "triage", "toolset": "00", "script": "", "input": {}, "output": {}, "x": 1,
+                "name": "triage", "actionSet": "00", "script": "", "input": {}, "output": {}, "x": 1,
             }))
             .is_err(),
             "unknown fields are refused"

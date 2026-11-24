@@ -952,7 +952,7 @@ impl<P: Plane> OrgActor<P> {
     }
 }
 
-/// Whether a stream may be handed a task: its namespace, its labels, its toolset, its tools.
+/// Whether a stream may be handed a task: its namespace, its labels, its action set, its tools.
 fn takes(stream: &StreamAttach, offer: &HostTaskOffer) -> bool {
     let task = &offer.task;
     stream
@@ -964,8 +964,8 @@ fn takes(stream: &StreamAttach, offer: &HostTaskOffer) -> bool {
             .iter()
             .all(|(key, value)| task.labels.get(key) == Some(value))
         && stream
-            .toolset
-            .is_none_or(|toolset| toolset == offer.toolset)
+            .action_set
+            .is_none_or(|action_set| action_set == offer.action_set)
         && (stream.tools.is_empty() || stream.tools.contains(&task.tool))
 }
 

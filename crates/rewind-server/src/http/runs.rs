@@ -25,7 +25,7 @@ use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
-use crate::http::{search, toolsets, workflows};
+use crate::http::{action_sets, search, workflows};
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most.
 const PAGE: u32 = 50;
@@ -61,10 +61,10 @@ pub(super) async fn start(
                      none",
                 ));
             }
-            if !request.script.is_empty() || request.toolset.is_some() {
+            if !request.script.is_empty() || request.action_set.is_some() {
                 return Err(ApiError::invalid(
-                    "give either a workflow, or a script and its toolset: a run of a workflow \
-                     executes the workflow's script with its toolset",
+                    "give either a workflow, or a script and its action set: a run of a workflow \
+                     executes the workflow's script with its action set",
                 ));
             }
             let stored =
@@ -85,15 +85,15 @@ pub(super) async fn start(
                 .await?
         }
         None => {
-            let stored = match &request.toolset {
-                Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
-                None => app.default_toolset(&caller.tenant).await?,
+            let stored = match &request.action_set {
+                Some(id) => action_sets::stored(&app, &caller.tenant, id).await?,
+                None => app.default_action_set(&caller.tenant).await?,
             };
             let start = rewind_engine::StartRun {
                 tenant: caller.tenant.clone(),
                 namespace,
                 script: Script::new(request.script),
-                toolset: stored.toolset,
+                action_set: stored.action_set,
                 declarations: stored.declarations,
                 input: input.clone(),
                 mode: RunMode::Live,

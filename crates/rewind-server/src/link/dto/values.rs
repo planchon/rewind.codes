@@ -553,7 +553,7 @@ pub enum Predicate {
         values: Vec<TextMatch>,
     },
     Script(Vec<String>),
-    Toolset(Vec<String>),
+    ActionSet(Vec<String>),
     Tool(Vec<TextMatch>),
     Error {
         names: BTreeSet<String>,
@@ -691,7 +691,7 @@ impl From<&engine::Predicate> for Predicate {
                 values: matchers(values),
             },
             P::Script(prefixes) => Predicate::Script(prefixes.clone()),
-            P::Toolset(prefixes) => Predicate::Toolset(prefixes.clone()),
+            P::ActionSet(prefixes) => Predicate::ActionSet(prefixes.clone()),
             P::Tool(tools) => Predicate::Tool(matchers(tools)),
             P::Error { names, kinds } => Predicate::Error {
                 names: names.clone(),
@@ -739,7 +739,7 @@ impl TryFrom<Predicate> for engine::Predicate {
                 values: matchers_of(values),
             },
             Predicate::Script(prefixes) => P::Script(prefixes),
-            Predicate::Toolset(prefixes) => P::Toolset(prefixes),
+            Predicate::ActionSet(prefixes) => P::ActionSet(prefixes),
             Predicate::Tool(tools) => P::Tool(matchers_of(tools)),
             Predicate::Error { names, kinds } => P::Error {
                 names,

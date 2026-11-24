@@ -1,7 +1,7 @@
 //! An OpenAPI 3.0 or 3.1 document read into a pinned API and its tools (`archi/04-tools.md`,
 //! "API tools").
 //!
-//! | From the document | The pinned toolset |
+//! | From the document | The pinned action set |
 //! | --- | --- |
 //! | The first `servers[]` (its variables at their defaults, a relative URL against the document's), unless `baseUrl` is given | The API's `base_url`: `https`, or `http` on the embedded server; no user, query nor fragment |
 //! | Each operation of `paths` | A tool `<api>.<operationId>`, or `<api>.<method>_<path>` without one (`post_v1_measures`) |
@@ -13,7 +13,7 @@
 //! | `summary` and `description` | The description |
 //! | The security requirement (the document's, else its operations' when they agree), when `auth` is not given | The API's `auth`: `bearer`, `oauth2` and `openIdConnect` are `Authorization: Bearer {secret}`; `basic` is `Authorization: Basic` with the secret in base64; an `apiKey` in a header is that header |
 //!
-//! Refused (`invalid-toolset`), naming the operation's path: a name that is no tool name, two
+//! Refused (`invalid-action-set`), naming the operation's path: a name that is no tool name, two
 //! operations of one name, two parameters of one name or one named `body`, a `$ref` to another
 //! document, an `apiKey` in the query or a cookie or several schemes at once without `auth`, an
 //! `operations` entry the document does not have. Left out (`skipped`): an operation with a body
@@ -30,7 +30,7 @@ use url::Url;
 
 use crate::schema::{Defs, Document};
 
-/// How to read one API of a toolset: what its registration gives beside the document.
+/// How to read one API of an action set: what its registration gives beside the document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadOptions {
     /// Its namespace in `rewind:tools`.
@@ -75,7 +75,7 @@ pub struct ReadApi {
     pub skipped: Vec<Skipped>,
 }
 
-/// An operation left out of the toolset, and why: in the registration's answer only.
+/// An operation left out of the action set, and why: in the registration's answer only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skipped {
     /// `post`, as the document writes it.
@@ -642,7 +642,7 @@ fn tool(
     input.insert("additionalProperties".into(), Value::Bool(false));
     let input = defs.attach(Value::Object(input));
 
-    // Sorted by name, as the toolset pins them: the digest does not depend on the document's
+    // Sorted by name, as the action set pins them: the digest does not depend on the document's
     // order.
     pinned.sort_by(|a, b| a.name.cmp(&b.name));
     let pinned_operation = ApiOperation {

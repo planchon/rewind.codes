@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rewind_core::{Digest, Epoch, RunId, RunStatus, Script, Test, TestOrigin, Toolset};
+use rewind_core::{ActionSet, Digest, Epoch, RunId, RunStatus, Script, Test, TestOrigin};
 
 use super::{Edge, EdgeError, Gateway, unavailable};
 use crate::plane::{InstanceOf, Plane};
@@ -206,8 +206,12 @@ impl<P: Plane> ScriptExecutor for PlaneExecutor<P> {
         self.0.executor().epochs()
     }
 
-    fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
-        self.0.executor().compile(script, toolset)
+    fn compile(
+        &self,
+        script: &Script,
+        action_set: &ActionSet,
+    ) -> Result<CompiledScript, InvalidScript> {
+        self.0.executor().compile(script, action_set)
     }
 
     fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {

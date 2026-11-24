@@ -371,7 +371,7 @@ impl TestServer {
             .unwrap()
             .with_namespace(test_namespace());
         // The node takes its partitions once it serves: until then, a request that reaches every
-        // partition (a toolset's creation, a list of runs) is answered 503, to be asked again.
+        // partition (an action set's creation, a list of runs) is answered 503, to be asked again.
         let every = Client::remote(&url, Some(ADMIN_KEY)).unwrap();
         eventually(|| async {
             match every

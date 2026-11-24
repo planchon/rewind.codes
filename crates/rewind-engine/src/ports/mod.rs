@@ -103,7 +103,7 @@ pub use identity::{
 pub use journal::{
     Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
-    StartedBy, StoreError, StoredScript, StoredToolset, StoredWorkflow, TEST_GRACE, TaskRef,
+    StartedBy, StoreError, StoredActionSet, StoredScript, StoredWorkflow, TEST_GRACE, TaskRef,
     TaskState, TaskToken, TestRecord, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
     WorkflowFilter, deferred_timeout_failure,
 };

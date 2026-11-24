@@ -18,6 +18,10 @@ use crate::Error;
 use crate::access::{
     ApiKey, ApiKeyList, CreateApiKey, Grant, PermissionList, PutRole, Role, RoleList, SetGrant,
 };
+use crate::action_sets::{
+    ActionSet, ActionSetList, CreateActionSet, DeclarationFormat, DeclarationsQuery,
+    DeclarationsText, SearchQuery, ToolSearchResults,
+};
 use crate::admin::ServerInfo;
 use crate::common::Duration;
 use crate::events::{ChangeEvent, Entry, EventsQuery, StreamEvent};
@@ -48,10 +52,6 @@ use crate::secrets::{
 };
 use crate::tasks::{
     CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamEvent, TaskStreamQuery,
-};
-use crate::toolsets::{
-    CreateToolset, DeclarationFormat, DeclarationsQuery, DeclarationsText, SearchQuery,
-    ToolSearchResults, Toolset, ToolsetList,
 };
 use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
 
@@ -181,19 +181,22 @@ impl Client {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Toolsets
+    // Action sets
 
-    /// `POST /v1/toolsets`.
-    pub async fn create_toolset(&self, toolset: &CreateToolset) -> Result<Toolset, Error> {
+    /// `POST /v1/action-sets`.
+    pub async fn create_action_set(
+        &self,
+        action_set: &CreateActionSet,
+    ) -> Result<ActionSet, Error> {
         let request = self
-            .request(Method::POST, routes::TOOLSETS, &[])?
-            .json(toolset);
+            .request(Method::POST, routes::ACTION_SETS, &[])?
+            .json(action_set);
         self.json(request).await
     }
 
-    /// `GET /v1/toolsets`.
-    pub async fn list_toolsets(&self) -> Result<ToolsetList, Error> {
-        let request = self.request(Method::GET, routes::TOOLSETS, &[])?;
+    /// `GET /v1/action-sets`.
+    pub async fn list_action_sets(&self) -> Result<ActionSetList, Error> {
+        let request = self.request(Method::GET, routes::ACTION_SETS, &[])?;
         self.json(request).await
     }
 
@@ -226,10 +229,10 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/toolsets/{id}/declarations`.
-    pub async fn toolset_declarations(
+    /// `GET /v1/action-sets/{id}/declarations`.
+    pub async fn action_set_declarations(
         &self,
-        toolset: &str,
+        action_set: &str,
         format: DeclarationFormat,
     ) -> Result<DeclarationsText, Error> {
         let query = DeclarationsQuery {
@@ -237,20 +240,21 @@ impl Client {
         };
         let request = self.request_with(
             Method::GET,
-            routes::TOOLSET_DECLARATIONS,
-            &[toolset],
+            routes::ACTION_SET_DECLARATIONS,
+            &[action_set],
             &query,
         )?;
         self.json(request).await
     }
 
-    /// `GET /v1/toolsets/{id}/search`.
+    /// `GET /v1/action-sets/{id}/search`.
     pub async fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> Result<ToolSearchResults, Error> {
-        let request = self.request_with(Method::GET, routes::TOOLSET_SEARCH, &[toolset], query)?;
+        let request =
+            self.request_with(Method::GET, routes::ACTION_SET_SEARCH, &[action_set], query)?;
         self.json(request).await
     }
 
@@ -1299,7 +1303,7 @@ mod tests {
         assert_eq!(round_trip(&filter), filter);
 
         let tasks = TaskStreamQuery {
-            toolset: Some("ab".into()),
+            action_set: Some("ab".into()),
             tools: vec!["ask_user".into(), "approve".into()],
             slots: Some(5),
             worker: Some("w-1".into()),

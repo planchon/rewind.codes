@@ -142,7 +142,7 @@ async fn starts_in_flight_together_get_handles_apart() {
         SeededEntropy::sharing_suffixes(9),
     )
     .await;
-    // A first run stores the script and the toolset the two others run.
+    // A first run stores the script and the action set the two others run.
     let first = world.run(request(TRIAGE, json!({}))).await;
     let head = world.view(&first).await.head;
     let started = world

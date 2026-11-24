@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunState, RunStatus,
-    Seq, Shape, Timestamp, Toolset,
+    ActionSet, Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunState,
+    RunStatus, Seq, Shape, Timestamp,
 };
 
 use crate::failures;
@@ -48,12 +48,12 @@ pub(crate) fn summary_of(
     headline: &str,
     history: &[HistoryEntry],
     state: &RunState,
-    toolset: &Toolset,
+    action_set: &ActionSet,
     tasks: &BTreeMap<Seq, TaskRecord>,
     previous: Option<&IndexedSummary>,
 ) -> IndexedSummary {
     let mut waits = if state.status() == RunStatus::Active {
-        projector::waits(history, state, Some(toolset))
+        projector::waits(history, state, Some(action_set))
     } else {
         Vec::new()
     };
@@ -108,7 +108,7 @@ pub(crate) fn summary_of(
             suffix_len: head.suffix_len,
             script: head.script,
             headline: headline.to_owned(),
-            toolset: head.toolset,
+            action_set: head.action_set,
             status: if history.is_empty() {
                 RunStatus::Pending
             } else {
@@ -144,7 +144,7 @@ pub(crate) fn pending_summary(head: &RunHead, headline: &str) -> IndexedSummary 
         headline,
         &[],
         &RunState::new(),
-        &Toolset::empty(),
+        &ActionSet::empty(),
         &BTreeMap::new(),
         None,
     );
@@ -228,14 +228,14 @@ pub(crate) fn head_after(
 /// The tool tasks and timers of the new entries (`from` on): a call still pending at the end of
 /// the activation, a timer still pending, the cancellation of a timer of an earlier activation,
 /// and the run's deadline once `run_started` is committed. A terminal run has none: its commit
-/// clears them. A task takes its route and policy from the pinned toolset; a tool the toolset
+/// clears them. A task takes its route and policy from the pinned action set; a tool the action set
 /// does not have is returned as the error.
 pub(crate) fn effects_of(
     head: &RunHead,
     history: &[HistoryEntry],
     from: usize,
     state: &rewind_core::RunState,
-    toolset: &Toolset,
+    action_set: &ActionSet,
     now: Timestamp,
 ) -> Result<(Vec<TaskRecord>, Vec<TimerChange>), String> {
     let mut tasks = Vec::new();
@@ -256,14 +256,14 @@ pub(crate) fn effects_of(
             Event::Command(Command::ScheduleToolCall {
                 seq, tool, args, ..
             }) if state.pending_tool_calls().contains_key(seq) => {
-                let pinned = toolset.tool(tool).ok_or_else(|| tool.clone())?;
+                let pinned = action_set.tool(tool).ok_or_else(|| tool.clone())?;
                 tasks.push(TaskRecord {
                     task: ToolTask {
                         task: TaskRef {
                             run: run.clone(),
                             seq: *seq,
                         },
-                        toolset: head.toolset,
+                        action_set: head.action_set,
                         tool: tool.clone(),
                         route: pinned.route.clone(),
                         args: args.clone(),
@@ -515,7 +515,7 @@ pub(crate) struct NewEntries<'h> {
 pub(crate) fn projections_of(
     head: &RunHead,
     new: NewEntries<'_>,
-    toolset: &Toolset,
+    action_set: &ActionSet,
     payloads: &BTreeMap<rewind_core::Digest, PayloadRecord>,
     telemetry: &TelemetryConfig,
 ) -> Vec<Projection> {
@@ -542,7 +542,7 @@ pub(crate) fn projections_of(
             projections.push(Projection::Otel { spans, logs });
         }
     }
-    for event in projector::lifecycle_events(head, Some(toolset), history, from, after) {
+    for event in projector::lifecycle_events(head, Some(action_set), history, from, after) {
         projections.push(Projection::Webhooks(event));
     }
     projections
@@ -646,7 +646,7 @@ mod tests {
             origin: "script".into(),
             suffix_len: 12,
             script: Digest::of(b"script"),
-            toolset: Digest::of(b"toolset"),
+            action_set: Digest::of(b"action_set"),
             status: RunStatus::Active,
             epoch: Epoch(1),
             attempt: Attempt::FIRST,
@@ -666,7 +666,7 @@ mod tests {
     }
 
     /// `ask` is a host tool, `github.get` a server's.
-    fn toolset() -> Toolset {
+    fn action_set() -> ActionSet {
         let server = McpServer::new(
             "github",
             McpTransport::Http {
@@ -681,7 +681,7 @@ mod tests {
             json!({}),
         );
         let ask = Tool::new("ask", ToolRoute::Host { group: None }, json!({}));
-        Toolset::new([server], [get, ask]).unwrap()
+        ActionSet::new([server], [get, ask]).unwrap()
     }
 
     /// A long history of every kind of entry: calls completed, failed and left pending; timers
@@ -690,7 +690,7 @@ mod tests {
     fn varied_history(rounds: u32) -> Vec<HistoryEntry> {
         let mut events = vec![Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
             script: Digest::of(b"script"),
-            toolset: Digest::of(b"toolset"),
+            action_set: Digest::of(b"action_set"),
             input: json!({}).into(),
             seed: Seed::from_bytes([1; 32]),
             epoch: Epoch(1),
@@ -834,7 +834,7 @@ mod tests {
         to: usize,
         previous: Option<&IndexedSummary>,
     ) -> Derived {
-        let (head, toolset) = (head(), toolset());
+        let (head, action_set) = (head(), action_set());
         let history = &history[..to];
         let before = RunState::from_history(&history[..from]).unwrap();
         let after = RunState::from_history(history).unwrap();
@@ -843,7 +843,7 @@ mod tests {
             "headline",
             history,
             &after,
-            &toolset,
+            &action_set,
             &BTreeMap::new(),
             previous,
         );

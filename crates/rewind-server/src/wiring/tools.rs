@@ -1,6 +1,6 @@
-//! Tools: the dispatcher of the routes Rewind calls itself, the discovery of a toolset's MCP
-//! servers, the reading of its APIs' OpenAPI documents, the built-ins pinned in every toolset,
-//! and the declarations generated for a toolset (`archi/04-tools.md`).
+//! Tools: the dispatcher of the routes Rewind calls itself, the discovery of an action set's MCP
+//! servers, the reading of its APIs' OpenAPI documents, the built-ins pinned in every action set,
+//! and the declarations generated for an action set (`archi/04-tools.md`).
 //!
 //! | Route | Dispatcher |
 //! | --- | --- |
@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Builtin, McpServer, Shape, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, Builtin, McpServer, Shape, Tool, ToolRoute};
 use rewind_engine::adapters::{RoutingDispatcher, Unrouted};
 use rewind_engine::ports::TenantId;
 use rewind_mcp::{HttpConfig, HttpTool, ListingAuth, McpConfig, McpDispatcher};
@@ -66,7 +66,7 @@ impl Tools {
         )
     }
 
-    /// The tools of an MCP server, as a toolset pins them, listed as `auth` says.
+    /// The tools of an MCP server, as an action set pins them, listed as `auth` says.
     pub(crate) async fn discover(
         &self,
         tenant: &TenantId,
@@ -89,7 +89,7 @@ impl Tools {
         rewind_mcp::http_tool(allowed_hosts)
     }
 
-    /// The `webhook` built-in, pinned in every toolset.
+    /// The `webhook` built-in, pinned in every action set.
     pub(crate) fn webhook_tool(&self) -> Tool {
         let mut tool = Tool::new(
             "webhook",
@@ -104,13 +104,13 @@ impl Tools {
         tool
     }
 
-    /// The declarations of a toolset: `rewind-tools.d.ts`, the prompt rendering, each tool's.
+    /// The declarations of an action set: `rewind-tools.d.ts`, the prompt rendering, each tool's.
     pub(crate) fn declarations(
         &self,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         observed: &BTreeMap<String, Shape>,
     ) -> rewind_codegen::Declarations {
-        rewind_codegen::generate(toolset, observed)
+        rewind_codegen::generate(action_set, observed)
     }
 
     /// Closes the MCP connections and stops the stdio servers.

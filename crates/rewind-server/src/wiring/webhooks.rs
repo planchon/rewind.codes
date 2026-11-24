@@ -236,7 +236,7 @@ impl Render for ServerRender {
                         seq: seq.0,
                         tool: tool.clone(),
                         server: mcp_server(&app, record, tool).await,
-                        toolset: record.toolset.to_hex(),
+                        action_set: record.action_set.to_hex(),
                         message: message.clone(),
                     },
                 }
@@ -257,7 +257,7 @@ impl Render for ServerRender {
                     seq: seq.0,
                     tool: tool.clone(),
                     server: mcp_server(&app, record, tool).await,
-                    toolset: record.toolset.to_hex(),
+                    action_set: record.action_set.to_hex(),
                     reason: match reason {
                         CredentialsExpiredReason::Refused => {
                             rewind_api::webhooks::CredentialsExpiredReason::Refused
@@ -312,15 +312,20 @@ impl Render for ServerRender {
     }
 }
 
-/// The MCP server of a tool of the run's toolset.
+/// The MCP server of a tool of the run's action set.
 async fn mcp_server(app: &App, head: &rewind_engine::ports::RunHead, tool: &str) -> Option<String> {
     use rewind_engine::ports::CatalogStore as _;
     let stored = app
         .catalog()
-        .get_toolset(&head.run.tenant, head.toolset)
+        .get_action_set(&head.run.tenant, head.action_set)
         .await
         .ok()??;
-    stored.toolset.tool(tool)?.route.server().map(str::to_owned)
+    stored
+        .action_set
+        .tool(tool)?
+        .route
+        .server()
+        .map(str::to_owned)
 }
 
 #[cfg(test)]

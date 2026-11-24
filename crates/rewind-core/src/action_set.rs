@@ -1,14 +1,14 @@
-//! The pinned toolset (`archi/04-tools.md`, "Toolsets and code generation").
+//! The pinned action set (`archi/04-tools.md`, "Action sets and code generation").
 //!
-//! Registering a toolset connects to its MCP servers, lists their tools, reads its APIs' OpenAPI
+//! Registering an action set connects to its MCP servers, lists their tools, reads its APIs' OpenAPI
 //! documents and **pins** them: the servers and APIs, with how each one authenticates its calls,
-//! and for each tool its name, route, description, schemas and policy. The pinned toolset is
+//! and for each tool its name, route, description, schemas and policy. The pinned action set is
 //! immutable and content-addressed: its digest is the SHA-256 of its canonical JSON, the pinned
-//! toolset document of the stored format v1 (`archi/02-journal.md`), and every run records the
+//! action set document of the stored format v1 (`archi/02-journal.md`), and every run records the
 //! digest it was started with.
 //!
 //! ```text
-//! Toolset
+//! Action set
 //! ├── servers:   McpServer { name, transport: http(url) | stdio(command, args, env), concurrency,
 //! │                          auth }
 //! ├── apis:      Api { name, base_url, auth, concurrency }
@@ -47,14 +47,14 @@ use crate::secret::{
 };
 use crate::workflow::{InvalidWorkflow, PinnedWorkflow, WORKFLOWS_NAMESPACE, WorkflowOp};
 
-/// The tools a run may call, pinned when the toolset was registered.
+/// The tools a run may call, pinned when the action set was registered.
 ///
-/// Built with [`Toolset::new`] or [`Toolset::from_parts`], which check every invariant: unique
+/// Built with [`ActionSet::new`] or [`ActionSet::from_parts`], which check every invariant: unique
 /// names, MCP and API tools of known servers and APIs and inside their namespace, an operation
 /// for each API tool, valid policies and `auth`. Servers, APIs and tools are kept sorted by name,
 /// so the digest does not depend on the order they were given in.
 #[derive(Clone, Debug, PartialEq, Default)]
-pub struct Toolset {
+pub struct ActionSet {
     servers: Vec<McpServer>,
     /// Sorted by name.
     apis: Vec<Api>,
@@ -65,7 +65,7 @@ pub struct Toolset {
     workflow_tools: Vec<Tool>,
 }
 
-/// An MCP server of a toolset, as it was pinned.
+/// An MCP server of an action set, as it was pinned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpServer {
     /// The namespace of its tools in `rewind:tools`: an identifier, such as `github`.
@@ -79,7 +79,7 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Calls in flight to one MCP server on each worker, unless the toolset says otherwise.
+    /// Calls in flight to one MCP server on each worker, unless the action set says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 8;
 
     /// A public server with the default concurrency.
@@ -93,7 +93,7 @@ impl McpServer {
     }
 }
 
-/// An API of a toolset, described by an OpenAPI document read once at registration
+/// An API of an action set, described by an OpenAPI document read once at registration
 /// (`archi/04-tools.md`, "API tools"). The document is not kept: each of its operations is a
 /// tool, with its [`ApiOperation`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,7 +110,7 @@ pub struct Api {
 }
 
 impl Api {
-    /// Calls in flight to one API on each worker, unless the toolset says otherwise.
+    /// Calls in flight to one API on each worker, unless the action set says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 8;
 
     /// A public API with the default concurrency.
@@ -308,9 +308,9 @@ impl Tool {
 /// Who calls a tool (`archi/04-tools.md`, "Routes").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolRoute {
-    /// A tool of one of the toolset's MCP servers, called by the dispatcher of Rewind.
+    /// A tool of one of the action set's MCP servers, called by the dispatcher of Rewind.
     Mcp { server: String },
-    /// An operation of one of the toolset's APIs, called by the dispatcher of Rewind as an HTTP
+    /// An operation of one of the action set's APIs, called by the dispatcher of Rewind as an HTTP
     /// client (`archi/04-tools.md`, "API tools").
     Api { api: String },
     /// A built-in, called by the dispatcher of Rewind.
@@ -337,7 +337,7 @@ impl ToolRoute {
     }
 }
 
-/// The built-in tools. A toolset enables one by listing it, named as the built-in.
+/// The built-in tools. An action set enables one by listing it, named as the built-in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Builtin {
     /// `http`: the only way a script reaches the network, through `fetch`. Requests leave from
@@ -347,7 +347,7 @@ pub enum Builtin {
     /// `webhook`: `webhook(name)` returns a URL bound to the run and the signal name.
     Webhook,
     /// `workflows.<workflow>.start` or `workflows.<workflow>.signal`: starts or signals a run of
-    /// a workflow the toolset pins (`archi/03-execution.md`, "Workflows across runs"). Derived
+    /// a workflow the action set pins (`archi/03-execution.md`, "Workflows across runs"). Derived
     /// from the pinned workflow, never declared as a tool.
     Workflow { workflow: String, op: WorkflowOp },
 }
@@ -385,8 +385,8 @@ impl Interruption {
     }
 }
 
-/// The policy of one tool, pinned in the toolset and set per tool by the harness when it
-/// registers the toolset (`archi/04-tools.md`, "Policies").
+/// The policy of one tool, pinned in the action set and set per tool by the harness when it
+/// registers the action set (`archi/04-tools.md`, "Policies").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ToolPolicy {
     pub on_interruption: Interruption,
@@ -403,7 +403,7 @@ pub struct ToolPolicy {
 }
 
 impl ToolPolicy {
-    /// Calls of one tool in flight in one run, unless the toolset says otherwise.
+    /// Calls of one tool in flight in one run, unless the action set says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 16;
     /// The execution timeout of the tools Rewind calls itself (MCP tools, API tools and
     /// built-ins).
@@ -439,10 +439,10 @@ impl ToolPolicy {
     }
 }
 
-/// A toolset that breaks an invariant. The messages are written for the harness developer who
-/// registers the toolset.
+/// An action set that breaks an invariant. The messages are written for the harness developer who
+/// registers the action set.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ToolsetError {
+pub enum ActionSetError {
     #[error(
         "invalid server name {0:?}: expected an identifier (letters, digits, _ and $) that is \
          not a reserved word of JavaScript"
@@ -465,9 +465,9 @@ pub enum ToolsetError {
     InvalidToolName(String),
     #[error("tool {0:?} is declared twice")]
     DuplicateTool(String),
-    #[error("tool {tool:?} belongs to server {server:?}, which the toolset does not declare")]
+    #[error("tool {tool:?} belongs to server {server:?}, which the action set does not declare")]
     UnknownServer { tool: String, server: String },
-    #[error("tool {tool:?} belongs to API {api:?}, which the toolset does not declare")]
+    #[error("tool {tool:?} belongs to API {api:?}, which the action set does not declare")]
     UnknownApi { tool: String, api: String },
     #[error("tool {tool:?} must be named {expected}")]
     MisplacedTool { tool: String, expected: String },
@@ -479,28 +479,28 @@ pub enum ToolsetError {
     InvalidWorkflow(#[from] InvalidWorkflow),
 }
 
-impl Toolset {
-    /// A toolset of these MCP servers and tools, without APIs: [`from_parts`](Self::from_parts).
+impl ActionSet {
+    /// An action set of these MCP servers and tools, without APIs: [`from_parts`](Self::from_parts).
     pub fn new(
         servers: impl IntoIterator<Item = McpServer>,
         tools: impl IntoIterator<Item = Tool>,
-    ) -> Result<Self, ToolsetError> {
+    ) -> Result<Self, ActionSetError> {
         Self::from_parts(servers, [], tools)
     }
 
-    /// A toolset of these MCP servers, APIs and tools, sorted by name. The allowed hosts of
+    /// An action set of these MCP servers, APIs and tools, sorted by name. The allowed hosts of
     /// `http` are lowercased, sorted and deduplicated; an operation's parameters are sorted by
     /// name.
     pub fn from_parts(
         servers: impl IntoIterator<Item = McpServer>,
         apis: impl IntoIterator<Item = Api>,
         tools: impl IntoIterator<Item = Tool>,
-    ) -> Result<Self, ToolsetError> {
+    ) -> Result<Self, ActionSetError> {
         let mut servers: Vec<McpServer> = servers.into_iter().collect();
         servers.sort_by(|a, b| a.name.cmp(&b.name));
         for pair in servers.windows(2) {
             if pair[0].name == pair[1].name {
-                return Err(ToolsetError::DuplicateServer(pair[0].name.clone()));
+                return Err(ActionSetError::DuplicateServer(pair[0].name.clone()));
             }
         }
         for server in &servers {
@@ -510,7 +510,7 @@ impl Toolset {
         apis.sort_by(|a, b| a.name.cmp(&b.name));
         for pair in apis.windows(2) {
             if pair[0].name == pair[1].name {
-                return Err(ToolsetError::DuplicateApi(pair[0].name.clone()));
+                return Err(ActionSetError::DuplicateApi(pair[0].name.clone()));
             }
         }
         for api in &apis {
@@ -518,7 +518,7 @@ impl Toolset {
                 .binary_search_by(|server| server.name.as_str().cmp(&api.name))
                 .is_ok()
             {
-                return Err(ToolsetError::DuplicateApi(api.name.clone()));
+                return Err(ActionSetError::DuplicateApi(api.name.clone()));
             }
             check_api(api)?;
         }
@@ -527,7 +527,7 @@ impl Toolset {
         tools.sort_by(|a, b| a.name.cmp(&b.name));
         for pair in tools.windows(2) {
             if pair[0].name == pair[1].name {
-                return Err(ToolsetError::DuplicateTool(pair[0].name.clone()));
+                return Err(ActionSetError::DuplicateTool(pair[0].name.clone()));
             }
         }
         for tool in &mut tools {
@@ -552,17 +552,17 @@ impl Toolset {
         })
     }
 
-    /// This toolset, pinning these workflows instead of those it pinned: each gives the
+    /// This action set, pinning these workflows instead of those it pinned: each gives the
     /// built-ins `workflows.<name>.start` and `workflows.<name>.signal`.
     pub fn with_workflows(
         mut self,
         workflows: impl IntoIterator<Item = PinnedWorkflow>,
-    ) -> Result<Self, ToolsetError> {
+    ) -> Result<Self, ActionSetError> {
         let mut workflows: Vec<PinnedWorkflow> = workflows.into_iter().collect();
         workflows.sort_by(|a, b| a.name.cmp(&b.name));
         for pair in workflows.windows(2) {
             if pair[0].name == pair[1].name {
-                return Err(ToolsetError::DuplicateWorkflow(pair[0].name.clone()));
+                return Err(ActionSetError::DuplicateWorkflow(pair[0].name.clone()));
             }
         }
         for workflow in &workflows {
@@ -586,17 +586,17 @@ impl Toolset {
         Ok(self)
     }
 
-    /// A toolset with no tool.
+    /// An action set with no tool.
     pub fn empty() -> Self {
         Self::default()
     }
 
     /// Host tools with these names, the default policy, and an input schema that accepts any
-    /// value: what mock mode and tests use when the toolset does not matter. A name
+    /// value: what mock mode and tests use when the action set does not matter. A name
     /// `group.tool` puts the tool in the host-tool group `group`. Duplicates are ignored.
     pub fn from_host_tools<S: Into<String>>(
         names: impl IntoIterator<Item = S>,
-    ) -> Result<Self, ToolsetError> {
+    ) -> Result<Self, ActionSetError> {
         let names: BTreeSet<String> = names.into_iter().map(Into::into).collect();
         let tools = names.into_iter().map(|name| {
             let group = name.split_once('.').map(|(group, _)| group.to_owned());
@@ -622,7 +622,7 @@ impl Toolset {
             .map(|index| &self.apis[index])
     }
 
-    /// How the calls to the MCP server or the API `name` authenticate, if the toolset has one of
+    /// How the calls to the MCP server or the API `name` authenticate, if the action set has one of
     /// that name.
     pub fn auth(&self, name: &str) -> Option<&ToolAuth> {
         self.server(name)
@@ -648,7 +648,7 @@ impl Toolset {
         names.into_iter()
     }
 
-    /// The tools, sorted by name: those the toolset declares, without the workflows'
+    /// The tools, sorted by name: those the action set declares, without the workflows'
     /// built-ins.
     pub fn tools(&self) -> &[Tool] {
         &self.tools
@@ -666,7 +666,7 @@ impl Toolset {
             .map(|index| &self.workflows[index])
     }
 
-    /// A tool scripts may call: one the toolset declares, or a built-in of a pinned workflow.
+    /// A tool scripts may call: one the action set declares, or a built-in of a pinned workflow.
     pub fn tool(&self, name: &str) -> Option<&Tool> {
         let find = |tools: &'_ [Tool]| {
             tools
@@ -690,16 +690,16 @@ impl Toolset {
         self.tool(name).is_some()
     }
 
-    /// SHA-256 of the toolset's canonical JSON (RFC 8785), which is the pinned toolset document
+    /// SHA-256 of the action set's canonical JSON (RFC 8785), which is the pinned action set document
     /// of the stored format v1, `"v": 1` included. The document `rewind-format` writes for a
-    /// toolset hashes to this digest.
+    /// action set hashes to this digest.
     pub fn digest(&self) -> Digest {
         Digest::of(canonical_json(&self.document()).as_bytes())
     }
 
-    /// The pinned toolset document v1, as a JSON value. `workflows` is only there when the
-    /// toolset pins some, `apis` when it has some, a server's `auth` when it is not none and a
-    /// tool's `operation` for an API tool: the digests of the toolsets without them did not
+    /// The pinned action set document v1, as a JSON value. `workflows` is only there when the
+    /// action set pins some, `apis` when it has some, a server's `auth` when it is not none and a
+    /// tool's `operation` for an API tool: the digests of the action sets without them did not
     /// change when they came.
     fn document(&self) -> Value {
         let servers: Vec<Value> = self.servers.iter().map(server_json).collect();
@@ -721,12 +721,12 @@ impl Toolset {
     }
 }
 
-impl fmt::Display for Toolset {
-    /// `toolset 9f2c4e1a07b3 (3 tools)`.
+impl fmt::Display for ActionSet {
+    /// `action_set 9f2c4e1a07b3 (3 tools)`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "toolset {} ({} tools",
+            "action set {} ({} tools",
             self.digest().short(),
             self.tools.len()
         )?;
@@ -740,13 +740,13 @@ impl fmt::Display for Toolset {
 // -------------------------------------------------------------------------------------------
 // Invariants
 
-fn check_server(server: &McpServer) -> Result<(), ToolsetError> {
-    let invalid = |message: &str| ToolsetError::InvalidServer {
+fn check_server(server: &McpServer) -> Result<(), ActionSetError> {
+    let invalid = |message: &str| ActionSetError::InvalidServer {
         server: server.name.clone(),
         message: message.to_owned(),
     };
     if !is_identifier(&server.name) || is_reserved(&server.name) {
-        return Err(ToolsetError::InvalidServerName(server.name.clone()));
+        return Err(ActionSetError::InvalidServerName(server.name.clone()));
     }
     if server.name == WORKFLOWS_NAMESPACE {
         return Err(invalid(
@@ -795,13 +795,13 @@ fn check_server(server: &McpServer) -> Result<(), ToolsetError> {
     }
 }
 
-fn check_api(api: &Api) -> Result<(), ToolsetError> {
-    let invalid = |message: String| ToolsetError::InvalidApi {
+fn check_api(api: &Api) -> Result<(), ActionSetError> {
+    let invalid = |message: String| ActionSetError::InvalidApi {
         api: api.name.clone(),
         message,
     };
     if !is_identifier(&api.name) || is_reserved(&api.name) {
-        return Err(ToolsetError::InvalidApiName(api.name.clone()));
+        return Err(ActionSetError::InvalidApiName(api.name.clone()));
     }
     if api.name == WORKFLOWS_NAMESPACE {
         return Err(invalid(
@@ -851,18 +851,18 @@ fn check_header_auth(auth: &ToolAuth) -> Result<(), String> {
     Ok(())
 }
 
-fn check_tool(tool: &Tool, servers: &[McpServer], apis: &[Api]) -> Result<(), ToolsetError> {
+fn check_tool(tool: &Tool, servers: &[McpServer], apis: &[Api]) -> Result<(), ActionSetError> {
     let name = tool.name.as_str();
-    let invalid = |message: String| ToolsetError::InvalidTool {
+    let invalid = |message: String| ActionSetError::InvalidTool {
         tool: name.to_owned(),
         message,
     };
-    let misplaced = |expected: String| ToolsetError::MisplacedTool {
+    let misplaced = |expected: String| ActionSetError::MisplacedTool {
         tool: name.to_owned(),
         expected,
     };
     if name.is_empty() || name.chars().any(char::is_control) {
-        return Err(ToolsetError::InvalidToolName(name.to_owned()));
+        return Err(ActionSetError::InvalidToolName(name.to_owned()));
     }
     match &tool.route {
         ToolRoute::Mcp { server } => {
@@ -870,7 +870,7 @@ fn check_tool(tool: &Tool, servers: &[McpServer], apis: &[Api]) -> Result<(), To
                 .binary_search_by(|known| known.name.as_str().cmp(server))
                 .is_err()
             {
-                return Err(ToolsetError::UnknownServer {
+                return Err(ActionSetError::UnknownServer {
                     tool: name.to_owned(),
                     server: server.clone(),
                 });
@@ -882,7 +882,7 @@ fn check_tool(tool: &Tool, servers: &[McpServer], apis: &[Api]) -> Result<(), To
                 .binary_search_by(|known| known.name.as_str().cmp(api))
                 .is_err()
             {
-                return Err(ToolsetError::UnknownApi {
+                return Err(ActionSetError::UnknownApi {
                     tool: name.to_owned(),
                     api: api.clone(),
                 });
@@ -929,7 +929,7 @@ fn check_tool(tool: &Tool, servers: &[McpServer], apis: &[Api]) -> Result<(), To
         }
         ToolRoute::Builtin(Builtin::Workflow { .. }) => {
             return Err(invalid(
-                "the built-ins of a workflow come from the workflows the toolset pins".into(),
+                "the built-ins of a workflow come from the workflows the action set pins".into(),
             ));
         }
         ToolRoute::Builtin(builtin) => {
@@ -1183,7 +1183,7 @@ fn tool_json(tool: &Tool) -> Value {
             json!({ "type": "builtin", "builtin": "http", "allowed_hosts": allowed_hosts })
         }
         ToolRoute::Builtin(Builtin::Webhook) => json!({ "type": "builtin", "builtin": "webhook" }),
-        // Never written: a toolset declares no such tool (`check_tool`).
+        // Never written: an action set declares no such tool (`check_tool`).
         ToolRoute::Builtin(Builtin::Workflow { workflow, op }) => json!({
             "type": "builtin", "builtin": "workflow", "workflow": workflow, "op": op.as_str(),
         }),
@@ -1249,7 +1249,7 @@ mod tests {
 
     #[test]
     fn tools_are_sorted_and_found_by_name() {
-        let toolset = Toolset::new(
+        let action_set = ActionSet::new(
             [github()],
             [
                 mcp_tool("github.list_issues"),
@@ -1257,27 +1257,27 @@ mod tests {
             ],
         )
         .unwrap();
-        let names: Vec<&str> = toolset.tools().iter().map(|t| t.name.as_str()).collect();
+        let names: Vec<&str> = action_set.tools().iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["github.close_issue", "github.list_issues"]);
-        let tool = toolset.tool("github.list_issues").unwrap();
+        let tool = action_set.tool("github.list_issues").unwrap();
         assert_eq!(tool.namespace(), Some("github"));
         assert_eq!(tool.local_name(), "list_issues");
-        assert!(toolset.contains("github.close_issue"));
-        assert!(!toolset.contains("github"));
-        assert_eq!(toolset.server("github"), Some(&github()));
+        assert!(action_set.contains("github.close_issue"));
+        assert!(!action_set.contains("github"));
+        assert_eq!(action_set.server("github"), Some(&github()));
     }
 
     #[test]
     fn the_digest_ignores_order_and_is_the_digest_of_the_document() {
-        let a = Toolset::new([github()], [mcp_tool("github.a"), mcp_tool("github.b")]).unwrap();
-        let b = Toolset::new([github()], [mcp_tool("github.b"), mcp_tool("github.a")]).unwrap();
+        let a = ActionSet::new([github()], [mcp_tool("github.a"), mcp_tool("github.b")]).unwrap();
+        let b = ActionSet::new([github()], [mcp_tool("github.b"), mcp_tool("github.a")]).unwrap();
         assert_eq!(a, b);
         assert_eq!(a.digest(), b.digest());
         assert_eq!(
-            Toolset::empty().digest(),
+            ActionSet::empty().digest(),
             Digest::of(br#"{"servers":[],"tools":[],"v":1}"#)
         );
-        let host = Toolset::from_host_tools(["ask_user"]).unwrap();
+        let host = ActionSet::from_host_tools(["ask_user"]).unwrap();
         assert_eq!(
             host.digest(),
             Digest::of(
@@ -1293,11 +1293,11 @@ mod tests {
 
     #[test]
     fn every_pinned_field_changes_the_digest() {
-        let base = Toolset::new([github()], [mcp_tool("github.a")]).unwrap();
+        let base = ActionSet::new([github()], [mcp_tool("github.a")]).unwrap();
         let with = |change: &dyn Fn(&mut Tool)| {
             let mut tool = mcp_tool("github.a");
             change(&mut tool);
-            Toolset::new([github()], [tool]).unwrap().digest()
+            ActionSet::new([github()], [tool]).unwrap().digest()
         };
         let digests = [
             base.digest(),
@@ -1312,7 +1312,7 @@ mod tests {
             {
                 let mut server = github();
                 server.concurrency = 2;
-                Toolset::new([server], [mcp_tool("github.a")])
+                ActionSet::new([server], [mcp_tool("github.a")])
                     .unwrap()
                     .digest()
             },
@@ -1338,9 +1338,10 @@ mod tests {
 
     #[test]
     fn host_tools_get_their_group_from_their_name() {
-        let toolset = Toolset::from_host_tools(["harness.ask_user", "notify", "notify"]).unwrap();
-        assert_eq!(toolset.tools().len(), 2);
-        let grouped = toolset.tool("harness.ask_user").unwrap();
+        let action_set =
+            ActionSet::from_host_tools(["harness.ask_user", "notify", "notify"]).unwrap();
+        assert_eq!(action_set.tools().len(), 2);
+        let grouped = action_set.tool("harness.ask_user").unwrap();
         assert_eq!(
             grouped.route,
             ToolRoute::Host {
@@ -1348,7 +1349,7 @@ mod tests {
             }
         );
         assert_eq!(grouped.local_name(), "ask_user");
-        assert_eq!(toolset.tool("notify").unwrap().namespace(), None);
+        assert_eq!(action_set.tool("notify").unwrap().namespace(), None);
         assert!(!ToolRoute::Host { group: None }.is_dispatched());
         assert!(ToolRoute::Builtin(Builtin::Webhook).is_dispatched());
     }
@@ -1364,40 +1365,41 @@ mod tests {
                 json!({}),
             )
         };
-        let toolset = Toolset::new([], [http(&["B.example", "a.example", "b.example"])]).unwrap();
+        let action_set =
+            ActionSet::new([], [http(&["B.example", "a.example", "b.example"])]).unwrap();
         assert_eq!(
-            toolset.tool("http").unwrap().route,
+            action_set.tool("http").unwrap().route,
             ToolRoute::Builtin(Builtin::Http {
                 allowed_hosts: vec!["a.example".into(), "b.example".into()]
             })
         );
         assert!(matches!(
-            Toolset::new([], [http(&[])]),
-            Err(ToolsetError::InvalidTool { .. })
+            ActionSet::new([], [http(&[])]),
+            Err(ActionSetError::InvalidTool { .. })
         ));
         let misnamed = Tool::new("hook", ToolRoute::Builtin(Builtin::Webhook), json!({}));
         assert!(matches!(
-            Toolset::new([], [misnamed]),
-            Err(ToolsetError::MisplacedTool { .. })
+            ActionSet::new([], [misnamed]),
+            Err(ActionSetError::MisplacedTool { .. })
         ));
         let impostor = Tool::new("webhook", ToolRoute::Host { group: None }, json!({}));
         assert!(matches!(
-            Toolset::new([], [impostor]),
-            Err(ToolsetError::MisplacedTool { .. })
+            ActionSet::new([], [impostor]),
+            Err(ActionSetError::MisplacedTool { .. })
         ));
     }
 
     #[test]
     fn invariants_are_checked() {
         let err =
-            |servers: Vec<McpServer>, tools: Vec<Tool>| Toolset::new(servers, tools).unwrap_err();
+            |servers: Vec<McpServer>, tools: Vec<Tool>| ActionSet::new(servers, tools).unwrap_err();
         assert_eq!(
             err(vec![github(), github()], vec![]),
-            ToolsetError::DuplicateServer("github".into())
+            ActionSetError::DuplicateServer("github".into())
         );
         assert_eq!(
             err(vec![], vec![mcp_tool("github.a")]),
-            ToolsetError::UnknownServer {
+            ActionSetError::UnknownServer {
                 tool: "github.a".into(),
                 server: "github".into()
             }
@@ -1407,51 +1409,51 @@ mod tests {
                 vec![github()],
                 vec![mcp_tool("github.a"), mcp_tool("github.a")]
             ),
-            ToolsetError::DuplicateTool("github.a".into())
+            ActionSetError::DuplicateTool("github.a".into())
         );
         assert!(matches!(
             err(vec![github()], vec![mcp_tool("slack.post")]),
-            ToolsetError::MisplacedTool { .. }
+            ActionSetError::MisplacedTool { .. }
         ));
         assert!(matches!(
             err(vec![github()], vec![mcp_tool("github.")]),
-            ToolsetError::MisplacedTool { .. }
+            ActionSetError::MisplacedTool { .. }
         ));
         let mut bad_server = github();
         bad_server.name = "git-hub".into();
         assert_eq!(
             err(vec![bad_server], vec![]),
-            ToolsetError::InvalidServerName("git-hub".into())
+            ActionSetError::InvalidServerName("git-hub".into())
         );
         let mut idle = github();
         idle.concurrency = 0;
         assert!(matches!(
             err(vec![idle], vec![]),
-            ToolsetError::InvalidServer { .. }
+            ActionSetError::InvalidServer { .. }
         ));
         let dotted = Tool::new("a.b", ToolRoute::Host { group: None }, json!({}));
         assert!(matches!(
             err(vec![], vec![dotted]),
-            ToolsetError::MisplacedTool { .. }
+            ActionSetError::MisplacedTool { .. }
         ));
         let mut blocked = mcp_tool("github.a");
         blocked.policy.concurrency = 0;
         assert!(matches!(
             err(vec![github()], vec![blocked]),
-            ToolsetError::InvalidTool { .. }
+            ActionSetError::InvalidTool { .. }
         ));
         let mut fractional = mcp_tool("github.a");
         fractional.policy.heartbeat_timeout = Duration::from_micros(1500);
         assert!(matches!(
             err(vec![github()], vec![fractional]),
-            ToolsetError::InvalidTool { .. }
+            ActionSetError::InvalidTool { .. }
         ));
         assert_eq!(
             err(
                 vec![],
                 vec![Tool::new("", ToolRoute::Host { group: None }, json!({}))]
             ),
-            ToolsetError::InvalidToolName(String::new())
+            ActionSetError::InvalidToolName(String::new())
         );
     }
 
@@ -1464,9 +1466,9 @@ mod tests {
         )
     }
 
-    /// A toolset where `name` becomes an identifier of `rewind:tools`: as a server, as a host-tool
+    /// An action set where `name` becomes an identifier of `rewind:tools`: as a server, as a host-tool
     /// group, and as a host tool without a group.
-    fn as_identifier(name: &str) -> [Result<Toolset, ToolsetError>; 3] {
+    fn as_identifier(name: &str) -> [Result<ActionSet, ActionSetError>; 3] {
         let tool = Tool::new(
             format!("{name}.find"),
             ToolRoute::Mcp {
@@ -1483,9 +1485,9 @@ mod tests {
         );
         let bare = Tool::new(name, ToolRoute::Host { group: None }, json!({}));
         [
-            Toolset::new([server(name)], [tool]),
-            Toolset::new([], [grouped]),
-            Toolset::new([], [bare]),
+            ActionSet::new([server(name)], [tool]),
+            ActionSet::new([], [grouped]),
+            ActionSet::new([], [bare]),
         ]
     }
 
@@ -1495,17 +1497,17 @@ mod tests {
             let [server, group, bare] = as_identifier(word);
             assert_eq!(
                 server.unwrap_err(),
-                ToolsetError::InvalidServerName((*word).to_owned()),
+                ActionSetError::InvalidServerName((*word).to_owned()),
                 "{word}"
             );
             let group = group.unwrap_err();
             assert!(
-                matches!(&group, ToolsetError::InvalidTool { message, .. } if message.contains("reserved word")),
+                matches!(&group, ActionSetError::InvalidTool { message, .. } if message.contains("reserved word")),
                 "{word}: {group}"
             );
             let bare = bare.unwrap_err();
             assert!(
-                matches!(&bare, ToolsetError::InvalidTool { message, .. } if message.contains("reserved word")),
+                matches!(&bare, ActionSetError::InvalidTool { message, .. } if message.contains("reserved word")),
                 "{word}: {bare}"
             );
         }
@@ -1541,7 +1543,7 @@ mod tests {
             assert!(RESERVED_WORDS.contains(&word), "{word}");
         }
         assert_eq!(
-            ToolsetError::InvalidServerName("delete".into()).to_string(),
+            ActionSetError::InvalidServerName("delete".into()).to_string(),
             "invalid server name \"delete\": expected an identifier (letters, digits, _ and $) \
              that is not a reserved word of JavaScript"
         );
@@ -1577,13 +1579,13 @@ mod tests {
             "$new",
             "github",
         ] {
-            for toolset in as_identifier(name) {
-                assert!(toolset.is_ok(), "{name}: {toolset:?}");
+            for action_set in as_identifier(name) {
+                assert!(action_set.is_ok(), "{name}: {action_set:?}");
             }
         }
         // A host tool whose name is no identifier at all stays out of `rewind:tools`, as before.
         let dashed = Tool::new("ask-user", ToolRoute::Host { group: None }, json!({}));
-        assert!(Toolset::new([], [dashed]).is_ok());
+        assert!(ActionSet::new([], [dashed]).is_ok());
     }
 
     fn pinned(name: &str) -> PinnedWorkflow {
@@ -1591,7 +1593,7 @@ mod tests {
             name,
             None,
             Digest::of(b"script"),
-            Digest::of(b"toolset"),
+            Digest::of(b"action_set"),
             crate::WorkflowSchemas {
                 input: json!({ "type": "object" }),
                 output: json!({}),
@@ -1604,19 +1606,19 @@ mod tests {
 
     #[test]
     fn pinned_workflows_give_their_builtins_outside_the_document() {
-        let base = Toolset::new([github()], [mcp_tool("github.a")]).unwrap();
-        let toolset = base
+        let base = ActionSet::new([github()], [mcp_tool("github.a")]).unwrap();
+        let action_set = base
             .clone()
             .with_workflows([pinned("triage"), pinned("digest")])
             .unwrap();
-        let names: Vec<&str> = toolset
+        let names: Vec<&str> = action_set
             .workflows()
             .iter()
             .map(|w| w.name.as_str())
             .collect();
         assert_eq!(names, ["digest", "triage"]);
-        assert_eq!(toolset.tools(), base.tools());
-        let start = toolset.tool("workflows.triage.start").unwrap();
+        assert_eq!(action_set.tools(), base.tools());
+        let start = action_set.tool("workflows.triage.start").unwrap();
         assert_eq!(
             start.route,
             ToolRoute::Builtin(Builtin::Workflow {
@@ -1625,33 +1627,33 @@ mod tests {
             })
         );
         assert_eq!(start.policy, ToolPolicy::default_for(&start.route));
-        assert!(toolset.contains("workflows.digest.signal"));
-        assert!(!toolset.contains("workflows.triage"));
-        assert_eq!(toolset.workflow("triage"), Some(&pinned("triage")));
-        assert_ne!(toolset.digest(), base.digest());
+        assert!(action_set.contains("workflows.digest.signal"));
+        assert!(!action_set.contains("workflows.triage"));
+        assert_eq!(action_set.workflow("triage"), Some(&pinned("triage")));
+        assert_ne!(action_set.digest(), base.digest());
         // Without workflows, the document has no `workflows`: older digests hold.
         assert_eq!(
             base.clone().with_workflows([]).unwrap().digest(),
             base.digest()
         );
-        assert!(toolset.to_string().ends_with("(1 tools, 2 workflows)"));
+        assert!(action_set.to_string().ends_with("(1 tools, 2 workflows)"));
     }
 
     #[test]
     fn workflows_are_checked_and_their_namespace_is_reserved() {
         assert_eq!(
-            Toolset::empty().with_workflows([pinned("triage"), pinned("triage")]),
-            Err(ToolsetError::DuplicateWorkflow("triage".into()))
+            ActionSet::empty().with_workflows([pinned("triage"), pinned("triage")]),
+            Err(ActionSetError::DuplicateWorkflow("triage".into()))
         );
         let mut invalid = pinned("triage");
         invalid.name = "default".into();
         assert!(matches!(
-            Toolset::empty().with_workflows([invalid]),
-            Err(ToolsetError::InvalidWorkflow(_))
+            ActionSet::empty().with_workflows([invalid]),
+            Err(ActionSetError::InvalidWorkflow(_))
         ));
         assert!(matches!(
-            Toolset::new([server("workflows")], []),
-            Err(ToolsetError::InvalidServer { .. })
+            ActionSet::new([server("workflows")], []),
+            Err(ActionSetError::InvalidServer { .. })
         ));
         let grouped = Tool::new(
             "workflows.ask",
@@ -1661,8 +1663,8 @@ mod tests {
             json!({}),
         );
         assert!(matches!(
-            Toolset::new([], [grouped]),
-            Err(ToolsetError::InvalidTool { .. })
+            ActionSet::new([], [grouped]),
+            Err(ActionSetError::InvalidTool { .. })
         ));
         let declared = Tool::new(
             "workflows.triage.start",
@@ -1673,8 +1675,8 @@ mod tests {
             json!({}),
         );
         assert!(matches!(
-            Toolset::new([], [declared]),
-            Err(ToolsetError::InvalidTool { .. })
+            ActionSet::new([], [declared]),
+            Err(ActionSetError::InvalidTool { .. })
         ));
     }
 
@@ -1712,8 +1714,8 @@ mod tests {
 
     #[test]
     fn api_tools_have_an_operation_and_a_policy_from_their_method() {
-        let toolset = Toolset::from_parts([github()], [dax()], [api_tool()]).unwrap();
-        let tool = toolset.tool("dax.createMeasure").unwrap();
+        let action_set = ActionSet::from_parts([github()], [dax()], [api_tool()]).unwrap();
+        let tool = action_set.tool("dax.createMeasure").unwrap();
         assert_eq!(tool.namespace(), Some("dax"));
         assert_eq!(tool.local_name(), "createMeasure");
         assert_eq!(tool.route.server(), Some("dax"));
@@ -1748,36 +1750,36 @@ mod tests {
             ToolPolicy::default_for_operation(&get).on_interruption,
             Interruption::Retry
         );
-        assert_eq!(toolset.api("dax"), Some(&dax()));
-        assert_eq!(toolset.auth("dax"), Some(&ToolAuth::None));
-        assert_eq!(toolset.auth("github"), Some(&ToolAuth::None));
-        assert_eq!(toolset.auth("slack"), None);
+        assert_eq!(action_set.api("dax"), Some(&dax()));
+        assert_eq!(action_set.auth("dax"), Some(&ToolAuth::None));
+        assert_eq!(action_set.auth("github"), Some(&ToolAuth::None));
+        assert_eq!(action_set.auth("slack"), None);
     }
 
     #[test]
     fn api_tools_are_checked() {
         let err = |apis: Vec<Api>, tools: Vec<Tool>| {
-            Toolset::from_parts([github()], apis, tools).unwrap_err()
+            ActionSet::from_parts([github()], apis, tools).unwrap_err()
         };
         assert_eq!(
             err(vec![], vec![api_tool()]),
-            ToolsetError::UnknownApi {
+            ActionSetError::UnknownApi {
                 tool: "dax.createMeasure".into(),
                 api: "dax".into()
             }
         );
         assert_eq!(
             err(vec![dax(), dax()], vec![]),
-            ToolsetError::DuplicateApi("dax".into())
+            ActionSetError::DuplicateApi("dax".into())
         );
         assert_eq!(
             err(vec![Api::new("github", "https://api.github.com")], vec![]),
-            ToolsetError::DuplicateApi("github".into()),
+            ActionSetError::DuplicateApi("github".into()),
             "an API and a server share the namespaces of rewind:tools"
         );
         assert_eq!(
             err(vec![Api::new("delete", "https://x.example")], vec![]),
-            ToolsetError::InvalidApiName("delete".into())
+            ActionSetError::InvalidApiName("delete".into())
         );
         for base in [
             "ftp://x.example",
@@ -1788,7 +1790,7 @@ mod tests {
             assert!(
                 matches!(
                     err(vec![Api::new("dax", base)], vec![]),
-                    ToolsetError::InvalidApi { .. }
+                    ActionSetError::InvalidApi { .. }
                 ),
                 "{base}"
             );
@@ -1797,13 +1799,13 @@ mod tests {
         no_operation.operation = None;
         assert!(matches!(
             err(vec![dax()], vec![no_operation]),
-            ToolsetError::InvalidTool { .. }
+            ActionSetError::InvalidTool { .. }
         ));
         let mut stray = mcp_tool("github.a");
         stray.operation = Some(create_measure());
         assert!(matches!(
             err(vec![], vec![stray]),
-            ToolsetError::InvalidTool { .. }
+            ActionSetError::InvalidTool { .. }
         ));
         let broken = |change: &dyn Fn(&mut ApiOperation)| {
             let mut tool = api_tool();
@@ -1817,7 +1819,10 @@ mod tests {
             broken(&|op| op.parameters[1].name = "body".into()),
             broken(&|op| op.parameters[1].name = "project".into()),
         ] {
-            assert!(matches!(error, ToolsetError::InvalidTool { .. }), "{error}");
+            assert!(
+                matches!(error, ActionSetError::InvalidTool { .. }),
+                "{error}"
+            );
         }
     }
 
@@ -1833,12 +1838,12 @@ mod tests {
                 },
             );
             server.auth = auth;
-            Toolset::new([server], [])
+            ActionSet::new([server], [])
         };
         let http = |auth: ToolAuth| {
             let mut server = github();
             server.auth = auth;
-            Toolset::new([server], [])
+            ActionSet::new([server], [])
         };
         let env = |variable: &str| {
             ToolAuth::Secret(SecretPlacement::Env {
@@ -1869,23 +1874,23 @@ mod tests {
             http(header("Authorization", Some("Bearer"))),
         ] {
             assert!(
-                matches!(refused, Err(ToolsetError::InvalidServer { .. })),
+                matches!(refused, Err(ActionSetError::InvalidServer { .. })),
                 "{refused:?}"
             );
         }
         let mut api = dax();
         api.auth = env("TOKEN");
         assert!(matches!(
-            Toolset::from_parts([], [api], []),
-            Err(ToolsetError::InvalidApi { .. })
+            ActionSet::from_parts([], [api], []),
+            Err(ActionSetError::InvalidApi { .. })
         ));
     }
 
     #[test]
     fn the_new_fields_are_in_the_document_only_when_used() {
-        let base = Toolset::new([github()], [mcp_tool("github.a")]).unwrap();
+        let base = ActionSet::new([github()], [mcp_tool("github.a")]).unwrap();
         assert_eq!(
-            Toolset::from_parts([github()], [], [mcp_tool("github.a")])
+            ActionSet::from_parts([github()], [], [mcp_tool("github.a")])
                 .unwrap()
                 .digest(),
             base.digest(),
@@ -1901,31 +1906,31 @@ mod tests {
         signed_api.auth = ToolAuth::Rewind;
         let digests = [
             base.digest(),
-            Toolset::new([signed], [mcp_tool("github.a")])
+            ActionSet::new([signed], [mcp_tool("github.a")])
                 .unwrap()
                 .digest(),
-            Toolset::new([keyed], [mcp_tool("github.a")])
+            ActionSet::new([keyed], [mcp_tool("github.a")])
                 .unwrap()
                 .digest(),
-            Toolset::new([basic], [mcp_tool("github.a")])
+            ActionSet::new([basic], [mcp_tool("github.a")])
                 .unwrap()
                 .digest(),
-            Toolset::from_parts([github()], [dax()], [mcp_tool("github.a")])
+            ActionSet::from_parts([github()], [dax()], [mcp_tool("github.a")])
                 .unwrap()
                 .digest(),
-            Toolset::from_parts([github()], [signed_api], [mcp_tool("github.a")])
+            ActionSet::from_parts([github()], [signed_api], [mcp_tool("github.a")])
                 .unwrap()
                 .digest(),
-            Toolset::from_parts([github()], [dax()], [mcp_tool("github.a"), api_tool()])
+            ActionSet::from_parts([github()], [dax()], [mcp_tool("github.a"), api_tool()])
                 .unwrap()
                 .digest(),
         ];
         let unique: BTreeSet<Digest> = digests.iter().copied().collect();
         assert_eq!(unique.len(), digests.len());
 
-        let toolset = Toolset::from_parts([github()], [dax()], [api_tool()]).unwrap();
+        let action_set = ActionSet::from_parts([github()], [dax()], [api_tool()]).unwrap();
         assert_eq!(
-            canonical_json(&toolset.document()),
+            canonical_json(&action_set.document()),
             concat!(
                 r#"{"apis":[{"base_url":"https://api.example.com/v1","concurrency":8,"name":"dax"}],"#,
                 r#""servers":[{"concurrency":8,"name":"github","transport":{"type":"http","#,
@@ -1940,7 +1945,7 @@ mod tests {
         );
         let mut basic = github();
         basic.auth = ToolAuth::Secret(SecretPlacement::basic());
-        let document = Toolset::new([basic], []).unwrap().document();
+        let document = ActionSet::new([basic], []).unwrap().document();
         assert_eq!(
             canonical_json(&document["servers"][0]["auth"]),
             r#"{"encoding":"base64","format":"Basic {secret}","header":"Authorization","type":"secret"}"#
@@ -1955,9 +1960,9 @@ mod tests {
         signed.auth = ToolAuth::Rewind;
         let mut api = Api::new("zendesk", "https://zendesk.example.com");
         api.auth = ToolAuth::Secret(SecretPlacement::header("X-Api-Key"));
-        let toolset = Toolset::from_parts([keyed, signed], [dax(), api], []).unwrap();
+        let action_set = ActionSet::from_parts([keyed, signed], [dax(), api], []).unwrap();
         assert_eq!(
-            toolset.taking_secrets().collect::<Vec<_>>(),
+            action_set.taking_secrets().collect::<Vec<_>>(),
             ["github", "zendesk"]
         );
     }

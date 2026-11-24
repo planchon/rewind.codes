@@ -1,5 +1,5 @@
 //! The agent tools of the MCP set (`archi/07-code-architecture.md`, "MCP and OAuth"): the
-//! SDK's handlers, with the namespace and the toolset taken from each call's arguments rather
+//! SDK's handlers, with the namespace and the action set taken from each call's arguments rather
 //! than from options, no labels of their own (the caller's grant carries them), the MCP bounds
 //! (`wait` at most 200 s, 30 s by default; a result at most 80 000 characters), and the tools
 //! that find what the caller reaches.
@@ -19,8 +19,8 @@ use crate::api::McpApi;
 use crate::definitions::MCP_TOOLS;
 use crate::input::{InputError, Values, optional_string, parse};
 use crate::render::{
-    Limits, MCP_RESULT_LIMIT, OrganizationView, describe_namespaces, describe_orgs,
-    describe_toolsets, truncate_middle,
+    Limits, MCP_RESULT_LIMIT, OrganizationView, describe_action_sets, describe_namespaces,
+    describe_orgs, truncate_middle,
 };
 use crate::tools::{AgentError, AgentToolResult, Failure, HandleOptions, Session, finish, result};
 
@@ -134,23 +134,23 @@ impl McpTools {
                 let list = api.list_namespaces(&query).await?;
                 return Ok(result(describe_namespaces(&list, prefix.as_deref()), false));
             }
-            "list_toolsets" => {
-                let list = api.list_toolsets().await?;
-                return Ok(result(describe_toolsets(&list), false));
+            "list_action_sets" => {
+                let list = api.list_action_sets().await?;
+                return Ok(result(describe_action_sets(&list), false));
             }
             "check_script" | "test_script" | "run_script" => {
                 require_namespace(values)?;
             }
             _ => {}
         }
-        let toolset = match name {
-            "search_tools" => Some(require_toolset(values)?),
-            "check_script" | "test_script" | "run_script" => optional_string(values, "toolset")?,
+        let action_set = match name {
+            "search_tools" => Some(require_action_set(values)?),
+            "check_script" | "test_script" | "run_script" => optional_string(values, "action_set")?,
             _ => None,
         };
         let session = Session {
             api,
-            toolset,
+            action_set,
             labels: &NO_LABELS,
             limits: self.limits,
             default_wait: self.default_wait,
@@ -189,11 +189,11 @@ fn require_namespace(values: &Values) -> Result<(), InputError> {
     }
 }
 
-fn require_toolset(values: &Values) -> Result<String, InputError> {
-    match values.get("toolset") {
+fn require_action_set(values: &Values) -> Result<String, InputError> {
+    match values.get("action_set") {
         Some(Value::String(id)) if !id.is_empty() => Ok(id.clone()),
         _ => Err(InputError::new(
-            "`toolset` must be a non-empty string: a toolset's id, as list_toolsets gives it.",
+            "`action_set` must be a non-empty string: an action set's id, as list_action_sets gives it.",
         )),
     }
 }

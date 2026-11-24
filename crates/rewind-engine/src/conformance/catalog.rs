@@ -1,4 +1,4 @@
-//! The conformance suite of `CatalogStore`: scripts and toolsets by digest, workflow versions
+//! The conformance suite of `CatalogStore`: scripts and action sets by digest, workflow versions
 //! and their order, the tests and the suites that reference them, subscriptions, tenants,
 //! namespaces with their partition, display names, listing and erasure, and the change every
 //! write sends.
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::{Stream, StreamExt as _};
 use rewind_core::{
-    Digest, Epoch, Script, Suite, SuiteTest, Timestamp, Toolset, Workflow, WorkflowSchemas,
+    ActionSet, Digest, Epoch, Script, Suite, SuiteTest, Timestamp, Workflow, WorkflowSchemas,
 };
 use serde_json::json;
 
@@ -34,7 +34,7 @@ pub async fn run_all<C: CatalogStore, K: Cluster>(new_store: impl Fn() -> (C, K)
             $check(&catalog).await;
         }};
     }
-    catalog_check!(scripts_and_toolsets_are_stored_by_tenant_and_digest);
+    catalog_check!(scripts_and_action_sets_are_stored_by_tenant_and_digest);
     catalog_check!(workflow_versions_are_stored_by_tenant_and_listed_newest_first);
     catalog_check!(scripts_take_the_titles_people_give_them);
     catalog_check!(workflow_versions_are_numbered_per_workflow);
@@ -85,8 +85,8 @@ fn deployment() -> NonZeroU16 {
     partitions(64)
 }
 
-fn toolset_digest() -> Digest {
-    Digest::of(b"toolset")
+fn action_set_digest() -> Digest {
+    Digest::of(b"action_set")
 }
 
 fn workflow(name: &str, script: &str) -> Workflow {
@@ -94,7 +94,7 @@ fn workflow(name: &str, script: &str) -> Workflow {
         name,
         Some(format!("The {name} workflow")),
         Digest::of(script.as_bytes()),
-        toolset_digest(),
+        action_set_digest(),
         WorkflowSchemas {
             input: json!({ "type": "object" }),
             output: json!({}),
@@ -146,9 +146,9 @@ async fn ensure<C: CatalogStore>(catalog: &C, tenant: &TenantId, name: &Namespac
 }
 
 // -------------------------------------------------------------------------------------------
-// Scripts, toolsets, workflows
+// Scripts, action sets, workflows
 
-pub async fn scripts_and_toolsets_are_stored_by_tenant_and_digest<C: CatalogStore>(catalog: &C) {
+pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogStore>(catalog: &C) {
     let other = tenant("other");
     let script = Script::new("export default () => 1");
     let compiled = CompiledScript {
@@ -193,58 +193,58 @@ pub async fn scripts_and_toolsets_are_stored_by_tenant_and_digest<C: CatalogStor
         "another tenant does not see it"
     );
 
-    let toolset = Toolset::from_host_tools(["a", "b"]).expect("toolset");
+    let action_set = ActionSet::from_host_tools(["a", "b"]).expect("action set");
     let declarations = ToolDeclarations {
         typescript: "declare module \"rewind:tools\" {}".into(),
         prompt: "a() · b()".into(),
     };
     catalog
-        .put_toolset(&acme(), &toolset, &declarations)
+        .put_action_set(&acme(), &action_set, &declarations)
         .await
-        .expect("put_toolset");
+        .expect("put_action_set");
     catalog
-        .put_toolset(&acme(), &toolset, &ToolDeclarations::default())
+        .put_action_set(&acme(), &action_set, &ToolDeclarations::default())
         .await
-        .expect("put_toolset is idempotent");
+        .expect("put_action_set is idempotent");
     let stored = catalog
-        .get_toolset(&acme(), toolset.digest())
+        .get_action_set(&acme(), action_set.digest())
         .await
-        .expect("get_toolset")
+        .expect("get_action_set")
         .expect("stored");
-    assert_eq!(stored.toolset, toolset);
+    assert_eq!(stored.action_set, action_set);
     assert_eq!(stored.declarations, declarations, "the first put wins");
     assert_eq!(
         catalog
-            .get_toolset(&other, toolset.digest())
+            .get_action_set(&other, action_set.digest())
             .await
-            .expect("get_toolset"),
+            .expect("get_action_set"),
         None
     );
-    let second = Toolset::from_host_tools(["c"]).expect("toolset");
+    let second = ActionSet::from_host_tools(["c"]).expect("action set");
     for tenant in [acme(), other] {
         catalog
-            .put_toolset(&tenant, &second, &ToolDeclarations::default())
+            .put_action_set(&tenant, &second, &ToolDeclarations::default())
             .await
-            .expect("put_toolset");
+            .expect("put_action_set");
     }
-    let mut expected = vec![toolset.digest(), second.digest()];
+    let mut expected = vec![action_set.digest(), second.digest()];
     expected.sort();
     assert_eq!(
         catalog
-            .list_toolsets(&acme())
+            .list_action_sets(&acme())
             .await
-            .expect("list_toolsets")
+            .expect("list_action_sets")
             .iter()
-            .map(|stored| stored.toolset.digest())
+            .map(|stored| stored.action_set.digest())
             .collect::<Vec<_>>(),
         expected,
-        "the tenant's toolsets, by digest"
+        "the tenant's action sets, by digest"
     );
     assert_eq!(
         catalog
-            .list_toolsets(&tenant("nobody"))
+            .list_action_sets(&tenant("nobody"))
             .await
-            .expect("list_toolsets"),
+            .expect("list_action_sets"),
         []
     );
 }
@@ -1340,16 +1340,16 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
         },
         "a title removed"
     );
-    let toolset = Toolset::from_host_tools(["a"]).expect("toolset");
+    let action_set = ActionSet::from_host_tools(["a"]).expect("action set");
     catalog
-        .put_toolset(&acme(), &toolset, &ToolDeclarations::default())
+        .put_action_set(&acme(), &action_set, &ToolDeclarations::default())
         .await
-        .expect("put_toolset");
+        .expect("put_action_set");
     assert_eq!(
         next_change(&mut changes).await,
-        ControlPlaneChange::Toolset {
+        ControlPlaneChange::ActionSet {
             tenant: acme(),
-            digest: toolset.digest()
+            digest: action_set.digest()
         }
     );
     let test = test_record("changed", None);

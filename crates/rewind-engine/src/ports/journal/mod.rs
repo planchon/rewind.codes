@@ -1,5 +1,5 @@
 //! What a run's history, inbox and tool tasks are made of, and what the catalog keeps of the
-//! scripts, toolsets and workflow versions they run (`archi/02-journal.md`,
+//! scripts, action sets and workflow versions they run (`archi/02-journal.md`,
 //! `archi/03-execution.md`, "Activations", "Workflows across runs"; `archi/04-tools.md`,
 //! "Tool task lifecycle"). The records the stores keep them in are their adapters':
 //! [`PartitionStore`](crate::ports::PartitionStore) for a run, [`CatalogStore`](
@@ -10,7 +10,7 @@ mod runs;
 mod tasks;
 mod workflows;
 
-use rewind_core::{RunId, Script, Timestamp, Toolset};
+use rewind_core::{ActionSet, RunId, Script, Timestamp};
 
 pub use activation::{InboxItem, PayloadRecord, Trigger};
 pub use runs::{
@@ -46,10 +46,10 @@ pub struct ScriptTitle {
     pub updated_at: Timestamp,
 }
 
-/// A pinned toolset as stored, with the declarations generated from it.
+/// A pinned action set as stored, with the declarations generated from it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StoredToolset {
-    pub toolset: Toolset,
+pub struct StoredActionSet {
+    pub action_set: ActionSet,
     pub declarations: ToolDeclarations,
 }
 

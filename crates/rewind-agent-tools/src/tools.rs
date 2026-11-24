@@ -11,18 +11,18 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
+use rewind_api::action_sets::{ActionSet, CreateActionSet, SearchQuery};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{CancelRun, ForkRun, Run, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::testing::{TestInput, TestResult};
-use rewind_api::toolsets::{CreateToolset, SearchQuery, Toolset};
 use rewind_api::workflows::{CreateWorkflow, RecordTests, TestRetirement, TestUpdate, Workflow};
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
 
 use crate::api::{Api, ApiError};
-use crate::definitions::{AGENT_TOOLS, NEEDS_TOOLSET, ToolDefinition, definition};
+use crate::definitions::{AGENT_TOOLS, NEEDS_ACTION_SET, ToolDefinition, definition};
 use crate::input::{
     InputError, Values, optional_attachments, optional_index, optional_retirements,
     optional_string, optional_strings, optional_tests, optional_updates, require_object,
@@ -48,8 +48,8 @@ pub struct AgentToolResult {
     pub run: Option<Run>,
     /// The workflow `save_workflow` saved, or `get_workflow` read.
     pub workflow: Option<Workflow>,
-    /// The toolset `save_workflow` derived: the one the tools use from then on.
-    pub toolset: Option<Toolset>,
+    /// The action set `save_workflow` derived: the one the tools use from then on.
+    pub action_set: Option<ActionSet>,
     /// The outcome of each test: those `test_script` ran, or those of the suite that refused a
     /// save (`save_workflow`) or a fork (`retry_run`).
     pub tests: Option<Vec<TestResult>>,
@@ -73,7 +73,7 @@ pub(crate) fn result(content: String, is_error: bool) -> AgentToolResult {
         is_error,
         run: None,
         workflow: None,
-        toolset: None,
+        action_set: None,
         tests: None,
         script: None,
     }
@@ -85,7 +85,7 @@ pub enum AgentError {
     /// The tool is not one of those given.
     #[error("{0:?} is not one of these agent tools")]
     UnknownTool(String),
-    /// The options name a tool that does not exist, or one that needs a toolset without one.
+    /// The options name a tool that does not exist, or one that needs an action set without one.
     #[error("{0}")]
     Options(String),
     /// The API could not answer, or answered a 401 or a 5xx.
@@ -202,10 +202,10 @@ pub struct HandleOptions {
     pub tracestate: Option<String>,
 }
 
-/// One call's view of the tools: the API, the toolset and labels it acts with, its bounds.
+/// One call's view of the tools: the API, the action set and labels it acts with, its bounds.
 pub(crate) struct Session<'a, A> {
     pub(crate) api: &'a A,
-    pub(crate) toolset: Option<String>,
+    pub(crate) action_set: Option<String>,
     pub(crate) labels: &'a BTreeMap<String, String>,
     pub(crate) limits: Limits,
     pub(crate) default_wait: Duration,
@@ -222,7 +222,7 @@ impl<A: Api> Session<'_, A> {
         let key = run_key(self.labels, self.call.tool_call_id.as_deref());
         let mut start = StartRun::new(code.clone());
         start.secrets = secrets.unwrap_or_default();
-        start.toolset.clone_from(&self.toolset);
+        start.action_set.clone_from(&self.action_set);
         start.input = input.get("input").cloned().unwrap_or_else(|| json!({}));
         start.wait = Some(wait.into());
         start.labels = Labels(self.labels.clone());
@@ -238,7 +238,7 @@ impl<A: Api> Session<'_, A> {
     pub(crate) async fn check_script(&self, input: &Values) -> Handled {
         let check = CheckRequest {
             script: require_string(input, "code")?,
-            toolset: self.toolset.clone(),
+            action_set: self.action_set.clone(),
         };
         let checked = self.api.check(&check).await?;
         let mut content = describe_check(&checked, &self.limits);
@@ -267,7 +267,7 @@ impl<A: Api> Session<'_, A> {
         }
         let request = TestRequest {
             script: Some(code),
-            toolset: self.toolset.clone(),
+            action_set: self.action_set.clone(),
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
             workflow,
         };
@@ -497,11 +497,11 @@ impl<A: Api> Session<'_, A> {
 
     pub(crate) async fn search_tools(&self, input: &Values) -> Handled {
         let query = require_string(input, "query")?;
-        let toolset = self.needs_toolset("search_tools")?;
+        let action_set = self.needs_action_set("search_tools")?;
         let found = self
             .api
             .search_tools(
-                &toolset,
+                &action_set,
                 &SearchQuery {
                     query: query.clone(),
                     limit: None,
@@ -511,7 +511,7 @@ impl<A: Api> Session<'_, A> {
         Ok(result(describe_matches(&query, &found.tools), false))
     }
 
-    /// `POST /v1/workflows` with the session's toolset. The workflow, or what the model reads of
+    /// `POST /v1/workflows` with the session's action set. The workflow, or what the model reads of
     /// its refusal.
     async fn create_workflow(
         &self,
@@ -540,12 +540,12 @@ impl<A: Api> Session<'_, A> {
         let retire = optional_retirements(input)?;
         let parent = optional_string(input, "parent")?;
         let secrets = optional_attachments(input)?;
-        let toolset = self.needs_toolset("save_workflow")?;
+        let action_set = self.needs_action_set("save_workflow")?;
         // The body, as the API reads it.
         let request = CreateWorkflow {
             name: name.clone(),
             description: Some(description),
-            toolset,
+            action_set,
             script: code,
             input: schema_input,
             output: schema_output,
@@ -734,10 +734,10 @@ impl<A: Api> Session<'_, A> {
         Ok(run)
     }
 
-    fn needs_toolset(&self, tool: &str) -> Result<String, Failure> {
-        self.toolset
-            .clone()
-            .ok_or_else(|| Failure::Agent(AgentError::Options(format!("{tool} needs a toolset"))))
+    fn needs_action_set(&self, tool: &str) -> Result<String, Failure> {
+        self.action_set.clone().ok_or_else(|| {
+            Failure::Agent(AgentError::Options(format!("{tool} needs an action set")))
+        })
     }
 
     /// The model's wait, bounded by the longest one, or the default wait.
@@ -769,14 +769,14 @@ fn has_labels(labels: &Labels, required: &BTreeMap<String, String>) -> bool {
 /// How the agent tools of the SDK's set behave: the SDK's `AgentToolsOptions`.
 #[derive(Debug, Clone)]
 pub struct AgentOptions {
-    /// The toolset the model's scripts import from `rewind:tools`. `search_tools`,
+    /// The action set the model's scripts import from `rewind:tools`. `search_tools`,
     /// `save_workflow`, `get_workflow` and `record_tests` need one. Each workflow
-    /// `save_workflow` saves derives a new toolset from it, which the later calls use.
-    pub toolset: Option<String>,
+    /// `save_workflow` saves derives a new action set from it, which the later calls use.
+    pub action_set: Option<String>,
     /// Set on every run the model starts. They scope `list_runs`, and the tools that take a run
     /// id refuse a run that does not carry them.
     pub labels: BTreeMap<String, String>,
-    /// The tools to give the model; all of them by default, those that need a toolset only with
+    /// The tools to give the model; all of them by default, those that need an action set only with
     /// one.
     pub tools: Option<Vec<String>>,
     /// How long `run_script`, `retry_run` and `cancel_run` wait for the run to end: 30 s.
@@ -792,7 +792,7 @@ pub struct AgentOptions {
 impl Default for AgentOptions {
     fn default() -> Self {
         Self {
-            toolset: None,
+            action_set: None,
             labels: BTreeMap::new(),
             tools: None,
             wait: Duration::from_secs(30),
@@ -811,21 +811,21 @@ pub struct AgentTools<A> {
     options: AgentOptions,
     names: Vec<&'static str>,
     limits: Limits,
-    /// The toolset of the model's scripts: the one given, then the last one `save_workflow`
+    /// The action set of the model's scripts: the one given, then the last one `save_workflow`
     /// derived.
     current: Mutex<Option<String>>,
-    /// One derivation of the toolset at a time, so concurrent saves all end up in it.
+    /// One derivation of the action set at a time, so concurrent saves all end up in it.
     derivations: tokio::sync::Mutex<()>,
 }
 
 impl<A: Api> AgentTools<A> {
-    /// The tools of `options.tools`, or all of them (those that need a toolset only with one).
+    /// The tools of `options.tools`, or all of them (those that need an action set only with one).
     pub fn new(api: A, options: AgentOptions) -> Result<Self, AgentError> {
-        let has_toolset = options.toolset.is_some();
+        let has_action_set = options.action_set.is_some();
         let names: Vec<&'static str> = match &options.tools {
             None => AGENT_TOOLS
                 .into_iter()
-                .filter(|name| has_toolset || !NEEDS_TOOLSET.contains(name))
+                .filter(|name| has_action_set || !NEEDS_ACTION_SET.contains(name))
                 .collect(),
             Some(tools) => tools
                 .iter()
@@ -844,14 +844,14 @@ impl<A: Api> AgentTools<A> {
         };
         if let Some(name) = names
             .iter()
-            .find(|name| !has_toolset && NEEDS_TOOLSET.contains(*name))
+            .find(|name| !has_action_set && NEEDS_ACTION_SET.contains(*name))
         {
-            return Err(AgentError::Options(format!("{name} needs a toolset")));
+            return Err(AgentError::Options(format!("{name} needs an action set")));
         }
         let wait = options.wait.min(options.max_wait);
         Ok(Self {
             limits: Limits::for_output(options.output_limit),
-            current: Mutex::new(options.toolset.clone()),
+            current: Mutex::new(options.action_set.clone()),
             options: AgentOptions { wait, ..options },
             api,
             names,
@@ -872,10 +872,10 @@ impl<A: Api> AgentTools<A> {
         self.names.contains(&name)
     }
 
-    /// The toolset the model's scripts run with: the one given, or the last one `save_workflow`
+    /// The action set the model's scripts run with: the one given, or the last one `save_workflow`
     /// derived from it. A harness that creates the agent tools again for each turn keeps it with
-    /// the conversation, and passes it as `toolset` the next time.
-    pub fn toolset(&self) -> Option<String> {
+    /// the conversation, and passes it as `action_set` the next time.
+    pub fn action_set(&self) -> Option<String> {
         self.current
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -896,7 +896,7 @@ impl<A: Api> AgentTools<A> {
         }
         let session = Session {
             api: &self.api,
-            toolset: self.toolset(),
+            action_set: self.action_set(),
             labels: &self.options.labels,
             limits: self.limits,
             default_wait: self.options.wait,
@@ -929,7 +929,7 @@ impl<A: Api> AgentTools<A> {
         finish(name, handled, &self.limits)
     }
 
-    /// Saves a workflow with the agent's toolset, then derives from that toolset one that pins
+    /// Saves a workflow with the agent's action set, then derives from that action set one that pins
     /// this version of it: the later scripts of the model import it from `rewind:workflows`.
     async fn save_workflow(&self, session: &Session<'_, A>, input: &Values) -> Handled {
         let workflow = match session.create_workflow(input).await? {
@@ -955,29 +955,31 @@ impl<A: Api> AgentTools<A> {
             Err(failure) => return Err(failure),
         };
         Ok(AgentToolResult {
-            toolset: Some(derived),
+            action_set: Some(derived),
             ..result(describe_workflow(&workflow, &self.limits), false)
         }
         .with_workflow(workflow))
     }
 
-    /// The current toolset with this version of the workflow pinned, which becomes the current
-    /// toolset. One derivation at a time: each starts from the toolset the previous one gave.
-    async fn derive(&self, workflow: &Workflow) -> Result<Toolset, Failure> {
+    /// The current action set with this version of the workflow pinned, which becomes the current
+    /// action set. One derivation at a time: each starts from the action set the previous one gave.
+    async fn derive(&self, workflow: &Workflow) -> Result<ActionSet, Failure> {
         let _one_at_a_time = self.derivations.lock().await;
-        let base = self.toolset().ok_or_else(|| {
-            Failure::Agent(AgentError::Options("save_workflow needs a toolset".into()))
+        let base = self.action_set().ok_or_else(|| {
+            Failure::Agent(AgentError::Options(
+                "save_workflow needs an action set".into(),
+            ))
         })?;
-        let toolset = self
+        let action_set = self
             .api
-            .create_toolset(&CreateToolset {
+            .create_action_set(&CreateActionSet {
                 base: Some(base),
                 workflows: vec![format!("{}@{}", workflow.name, workflow.version)],
-                ..CreateToolset::default()
+                ..CreateActionSet::default()
             })
             .await?;
-        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(toolset.id.clone());
-        Ok(toolset)
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(action_set.id.clone());
+        Ok(action_set)
     }
 }
 

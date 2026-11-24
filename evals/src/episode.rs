@@ -33,7 +33,7 @@ pub struct EpisodeConfig {
     /// Model turns at most.
     pub max_turns: usize,
     /// How the agent tools behave: the SDK's defaults, a wait of 30 s and 2 minutes at most, in
-    /// virtual time. Each episode gives them its toolset and its labels.
+    /// virtual time. Each episode gives them its action set and its labels.
     pub agent: AgentOptions,
 }
 
@@ -213,7 +213,7 @@ async fn converse(
     });
 
     let options = AgentOptions {
-        toolset: Some(world.toolset.digest().to_hex()),
+        action_set: Some(world.action_set.digest().to_hex()),
         labels: world.labels.clone(),
         ..config.agent.clone()
     };
@@ -252,7 +252,7 @@ async fn converse(
                     is_error: true,
                     run: None,
                     workflow: None,
-                    toolset: None,
+                    action_set: None,
                     tests: None,
                     script: None,
                 },
@@ -336,7 +336,7 @@ async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
     Ok(ids)
 }
 
-/// Saves a workflow of the setup through the gate, with the agent's labels, on the toolset it
+/// Saves a workflow of the setup through the gate, with the agent's labels, on the action set it
 /// was written for.
 async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), String> {
     let refused = |error: String| {
@@ -345,12 +345,12 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
             workflow.name
         )
     };
-    let toolset = match workflow.toolset {
-        Some(toolset) => toolset(&world.toolset).map_err(refused)?,
-        None => world.toolset.clone(),
+    let action_set = match workflow.action_set {
+        Some(action_set) => action_set(&world.action_set).map_err(refused)?,
+        None => world.action_set.clone(),
     };
     world
-        .register_toolset(&toolset)
+        .register_action_set(&action_set)
         .await
         .map_err(|err| refused(err.to_string()))?;
     let mut tests = Vec::with_capacity(workflow.tests.len());
@@ -377,7 +377,7 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
                 name: workflow.name.to_owned(),
                 description: Some(workflow.description.to_owned()),
                 script: Script::new(workflow.script),
-                toolset: toolset.digest(),
+                action_set: action_set.digest(),
                 schemas,
                 labels: world.labels.clone(),
                 secrets: Default::default(),

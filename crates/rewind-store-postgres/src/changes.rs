@@ -18,7 +18,7 @@
 //! {"k":"role","t":"acme","n":"triager"}                 {"k":"connection","id":"cn_…"}
 //! {"k":"secret","t":"acme","ns":"*","n":"github"}       {"k":"subscription","t":"acme","id":"s1"}
 //! {"k":"workflow","t":"acme","n":"triage","v":"<hex>"}  {"k":"script","t":"acme","d":"<hex>"}
-//! {"k":"toolset","t":"acme","d":"<hex>"}                {"k":"test","t":"acme","d":"<hex>"}
+//! {"k":"action_set","t":"acme","d":"<hex>"}             {"k":"test","t":"acme","d":"<hex>"}
 //! {"k":"partition_map","n":["node-a","node-b"],"p":[[0,0,3],[1,1,2],[2,null,0]]}
 //! {"k":"nodes"}
 //! ```
@@ -114,7 +114,7 @@ enum Payload {
         t: String,
         d: String,
     },
-    Toolset {
+    ActionSet {
         t: String,
         d: String,
     },
@@ -200,7 +200,7 @@ impl From<&ControlPlaneChange> for Payload {
                 t: text(tenant),
                 d: digest.to_hex(),
             },
-            ControlPlaneChange::Toolset { tenant, digest } => Payload::Toolset {
+            ControlPlaneChange::ActionSet { tenant, digest } => Payload::ActionSet {
                 t: text(tenant),
                 d: digest.to_hex(),
             },
@@ -316,7 +316,7 @@ impl TryFrom<Payload> for ControlPlaneChange {
                 tenant: tenant_of(t)?,
                 digest: digest_of(&d)?,
             },
-            Payload::Toolset { t, d } => ControlPlaneChange::Toolset {
+            Payload::ActionSet { t, d } => ControlPlaneChange::ActionSet {
                 tenant: tenant_of(t)?,
                 digest: digest_of(&d)?,
             },
@@ -541,7 +541,7 @@ mod tests {
                 tenant: acme.clone(),
                 digest,
             },
-            ControlPlaneChange::Toolset {
+            ControlPlaneChange::ActionSet {
                 tenant: acme.clone(),
                 digest,
             },

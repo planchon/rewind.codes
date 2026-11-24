@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use deno_core::{ModuleSpecifier, PollEventLoopOptions, v8};
 use rewind_core::{
-    Annotation, RunId, Script, Seed, Timestamp, ToolFailure, ToolFailureKind, Toolset,
+    ActionSet, Annotation, RunId, Script, Seed, Timestamp, ToolFailure, ToolFailureKind,
 };
 use rewind_engine::adapters::VirtualClock;
 use rewind_engine::mock::Mocks as Answering;
@@ -264,7 +264,7 @@ impl Mocks {
         let state = ExecState::new(
             RunId::from_u128(0),
             &Seed::from_bytes([0; 32]),
-            Toolset::empty(),
+            ActionSet::empty(),
             started_at,
         );
         let (mut isolate, _hooks) =

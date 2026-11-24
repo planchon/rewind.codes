@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    Epoch, Interruption, McpServer, McpTransport, PartitionId, RunStatus, Tool, ToolFailureKind,
-    ToolPolicy, ToolRoute, Toolset,
+    ActionSet, Epoch, Interruption, McpServer, McpTransport, PartitionId, RunStatus, Tool,
+    ToolFailureKind, ToolPolicy, ToolRoute,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HostTools;
@@ -188,7 +188,7 @@ async fn a_partition_moves_to_a_node_that_joins_and_its_runs_go_on() {
     }
 }
 
-/// A toolset whose tool `srv.a` is an MCP server's, whose calls need a slot of the
+/// An action set whose tool `srv.a` is an MCP server's, whose calls need a slot of the
 /// organization.
 fn mcp_request(name: &str) -> rewind_engine::StartRun {
     let server = McpServer::new(
@@ -205,7 +205,7 @@ fn mcp_request(name: &str) -> rewind_engine::StartRun {
         json!({}),
     );
     let mut request = request(name, json!({}));
-    request.toolset = Toolset::new(vec![server], vec![tool]).unwrap();
+    request.action_set = ActionSet::new(vec![server], vec![tool]).unwrap();
     request
 }
 
@@ -421,7 +421,7 @@ async fn a_node_that_does_not_run_the_run_s_epoch_sends_its_activations_to_one_t
 
 fn host_call(policy: Interruption) -> rewind_engine::StartRun {
     let mut request = request("host", json!({}));
-    let mut tools: Vec<Tool> = request.toolset.tools().to_vec();
+    let mut tools: Vec<Tool> = request.action_set.tools().to_vec();
     for tool in &mut tools {
         if tool.name == "a" {
             let mut with = ToolPolicy::default_for(&tool.route);
@@ -430,7 +430,7 @@ fn host_call(policy: Interruption) -> rewind_engine::StartRun {
             tool.policy = with;
         }
     }
-    request.toolset = Toolset::new(Vec::new(), tools).unwrap();
+    request.action_set = ActionSet::new(Vec::new(), tools).unwrap();
     request
 }
 
@@ -467,7 +467,7 @@ fn attach(stream: &str, worker: &str, at: &NodeId) -> StreamAttach {
         node: at.clone(),
         namespace: None,
         labels: BTreeMap::new(),
-        toolset: None,
+        action_set: None,
         tools: BTreeSet::new(),
         slots: 4,
     }

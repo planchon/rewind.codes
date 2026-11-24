@@ -14,7 +14,7 @@ pub struct Scenario {
     /// The run's input.
     #[serde(default = "empty_object")]
     pub input: Value,
-    /// The toolset, and how each tool answers (see [`crate::tools::ScenarioTools`]). A tool is a
+    /// The action set, and how each tool answers (see [`crate::tools::ScenarioTools`]). A tool is a
     /// host tool (`group.tool` puts it in a group), except `http` and `webhook`, the built-ins,
     /// and the tools of `mcp_servers`.
     #[serde(default)]
@@ -55,8 +55,8 @@ pub struct Scenario {
     /// engine serves its built-ins itself, so the runs of `workflows` it starts really run.
     #[serde(default)]
     pub live: bool,
-    /// Workflows the run's toolset pins, by name. Each is registered with the scenario's tools
-    /// as its toolset, before the run starts (`archi/01-product.md`, "Workflows").
+    /// Workflows the run's action set pins, by name. Each is registered with the scenario's tools
+    /// as its action set, before the run starts (`archi/01-product.md`, "Workflows").
     #[serde(default)]
     pub workflows: BTreeMap<String, WorkflowCase>,
     /// The pinned input schema of some tools, by name. The other host and MCP tools accept any

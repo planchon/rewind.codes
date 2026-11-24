@@ -493,7 +493,7 @@ async fn the_whole_flow(world: &World) {
             "runs:read",
             "runs:start",
             "runs:control",
-            "toolsets:read",
+            "actions:read",
             "namespaces:read"
         ]),
         "a connection never administers, whatever its person's role"
@@ -1329,7 +1329,7 @@ async fn a_connection_never_holds_more_than_its_person() {
         .await;
     assert_eq!(
         whoami["permissions"],
-        json!(["runs:read", "toolsets:read", "namespaces:read"])
+        json!(["runs:read", "actions:read", "namespaces:read"])
     );
 
     // An organization's administrator removes it from the connection.
@@ -1660,7 +1660,7 @@ async fn claude_runs_a_script_over_mcp() {
     for name in [
         "list_orgs",
         "list_namespaces",
-        "list_toolsets",
+        "list_action_sets",
         "run_script",
         "cancel_run",
     ] {

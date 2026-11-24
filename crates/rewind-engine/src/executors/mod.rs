@@ -275,7 +275,7 @@ impl<P: Plane> Executors<P> {
 /// Reads what an activation of a run needs from its partition: its inbox, its tasks, its
 /// history unless the instance cache holds the run (`with_history`), the payload records the
 /// history and the inbox hold by digest, a fork's parent at its first activation, its script
-/// and its toolset.
+/// and its action set.
 pub(crate) async fn prepare<P: Plane>(
     plane: &P,
     log: &LogOf<P>,
@@ -322,12 +322,12 @@ pub(crate) async fn prepare<P: Plane>(
         .await
         .map_err(|error| failed("the script", error.to_string()))?
         .ok_or_else(|| format!("script {} not found", head.script))?;
-    let toolset = plane
+    let action_set = plane
         .catalog()
-        .get_toolset(tenant, head.toolset)
+        .get_action_set(tenant, head.action_set)
         .await
-        .map_err(|error| failed("the toolset", error.to_string()))?
-        .ok_or_else(|| format!("toolset {} not found", head.toolset))?;
+        .map_err(|error| failed("the action set", error.to_string()))?
+        .ok_or_else(|| format!("action set {} not found", head.action_set))?;
     Ok(ActivationRequest {
         partition: log.partition(),
         head,
@@ -337,7 +337,7 @@ pub(crate) async fn prepare<P: Plane>(
         payloads,
         parent,
         script,
-        toolset,
+        action_set,
         purpose,
         tasks,
     })

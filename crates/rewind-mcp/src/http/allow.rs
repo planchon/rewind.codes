@@ -1,5 +1,5 @@
 //! The first step of the `http` tool's egress rules (`archi/04-tools.md`, "The http tool and
-//! egress"): the host must be in the toolset's allow-list. The other steps, a name resolved
+//! egress"): the host must be in the action set's allow-list. The other steps, a name resolved
 //! once, private and metadata addresses refused, the connection to the checked address, are
 //! `rewind-outbound`'s [`Egress`](rewind_outbound::Egress), the client's only resolver.
 
@@ -11,7 +11,7 @@ use url::{Host, Url};
 /// How the `http` tool ends the reason of a refusal.
 pub(crate) const HTTP_TOOL: &str = "the http tool does not reach it";
 
-/// The hosts of a toolset's allow-list: names (`api.example.com`), wildcards for the subdomains
+/// The hosts of an action set's allow-list: names (`api.example.com`), wildcards for the subdomains
 /// of a name (`*.example.com`, not `example.com` itself), or IP addresses.
 #[derive(Debug, Clone)]
 pub(crate) struct AllowList {
@@ -84,7 +84,7 @@ pub(crate) fn check(url: &Url, allowed: &AllowList, policy: AddressPolicy) -> Re
     };
     if !allowed.allows(&host) {
         return Err(Refused(format!(
-            "{host} is not in the toolset's allow-list of the http tool ({})",
+            "{host} is not in the action set's allow-list of the http tool ({})",
             allowed.listed
         )));
     }
@@ -160,7 +160,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error.0,
-            "internal.example is not in the toolset's allow-list of the http tool (127.0.0.1, localhost)"
+            "internal.example is not in the action set's allow-list of the http tool (127.0.0.1, localhost)"
         );
     }
 }

@@ -16,7 +16,7 @@ use crate::args::{
 };
 use crate::error::CliError;
 use crate::exit::Exit;
-use crate::input::{self, ToolsetRef};
+use crate::input::{self, ActionSetRef};
 use crate::interrupt;
 use crate::output::Console;
 use crate::render;
@@ -44,17 +44,21 @@ pub(super) async fn run(
         start.check = Some(false);
     }
     let key = idempotency_key(args.start.key.as_deref())?;
-    let toolset = args.toolset.as_deref().map(ToolsetRef::parse).transpose()?;
+    let action_set = args
+        .action_set
+        .as_deref()
+        .map(ActionSetRef::parse)
+        .transpose()?;
 
     let client = server.starting_client().await?;
     let deadline = Instant::now() + args.start.wait.get();
-    start.toolset = match toolset {
+    start.action_set = match action_set {
         None => None,
-        Some(ToolsetRef::Id(id)) => Some(id),
+        Some(ActionSetRef::Id(id)) => Some(id),
         // Content-addressed: registering the same file again gives the same id.
-        Some(ToolsetRef::File(path)) => {
+        Some(ActionSetRef::File(path)) => {
             let create = input::read_json(&path)?;
-            Some(client.create_toolset(&create).await?.id)
+            Some(client.create_action_set(&create).await?.id)
         }
     };
     // Answered as soon as the run exists, so that its id is known at once; the wait follows.
@@ -373,7 +377,7 @@ mod tests {
 
     const RUN: &str = r#"{"id":"r1","handle":"local/script/06bqx3k9f2mt","namespace":"local",
         "status":"completed","script":"aa",
-        "toolset":"bb","epoch":1,"mode":"live","labels":{},"traceId":"00","historyLen":3,
+        "actionSet":"bb","epoch":1,"mode":"live","labels":{},"traceId":"00","historyLen":3,
         "createdAt":"2026-11-09T10:00:00Z","updatedAt":"2026-11-09T10:00:01Z",
         "expiresAt":"2026-12-09T10:00:00Z"}"#;
 

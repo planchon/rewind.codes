@@ -1,7 +1,7 @@
 //! Names that become identifiers of `rewind:tools`: a server, a host-tool group and a host tool
 //! without a group are declared as `export const`, `export namespace` and `export function`.
-//! Every such name a toolset accepts must give declarations that parse; the reserved words of
-//! JavaScript, which would not, are refused by the toolset itself (`rewind_core::RESERVED_WORDS`).
+//! Every such name an action set accepts must give declarations that parse; the reserved words of
+//! JavaScript, which would not, are refused by the action set itself (`rewind_core::RESERVED_WORDS`).
 
 #![allow(clippy::unwrap_used)]
 
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
 use rewind_codegen::generate;
-use rewind_core::{McpServer, McpTransport, RESERVED_WORDS, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, McpServer, McpTransport, RESERVED_WORDS, Tool, ToolRoute};
 use serde_json::json;
 
 /// Names worth trying besides the reserved words: the contextual keywords of JavaScript and
@@ -65,9 +65,9 @@ const OTHER_NAMES: &[&str] = &[
     "github",
 ];
 
-/// A toolset in which `name` is declared as a server, as a host-tool group, or as a host tool
+/// An action set in which `name` is declared as a server, as a host-tool group, or as a host tool
 /// without a group; each tool takes a string and returns an object.
-fn toolsets(name: &str) -> [Result<Toolset, rewind_core::ToolsetError>; 3] {
+fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3] {
     let input = json!({
         "type": "object",
         "properties": { "q": { "type": "string" } },
@@ -87,7 +87,7 @@ fn toolsets(name: &str) -> [Result<Toolset, rewind_core::ToolsetError>; 3] {
         },
     );
     [
-        Toolset::new(
+        ActionSet::new(
             [server],
             [tool(
                 format!("{name}.find"),
@@ -96,7 +96,7 @@ fn toolsets(name: &str) -> [Result<Toolset, rewind_core::ToolsetError>; 3] {
                 },
             )],
         ),
-        Toolset::new(
+        ActionSet::new(
             [],
             [tool(
                 format!("{name}.ask"),
@@ -105,7 +105,7 @@ fn toolsets(name: &str) -> [Result<Toolset, rewind_core::ToolsetError>; 3] {
                 },
             )],
         ),
-        Toolset::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]),
+        ActionSet::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]),
     ]
 }
 
@@ -131,9 +131,9 @@ fn parse(text: &str) -> Result<(), String> {
 fn the_declarations_of_every_accepted_name_parse() {
     let mut accepted = 0;
     for name in RESERVED_WORDS.iter().chain(OTHER_NAMES) {
-        for toolset in toolsets(name) {
-            let Ok(toolset) = toolset else { continue };
-            let declarations = generate(&toolset, &BTreeMap::new());
+        for action_set in action_sets(name) {
+            let Ok(action_set) = action_set else { continue };
+            let declarations = generate(&action_set, &BTreeMap::new());
             assert!(
                 declarations.typescript.contains(&format!(" {name}")),
                 "{name} is declared:\n{}",
@@ -163,8 +163,8 @@ fn the_declarations_of_every_accepted_name_parse() {
 #[test]
 fn reserved_words_are_refused_before_they_reach_the_declarations() {
     for word in RESERVED_WORDS {
-        for toolset in toolsets(word) {
-            assert!(toolset.is_err(), "{word} is refused");
+        for action_set in action_sets(word) {
+            assert!(action_set.is_err(), "{word} is refused");
         }
         // Declared by an ES module, as `rewind:tools` declares its exports, the name does not
         // parse. (The parser of `.d.ts` files lets some through, such as `eval` and `static`;

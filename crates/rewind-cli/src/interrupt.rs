@@ -4,7 +4,7 @@
 //! A call that changes something (a start, a signal, a fork, a cancellation, a release, a
 //! local scenario or replay) is always finished: abandoning it would leave the user not knowing
 //! whether it happened. No such call starts after the first Ctrl-C: `rewind run` interrupted while
-//! it registers its toolset starts no run, and exits with 130. What only reads or waits (waiting
+//! it registers its action set starts no run, and exits with 130. What only reads or waits (waiting
 //! for a run to end, listing pages) is abandoned at the first Ctrl-C, and the command reports
 //! what it knows.
 

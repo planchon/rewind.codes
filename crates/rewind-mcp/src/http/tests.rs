@@ -307,7 +307,7 @@ async fn redirects_are_checked_again() {
     );
     assert_eq!(
         refused("/to-unlisted").await,
-        "unlisted.test is not in the toolset's allow-list of the http tool (api.test, metadata.test, 169.254.169.254)"
+        "unlisted.test is not in the action set's allow-list of the http tool (api.test, metadata.test, 169.254.169.254)"
     );
     assert_eq!(
         refused("/to-file").await,

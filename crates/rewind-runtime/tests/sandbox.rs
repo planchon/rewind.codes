@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, Annotation, Builtin, Callsite, Command, Completion, Epoch, Event, HistoryEntry,
-    McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed,
-    Seq, Timestamp, Tool, ToolFailure, ToolFailureKind, ToolRoute, Toolset, canonical_json,
+    AbortKind, ActionSet, Annotation, Builtin, Callsite, Command, Completion, Epoch, Event,
+    HistoryEntry, McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script,
+    ScriptError, Seed, Seq, Timestamp, Tool, ToolFailure, ToolFailureKind, ToolRoute,
+    canonical_json,
 };
 use rewind_engine::ports::{
     CallAuth, CompiledScript, Dispatched, ExecutorError, RunRef, ScriptExecutor, StartScript,
@@ -155,8 +156,8 @@ impl Run {
     }
 }
 
-fn toolset() -> Toolset {
-    Toolset::from_host_tools([
+fn action_set() -> ActionSet {
+    ActionSet::from_host_tools([
         "github.get_issue",
         "github.close_issue",
         "audit.record",
@@ -183,16 +184,16 @@ impl Harness {
     }
 
     async fn try_start(&self, source: &str, input: Value) -> Result<RunRef, StartError> {
-        self.try_start_with(source, input, toolset()).await
+        self.try_start_with(source, input, action_set()).await
     }
 
     async fn try_start_with(
         &self,
         source: &str,
         input: Value,
-        toolset: Toolset,
+        action_set: ActionSet,
     ) -> Result<RunRef, StartError> {
-        let mut request = StartRun::new(Script::new(source), toolset, input);
+        let mut request = StartRun::new(Script::new(source), action_set, input);
         request.mode = rewind_core::RunMode::Mock;
         self.world.start(request).await
     }
@@ -201,8 +202,10 @@ impl Harness {
         self.try_start(source, input).await.unwrap()
     }
 
-    async fn start_with(&self, source: &str, input: Value, toolset: Toolset) -> RunRef {
-        self.try_start_with(source, input, toolset).await.unwrap()
+    async fn start_with(&self, source: &str, input: Value, action_set: ActionSet) -> RunRef {
+        self.try_start_with(source, input, action_set)
+            .await
+            .unwrap()
     }
 
     /// Drives the node in virtual time until only the outside world can wake a run.
@@ -381,12 +384,12 @@ async fn crypto_is_chacha20_keyed_by_the_seed() {
       return Array.from(crypto.getRandomValues(new Uint8Array(8)));
     }"#;
     let compiled = executor
-        .compile(&Script::new(source), &Toolset::default())
+        .compile(&Script::new(source), &ActionSet::default())
         .unwrap();
     let start = |seed| StartScript {
         run_id: RunId::from_u128(1),
         compiled: compiled.clone(),
-        toolset: Toolset::default(),
+        action_set: ActionSet::default(),
         input: json!({}),
         seed: Seed::from_bytes(seed),
         epoch: Epoch(1),
@@ -546,7 +549,7 @@ export default async function main() {
 }
 
 /// What type-checks is what exists (`archi/04-tools.md`, "Type-checking"): the isolate's global
-/// names are exactly those `lib/globals.json` declares, with `fetch` only for a toolset that
+/// names are exactly those `lib/globals.json` declares, with `fetch` only for an action set that
 /// enables the `http` tool.
 #[tokio::test]
 async fn the_sandbox_has_exactly_the_declared_globals() {
@@ -567,12 +570,12 @@ export default async function main() {
     let declared = rewind_runtime::sandbox_lib::declared_globals();
     for http_tool in [false, true] {
         let harness = harness().await;
-        let toolset = if http_tool {
-            builtins_toolset()
+        let action_set = if http_tool {
+            builtins_action_set()
         } else {
-            toolset()
+            action_set()
         };
-        let id = harness.start_with(SCRIPT, json!({}), toolset).await;
+        let id = harness.start_with(SCRIPT, json!({}), action_set).await;
         harness.drive().await;
         let run = harness.get(&id).await;
         let output = run.output();
@@ -590,11 +593,11 @@ export default async function main() {
     }
 }
 
-/// A toolset with the built-ins `http` and `webhook`, and one host tool. `webhook` is pinned
+/// An action set with the built-ins `http` and `webhook`, and one host tool. `webhook` is pinned
 /// with the schema of `rewind_runtime::builtins`; `http` with a schema that accepts anything, as
 /// its schema lives in `rewind-mcp` (the corpus of `rewind-e2e` pins that one).
-fn builtins_toolset() -> Toolset {
-    Toolset::new(
+fn builtins_action_set() -> ActionSet {
+    ActionSet::new(
         [],
         [
             Tool::new(
@@ -1465,7 +1468,7 @@ async fn an_unsupported_epoch_is_refused() {
             javascript: "export default () => 1".into(),
             source_map: String::new(),
         },
-        toolset: Toolset::default(),
+        action_set: ActionSet::default(),
         input: json!({}),
         seed: Seed::from_bytes([0; 32]),
         epoch: Epoch(99),
@@ -1512,7 +1515,7 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn only_the_toolset_is_callable() {
+async fn only_the_action_set_is_callable() {
     let harness = harness().await;
     let run = harness
         .run(
@@ -1808,7 +1811,7 @@ export default async function main() {
 }
 "#;
     let id = harness
-        .start_with(script, json!({}), builtins_toolset())
+        .start_with(script, json!({}), builtins_action_set())
         .await;
     harness.drive().await;
     let run = harness.get(&id).await;
@@ -1844,7 +1847,7 @@ export default async function main() {
 }
 "#,
             json!({}),
-            builtins_toolset(),
+            builtins_action_set(),
         )
         .await;
     harness.drive().await;
@@ -1872,7 +1875,7 @@ export default async function main() {
 }
 "#,
             json!({}),
-            builtins_toolset(),
+            builtins_action_set(),
         )
         .await;
     harness.drive().await;
@@ -1916,7 +1919,7 @@ export default async function main() {
     assert_eq!(
         run.output(),
         &json!(
-            "TypeError: webhook() needs the built-in webhook tool, which this run's toolset does \
+            "TypeError: webhook() needs the built-in webhook tool, which this run's action set does \
              not have"
         )
     );
@@ -1924,7 +1927,7 @@ export default async function main() {
 }
 
 /// The tools of an MCP server `crm`: two pinned without an output schema, one with.
-fn crm_toolset() -> Toolset {
+fn crm_action_set() -> ActionSet {
     let server = McpServer::new(
         "crm",
         McpTransport::Http {
@@ -1936,7 +1939,7 @@ fn crm_toolset() -> Toolset {
     };
     let mut score = Tool::new("crm.score", route(), json!({}));
     score.output_schema = Some(json!({ "type": "object" }));
-    Toolset::new(
+    ActionSet::new(
         [server],
         [
             Tool::new("crm.lookup", route(), json!({})),
@@ -1970,7 +1973,7 @@ export default async function main() {
 }
 "#,
             json!({}),
-            crm_toolset(),
+            crm_action_set(),
         )
         .await;
     harness.drive().await;
@@ -2054,7 +2057,7 @@ export default async function main() {
 }
 "#,
             json!({}),
-            builtins_toolset(),
+            builtins_action_set(),
         )
         .await;
     harness.drive().await;

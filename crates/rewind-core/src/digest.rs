@@ -3,7 +3,7 @@ use std::fmt;
 use sha2::{Digest as _, Sha256};
 
 /// SHA-256 digest. Identifies immutable content: payloads (by their canonical JSON), scripts
-/// and toolsets.
+/// and action sets.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Digest([u8; 32]);
 

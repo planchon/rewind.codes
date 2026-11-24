@@ -320,7 +320,7 @@ fn a_first_ctrl_c_stops_waiting_and_reports_the_run() {
     assert_eq!(code, 0, "{run}");
 }
 
-/// A server for `--url` that answers the registration of a toolset only once released, and
+/// A server for `--url` that answers the registration of an action set only once released, and
 /// records the requests it gets: `(method and path, …)`.
 fn slow_registration_server() -> (
     String,
@@ -358,7 +358,7 @@ fn slow_registration_server() -> (
             let line: Vec<&str> = request.split_whitespace().take(2).collect();
             let what = line.join(" ");
             let _ = seen.send(what.clone());
-            let (status, body) = if what == "POST /v1/toolsets" {
+            let (status, body) = if what == "POST /v1/action-sets" {
                 let _ = released.recv();
                 let id = "a".repeat(64);
                 (
@@ -383,13 +383,13 @@ fn slow_registration_server() -> (
     (url, requests, release)
 }
 
-/// A first Ctrl-C while `rewind run` registers its toolset: the registration finishes, and no run
+/// A first Ctrl-C while `rewind run` registers its action set: the registration finishes, and no run
 /// is started.
 #[test]
 fn a_first_ctrl_c_before_the_start_starts_no_run() {
     let project = Project::new();
     project.write("script.ts", "export default async () => 1;\n");
-    project.write("toolset.json", "{}");
+    project.write("action_set.json", "{}");
     let (url, requests, release) = slow_registration_server();
     let running: Child = project
         .command(&[
@@ -399,8 +399,8 @@ fn a_first_ctrl_c_before_the_start_starts_no_run() {
             "alice",
             "run",
             "script.ts",
-            "--toolset",
-            "toolset.json",
+            "--action-set",
+            "action_set.json",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -408,7 +408,7 @@ fn a_first_ctrl_c_before_the_start_starts_no_run() {
         .unwrap();
     assert_eq!(
         requests.recv_timeout(Duration::from_secs(30)).unwrap(),
-        "POST /v1/toolsets"
+        "POST /v1/action-sets"
     );
     let status = Command::new("kill")
         .args(["-INT", &running.id().to_string()])
@@ -526,7 +526,7 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             && tools.iter().all(|(tool, response)| {
                 !matches!(tool.as_str(), "http" | "webhook") && answerable(response)
             });
-        // Its toolset lacks the `webhook` built-in, which every toolset of a server pins.
+        // Its action set lacks the `webhook` built-in, which every action set of a server pins.
         if !simple || name == "red/webhook_without_the_built_in" {
             continue;
         }
@@ -551,19 +551,19 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             wait.to_owned(),
             "--no-check".to_owned(),
         ];
-        let toolset = (!tools.is_empty()).then(|| {
+        let action_set = (!tools.is_empty()).then(|| {
             let host: Vec<Value> = tools
                 .keys()
                 .map(|tool| json!({ "name": tool, "description": tool, "inputSchema": {} }))
                 .collect();
             let file = project.write(
-                &format!("{}.toolset.json", name.replace('/', "_")),
+                &format!("{}.action_set.json", name.replace('/', "_")),
                 &json!({ "host": host }).to_string(),
             );
-            let (code, registered) = project.json(&["toolsets", "add", file.to_str().unwrap()]);
+            let (code, registered) = project.json(&["action-sets", "add", file.to_str().unwrap()]);
             assert_eq!(code, 0, "{name}: {registered}");
             let id = registered["id"].as_str().unwrap().to_owned();
-            args.push("--toolset".to_owned());
+            args.push("--action-set".to_owned());
             args.push(id.clone());
             id
         });
@@ -574,8 +574,8 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let ran = match &toolset {
-            Some(toolset) => work(&project, toolset, &tools, child),
+        let ran = match &action_set {
+            Some(action_set) => work(&project, action_set, &tools, child),
             None => Ran::from(child.wait_with_output().unwrap()),
         };
 
@@ -666,11 +666,11 @@ fn answerable(response: &Value) -> bool {
     }
 }
 
-/// The harness's worker: claims the host-tool tasks of `toolset` and answers them from the
+/// The harness's worker: claims the host-tool tasks of `action_set` and answers them from the
 /// case's responses, until the `rewind run` in `child` ends.
 fn work(
     project: &Project,
-    toolset: &str,
+    action_set: &str,
     tools: &serde_json::Map<String, Value>,
     mut child: Child,
 ) -> Ran {
@@ -685,7 +685,7 @@ fn work(
             .unix_socket(socket)
             .build()
             .unwrap();
-        let mut tasks = Tasks::open(&client, toolset).await;
+        let mut tasks = Tasks::open(&client, action_set).await;
         while child.try_wait().unwrap().is_none() {
             // What the stream hands at once, answered in the order the script called it.
             let mut handed: Vec<Value> = tasks
@@ -743,7 +743,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     let project = Project::new();
     // A host tool: the harness's worker answers it. This test is the worker.
     project.write(
-        "toolset.json",
+        "action_set.json",
         &json!({
             "host": [{
                 "name": "github.list_issues",
@@ -764,8 +764,8 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     let (code, run) = project.json(&[
         "run",
         "failing.ts",
-        "--toolset",
-        "toolset.json",
+        "--action-set",
+        "action_set.json",
         "--wait",
         "1s",
         "--no-check",
@@ -777,7 +777,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     // The harness's worker answers through the API: claim the task and complete it.
     complete_host_task(
         &project,
-        run["toolset"].as_str().unwrap(),
+        run["actionSet"].as_str().unwrap(),
         json!([{ "number": 4 }]),
     );
     let (code, run) = project.json(&["status", &id, "--wait", "60s"]);
@@ -807,7 +807,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
         }])
         .to_string(),
     );
-    let ran = project.rewind(&["test", "fixed.ts", "--toolset", "toolset.json"]);
+    let ran = project.rewind(&["test", "fixed.ts", "--action-set", "action_set.json"]);
     assert_eq!(ran.code, 0, "{ran:?}");
     assert!(ran.stdout.starts_with("PASS"), "{}", ran.stdout);
 
@@ -835,7 +835,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     assert_eq!(fork["parent"]["run"], id.as_str());
 }
 
-/// The task stream of a toolset over the embedded server's socket, as an SDK worker holds it:
+/// The task stream of an action set over the embedded server's socket, as an SDK worker holds it:
 /// each `task` event's data.
 struct Tasks {
     response: reqwest::Response,
@@ -843,10 +843,10 @@ struct Tasks {
 }
 
 impl Tasks {
-    async fn open(client: &reqwest::Client, toolset: &str) -> Self {
+    async fn open(client: &reqwest::Client, action_set: &str) -> Self {
         let response = client
             .get(format!(
-                "http://localhost/v1/tasks/stream?toolset={toolset}&slots=100"
+                "http://localhost/v1/tasks/stream?actionSet={action_set}&slots=100"
             ))
             .send()
             .await
@@ -888,7 +888,7 @@ impl Tasks {
 
 /// Takes the one host-tool task of the embedded server and completes it, as an SDK worker
 /// would, over the server's socket.
-fn complete_host_task(project: &Project, toolset: &str, result: Value) {
+fn complete_host_task(project: &Project, action_set: &str, result: Value) {
     let socket = project.state().join("server.sock");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -899,7 +899,7 @@ fn complete_host_task(project: &Project, toolset: &str, result: Value) {
             .unix_socket(socket)
             .build()
             .unwrap();
-        let mut tasks = Tasks::open(&client, toolset).await;
+        let mut tasks = Tasks::open(&client, action_set).await;
         let task = tasks
             .next(std::time::Duration::from_secs(10))
             .await

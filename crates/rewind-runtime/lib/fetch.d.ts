@@ -1,9 +1,9 @@
-// `fetch`, for a script whose toolset enables the built-in `http` tool (archi/04-tools.md, "The
+// `fetch`, for a script whose action set enables the built-in `http` tool (archi/04-tools.md, "The
 // `http` tool and egress"). The type-checker gives this file to tsgo only then: without the
 // `http` tool there is no `fetch`.
 //
 // Each call is a journaled call of the `http` tool, sent by Rewind, never from the sandbox, and
-// only to the hosts the toolset allows. Redirects are followed (5 at most); the response is
+// only to the hosts the action set allows. Redirects are followed (5 at most); the response is
 // bounded to 5 MB and 30 s. A refused or failed request rejects with a `ToolError` from "rewind".
 // This is a subset of the web's `fetch`: no `Request`, `Response` or `Headers` constructors, no
 // streams, no `AbortSignal`.
@@ -45,5 +45,5 @@ interface Response {
   bytes(): Promise<Uint8Array<ArrayBuffer>>;
 }
 
-/** Sends an HTTP request through the toolset's `http` tool, to a host it allows. */
+/** Sends an HTTP request through the action set's `http` tool, to a host it allows. */
 declare function fetch(input: string | URL, init?: RequestInit): Promise<Response>;

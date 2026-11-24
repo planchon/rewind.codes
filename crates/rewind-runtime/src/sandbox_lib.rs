@@ -11,11 +11,11 @@
 //! | --- | --- |
 //! | `rewind.d.ts` | The `rewind` module |
 //! | `globals.d.ts` | The sandbox's globals beyond ECMAScript |
-//! | `fetch.d.ts` | `fetch`, only for a toolset that enables the `http` tool |
+//! | `fetch.d.ts` | `fetch`, only for an action set that enables the `http` tool |
 //! | `tsconfig.json` | tsgo's options: strict, `verbatimModuleSyntax`, ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), without shared memory, weak references and decorators, no DOM |
 //! | `globals.json` | The declared global names, the `rewind` exports, and a hint for each absent global models reach for |
 //!
-//! The checker writes the script as `script.ts` next to these files and the toolset's
+//! The checker writes the script as `script.ts` next to these files and the action set's
 //! `rewind-tools.d.ts`; `tsconfig.json` includes every `*.ts` of its directory.
 
 use std::collections::BTreeSet;
@@ -27,7 +27,7 @@ use serde_json::Value;
 pub const REWIND_D_TS: &str = include_str!("../lib/rewind.d.ts");
 /// The sandbox's globals beyond ECMAScript.
 pub const GLOBALS_D_TS: &str = include_str!("../lib/globals.d.ts");
-/// `fetch`: only for a toolset that enables the `http` tool.
+/// `fetch`: only for an action set that enables the `http` tool.
 pub const FETCH_D_TS: &str = include_str!("../lib/fetch.d.ts");
 /// tsgo's configuration.
 pub const TSCONFIG_JSON: &str = include_str!("../lib/tsconfig.json");
@@ -55,7 +55,7 @@ pub struct DeclaredGlobals {
     pub ecmascript: BTreeSet<String>,
     /// The sandbox's own globals (`archi/01-product.md`, "What exists in the sandbox").
     pub sandbox: BTreeSet<String>,
-    /// Globals that exist only when the toolset enables the `http` tool.
+    /// Globals that exist only when the action set enables the `http` tool.
     pub http_tool: BTreeSet<String>,
     /// The names the `rewind` module exports (values, not types).
     pub rewind: BTreeSet<String>,

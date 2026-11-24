@@ -1,7 +1,7 @@
-//! Toolsets pinned in the CLI process, for the local commands (`rewind check`, `rewind test`): from a
-//! toolset file, or from the tools a scenario's mocks answer.
+//! Action sets pinned in the CLI process, for the local commands (`rewind check`, `rewind test`): from a
+//! action set file, or from the tools a scenario's mocks answer.
 //!
-//! A toolset file is the body of `POST /v1/toolsets` (`CreateToolset`), pinned as a server pins
+//! An action set file is the body of `POST /v1/action-sets` (`CreateActionSet`), pinned as a server pins
 //! it: the tools of each MCP server are discovered by connecting to it (`rewind-mcp`), each with
 //! its `auth`; the operations of each API are read from its OpenAPI document (`rewind-openapi`);
 //! host tools and the `http` tool are taken as written, the `webhook` built-in is always there.
@@ -11,12 +11,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use rewind_api::toolsets::{
-    CreateToolset, OnInterruption, OpenApiDocument, ToolPolicy as ApiPolicy,
+use rewind_api::action_sets::{
+    CreateActionSet, OnInterruption, OpenApiDocument, ToolPolicy as ApiPolicy,
 };
 use rewind_core::{
-    Api, Builtin, Interruption, McpServer, McpTransport, Tool, ToolAuth, ToolPolicy, ToolRoute,
-    Toolset,
+    ActionSet, Api, Builtin, Interruption, McpServer, McpTransport, Tool, ToolAuth, ToolPolicy,
+    ToolRoute,
 };
 use rewind_engine::ports::{Secret, TenantId};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
@@ -27,16 +27,16 @@ use serde_json::json;
 use crate::error::CliError;
 use crate::input::read_json;
 
-/// Pins the toolset of a toolset file.
-pub(crate) async fn pin_file(path: &Path) -> Result<Toolset, CliError> {
-    let create: CreateToolset = read_json(path)?;
+/// Pins the action set of an action set file.
+pub(crate) async fn pin_file(path: &Path) -> Result<ActionSet, CliError> {
+    let create: CreateActionSet = read_json(path)?;
     pin(&create)
         .await
         .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))
 }
 
-/// Pins a toolset as `POST /v1/toolsets` does.
-pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
+/// Pins an action set as `POST /v1/action-sets` does.
+pub(crate) async fn pin(create: &CreateActionSet) -> Result<ActionSet, String> {
     let mut servers = Vec::new();
     if !create.secrets.is_empty() {
         return Err(LISTING_SECRETS.to_owned());
@@ -72,12 +72,12 @@ pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
         tools.push(tool);
     }
     tools.push(webhook());
-    Toolset::from_parts(servers, apis, tools).map_err(|error| error.to_string())
+    ActionSet::from_parts(servers, apis, tools).map_err(|error| error.to_string())
 }
 
-/// The APIs of a toolset file, read from their OpenAPI documents as `POST /v1/toolsets` reads
+/// The APIs of an action set file, read from their OpenAPI documents as `POST /v1/action-sets` reads
 /// them: given in the file, or read once from their URL, at any address.
-async fn read_apis(create: &CreateToolset) -> Result<(Vec<Api>, Vec<Tool>), String> {
+async fn read_apis(create: &CreateActionSet) -> Result<(Vec<Api>, Vec<Tool>), String> {
     let mut apis = Vec::new();
     let mut tools = Vec::new();
     for declared in &create.apis {
@@ -128,7 +128,7 @@ async fn read_apis(create: &CreateToolset) -> Result<(Vec<Api>, Vec<Tool>), Stri
 
 async fn discover(
     discovery: &McpDispatcher,
-    create: &CreateToolset,
+    create: &CreateActionSet,
     mut listing: BTreeMap<String, Secret>,
     servers: &mut Vec<McpServer>,
     tools: &mut Vec<Tool>,
@@ -164,7 +164,7 @@ async fn discover(
             .await
             .map_err(|error| {
                 let unsigned = if pinned.auth == ToolAuth::Rewind {
-                    " (the CLI does not sign: register the toolset on a server, which signs its \
+                    " (the CLI does not sign: register the action set on a server, which signs its \
                      listing)"
                 } else {
                     ""
@@ -194,12 +194,12 @@ async fn discover(
     Ok(())
 }
 
-/// Why this process pins no toolset file that attaches secrets to list its servers' tools: a
+/// Why this process pins no action set file that attaches secrets to list its servers' tools: a
 /// secret is written and never read back, and only the server's dispatcher reads it
 /// (`archi/04-tools.md`, "Secrets").
 const LISTING_SECRETS: &str = "secrets: this process cannot read a secret, which only the \
-    server reads: register the toolset on the server (a run's --toolset FILE does), then give \
-    its id to --toolset";
+    server reads: register the action set on the server (a run's --action-set FILE does), then give \
+    its id to --action-set";
 
 /// `list_issues` for `github.list_issues`.
 fn short_name<'a>(server: &str, name: &'a str) -> &'a str {
@@ -208,7 +208,7 @@ fn short_name<'a>(server: &str, name: &'a str) -> &'a str {
         .unwrap_or(name)
 }
 
-/// The fields of a policy that a toolset file gives, over the route's defaults.
+/// The fields of a policy that an action set file gives, over the route's defaults.
 fn apply(policy: &mut ToolPolicy, given: Option<&ApiPolicy>) {
     let Some(given) = given else {
         return;
@@ -233,7 +233,7 @@ fn apply(policy: &mut ToolPolicy, given: Option<&ApiPolicy>) {
     }
 }
 
-/// The `webhook` built-in, which every toolset pins.
+/// The `webhook` built-in, which every action set pins.
 fn webhook() -> Tool {
     Tool::new(
         "webhook",
@@ -242,15 +242,15 @@ fn webhook() -> Tool {
     )
 }
 
-/// The toolset of a scenario that names none: a host tool for each tool its mocks answer (a
+/// The action set of a scenario that names none: a host tool for each tool its mocks answer (a
 /// name `group.tool` puts it in a group), and `webhook`. In mock mode every call goes to the
 /// mocks, whatever its route. The `http` tool needs its allow-list: a scenario whose mocks
-/// answer it names a toolset file.
-pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<Toolset, CliError> {
+/// answer it names an action set file.
+pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<ActionSet, CliError> {
     if names.contains("http") {
         return Err(CliError::usage(
-            "the mocks answer the http tool: name a toolset file with its allow-list \
-             (\"toolset\" in the scenario, \"http\": {\"allow\": [hosts]} in the file)",
+            "the mocks answer the http tool: name an action set file with its allow-list \
+             (--action-set, with \"http\": {\"allow\": [hosts]} in the file)",
         ));
     }
     let mut tools: Vec<Tool> = names
@@ -262,12 +262,12 @@ pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<Toolset, CliError> {
         })
         .collect();
     tools.push(webhook());
-    Toolset::new([], tools).map_err(|error| CliError::usage(format!("the mocked tools: {error}")))
+    ActionSet::new([], tools).map_err(|error| CliError::usage(format!("the mocked tools: {error}")))
 }
 
 #[cfg(test)]
 mod tests {
-    use rewind_api::toolsets::{Api as ApiDeclared, HostTool, HttpTool};
+    use rewind_api::action_sets::{Api as ApiDeclared, HostTool, HttpTool};
 
     use super::*;
 
@@ -284,7 +284,7 @@ mod tests {
                 }
             }
         });
-        let create = CreateToolset {
+        let create = CreateActionSet {
             apis: vec![ApiDeclared {
                 name: "dax".into(),
                 openapi: OpenApiDocument::Document(document),
@@ -301,22 +301,22 @@ mod tests {
                 )]
                 .into(),
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         };
-        let toolset = pin(&create).await.unwrap();
-        assert_eq!(toolset.apis()[0].base_url, "http://127.0.0.1:8080/v1");
-        let create_measure = toolset.tool("dax.createMeasure").unwrap();
+        let action_set = pin(&create).await.unwrap();
+        assert_eq!(action_set.apis()[0].base_url, "http://127.0.0.1:8080/v1");
+        let create_measure = action_set.tool("dax.createMeasure").unwrap();
         // A POST without Idempotency-Key is called at most once.
         assert_eq!(
             create_measure.policy.on_interruption,
             Interruption::AtMostOnce
         );
-        assert!(toolset.tool("dax.listMeasures").unwrap().policy.approval);
+        assert!(action_set.tool("dax.listMeasures").unwrap().policy.approval);
     }
 
     #[tokio::test]
     async fn host_tools_and_http_are_pinned_as_written() {
-        let create = CreateToolset {
+        let create = CreateActionSet {
             secrets: std::collections::BTreeMap::new(),
             apis: Vec::new(),
             workflows: Vec::new(),
@@ -339,14 +339,14 @@ mod tests {
                 policy: None,
             }),
         };
-        let toolset = pin(&create).await.unwrap();
-        let names: Vec<&str> = toolset
+        let action_set = pin(&create).await.unwrap();
+        let names: Vec<&str> = action_set
             .tools()
             .iter()
             .map(|tool| tool.name.as_str())
             .collect();
         assert_eq!(names, ["crm.ask_user", "http", "webhook"]);
-        let ask = &toolset.tools()[0];
+        let ask = &action_set.tools()[0];
         assert_eq!(
             ask.route,
             ToolRoute::Host {
@@ -361,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_mcp_server_needs_one_transport() {
-        let create: CreateToolset =
+        let create: CreateActionSet =
             serde_json::from_value(json!({ "mcp": [{ "name": "github" }] })).unwrap();
         let error = pin(&create).await.unwrap_err();
         assert!(error.contains("exactly one of url and command"), "{error}");
@@ -373,8 +373,8 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect();
-        let toolset = of_mocks(&names).unwrap();
-        let routes: Vec<(&str, &ToolRoute)> = toolset
+        let action_set = of_mocks(&names).unwrap();
+        let routes: Vec<(&str, &ToolRoute)> = action_set
             .tools()
             .iter()
             .map(|tool| (tool.name.as_str(), &tool.route))

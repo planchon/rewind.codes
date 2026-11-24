@@ -6,8 +6,8 @@
 //! them; the SDK keeps the order it writes them in.
 //!
 //! The MCP set (`archi/07-code-architecture.md`, "MCP and OAuth"): the same tools but
-//! `save_workflow`, with `list_orgs`, `list_namespaces` and `list_toolsets` to find what the
-//! caller reaches, the organization, the namespace and the toolset as arguments, and for each
+//! `save_workflow`, with `list_orgs`, `list_namespaces` and `list_action_sets` to find what the
+//! caller reaches, the organization, the namespace and the action set as arguments, and for each
 //! tool a title, its annotations and the permission it needs.
 
 use rewind_api::access::Permission;
@@ -30,8 +30,8 @@ pub const AGENT_TOOLS: [&str; 13] = [
     "record_tests",
 ];
 
-/// The tools that need a toolset (the SDK's `NEEDS_TOOLSET`).
-pub const NEEDS_TOOLSET: [&str; 4] = [
+/// The tools that need an action set (the SDK's `NEEDS_TOOLSET`).
+pub const NEEDS_ACTION_SET: [&str; 4] = [
     "search_tools",
     "save_workflow",
     "get_workflow",
@@ -383,7 +383,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "search_tools" => ToolDefinition {
             name: "search_tools",
-            description: "Find the tools of `rewind:tools` matching a query, with their TypeScript declarations: for toolsets too large to be listed in full.",
+            description: "Find the tools of `rewind:tools` matching a query, with their TypeScript declarations: for action sets too large to be listed in full.",
             input_schema: json!({
                 "type": "object",
                 "properties": { "query": { "type": "string", "description": "Words to look for in tool names and descriptions." } },
@@ -517,7 +517,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
 pub const MCP_TOOLS: [&str; 15] = [
     "list_orgs",
     "list_namespaces",
-    "list_toolsets",
+    "list_action_sets",
     "search_tools",
     "list_secrets",
     "check_script",
@@ -542,7 +542,7 @@ pub struct Annotations {
     pub destructive: bool,
     /// Calling it again with the same arguments changes nothing more.
     pub idempotent: bool,
-    /// What it starts reaches the world outside Rewind: the toolset's servers.
+    /// What it starts reaches the world outside Rewind: the action set's servers.
     pub open_world: bool,
 }
 
@@ -593,17 +593,17 @@ fn namespace_filter() -> Value {
     })
 }
 
-fn toolset_required(what: &str) -> Value {
+fn action_set_required(what: &str) -> Value {
     json!({
         "type": "string",
-        "description": format!("The toolset {what}: its id, as list_toolsets gives it.")
+        "description": format!("The action set {what}: its id, as list_action_sets gives it.")
     })
 }
 
-fn toolset_of_script() -> Value {
+fn action_set_of_script() -> Value {
     json!({
         "type": "string",
-        "description": "The toolset whose tools the script imports from \"rewind:tools\": its id, as list_toolsets gives it. Without it, the script has only the built-in `webhook`."
+        "description": "The action set whose tools the script imports from \"rewind:tools\": its id, as list_action_sets gives it. Without it, the script has only the built-in `webhook`."
     })
 }
 
@@ -657,18 +657,18 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 permission: Some(Permission::NamespacesRead),
             });
         }
-        "list_toolsets" => {
+        "list_action_sets" => {
             return Some(McpTool {
-                name: "list_toolsets",
-                title: "List toolsets",
-                description: "List the toolsets of an organization: each pins MCP servers and their tools, which scripts import from \"rewind:tools\", and the workflows they import from \"rewind:workflows\". Give a toolset's id as `toolset` to search_tools, check_script, test_script and run_script, and read its tools' declarations with search_tools before you write a script.".into(),
+                name: "list_action_sets",
+                title: "List action sets",
+                description: "List the action sets of an organization: each pins MCP servers and their tools, which scripts import from \"rewind:tools\", and the workflows they import from \"rewind:workflows\". Give an action set's id as `action_set` to search_tools, check_script, test_script and run_script, and read its tools' declarations with search_tools before you write a script.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": { "org": org() },
                     "additionalProperties": false
                 }),
                 annotations: Annotations::READ,
-                permission: Some(Permission::ToolsetsRead),
+                permission: Some(Permission::ActionsRead),
             });
         }
         _ => {}
@@ -680,13 +680,13 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
     let mut extra = vec![("org", org())];
     let (title, permission, annotations, place) = match name {
         "search_tools" => {
-            extra.push(("toolset", toolset_required("whose tools to search")));
-            required.push("toolset");
+            extra.push(("action_set", action_set_required("whose tools to search")));
+            required.push("action_set");
             (
                 "Search tools",
-                Permission::ToolsetsRead,
+                Permission::ActionsRead,
                 Annotations::READ,
-                "Give the toolset as `toolset`, as list_toolsets gives it.",
+                "Give the action set as `action_set`, as list_action_sets gives it.",
             )
         }
         "list_secrets" => {
@@ -710,18 +710,18 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
         }
         "check_script" => {
             extra.push(("namespace", namespace_for("the script is checked for")));
-            extra.push(("toolset", toolset_of_script()));
+            extra.push(("action_set", action_set_of_script()));
             required.push("namespace");
             (
                 "Check a script",
                 Permission::RunsStart,
                 Annotations::READ,
-                "Give the namespace it will run in as `namespace`, and its toolset as `toolset`.",
+                "Give the namespace it will run in as `namespace`, and its action set as `action_set`.",
             )
         }
         "test_script" => {
             extra.push(("namespace", namespace_for("the tests run for")));
-            extra.push(("toolset", toolset_of_script()));
+            extra.push(("action_set", action_set_of_script()));
             required.push("namespace");
             description = description.replace(
                 "this is how you check a fix or a change of a workflow before save_workflow",
@@ -731,19 +731,19 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 "Test a script",
                 Permission::RunsStart,
                 Annotations::READ,
-                "Give the namespace as `namespace`, and the script's toolset as `toolset`.",
+                "Give the namespace as `namespace`, and the script's action set as `action_set`.",
             )
         }
         "run_script" => {
             extra.push(("namespace", namespace_for("the run acts for")));
-            extra.push(("toolset", toolset_of_script()));
+            extra.push(("action_set", action_set_of_script()));
             required.push("namespace");
             schema["properties"]["wait"] = mcp_wait(&schema["properties"]["wait"]);
             (
                 "Run a script",
                 Permission::RunsStart,
                 annotations(false, false, true),
-                "Give the namespace the run acts for as `namespace` (list_namespaces), and the toolset whose tools it imports as `toolset` (list_toolsets).",
+                "Give the namespace the run acts for as `namespace` (list_namespaces), and the action set whose tools it imports as `action_set` (list_action_sets).",
             )
         }
         "get_run" => {
@@ -784,11 +784,11 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             "Retry a run",
             Permission::RunsStart,
             annotations(false, false, true),
-            "Give the organization of the run as `org`: the new run takes its namespace and its toolset.",
+            "Give the organization of the run as `org`: the new run takes its namespace and its action set.",
         ),
         "get_workflow" => (
             "Read a workflow",
-            Permission::ToolsetsRead,
+            Permission::ActionsRead,
             Annotations::READ,
             "Give the organization as `org`.",
         ),
@@ -849,7 +849,7 @@ mod tests {
             definition("list_runs").unwrap().input_schema["properties"]["status"]["description"],
             "Only runs with this status."
         );
-        for name in NEEDS_TOOLSET {
+        for name in NEEDS_ACTION_SET {
             assert!(AGENT_TOOLS.contains(&name), "{name}");
         }
     }
@@ -878,16 +878,16 @@ mod tests {
         assert_eq!(required("run_script"), json!(["code", "namespace"]));
         assert_eq!(required("check_script"), json!(["code", "namespace"]));
         assert_eq!(required("test_script"), json!(["code", "namespace"]));
-        assert_eq!(required("search_tools"), json!(["query", "toolset"]));
+        assert_eq!(required("search_tools"), json!(["query", "action_set"]));
         assert_eq!(required("get_run"), json!(["run_id"]));
         assert!(tool("get_run").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_runs").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_namespaces").input_schema["properties"]["prefix"].is_object());
-        // `/v1` finds a workflow by its name alone: no toolset to give.
+        // `/v1` finds a workflow by its name alone: no action set to give.
         for name in ["get_workflow", "record_tests"] {
             assert!(
                 tool(name).input_schema["properties"]
-                    .get("toolset")
+                    .get("action_set")
                     .is_none(),
                 "{name}"
             );
@@ -910,7 +910,7 @@ mod tests {
             [
                 "list_orgs",
                 "list_namespaces",
-                "list_toolsets",
+                "list_action_sets",
                 "search_tools",
                 "list_secrets",
                 "check_script",

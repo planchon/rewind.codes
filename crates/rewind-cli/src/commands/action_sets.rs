@@ -1,36 +1,36 @@
-//! `rewind toolsets add|declarations|search`: toolsets registered on the server
-//! (`archi/04-tools.md`, "Toolsets and code generation").
+//! `rewind action-sets add|declarations|search`: action sets registered on the server
+//! (`archi/04-tools.md`, "Action sets and code generation").
 
-use rewind_api::toolsets::{CreateToolset, DeclarationFormat, Route, SearchQuery};
+use rewind_api::action_sets::{CreateActionSet, DeclarationFormat, Route, SearchQuery};
 
 use super::Server;
-use crate::args::{DeclarationsFormat, ToolsetsCommand};
+use crate::args::{ActionSetsCommand, DeclarationsFormat};
 use crate::error::CliError;
 use crate::exit::Exit;
 use crate::input;
 use crate::output::Console;
 use crate::render;
 
-pub(super) async fn toolsets(
+pub(super) async fn action_sets(
     server: &Server<'_>,
-    command: ToolsetsCommand,
+    command: ActionSetsCommand,
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     match command {
-        ToolsetsCommand::Add { file } => {
-            let create: CreateToolset = input::read_json(&file)?;
+        ActionSetsCommand::Add { file } => {
+            let create: CreateActionSet = input::read_json(&file)?;
             let client = server.client().await?;
-            let toolset = client.create_toolset(&create).await?;
+            let action_set = client.create_action_set(&create).await?;
             if console.json() {
-                console.print_json(&toolset)?;
+                console.print_json(&action_set)?;
             } else {
-                console.line(format!("toolset {}", toolset.id));
+                console.line(format!("action set {}", action_set.id));
                 let mut rows = vec![[
                     "TOOL".to_owned(),
                     "ROUTE".to_owned(),
                     "DESCRIPTION".to_owned(),
                 ]];
-                for tool in &toolset.tools {
+                for tool in &action_set.tools {
                     let route = match tool.route {
                         Route::Mcp => format!("mcp {}", tool.server.as_deref().unwrap_or("")),
                         Route::Api => format!("api {}", tool.api.as_deref().unwrap_or("")),
@@ -43,20 +43,20 @@ pub(super) async fn toolsets(
                 console.text(&render::table(&rows));
             }
         }
-        ToolsetsCommand::Declarations { id, format } => {
+        ActionSetsCommand::Declarations { id, format } => {
             let format = match format {
                 DeclarationsFormat::Dts => DeclarationFormat::Dts,
                 DeclarationsFormat::Prompt => DeclarationFormat::Prompt,
             };
             let client = server.client().await?;
-            let declarations = client.toolset_declarations(&id, format).await?;
+            let declarations = client.action_set_declarations(&id, format).await?;
             if console.json() {
                 console.print_json(&declarations)?;
             } else {
                 console.text(&declarations.text);
             }
         }
-        ToolsetsCommand::Search { id, query, limit } => {
+        ActionSetsCommand::Search { id, query, limit } => {
             let client = server.client().await?;
             let results = client
                 .search_tools(&id, &SearchQuery { query, limit })

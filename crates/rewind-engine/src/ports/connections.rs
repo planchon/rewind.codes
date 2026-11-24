@@ -108,7 +108,7 @@ pub struct OAuthClient {
     pub last_used_at: Option<Timestamp>,
 }
 
-/// What a connection may do in an organization it opens: `read` (`runs:read`, `toolsets:read`,
+/// What a connection may do in an organization it opens: `read` (`runs:read`, `actions:read`,
 /// `namespaces:read`, `secrets:read`) or `run` (`runs:start`, `runs:control` and `secrets:use`
 /// too).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

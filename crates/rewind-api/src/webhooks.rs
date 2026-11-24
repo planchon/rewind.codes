@@ -235,9 +235,9 @@ pub struct RunEvent {
 }
 
 /// A call parked because the tool no longer matches its pinned schema
-/// (`archi/04-tools.md`, "When a toolset changes during a run"). Approve the task to continue
+/// (`archi/04-tools.md`, "When an action set changes during a run"). Approve the task to continue
 /// against the new schema, reject it, fork the run, or cancel it. The pinned schema is in the
-/// toolset; `message` says what changed.
+/// action set; `message` says what changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSchemaChanged {
@@ -251,8 +251,8 @@ pub struct ToolSchemaChanged {
     /// The tool's MCP server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
-    /// The run's toolset, where the pinned schema is.
-    pub toolset: String,
+    /// The run's action set, where the pinned schema is.
+    pub action_set: String,
     /// What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the
     /// call's arguments, or its output schema changed. Written for the harness developer and
     /// the model.
@@ -276,7 +276,7 @@ pub struct CredentialsExpired {
     /// The tool's MCP server or API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
-    pub toolset: String,
+    pub action_set: String,
     pub reason: CredentialsExpiredReason,
     /// The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);
     /// absent for a signed call.
@@ -449,7 +449,7 @@ mod tests {
             "data": {
                 "runId": "r1", "namespace": "alice", "labels": {}, "taskId": "t1", "seq": 2,
                 "tool": "github.list_issues",
-                "server": "github", "toolset": "ab", "reason": "refused", "secret": "ns/github",
+                "server": "github", "actionSet": "ab", "reason": "refused", "secret": "ns/github",
                 "message": "401 Unauthorized"
             }
         }))

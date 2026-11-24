@@ -1,6 +1,6 @@
 //! The eval suite of Rewind (`archi/05-testing-and-observability.md`, "Evals").
 //!
-//! Models solve realistic tasks end to end: they get a system prompt with the toolset's
+//! Models solve realistic tasks end to end: they get a system prompt with the action set's
 //! declarations in a prompt rendering, and the agent tools of the SDK (`run_script`,
 //! `check_script`, `get_run`…); their scripts run on the real engine and V8 sandbox, in
 //! virtual time, against deterministic fake MCP servers called through the real MCP client.

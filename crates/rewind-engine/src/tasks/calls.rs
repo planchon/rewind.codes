@@ -231,20 +231,20 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
     } = work;
     let record = &task.task;
     let run = &head.run;
-    let toolset = match plane
+    let action_set = match plane
         .catalog()
-        .get_toolset(&run.tenant, record.toolset)
+        .get_action_set(&run.tenant, record.action_set)
         .await
     {
-        Ok(Some(stored)) => stored.toolset,
-        Ok(None) => return failed(format!("toolset {} not found", record.toolset)),
+        Ok(Some(stored)) => stored.action_set,
+        Ok(None) => return failed(format!("action set {} not found", record.action_set)),
         Err(error) => {
-            return CallOutcome::NotSent(format!("the toolset could not be read: {error}"));
+            return CallOutcome::NotSent(format!("the action set could not be read: {error}"));
         }
     };
-    let Some(tool) = toolset.tool(&record.tool).cloned() else {
+    let Some(tool) = action_set.tool(&record.tool).cloned() else {
         return failed(format!(
-            "run {} called {}, which its toolset does not have",
+            "run {} called {}, which its action set does not have",
             run.id, record.tool
         ));
     };
@@ -294,8 +294,8 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         }));
     }
     let (server, api) = match &tool.route {
-        ToolRoute::Mcp { server } => (toolset.server(server).cloned(), None),
-        ToolRoute::Api { api } => (None, toolset.api(api).cloned()),
+        ToolRoute::Mcp { server } => (action_set.server(server).cloned(), None),
+        ToolRoute::Api { api } => (None, action_set.api(api).cloned()),
         ToolRoute::Builtin(_) | ToolRoute::Host { .. } => (None, None),
     };
     let auth = server
@@ -328,7 +328,14 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
             return match op {
                 WorkflowOp::Start => {
                     start_child(
-                        plane, config, &*log, partition, &call, &head, &toolset, &workflow,
+                        plane,
+                        config,
+                        &*log,
+                        partition,
+                        &call,
+                        &head,
+                        &action_set,
+                        &workflow,
                     )
                     .await
                 }
@@ -581,13 +588,13 @@ async fn start_child<P: Plane>(
     partition: rewind_core::PartitionId,
     call: &ToolCall,
     head: &RunHead,
-    toolset: &rewind_core::Toolset,
+    action_set: &rewind_core::ActionSet,
     name: &str,
 ) -> CallOutcome {
     let tenant = &call.run.tenant;
     let not_sent = |message: String| CallOutcome::NotSent(message);
-    let Some(pinned) = toolset.workflow(name) else {
-        return failed(format!("this run's toolset pins no workflow {name}"));
+    let Some(pinned) = action_set.workflow(name) else {
+        return failed(format!("this run's action set pins no workflow {name}"));
     };
     let workflow = match plane.catalog().get_workflow(tenant, pinned.version).await {
         Ok(Some(stored)) => stored.workflow,
@@ -718,7 +725,7 @@ async fn start_child<P: Plane>(
         origin: workflow.name().to_owned(),
         started: RunStarted {
             script: workflow.script(),
-            toolset: workflow.toolset(),
+            action_set: workflow.action_set(),
             input,
             seed,
             epoch,

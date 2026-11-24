@@ -17,7 +17,7 @@ pub struct ToolCall {
     /// The run's labels.
     pub labels: BTreeMap<String, String>,
     pub seq: Seq,
-    /// The tool as pinned in the run's toolset: route, operation, schemas and policy. The
+    /// The tool as pinned in the run's action set: route, operation, schemas and policy. The
     /// dispatcher checks an MCP call against the server's current schema, and enforces the
     /// execution timeout.
     pub tool: Tool,

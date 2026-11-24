@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rewind_blob::{CachedArchive, DEFAULT_ARCHIVE_CACHE_CAPACITY, FileArchive, FileBlobs};
 use rewind_core::{
-    Digest, Epoch, Event, HistoryEntry, Lifecycle, RunMode, RunStarted, Script, Seed, Timestamp,
-    Toolset, canonical_json,
+    ActionSet, Digest, Epoch, Event, HistoryEntry, Lifecycle, RunMode, RunStarted, Script, Seed,
+    Timestamp, canonical_json,
 };
 use rewind_engine::conformance::{archive, tenant};
 use rewind_engine::ports::{
@@ -26,7 +26,7 @@ fn run(tenant_name: &str) -> RunRef {
 
 fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
     let script = Script::new("export default async (input) => input");
-    let toolset = Toolset::from_host_tools(["github.close_issue"]).expect("toolset");
+    let action_set = ActionSet::from_host_tools(["github.close_issue"]).expect("action set");
     SealedAttempt {
         run: run.clone(),
         attempt,
@@ -35,7 +35,7 @@ fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
             recorded_at: Timestamp(1),
             event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
                 script: script.digest(),
-                toolset: toolset.digest(),
+                action_set: action_set.digest(),
                 input: json!({ "text": input }).into(),
                 seed: Seed::from_bytes([1; 32]),
                 epoch: Epoch(1),
@@ -44,7 +44,7 @@ fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
             })),
         }],
         script,
-        toolset,
+        action_set,
     }
 }
 

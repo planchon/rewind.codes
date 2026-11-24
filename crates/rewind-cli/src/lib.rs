@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+mod action_set;
 mod args;
 mod commands;
 pub mod embedded;
@@ -28,7 +29,6 @@ mod input;
 mod interrupt;
 mod output;
 mod render;
-mod toolset;
 
 use std::ffi::OsString;
 use std::process::ExitCode;

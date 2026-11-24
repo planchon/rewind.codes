@@ -187,7 +187,7 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
             origin: "triage".into(),
             suffix_len: 13,
             script: head.script,
-            toolset: head.toolset,
+            action_set: head.action_set,
             epoch: head.epoch,
             expires_at: head.expires_at,
             expiry_enqueued: false,
@@ -217,7 +217,7 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
         moved.push((RunRef::new(tenant.clone(), id), values));
     }
 
-    // Moved into a plane of four partitions, its scripts and toolsets in its catalog.
+    // Moved into a plane of four partitions, its scripts and action sets in its catalog.
     let (plane, cluster) = plane(4);
     for run in [&ended, &waiting] {
         let head = source.view(run).await.head;
@@ -233,16 +233,16 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
             .put_script(&tenant, &script.script, &script.compiled)
             .await
             .unwrap();
-        let toolset = source
+        let action_set = source
             .plane
             .catalog
-            .get_toolset(&tenant, head.toolset)
+            .get_action_set(&tenant, head.action_set)
             .await
             .unwrap()
             .unwrap();
         plane
             .catalog
-            .put_toolset(&tenant, &toolset.toolset, &toolset.declarations)
+            .put_action_set(&tenant, &action_set.action_set, &action_set.declarations)
             .await
             .unwrap();
     }

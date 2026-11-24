@@ -12,11 +12,11 @@
 mod support;
 
 use rewind_api::access::{BuiltInRole, Permission};
+use rewind_api::action_sets::{CreateActionSet, HostTool};
 use rewind_api::common::Labels;
 use rewind_api::namespaces::{CreateToken, NamespaceName};
 use rewind_api::runs::StartRun;
 use rewind_api::secrets::{AttachmentProblemKind, PutSecret, SecretScope};
-use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::json;
 use support::TestServer;
@@ -341,8 +341,8 @@ async fn a_token_reaches_its_namespace_s_secrets_only(server: &TestServer) {
 /// as `secret-required` naming the attachment.
 async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &TestServer) {
     let customer = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = customer
-        .create_toolset(&CreateToolset {
+    let action_set = customer
+        .create_action_set(&CreateActionSet {
             host: vec![HostTool {
                 name: "ask_user".into(),
                 description: "Asks the user.".into(),
@@ -350,14 +350,14 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
                 output_schema: None,
                 policy: None,
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
     let mut start = StartRun::new(
         "import { ask_user } from \"rewind:tools\";\nexport default async () => ask_user({});",
     );
-    start.toolset = Some(toolset.id.clone());
+    start.action_set = Some(action_set.id.clone());
     start.secrets = [("ask_user".to_owned(), "ns/github".to_owned())]
         .into_iter()
         .collect();
@@ -390,20 +390,20 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
     );
 
     // A registration's listing takes the organization's secrets only.
-    let mut listed = CreateToolset {
+    let mut listed = CreateActionSet {
         secrets: [("github".to_owned(), "ns/github".to_owned())]
             .into_iter()
             .collect(),
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     };
     assert_eq!(
-        refused(customer.create_toolset(&listed).await),
+        refused(customer.create_action_set(&listed).await),
         (400, Some(ProblemType::InvalidRequest))
     );
     listed.secrets = [("github".to_owned(), "org/github".to_owned())]
         .into_iter()
         .collect();
-    let refusal = problem(customer.create_toolset(&listed).await.unwrap_err());
+    let refusal = problem(customer.create_action_set(&listed).await.unwrap_err());
     assert_eq!(
         (refusal.kind(), refusal.attachments[0].problem),
         (

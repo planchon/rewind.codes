@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use rewind_core::{Epoch, RunId, Script, Seed, Timestamp, Toolset};
+use rewind_core::{ActionSet, Epoch, RunId, Script, Seed, Timestamp};
 use rewind_engine::ports::{Delivery, ExecutorError, ScriptExecutor, ScriptInstance, StartScript};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
@@ -36,9 +36,9 @@ fn start(executor: &V8Executor, input: u64) -> StartScript {
     StartScript {
         run_id: RunId::from_u128(1),
         compiled: executor
-            .compile(&Script::new(SPINNER), &Toolset::default())
+            .compile(&Script::new(SPINNER), &ActionSet::default())
             .unwrap(),
-        toolset: Toolset::default(),
+        action_set: ActionSet::default(),
         input: json!(input),
         seed: Seed::from_bytes([0; 32]),
         epoch: Epoch(1),

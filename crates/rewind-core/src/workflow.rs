@@ -4,13 +4,13 @@
 //! ```text
 //! Workflow (a version: immutable, content-addressed)
 //! ├── name, description?
-//! ├── script, toolset            digests: what its runs execute
+//! ├── script, action set            digests: what its runs execute
 //! ├── schemas                    { input, output, signals: { <name>: schema } }
 //! ├── suite                      parent?, tests, retired, updated: the tests it passed
 //! ├── labels                     the scope it was saved under; {} for a tenant-wide save
 //! └── secrets                    its attachments: { <server>: org/<name> | ns/<name> }
 //!
-//! PinnedWorkflow (what a toolset pins: the interface, without the script)
+//! PinnedWorkflow (what an action set pins: the interface, without the script)
 //! └── name, version (the Workflow's digest), description?, schemas
 //! ```
 //!
@@ -23,6 +23,7 @@ use std::fmt;
 
 use serde_json::{Map, Value, json};
 
+use crate::action_set::{is_identifier, is_reserved};
 use crate::canonical::canonical_json;
 use crate::digest::Digest;
 use crate::event::{
@@ -32,7 +33,6 @@ use crate::ids::RunId;
 use crate::payload::Payload;
 use crate::secret::Attachments;
 use crate::state::RunOutcome;
-use crate::toolset::{is_identifier, is_reserved};
 
 /// Signal names starting with this prefix are Rewind's: no one else sends them, and no
 /// workflow declares them (`archi/01-product.md`, "Signals").
@@ -95,7 +95,7 @@ pub struct Workflow {
     name: String,
     description: Option<String>,
     script: Digest,
-    toolset: Digest,
+    action_set: Digest,
     schemas: WorkflowSchemas,
     suite: Suite,
     labels: BTreeMap<String, String>,
@@ -255,12 +255,12 @@ pub enum InvalidWorkflow {
 }
 
 impl Workflow {
-    /// A version of the workflow `name`, whose runs execute `script` with `toolset`.
+    /// A version of the workflow `name`, whose runs execute `script` with `action_set`.
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,
         script: Digest,
-        toolset: Digest,
+        action_set: Digest,
         schemas: WorkflowSchemas,
     ) -> Result<Self, InvalidWorkflow> {
         let name = name.into();
@@ -269,7 +269,7 @@ impl Workflow {
             name,
             description,
             script,
-            toolset,
+            action_set,
             schemas,
             suite: Suite::default(),
             labels: BTreeMap::new(),
@@ -321,9 +321,9 @@ impl Workflow {
         self.script
     }
 
-    /// Digest of the toolset its runs call.
-    pub fn toolset(&self) -> Digest {
-        self.toolset
+    /// Digest of the action set its runs call.
+    pub fn action_set(&self) -> Digest {
+        self.action_set
     }
 
     pub fn schemas(&self) -> &WorkflowSchemas {
@@ -341,7 +341,7 @@ impl Workflow {
         Digest::of(canonical_json(&self.document()).as_bytes())
     }
 
-    /// What a toolset pins of this version.
+    /// What an action set pins of this version.
     pub fn pinned(&self) -> PinnedWorkflow {
         PinnedWorkflow {
             name: self.name.clone(),
@@ -360,7 +360,7 @@ impl Workflow {
             object.insert("description".into(), json!(description));
         }
         object.insert("script".into(), json!(self.script.to_hex()));
-        object.insert("toolset".into(), json!(self.toolset.to_hex()));
+        object.insert("action_set".into(), json!(self.action_set.to_hex()));
         object.insert("schemas".into(), self.schemas.to_json());
         self.suite.insert_into(&mut object);
         if !self.labels.is_empty() {
@@ -385,7 +385,7 @@ impl fmt::Display for Workflow {
     }
 }
 
-/// A workflow as a toolset pins it: its name, version and interface. Scripts of that toolset
+/// A workflow as an action set pins it: its name, version and interface. Scripts of that action set
 /// start runs of exactly this version, and are checked against these schemas.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinnedWorkflow {
@@ -407,7 +407,7 @@ impl PinnedWorkflow {
         format!("{WORKFLOWS_NAMESPACE}.{}.{}", self.name, op.as_str())
     }
 
-    /// Its entry in the pinned toolset document v1.
+    /// Its entry in the pinned action set document v1.
     pub(crate) fn document(&self) -> Value {
         let mut object = Map::new();
         object.insert("name".into(), json!(self.name));
@@ -427,7 +427,7 @@ impl fmt::Display for PinnedWorkflow {
     }
 }
 
-/// The namespace of the workflows' built-ins, reserved in every toolset.
+/// The namespace of the workflows' built-ins, reserved in every action set.
 pub const WORKFLOWS_NAMESPACE: &str = "workflows";
 
 /// What a workflow's built-in does.
@@ -657,7 +657,7 @@ mod tests {
             "triage",
             Some("Triage the stale issues".into()),
             Digest::of(b"script"),
-            Digest::of(b"toolset"),
+            Digest::of(b"action_set"),
             schemas(),
         )
         .unwrap()
@@ -668,13 +668,13 @@ mod tests {
         let workflow = triage();
         let document = format!(
             concat!(
-                r#"{{"description":"Triage the stale issues","name":"triage","#,
+                r#"{{"action_set":"{}","description":"Triage the stale issues","name":"triage","#,
                 r#""schemas":{{"input":{{"properties":{{"repo":{{"type":"string"}}}},"type":"object"}},"#,
                 r#""output":{{"type":"object"}},"signals":{{"approval":{{"type":"object"}}}}}},"#,
-                r#""script":"{}","toolset":"{}","v":1}}"#
+                r#""script":"{}","v":1}}"#
             ),
+            Digest::of(b"action_set").to_hex(),
             Digest::of(b"script").to_hex(),
-            Digest::of(b"toolset").to_hex(),
         );
         assert_eq!(workflow.version(), Digest::of(document.as_bytes()));
         assert_eq!(
@@ -745,7 +745,7 @@ mod tests {
                 name,
                 description.map(str::to_owned),
                 Digest::of(script),
-                Digest::of(b"toolset"),
+                Digest::of(b"action_set"),
                 schemas,
             )
             .unwrap()

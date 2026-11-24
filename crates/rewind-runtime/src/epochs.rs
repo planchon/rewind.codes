@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use rewind_core::{Epoch, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, Epoch, Tool, ToolRoute};
 
 /// The glue of one epoch.
 #[derive(Debug)]
@@ -26,14 +26,14 @@ pub(crate) struct Glue {
     pub(crate) std: &'static str,
     /// The names `rewind` exports, checked when a script is compiled.
     pub(crate) std_exports: &'static [&'static str],
-    /// Generates `rewind:tools` from the run's toolset.
-    pub(crate) tools: fn(&Toolset) -> String,
-    /// The names `rewind:tools` exports for a toolset, checked when a script is compiled.
-    pub(crate) tool_exports: fn(&Toolset) -> BTreeSet<String>,
-    /// Generates `rewind:workflows` from the run's toolset.
-    pub(crate) workflows: fn(&Toolset) -> String,
-    /// The names `rewind:workflows` exports for a toolset, checked when a script is compiled.
-    pub(crate) workflow_exports: fn(&Toolset) -> BTreeSet<String>,
+    /// Generates `rewind:tools` from the run's action set.
+    pub(crate) tools: fn(&ActionSet) -> String,
+    /// The names `rewind:tools` exports for an action set, checked when a script is compiled.
+    pub(crate) tool_exports: fn(&ActionSet) -> BTreeSet<String>,
+    /// Generates `rewind:workflows` from the run's action set.
+    pub(crate) workflows: fn(&ActionSet) -> String,
+    /// The names `rewind:workflows` exports for an action set, checked when a script is compiled.
+    pub(crate) workflow_exports: fn(&ActionSet) -> BTreeSet<String>,
 }
 
 const EPOCH_1: Glue = Glue {
@@ -69,7 +69,7 @@ pub(crate) fn latest() -> &'static Glue {
     const { &EPOCHS[EPOCHS.len() - 1] }
 }
 
-/// The tools of a toolset as `rewind:tools` exposes them in epoch 1, from their routes: one
+/// The tools of an action set as `rewind:tools` exposes them in epoch 1, from their routes: one
 /// namespace per MCP server or host-tool group, and the host tools without a group by name.
 /// The built-ins are not exported: scripts reach them through `fetch` and `webhook`.
 struct ToolExportsV1<'a> {
@@ -78,10 +78,10 @@ struct ToolExportsV1<'a> {
 }
 
 impl<'a> ToolExportsV1<'a> {
-    fn of(toolset: &'a Toolset) -> Self {
+    fn of(action_set: &'a ActionSet) -> Self {
         let mut namespaces: BTreeMap<&str, Vec<&Tool>> = BTreeMap::new();
         let mut bare = Vec::new();
-        for tool in toolset.tools() {
+        for tool in action_set.tools() {
             if matches!(tool.route, ToolRoute::Builtin(_)) {
                 continue;
             }
@@ -96,8 +96,8 @@ impl<'a> ToolExportsV1<'a> {
     }
 }
 
-fn tool_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
-    let exports = ToolExportsV1::of(toolset);
+fn tool_exports_v1(action_set: &ActionSet) -> BTreeSet<String> {
+    let exports = ToolExportsV1::of(action_set);
     let namespaces = exports.namespaces.keys().copied();
     let bare = exports.bare.iter().map(|tool| tool.name.as_str());
     namespaces.chain(bare).map(str::to_owned).collect()
@@ -115,8 +115,8 @@ fn caller(tool: &Tool) -> &'static str {
 /// `rewind:tools` for epoch 1: one frozen namespace object per MCP server or host-tool group, and
 /// one function per host tool without a group. Tool names are kept as the server defines them;
 /// a name that is not an identifier is still reachable with brackets (`github["close-issue"]`).
-fn tools_module_v1(toolset: &Toolset) -> String {
-    let ToolExportsV1 { namespaces, bare } = ToolExportsV1::of(toolset);
+fn tools_module_v1(action_set: &ActionSet) -> String {
+    let ToolExportsV1 { namespaces, bare } = ToolExportsV1::of(action_set);
     let mut module = String::from(
         "import hooks from \"rewind:internal\";\n\
          const call = hooks.callTool;\n\
@@ -149,8 +149,8 @@ fn tools_module_v1(toolset: &Toolset) -> String {
 }
 
 /// The names `rewind:workflows` exports in epoch 1: one per pinned workflow.
-fn workflow_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
-    toolset
+fn workflow_exports_v1(action_set: &ActionSet) -> BTreeSet<String> {
+    action_set
         .workflows()
         .iter()
         .map(|workflow| workflow.name.clone())
@@ -158,13 +158,13 @@ fn workflow_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
 }
 
 /// `rewind:workflows` for epoch 1: one frozen handle per pinned workflow, built by the glue
-/// (`start`, `get`). A pinned workflow's name is an identifier (`rewind_core::Toolset`).
-fn workflows_module_v1(toolset: &Toolset) -> String {
+/// (`start`, `get`). A pinned workflow's name is an identifier (`rewind_core::ActionSet`).
+fn workflows_module_v1(action_set: &ActionSet) -> String {
     let mut module = String::from(
         "import hooks from \"rewind:internal\";\n\
          const workflow = hooks.workflow;\n",
     );
-    for workflow in toolset.workflows() {
+    for workflow in action_set.workflows() {
         let _ = writeln!(
             module,
             "export const {} = workflow({});",
@@ -189,11 +189,11 @@ fn js_string(text: &str) -> String {
 mod tests {
     use super::*;
 
-    // A pinned toolset only has namespaces that are identifiers (`rewind_core::Toolset::new`).
+    // A pinned action set only has namespaces that are identifiers (`rewind_core::ActionSet::new`).
     #[test]
     fn generates_namespaces_and_bare_tools() {
         let module = tools_module_v1(
-            &Toolset::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
+            &ActionSet::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
                 .unwrap(),
         );
         assert_eq!(
@@ -208,7 +208,7 @@ mod tests {
              export const ask_user = (args) => call(\"ask_user\", args);\n"
         );
         let exports: Vec<String> = tool_exports_v1(
-            &Toolset::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
+            &ActionSet::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
                 .unwrap(),
         )
         .into_iter()
@@ -249,7 +249,7 @@ mod tests {
             serde_json::json!({}),
         );
         get_issue.output_schema = Some(serde_json::json!({ "type": "object" }));
-        let toolset = Toolset::new(
+        let action_set = ActionSet::new(
             [github],
             [
                 get_issue,
@@ -275,9 +275,9 @@ mod tests {
             ],
         )
         .unwrap();
-        let exports: Vec<String> = tool_exports_v1(&toolset).into_iter().collect();
+        let exports: Vec<String> = tool_exports_v1(&action_set).into_iter().collect();
         assert_eq!(exports, ["github"]);
-        let module = tools_module_v1(&toolset);
+        let module = tools_module_v1(&action_set);
         assert!(module.contains("export const github"), "{module}");
         // An MCP tool without an output schema returns its content, with the helpers; with
         // one, its structured content.

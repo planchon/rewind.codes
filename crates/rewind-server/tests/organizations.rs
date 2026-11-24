@@ -444,7 +444,7 @@ async fn no_one_gives_or_takes_away_more_than_they_hold() {
         description: "Manages the members.".into(),
         permissions: vec![
             Permission::RunsRead,
-            Permission::ToolsetsRead,
+            Permission::ActionsRead,
             Permission::SecretsRead,
             Permission::SubscriptionsRead,
             Permission::MembersRead,

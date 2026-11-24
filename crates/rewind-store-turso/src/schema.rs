@@ -715,7 +715,7 @@ ALTER TABLE namespaces ADD COLUMN display_name TEXT;
 "#;
 
 /// Named secrets attached to runs, and each tenant's signing keys (`archi/04-tools.md`, "Secrets"
-/// and "Signed calls"). The credentials per toolset, per namespace and toolset, and per run are
+/// and "Signed calls"). The credentials per action set, per namespace and action set, and per run are
 /// dropped, with the data keys that encrypted them: nothing is encrypted under those any more, and
 /// a tenant's next secret or signing key makes a data key under the current master key, whose id
 /// `data_keys.master_key` records. An organization's secrets are kept under the namespace `*`.
@@ -1216,7 +1216,7 @@ mod tests {
                 sql::run_id(id),
                 text(tenant),
                 digest(Digest::of(b"script")),
-                digest(Digest::of(b"toolset")),
+                digest(Digest::of(b"action_set")),
                 ts(at(86_400 * 30)),
                 ts(T0),
                 ts(T0),
@@ -1261,7 +1261,7 @@ mod tests {
             name,
             None,
             Digest::of(script.as_bytes()),
-            Digest::of(b"toolset"),
+            Digest::of(b"action_set"),
             rewind_core::WorkflowSchemas {
                 input: serde_json::json!({ "type": "object" }),
                 output: serde_json::json!({}),

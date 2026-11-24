@@ -65,7 +65,7 @@ pub(crate) struct Global {
 pub(crate) enum Command {
     /// Start a run and wait for it, up to --wait.
     Run(RunArgs),
-    /// Type-check a script against the sandbox and a toolset's declarations.
+    /// Type-check a script against the sandbox and an action set's declarations.
     Check(CheckArgs),
     /// Run tests in virtual time: in this process, or on the server for a workflow's suite.
     Test(TestArgs),
@@ -87,9 +87,9 @@ pub(crate) enum Command {
     Release(ReleaseArgs),
     /// Export a run's journal document, or a cassette of its calls and signals.
     Export(ExportArgs),
-    /// Register toolsets and read their declarations.
+    /// Register action sets and read their declarations.
     #[command(subcommand)]
-    Toolsets(ToolsetsCommand),
+    ActionSets(ActionSetsCommand),
     /// The namespaces (the end users) and their use; one namespace; their limits; erase one.
     #[command(subcommand)]
     Namespaces(NamespacesCommand),
@@ -186,9 +186,9 @@ pub(crate) struct RunArgs {
     /// The input of main: JSON, or @file.json.
     #[arg(long, value_name = "JSON")]
     pub(crate) input: Option<String>,
-    /// The toolset: the id of a registered toolset, or a toolset file to register.
+    /// The action set: the id of a registered action set, or an action set file to register.
     #[arg(long, value_name = "ID|FILE")]
-    pub(crate) toolset: Option<String>,
+    pub(crate) action_set: Option<String>,
     #[command(flatten)]
     pub(crate) start: StartOptions,
 }
@@ -197,10 +197,10 @@ pub(crate) struct RunArgs {
 pub(crate) struct CheckArgs {
     /// The TypeScript script.
     pub(crate) script: PathBuf,
-    /// The toolset: a toolset file, pinned in this process, or the id of a toolset registered
+    /// The action set: an action set file, pinned in this process, or the id of an action set registered
     /// on the server, which then checks the script.
     #[arg(long, value_name = "ID|FILE")]
-    pub(crate) toolset: Option<String>,
+    pub(crate) action_set: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -215,10 +215,10 @@ pub(crate) struct TestArgs {
     /// checks every test against its interface.
     #[arg(long, value_name = "NAME")]
     pub(crate) workflow: Option<String>,
-    /// The toolset: a toolset file, or the id of a toolset registered on the server, where the
+    /// The action set: an action set file, or the id of an action set registered on the server, where the
     /// tests then run. Default: the workflow's, or else the tools the tests answer.
     #[arg(long, value_name = "ID|FILE")]
-    pub(crate) toolset: Option<String>,
+    pub(crate) action_set: Option<String>,
     /// Static responses per tool, tried last, in this process. Default: rewind.tools.json next
     /// to the tests.
     #[arg(long, value_name = "FILE")]
@@ -414,19 +414,19 @@ pub(crate) enum ExportFormat {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum ToolsetsCommand {
-    /// Register and pin a toolset file; print its id.
+pub(crate) enum ActionSetsCommand {
+    /// Register and pin an action set file; print its id.
     Add {
-        /// MCP servers, host tools and the http tool, as `POST /v1/toolsets` takes them.
+        /// MCP servers, host tools and the http tool, as `POST /v1/action-sets` takes them.
         file: PathBuf,
     },
-    /// The declarations of a registered toolset.
+    /// The declarations of a registered action set.
     Declarations {
         id: String,
         #[arg(long, value_enum, default_value = "dts")]
         format: DeclarationsFormat,
     },
-    /// Search a registered toolset's tools.
+    /// Search a registered action set's tools.
     Search {
         id: String,
         query: String,

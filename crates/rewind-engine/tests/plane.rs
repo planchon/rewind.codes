@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use rewind_core::PartitionId;
 use rewind_core::{
-    AbortKind, CancelReason, Completion, Event, Interruption, Lifecycle, RunStatus, Seq, Timestamp,
-    ToolFailure, ToolFailureKind, ToolPolicy, Toolset,
+    AbortKind, ActionSet, CancelReason, Completion, Event, Interruption, Lifecycle, RunStatus, Seq,
+    Timestamp, ToolFailure, ToolFailureKind, ToolPolicy,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HostTools;
@@ -75,18 +75,18 @@ fn one_call() -> FakeExecutor {
     )
 }
 
-/// The toolset of `request`, with `a` under `policy`.
+/// The action set of `request`, with `a` under `policy`.
 fn with_policy(
     mut request: rewind_engine::StartRun,
     policy: ToolPolicy,
 ) -> rewind_engine::StartRun {
-    let mut tools: Vec<rewind_core::Tool> = request.toolset.tools().to_vec();
+    let mut tools: Vec<rewind_core::Tool> = request.action_set.tools().to_vec();
     for tool in &mut tools {
         if tool.name == "a" {
             tool.policy = policy;
         }
     }
-    request.toolset = Toolset::new(Vec::new(), tools).unwrap();
+    request.action_set = ActionSet::new(Vec::new(), tools).unwrap();
     request
 }
 
@@ -213,7 +213,7 @@ async fn a_read_that_finds_the_partition_opened_elsewhere_drops_it_and_the_node_
 
 /// Two reads in flight when the first finds the partition opened by another node: the owner
 /// drops the partition at the first, and the second, which comes back to an owner that closed,
-/// is answered `NotOwner` too, never left waiting (a toolset's creation, which reads every
+/// is answered `NotOwner` too, never left waiting (an action set's creation, which reads every
 /// partition, waited forever for a read that came back during a hand-over).
 #[tokio::test]
 async fn reads_in_flight_when_the_partition_is_dropped_are_answered_not_owner() {
@@ -731,7 +731,7 @@ async fn a_stream_attached_before_its_home_partition_is_opened_again_is_still_ha
                 node: at.clone(),
                 namespace: None,
                 labels: BTreeMap::new(),
-                toolset: None,
+                action_set: None,
                 tools: Default::default(),
                 slots: 4,
             },
@@ -779,7 +779,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
                 node: at.clone(),
                 namespace: None,
                 labels: BTreeMap::new(),
-                toolset: None,
+                action_set: None,
                 tools: Default::default(),
                 slots: 4,
             },
@@ -870,7 +870,7 @@ async fn tasks_in_flight_read_claimed() {
                 node: at.clone(),
                 namespace: None,
                 labels: BTreeMap::new(),
-                toolset: None,
+                action_set: None,
                 tools: Default::default(),
                 slots: 1,
             },

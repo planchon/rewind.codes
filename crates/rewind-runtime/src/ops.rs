@@ -12,8 +12,8 @@ use chacha20::cipher::{KeyIvInit, StreamCipher};
 use deno_core::{OpState, extension, op2, v8};
 use deno_error::JsErrorBox;
 use rewind_core::{
-    Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId, ScriptError, Seed, Seq,
-    Timestamp, ToolRoute, Toolset, WorkflowOp, parse_duration,
+    ActionSet, Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId, ScriptError, Seed,
+    Seq, Timestamp, ToolRoute, WorkflowOp, parse_duration,
 };
 use rewind_engine::ports::Emitted;
 use rewind_engine::schema::{Refused, Validator};
@@ -28,7 +28,7 @@ pub(crate) struct ExecState {
     pub(crate) now: Timestamp,
     started_at: Timestamp,
     run_id: RunId,
-    toolset: Toolset,
+    action_set: ActionSet,
     next_seq: Option<Seq>,
     emitted: Vec<Emitted>,
     /// The bytes of text `emitted` holds.
@@ -54,7 +54,12 @@ pub(crate) struct ExecState {
 }
 
 impl ExecState {
-    pub(crate) fn new(run_id: RunId, seed: &Seed, toolset: Toolset, started_at: Timestamp) -> Self {
+    pub(crate) fn new(
+        run_id: RunId,
+        seed: &Seed,
+        action_set: ActionSet,
+        started_at: Timestamp,
+    ) -> Self {
         // Each generator gets its own key, derived from the seed: what `Math.random` reveals
         // tells nothing about `crypto`.
         let math = derive_key(b"rewind/epoch-1/math-random", seed);
@@ -72,7 +77,7 @@ impl ExecState {
             now: started_at,
             started_at,
             run_id,
-            toolset,
+            action_set,
             next_seq: Some(Seq::FIRST),
             emitted: Vec::new(),
             emitted_bytes: 0,
@@ -94,7 +99,7 @@ impl ExecState {
             "runId": self.run_id.to_string(),
             "startedAt": self.started_at.as_millis(),
             "mathRandom": self.math_random_state,
-            "http": self.toolset.tools().iter().any(|tool| {
+            "http": self.action_set.tools().iter().any(|tool| {
                 matches!(tool.route, ToolRoute::Builtin(Builtin::Http { .. }))
             }),
             "maxElements": max_elements(self.heap_bytes),
@@ -192,19 +197,21 @@ impl ExecState {
         self.emitted.push(Emitted::Annotation(annotation));
     }
 
-    /// Checks a call against the run's toolset and the tool's pinned input schema
-    /// (`archi/04-tools.md`, "Toolsets and code generation"). The message is the `TypeError`
+    /// Checks a call against the run's action set and the tool's pinned input schema
+    /// (`archi/04-tools.md`, "Action sets and code generation"). The message is the `TypeError`
     /// the script sees at its call.
     fn check_call(&mut self, tool: &str, args: &Value) -> Result<(), String> {
-        let Some(pinned) = self.toolset.tool(tool) else {
+        let Some(pinned) = self.action_set.tool(tool) else {
             return Err(match tool {
-                "webhook" => "webhook() needs the built-in webhook tool, which this run's toolset \
+                "webhook" => {
+                    "webhook() needs the built-in webhook tool, which this run's action set \
                               does not have"
-                    .to_owned(),
-                "http" => "fetch() needs the built-in http tool, which this run's toolset does \
+                        .to_owned()
+                }
+                "http" => "fetch() needs the built-in http tool, which this run's action set does \
                            not have"
                     .to_owned(),
-                _ => format!("{tool} is not a tool of this run's toolset"),
+                _ => format!("{tool} is not a tool of this run's action set"),
             });
         };
         if let ToolRoute::Builtin(Builtin::Workflow { workflow, op }) = &pinned.route {
@@ -232,7 +239,7 @@ impl ExecState {
     ) -> Option<Result<(), Refused>> {
         let key = (workflow.to_owned(), schema.to_owned());
         if !self.workflow_validators.contains_key(&key) {
-            let pinned = self.toolset.workflow(workflow)?;
+            let pinned = self.action_set.workflow(workflow)?;
             let json = match schema.strip_prefix("signal:") {
                 Some(signal) => pinned.schemas.signals.get(signal)?,
                 None if schema == "input" => &pinned.schemas.input,
@@ -271,7 +278,7 @@ impl ExecState {
             }
             None => {
                 return Err(format!(
-                    "{workflow} is not a workflow of this run's toolset"
+                    "{workflow} is not a workflow of this run's action set"
                 ));
             }
         }
@@ -322,7 +329,7 @@ impl ExecState {
             )),
             None => {
                 let declared: Vec<String> = self
-                    .toolset
+                    .action_set
                     .workflow(workflow)
                     .map(|pinned| {
                         pinned
@@ -659,21 +666,21 @@ mod tests {
 
     #[test]
     fn generators_are_keyed_by_the_seed_and_independent() {
-        let toolset = Toolset::default();
+        let action_set = ActionSet::default();
         let run = RunId::from_u128(1);
         let a = ExecState::new(
             run,
             &Seed::from_bytes([1; 32]),
-            toolset.clone(),
+            action_set.clone(),
             Timestamp(0),
         );
         let b = ExecState::new(
             run,
             &Seed::from_bytes([1; 32]),
-            toolset.clone(),
+            action_set.clone(),
             Timestamp(0),
         );
-        let c = ExecState::new(run, &Seed::from_bytes([2; 32]), toolset, Timestamp(0));
+        let c = ExecState::new(run, &Seed::from_bytes([2; 32]), action_set, Timestamp(0));
         assert_eq!(a.math_random_state, b.math_random_state);
         assert_ne!(a.math_random_state, c.math_random_state);
 
@@ -709,11 +716,11 @@ mod tests {
             },
             schema,
         );
-        let toolset = Toolset::new([], [tool]).unwrap();
+        let action_set = ActionSet::new([], [tool]).unwrap();
         ExecState::new(
             RunId::from_u128(1),
             &Seed::from_bytes([0; 32]),
-            toolset,
+            action_set,
             Timestamp(0),
         )
     }
@@ -757,7 +764,7 @@ mod tests {
         );
         assert_eq!(
             state.check_call("slack.post", &json!({})),
-            Err("slack.post is not a tool of this run's toolset".into())
+            Err("slack.post is not a tool of this run's action set".into())
         );
         assert!(
             state

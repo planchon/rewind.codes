@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use fixture::{Auth, Fixture};
 use libtest_mimic::{Arguments, Trial};
 use rewind_core::{
-    McpServer, McpTransport, RunId, SecretPlacement, Seq, Timestamp, Tool, ToolAuth, ToolFailure,
-    ToolFailureKind, ToolRoute, Toolset,
+    ActionSet, McpServer, McpTransport, RunId, SecretPlacement, Seq, Timestamp, Tool, ToolAuth,
+    ToolFailure, ToolFailureKind, ToolRoute,
 };
 use rewind_engine::adapters::MemorySecrets;
 use rewind_engine::ports::{
@@ -318,9 +318,9 @@ async fn discovery_pins_the_server_tools() {
         issue.policy.execution_timeout,
         Some(Duration::from_secs(300))
     );
-    // What discovery returns is a toolset.
-    let toolset = Toolset::new([mcp], tools).unwrap();
-    assert_eq!(toolset.tools().len(), 8);
+    // What discovery returns is an action set.
+    let action_set = ActionSet::new([mcp], tools).unwrap();
+    assert_eq!(action_set.tools().len(), 8);
 }
 
 async fn a_tool_list_without_end_is_refused() {

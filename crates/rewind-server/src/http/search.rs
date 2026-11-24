@@ -156,7 +156,7 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
         Filter::Calls(range) => Predicate::Calls(counts(range)),
         Filter::Errors(range) => Predicate::Errors(counts(range)),
         Filter::Script(prefixes) => Predicate::Script(prefixes),
-        Filter::Toolset(prefixes) => Predicate::Toolset(prefixes),
+        Filter::ActionSet(prefixes) => Predicate::ActionSet(prefixes),
         Filter::Id(prefixes) => Predicate::Id(prefixes),
         // The parser checked the form of the id.
         Filter::Parent(parent) => match parent.parse::<RunId>() {
@@ -354,7 +354,7 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
         // The script's title is not the read model's: the caller gives it.
         script_title: None,
         headline: run.headline.clone(),
-        toolset: run.toolset.to_hex(),
+        action_set: run.action_set.to_hex(),
         labels: Labels::from(run.labels.clone()),
         started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
         ended_at: run.ended_at.map(timestamp),

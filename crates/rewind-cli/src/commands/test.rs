@@ -1,4 +1,4 @@
-//! `rewind test [script.ts] [--tests file] [--workflow name] [--toolset id|file]`: runs tests in
+//! `rewind test [script.ts] [--tests file] [--workflow name] [--action-set id|file]`: runs tests in
 //! mock mode, in virtual time (`archi/05-testing-and-observability.md`, "Running tests").
 //!
 //! A tests file is a JSON array of tests, `script.tests.json` next to the script by default:
@@ -19,10 +19,10 @@
 //!
 //! `world.cassette` given as a string, and `world.mocks` as the name of a `.ts` or `.js` file,
 //! are read from files relative to the tests file. The tests run in this process, the tools'
-//! static responses of `rewind.tools.json` tried last, against the toolset file `--toolset`
+//! static responses of `rewind.tools.json` tried last, against the action set file `--action-set`
 //! names, or else the tools the tests answer, as host tools. They run on the server (embedded
 //! or remote, `POST /v1/test`) when they need what it holds: a workflow's suite (`--workflow`)
-//! or a toolset registered there (`--toolset <id>`).
+//! or an action set registered there (`--action-set <id>`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -36,12 +36,12 @@ use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
 use serde_json::Value;
 
 use super::Server;
+use crate::action_set;
 use crate::args::TestArgs;
 use crate::error::CliError;
 use crate::exit::Exit;
-use crate::input::{self, ToolsetRef};
+use crate::input::{self, ActionSetRef};
 use crate::output::Console;
-use crate::toolset;
 
 /// The static responses read next to the tests.
 pub(crate) const TOOLS_FILE: &str = "rewind.tools.json";
@@ -81,18 +81,24 @@ pub(super) async fn test(
         )));
     }
     let source = args.script.as_deref().map(input::read_text).transpose()?;
-    let toolset = args.toolset.as_deref().map(ToolsetRef::parse).transpose()?;
-    let run = match toolset {
-        Some(ToolsetRef::Id(id)) => remote(server, source, Some(id), tests, args.workflow).await?,
-        Some(ToolsetRef::File(path)) if args.workflow.is_some() => {
+    let action_set = args
+        .action_set
+        .as_deref()
+        .map(ActionSetRef::parse)
+        .transpose()?;
+    let run = match action_set {
+        Some(ActionSetRef::Id(id)) => {
+            remote(server, source, Some(id), tests, args.workflow).await?
+        }
+        Some(ActionSetRef::File(path)) if args.workflow.is_some() => {
             let client = server.client().await?;
-            let registered = client.create_toolset(&input::read_json(&path)?).await?;
+            let registered = client.create_action_set(&input::read_json(&path)?).await?;
             remote(server, source, Some(registered.id), tests, args.workflow).await?
         }
         None if args.workflow.is_some() => {
             remote(server, source, None, tests, args.workflow).await?
         }
-        toolset => {
+        action_set => {
             let base = tests_file
                 .as_deref()
                 .and_then(Path::parent)
@@ -107,8 +113,8 @@ pub(super) async fn test(
                         .transpose()?
                 }
             };
-            let file = match toolset {
-                Some(ToolsetRef::File(path)) => Some(path),
+            let file = match action_set {
+                Some(ActionSetRef::File(path)) => Some(path),
                 _ => None,
             };
             local(source.unwrap_or_default(), file.as_deref(), tests, statics).await?
@@ -162,7 +168,7 @@ fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
 async fn remote(
     server: &Server<'_>,
     script: Option<String>,
-    toolset: Option<String>,
+    action_set: Option<String>,
     tests: Vec<ApiTest>,
     workflow: Option<String>,
 ) -> Result<TestRun, CliError> {
@@ -170,7 +176,7 @@ async fn remote(
     Ok(client
         .test(&TestRequest {
             script,
-            toolset,
+            action_set,
             tests: tests
                 .into_iter()
                 .map(|test| TestInput::Inline(Box::new(test)))
@@ -183,7 +189,7 @@ async fn remote(
 /// In this process.
 async fn local(
     source: String,
-    toolset_file: Option<&Path>,
+    action_set_file: Option<&Path>,
     tests: Vec<ApiTest>,
     statics: Option<Value>,
 ) -> Result<TestRun, CliError> {
@@ -203,8 +209,8 @@ async fn local(
             .map_err(CliError::usage)
         })
         .collect::<Result<_, _>>()?;
-    let toolset = match toolset_file {
-        Some(path) => toolset::pin_file(path).await?,
+    let action_set = match action_set_file {
+        Some(path) => action_set::pin_file(path).await?,
         None => {
             let mut answered: BTreeSet<String> = tests
                 .iter()
@@ -242,7 +248,7 @@ async fn local(
                     answered.extend(mocks.tools);
                 }
             }
-            toolset::of_mocks(&answered)?
+            action_set::of_mocks(&answered)?
         }
     };
     let executor = V8Executor::new(SandboxLimits::default())
@@ -253,7 +259,7 @@ async fn local(
         &TsMockLoader::default(),
         &Subject {
             script: &script,
-            toolset: &toolset,
+            action_set: &action_set,
             interface: None,
         },
         &tests,

@@ -28,7 +28,7 @@ pub(crate) enum EventV1 {
     // Lifecycle
     RunStarted {
         script: String,
-        toolset: String,
+        action_set: String,
         input: PayloadV1,
         seed: String,
         epoch: u32,
@@ -239,7 +239,7 @@ impl From<&Event> for EventV1 {
         match event {
             Event::Lifecycle(Lifecycle::RunStarted(started)) => EventV1::RunStarted {
                 script: started.script.to_hex(),
-                toolset: started.toolset.to_hex(),
+                action_set: started.action_set.to_hex(),
                 input: (&started.input).into(),
                 seed: hex(started.seed.as_bytes()),
                 epoch: started.epoch.0,
@@ -433,7 +433,7 @@ impl TryFrom<EventV1> for Event {
         Ok(match dto {
             EventV1::RunStarted {
                 script,
-                toolset,
+                action_set,
                 input,
                 seed,
                 epoch,
@@ -441,7 +441,7 @@ impl TryFrom<EventV1> for Event {
                 mode,
             } => Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
                 script: digest(&script)?,
-                toolset: digest(&toolset)?,
+                action_set: digest(&action_set)?,
                 input: input.try_into()?,
                 seed: Seed::from_bytes(unhex(&seed).ok_or_else(|| {
                     format!("invalid seed {seed:?}: expected 64 lowercase hex digits")

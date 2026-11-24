@@ -5,7 +5,7 @@
 //! rewind-load mcp --listen 127.0.0.1:9100
 //! ```
 //!
-//! `run` drives a deployment through its HTTP API: it registers a toolset whose MCP server is
+//! `run` drives a deployment through its HTTP API: it registers an action set whose MCP server is
 //! its own fake one (served by this process, which the deployment must reach) and whose host
 //! tool it answers itself, starts many runs at once, signals them, waits for every one to end,
 //! then checks the invariants and prints throughput, latencies and errors. It exits with 0 when

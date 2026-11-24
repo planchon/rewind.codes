@@ -1,9 +1,9 @@
-//! The toolset as `rewind:tools` exports it: one namespace per MCP server or host-tool group, one
+//! The action set as `rewind:tools` exports it: one namespace per MCP server or host-tool group, one
 //! function per bare host tool, and the type of each tool's args and result.
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Shape, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, Shape, Tool, ToolRoute};
 
 use crate::observed;
 use crate::schema::{self, Declaration, Role, Scope};
@@ -42,15 +42,15 @@ pub(crate) struct Signature<'a> {
     pub(crate) doc: Doc,
 }
 
-/// The exports of a toolset, sorted by name, built-ins left out: scripts reach them through
+/// The exports of an action set, sorted by name, built-ins left out: scripts reach them through
 /// `fetch` and `webhook` from `rewind`. A bare host tool whose name is not an identifier cannot be
 /// imported, and is left out too.
 pub(crate) fn exports<'a>(
-    toolset: &'a Toolset,
+    action_set: &'a ActionSet,
     observed: &BTreeMap<String, Shape>,
 ) -> Vec<Export<'a>> {
     let mut exports: BTreeMap<&str, Export<'a>> = BTreeMap::new();
-    for tool in toolset.tools() {
+    for tool in action_set.tools() {
         let (name, kind) = match (&tool.route, tool.namespace()) {
             (ToolRoute::Builtin(_), _) => continue,
             (_, Some(namespace)) => (namespace, ExportKind::Namespace),

@@ -1,5 +1,5 @@
-//! Does a call still match its tool? (`archi/04-tools.md`, "When a toolset changes during a
-//! run".) A run keeps the toolset it started with, but the server behind it can change during a
+//! Does a call still match its tool? (`archi/04-tools.md`, "When an action set changes during a
+//! run".) A run keeps the action set it started with, but the server behind it can change during a
 //! long pause. Before each call, the dispatcher compares the pinned tool with the tool the
 //! server lists now.
 //!

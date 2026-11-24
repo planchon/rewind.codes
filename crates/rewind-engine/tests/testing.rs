@@ -8,8 +8,8 @@ mod support;
 use std::time::Duration;
 
 use rewind_core::{
-    CallOrder, Expectations, ExpectedCall, ExpectedError, Matching, RunStatus, Script, SignalWhen,
-    Test, TestOrigin, TestSignal, ToolOutcome, ToolRule, Toolset,
+    ActionSet, CallOrder, Expectations, ExpectedCall, ExpectedError, Matching, RunStatus, Script,
+    SignalWhen, Test, TestOrigin, TestSignal, ToolOutcome, ToolRule,
 };
 use rewind_engine::ports::Delivery;
 use rewind_engine::testing::{
@@ -45,8 +45,8 @@ fn script() -> Script {
     Script::new("sleepy")
 }
 
-fn toolset() -> Toolset {
-    Toolset::from_host_tools(["a", "b"]).unwrap()
+fn action_set() -> ActionSet {
+    ActionSet::from_host_tools(["a", "b"]).unwrap()
 }
 
 /// `a` answers `{ ok: true }`; `approval` comes once the run is blocked.
@@ -66,10 +66,10 @@ fn test() -> Test {
 
 async fn run(test: &Test) -> rewind_engine::testing::TestReport {
     let script = script();
-    let toolset = toolset();
+    let action_set = action_set();
     let subject = Subject {
         script: &script,
-        toolset: &toolset,
+        action_set: &action_set,
         interface: None,
     };
     run_test(
@@ -254,10 +254,10 @@ async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
 #[tokio::test]
 async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
     let script = script();
-    let toolset = toolset();
+    let action_set = action_set();
     let subject = Subject {
         script: &script,
-        toolset: &toolset,
+        action_set: &action_set,
         interface: None,
     };
     let mut first = test();
@@ -285,7 +285,7 @@ async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
     assert!(reports[0].passed && reports[2].passed);
     assert_eq!(reports[1].problem, Some(TestProblem::Stale));
     assert_eq!(reports[1].status, None);
-    assert_eq!(reports[1].failures, ["the toolset has no tool c"]);
+    assert_eq!(reports[1].failures, ["the action set has no tool c"]);
 
     // A test with mock handlers where none can run fails, alone.
     let mut mocked = test();
@@ -318,10 +318,10 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
     );
     test.expect.output = Some(json!({ "approved": true }));
     let script = script();
-    let toolset = toolset();
+    let action_set = action_set();
     let subject = Subject {
         script: &script,
-        toolset: &toolset,
+        action_set: &action_set,
         interface: None,
     };
     let options = TestOptions {
@@ -344,10 +344,10 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
 fn a_run_of_tests_is_a_future_a_server_can_spawn() {
     fn spawnable<T: Send>(_: &T) {}
     let script = script();
-    let toolset = toolset();
+    let action_set = action_set();
     let subject = Subject {
         script: &script,
-        toolset: &toolset,
+        action_set: &action_set,
         interface: None,
     };
     let tests = [test()];

@@ -119,8 +119,8 @@ fn script(name: &str) -> Digest {
     Digest::of(name.as_bytes())
 }
 
-fn toolset_digest() -> Digest {
-    Digest::of(b"toolset")
+fn action_set_digest() -> Digest {
+    Digest::of(b"action_set")
 }
 
 fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
@@ -130,7 +130,7 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
         origin: "triage".into(),
         suffix_len: 12,
         script: script("script"),
-        toolset: toolset_digest(),
+        action_set: action_set_digest(),
         status: RunStatus::Pending,
         epoch: Epoch(1),
         attempt: Attempt::FIRST,
@@ -175,7 +175,7 @@ fn create_in(run: &RunRef, namespace: &NamespaceName, start_key: Option<&str>) -
 fn started() -> RunStarted {
     RunStarted {
         script: script("script"),
-        toolset: toolset_digest(),
+        action_set: action_set_digest(),
         input: json!({ "n": 1 }).into(),
         seed: Seed::from_bytes([9; 32]),
         epoch: Epoch(1),
@@ -252,7 +252,7 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         suffix_len: 12,
         script: script("script"),
         headline: "export default async () => {".into(),
-        toolset: toolset_digest(),
+        action_set: action_set_digest(),
         status: if status == RunStatus::Pending {
             RunStatus::Active
         } else {
@@ -358,7 +358,7 @@ fn task(run: &RunRef, seq: u32, state: TaskState) -> TaskRecord {
                 run: run.clone(),
                 seq: Seq(seq),
             },
-            toolset: toolset_digest(),
+            action_set: action_set_digest(),
             tool: "github.close_issue".into(),
             policy: ToolPolicy::default_for(&route),
             route,

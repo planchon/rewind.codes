@@ -252,12 +252,12 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_QUOTA_MAX_SCRIPT_LINES")]
     pub quota_max_script_lines: Option<u32>,
 
-    /// Accept toolsets with stdio MCP servers: processes this server starts. The embedded
+    /// Accept action sets with stdio MCP servers: processes this server starts. The embedded
     /// server always does.
     #[arg(long, env = "REWIND_ALLOW_STDIO")]
     pub allow_stdio: bool,
 
-    /// An internal host or network whose MCP servers and APIs toolsets may name: a host name
+    /// An internal host or network whose MCP servers and APIs action sets may name: a host name
     /// (`mcp.internal.example`), its subdomains (`*.svc.cluster.local`), an address or a CIDR
     /// network (`10.20.0.0/16`). Repeat, or separate with commas. Without it, a server reaches
     /// MCP servers, APIs and OpenAPI documents only at public addresses: private, loopback,

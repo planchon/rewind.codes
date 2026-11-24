@@ -125,7 +125,7 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::InvalidQuery
                 | ProblemType::UnsupportedMediaType
                 | ProblemType::PayloadTooLarge
-                | ProblemType::InvalidToolset
+                | ProblemType::InvalidActionSet
                 | ProblemType::InvalidWorkflow
                 | ProblemType::InvalidInput
                 | ProblemType::InvalidTest
@@ -137,7 +137,7 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
             Some(ProblemType::InvalidScript) => Exit::ScriptRefused,
             Some(
                 ProblemType::Internal
-                | ProblemType::ToolsetUnavailable
+                | ProblemType::ActionSetUnavailable
                 | ProblemType::IdentityUnavailable
                 | ProblemType::Unavailable,
             ) => Exit::Internal,

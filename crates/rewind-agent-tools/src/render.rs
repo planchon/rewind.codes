@@ -1,18 +1,18 @@
 //! What the agent tools say to the model: a port of the SDK's
 //! `sdk/typescript/src/agent-tools/render.ts` and `bound.ts`, on the same DTOs, so that a model
 //! reads here what it reads through the SDK; and what the MCP set says of the organizations,
-//! namespaces and toolsets a caller reaches. Plain text, short, bounded, pointing at the next
+//! namespaces and action sets a caller reaches. Plain text, short, bounded, pointing at the next
 //! useful call.
 
 use std::collections::BTreeSet;
 
 use rewind_api::access::Permission;
+use rewind_api::action_sets::ToolMatch;
 use rewind_api::common::{Callsite, Payload, RunStatus};
 use rewind_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
 use rewind_api::scripts::{CheckResult, Diagnostic, Severity};
 use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_api::testing::{Test, TestProblem, TestResult};
-use rewind_api::toolsets::ToolMatch;
 use rewind_api::workflows::{RecordedTests, Workflow};
 use serde_json::{Value, json};
 
@@ -349,7 +349,7 @@ fn describe_waiting(waiting: &Waiting) -> String {
                         )
                     } else {
                         format!(
-                            "{call}: parked, the tool changed since the toolset was pinned; the harness decides whether it goes on"
+                            "{call}: parked, the tool changed since the action set was pinned; the harness decides whether it goes on"
                         )
                     }
                 }
@@ -653,7 +653,7 @@ fn problem_name(problem: TestProblem) -> &'static str {
 fn problem_phrase(problem: TestProblem) -> &'static str {
     match problem {
         TestProblem::Stale => {
-            "it names tools, answers or args the toolset no longer has; it was not run."
+            "it names tools, answers or args the action set no longer has; it was not run."
         }
         TestProblem::Incompatible => {
             "the workflow's input or signal schemas refuse its input or its signals; it was not run."
@@ -1137,7 +1137,7 @@ fn permission_phrase(permission: Permission) -> Option<&'static str> {
         Permission::RunsRead => "read runs and record tests",
         Permission::RunsStart => "check, test, run and retry scripts",
         Permission::RunsControl => "signal and cancel runs",
-        Permission::ToolsetsRead => "read toolsets and workflows",
+        Permission::ActionsRead => "read action sets and workflows",
         Permission::NamespacesRead => "list namespaces",
         _ => return None,
     })
@@ -1290,22 +1290,22 @@ pub fn describe_namespaces(
     lines.join("\n")
 }
 
-/// Tool names `list_toolsets` shows per toolset; `search_tools` gives the rest.
+/// Tool names `list_action_sets` shows per action set; `search_tools` gives the rest.
 const LISTED_TOOLS: usize = 20;
 
-/// `list_toolsets`: each toolset's id, servers, tools and workflows.
-pub fn describe_toolsets(list: &rewind_api::toolsets::ToolsetList) -> String {
-    if list.toolsets.is_empty() {
-        return "No toolset in this organization: a script can only use the built-in `webhook`. A toolset is registered with POST /v1/toolsets, outside these tools.".to_owned();
+/// `list_action_sets`: each action set's id, servers, tools and workflows.
+pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> String {
+    if list.action_sets.is_empty() {
+        return "No action set in this organization: a script can only use the built-in `webhook`. An action set is registered with POST /v1/action-sets, outside these tools.".to_owned();
     }
     let mut lines = vec![format!(
-        "{}: give one's id as `toolset`.",
-        plural(list.toolsets.len(), "toolset")
+        "{}: give one's id as `action_set`.",
+        plural(list.action_sets.len(), "action set")
     )];
-    for toolset in &list.toolsets {
-        lines.push(format!("- {}", toolset.id));
-        if !toolset.servers.is_empty() {
-            let servers: Vec<String> = toolset
+    for action_set in &list.action_sets {
+        lines.push(format!("- {}", action_set.id));
+        if !action_set.servers.is_empty() {
+            let servers: Vec<String> = action_set
                 .servers
                 .iter()
                 .map(|server| {
@@ -1318,14 +1318,14 @@ pub fn describe_toolsets(list: &rewind_api::toolsets::ToolsetList) -> String {
                 .collect();
             lines.push(format!("  servers: {}", servers.join(", ")));
         }
-        if !toolset.tools.is_empty() {
-            let shown: Vec<&str> = toolset
+        if !action_set.tools.is_empty() {
+            let shown: Vec<&str> = action_set
                 .tools
                 .iter()
                 .take(LISTED_TOOLS)
                 .map(String::as_str)
                 .collect();
-            let more = toolset.tools.len().saturating_sub(LISTED_TOOLS);
+            let more = action_set.tools.len().saturating_sub(LISTED_TOOLS);
             lines.push(format!(
                 "  tools: {}{}",
                 shown.join(", "),
@@ -1336,8 +1336,8 @@ pub fn describe_toolsets(list: &rewind_api::toolsets::ToolsetList) -> String {
                 }
             ));
         }
-        if !toolset.workflows.is_empty() {
-            lines.push(format!("  workflows: {}", toolset.workflows.join(", ")));
+        if !action_set.workflows.is_empty() {
+            lines.push(format!("  workflows: {}", action_set.workflows.join(", ")));
         }
     }
     lines.push(
@@ -1360,7 +1360,7 @@ mod tests {
         );
         let reader = [
             Permission::RunsRead,
-            Permission::ToolsetsRead,
+            Permission::ActionsRead,
             Permission::TokensWrite,
         ];
         assert_eq!(
@@ -1376,11 +1376,11 @@ mod tests {
                     permissions: &[Permission::TokensWrite]
                 },
             ]),
-            "You reach 2 organizations: give one as `org`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests, read toolsets and workflows.\n- id org_2: these tools can do nothing there."
+            "You reach 2 organizations: give one as `org`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests, read action sets and workflows.\n- id org_2: these tools can do nothing there."
         );
 
-        let toolsets: rewind_api::toolsets::ToolsetList = serde_json::from_value(json!({
-            "toolsets": [{
+        let action_sets: rewind_api::action_sets::ActionSetList = serde_json::from_value(json!({
+            "actionSets": [{
                 "id": "ab".repeat(32),
                 "servers": [{ "name": "github", "transport": "http", "tools": 25 }],
                 "tools": (0..25).map(|n| format!("github.tool_{n}")).collect::<Vec<_>>(),
@@ -1388,8 +1388,8 @@ mod tests {
             }]
         }))
         .unwrap();
-        let text = describe_toolsets(&toolsets);
-        assert!(text.starts_with(&format!("1 toolset: give one's id as `toolset`.\n- {}\n  servers: github (25 tools)\n  tools: github.tool_0, ", "ab".repeat(32))), "{text}");
+        let text = describe_action_sets(&action_sets);
+        assert!(text.starts_with(&format!("1 action set: give one's id as `action_set`.\n- {}\n  servers: github (25 tools)\n  tools: github.tool_0, ", "ab".repeat(32))), "{text}");
         assert!(
             text.contains(
                 "github.tool_19, and 5 more: find them with search_tools\n  workflows: triage\n"
@@ -1397,10 +1397,10 @@ mod tests {
             "{text}"
         );
         assert!(
-            describe_toolsets(&rewind_api::toolsets::ToolsetList {
-                toolsets: Vec::new()
+            describe_action_sets(&rewind_api::action_sets::ActionSetList {
+                action_sets: Vec::new()
             })
-            .starts_with("No toolset in this organization")
+            .starts_with("No action set in this organization")
         );
     }
 
@@ -1442,7 +1442,7 @@ mod tests {
         let limits = Limits::for_output(64 * 1024);
         let long = "m".repeat(3_000_000);
         let run: Run = serde_json::from_value(json!({
-            "id": "r", "handle": "alice/script/r", "namespace": "alice", "status": "failed", "script": "s", "toolset": "t", "epoch": 1,
+            "id": "r", "handle": "alice/script/r", "namespace": "alice", "status": "failed", "script": "s", "actionSet": "t", "epoch": 1,
             "mode": "live", "labels": {}, "traceId": "0", "historyLen": 3,
             "createdAt": "2026-11-12T00:00:00Z", "updatedAt": "2026-11-12T00:00:00Z",
             "expiresAt": "2026-11-13T00:00:00Z",
@@ -1527,7 +1527,7 @@ mod tests {
             "version": VERSION,
             "number": 3,
             "description": "Triage the stale issues of a repository, after approval.",
-            "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+            "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
             "script": "cd".repeat(32),
             "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
             "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
@@ -1592,7 +1592,7 @@ mod tests {
                 "  Calls: github.close_issue ×2, github.list_issues ×1",
                 "  Trace:",
                 "#0 run_started\n#1 tool github.list_issues",
-                "FAIL \"posts to slack\" (stale): it names tools, answers or args the toolset no longer has; it was not run.",
+                "FAIL \"posts to slack\" (stale): it names tools, answers or args the action set no longer has; it was not run.",
                 "  - slack.post_message is not one of the tools",
                 "FAIL \"refuses a bad repo\" (incompatible): the workflow's input or signal schemas refuse its input or its signals; it was not run.",
                 "  - the input does not match the input schema of triage: repo must be a string",
@@ -1913,7 +1913,7 @@ mod tests {
         let run: Run = serde_json::from_value(json!({
             "id": RUN_ID, "handle": "user_2fQ81/triage/06bqx3k9f2mt", "namespace": "user_2fQ81",
             "status": "completed", "script": "ab".repeat(32),
-            "toolset": "t", "epoch": 1, "mode": "live", "labels": {}, "traceId": "0", "historyLen": 4,
+            "actionSet": "t", "epoch": 1, "mode": "live", "labels": {}, "traceId": "0", "historyLen": 4,
             "createdAt": "2026-11-12T10:00:00Z", "updatedAt": "2026-11-12T10:00:01Z",
             "expiresAt": "2026-12-12T10:00:00Z",
             "workflow": { "name": "triage", "version": VERSION, "number": 3 },
@@ -1934,7 +1934,7 @@ mod tests {
         let summary: RunSummary = serde_json::from_value(json!({
             "id": "r2", "handle": "user_2fQ81/triage/06bqx3k9f2mv", "namespace": "user_2fQ81",
             "status": "active", "quarantined": false, "script": "s",
-            "headline": "", "toolset": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
+            "headline": "", "actionSet": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
             "lastActivityAt": "2026-11-12T10:00:00Z", "toolCalls": 1, "errors": 0, "historyLen": 3,
             "waitingFor": [], "workflow": "triage", "startedBy": "r1"
         }))

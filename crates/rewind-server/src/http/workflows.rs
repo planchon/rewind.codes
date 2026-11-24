@@ -14,13 +14,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
+use rewind_api::action_sets::Declarations;
 use rewind_api::common::{Labels, timestamp};
-use rewind_api::toolsets::Declarations;
 use rewind_api::workflows::{
     CreateWorkflow, RetiredTest, SuiteTest, UpdatedTest, Workflow as ApiWorkflow, WorkflowPage,
     WorkflowQuery, WorkflowVersions,
 };
-use rewind_core::{Digest, Script, Toolset, WorkflowSchemas};
+use rewind_core::{ActionSet, Digest, Script, WorkflowSchemas};
 use rewind_engine::ports::{
     CatalogStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
 };
@@ -33,7 +33,7 @@ use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Query};
-use crate::http::{testing, toolsets};
+use crate::http::{action_sets, testing};
 
 /// Workflows a page of `GET /v1/workflows` holds by default, and at most.
 const PAGE: u32 = 50;
@@ -49,8 +49,8 @@ pub(super) async fn create(
     caller: Caller,
     Body(request): Body<CreateWorkflow>,
 ) -> Result<Response, ApiError> {
-    caller.require(Permission::ToolsetsWrite)?;
-    let toolset = toolsets::parse_digest(&request.toolset)?;
+    caller.require(Permission::ActionsWrite)?;
+    let action_set = action_sets::parse_digest(&request.action_set)?;
     let secrets = super::runs::attachments(&request.secrets)?;
     let schemas = WorkflowSchemas {
         input: request.input,
@@ -114,7 +114,7 @@ pub(super) async fn create(
                 name: request.name,
                 description: request.description,
                 script,
-                toolset,
+                action_set,
                 schemas,
                 labels: caller.labels.clone(),
                 secrets,
@@ -170,7 +170,7 @@ pub(super) async fn list(
     caller: Caller,
     Query(query): Query<WorkflowQuery>,
 ) -> Result<Json<WorkflowPage>, ApiError> {
-    caller.require(Permission::ToolsetsRead)?;
+    caller.require(Permission::ActionsRead)?;
     if let Some(script) = &query.script {
         let script = Digest::from_hex(script).map_err(|_| {
             ApiError::invalid("script: the digest of a script, 64 lowercase hexadecimal digits")
@@ -210,7 +210,7 @@ pub(super) async fn versions(
     caller: Caller,
     Path(name): Path<String>,
 ) -> Result<Json<WorkflowVersions>, ApiError> {
-    caller.require(Permission::ToolsetsRead)?;
+    caller.require(Permission::ActionsRead)?;
     let versions = app
         .store
         .workflow_versions(&caller.tenant, &name, &caller.labels)
@@ -279,18 +279,18 @@ pub(crate) async fn resolve(
     found.ok_or_else(|| not_found(reference))
 }
 
-/// The pinned forms of the workflows a toolset names.
+/// The pinned forms of the workflows an action set names.
 pub(crate) async fn pin(
     app: &App,
     tenant: &TenantId,
     labels: &BTreeMap<String, String>,
     references: &[String],
-    toolset: Toolset,
-) -> Result<Toolset, ApiError> {
+    action_set: ActionSet,
+) -> Result<ActionSet, ApiError> {
     if references.is_empty() {
-        return Ok(toolset);
+        return Ok(action_set);
     }
-    let mut pinned: BTreeMap<String, rewind_core::PinnedWorkflow> = toolset
+    let mut pinned: BTreeMap<String, rewind_core::PinnedWorkflow> = action_set
         .workflows()
         .iter()
         .map(|workflow| (workflow.name.clone(), workflow.clone()))
@@ -300,18 +300,18 @@ pub(crate) async fn pin(
         let workflow = stored.workflow.pinned();
         pinned.insert(workflow.name.clone(), workflow);
     }
-    toolset
+    action_set
         .with_workflows(pinned.into_values())
-        .map_err(|error| ApiError::new(ProblemType::InvalidToolset, error.to_string()))
+        .map_err(|error| ApiError::new(ProblemType::InvalidActionSet, error.to_string()))
 }
 
 /// A stored version, as the API shows it.
 pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
     let workflow = &stored.workflow;
     let pinned = workflow.pinned();
-    let declarations = Toolset::empty()
+    let declarations = ActionSet::empty()
         .with_workflows([pinned])
-        .map(|toolset| rewind_codegen::generate(&toolset, &BTreeMap::new()))
+        .map(|action_set| rewind_codegen::generate(&action_set, &BTreeMap::new()))
         .ok();
     let declaration = declarations.as_ref().and_then(|generated| {
         let name = format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name());
@@ -322,7 +322,7 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
         version: workflow.version().to_hex(),
         number: stored.number,
         description: workflow.description().map(str::to_owned),
-        toolset: workflow.toolset().to_hex(),
+        action_set: workflow.action_set().to_hex(),
         script: workflow.script().to_hex(),
         input: workflow.schemas().input.clone(),
         output: workflow.schemas().output.clone(),
@@ -393,8 +393,8 @@ fn register_error(error: RegisterError) -> ApiError {
             ApiError::secret_required(error.to_string(), refused)
         }
         RegisterError::Secret(error) => error.into(),
-        RegisterError::ToolsetNotFound(digest) => ApiError::not_found(format!(
-            "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
+        RegisterError::ActionSetNotFound(digest) => ApiError::not_found(format!(
+            "no action set {digest} for this tenant: register it with POST /v1/action-sets"
         )),
         RegisterError::InvalidScript(invalid) => {
             rewind_engine::StartError::InvalidScript(invalid).into()

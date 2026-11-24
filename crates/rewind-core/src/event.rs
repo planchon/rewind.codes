@@ -115,8 +115,8 @@ pub enum Lifecycle {
 pub struct RunStarted {
     /// Digest of the TypeScript source. A run always replays the exact code that produced it.
     pub script: Digest,
-    /// Digest of the toolset the run may call.
-    pub toolset: Digest,
+    /// Digest of the action set the run may call.
+    pub action_set: Digest,
     pub input: Payload,
     /// Keys the sandbox's random generators.
     pub seed: Seed,

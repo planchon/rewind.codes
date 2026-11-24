@@ -30,8 +30,8 @@ use rewind_core::{
 use crate::ports::archive::SealedAttempt;
 use crate::ports::cluster::{NodeId, PartitionEpoch};
 use crate::ports::journal::{
-    Created, Enqueued, InboxItem, PayloadRecord, QuarantineKind, RunMetadata, StoredScript,
-    StoredToolset, TaskRef, TaskToken, TraceContext,
+    Created, Enqueued, InboxItem, PayloadRecord, QuarantineKind, RunMetadata, StoredActionSet,
+    StoredScript, TaskRef, TaskToken, TraceContext,
 };
 use crate::ports::namespaces::{Month, NamespaceName, QuotaAlert, QuotaExceeded, Usage};
 use crate::ports::partition::{
@@ -435,7 +435,7 @@ pub struct HostTaskOffer {
     pub partition: PartitionId,
     pub epoch: PartitionEpoch,
     pub task: HostTask,
-    pub toolset: Digest,
+    pub action_set: Digest,
     /// The grace a stream that closes gets to come back before the task is handed again.
     pub grace: Duration,
 }
@@ -478,7 +478,7 @@ pub struct StreamAttach {
     pub namespace: Option<NamespaceName>,
     /// The tasks of the runs carrying all of these labels only. Empty: every run.
     pub labels: BTreeMap<String, String>,
-    pub toolset: Option<Digest>,
+    pub action_set: Option<Digest>,
     /// Empty: every host tool.
     pub tools: BTreeSet<String>,
     /// Tasks it holds at once.
@@ -580,7 +580,7 @@ pub struct ActivationRequest {
     /// For a fork's first activation: its parent's history and payloads.
     pub parent: Option<ParentHistory>,
     pub script: StoredScript,
-    pub toolset: StoredToolset,
+    pub action_set: StoredActionSet,
     pub purpose: Purpose,
     /// The run's tool tasks: what its summary shows of its calls.
     pub tasks: Vec<TaskRecord>,

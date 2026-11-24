@@ -25,7 +25,7 @@
 //! and quotas count it; the CPU time it used is not known per run and is not counted. A task in
 //! flight (claimed, or deferred with a token the run plane cannot route) is written `ready`:
 //! recovery sends it again with attempt + 1, or fails it under `at_most_once`. A run that cannot
-//! be moved (its script, its toolset, a blob or its journal missing, its history corrupt) is
+//! be moved (its script, its action set, a blob or its journal missing, its history corrupt) is
 //! reported and left in the tables, which are then not dropped; the command can run again: what
 //! moved is skipped.
 //!
@@ -36,7 +36,7 @@ use std::num::NonZeroU16;
 use std::time::Duration;
 
 use rewind_core::{
-    Digest, HistoryEntry, JsonValue, PartitionId, Payload, RunState, Timestamp, Toolset,
+    ActionSet, Digest, HistoryEntry, JsonValue, PartitionId, Payload, RunState, Timestamp,
 };
 
 use crate::executors::derive;
@@ -258,12 +258,14 @@ where
             .await?
             .ok_or_else(|| Refused::Run(format!("its script {} is missing", legacy.script)))?
             .script;
-        let toolset = self
+        let action_set = self
             .catalog
-            .get_toolset(tenant, legacy.toolset)
+            .get_action_set(tenant, legacy.action_set)
             .await?
-            .ok_or_else(|| Refused::Run(format!("its toolset {} is missing", legacy.toolset)))?
-            .toolset;
+            .ok_or_else(|| {
+                Refused::Run(format!("its action set {} is missing", legacy.action_set))
+            })?
+            .action_set;
         let state = RunState::from_history(&history)
             .map_err(|error| Refused::Run(format!("its history is corrupt: {error}")))?;
 
@@ -299,7 +301,7 @@ where
             }
         }
 
-        let tasks = tasks_of(&legacy, &toolset, self.now)?;
+        let tasks = tasks_of(&legacy, &action_set, self.now)?;
         let by_seq: BTreeMap<_, _> = tasks
             .iter()
             .map(|task| (task.task.task.seq, task.clone()))
@@ -310,7 +312,7 @@ where
             origin: legacy.origin.clone(),
             suffix_len: legacy.suffix_len,
             script: legacy.script,
-            toolset: legacy.toolset,
+            action_set: legacy.action_set,
             status: rewind_core::RunStatus::Pending,
             epoch: legacy.epoch,
             attempt: Attempt::FIRST,
@@ -330,8 +332,15 @@ where
             ended_at: None,
         };
         let headline = crate::projector::headline(script.source());
-        let summary =
-            derive::summary_of(&head, &headline, &history, &state, &toolset, &by_seq, None);
+        let summary = derive::summary_of(
+            &head,
+            &headline,
+            &history,
+            &state,
+            &action_set,
+            &by_seq,
+            None,
+        );
         head.status = summary.summary.status;
         let ended = head.is_ended();
         if ended {
@@ -377,7 +386,7 @@ where
                     run: run.clone(),
                     attempt: Attempt::FIRST,
                     script,
-                    toolset,
+                    action_set,
                     entries: sealed,
                 })
                 .await?;
@@ -477,20 +486,20 @@ fn live(batch: &mut Batch, legacy: &LegacyRun, tasks: Vec<TaskRecord>, now: Time
     }
 }
 
-/// The run's tool tasks, their route and policy from the pinned toolset. A task in flight is
+/// The run's tool tasks, their route and policy from the pinned action set. A task in flight is
 /// `ready` from now: what was in flight is in no node's memory any more.
 fn tasks_of(
     legacy: &LegacyRun,
-    toolset: &Toolset,
+    action_set: &ActionSet,
     now: Timestamp,
 ) -> Result<Vec<TaskRecord>, Refused> {
     legacy
         .tasks
         .iter()
         .map(|task| {
-            let pinned = toolset
-                .tool(&task.tool)
-                .ok_or_else(|| Refused::Run(format!("its toolset has no tool {:?}", task.tool)))?;
+            let pinned = action_set.tool(&task.tool).ok_or_else(|| {
+                Refused::Run(format!("its action set has no tool {:?}", task.tool))
+            })?;
             let state = match &task.state {
                 TaskState::Claimed { .. } | TaskState::Deferred { .. } => TaskState::Ready {
                     next_attempt_at: now,
@@ -503,7 +512,7 @@ fn tasks_of(
                         run: legacy.run.clone(),
                         seq: task.seq,
                     },
-                    toolset: legacy.toolset,
+                    action_set: legacy.action_set,
                     tool: task.tool.clone(),
                     route: pinned.route.clone(),
                     args: task.args.clone(),

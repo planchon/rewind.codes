@@ -1,5 +1,5 @@
 //! Tool tasks (`archi/04-tools.md`, "Tool task lifecycle", "Policies", "Authenticating calls",
-//! "When a toolset changes during a run").
+//! "When an action set changes during a run").
 //!
 //! Each `schedule_tool_call` an activation commits becomes a tool task in the run's partition.
 //! Its attempts, backoff, approval, deferral and park live in the task; the journal only gets

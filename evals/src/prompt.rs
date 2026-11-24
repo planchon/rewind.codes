@@ -1,4 +1,4 @@
-//! The system prompt of an episode, in each prompt rendering of the toolset.
+//! The system prompt of an episode, in each prompt rendering of the action set.
 //!
 //! The renderings are what the evals compare (`archi/08-decisions.md`: "the evals decide
 //! between renderings"):
@@ -14,7 +14,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// How the toolset's declarations are written in the system prompt.
+/// How the action set's declarations are written in the system prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Rendering {
@@ -79,7 +79,7 @@ fn rewind_module() -> &'static str {
         .map_or(lib, |start| &lib[start..])
 }
 
-/// The system prompt for a toolset's declarations, in a rendering.
+/// The system prompt for an action set's declarations, in a rendering.
 pub fn system(declarations: &rewind_codegen::Declarations, rendering: Rendering) -> String {
     let tools = match rendering {
         Rendering::Compact => format!(

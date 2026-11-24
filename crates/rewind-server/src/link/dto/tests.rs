@@ -8,10 +8,10 @@ use std::ops::Bound as StdBound;
 use std::time::Duration;
 
 use rewind_core::{
-    Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch, Event, HistoryEntry,
-    Lifecycle, LogLevel, PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus, Script,
-    SecretRef, Seed, Seq, Shape, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy, ToolRoute,
-    Toolset,
+    ActionSet, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch, Event,
+    HistoryEntry, Lifecycle, LogLevel, PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus,
+    Script, SecretRef, Seed, Seq, Shape, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy,
+    ToolRoute,
 };
 use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
@@ -29,10 +29,10 @@ use rewind_engine::ports::{
     Predicate, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey,
     QuotaExceeded, QuotaKind, QuotaScope, Range, RunCounts, RunHead, RunMetadata, RunOrder,
     RunQuery, RunRef, RunSummary, RunWorkflow, Scope, ScriptCounts, SealedAttempt, SearchCursor,
-    Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, StoredScript, StoredToolset, TaskPhase,
-    TaskRecord, TaskRef, TaskState, TaskToken, TenantId, Term, TextMatch, Threshold, TimerChange,
-    TimerKind, ToolCounts, ToolDeclarations, ToolTask, TraceContext, TraceId, Trigger, Usage, Wait,
-    WaitKind, WaitingFor, WebhookEvent, WebhookEventKind, Window,
+    Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, StoredActionSet, StoredScript,
+    TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, Term, TextMatch, Threshold,
+    TimerChange, TimerKind, ToolCounts, ToolDeclarations, ToolTask, TraceContext, TraceId, Trigger,
+    Usage, Wait, WaitKind, WaitingFor, WebhookEvent, WebhookEventKind, Window,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -124,7 +124,7 @@ fn metadata() -> RunMetadata {
 fn started() -> RunStarted {
     RunStarted {
         script: digest("script"),
-        toolset: digest("toolset"),
+        action_set: digest("action_set"),
         input: Payload::Value(json!({ "issue": 42 })),
         seed: Seed::from_bytes([7; 32]),
         epoch: Epoch(1),
@@ -185,7 +185,7 @@ fn head(n: u128) -> RunHead {
         origin: "triage-new-issues".into(),
         suffix_len: 14,
         script: digest("script"),
-        toolset: digest("toolset"),
+        action_set: digest("action_set"),
         status: RunStatus::Active,
         epoch: Epoch(1),
         attempt: Attempt(2),
@@ -217,7 +217,7 @@ fn summary(n: u128) -> RunSummary {
         suffix_len: 14,
         script: digest("script"),
         headline: "import { signal } from \"rewind\";".into(),
-        toolset: digest("toolset"),
+        action_set: digest("action_set"),
         status: RunStatus::Failed,
         mode: Some(RunMode::Live),
         labels: labels(),
@@ -380,7 +380,7 @@ fn tasks() -> Vec<TaskRecord> {
             TaskRecord {
                 task: ToolTask {
                     task: task_ref(1, seq as u32),
-                    toolset: digest("toolset"),
+                    action_set: digest("action_set"),
                     tool: "srv.a".into(),
                     policy: ToolPolicy::default_for(&route),
                     route,
@@ -608,8 +608,8 @@ fn activation() -> Activation {
     }
 }
 
-fn toolset() -> Toolset {
-    Toolset::from_host_tools(["ask", "crm.find"]).unwrap()
+fn action_set() -> ActionSet {
+    ActionSet::from_host_tools(["ask", "crm.find"]).unwrap()
 }
 
 fn host_task() -> HostTask {
@@ -676,7 +676,7 @@ fn every_predicate() -> Vec<Predicate> {
             ],
         },
         Predicate::Script(vec!["ab".into()]),
-        Predicate::Toolset(vec!["cd".into()]),
+        Predicate::ActionSet(vec!["cd".into()]),
         Predicate::Tool(vec![TextMatch::Prefix("srv.".into())]),
         Predicate::Error {
             names: BTreeSet::from(["TypeError".to_owned()]),
@@ -1011,7 +1011,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
             task: host_task(),
-            toolset: digest("toolset"),
+            action_set: digest("action_set"),
             grace: Duration::from_secs(60),
         })),
         OrgRequest::HostTaskDone {
@@ -1028,7 +1028,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             node: NodeId::new("node-a").unwrap(),
             namespace: Some(user()),
             labels: labels(),
-            toolset: Some(digest("toolset")),
+            action_set: Some(digest("action_set")),
             tools: BTreeSet::from(["ask".to_owned()]),
             slots: 4,
         }),
@@ -1112,7 +1112,7 @@ fn activation_request(purpose: Purpose) -> ActivationRequest {
                 run: RunRef::new(acme(), run_id(9)),
                 attempt: Attempt(1),
                 script: Script::new("export default async () => 1;"),
-                toolset: toolset(),
+                action_set: action_set(),
                 entries: history(),
             })),
         }),
@@ -1123,8 +1123,8 @@ fn activation_request(purpose: Purpose) -> ActivationRequest {
                 source_map: "{\"version\":3}".into(),
             },
         },
-        toolset: StoredToolset {
-            toolset: toolset(),
+        action_set: StoredActionSet {
+            action_set: action_set(),
             declarations: ToolDeclarations {
                 typescript: "declare module \"rewind:tools\" {}".into(),
                 prompt: "ask(question) → unknown".into(),

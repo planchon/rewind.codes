@@ -25,8 +25,8 @@ is fixed without calling again what it already called. From an organization to a
 its name; leave it out when you reach only one.\n\
 2. list_namespaces: the namespaces of the organization, each one end user. A script runs in the \
 namespace you give as `namespace`; a new name creates one.\n\
-3. list_toolsets: the toolsets, the MCP servers and tools a script imports from \
-\"rewind:tools\". Give the toolset's id as `toolset`.\n\
+3. list_action_sets: the action sets, the MCP servers and tools a script imports from \
+\"rewind:tools\". Give the action set's id as `action_set`.\n\
 4. search_tools: the TypeScript declarations of the tools you need, before you write the script.\n\
 5. list_secrets: the secrets you may attach, by name, never a value: the end user's own \
 (ns/<name>) and the organization's (org/<name>). A server whose calls need one takes it in \
@@ -36,7 +36,7 @@ answers you give for its calls, without calling anything or reading any secret.\
 7. run_script: run it with the secrets its servers need. You get its output, or the run's id and \
 what it waits for: follow it with get_run, answer it with signal_run, stop it with cancel_run, \
 and fix a failed run with retry_run.\n\
-When the person has not said which organization, namespace or toolset to use and a list holds \
+When the person has not said which organization, namespace or action set to use and a list holds \
 more than one, ask them.";
 
 /// Builds the caller of an HTTP request from its parts.

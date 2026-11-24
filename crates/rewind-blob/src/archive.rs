@@ -48,7 +48,7 @@ fn decode(run: &RunRef, attempt: Attempt, bytes: &[u8]) -> Result<SealedAttempt,
         run: run.clone(),
         attempt,
         script: document.script,
-        toolset: document.toolset,
+        action_set: document.action_set,
         entries: document.entries,
     })
 }

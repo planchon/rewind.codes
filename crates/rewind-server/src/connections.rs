@@ -47,7 +47,7 @@ pub(crate) const CONNECTION_PERMISSIONS: [Permission; 5] = [
     Permission::RunsRead,
     Permission::RunsStart,
     Permission::RunsControl,
-    Permission::ToolsetsRead,
+    Permission::ActionsRead,
     Permission::NamespacesRead,
 ];
 

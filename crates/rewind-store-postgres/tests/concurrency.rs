@@ -27,7 +27,7 @@ fn version_with_test(n: usize, test: Digest) -> Workflow {
         "triage",
         None,
         Digest::of(format!("script {n}").as_bytes()),
-        Digest::of(b"toolset"),
+        Digest::of(b"action_set"),
         WorkflowSchemas {
             input: json!({ "type": "object" }),
             output: json!({}),
@@ -135,7 +135,7 @@ async fn versions_saved_at_once_take_distinct_numbers() {
                 "triage",
                 None,
                 Digest::of(format!("script {n}").as_bytes()),
-                Digest::of(b"toolset"),
+                Digest::of(b"action_set"),
                 WorkflowSchemas {
                     input: json!({ "type": "object" }),
                     output: json!({}),

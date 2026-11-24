@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rewind_core::{Command, Event, RunId, RunStatus, Toolset};
+use rewind_core::{ActionSet, Command, Event, RunId, RunStatus};
 use serde_json::{Value, json};
 
 use crate::fake::{object_schema, shipping, tracker};
@@ -120,7 +120,7 @@ fn ship_orders() -> SetupWorkflow {
                 }
             }),
         ],
-        toolset: None,
+        action_set: None,
     }
 }
 
@@ -166,8 +166,8 @@ const BUG_DIGEST_TESTS: [&str; 3] = [
 
 /// The tracker's `list_issues` before its upgrade: `labels` rather than `label`, no cursor but
 /// a `truncated` flag, and issues without their reporter.
-fn tracker_before_upgrade(toolset: &Toolset) -> Result<Toolset, String> {
-    let tools: Vec<rewind_core::Tool> = toolset
+fn tracker_before_upgrade(action_set: &ActionSet) -> Result<ActionSet, String> {
+    let tools: Vec<rewind_core::Tool> = action_set
         .tools()
         .iter()
         .map(|tool| {
@@ -209,7 +209,7 @@ fn tracker_before_upgrade(toolset: &Toolset) -> Result<Toolset, String> {
             old
         })
         .collect();
-    Toolset::new(toolset.servers().to_vec(), tools).map_err(|error| error.to_string())
+    ActionSet::new(action_set.servers().to_vec(), tools).map_err(|error| error.to_string())
 }
 
 fn old_issue(number: u64, title: &str) -> Value {
@@ -282,7 +282,7 @@ fn bug_digest() -> SetupWorkflow {
                 "expect": { "status": "completed", "output": { "posted": 1, "truncated": true } }
             }),
         ],
-        toolset: Some(tracker_before_upgrade),
+        action_set: Some(tracker_before_upgrade),
     }
 }
 

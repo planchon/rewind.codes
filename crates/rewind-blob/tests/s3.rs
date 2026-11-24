@@ -20,7 +20,7 @@ use rewind_blob::{
     CachedArchive, CachedBlobs, DEFAULT_ARCHIVE_CACHE_CAPACITY, DEFAULT_CACHE_CAPACITY, S3Archive,
     S3Blobs, S3Config,
 };
-use rewind_core::{Digest, Epoch, Script, Toolset, canonical_json};
+use rewind_core::{ActionSet, Digest, Epoch, Script, canonical_json};
 use rewind_engine::conformance::{archive, blobs, tenant};
 use rewind_engine::ports::{
     ArchiveError, Attempt, BlobError, BlobOwner, BlobStore, RunArchive, RunRef,
@@ -122,14 +122,16 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
         run: run.clone(),
         attempt: Attempt::FIRST,
         script: Script::new("export default () => 1"),
-        toolset: Toolset::from_host_tools(["a"]).expect("toolset"),
+        action_set: ActionSet::from_host_tools(["a"]).expect("action set"),
         entries: vec![rewind_core::HistoryEntry {
             index: 0,
             recorded_at: rewind_core::Timestamp(1),
             event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(
                 rewind_core::RunStarted {
                     script: Script::new("export default () => 1").digest(),
-                    toolset: Toolset::from_host_tools(["a"]).expect("toolset").digest(),
+                    action_set: ActionSet::from_host_tools(["a"])
+                        .expect("action set")
+                        .digest(),
                     input: json!({}).into(),
                     seed: rewind_core::Seed::from_bytes([1; 32]),
                     epoch: Epoch(1),

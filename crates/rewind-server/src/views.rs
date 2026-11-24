@@ -297,7 +297,7 @@ impl Views<'_> {
             }),
             script: head.script.to_hex(),
             script_title,
-            toolset: head.toolset.to_hex(),
+            action_set: head.action_set.to_hex(),
             epoch: head.epoch.0,
             // Only live runs are stored: mock runs live in memory (`POST /v1/test`).
             mode: started.map_or(RunMode::Live, |started| started.mode.into()),

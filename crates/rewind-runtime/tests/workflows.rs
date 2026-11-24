@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rewind_core::{
-    Annotation, Command, Completion, Event, HistoryEntry, RunMode, RunOutcome, RunState, RunStatus,
-    Script, ToolFailure, Toolset, Workflow, WorkflowSchemas,
+    ActionSet, Annotation, Command, Completion, Event, HistoryEntry, RunMode, RunOutcome, RunState,
+    RunStatus, Script, ToolFailure, Workflow, WorkflowSchemas,
 };
 use rewind_engine::ports::{
     CallAuth, CatalogStore, Dispatched, Predicate, RunRef, ScriptExecutor, TenantId, ToolCall,
@@ -81,8 +81,8 @@ fn schemas() -> WorkflowSchemas {
 
 struct Harness {
     world: World<Tools>,
-    /// The toolset that pins `triage`.
-    toolset: Toolset,
+    /// The action set that pins `triage`.
+    action_set: ActionSet,
 }
 
 async fn harness() -> Harness {
@@ -102,16 +102,16 @@ async fn harness_with(
     // `triage`'s version in the catalog, its suite empty: nothing gates it.
     let tenant = TenantId::local();
     let catalog = &world.plane.catalog;
-    let child_toolset = Toolset::from_host_tools(["notify"]).unwrap();
+    let child_action_set = ActionSet::from_host_tools(["notify"]).unwrap();
     catalog
-        .put_toolset(&tenant, &child_toolset, &ToolDeclarations::default())
+        .put_action_set(&tenant, &child_action_set, &ToolDeclarations::default())
         .await
         .unwrap();
     let script = Script::new(TRIAGE);
     let compiled = world
         .plane
         .executor
-        .compile(&script, &child_toolset)
+        .compile(&script, &child_action_set)
         .unwrap();
     catalog
         .put_script(&tenant, &script, &compiled)
@@ -121,7 +121,7 @@ async fn harness_with(
         "triage",
         None,
         script.digest(),
-        child_toolset.digest(),
+        child_action_set.digest(),
         schemas(),
     )
     .unwrap();
@@ -129,11 +129,11 @@ async fn harness_with(
         .put_workflow(&tenant, &workflow, world.now())
         .await
         .unwrap();
-    let toolset = Toolset::from_host_tools(["notify"])
+    let action_set = ActionSet::from_host_tools(["notify"])
         .unwrap()
         .with_workflows([stored.workflow.pinned()])
         .unwrap();
-    Harness { world, toolset }
+    Harness { world, action_set }
 }
 
 struct Run {
@@ -168,7 +168,7 @@ impl Harness {
         input: Value,
         mode: RunMode,
     ) -> Result<RunRef, StartError> {
-        let mut request = StartRun::new(Script::new(source), self.toolset.clone(), input);
+        let mut request = StartRun::new(Script::new(source), self.action_set.clone(), input);
         request.mode = mode;
         self.world.start(request).await
     }
@@ -467,7 +467,7 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn importing_a_workflow_the_toolset_does_not_pin_is_refused_at_start() {
+async fn importing_a_workflow_the_action_set_does_not_pin_is_refused_at_start() {
     let harness = harness().await;
     let error = harness
         .try_start(

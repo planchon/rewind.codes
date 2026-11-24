@@ -12,7 +12,7 @@
 //! history entry (its event in the stored format of events), an inbox item, a tool task, a timer,
 //! a payload record, a summary, counters, gauges, a shape, an outbox entry's projection, run
 //! metadata; an event alone (`run_started`) as a stored event, a sealed attempt as a journal
-//! document and a pinned toolset as its document. The rest is defined here:
+//! document and a pinned action set as its document. The rest is defined here:
 //!
 //! - [`requests`]: [`NodeRequest`] and [`NodeReply`], with what an edge asks an owner
 //!   ([`PartitionRequest`], [`PartitionReply`], [`Refusal`]), what an owner asks an organization
@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 pub use activations::{
     Activation, ActivationRequest, ActivationResult, Child, Committed, CounterDelta, Measurement,
-    ParentHistory, Purpose, SealedAttempt, StoredScript, StoredToolset, TimerChange,
+    ParentHistory, Purpose, SealedAttempt, StoredActionSet, StoredScript, TimerChange,
 };
 pub use requests::{
     Admit, Changed, Counted, CountsReport, Created, Decision, EdgeNotice, Enqueued, HostFailure,

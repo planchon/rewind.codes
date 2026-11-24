@@ -10,6 +10,9 @@
 use std::future::Future;
 
 use rewind_api::Problem;
+use rewind_api::action_sets::{
+    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+};
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -20,7 +23,6 @@ use rewind_api::runs::{
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
-use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -139,16 +141,16 @@ pub trait Api: Send + Sync {
     /// `GET /v1/tests/{digest}`.
     fn get_test(&self, digest: &str) -> impl Future<Output = Result<Test, ApiError>> + Send;
 
-    /// `POST /v1/toolsets`.
-    fn create_toolset(
+    /// `POST /v1/action-sets`.
+    fn create_action_set(
         &self,
-        toolset: &CreateToolset,
-    ) -> impl Future<Output = Result<Toolset, ApiError>> + Send;
+        action_set: &CreateActionSet,
+    ) -> impl Future<Output = Result<ActionSet, ApiError>> + Send;
 
-    /// `GET /v1/toolsets/{id}/search`.
+    /// `GET /v1/action-sets/{id}/search`.
     fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> impl Future<Output = Result<ToolSearchResults, ApiError>> + Send;
 
@@ -195,8 +197,8 @@ pub trait McpApi: Api {
         query: &NamespaceListQuery,
     ) -> impl Future<Output = Result<NamespaceList, ApiError>> + Send;
 
-    /// `GET /v1/toolsets`.
-    fn list_toolsets(&self) -> impl Future<Output = Result<ToolsetList, ApiError>> + Send;
+    /// `GET /v1/action-sets`.
+    fn list_action_sets(&self) -> impl Future<Output = Result<ActionSetList, ApiError>> + Send;
 }
 
 /// A borrowed API is an API: a harness keeps its world, and lends it to the tools.
@@ -290,19 +292,19 @@ impl<A: Api> Api for &A {
         (**self).get_test(digest)
     }
 
-    fn create_toolset(
+    fn create_action_set(
         &self,
-        toolset: &CreateToolset,
-    ) -> impl Future<Output = Result<Toolset, ApiError>> + Send {
-        (**self).create_toolset(toolset)
+        action_set: &CreateActionSet,
+    ) -> impl Future<Output = Result<ActionSet, ApiError>> + Send {
+        (**self).create_action_set(action_set)
     }
 
     fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> impl Future<Output = Result<ToolSearchResults, ApiError>> + Send {
-        (**self).search_tools(toolset, query)
+        (**self).search_tools(action_set, query)
     }
 
     fn create_workflow(
@@ -351,7 +353,7 @@ impl<A: McpApi> McpApi for &A {
         (**self).list_namespaces(query)
     }
 
-    fn list_toolsets(&self) -> impl Future<Output = Result<ToolsetList, ApiError>> + Send {
-        (**self).list_toolsets()
+    fn list_action_sets(&self) -> impl Future<Output = Result<ActionSetList, ApiError>> + Send {
+        (**self).list_action_sets()
     }
 }

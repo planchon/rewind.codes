@@ -109,16 +109,16 @@ impl<P: Plane> Owner<P> {
     }
 
     /// Asks the organization actor for a slot of `server` for the task: its concurrency, from
-    /// the run's toolset.
+    /// the run's action set.
     fn ask_slot(&mut self, task: &TaskRef, server: String) {
         let limit = self
             .slot(task.run.id)
             .and_then(|slot| {
                 let record = slot.tasks.get(&task.seq)?;
-                let toolset = slot.toolset.as_ref()?;
+                let action_set = slot.action_set.as_ref()?;
                 match &record.task.route {
-                    ToolRoute::Mcp { server } => toolset.server(server).map(|s| s.concurrency),
-                    ToolRoute::Api { api } => toolset.api(api).map(|api| api.concurrency),
+                    ToolRoute::Mcp { server } => action_set.server(server).map(|s| s.concurrency),
+                    ToolRoute::Api { api } => action_set.api(api).map(|api| api.concurrency),
                     _ => None,
                 }
             })
@@ -414,7 +414,7 @@ impl<P: Plane> Owner<P> {
                             partition: self.partition,
                             epoch: self.epoch,
                             task: *host,
-                            toolset: record.task.toolset,
+                            action_set: record.task.action_set,
                             grace: record.task.policy.heartbeat_timeout,
                         }))),
                     },

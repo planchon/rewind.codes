@@ -18,14 +18,14 @@ use crate::sandbox::{self, ENTRY, FETCH, SCRIPT, TOOLS, WORKFLOW};
 use crate::source::{SourceText, blank_directives};
 use crate::tsgo::{self, Reported};
 
-/// The first line of the `rewind-tools.d.ts` of a toolset that enables the `http` tool. The
+/// The first line of the `rewind-tools.d.ts` of an action set that enables the `http` tool. The
 /// checker then gives tsgo `fetch.d.ts`, and `fetch` is not an absent global.
 pub const HTTP_TOOL_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
 
-/// The declarations of a toolset without tools: `rewind:tools` exists, and exports nothing.
+/// The declarations of an action set without tools: `rewind:tools` exists, and exports nothing.
 const NO_TOOLS: &str = "declare module \"rewind:tools\" {}\n";
 
-/// The declarations of a toolset that pins no workflow: `rewind:workflows` exists, and exports
+/// The declarations of an action set that pins no workflow: `rewind:workflows` exists, and exports
 /// nothing.
 const NO_WORKFLOWS: &str = "\ndeclare module \"rewind:workflows\" {}\n";
 
@@ -41,7 +41,7 @@ struct Workflow<'a> {
 /// "Type-checking").
 ///
 /// A check writes the script as `script.ts` in a directory of its own, next to the sandbox lib
-/// and the toolset's `rewind-tools.d.ts`, and runs tsgo there in strict mode. tsgo is extracted to
+/// and the action set's `rewind-tools.d.ts`, and runs tsgo there in strict mode. tsgo is extracted to
 /// the cache directory at first use. Diagnostics are written for a model: a location in
 /// `script.ts` (columns count characters), the message, a hint for the checker's own rules,
 /// and a short code frame. They come sorted by position, and the same script and declarations
@@ -115,12 +115,12 @@ impl TsgoChecker {
             .map(PathBuf::as_path)
     }
 
-    /// Type-checks a script against the sandbox lib and `declarations`, the toolset's
+    /// Type-checks a script against the sandbox lib and `declarations`, the action set's
     /// `rewind-tools.d.ts`, and runs the checker's own rules.
     ///
     /// `declarations` declare the module `rewind:tools` (`declare module "rewind:tools" { … }`);
     /// empty, the module exports nothing. When they start with [`HTTP_TOOL_REFERENCE`], the
-    /// toolset enables the `http` tool, and the script has `fetch`.
+    /// action set enables the `http` tool, and the script has `fetch`.
     pub async fn check_source(
         &self,
         source: &str,

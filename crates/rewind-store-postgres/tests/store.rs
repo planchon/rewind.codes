@@ -605,7 +605,7 @@ fn workflow(name: &str, script: &str) -> Workflow {
         name,
         None,
         Digest::of(script.as_bytes()),
-        Digest::of(b"toolset"),
+        Digest::of(b"action_set"),
         WorkflowSchemas {
             input: serde_json::json!({ "type": "object" }),
             output: serde_json::json!({}),
@@ -663,7 +663,7 @@ async fn runs_and_workflows_of_version_12_get_handles_and_numbers(postgres: &Pos
         .bind(tenant)
         .bind(id.as_uuid())
         .bind(Digest::of(b"script").as_bytes().to_vec())
-        .bind(Digest::of(b"toolset").as_bytes().to_vec())
+        .bind(Digest::of(b"action_set").as_bytes().to_vec())
         .bind(workflow.map(|workflow| workflow.name()))
         .bind(workflow.map(|workflow| workflow.version().as_bytes().to_vec()))
         .execute(&pool)
@@ -801,7 +801,7 @@ fn version_with_tests(tests: &[TestRecord]) -> Workflow {
         "triage",
         None,
         Digest::of(b"script"),
-        Digest::of(b"toolset"),
+        Digest::of(b"action_set"),
         WorkflowSchemas {
             input: serde_json::json!({ "type": "object" }),
             output: serde_json::json!({}),

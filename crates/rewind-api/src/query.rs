@@ -34,7 +34,7 @@ pub const FIELDS: [&str; 21] = [
     "calls",
     "errors",
     "script",
-    "toolset",
+    "action_set",
     "id",
     "parent",
     "workflow",
@@ -96,8 +96,8 @@ pub enum Filter {
     Errors(Comparison<u64>),
     /// Lowercase hexadecimal prefixes of the script's digest.
     Script(Vec<String>),
-    /// Lowercase hexadecimal prefixes of the toolset's digest.
-    Toolset(Vec<String>),
+    /// Lowercase hexadecimal prefixes of the action set's digest.
+    ActionSet(Vec<String>),
     /// Lowercase prefixes of the run's id, hyphenated as a UUID is.
     Id(Vec<String>),
     /// Forks of this run (a full run id, lowercase).
@@ -384,12 +384,12 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
         "duration" => Filter::Duration(comparison(name, operand, duration_value, Alone::Refused)?),
         "calls" => Filter::Calls(comparison(name, operand, count_value, Alone::Exact)?),
         "errors" => Filter::Errors(comparison(name, operand, count_value, Alone::Exact)?),
-        "script" | "toolset" => {
+        "script" | "action_set" => {
             let prefixes = hex_prefixes(name, operand, false)?;
             if name == "script" {
                 Filter::Script(prefixes)
             } else {
-                Filter::Toolset(prefixes)
+                Filter::ActionSet(prefixes)
             }
         }
         "id" => Filter::Id(hex_prefixes(name, operand, true)?),

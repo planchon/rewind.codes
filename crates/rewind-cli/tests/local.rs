@@ -96,11 +96,11 @@ async fn check_reports_type_errors_rules_and_start_checks() {
 }
 
 #[tokio::test]
-async fn check_reads_a_toolset_file() {
+async fn check_reads_an_action_set_file() {
     let dir = tempfile::tempdir().unwrap();
-    let toolset = write(
+    let action_set = write(
         dir.path(),
-        "toolset.json",
+        "action_set.json",
         &json!({
             "host": [{
                 "name": "ask_user",
@@ -123,8 +123,8 @@ async fn check_reads_a_toolset_file() {
     let run = rewind(&[
         "check",
         script.to_str().unwrap(),
-        "--toolset",
-        toolset.to_str().unwrap(),
+        "--action-set",
+        action_set.to_str().unwrap(),
     ])
     .await;
     assert_eq!(run.exit, Exit::ScriptRefused, "{}{}", run.out, run.err);
@@ -139,12 +139,12 @@ async fn check_reads_a_toolset_file() {
     let run = rewind(&[
         "check",
         fixed.to_str().unwrap(),
-        "--toolset",
-        toolset.to_str().unwrap(),
+        "--action-set",
+        action_set.to_str().unwrap(),
     ])
     .await;
     assert_eq!(run.exit, Exit::Success, "{}", run.out);
-    // Without the toolset, `rewind:tools` exports nothing.
+    // Without the action set, `rewind:tools` exports nothing.
     let run = rewind(&["check", fixed.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::ScriptRefused, "{}", run.out);
 }
@@ -496,7 +496,7 @@ async fn the_corpus_runs_through_rewind_test() {
         let scenario: Value =
             serde_json::from_str(&std::fs::read_to_string(case.join("scenario.json")).unwrap())
                 .unwrap();
-        // Its toolset lacks the `webhook` built-in, which every toolset of a server, and of
+        // Its action set lacks the `webhook` built-in, which every action set of a server, and of
         // `rewind test`, pins.
         let without_webhook = name == "red/webhook_without_the_built_in";
         let Some(translated) = translate(&scenario).filter(|_| !without_webhook) else {

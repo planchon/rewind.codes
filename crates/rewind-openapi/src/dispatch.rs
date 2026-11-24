@@ -142,7 +142,7 @@ impl ApiDispatcher {
             (_, _, ToolRoute::Api { api: name }) => {
                 return failed(
                     ToolFailureKind::Unavailable,
-                    format!("the toolset does not say how to call the API {name} for {tool}"),
+                    format!("the action set does not say how to call the API {name} for {tool}"),
                     None,
                 );
             }

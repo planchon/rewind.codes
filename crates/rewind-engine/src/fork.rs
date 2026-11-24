@@ -3,7 +3,7 @@
 //!
 //! A fork is a new run started from an existing one with a corrected script, so that an agent
 //! can fix step 7 without redoing the side effects of steps 1 to 6. It has its own id, the
-//! parent's seed, input (unless overridden) and toolset, and a new TTL.
+//! parent's seed, input (unless overridden) and action set, and a new TTL.
 //!
 //! Starting a fork only creates the run, with its parent and `at` as run metadata. Its first
 //! activation replays the new script against the parent's history, in the same transaction as
@@ -25,9 +25,9 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    Attachments, Command, Completion, Event, HistoryEntry, Interruption, JournalDocument,
-    JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted,
-    RunStatus, Script, Seq, Toolset,
+    ActionSet, Attachments, Command, Completion, Event, HistoryEntry, Interruption,
+    JournalDocument, JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed,
+    RunId, RunStarted, RunStatus, Script, Seq,
 };
 
 use crate::attachments::AttachRights;
@@ -173,7 +173,7 @@ pub(crate) struct ForkSource<'a> {
     pub(crate) parent: ForkParent,
     pub(crate) started: RunStarted,
     pub(crate) compiled: &'a CompiledScript,
-    pub(crate) toolset: &'a Toolset,
+    pub(crate) action_set: &'a ActionSet,
 }
 
 /// What following a parent's history gave.
@@ -214,7 +214,7 @@ pub async fn compatibility<X: ScriptExecutor>(
         return Err(ForkError::ParentNotStarted(journal.run));
     };
     let compiled = executor
-        .compile(script, &journal.toolset)
+        .compile(script, &journal.action_set)
         .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
     let started = RunStarted {
         script: script.digest(),
@@ -238,7 +238,7 @@ pub async fn compatibility<X: ScriptExecutor>(
             },
             started,
             compiled: &compiled,
-            toolset: &journal.toolset,
+            action_set: &journal.action_set,
         },
         &journal.entries,
     )
@@ -313,7 +313,7 @@ where
         let start = StartScript {
             run_id: source.run.id,
             compiled: source.compiled.clone(),
-            toolset: source.toolset.clone(),
+            action_set: source.action_set.clone(),
             input,
             seed: source.started.seed,
             epoch: source.started.epoch,
@@ -445,7 +445,7 @@ where
                     continue;
                 }
                 let policy = source
-                    .toolset
+                    .action_set
                     .tool(tool)
                     .map(|tool| tool.policy.on_interruption);
                 match policy {

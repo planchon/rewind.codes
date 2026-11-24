@@ -32,8 +32,8 @@ pub enum Setup {
     },
 }
 
-/// Makes a toolset from the world's.
-pub type MakeToolset = fn(&rewind_core::Toolset) -> Result<rewind_core::Toolset, String>;
+/// Makes an action set from the world's.
+pub type MakeActionSet = fn(&rewind_core::ActionSet) -> Result<rewind_core::ActionSet, String>;
 
 /// A workflow saved before the conversation, as `POST /v1/workflows` saves it.
 #[derive(Debug, Clone)]
@@ -46,9 +46,9 @@ pub struct SetupWorkflow {
     pub signals: BTreeMap<String, Value>,
     /// Its suite: tests written in full, as the API takes them.
     pub tests: Vec<Value>,
-    /// The toolset it was saved with, made from the world's: the tools as they were then. The
+    /// The action set it was saved with, made from the world's: the tools as they were then. The
     /// world's own when `None`.
-    pub toolset: Option<MakeToolset>,
+    pub action_set: Option<MakeActionSet>,
 }
 
 /// A task of the suite.

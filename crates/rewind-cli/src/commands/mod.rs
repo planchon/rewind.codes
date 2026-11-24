@@ -1,5 +1,6 @@
 //! The commands. Each returns its exit code, or the error that stopped it.
 
+mod action_sets;
 mod check;
 mod mcp;
 mod namespaces;
@@ -7,7 +8,6 @@ mod replay;
 mod runs;
 mod secrets;
 mod test;
-mod toolsets;
 mod workflows;
 
 use rewind_api::Client;
@@ -38,7 +38,7 @@ pub(crate) async fn execute(
         Command::Runs(args) => runs::list(&server, args, console).await,
         Command::Release(args) => runs::release(&server, args, console).await,
         Command::Export(args) => runs::export(&server, args, console).await,
-        Command::Toolsets(command) => toolsets::toolsets(&server, command, console).await,
+        Command::ActionSets(command) => action_sets::action_sets(&server, command, console).await,
         Command::Namespaces(command) => namespaces::namespaces(&server, command, console).await,
         Command::Workflows(command) => workflows::workflows(&server, command, console).await,
         Command::Secrets(command) => secrets::secrets(&server, command, console).await,

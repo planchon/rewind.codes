@@ -11,18 +11,18 @@
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
 //! - a **journal document** (exports, the archive of a finished run, the epoch corpus):
-//!   `{"v":1,"run":"…","script":"…","toolset":{…},"entries":[{"index":0,"recorded_at":…,
+//!   `{"v":1,"run":"…","script":"…","action_set":{…},"entries":[{"index":0,"recorded_at":…,
 //!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
-//!   toolset document and its entries, written with one entry per line so that diffs stay
+//!   action set document and its entries, written with one entry per line so that diffs stay
 //!   readable. It replays on its own;
 //! - a **cassette** (mocks recorded from a run, replayed by `rewind test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
-//! - a **pinned toolset** (the `toolsets` table): `{"servers":[…],"tools":[…],"v":1}`, with
+//! - a **pinned action set** (the `action_sets` table): `{"servers":[…],"tools":[…],"v":1}`, with
 //!   `"apis":[…]` when it calls APIs, a server's or an API's `"auth":{…}` when its calls carry a
 //!   secret or a signature, and `"workflows":[…]` when it pins workflows, in its canonical form,
-//!   so that its bytes hash to the toolset's digest;
+//!   so that its bytes hash to the action set's digest;
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
-//!   "toolset":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
+//!   "action_set":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
 //!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
 //!   when it attaches secrets, in its canonical form, so that its bytes hash to the version;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
@@ -40,7 +40,7 @@ pub mod partition;
 mod v1;
 
 use rewind_core::{
-    Cassette, Digest, Event, JournalDocument, RunId, Script, Test, Toolset, Workflow,
+    ActionSet, Cassette, Digest, Event, JournalDocument, RunId, Script, Test, Workflow,
     canonical_json,
 };
 use serde::Serialize;
@@ -67,8 +67,8 @@ pub enum FormatError {
     InvalidEntry { position: usize, message: String },
     #[error("invalid cassette: {0}")]
     InvalidCassette(String),
-    #[error("invalid pinned toolset: {0}")]
-    InvalidToolset(String),
+    #[error("invalid pinned action set: {0}")]
+    InvalidActionSet(String),
     #[error("invalid workflow version: {0}")]
     InvalidWorkflow(String),
     #[error("invalid test: {0}")]
@@ -102,14 +102,14 @@ pub fn decode_event(json: &str) -> Result<Event, FormatError> {
     }
 }
 
-/// A journal document: the version, the run, its script and its toolset, then one entry per
+/// A journal document: the version, the run, its script and its action set, then one entry per
 /// line.
 pub fn encode_journal(journal: &JournalDocument) -> String {
     let mut out = format!(
-        "{{\"v\":{VERSION},\"run\":{},\"script\":{},\"toolset\":{},\"entries\":[",
+        "{{\"v\":{VERSION},\"run\":{},\"script\":{},\"action_set\":{},\"entries\":[",
         to_json(&journal.run.to_string()),
         to_json(&journal.script.source()),
-        encode_toolset(&journal.toolset),
+        encode_action_set(&journal.action_set),
     );
     for (i, entry) in journal.entries.iter().enumerate() {
         out.push_str(if i == 0 { "\n" } else { ",\n" });
@@ -122,7 +122,7 @@ pub fn encode_journal(journal: &JournalDocument) -> String {
 /// Decodes a journal document written by [`encode_journal`], of any supported version.
 ///
 /// Only the encoding is checked here. Whether the entries form a valid history, and whether
-/// the script and the toolset are those of its `run_started`, is the domain's business
+/// the script and the action set are those of its `run_started`, is the domain's business
 /// ([`JournalDocument::check`]).
 pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
     let mut object = parse_object(json)?;
@@ -141,13 +141,13 @@ pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
                 Some(_) => return Err(invalid("\"script\" is not a string")),
                 None => return Err(invalid("missing \"script\"")),
             };
-            let toolset = match object.remove("toolset") {
-                Some(Value::Object(mut toolset)) => match take_version(&mut toolset)? {
-                    Version::V1 => v1::decode_toolset(Value::Object(toolset))
-                        .map_err(FormatError::InvalidToolset)?,
+            let action_set = match object.remove("action_set") {
+                Some(Value::Object(mut action_set)) => match take_version(&mut action_set)? {
+                    Version::V1 => v1::decode_action_set(Value::Object(action_set))
+                        .map_err(FormatError::InvalidActionSet)?,
                 },
-                Some(_) => return Err(invalid("\"toolset\" is not an object")),
-                None => return Err(invalid("missing \"toolset\"")),
+                Some(_) => return Err(invalid("\"action_set\" is not an object")),
+                None => return Err(invalid("missing \"action_set\"")),
             };
             let entries = match object.remove("entries") {
                 Some(Value::Array(entries)) => entries,
@@ -170,7 +170,7 @@ pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
             Ok(JournalDocument {
                 run,
                 script,
-                toolset,
+                action_set,
                 entries,
             })
         }
@@ -190,19 +190,19 @@ pub fn decode_cassette(json: &str) -> Result<Cassette, FormatError> {
     }
 }
 
-/// The pinned toolset document, in its canonical form (RFC 8785): its bytes hash to
-/// [`Toolset::digest`].
-pub fn encode_toolset(toolset: &Toolset) -> String {
-    canonical_json(&v1::toolset_document(toolset))
+/// The pinned action set document, in its canonical form (RFC 8785): its bytes hash to
+/// [`ActionSet::digest`].
+pub fn encode_action_set(action_set: &ActionSet) -> String {
+    canonical_json(&v1::action_set_document(action_set))
 }
 
-/// Decodes a pinned toolset document, of any supported version. Servers and tools may come in
-/// any order, and the toolset's invariants are checked ([`Toolset::new`]).
-pub fn decode_toolset(json: &str) -> Result<Toolset, FormatError> {
+/// Decodes a pinned action set document, of any supported version. Servers and tools may come in
+/// any order, and the action set's invariants are checked ([`ActionSet::new`]).
+pub fn decode_action_set(json: &str) -> Result<ActionSet, FormatError> {
     let mut object = parse_object(json)?;
     match take_version(&mut object)? {
         Version::V1 => {
-            v1::decode_toolset(Value::Object(object)).map_err(FormatError::InvalidToolset)
+            v1::decode_action_set(Value::Object(object)).map_err(FormatError::InvalidActionSet)
         }
     }
 }

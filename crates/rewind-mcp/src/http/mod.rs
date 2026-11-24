@@ -2,7 +2,7 @@
 //! script reaches the network, through `fetch`. Requests leave from the dispatcher, never from
 //! the isolate, and each goes through these steps, in order:
 //!
-//! 1. The host must be in the toolset's allow-list.
+//! 1. The host must be in the action set's allow-list.
 //! 2. The name is resolved once.
 //! 3. Private, loopback, link-local and cloud-metadata addresses are refused.
 //! 4. The connection goes to the address that was checked.
@@ -64,7 +64,7 @@ impl Default for HttpConfig {
     }
 }
 
-/// The `http` tool as a toolset pins it: the built-in with its allow-list and its schemas.
+/// The `http` tool as an action set pins it: the built-in with its allow-list and its schemas.
 pub fn http_tool(allowed_hosts: Vec<String>) -> Tool {
     let mut tool = Tool::new(
         "http",
@@ -72,7 +72,7 @@ pub fn http_tool(allowed_hosts: Vec<String>) -> Tool {
         http_input_schema(),
     );
     tool.description = Some(
-        "HTTP requests, sent by Rewind to the hosts of the toolset's allow-list; scripts call it \
+        "HTTP requests, sent by Rewind to the hosts of the action set's allow-list; scripts call it \
          through fetch."
             .to_owned(),
     );

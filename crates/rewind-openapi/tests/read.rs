@@ -4,8 +4,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rewind_core::{
-    ApiParameter, HttpMethod, Interruption, ParameterLocation, SecretPlacement, Tool, ToolAuth,
-    Toolset,
+    ActionSet, ApiParameter, HttpMethod, Interruption, ParameterLocation, SecretPlacement, Tool,
+    ToolAuth,
 };
 use rewind_engine::schema::Validator;
 use rewind_openapi::{ReadApi, ReadOptions, read};
@@ -156,13 +156,13 @@ fn an_openapi_3_0_document_is_read_into_tools() {
         .collect();
     assert_eq!(parameters, ["limit", "tag"]);
 
-    // What is read is a toolset, with a digest that does not depend on the reading's order.
-    let toolset = Toolset::from_parts([], [read.api.clone()], read.tools.clone()).unwrap();
+    // What is read is an action set, with a digest that does not depend on the reading's order.
+    let action_set = ActionSet::from_parts([], [read.api.clone()], read.tools.clone()).unwrap();
     let mut reversed = read.tools.clone();
     reversed.reverse();
     assert_eq!(
-        toolset.digest(),
-        Toolset::from_parts([], [read.api.clone()], reversed)
+        action_set.digest(),
+        ActionSet::from_parts([], [read.api.clone()], reversed)
             .unwrap()
             .digest()
     );
@@ -216,7 +216,7 @@ fn an_openapi_3_1_document_is_read_into_tools() {
         &json!({ "contactId": 4, "body": { "text": "hi" } })
     ));
     assert!(tool(&read, "crm.contacts.list").output_schema.is_none());
-    Toolset::from_parts([], [read.api], read.tools).unwrap();
+    ActionSet::from_parts([], [read.api], read.tools).unwrap();
 }
 
 #[test]

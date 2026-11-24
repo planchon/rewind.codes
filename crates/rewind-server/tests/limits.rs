@@ -20,10 +20,10 @@ use std::time::Duration;
 
 use rewind_api::Client;
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::{CreateActionSet, HostTool};
 use rewind_api::common::{AbortKind, RunStatus};
 use rewind_api::runs::{JournalExport, Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
-use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{TestServer, wait};
@@ -230,8 +230,8 @@ async fn payloads_are_bounded_to_8_mib() {
     assert_eq!(problem_of.kind(), Some(ProblemType::PayloadTooLarge));
     assert_eq!(problem_of.status, 413);
 
-    let toolset = harness
-        .create_toolset(&CreateToolset {
+    let action_set = harness
+        .create_action_set(&CreateActionSet {
             host: vec![HostTool {
                 name: "store.put".into(),
                 description: "Stores a value.".into(),
@@ -239,7 +239,7 @@ async fn payloads_are_bounded_to_8_mib() {
                 output_schema: None,
                 policy: None,
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
@@ -252,12 +252,12 @@ export default async function main() {
   return { got, signalled };
 }"#,
     );
-    waiting.toolset = Some(toolset.id.clone());
+    waiting.action_set = Some(action_set.id.clone());
     let waiting = harness.start_run(&waiting, None).await.unwrap();
     let task = support::TaskWorker::open(
         &worker,
         &TaskStreamQuery {
-            toolset: Some(toolset.id.clone()),
+            action_set: Some(action_set.id.clone()),
             ..TaskStreamQuery::default()
         },
     )
@@ -305,7 +305,7 @@ export default async function main() {
   await store.put({ blob: "x".repeat(8 * 1024 * 1024) });
 }"#,
     );
-    args.toolset = Some(toolset.id.clone());
+    args.action_set = Some(action_set.id.clone());
     let args = harness.start_run(&args, None).await.unwrap();
     let output = harness
         .start_run(

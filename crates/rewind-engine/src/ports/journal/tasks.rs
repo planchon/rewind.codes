@@ -128,8 +128,8 @@ impl ParkKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolTask {
     pub task: TaskRef,
-    /// The toolset of the task's run.
-    pub toolset: Digest,
+    /// The action set of the task's run.
+    pub action_set: Digest,
     pub tool: String,
     pub route: ToolRoute,
     pub args: Payload,

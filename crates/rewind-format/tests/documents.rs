@@ -1,4 +1,4 @@
-//! The cassette, pinned toolset, workflow version and test documents v1 are frozen like events: these
+//! The cassette, pinned action set, workflow version and test documents v1 are frozen like events: these
 //! fixtures were written once and must decode forever, to the same domain values, and re-encode
 //! to the same bytes.
 
@@ -8,24 +8,24 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest, Expectations,
+    ActionSet, Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest, Expectations,
     ExpectedCall, ExpectedError, HttpMethod, Interruption, Matching, McpServer, McpTransport,
     ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus, SecretPlacement,
     SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp, Tool,
-    ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, ToolRule, Toolset,
+    ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, ToolRule,
     UpdatedTest, Workflow, WorkflowSchemas, World,
 };
 use rewind_format::{
-    FormatError, decode_cassette, decode_test, decode_toolset, decode_workflow, encode_cassette,
-    encode_test, encode_toolset, encode_workflow, test_digest,
+    FormatError, decode_action_set, decode_cassette, decode_test, decode_workflow,
+    encode_action_set, encode_cassette, encode_test, encode_workflow, test_digest,
 };
 use serde_json::json;
 
-const TOOLSET: &str = include_str!("fixtures/toolset.v1.json");
+const ACTION_SET: &str = include_str!("fixtures/action-set.v1.json");
 const CASSETTE: &str = include_str!("fixtures/cassette.v1.json");
 
-/// Every field and variant of the pinned toolset.
-fn toolset() -> Toolset {
+/// Every field and variant of the pinned action set.
+fn action_set() -> ActionSet {
     let github = McpServer {
         name: "github".into(),
         transport: McpTransport::Http {
@@ -86,7 +86,7 @@ fn toolset() -> Toolset {
         json!({}),
     );
     let webhook = Tool::new("webhook", ToolRoute::Builtin(Builtin::Webhook), json!({}));
-    Toolset::new(
+    ActionSet::new(
         [github, files],
         [
             list_issues,
@@ -138,39 +138,42 @@ fn cassette() -> Cassette {
 }
 
 #[test]
-fn the_toolset_fixture_decodes_and_re_encodes_to_the_same_bytes() {
-    let decoded = decode_toolset(TOOLSET).unwrap();
-    assert_eq!(decoded, toolset());
-    assert_eq!(encode_toolset(&decoded), TOOLSET);
+fn the_action_set_fixture_decodes_and_re_encodes_to_the_same_bytes() {
+    let decoded = decode_action_set(ACTION_SET).unwrap();
+    assert_eq!(decoded, action_set());
+    assert_eq!(encode_action_set(&decoded), ACTION_SET);
 }
 
-/// The bytes of a pinned toolset document are what its digest is computed on: a store can
-/// check a stored toolset against its key.
+/// The bytes of a pinned action set document are what its digest is computed on: a store can
+/// check a stored action set against its key.
 #[test]
-fn a_toolset_document_hashes_to_the_toolset_digest() {
-    assert_eq!(Digest::of(TOOLSET.as_bytes()), toolset().digest());
-    for toolset in [
-        Toolset::empty(),
-        Toolset::from_host_tools(["a", "g.b"]).unwrap(),
-        toolset(),
+fn an_action_set_document_hashes_to_the_action_set_digest() {
+    assert_eq!(Digest::of(ACTION_SET.as_bytes()), action_set().digest());
+    for action_set in [
+        ActionSet::empty(),
+        ActionSet::from_host_tools(["a", "g.b"]).unwrap(),
+        action_set(),
     ] {
         assert_eq!(
-            Digest::of(encode_toolset(&toolset).as_bytes()),
-            toolset.digest()
+            Digest::of(encode_action_set(&action_set).as_bytes()),
+            action_set.digest()
         );
-        assert_eq!(decode_toolset(&encode_toolset(&toolset)).unwrap(), toolset);
+        assert_eq!(
+            decode_action_set(&encode_action_set(&action_set)).unwrap(),
+            action_set
+        );
     }
 }
 
 #[test]
-fn a_toolset_document_may_list_tools_in_any_order() {
+fn an_action_set_document_may_list_tools_in_any_order() {
     let reordered = r#"{"v":1,"tools":[
         {"name":"b","route":{"type":"host"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}},
         {"name":"a","route":{"type":"host"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}
     ],"servers":[]}"#;
     assert_eq!(
-        decode_toolset(reordered).unwrap(),
-        Toolset::from_host_tools(["a", "b"]).unwrap()
+        decode_action_set(reordered).unwrap(),
+        ActionSet::from_host_tools(["a", "b"]).unwrap()
     );
 }
 
@@ -219,9 +222,9 @@ fn rejects_what_v1_does_not_define() {
             r#"{{"v":1,"servers":[],"tools":[{{"name":"webhook","route":{route},"schemas":{{"input":{{}}}},{policy}{extra}}}]}}"#
         )
     };
-    assert!(decode_toolset(&tool(r#"{"type":"builtin","builtin":"webhook"}"#, "")).is_ok());
+    assert!(decode_action_set(&tool(r#"{"type":"builtin","builtin":"webhook"}"#, "")).is_ok());
 
-    let invalid_toolsets = [
+    let invalid_action_sets = [
         tool(r#"{"type":"builtin","builtin":"webhook"}"#, r#","extra":1"#),
         tool(r#"{"type":"builtin","builtin":"ftp"}"#, ""),
         tool(r#"{"type":"teleport"}"#, ""),
@@ -234,19 +237,22 @@ fn rejects_what_v1_does_not_define() {
         r#"{"v":1,"servers":[{"name":"s","transport":{"type":"ws","url":"x"},"concurrency":1}],"tools":[]}"#.to_owned(),
         r#"{"v":1,"servers":[{"name":"s","transport":{"type":"http","url":"x"},"concurrency":0}],"tools":[]}"#.to_owned(),
     ];
-    for json in &invalid_toolsets {
+    for json in &invalid_action_sets {
         assert!(
-            matches!(decode_toolset(json), Err(FormatError::InvalidToolset(_))),
+            matches!(
+                decode_action_set(json),
+                Err(FormatError::InvalidActionSet(_))
+            ),
             "{json} must be rejected, got {:?}",
-            decode_toolset(json)
+            decode_action_set(json)
         );
     }
     assert_eq!(
-        decode_toolset(r#"{"v":2,"servers":[],"tools":[]}"#),
+        decode_action_set(r#"{"v":2,"servers":[],"tools":[]}"#),
         Err(FormatError::UnsupportedVersion(json!(2)))
     );
     assert_eq!(
-        decode_toolset(r#"{"servers":[],"tools":[]}"#),
+        decode_action_set(r#"{"servers":[],"tools":[]}"#),
         Err(FormatError::MissingVersion)
     );
 
@@ -276,13 +282,13 @@ fn rejects_what_v1_does_not_define() {
 #[test]
 #[ignore = "writes nothing: prints the fixtures for a human to review"]
 fn print_fixtures() {
-    println!("{}", encode_toolset(&toolset()));
+    println!("{}", encode_action_set(&action_set()));
     print!("{}", encode_cassette(&cassette()));
 }
 
 const WORKFLOW: &str = include_str!("fixtures/workflow.v1.json");
 const WORKFLOW_WITH_LABELS: &str = include_str!("fixtures/workflow-labels.v1.json");
-const TOOLSET_WITH_WORKFLOWS: &str = include_str!("fixtures/toolset-workflows.v1.json");
+const ACTION_SET_WITH_WORKFLOWS: &str = include_str!("fixtures/action-set-workflows.v1.json");
 
 /// Every field of a workflow version.
 fn workflow() -> Workflow {
@@ -290,7 +296,7 @@ fn workflow() -> Workflow {
         "triage",
         Some("Triage the stale issues of a repository, after approval.".into()),
         digest_of("script"),
-        toolset().digest(),
+        action_set().digest(),
         WorkflowSchemas {
             input: json!({
                 "type": "object",
@@ -314,13 +320,13 @@ fn digest_of(text: &str) -> Digest {
     Digest::of(text.as_bytes())
 }
 
-/// A toolset pinning two workflows, one without a description or signals.
-fn toolset_with_workflows() -> Toolset {
+/// An action set pinning two workflows, one without a description or signals.
+fn action_set_with_workflows() -> ActionSet {
     let digest = Workflow::new(
         "digest",
         None,
         digest_of("digest"),
-        Toolset::empty().digest(),
+        ActionSet::empty().digest(),
         WorkflowSchemas {
             input: json!({}),
             output: json!({ "type": "string" }),
@@ -328,7 +334,7 @@ fn toolset_with_workflows() -> Toolset {
         },
     )
     .unwrap();
-    Toolset::from_host_tools(["notify"])
+    ActionSet::from_host_tools(["notify"])
         .unwrap()
         .with_workflows([workflow().pinned(), digest.pinned()])
         .unwrap()
@@ -362,22 +368,22 @@ fn the_workflow_with_labels_fixture_decodes_re_encodes_and_hashes_to_its_version
 }
 
 #[test]
-fn the_toolset_with_workflows_fixture_decodes_and_hashes_to_its_digest() {
-    let decoded = decode_toolset(TOOLSET_WITH_WORKFLOWS).unwrap();
-    assert_eq!(decoded, toolset_with_workflows());
-    assert_eq!(encode_toolset(&decoded), TOOLSET_WITH_WORKFLOWS);
+fn the_action_set_with_workflows_fixture_decodes_and_hashes_to_its_digest() {
+    let decoded = decode_action_set(ACTION_SET_WITH_WORKFLOWS).unwrap();
+    assert_eq!(decoded, action_set_with_workflows());
+    assert_eq!(encode_action_set(&decoded), ACTION_SET_WITH_WORKFLOWS);
     assert_eq!(
-        Digest::of(TOOLSET_WITH_WORKFLOWS.as_bytes()),
-        toolset_with_workflows().digest()
+        Digest::of(ACTION_SET_WITH_WORKFLOWS.as_bytes()),
+        action_set_with_workflows().digest()
     );
     assert!(decoded.contains("workflows.triage.signal"));
 }
 
-const TOOLSET_WITH_APIS: &str = include_str!("fixtures/toolset-apis.v1.json");
+const ACTION_SET_WITH_APIS: &str = include_str!("fixtures/action-set-apis.v1.json");
 const WORKFLOW_WITH_SECRETS: &str = include_str!("fixtures/workflow-secrets.v1.json");
 
 /// Every kind of `auth`, an API with every place of a parameter, and an API tool.
-fn toolset_with_apis() -> Toolset {
+fn action_set_with_apis() -> ActionSet {
     let mut github = McpServer::new(
         "github",
         McpTransport::Http {
@@ -453,7 +459,7 @@ fn toolset_with_apis() -> Toolset {
             json!({}),
         )
     };
-    Toolset::from_parts(
+    ActionSet::from_parts(
         [github, crm, files],
         [dax, zendesk, keyed],
         [
@@ -468,13 +474,13 @@ fn toolset_with_apis() -> Toolset {
 }
 
 #[test]
-fn the_toolset_with_apis_fixture_decodes_and_hashes_to_its_digest() {
-    let decoded = decode_toolset(TOOLSET_WITH_APIS).unwrap();
-    assert_eq!(decoded, toolset_with_apis());
-    assert_eq!(encode_toolset(&decoded), TOOLSET_WITH_APIS);
+fn the_action_set_with_apis_fixture_decodes_and_hashes_to_its_digest() {
+    let decoded = decode_action_set(ACTION_SET_WITH_APIS).unwrap();
+    assert_eq!(decoded, action_set_with_apis());
+    assert_eq!(encode_action_set(&decoded), ACTION_SET_WITH_APIS);
     assert_eq!(
-        Digest::of(TOOLSET_WITH_APIS.as_bytes()),
-        toolset_with_apis().digest()
+        Digest::of(ACTION_SET_WITH_APIS.as_bytes()),
+        action_set_with_apis().digest()
     );
 }
 
@@ -520,14 +526,14 @@ fn rejects_auth_and_apis_v1_does_not_define() {
             r#"{{"v":1,"servers":[{{"name":"s","transport":{{"type":"http","url":"https://x"}},"concurrency":1,"auth":{auth}}}],"tools":[]}}"#
         )
     };
-    assert!(decode_toolset(&server(r#"{"type":"rewind"}"#)).is_ok());
-    assert!(decode_toolset(&server(r#"{"type":"secret","header":"X-Key"}"#)).is_ok());
+    assert!(decode_action_set(&server(r#"{"type":"rewind"}"#)).is_ok());
+    assert!(decode_action_set(&server(r#"{"type":"secret","header":"X-Key"}"#)).is_ok());
     let api = |fields: &str| {
         format!(
             r#"{{"v":1,"servers":[],"apis":[{{"name":"a","concurrency":1,{fields}}}],"tools":[]}}"#
         )
     };
-    assert!(decode_toolset(&api(r#""base_url":"https://x""#)).is_ok());
+    assert!(decode_action_set(&api(r#""base_url":"https://x""#)).is_ok());
     let invalid = [
         server(r#"{"type":"none"}"#),
         server(r#"{"type":"rewind","header":"X-Key"}"#),
@@ -543,9 +549,12 @@ fn rejects_auth_and_apis_v1_does_not_define() {
     ];
     for json in &invalid {
         assert!(
-            matches!(decode_toolset(json), Err(FormatError::InvalidToolset(_))),
+            matches!(
+                decode_action_set(json),
+                Err(FormatError::InvalidActionSet(_))
+            ),
             "{json} must be rejected, got {:?}",
-            decode_toolset(json)
+            decode_action_set(json)
         );
     }
 }
@@ -554,7 +563,7 @@ fn rejects_auth_and_apis_v1_does_not_define() {
 #[test]
 #[ignore = "writes nothing: prints the fixtures for a human to review"]
 fn print_secrets_fixtures() {
-    println!("{}", encode_toolset(&toolset_with_apis()));
+    println!("{}", encode_action_set(&action_set_with_apis()));
     println!("{}", encode_workflow(&workflow_with_secrets()));
 }
 
@@ -565,26 +574,26 @@ fn rejects_workflows_v1_does_not_define() {
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     assert!(
         decode_workflow(&document(&format!(
-            r#""name":"triage","script":"{digest}","toolset":"{digest}",{schemas}"#
+            r#""name":"triage","script":"{digest}","action_set":"{digest}",{schemas}"#
         )))
         .is_ok()
     );
     let invalid = [
         document(&format!(
-            r#""name":"triage","script":"{digest}","toolset":"{digest}",{schemas},"x":1"#
+            r#""name":"triage","script":"{digest}","action_set":"{digest}",{schemas},"x":1"#
         )),
         document(&format!(r#""name":"triage","script":"{digest}",{schemas}"#)),
         document(&format!(
-            r#""name":"triage","script":"abc","toolset":"{digest}",{schemas}"#
+            r#""name":"triage","script":"abc","action_set":"{digest}",{schemas}"#
         )),
         document(&format!(
-            r#""name":"default","script":"{digest}","toolset":"{digest}",{schemas}"#
+            r#""name":"default","script":"{digest}","action_set":"{digest}",{schemas}"#
         )),
         document(&format!(
-            r#""name":"triage","script":"{digest}","toolset":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
+            r#""name":"triage","script":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
         )),
         document(&format!(
-            r#""name":"triage","script":"{digest}","toolset":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
+            r#""name":"triage","script":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
         )),
     ];
     for json in &invalid {
@@ -603,8 +612,8 @@ fn rejects_workflows_v1_does_not_define() {
         w = format_args!(r#"{{"name":"a","version":"{digest}",{schemas}}}"#)
     );
     assert!(matches!(
-        decode_toolset(&pinned_twice),
-        Err(FormatError::InvalidToolset(_))
+        decode_action_set(&pinned_twice),
+        Err(FormatError::InvalidActionSet(_))
     ));
 }
 
@@ -831,7 +840,7 @@ fn rejects_tests_v1_does_not_define() {
 fn rejects_suites_v1_does_not_define() {
     let digest = "0".repeat(64);
     let base = format!(
-        r#""name":"triage","script":"{digest}","toolset":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
+        r#""name":"triage","script":"{digest}","action_set":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
     );
     let document = |fields: &str| format!(r#"{{"v":1,{base},{fields}}}"#);
     assert!(

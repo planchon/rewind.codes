@@ -11,7 +11,7 @@
 //! - a signal awaited with an empty mailbox is a `signal` wait since its `signal_awaited`, until
 //!   its timeout timer's due time; that timer is not a wait of its own;
 //! - a pending timer is a `timer` wait since its `start_timer`, until its due time;
-//! - a pending call is a `host` wait when the pinned toolset routes its tool to the host, a
+//! - a pending call is a `host` wait when the pinned action set routes its tool to the host, a
 //!   `call` wait otherwise, since its `schedule_tool_call`;
 //! - waits are ordered by `since`, then kind, then seq and name;
 //! - a failure or an abort gives the run's [`Ending`](crate::ports::Ending), its signature and
@@ -23,8 +23,8 @@
 use std::collections::BTreeSet;
 
 use rewind_core::{
-    Annotation, Callsite, Command, Event, HistoryEntry, Lifecycle, RunState, RunStatus,
-    ScriptError, Seq, Timestamp, ToolRoute, Toolset,
+    ActionSet, Annotation, Callsite, Command, Event, HistoryEntry, Lifecycle, RunState, RunStatus,
+    ScriptError, Seq, Timestamp, ToolRoute,
 };
 
 use crate::failures;
@@ -36,7 +36,7 @@ use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, WebhookEvent, WebhookEv
 /// by the index of the entry it is projected from.
 pub(crate) fn lifecycle_events(
     head: &RunHead,
-    toolset: Option<&Toolset>,
+    action_set: Option<&ActionSet>,
     history: &[HistoryEntry],
     from: usize,
     state: &RunState,
@@ -80,7 +80,7 @@ pub(crate) fn lifecycle_events(
     if let Some(ended) = ended {
         return vec![ended];
     }
-    let waiting_for = waiting_for(state, toolset);
+    let waiting_for = waiting_for(state, action_set);
     if waiting_for.is_empty() {
         return Vec::new();
     }
@@ -93,10 +93,10 @@ pub(crate) fn lifecycle_events(
 
 /// What a run that has not ended waits for from the outside world: signals and host tools.
 /// Empty when it is still running something of its own: a call Rewind dispatches.
-fn waiting_for(state: &RunState, toolset: Option<&Toolset>) -> Vec<String> {
+fn waiting_for(state: &RunState, action_set: Option<&ActionSet>) -> Vec<String> {
     let route = |tool: &str| {
-        toolset
-            .and_then(|toolset| toolset.tool(tool))
+        action_set
+            .and_then(|action_set| action_set.tool(tool))
             .map(|t| &t.route)
     };
     let mut waiting: Vec<String> = state
@@ -124,10 +124,10 @@ pub fn headline(source: &str) -> String {
 }
 
 /// The snapshot of a run, folded from its history (see the [module](self)): its status and
-/// mode, what it waits for while active, and how it ended. The pinned toolset tells the calls
+/// mode, what it waits for while active, and how it ended. The pinned action set tells the calls
 /// of host tools from the calls Rewind sends; without it, every call is a `call`. A history that
 /// cannot be folded past an entry gives the snapshot of the entries before it.
-pub fn run_snapshot(history: &[HistoryEntry], toolset: Option<&Toolset>) -> RunSnapshot {
+pub fn run_snapshot(history: &[HistoryEntry], action_set: Option<&ActionSet>) -> RunSnapshot {
     let mut state = RunState::new();
     for entry in history {
         if let Err(error) = state.apply(entry) {
@@ -139,7 +139,7 @@ pub fn run_snapshot(history: &[HistoryEntry], toolset: Option<&Toolset>) -> RunS
         .unwrap_or(usize::MAX)
         .min(history.len())];
     let waits = if state.status() == RunStatus::Active {
-        waits(folded, &state, toolset)
+        waits(folded, &state, action_set)
     } else {
         Vec::new()
     };
@@ -170,7 +170,7 @@ pub(crate) fn opening<'h>(
 pub(crate) fn waits(
     history: &[HistoryEntry],
     state: &RunState,
-    toolset: Option<&Toolset>,
+    action_set: Option<&ActionSet>,
 ) -> Vec<Wait> {
     // The entry that opened a timer or a call: when, and where in the script.
     let opened = |seq: &Seq| -> Option<(Timestamp, Option<Callsite>)> {
@@ -231,8 +231,8 @@ pub(crate) fn waits(
         let Some((since, callsite)) = opened(seq) else {
             continue;
         };
-        let host = toolset
-            .and_then(|toolset| toolset.tool(tool))
+        let host = action_set
+            .and_then(|action_set| action_set.tool(tool))
             .is_some_and(|tool| matches!(tool.route, ToolRoute::Host { .. }));
         waits.push(Wait {
             kind: if host { WaitKind::Host } else { WaitKind::Call },

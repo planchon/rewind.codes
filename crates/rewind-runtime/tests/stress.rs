@@ -11,7 +11,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{Epoch, RunId, Script, Seed, Seq, Timestamp, Toolset};
+use rewind_core::{ActionSet, Epoch, RunId, Script, Seed, Seq, Timestamp};
 use rewind_engine::ports::{Delivery, ScriptExecutor, ScriptInstance, StartScript};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
@@ -49,9 +49,9 @@ fn start(executor: &V8Executor, n: u64, source: &str) -> StartScript {
     StartScript {
         run_id: RunId::from_u128(u128::from(n) + 1),
         compiled: executor
-            .compile(&Script::new(source), &Toolset::default())
+            .compile(&Script::new(source), &ActionSet::default())
             .unwrap(),
-        toolset: Toolset::default(),
+        action_set: ActionSet::default(),
         input: json!(n),
         seed: Seed::from_bytes([1; 32]),
         epoch: Epoch(1),

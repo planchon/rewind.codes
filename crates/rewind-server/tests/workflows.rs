@@ -1,4 +1,4 @@
-//! Workflows over HTTP, on Turso: saving versions, pinning them in toolsets, a script that starts
+//! Workflows over HTTP, on Turso: saving versions, pinning them in action sets, a script that starts
 //! and signals runs of a workflow and receives their end, runs of a workflow started by the
 //! harness, and the signals a run of a workflow refuses (`archi/01-product.md`, "Workflows").
 
@@ -9,9 +9,9 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::CreateActionSet;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{RunFilter, StartRun};
-use rewind_api::toolsets::CreateToolset;
 use rewind_api::workflows::{CreateWorkflow, WorkflowQuery};
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
@@ -41,11 +41,11 @@ fn problem(error: rewind_api::Error) -> Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-fn triage(toolset: &str, script: &str) -> CreateWorkflow {
+fn triage(action_set: &str, script: &str) -> CreateWorkflow {
     CreateWorkflow {
         name: "triage".into(),
         description: Some("Triage the stale issues of a repository, after approval.".into()),
-        toolset: toolset.into(),
+        action_set: action_set.into(),
         script: script.into(),
         input: json!({
             "type": "object",
@@ -77,14 +77,14 @@ fn triage(toolset: &str, script: &str) -> CreateWorkflow {
 async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset::default())
+    let action_set = harness
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
 
     // Saving checks the script against its schemas; saving it again returns the same version.
     let saved = harness
-        .create_workflow(&triage(&toolset.id, TRIAGE))
+        .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
     assert_eq!(saved.name, "triage");
@@ -105,7 +105,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         saved.declarations.prompt
     );
     let again = harness
-        .create_workflow(&triage(&toolset.id, TRIAGE))
+        .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
     assert_eq!(again.version, saved.version);
@@ -113,7 +113,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
     let refused = problem(
         harness
             .create_workflow(&triage(
-                &toolset.id,
+                &action_set.id,
                 &TRIAGE.replace("input: { repo: string }", "input: { repo: number }"),
             ))
             .await
@@ -126,33 +126,33 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
             .starts_with("the default export does not match the workflow's schemas")),
         "{refused:?}"
     );
-    let mut misnamed = triage(&toolset.id, TRIAGE);
+    let mut misnamed = triage(&action_set.id, TRIAGE);
     misnamed.name = "default".into();
     assert_eq!(
         problem(harness.create_workflow(&misnamed).await.unwrap_err()).kind(),
         Some(ProblemType::InvalidWorkflow)
     );
 
-    // A toolset pins it; its scripts start it, signal it and receive its end.
-    let parent_toolset = harness
-        .create_toolset(&CreateToolset {
+    // An action set pins it; its scripts start it, signal it and receive its end.
+    let parent_action_set = harness
+        .create_action_set(&CreateActionSet {
             workflows: vec!["triage".into()],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
-    assert_eq!(parent_toolset.workflows.len(), 1);
-    assert_eq!(parent_toolset.workflows[0].version, saved.version);
+    assert_eq!(parent_action_set.workflows.len(), 1);
+    assert_eq!(parent_action_set.workflows[0].version, saved.version);
     assert!(
-        parent_toolset
+        parent_action_set
             .declarations
             .dts
             .contains("declare module \"rewind:workflows\""),
         "{}",
-        parent_toolset.declarations.dts
+        parent_action_set.declarations.dts
     );
     let mut start = StartRun::new(PARENT);
-    start.toolset = Some(parent_toolset.id.clone());
+    start.action_set = Some(parent_action_set.id.clone());
     start.input = json!({ "repo": "acme/api" });
     start.wait = wait("30s");
     let parent = harness.start_run(&start, None).await.unwrap();
@@ -206,16 +206,16 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         "{not_started:?}"
     );
 
-    // A toolset derived from it pins the workflow again, without its servers listed again.
+    // An action set derived from it pins the workflow again, without its servers listed again.
     let derived = harness
-        .create_toolset(&CreateToolset {
-            base: Some(toolset.id.clone()),
+        .create_action_set(&CreateActionSet {
+            base: Some(action_set.id.clone()),
             workflows: vec![format!("triage@{}", &saved.version[..12])],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
-    assert_eq!(derived.id, parent_toolset.id);
+    assert_eq!(derived.id, parent_action_set.id);
 
     let listed = harness
         .list_workflows(&WorkflowQuery::default())
@@ -235,12 +235,12 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
 async fn a_run_of_a_workflow_takes_only_its_input_and_its_signals() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset::default())
+    let action_set = harness
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
     let saved = harness
-        .create_workflow(&triage(&toolset.id, TRIAGE))
+        .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
 
@@ -290,7 +290,7 @@ async fn a_run_of_a_workflow_takes_only_its_input_and_its_signals() {
             .workflows
             .is_empty()
     );
-    let mut own = triage(&toolset.id, TRIAGE);
+    let mut own = triage(&action_set.id, TRIAGE);
     own.name = "digest".into();
     let digest = scoped.create_workflow(&own).await.unwrap();
     assert_eq!(
@@ -319,11 +319,11 @@ async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
     let tenant_wide = server.key(BuiltInRole::Harness, &[]).await;
     let dev = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
     let prod = server.key(BuiltInRole::Harness, &[("env", "prod")]).await;
-    let toolset = tenant_wide
-        .create_toolset(&CreateToolset::default())
+    let action_set = tenant_wide
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
-    let body = triage(&toolset.id, TRIAGE);
+    let body = triage(&action_set.id, TRIAGE);
 
     let first = tenant_wide.create_workflow(&body).await.unwrap();
     assert!(first.labels.0.is_empty());
@@ -363,9 +363,9 @@ async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
     let versions = dev.workflow_versions("triage").await.unwrap();
     assert_eq!(versions.versions.len(), 1);
     let pinned = dev
-        .create_toolset(&CreateToolset {
+        .create_action_set(&CreateActionSet {
             workflows: vec!["triage".into()],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();

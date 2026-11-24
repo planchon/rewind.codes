@@ -37,9 +37,9 @@ use crate::app::{App, Node};
 use crate::auth::{Caller, TokenExpiry};
 use crate::error::ApiError;
 use crate::extract::{Body, OptionalBody, Query};
+use crate::http::action_sets::parse_digest;
 use crate::http::refuse_nul_in_filter;
 use crate::http::runs::check_payload_size;
-use crate::http::toolsets::parse_digest;
 use crate::idle::Busy;
 use crate::streams::Rights;
 use crate::views::{parse_task_id, task_id};
@@ -72,7 +72,7 @@ pub(super) async fn stream(
         (Some(bound), _) => Some(bound.clone()),
         (None, named) => named,
     };
-    let toolset = query.toolset.as_deref().map(parse_digest).transpose()?;
+    let action_set = query.action_set.as_deref().map(parse_digest).transpose()?;
     let mut tools = BTreeSet::new();
     for tool in query.tools {
         refuse_nul_in_filter("tools", &tool)?;
@@ -108,7 +108,7 @@ pub(super) async fn stream(
                 node: app.node.node().clone(),
                 namespace,
                 labels: caller.labels.clone(),
-                toolset,
+                action_set,
                 tools,
                 slots,
             },

@@ -162,7 +162,7 @@ pub(crate) async fn version_attachments<S: SecretStore>(
     let check = AttachmentCheck {
         tenant,
         namespace: Some(namespace),
-        toolset: &rewind_core::Toolset::empty(),
+        action_set: &rewind_core::ActionSet::empty(),
         imports: None,
         attachments: workflow.secrets(),
         rights: &AttachRights::Version,

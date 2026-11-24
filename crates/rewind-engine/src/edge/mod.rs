@@ -172,7 +172,7 @@ impl<P: Plane> Edge<P> {
         .await
     }
 
-    /// [`start_run`](Self::start_run), type-checked first against the toolset's declarations.
+    /// [`start_run`](Self::start_run), type-checked first against the action set's declarations.
     pub async fn start_run_checked<G: Gateway, K: TypeChecker>(
         &self,
         gateway: &mut G,
@@ -191,8 +191,8 @@ impl<P: Plane> Edge<P> {
         // What the request alone refuses is refused before its namespace's first use.
         let input = self.bounded_input(request.input)?;
         text::refuse_nul("the script", request.script.source())?;
-        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.typescript)?;
-        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.prompt)?;
+        text::refuse_nul(text::ACTION_SET_TEXT, &request.declarations.typescript)?;
+        text::refuse_nul(text::ACTION_SET_TEXT, &request.declarations.prompt)?;
         refuse_nul_in_metadata(&request.metadata, request.idempotency_key.as_deref())?;
         let namespace = self.namespace(&request.tenant, &request.namespace).await?;
         let bounds = self.bounds(&request.tenant, &request.namespace).await?;
@@ -205,14 +205,14 @@ impl<P: Plane> Edge<P> {
         let executor = self.plane.executor();
         let epoch = *executor.epochs().last().ok_or(StartError::NoEpoch)?;
         let compiled = executor
-            .compile(&request.script, &request.toolset)
+            .compile(&request.script, &request.action_set)
             .map_err(StartError::InvalidScript)?;
         if request.mode == RunMode::Live {
             self.check_attachments(
                 &request.tenant,
                 &request.namespace,
                 &request.script,
-                &request.toolset,
+                &request.action_set,
                 &request.metadata.secrets,
                 &request.attach,
             )
@@ -227,14 +227,14 @@ impl<P: Plane> Edge<P> {
             .await
             .map_err(start_unavailable)?;
         catalog
-            .put_toolset(&request.tenant, &request.toolset, &request.declarations)
+            .put_action_set(&request.tenant, &request.action_set, &request.declarations)
             .await
             .map_err(start_unavailable)?;
         // The run is created now: its deadline is its TTL from then.
         let now = self.now();
         let started = |seed| RunStarted {
             script: request.script.digest(),
-            toolset: request.toolset.digest(),
+            action_set: request.action_set.digest(),
             input,
             seed,
             epoch,
@@ -343,7 +343,7 @@ impl<P: Plane> Edge<P> {
                 origin: workflow.name().to_owned(),
                 started: RunStarted {
                     script: workflow.script(),
-                    toolset: workflow.toolset(),
+                    action_set: workflow.action_set(),
                     input,
                     seed,
                     epoch,
@@ -374,7 +374,7 @@ impl<P: Plane> Edge<P> {
         .await
     }
 
-    /// [`fork`](Self::fork), type-checked first against the parent's toolset.
+    /// [`fork`](Self::fork), type-checked first against the parent's action set.
     pub async fn fork_checked<G: Gateway, K: TypeChecker>(
         &self,
         gateway: &mut G,
@@ -447,27 +447,27 @@ impl<P: Plane> Edge<P> {
         let stored = self
             .plane
             .catalog()
-            .get_toolset(&parent.tenant, head.toolset)
+            .get_action_set(&parent.tenant, head.action_set)
             .await
             .map_err(|error| start_failed(start_unavailable(error)))?
             .ok_or_else(|| {
                 start_failed(start_unavailable(format!(
-                    "toolset {} not found",
-                    head.toolset
+                    "action set {} not found",
+                    head.action_set
                 )))
             })?;
-        let toolset = stored.toolset;
+        let action_set = stored.action_set;
         let compiled = self
             .plane
             .executor()
-            .compile(&request.script, &toolset)
+            .compile(&request.script, &action_set)
             .map_err(|invalid| start_failed(StartError::InvalidScript(invalid)))?;
         if parent_started.mode == RunMode::Live {
             self.check_attachments(
                 &parent.tenant,
                 &head.namespace,
                 &request.script,
-                &toolset,
+                &action_set,
                 &metadata.secrets,
                 &request.attach,
             )
@@ -510,7 +510,7 @@ impl<P: Plane> Edge<P> {
             origin: head.origin.clone(),
             started: RunStarted {
                 script: request.script.digest(),
-                toolset: head.toolset,
+                action_set: head.action_set,
                 input,
                 seed: parent_started.seed,
                 epoch: parent_started.epoch,
@@ -621,18 +621,18 @@ impl<P: Plane> Edge<P> {
         tenant: &TenantId,
         namespace: &NamespaceName,
         script: &Script,
-        toolset: &rewind_core::Toolset,
+        action_set: &rewind_core::ActionSet,
         attachments: &rewind_core::Attachments,
         rights: &attachments::AttachRights,
     ) -> Result<(), StartError> {
-        if attachments.is_empty() && toolset.taking_secrets().next().is_none() {
+        if attachments.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
         let imports = self.plane.executor().tool_imports(script);
         let check = AttachmentCheck {
             tenant,
             namespace: Some(namespace),
-            toolset,
+            action_set,
             imports: imports.as_ref(),
             attachments,
             rights,
@@ -986,15 +986,15 @@ impl<P: Plane> Edge<P> {
             .await
             .map_err(unavailable)?
             .ok_or_else(|| unavailable(format!("script {} not found", view.head.script)))?;
-        let toolset = catalog
-            .get_toolset(&run.tenant, view.head.toolset)
+        let action_set = catalog
+            .get_action_set(&run.tenant, view.head.action_set)
             .await
             .map_err(unavailable)?
-            .ok_or_else(|| unavailable(format!("toolset {} not found", view.head.toolset)))?;
+            .ok_or_else(|| unavailable(format!("action set {} not found", view.head.action_set)))?;
         Ok(JournalDocument {
             run: run.id,
             script: script.script,
-            toolset: toolset.toolset,
+            action_set: action_set.action_set,
             entries,
         })
     }
@@ -1010,11 +1010,11 @@ impl<P: Plane> Edge<P> {
         let journal = self.export_journal(gateway, run).await?;
         let script = script.cloned().unwrap_or(journal.script.clone());
         let executor = self.plane.executor();
-        let compiled = executor.compile(&script, &journal.toolset);
+        let compiled = executor.compile(&script, &journal.action_set);
         let input = crate::replay::ReplayInput {
             run,
             compiled: compiled.as_ref(),
-            toolset: &journal.toolset,
+            action_set: &journal.action_set,
             history: &journal.entries,
         };
         let blobs = self.plane.blobs();

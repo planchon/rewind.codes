@@ -3,7 +3,7 @@
 //!
 //! | Route | Dispatcher | What it does |
 //! | --- | --- | --- |
-//! | MCP tools | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the toolset), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
+//! | MCP tools | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the action set), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
 //! | Built-ins | [`HttpTool`] | `http`, with the egress rules: allow-list, then `rewind-outbound`'s checks (one DNS resolution, private and metadata addresses refused, a connection to the checked address), redirects checked again, bounded responses. `webhook` is answered by the engine |
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
@@ -123,7 +123,7 @@ impl Default for McpConfig {
     }
 }
 
-/// Why the tools of an MCP server could not be listed, what registering a toolset reports to
+/// Why the tools of an MCP server could not be listed, what registering an action set reports to
 /// the harness developer, or why the `http` tool could not be set up. The message names the
 /// server.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -179,10 +179,10 @@ impl McpDispatcher {
         }
     }
 
-    /// Discovery: the tools of a server, as a toolset pins them (`archi/04-tools.md`, "Toolsets
+    /// Discovery: the tools of a server, as an action set pins them (`archi/04-tools.md`, "Action sets
     /// and code generation"), sorted by name. Each is named `{server}.{tool}`, with its
     /// description (or its title), its input and output schemas, and the default policy of an
-    /// MCP tool; the harness's policies are applied by whoever builds the toolset. `auth` is how
+    /// MCP tool; the harness's policies are applied by whoever builds the action set. `auth` is how
     /// the listing proves who calls: the organization's secret the registration attaches, or a
     /// listing signed with the reduced set of claims.
     pub async fn list_tools(
@@ -311,7 +311,7 @@ impl ToolDispatcher for McpDispatcher {
         let Some(server) = call.server.as_ref().filter(|server| &server.name == name) else {
             return Failure::permanent(
                 ToolFailureKind::Unavailable,
-                format!("the toolset does not say how to reach the MCP server {name}"),
+                format!("the action set does not say how to reach the MCP server {name}"),
                 None,
             )
             .into_dispatched();
@@ -423,7 +423,7 @@ fn meta(call: &ToolCall) -> RequestMetaObject {
     RequestMetaObject(MetaObject(meta))
 }
 
-/// A listed tool, as a toolset pins it.
+/// A listed tool, as an action set pins it.
 fn pinned(server: &str, tool: &rmcp::model::Tool) -> Tool {
     let mut pinned = Tool::new(
         format!("{server}.{}", tool.name),

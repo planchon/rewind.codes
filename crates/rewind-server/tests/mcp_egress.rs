@@ -1,4 +1,4 @@
-//! Where a server's MCP client goes (`archi/04-tools.md`, "Toolsets and code generation";
+//! Where a server's MCP client goes (`archi/04-tools.md`, "Action sets and code generation";
 //! `archi/06-storage-and-scale.md`, "Security"). The MCP servers of these tests listen on
 //! 127.0.0.1: for a deployed server, an internal service, refused unless the operator allows it
 //! (`--allow-internal-tools`), and never quoted to the tenant once allowed. The embedded server
@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use clap::Parser;
 use rewind_api::access::BuiltInRole;
-use rewind_api::toolsets::{CreateToolset, McpServer};
+use rewind_api::action_sets::{CreateActionSet, McpServer};
 use rewind_api::{Client, ProblemType};
 use rewind_server::ServerArgs;
 use rmcp::ServerHandler;
@@ -84,14 +84,14 @@ async fn serve(finder: Finder) -> (String, String) {
     )
 }
 
-fn toolset(url: &str) -> CreateToolset {
-    CreateToolset {
+fn action_set(url: &str) -> CreateActionSet {
+    CreateActionSet {
         mcp: vec![McpServer {
             name: "finder".into(),
             url: Some(url.to_owned()),
             ..McpServer::default()
         }],
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     }
 }
 
@@ -109,8 +109,13 @@ async fn a_deployed_server_refuses_mcp_servers_on_internal_addresses() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
 
-    let refused = problem(harness.create_toolset(&toolset(&url)).await.unwrap_err());
-    assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
+    let refused = problem(
+        harness
+            .create_action_set(&action_set(&url))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(refused.kind(), Some(ProblemType::ActionSetUnavailable));
     assert_eq!(
         refused.detail,
         "finder cannot be reached: 127.0.0.1 is a loopback address: MCP servers and APIs are not \
@@ -118,7 +123,7 @@ async fn a_deployed_server_refuses_mcp_servers_on_internal_addresses() {
     );
     let metadata = problem(
         harness
-            .create_toolset(&toolset("http://169.254.169.254/latest/meta-data/"))
+            .create_action_set(&action_set("http://169.254.169.254/latest/meta-data/"))
             .await
             .unwrap_err(),
     );
@@ -140,7 +145,7 @@ async fn an_operator_allows_internal_mcp_servers_whose_answers_stay_unquoted() {
     let server = TestServer::start(&["--allow-internal-tools", "127.0.0.1"]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
 
-    let registered = harness.create_toolset(&toolset(&url)).await.unwrap();
+    let registered = harness.create_action_set(&action_set(&url)).await.unwrap();
     let names: Vec<&str> = registered
         .tools
         .iter()
@@ -150,8 +155,13 @@ async fn an_operator_allows_internal_mcp_servers_whose_answers_stay_unquoted() {
     assert_eq!(finder.sessions.load(Ordering::SeqCst), 1);
 
     // What the internal server answers to a URL that is not MCP stays out of the problem.
-    let refused = problem(harness.create_toolset(&toolset(&admin)).await.unwrap_err());
-    assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
+    let refused = problem(
+        harness
+            .create_action_set(&action_set(&admin))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(refused.kind(), Some(ProblemType::ActionSetUnavailable));
     assert_eq!(
         refused.detail,
         "finder refused the request (HTTP 404); the answer of an internal server is not quoted"
@@ -175,11 +185,16 @@ async fn the_embedded_server_reaches_mcp_servers_anywhere() {
     let running = rewind_server::start(args).await.unwrap();
     let client = Client::embedded(running.socket().unwrap()).unwrap();
 
-    let registered = client.create_toolset(&toolset(&url)).await.unwrap();
+    let registered = client.create_action_set(&action_set(&url)).await.unwrap();
     assert_eq!(registered.tools.len(), 2);
     assert_eq!(finder.sessions.load(Ordering::SeqCst), 1);
     // Its developer reads what their own server answered.
-    let refused = problem(client.create_toolset(&toolset(&admin)).await.unwrap_err());
+    let refused = problem(
+        client
+            .create_action_set(&action_set(&admin))
+            .await
+            .unwrap_err(),
+    );
     assert!(
         refused.detail.contains("secret=hunter2"),
         "{}",

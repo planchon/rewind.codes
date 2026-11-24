@@ -31,7 +31,7 @@ fn digest(hex: &str) -> Digest {
 fn every_fixture_decodes_to_a_valid_journal_and_re_encodes_to_the_same_bytes() {
     for (name, fixture) in FIXTURES {
         let journal = decode_journal(fixture).unwrap_or_else(|err| panic!("{name}: {err}"));
-        // The history is valid, and the script and toolset are those of its run_started.
+        // The history is valid, and the script and action set are those of its run_started.
         journal
             .check()
             .unwrap_or_else(|err| panic!("{name}: {err}"));
@@ -62,14 +62,14 @@ fn decodes_to_the_expected_domain_values() {
             .source()
             .starts_with("import { github } from \"rewind:tools\";")
     );
-    assert_eq!(journal.toolset.tools().len(), 7);
+    assert_eq!(journal.action_set.tools().len(), 7);
     let history = journal.entries;
     assert_eq!(history.len(), 16);
     assert_eq!(
         history[0].event,
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
             script: digest("88b30ba7a18c0a5dcd87a939c120336570ea6c747836b1a6b59ce93108d57c31"),
-            toolset: digest("41c98467fab2b9b22e2ef928f7b284e4c7adf424ed905dabfe4342e65ea69552"),
+            action_set: digest("41c98467fab2b9b22e2ef928f7b284e4c7adf424ed905dabfe4342e65ea69552"),
             input: json!({ "repo": "acme/api" }).into(),
             seed: Seed::from_bytes(
                 *digest("19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b")
@@ -328,27 +328,29 @@ fn rejects_what_v1_does_not_define() {
         );
     }
 
-    let toolset = r#"{"servers":[],"tools":[],"v":1}"#;
+    let action_set = r#"{"servers":[],"tools":[],"v":1}"#;
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     let valid = document(&format!(
-        r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{toolset},"entries":[]"#
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[]"#
     ));
     assert_eq!(decode_journal(&valid).unwrap().entries, vec![]);
     let invalid_documents = [
         // An unknown field.
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{toolset},"entries":[],"x":1"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[],"x":1"#
         ),
         // A missing field.
         r#""entries":[]"#.to_owned(),
-        format!(r#""script":"s","toolset":{toolset},"entries":[]"#),
-        format!(r#""run":"019b7a3c-8f00-7000-8000-000000000003","toolset":{toolset},"entries":[]"#),
+        format!(r#""script":"s","action_set":{action_set},"entries":[]"#),
+        format!(
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","action_set":{action_set},"entries":[]"#
+        ),
         r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","entries":[]"#.to_owned(),
         // A run that is not a run id.
-        format!(r#""run":"x","script":"s","toolset":{toolset},"entries":[]"#),
+        format!(r#""run":"x","script":"s","action_set":{action_set},"entries":[]"#),
         // A script that is not a source.
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":1,"toolset":{toolset},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":1,"action_set":{action_set},"entries":[]"#
         ),
     ];
     for json in invalid_documents {
@@ -361,13 +363,13 @@ fn rejects_what_v1_does_not_define() {
     }
     assert!(matches!(
         decode_journal(&document(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{"servers":[],"v":1},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{"servers":[],"v":1},"entries":[]"#
         )),
-        Err(FormatError::InvalidToolset(_))
+        Err(FormatError::InvalidActionSet(_))
     ));
     assert!(matches!(
         decode_journal(&document(&format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{toolset},"entries":[{{"index":0,"recorded_at":0}}]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[{{"index":0,"recorded_at":0}}]"#
         ))),
         Err(FormatError::InvalidEntry { position: 0, .. })
     ));

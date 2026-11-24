@@ -11,10 +11,10 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::CreateActionSet;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun, TraceFormat};
 use rewind_api::scripts::{ScriptFilter, SetScriptTitle, TitleSource};
-use rewind_api::toolsets::CreateToolset;
 use rewind_api::workflows::{CreateWorkflow, WorkflowQuery};
 use rewind_api::{Problem, ProblemType};
 use rewind_core::SUFFIX_LEN;
@@ -357,11 +357,11 @@ export default async function main(input: { repo: string }) {
 }
 "#;
 
-fn triage(toolset: &str, script: &str) -> CreateWorkflow {
+fn triage(action_set: &str, script: &str) -> CreateWorkflow {
     CreateWorkflow {
         name: "triage".into(),
         description: None,
-        toolset: toolset.into(),
+        action_set: action_set.into(),
         script: script.into(),
         input: json!({
             "type": "object",
@@ -393,17 +393,17 @@ fn triage(toolset: &str, script: &str) -> CreateWorkflow {
 async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset::default())
+    let action_set = harness
+        .create_action_set(&CreateActionSet::default())
         .await
         .unwrap();
     let first = harness
-        .create_workflow(&triage(&toolset.id, TRIAGE))
+        .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
     // Saved again, a version keeps its number.
     let again = harness
-        .create_workflow(&triage(&toolset.id, TRIAGE))
+        .create_workflow(&triage(&action_set.id, TRIAGE))
         .await
         .unwrap();
     assert_eq!(
@@ -411,7 +411,7 @@ async fn a_workflow_s_versions_are_numbered_and_named_by_their_number() {
         (first.version.as_str(), 1)
     );
     let second = harness
-        .create_workflow(&triage(&toolset.id, &TRIAGE.replace("? 3", "? 4")))
+        .create_workflow(&triage(&action_set.id, &TRIAGE.replace("? 3", "? 4")))
         .await
         .unwrap();
     assert_eq!((first.number, second.number), (1, 2));

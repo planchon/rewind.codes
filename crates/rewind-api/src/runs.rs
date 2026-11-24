@@ -29,7 +29,7 @@ use crate::workflows::{RunWorkflow, StartedBy};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
     "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
-    "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+    "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
     "input": { "repo": "acme/api" },
     "wait": "30s",
     "labels": { "agent": "triage", "conversation": "c-42" },
@@ -40,10 +40,10 @@ pub struct StartRun {
     /// Without it, `workflow` names what the run executes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub script: String,
-    /// The toolset the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.
+    /// The action set the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
-    /// Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version
+    pub action_set: Option<String>,
+    /// Instead of `script` and `actionSet`: a run of this workflow, `triage` for its latest version
     /// or `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one
     /// version. Its input is checked against the workflow's input schema (`invalid-input`); the
     /// script is not checked again.
@@ -87,7 +87,7 @@ impl StartRun {
     pub fn new(script: impl Into<String>) -> Self {
         Self {
             script: script.into(),
-            toolset: None,
+            action_set: None,
             workflow: None,
             input: empty_object(),
             wait: None,
@@ -129,8 +129,8 @@ pub struct Run {
     /// first line of the comment at its top. Absent when it has neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_title: Option<String>,
-    /// Digest of the pinned toolset.
-    pub toolset: String,
+    /// Digest of the pinned action set.
+    pub action_set: String,
     /// The determinism epoch the run started under.
     pub epoch: u32,
     pub mode: RunMode,
@@ -460,7 +460,7 @@ pub struct RunSummary {
     pub script_title: Option<String>,
     /// The first line of the script that is not blank, for display.
     pub headline: String,
-    pub toolset: String,
+    pub action_set: String,
     pub labels: Labels,
     pub started_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]

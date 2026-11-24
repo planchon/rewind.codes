@@ -1,5 +1,5 @@
 //! JSON Schemas compiled once, whose problems are written for the model that wrote the value
-//! (`archi/04-tools.md`, "Toolsets and code generation").
+//! (`archi/04-tools.md`, "Action sets and code generation").
 //!
 //! The sandbox checks tool args with it, inside the op, so its messages reach scripts and its
 //! version is part of the determinism epoch. The engine checks with it what other runs and the

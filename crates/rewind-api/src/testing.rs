@@ -243,7 +243,7 @@ pub struct TestFrom {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TestProblem {
-    /// It names tools, answers or args the toolset no longer has. Not run.
+    /// It names tools, answers or args the action set no longer has. Not run.
     Stale,
     /// The workflow's input or signal schemas refuse it. Not run.
     Incompatible,

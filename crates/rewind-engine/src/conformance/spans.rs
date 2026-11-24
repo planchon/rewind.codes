@@ -119,7 +119,7 @@ fn run_span() -> Span {
         status: SpanStatus::Ok,
         attributes: attributes([
             ("rewind.script", string(&"ab".repeat(32))),
-            ("rewind.toolset", string(&"cd".repeat(32))),
+            ("rewind.action_set", string(&"cd".repeat(32))),
             ("rewind.outcome", string("completed")),
             ("rewind.label.agent", string("triage")),
         ]),

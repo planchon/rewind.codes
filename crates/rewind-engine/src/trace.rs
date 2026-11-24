@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! run 0198…0001  suspended · waiting for signal "approval" (timeout in 2d 23h)
-//! script 21a0270b7f66 · toolset 5598149567a4 · started 2026-01-01T00:00:00Z
+//! script 21a0270b7f66 · action set 5598149567a4 · started 2026-01-01T00:00:00Z
 //!
 //!   idx  at       event                                                    line  outcome
 //!     1  +0.0s    #1 github.list_issues({"repo":"acme/api","state":"open"})  L5   → 37 items · 12.4 KB · 310ms
@@ -53,7 +53,7 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
     let shown = Shown {
         run: head.run.id,
         script: head.script,
-        toolset: head.toolset,
+        action_set: head.action_set,
         status: head.status,
         quarantine: head.quarantine.as_ref(),
         parent: head.metadata.parent.as_ref(),
@@ -65,7 +65,7 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
 struct Shown<'a> {
     run: RunId,
     script: Digest,
-    toolset: Digest,
+    action_set: Digest,
     status: RunStatus,
     quarantine: Option<&'a Quarantine>,
     parent: Option<&'a ForkParent>,
@@ -87,9 +87,9 @@ fn render(
     );
     let started_at = history.first().map(|entry| entry.recorded_at);
     let mut second = format!(
-        "script {} · toolset {}",
+        "script {} · action set {}",
         record.script.short(),
-        record.toolset.short()
+        record.action_set.short()
     );
     match started_at {
         Some(at) => {

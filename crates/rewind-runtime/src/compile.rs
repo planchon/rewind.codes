@@ -19,7 +19,7 @@ use deno_ast::{
     EmitOptions, MediaType, ModuleSpecifier, ParseParams, ParsedSource, ProgramRef,
     SourceMapOption, SourcePos, TranspileModuleOptions, TranspileOptions,
 };
-use rewind_core::{Script, Toolset};
+use rewind_core::{ActionSet, Script};
 use rewind_engine::ports::{CompiledScript, InvalidScript};
 
 use crate::epochs::Glue;
@@ -30,7 +30,7 @@ pub(crate) const SCRIPT_SPECIFIER: &str = "file:///script.ts";
 /// Checks a script against the modules it may import under `glue`, and compiles it.
 pub(crate) fn compile(
     script: &Script,
-    toolset: &Toolset,
+    action_set: &ActionSet,
     glue: &Glue,
 ) -> Result<CompiledScript, InvalidScript> {
     let parsed = parse(script, SCRIPT_SPECIFIER)?;
@@ -41,8 +41,8 @@ pub(crate) fn compile(
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
-        tools: (glue.tool_exports)(toolset),
-        workflows: (glue.workflow_exports)(toolset),
+        tools: (glue.tool_exports)(action_set),
+        workflows: (glue.workflow_exports)(action_set),
     }
     .check()?;
     let Transpiled {
@@ -165,9 +165,9 @@ struct Checker<'a> {
     parsed: &'a ParsedSource,
     /// What `rewind` exports.
     std: BTreeSet<String>,
-    /// What `rewind:tools` exports for the run's toolset.
+    /// What `rewind:tools` exports for the run's action set.
     tools: BTreeSet<String>,
-    /// What `rewind:workflows` exports for the run's toolset.
+    /// What `rewind:workflows` exports for the run's action set.
     workflows: BTreeSet<String>,
 }
 
@@ -316,7 +316,7 @@ impl Checker<'_> {
             return Ok(());
         }
         let available = if exports.is_empty() {
-            "it exports nothing for this run's toolset".to_owned()
+            "it exports nothing for this run's action set".to_owned()
         } else {
             let names: Vec<&str> = exports.iter().map(String::as_str).collect();
             format!("it exports {}", names.join(", "))
@@ -430,9 +430,9 @@ mod tests {
     use crate::epochs::EPOCHS;
 
     fn check(source: &str) -> Result<CompiledScript, InvalidScript> {
-        let toolset = Toolset::from_host_tools(["github.list_issues", "ask_user"]).unwrap();
+        let action_set = ActionSet::from_host_tools(["github.list_issues", "ask_user"]).unwrap();
         let glue = EPOCHS.last().expect("an epoch");
-        compile(&Script::new(source), &toolset, glue)
+        compile(&Script::new(source), &action_set, glue)
     }
 
     fn refused(source: &str) -> String {

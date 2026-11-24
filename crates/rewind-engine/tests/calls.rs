@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Command, Completion, Event, JsonValue, McpServer, McpTransport, RunMode, Script, Tool,
-    ToolFailure, ToolFailureKind, ToolRoute, Toolset,
+    ActionSet, Builtin, Command, Completion, Event, JsonValue, McpServer, McpTransport, RunMode,
+    Script, Tool, ToolFailure, ToolFailureKind, ToolRoute,
 };
 use rewind_engine::StartRun;
 use rewind_engine::edge::EdgeError;
@@ -50,7 +50,7 @@ fn caller() -> FakeExecutor {
 
 /// An MCP server `github` with the tool `github.get_issue`, the host tool `ask_user` and the
 /// `webhook` built-in.
-fn toolset() -> Toolset {
+fn action_set() -> ActionSet {
     let server = McpServer::new(
         "github",
         McpTransport::Http {
@@ -66,13 +66,13 @@ fn toolset() -> Toolset {
     );
     let ask = Tool::new("ask_user", ToolRoute::Host { group: None }, json!({}));
     let webhook = Tool::new("webhook", ToolRoute::Builtin(Builtin::Webhook), json!({}));
-    Toolset::new([server], [issue, ask, webhook]).unwrap()
+    ActionSet::new([server], [issue, ask, webhook]).unwrap()
 }
 
 fn calling(tool: &str, args: JsonValue) -> StartRun {
     StartRun::new(
         Script::new("caller"),
-        toolset(),
+        action_set(),
         json!({ "tool": tool, "args": args }),
     )
 }
@@ -170,7 +170,7 @@ async fn a_result_above_the_payload_limit_is_refused() {
                 node: at.clone(),
                 namespace: None,
                 labels: BTreeMap::new(),
-                toolset: None,
+                action_set: None,
                 tools: Default::default(),
                 slots: 1,
             },
@@ -229,7 +229,7 @@ async fn first_result(world: &mut World, run: &RunRef) -> JsonValue {
 async fn the_webhook_builtin_returns_a_url_bound_to_the_run_and_the_name() {
     let dispatcher = RecordingDispatcher::new(|_| Ok(json!({ "url": "mock://hook" })));
     let mut world = World::with(hooked(), dispatcher, 1, &[public()]).await;
-    let request = StartRun::new(Script::new("hooked"), toolset(), json!({}));
+    let request = StartRun::new(Script::new("hooked"), action_set(), json!({}));
     let live = world.run(request.clone()).await;
     let mut mock = request;
     mock.mode = RunMode::Mock;

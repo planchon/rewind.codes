@@ -1,8 +1,8 @@
-//! Golden tests: each directory of `tests/golden/` holds a toolset (`toolset.json`) and what
+//! Golden tests: each directory of `tests/golden/` holds an action set (`action_set.json`) and what
 //! codegen must generate from it, byte for byte: `rewind-tools.d.ts`, `prompt.txt`, and
 //! `tools.txt` (each tool on its own). `REWIND_CODEGEN_BLESS=1` writes the outputs again.
 //!
-//! `toolset.json` describes the toolset in a form of this test's own (codegen does not read the
+//! `action_set.json` describes the action set in a form of this test's own (codegen does not read the
 //! stored format):
 //!
 //! ```json
@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
 use rewind_codegen::{Declarations, HTTP_TOOL_REFERENCE, generate};
-use rewind_core::{Builtin, McpServer, McpTransport, Shape, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, Builtin, McpServer, McpTransport, Shape, Tool, ToolRoute};
 use serde_json::Value;
 
 fn golden_dir() -> PathBuf {
@@ -37,16 +37,16 @@ fn cases() -> Vec<PathBuf> {
     let mut cases: Vec<PathBuf> = fs::read_dir(golden_dir())
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.join("toolset.json").exists())
+        .filter(|path| path.join("action_set.json").exists())
         .collect();
     cases.sort();
     assert!(cases.len() >= 4, "the golden cases are missing");
     cases
 }
 
-/// The toolset and the observed shapes of a case.
-fn load(case: &Path) -> (Toolset, BTreeMap<String, Shape>) {
-    let text = fs::read_to_string(case.join("toolset.json")).unwrap();
+/// The action set and the observed shapes of a case.
+fn load(case: &Path) -> (ActionSet, BTreeMap<String, Shape>) {
+    let text = fs::read_to_string(case.join("action_set.json")).unwrap();
     let document: Value = serde_json::from_str(&text).unwrap();
     let servers = document["servers"].as_array().unwrap().iter().map(|name| {
         let name = name.as_str().unwrap();
@@ -77,7 +77,7 @@ fn load(case: &Path) -> (Toolset, BTreeMap<String, Shape>) {
         pinned.output_schema = tool.get("output").cloned();
         pinned
     });
-    let toolset = Toolset::new(servers, tools).unwrap();
+    let action_set = ActionSet::new(servers, tools).unwrap();
     let observed = document
         .get("observed")
         .and_then(Value::as_object)
@@ -96,7 +96,7 @@ fn load(case: &Path) -> (Toolset, BTreeMap<String, Shape>) {
                 .collect()
         })
         .unwrap_or_default();
-    (toolset, observed)
+    (action_set, observed)
 }
 
 fn outputs(declarations: &Declarations) -> Vec<(&'static str, String)> {
@@ -117,8 +117,8 @@ fn generated_declarations_match_the_golden_files() {
     let bless = std::env::var_os("REWIND_CODEGEN_BLESS").is_some();
     let mut stale = Vec::new();
     for case in cases() {
-        let (toolset, observed) = load(&case);
-        let declarations = generate(&toolset, &observed);
+        let (action_set, observed) = load(&case);
+        let declarations = generate(&action_set, &observed);
         for (file, generated) in outputs(&declarations) {
             let path = case.join(file);
             if bless {
@@ -156,8 +156,8 @@ fn parse(name: &str, text: &str) {
 #[test]
 fn generated_declarations_are_valid_typescript() {
     for case in cases() {
-        let (toolset, observed) = load(&case);
-        let declarations = generate(&toolset, &observed);
+        let (action_set, observed) = load(&case);
+        let declarations = generate(&action_set, &observed);
         parse("rewind-tools.d.ts", &declarations.typescript);
         for tool in &declarations.tools {
             parse(&format!("{}.d.ts", tool.name), &tool.typescript);
@@ -168,18 +168,18 @@ fn generated_declarations_are_valid_typescript() {
 #[test]
 fn generation_is_deterministic_whatever_the_order_of_keys() {
     for case in cases() {
-        let (toolset, observed) = load(&case);
-        let first = generate(&toolset, &observed);
-        assert_eq!(first, generate(&toolset, &observed));
+        let (action_set, observed) = load(&case);
+        let first = generate(&action_set, &observed);
+        assert_eq!(first, generate(&action_set, &observed));
 
-        // The same toolset, every object's keys reversed.
-        let reversed_tools = toolset.tools().iter().rev().map(|tool| {
+        // The same action set, every object's keys reversed.
+        let reversed_tools = action_set.tools().iter().rev().map(|tool| {
             let mut tool = tool.clone();
             tool.input_schema = reverse_keys(&tool.input_schema);
             tool.output_schema = tool.output_schema.as_ref().map(reverse_keys);
             tool
         });
-        let reversed = Toolset::new(toolset.servers().to_vec(), reversed_tools).unwrap();
+        let reversed = ActionSet::new(action_set.servers().to_vec(), reversed_tools).unwrap();
         assert_eq!(first, generate(&reversed, &observed), "{}", case.display());
     }
 }
@@ -202,11 +202,11 @@ fn reverse_keys(value: &Value) -> Value {
 }
 
 #[test]
-fn the_declarations_of_a_toolset_with_the_http_tool_start_with_its_reference() {
+fn the_declarations_of_an_action_set_with_the_http_tool_start_with_its_reference() {
     for case in cases() {
-        let (toolset, observed) = load(&case);
-        let typescript = generate(&toolset, &observed).typescript;
-        let http_tool = toolset.tool("http").is_some();
+        let (action_set, observed) = load(&case);
+        let typescript = generate(&action_set, &observed).typescript;
+        let http_tool = action_set.tool("http").is_some();
         assert_eq!(
             typescript.starts_with(&format!("{HTTP_TOOL_REFERENCE}\n")),
             http_tool,
@@ -217,7 +217,7 @@ fn the_declarations_of_a_toolset_with_the_http_tool_start_with_its_reference() {
             typescript.matches(HTTP_TOOL_REFERENCE).count(),
             usize::from(http_tool)
         );
-        // Every toolset declares the module, the empty one included.
+        // Every action set declares the module, the empty one included.
         assert!(
             typescript.contains("\ndeclare module \"rewind:tools\" {\n"),
             "{}",

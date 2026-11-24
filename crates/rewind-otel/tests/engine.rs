@@ -17,8 +17,8 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
 use rewind_core::{
-    Command, Epoch, JsonValue, McpServer, McpTransport, Payload, Script, Seq, Timestamp, Tool,
-    ToolFailure, ToolFailureKind, ToolRoute, Toolset,
+    ActionSet, Command, Epoch, JsonValue, McpServer, McpTransport, Payload, Script, Seq, Timestamp,
+    Tool, ToolFailure, ToolFailureKind, ToolRoute,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -425,8 +425,8 @@ fn request(name: &str) -> StartRun {
         },
         json!({}),
     );
-    let toolset = Toolset::new([server], [issue]).expect("a toolset");
-    StartRun::new(Script::new(name), toolset, json!({}))
+    let action_set = ActionSet::new([server], [issue]).expect("an action set");
+    StartRun::new(Script::new(name), action_set, json!({}))
 }
 
 /// Answers each call with a function of it.
@@ -478,7 +478,7 @@ impl ScriptExecutor for Programs {
     fn compile(
         &self,
         script: &Script,
-        _toolset: &Toolset,
+        _action_set: &ActionSet,
     ) -> Result<CompiledScript, InvalidScript> {
         Ok(CompiledScript {
             javascript: script.source().into(),

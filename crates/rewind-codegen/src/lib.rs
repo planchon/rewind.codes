@@ -1,6 +1,6 @@
-//! Code generation of Rewind (`archi/04-tools.md`, "Toolsets and code generation").
+//! Code generation of Rewind (`archi/04-tools.md`, "Action sets and code generation").
 //!
-//! From a pinned toolset, [`generate`] writes what the type-checker and the model read:
+//! From a pinned action set, [`generate`] writes what the type-checker and the model read:
 //!
 //! | Output | Read by | Example |
 //! | --- | --- | --- |
@@ -8,7 +8,7 @@
 //! | The compact prompt rendering, one line per tool | The model | `github.list_issues({ repo: string, state?: "open" \| "closed" }) → Issue[] · List the issues` |
 //!
 //! The runtime module `rewind:tools` itself is part of the runtime's glue, kept per determinism
-//! epoch. Codegen is deterministic: the same toolset and observed shapes give the same bytes.
+//! epoch. Codegen is deterministic: the same action set and observed shapes give the same bytes.
 //!
 //! The JSON Schema → TypeScript converter is ours: no maintained crate exists.
 //! When a tool declares no `outputSchema`, its result type comes from the shapes observed in
@@ -16,11 +16,11 @@
 //! shape; for an MCP tool, which returns its content, the shape of its `structuredContent`.
 //!
 //! `rewind-tools.d.ts` always declares the module `rewind:tools` (`declare module "rewind:tools" { … }`),
-//! empty for a toolset without tools. A toolset that pins workflows also gets the module
+//! empty for an action set without tools. An action set that pins workflows also gets the module
 //! `rewind:workflows`, one typed export per workflow, and a prompt line per workflow; the
 //! declarations a workflow's own script is checked against come from
 //! [`workflow_declarations`]. Built-ins are not part of it: scripts reach `http` through
-//! `fetch` and `webhook` through the `rewind` module. For a toolset that enables `http`, the file
+//! `fetch` and `webhook` through the `rewind` module. For an action set that enables `http`, the file
 //! starts with [`HTTP_TOOL_REFERENCE`], from which the type-checker knows to declare `fetch`.
 //! The prompt lists the built-ins too, with the hosts `fetch` may reach.
 
@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Builtin, Shape, ToolRoute, Toolset};
+use rewind_core::{ActionSet, Builtin, Shape, ToolRoute};
 
 mod dts;
 mod model;
@@ -40,12 +40,12 @@ mod workflows;
 
 pub use workflows::{WorkflowDeclarations, workflow_declarations};
 
-/// The first line of the `rewind-tools.d.ts` of a toolset that enables the `http` tool. It is how
+/// The first line of the `rewind-tools.d.ts` of an action set that enables the `http` tool. It is how
 /// the type-checker learns that the script has `fetch`: it then adds `fetch.d.ts` to the check.
 /// `rewind-check` exports the same line (`HTTP_TOOL_REFERENCE`); `archi/04-tools.md` records it.
 pub const HTTP_TOOL_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
 
-/// What codegen generated for a toolset.
+/// What codegen generated for an action set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Declarations {
     /// `rewind-tools.d.ts`.
@@ -70,22 +70,22 @@ pub struct ToolDeclaration {
     pub typescript: String,
 }
 
-/// Generates the declarations of a toolset. `observed` holds the shapes observed in the
+/// Generates the declarations of an action set. `observed` holds the shapes observed in the
 /// recorded results of its tools, by tool name (`ReadModel::observed_shapes`); they type the
 /// results of the tools that declare no output schema.
 ///
 /// A bare host tool whose name is not an identifier cannot be imported from `rewind:tools`: it is
 /// left out, as the runtime leaves it out of the module.
-pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declarations {
-    let exports = model::exports(toolset, observed);
-    let http_tool = toolset
+pub fn generate(action_set: &ActionSet, observed: &BTreeMap<String, Shape>) -> Declarations {
+    let exports = model::exports(action_set, observed);
+    let http_tool = action_set
         .tools()
         .iter()
         .any(|tool| matches!(tool.route, ToolRoute::Builtin(Builtin::Http { .. })));
-    let mut typescript = dts::module(&toolset.digest().short(), &exports, http_tool);
-    if !toolset.workflows().is_empty() {
+    let mut typescript = dts::module(&action_set.digest().short(), &exports, http_tool);
+    if !action_set.workflows().is_empty() {
         typescript.push('\n');
-        typescript.push_str(&workflows::module(toolset.workflows()));
+        typescript.push_str(&workflows::module(action_set.workflows()));
     }
 
     let mut tools = Vec::new();
@@ -98,7 +98,7 @@ pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declar
             });
         }
     }
-    for tool in toolset.tools() {
+    for tool in action_set.tools() {
         if let Some(builtin) = prompt::builtin_of(tool) {
             tools.push(ToolDeclaration {
                 name: tool.name.clone(),
@@ -108,7 +108,7 @@ pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declar
         }
     }
     tools.sort_by(|a, b| a.name.cmp(&b.name));
-    let pinned: Vec<ToolDeclaration> = toolset
+    let pinned: Vec<ToolDeclaration> = action_set
         .workflows()
         .iter()
         .map(|workflow| ToolDeclaration {
@@ -119,7 +119,7 @@ pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declar
         .collect();
 
     let mut lines: Vec<String> = prompt::imports(&exports).into_iter().collect();
-    lines.extend(workflows::imports(toolset.workflows()));
+    lines.extend(workflows::imports(action_set.workflows()));
     lines.extend(tools.iter().map(|tool| tool.prompt.clone()));
     lines.extend(pinned.iter().map(|workflow| workflow.prompt.clone()));
     tools.extend(pinned);

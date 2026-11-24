@@ -3,7 +3,7 @@
 //! `MemoryCatalog` of `rewind-engine` is the reference of every behavior here; both pass the same
 //! conformance suite.
 //!
-//! The catalog keeps scripts, toolsets, workflows, tests, workflow_tests, tenants, namespaces
+//! The catalog keeps scripts, action sets, workflows, tests, workflow_tests, tenants, namespaces
 //! with each one's `partition`, and subscriptions. Every write is one transaction that sends what
 //! it changed with `NOTIFY` (`crate::changes`); a write that changes nothing sends nothing. Test
 //! rows are locked by tenant and digest: a new version locks the rows of its suite (`FOR SHARE`)
@@ -18,12 +18,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 
-use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
     DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle, Secret,
-    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    StoredActionSet, StoredScript, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
     Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 use sqlx::postgres::PgRow;
@@ -129,16 +129,20 @@ fn workflow_key(tenant_id: &TenantId, name: &str) -> String {
     format!("rewind workflow\u{1f}{tenant_id}\u{1f}{name}")
 }
 
-fn toolset_from_row(row: &PgRow, digest: Digest, first: usize) -> Result<StoredToolset, Error> {
-    let toolset = rewind_format::decode_toolset(&row.text(first)?)
-        .map_err(|err| Error::Corrupt(format!("toolset {digest}: {err}")))?;
-    if toolset.digest() != digest {
+fn action_set_from_row(
+    row: &PgRow,
+    digest: Digest,
+    first: usize,
+) -> Result<StoredActionSet, Error> {
+    let action_set = rewind_format::decode_action_set(&row.text(first)?)
+        .map_err(|err| Error::Corrupt(format!("action set {digest}: {err}")))?;
+    if action_set.digest() != digest {
         return Err(Error::Corrupt(format!(
-            "toolset {digest} does not hash to its key"
+            "action set {digest} does not hash to its key"
         )));
     }
-    Ok(StoredToolset {
-        toolset,
+    Ok(StoredActionSet {
+        action_set,
         declarations: ToolDeclarations {
             typescript: row.text(first + 1)?,
             prompt: row.text(first + 2)?,
@@ -706,7 +710,7 @@ impl PostgresCatalog {
 
 impl CatalogStore for PostgresCatalog {
     // ---------------------------------------------------------------------------------------
-    // Scripts and toolsets
+    // Scripts and action sets
 
     async fn put_script(
         &self,
@@ -857,10 +861,10 @@ impl CatalogStore for PostgresCatalog {
         Ok(titles)
     }
 
-    async fn put_toolset(
+    async fn put_action_set(
         &self,
         tenant_id: &TenantId,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: &ToolDeclarations,
     ) -> Result<(), CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
@@ -869,17 +873,17 @@ impl CatalogStore for PostgresCatalog {
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
         )
         .bind(tenant(tenant_id))
-        .bind(bytes(toolset.digest()))
-        .bind(rewind_format::encode_toolset(toolset))
+        .bind(bytes(action_set.digest()))
+        .bind(rewind_format::encode_action_set(action_set))
         .bind(declarations.typescript.as_str())
         .bind(declarations.prompt.as_str())
         .execute(&mut *tx)
         .await
         .map_err(Error::from)?;
         if inserted.rows_affected() > 0 {
-            let change = ControlPlaneChange::Toolset {
+            let change = ControlPlaneChange::ActionSet {
                 tenant: tenant_id.clone(),
-                digest: toolset.digest(),
+                digest: action_set.digest(),
             };
             notify(&mut tx, &[change]).await?;
         }
@@ -887,11 +891,11 @@ impl CatalogStore for PostgresCatalog {
         Ok(())
     }
 
-    async fn get_toolset(
+    async fn get_action_set(
         &self,
         tenant_id: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredToolset>, CatalogError> {
+    ) -> Result<Option<StoredActionSet>, CatalogError> {
         let row = sqlx::query(
             "SELECT spec, declarations, prompt FROM toolsets WHERE tenant = $1 AND digest = $2",
         )
@@ -901,14 +905,14 @@ impl CatalogStore for PostgresCatalog {
         .await
         .map_err(Error::from)?;
         Ok(row
-            .map(|row| toolset_from_row(&row, digest, 0))
+            .map(|row| action_set_from_row(&row, digest, 0))
             .transpose()?)
     }
 
-    async fn list_toolsets(
+    async fn list_action_sets(
         &self,
         tenant_id: &TenantId,
-    ) -> Result<Vec<StoredToolset>, CatalogError> {
+    ) -> Result<Vec<StoredActionSet>, CatalogError> {
         let rows = sqlx::query(
             "SELECT digest, spec, declarations, prompt FROM toolsets WHERE tenant = $1 \
              ORDER BY digest",
@@ -919,7 +923,7 @@ impl CatalogStore for PostgresCatalog {
         .map_err(Error::from)?;
         Ok(rows
             .iter()
-            .map(|row| toolset_from_row(row, row.digest(0)?, 1))
+            .map(|row| action_set_from_row(row, row.digest(0)?, 1))
             .collect::<Result<_, Error>>()?)
     }
 

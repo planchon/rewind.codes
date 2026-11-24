@@ -718,7 +718,7 @@ async fn a_stale_test_cannot_be_updated_by_its_expectation_alone() {
     assert!(results[0].is_error);
     assert!(
         results[0].content.contains(
-            "FAIL \"posts the open bugs\" (stale): it names tools, answers or args the toolset no longer has; it was not run.\n  - rule 1 of tracker.list_issues answers what its output schema refuses"
+            "FAIL \"posts the open bugs\" (stale): it names tools, answers or args the action set no longer has; it was not run.\n  - rule 1 of tracker.list_issues answers what its output schema refuses"
         ),
         "{}",
         results[0].content

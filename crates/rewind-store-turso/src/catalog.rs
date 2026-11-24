@@ -3,7 +3,7 @@
 //! control plane"). The in-memory `MemoryCatalog` of `rewind-engine` is the reference of every
 //! behavior here; both pass the same conformance suite.
 //!
-//! The catalog keeps scripts, toolsets, workflows, tests, workflow_tests, tenants, namespaces
+//! The catalog keeps scripts, action sets, workflows, tests, workflow_tests, tenants, namespaces
 //! with each one's `partition`, and subscriptions. Every call holds the store's one connection;
 //! a write that changes something sends its change once it committed, while it still holds the
 //! connection, so changes leave in commit order ([`TursoStore::changes`]). A write that changes
@@ -14,12 +14,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 
-use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
     DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle, Secret,
-    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    StoredActionSet, StoredScript, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
     Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 use turso::{Connection, Row, Value};
@@ -84,16 +84,16 @@ fn carries(labels: &BTreeMap<String, String>, required: &BTreeMap<String, String
         .all(|(key, value)| labels.get(key) == Some(value))
 }
 
-fn toolset_from_row(row: &Row, key: Digest, first: usize) -> Result<StoredToolset, Error> {
-    let toolset = rewind_format::decode_toolset(&row.text(first)?)
-        .map_err(|err| Error::Corrupt(format!("toolset {key}: {err}")))?;
-    if toolset.digest() != key {
+fn action_set_from_row(row: &Row, key: Digest, first: usize) -> Result<StoredActionSet, Error> {
+    let action_set = rewind_format::decode_action_set(&row.text(first)?)
+        .map_err(|err| Error::Corrupt(format!("action set {key}: {err}")))?;
+    if action_set.digest() != key {
         return Err(Error::Corrupt(format!(
-            "toolset {key} does not hash to its key"
+            "action set {key} does not hash to its key"
         )));
     }
-    Ok(StoredToolset {
-        toolset,
+    Ok(StoredActionSet {
+        action_set,
         declarations: ToolDeclarations {
             typescript: row.text(first + 1)?,
             prompt: row.text(first + 2)?,
@@ -310,7 +310,7 @@ impl TursoCatalog {
 
 impl CatalogStore for TursoCatalog {
     // ---------------------------------------------------------------------------------------
-    // Scripts and toolsets
+    // Scripts and action sets
 
     async fn put_script(
         &self,
@@ -455,10 +455,10 @@ impl CatalogStore for TursoCatalog {
         Ok(titles.into_iter().collect())
     }
 
-    async fn put_toolset(
+    async fn put_action_set(
         &self,
         tenant_id: &TenantId,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: &ToolDeclarations,
     ) -> Result<(), CatalogError> {
         let connection = self.store.connection().await?;
@@ -468,27 +468,27 @@ impl CatalogStore for TursoCatalog {
              VALUES (?, ?, ?, ?, ?)",
             vec![
                 tenant(tenant_id),
-                digest(toolset.digest()),
-                text(rewind_format::encode_toolset(toolset)),
+                digest(action_set.digest()),
+                text(rewind_format::encode_action_set(action_set)),
                 text(declarations.typescript.as_str()),
                 text(declarations.prompt.as_str()),
             ],
         )
         .await?;
         if inserted > 0 {
-            self.send([ControlPlaneChange::Toolset {
+            self.send([ControlPlaneChange::ActionSet {
                 tenant: tenant_id.clone(),
-                digest: toolset.digest(),
+                digest: action_set.digest(),
             }]);
         }
         Ok(())
     }
 
-    async fn get_toolset(
+    async fn get_action_set(
         &self,
         tenant_id: &TenantId,
         key: Digest,
-    ) -> Result<Option<StoredToolset>, CatalogError> {
+    ) -> Result<Option<StoredActionSet>, CatalogError> {
         let connection = self.store.connection().await?;
         let row = sql::query_row(
             &connection,
@@ -496,13 +496,15 @@ impl CatalogStore for TursoCatalog {
             vec![tenant(tenant_id), digest(key)],
         )
         .await?;
-        Ok(row.map(|row| toolset_from_row(&row, key, 0)).transpose()?)
+        Ok(row
+            .map(|row| action_set_from_row(&row, key, 0))
+            .transpose()?)
     }
 
-    async fn list_toolsets(
+    async fn list_action_sets(
         &self,
         tenant_id: &TenantId,
-    ) -> Result<Vec<StoredToolset>, CatalogError> {
+    ) -> Result<Vec<StoredActionSet>, CatalogError> {
         let connection = self.store.connection().await?;
         let rows = sql::query(
             &connection,
@@ -513,7 +515,7 @@ impl CatalogStore for TursoCatalog {
         .await?;
         Ok(rows
             .iter()
-            .map(|row| toolset_from_row(row, row.digest(0)?, 1))
+            .map(|row| action_set_from_row(row, row.digest(0)?, 1))
             .collect::<Result<_, Error>>()?)
     }
 

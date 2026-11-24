@@ -2,6 +2,9 @@
 //! `Rewind-Organization` and its `Rewind-Namespace`. The CLI's `rewind mcp` reaches the embedded
 //! server through it, and `rewind-server` the workers.
 
+use rewind_api::action_sets::{
+    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+};
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -12,7 +15,6 @@ use rewind_api::runs::{
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
-use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -98,16 +100,16 @@ impl Api for Client {
         Ok(Client::get_test(self, digest).await?)
     }
 
-    async fn create_toolset(&self, toolset: &CreateToolset) -> Result<Toolset, ApiError> {
-        Ok(Client::create_toolset(self, toolset).await?)
+    async fn create_action_set(&self, action_set: &CreateActionSet) -> Result<ActionSet, ApiError> {
+        Ok(Client::create_action_set(self, action_set).await?)
     }
 
     async fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> Result<ToolSearchResults, ApiError> {
-        Ok(Client::search_tools(self, toolset, query).await?)
+        Ok(Client::search_tools(self, action_set, query).await?)
     }
 
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
@@ -145,7 +147,7 @@ impl McpApi for Client {
         Ok(Client::list_namespaces(self, query).await?)
     }
 
-    async fn list_toolsets(&self) -> Result<ToolsetList, ApiError> {
-        Ok(Client::list_toolsets(self).await?)
+    async fn list_action_sets(&self) -> Result<ActionSetList, ApiError> {
+        Ok(Client::list_action_sets(self).await?)
     }
 }

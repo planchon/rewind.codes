@@ -1,5 +1,5 @@
 {
-  "description": "rewind:tools does not export the built-ins, even when the toolset has them: scripts reach http through fetch, and webhook from \"rewind\". Importing one from rewind:tools is refused at start, and no run exists.",
+  "description": "rewind:tools does not export the built-ins, even when the action set has them: scripts reach http through fetch, and webhook from \"rewind\". Importing one from rewind:tools is refused at start, and no run exists.",
   "tools": {
     "http": {
       "status": 200,

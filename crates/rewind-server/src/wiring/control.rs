@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryAccess, MemoryCatalog, MemoryCluster, MemoryMembership,
     MemorySecrets,
@@ -38,8 +38,9 @@ use rewind_engine::ports::{
     NewSecret, NewToken, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization,
     PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef,
     ScriptTitle, Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader,
-    SecretStore, SigningKey, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription,
-    Tenant, TenantId, TestRecord, Token, TokenKey, ToolDeclarations, UserId, WorkflowFilter,
+    SecretStore, SigningKey, StoreError, StoredActionSet, StoredScript, StoredWorkflow,
+    Subscription, Tenant, TenantId, TestRecord, Token, TokenKey, ToolDeclarations, UserId,
+    WorkflowFilter,
 };
 use rewind_store_postgres::{PostgresCatalog, PostgresCluster, PostgresMembership, PostgresStore};
 use rewind_store_turso::{TursoCatalog, TursoCluster, TursoMembership, TursoStore};
@@ -647,25 +648,28 @@ impl CatalogStore for Catalog {
         catalog!(self, catalog => catalog.script_titles(tenant, scripts).await)
     }
 
-    async fn put_toolset(
+    async fn put_action_set(
         &self,
         tenant: &TenantId,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: &ToolDeclarations,
     ) -> Result<(), CatalogError> {
-        catalog!(self, catalog => catalog.put_toolset(tenant, toolset, declarations).await)
+        catalog!(self, catalog => catalog.put_action_set(tenant, action_set, declarations).await)
     }
 
-    async fn get_toolset(
+    async fn get_action_set(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredToolset>, CatalogError> {
-        catalog!(self, catalog => catalog.get_toolset(tenant, digest).await)
+    ) -> Result<Option<StoredActionSet>, CatalogError> {
+        catalog!(self, catalog => catalog.get_action_set(tenant, digest).await)
     }
 
-    async fn list_toolsets(&self, tenant: &TenantId) -> Result<Vec<StoredToolset>, CatalogError> {
-        catalog!(self, catalog => catalog.list_toolsets(tenant).await)
+    async fn list_action_sets(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Vec<StoredActionSet>, CatalogError> {
+        catalog!(self, catalog => catalog.list_action_sets(tenant).await)
     }
 
     async fn put_workflow(
@@ -884,7 +888,7 @@ impl CatalogStore for Catalog {
 }
 
 /// The control plane is its catalog too: what the edge and the routes read of scripts,
-/// toolsets, workflows, tenants, namespaces and subscriptions.
+/// action sets, workflows, tenants, namespaces and subscriptions.
 impl CatalogStore for ControlPlane {
     async fn put_script(
         &self,
@@ -920,27 +924,30 @@ impl CatalogStore for ControlPlane {
         self.catalog().script_titles(tenant, scripts).await
     }
 
-    async fn put_toolset(
+    async fn put_action_set(
         &self,
         tenant: &TenantId,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: &ToolDeclarations,
     ) -> Result<(), CatalogError> {
         self.catalog()
-            .put_toolset(tenant, toolset, declarations)
+            .put_action_set(tenant, action_set, declarations)
             .await
     }
 
-    async fn get_toolset(
+    async fn get_action_set(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredToolset>, CatalogError> {
-        self.catalog().get_toolset(tenant, digest).await
+    ) -> Result<Option<StoredActionSet>, CatalogError> {
+        self.catalog().get_action_set(tenant, digest).await
     }
 
-    async fn list_toolsets(&self, tenant: &TenantId) -> Result<Vec<StoredToolset>, CatalogError> {
-        self.catalog().list_toolsets(tenant).await
+    async fn list_action_sets(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Vec<StoredActionSet>, CatalogError> {
+        self.catalog().list_action_sets(tenant).await
     }
 
     async fn put_workflow(

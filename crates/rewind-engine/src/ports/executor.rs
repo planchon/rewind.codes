@@ -3,8 +3,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use rewind_core::{
-    Annotation, CancelReason, Command, Epoch, Event, JsonValue, RunId, Script, Seed, Seq,
-    Timestamp, ToolFailure, Toolset,
+    ActionSet, Annotation, CancelReason, Command, Epoch, Event, JsonValue, RunId, Script, Seed,
+    Seq, Timestamp, ToolFailure,
 };
 
 /// What an executor compiled from a script's TypeScript source. It is stored with the
@@ -29,7 +29,7 @@ pub struct InvalidScript {
 pub struct StartScript {
     pub run_id: RunId,
     pub compiled: CompiledScript,
-    pub toolset: Toolset,
+    pub action_set: ActionSet,
     pub input: JsonValue,
     pub seed: Seed,
     pub epoch: Epoch,
@@ -95,12 +95,16 @@ pub trait ScriptExecutor: Send + Sync {
     /// last one; a run of another epoch is never offered to this executor.
     fn epochs(&self) -> &[Epoch];
 
-    /// Checks a script against the toolset it runs with, and compiles it. Everything that
+    /// Checks a script against the action set it runs with, and compiles it. Everything that
     /// can be refused without running the script is refused here: syntax errors, imports of
     /// modules or names that do not exist, a missing default export. Imports are checked
     /// against the last epoch, the one new runs start under; the compiled form does not depend
-    /// on the epoch nor on the toolset.
-    fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript>;
+    /// on the epoch nor on the action set.
+    fn compile(
+        &self,
+        script: &Script,
+        action_set: &ActionSet,
+    ) -> Result<CompiledScript, InvalidScript>;
 
     /// The names a script imports from `rewind:tools`: its MCP servers, APIs and host-tool groups
     /// by their namespace, and its host tools without a group by name. A start checks that each
@@ -159,8 +163,12 @@ impl<X: ScriptExecutor> ScriptExecutor for &X {
         (**self).epochs()
     }
 
-    fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
-        (**self).compile(script, toolset)
+    fn compile(
+        &self,
+        script: &Script,
+        action_set: &ActionSet,
+    ) -> Result<CompiledScript, InvalidScript> {
+        (**self).compile(script, action_set)
     }
 
     fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {

@@ -1,9 +1,9 @@
-//! `rewind check script.ts [--toolset id|file]`: type-checks a script (`archi/04-tools.md`,
+//! `rewind check script.ts [--action-set id|file]`: type-checks a script (`archi/04-tools.md`,
 //! "Type-checking").
 //!
 //! In this process, without a server: the checks at start of the runtime (syntax, imports,
 //! default export), then tsgo and the checker's own rules against the sandbox lib and the
-//! declarations of the toolset file, pinned here. A toolset registered on a server lives there,
+//! declarations of the action set file, pinned here. An action set registered on a server lives there,
 //! with the result types observed in its runs: the server checks the script against it
 //! (`POST /v1/check`).
 
@@ -11,18 +11,18 @@ use std::collections::BTreeMap;
 
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_check::TsgoChecker;
-use rewind_core::{Script, Toolset};
+use rewind_core::{ActionSet, Script};
 use rewind_engine::ports::{self, DiagnosticSource, ScriptExecutor};
 use rewind_runtime::{SandboxLimits, V8Executor};
 
 use super::Server;
+use crate::action_set;
 use crate::args::CheckArgs;
 use crate::error::CliError;
 use crate::exit::Exit;
-use crate::input::{self, ToolsetRef};
+use crate::input::{self, ActionSetRef};
 use crate::output::Console;
 use crate::render;
-use crate::toolset;
 
 /// The code of a diagnostic from the runtime's checks at start.
 const START_CHECK: &str = "rewind/invalid-script";
@@ -33,25 +33,29 @@ pub(super) async fn check(
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let source = input::read_text(&args.script)?;
-    let toolset = args.toolset.as_deref().map(ToolsetRef::parse).transpose()?;
-    let result = match toolset {
-        Some(ToolsetRef::Id(id)) => {
+    let action_set = args
+        .action_set
+        .as_deref()
+        .map(ActionSetRef::parse)
+        .transpose()?;
+    let result = match action_set {
+        Some(ActionSetRef::Id(id)) => {
             let client = server.client().await?;
             client
                 .check(&CheckRequest {
                     script: source,
-                    toolset: Some(id),
+                    action_set: Some(id),
                 })
                 .await?
         }
-        Some(ToolsetRef::File(path)) => {
-            let toolset = toolset::pin_file(&path).await?;
-            check_locally(&source, &toolset).await?
+        Some(ActionSetRef::File(path)) => {
+            let action_set = action_set::pin_file(&path).await?;
+            check_locally(&source, &action_set).await?
         }
         None => {
-            let toolset = Toolset::new([], [])
-                .map_err(|error| CliError::internal(format!("the empty toolset: {error}")))?;
-            check_locally(&source, &toolset).await?
+            let action_set = ActionSet::new([], [])
+                .map_err(|error| CliError::internal(format!("the empty action set: {error}")))?;
+            check_locally(&source, &action_set).await?
         }
     };
     if console.json() {
@@ -70,13 +74,13 @@ pub(super) async fn check(
 /// The checks at start and the type-check, in this process.
 pub(crate) async fn check_locally(
     source: &str,
-    toolset: &Toolset,
+    action_set: &ActionSet,
 ) -> Result<CheckResult, CliError> {
     let script = Script::new(source);
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| CliError::internal(error.to_string()))?;
     let mut diagnostics = Vec::new();
-    if let Err(invalid) = executor.compile(&script, toolset) {
+    if let Err(invalid) = executor.compile(&script, action_set) {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             code: START_CHECK.into(),
@@ -86,7 +90,7 @@ pub(crate) async fn check_locally(
             hint: None,
         });
     }
-    let declarations = rewind_codegen::generate(toolset, &BTreeMap::new());
+    let declarations = rewind_codegen::generate(action_set, &BTreeMap::new());
     let checker = TsgoChecker::new(TsgoChecker::default_cache_dir());
     let found = checker
         .check_source(source, &declarations.typescript)

@@ -8,7 +8,7 @@
 
 use std::future::Future;
 
-use rewind_core::{HistoryEntry, JournalDocument, Script, Toolset};
+use rewind_core::{ActionSet, HistoryEntry, JournalDocument, Script};
 
 use crate::ports::partition::Attempt;
 use crate::ports::tenancy::RunRef;
@@ -20,8 +20,8 @@ pub struct SealedAttempt {
     pub attempt: Attempt,
     /// The script the run started with.
     pub script: Script,
-    /// The pinned toolset the run started with.
-    pub toolset: Toolset,
+    /// The pinned action set the run started with.
+    pub action_set: ActionSet,
     /// The attempt's history, every payload up to 64 KiB inlined as a value; larger ones stay
     /// digests, their values in the run's blobs.
     pub entries: Vec<HistoryEntry>,
@@ -33,7 +33,7 @@ impl SealedAttempt {
         JournalDocument {
             run: self.run.id,
             script: self.script.clone(),
-            toolset: self.toolset.clone(),
+            action_set: self.action_set.clone(),
             entries: self.entries.clone(),
         }
     }

@@ -1,4 +1,4 @@
-//! Toolsets with APIs read from OpenAPI documents, and MCP servers listed with Rewind's signature
+//! Action sets with APIs read from OpenAPI documents, and MCP servers listed with Rewind's signature
 //! (`archi/04-tools.md`, "API tools" and "Signed calls"). The servers of these tests listen on
 //! 127.0.0.1: the embedded server reaches them, calls included; a deployed server reaches them
 //! only through `--allow-internal-tools`, and calls APIs over https only.
@@ -17,11 +17,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Parser;
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::{
+    Api, Auth, CreateActionSet, McpServer, OnInterruption, OpenApiDocument, ToolPolicy,
+};
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
-use rewind_api::toolsets::{
-    Api, Auth, CreateToolset, McpServer, OnInterruption, OpenApiDocument, ToolPolicy,
-};
 use rewind_api::{Client, ProblemType};
 use rewind_server::ServerArgs;
 use rmcp::ServerHandler;
@@ -119,8 +119,8 @@ async fn serve_api(document_server: &'static str) -> (String, Arc<Mutex<Vec<Stri
     (format!("http://{address}/v1"), keys)
 }
 
-fn api(document: OpenApiDocument, base_url: Option<String>) -> CreateToolset {
-    CreateToolset {
+fn api(document: OpenApiDocument, base_url: Option<String>) -> CreateActionSet {
+    CreateActionSet {
         apis: vec![Api {
             name: "dax".into(),
             openapi: document,
@@ -137,7 +137,7 @@ fn api(document: OpenApiDocument, base_url: Option<String>) -> CreateToolset {
             )]
             .into(),
         }],
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     }
 }
 
@@ -176,7 +176,7 @@ async fn the_embedded_server_reads_an_api_and_calls_it() {
 
     // Over http, on the embedded server.
     let registered = client
-        .create_toolset(&api(
+        .create_action_set(&api(
             OpenApiDocument::Document(document("https://unused.example.com/v1")),
             Some(base.clone()),
         ))
@@ -212,7 +212,7 @@ async fn the_embedded_server_reads_an_api_and_calls_it() {
     );
 
     let mut start = StartRun::new(SCRIPT);
-    start.toolset = Some(registered.id.clone());
+    start.action_set = Some(registered.id.clone());
     start.wait = wait("60s");
     let run = client.start_run(&start, None).await.unwrap();
     assert_eq!(run.status, RunStatus::Completed, "{run:?}");
@@ -237,11 +237,11 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     let harness = closed.key(BuiltInRole::Harness, &[]).await;
     let refused = problem(
         harness
-            .create_toolset(&api(OpenApiDocument::Url(document_url.clone()), None))
+            .create_action_set(&api(OpenApiDocument::Url(document_url.clone()), None))
             .await
             .unwrap_err(),
     );
-    assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
+    assert_eq!(refused.kind(), Some(ProblemType::ActionSetUnavailable));
     assert_eq!(
         refused.detail,
         format!(
@@ -253,14 +253,14 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     // Calls go over https only.
     let http = problem(
         harness
-            .create_toolset(&api(
+            .create_action_set(&api(
                 OpenApiDocument::Document(document("https://api.example.com/v1")),
                 Some(base.clone()),
             ))
             .await
             .unwrap_err(),
     );
-    assert_eq!(http.kind(), Some(ProblemType::InvalidToolset));
+    assert_eq!(http.kind(), Some(ProblemType::InvalidActionSet));
     assert!(
         http.detail
             .ends_with("is http: a deployed server calls APIs over https"),
@@ -272,14 +272,14 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     let open = TestServer::start(&["--allow-internal-tools", "127.0.0.1"]).await;
     let harness = open.key(BuiltInRole::Harness, &[]).await;
     let registered = harness
-        .create_toolset(&api(OpenApiDocument::Url(document_url), None))
+        .create_action_set(&api(OpenApiDocument::Url(document_url), None))
         .await
         .unwrap();
     assert_eq!(registered.apis[0].base_url, "https://api.example.com/v1");
     assert_eq!(registered.skipped.len(), 1);
-    // Registered again: the same toolset, and its skipped operations said again.
+    // Registered again: the same action set, and its skipped operations said again.
     let again = harness
-        .create_toolset(&api(
+        .create_action_set(&api(
             OpenApiDocument::Document(document("https://api.example.com/v1")),
             None,
         ))
@@ -291,11 +291,11 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     // What an internal address answers is not quoted.
     let withheld = problem(
         harness
-            .create_toolset(&api(OpenApiDocument::Url(admin_url), None))
+            .create_action_set(&api(OpenApiDocument::Url(admin_url), None))
             .await
             .unwrap_err(),
     );
-    assert_eq!(withheld.kind(), Some(ProblemType::InvalidToolset));
+    assert_eq!(withheld.kind(), Some(ProblemType::InvalidActionSet));
     assert_eq!(
         withheld.detail,
         "API dax: its OpenAPI document, read from an internal address, cannot be read as an \
@@ -311,7 +311,7 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     unknown.apis[0]
         .policies
         .insert("dropMeasure".into(), ToolPolicy::default());
-    let refused = problem(harness.create_toolset(&unknown).await.unwrap_err());
+    let refused = problem(harness.create_action_set(&unknown).await.unwrap_err());
     assert_eq!(
         refused.detail,
         "API dax: a policy names \"dropMeasure\", which it does not have"
@@ -380,15 +380,15 @@ async fn serve_signed(signed: Signed) -> String {
     format!("http://{address}/mcp")
 }
 
-fn signed_toolset(url: &str) -> CreateToolset {
-    CreateToolset {
+fn signed_action_set(url: &str) -> CreateActionSet {
+    CreateActionSet {
         mcp: vec![McpServer {
             name: "crm".into(),
             url: Some(url.to_owned()),
             auth: Some(Auth::Rewind {}),
             ..McpServer::default()
         }],
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     }
 }
 
@@ -404,7 +404,10 @@ async fn a_signed_server_is_listed_with_the_reduced_claims() {
     ])
     .await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let registered = harness.create_toolset(&signed_toolset(&url)).await.unwrap();
+    let registered = harness
+        .create_action_set(&signed_action_set(&url))
+        .await
+        .unwrap();
     assert_eq!(registered.tools[0].name, "crm.whoami");
     let claims = signed.claims.lock().unwrap().clone();
     assert!(claims.len() >= 2, "initialize and tools/list: {claims:?}");
@@ -421,11 +424,11 @@ async fn a_signed_server_is_listed_with_the_reduced_claims() {
     let harness = unsigned.key(BuiltInRole::Harness, &[]).await;
     let refused = problem(
         harness
-            .create_toolset(&signed_toolset(&url))
+            .create_action_set(&signed_action_set(&url))
             .await
             .unwrap_err(),
     );
-    assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
+    assert_eq!(refused.kind(), Some(ProblemType::ActionSetUnavailable));
     assert!(
         refused.detail.starts_with(
             "MCP server crm checks Rewind's signature, and this server has no public URL"

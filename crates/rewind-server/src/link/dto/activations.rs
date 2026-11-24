@@ -28,7 +28,7 @@ where
 
 /// An activation an owner sends: `{"partition":3,"head":<run head record>,"summary":<summary
 /// record>,"inbox":[<inbox item record>,…],"history":[<history entry record>,…],
-/// "payloads":[<payload record>,…],"parent":{…},"script":{…},"toolset":{…},
+/// "payloads":[<payload record>,…],"parent":{…},"script":{…},"action_set":{…},
 /// "purpose":"runnable","tasks":[<tool task record>,…]}`; `history` left out when the owner
 /// expects the executor's instance cache to hold the run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ pub struct ActivationRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<ParentHistory>,
     pub script: StoredScript,
-    pub toolset: StoredToolset,
+    pub action_set: StoredActionSet,
     pub purpose: Purpose,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<record::Task>,
@@ -84,12 +84,12 @@ pub struct StoredScript {
     pub source_map: String,
 }
 
-/// A pinned toolset as stored: `{"toolset":<pinned toolset document v1>,"typescript":"…",
+/// A pinned action set as stored: `{"action_set":<pinned action_set document v1>,"typescript":"…",
 /// "prompt":"…"}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StoredToolset {
-    pub toolset: Box<RawValue>,
+pub struct StoredActionSet {
+    pub action_set: Box<RawValue>,
     pub typescript: String,
     pub prompt: String,
 }
@@ -299,13 +299,13 @@ impl From<&link::ActivationRequest> for ActivationRequest {
                 javascript: request.script.compiled.javascript.clone(),
                 source_map: request.script.compiled.source_map.clone(),
             },
-            toolset: StoredToolset {
-                toolset: RawValue::from_string(rewind_format::encode_toolset(
-                    &request.toolset.toolset,
+            action_set: StoredActionSet {
+                action_set: RawValue::from_string(rewind_format::encode_action_set(
+                    &request.action_set.action_set,
                 ))
-                .expect("a pinned toolset document is JSON"),
-                typescript: request.toolset.declarations.typescript.clone(),
-                prompt: request.toolset.declarations.prompt.clone(),
+                .expect("a pinned action set document is JSON"),
+                typescript: request.action_set.declarations.typescript.clone(),
+                prompt: request.action_set.declarations.prompt.clone(),
             },
             purpose: match request.purpose {
                 link::Purpose::Runnable => Purpose::Runnable,
@@ -355,12 +355,12 @@ impl TryFrom<ActivationRequest> for link::ActivationRequest {
                     source_map: request.script.source_map,
                 },
             },
-            toolset: engine::StoredToolset {
-                toolset: rewind_format::decode_toolset(request.toolset.toolset.get())
+            action_set: engine::StoredActionSet {
+                action_set: rewind_format::decode_action_set(request.action_set.action_set.get())
                     .map_err(Invalid::new)?,
                 declarations: engine::ToolDeclarations {
-                    typescript: request.toolset.typescript,
-                    prompt: request.toolset.prompt,
+                    typescript: request.action_set.typescript,
+                    prompt: request.action_set.prompt,
                 },
             },
             purpose: match request.purpose {
@@ -393,7 +393,7 @@ impl TryFrom<SealedAttempt> for engine::SealedAttempt {
             run: engine::RunRef::new(tenant(sealed.tenant)?, journal.run),
             attempt: engine::Attempt(sealed.attempt),
             script: journal.script,
-            toolset: journal.toolset,
+            action_set: journal.action_set,
             entries: journal.entries,
         })
     }

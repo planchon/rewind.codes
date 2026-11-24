@@ -1,5 +1,5 @@
 //! The script, the immutable and content-addressed input of a run. A run records the digest
-//! it started with. The toolset, the other input, is in [`crate::toolset`].
+//! it started with. The action set, the other input, is in [`crate::action_set`].
 
 use crate::digest::Digest;
 

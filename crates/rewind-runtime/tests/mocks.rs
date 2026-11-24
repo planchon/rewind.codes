@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    RunId, RunMode, RunOutcome, RunState, Script, Seq, Timestamp, Tool, ToolFailure,
-    ToolFailureKind, ToolRoute, Toolset,
+    ActionSet, RunId, RunMode, RunOutcome, RunState, Script, Seq, Timestamp, Tool, ToolFailure,
+    ToolFailureKind, ToolRoute,
 };
 use rewind_engine::ports::{
     CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId, ToolCall,
@@ -272,8 +272,8 @@ async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
         |_| {},
     )
     .await;
-    let toolset =
-        Toolset::from_host_tools(["github.get_issue", "github.close_issue", "fails"]).unwrap();
+    let action_set =
+        ActionSet::from_host_tools(["github.get_issue", "github.close_issue", "fails"]).unwrap();
     let mut request = StartRun::new(
         Script::new(
             r#"
@@ -292,7 +292,7 @@ export default async function main() {
 }
 "#,
         ),
-        toolset,
+        action_set,
         json!({}),
     );
     request.mode = RunMode::Mock;

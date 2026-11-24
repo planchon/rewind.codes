@@ -9,8 +9,8 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Attachments, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, RunMode,
-    RunStatus, Script, Seq, Toolset, WorkflowSchemas, end_signal_name, ended_run,
+    ActionSet, Attachments, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle,
+    RunMode, RunStatus, Script, Seq, WorkflowSchemas, end_signal_name, ended_run,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::attachments::AttachRights;
@@ -60,9 +60,9 @@ fn run_id(result: &JsonValue) -> String {
     result["runId"].as_str().unwrap().to_owned()
 }
 
-/// The child toolset: one host tool.
-fn child_toolset() -> Toolset {
-    Toolset::from_host_tools(["notify"]).unwrap()
+/// The child action set: one host tool.
+fn child_action_set() -> ActionSet {
+    ActionSet::from_host_tools(["notify"]).unwrap()
 }
 
 fn schemas() -> WorkflowSchemas {
@@ -179,19 +179,19 @@ fn others(executor: FakeExecutor) -> FakeExecutor {
         )
 }
 
-/// A world where `triage` is registered, and the toolset that pins it.
-async fn registered() -> (World, StoredWorkflow, Toolset) {
+/// A world where `triage` is registered, and the action set that pins it.
+async fn registered() -> (World, StoredWorkflow, ActionSet) {
     registered_with(RecordingDispatcher::echo()).await
 }
 
-async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkflow, Toolset) {
+async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkflow, ActionSet) {
     let world = World::new(others(parent(triage(FakeExecutor::new()))), dispatcher).await;
     world
         .plane
         .catalog
-        .put_toolset(
+        .put_action_set(
             &TenantId::local(),
-            &child_toolset(),
+            &child_action_set(),
             &ToolDeclarations::default(),
         )
         .await
@@ -205,11 +205,11 @@ async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkf
         )
         .await
         .unwrap();
-    let toolset = Toolset::from_host_tools(["notify"])
+    let action_set = ActionSet::from_host_tools(["notify"])
         .unwrap()
         .with_workflows([stored.workflow.pinned()])
         .unwrap();
-    (world, stored, toolset)
+    (world, stored, action_set)
 }
 
 fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
@@ -218,7 +218,7 @@ fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
         name: name.into(),
         description: Some("Triage the stale issues of a repository.".into()),
         script: Script::new("triage"),
-        toolset: child_toolset().digest(),
+        action_set: child_action_set().digest(),
         schemas,
         labels: BTreeMap::new(),
         secrets: Attachments::new(),
@@ -233,8 +233,8 @@ fn local() -> NamespaceName {
     NamespaceName::new(NamespaceName::LOCAL).unwrap()
 }
 
-fn start_parent(toolset: &Toolset, input: JsonValue) -> StartRun {
-    let mut request = StartRun::new(Script::new("parent"), toolset.clone(), input);
+fn start_parent(action_set: &ActionSet, input: JsonValue) -> StartRun {
+    let mut request = StartRun::new(Script::new("parent"), action_set.clone(), input);
     request.metadata.labels = BTreeMap::from([("agent".to_owned(), "triage".to_owned())]);
     request
 }
@@ -279,8 +279,8 @@ async fn child_of(world: &mut World, parent: &RunRef) -> RunRef {
 
 #[tokio::test]
 async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
-    let (mut world, stored, toolset) = registered().await;
-    let parent = world.run(start_parent(&toolset, json!({}))).await;
+    let (mut world, stored, action_set) = registered().await;
+    let parent = world.run(start_parent(&action_set, json!({}))).await;
 
     assert_eq!(status(&mut world, &parent).await, RunStatus::Completed);
     let child = child_of(&mut world, &parent).await;
@@ -298,7 +298,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
     let head = world.view(&child).await.head;
     assert_eq!(head.status, RunStatus::Completed);
     assert_eq!(head.script, Script::new("triage").digest());
-    assert_eq!(head.toolset, child_toolset().digest());
+    assert_eq!(head.action_set, child_action_set().digest());
     let workflow = head.metadata.workflow.clone().unwrap();
     assert_eq!(
         (workflow.name.as_str(), workflow.version),
@@ -334,13 +334,16 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
 
 #[tokio::test]
 async fn a_parent_that_ends_cancels_its_attached_children_not_its_detached_ones() {
-    let (mut world, _, toolset) = registered().await;
+    let (mut world, _, action_set) = registered().await;
     let attached = world
-        .run(start_parent(&toolset, json!({ "fail_after_start": true })))
+        .run(start_parent(
+            &action_set,
+            json!({ "fail_after_start": true }),
+        ))
         .await;
     let detached = world
         .run(start_parent(
-            &toolset,
+            &action_set,
             json!({ "fail_after_start": true, "detached": true }),
         ))
         .await;
@@ -419,7 +422,7 @@ async fn signals_to_a_run_of_a_workflow_are_checked_against_its_version() {
     let ad_hoc = world
         .run(StartRun::new(
             Script::new("triage"),
-            child_toolset(),
+            child_action_set(),
             json!({}),
         ))
         .await;
@@ -469,7 +472,7 @@ async fn a_start_is_refused_when_its_input_does_not_match() {
 }
 
 #[tokio::test]
-async fn registering_checks_the_name_the_schemas_the_toolset_and_the_types() {
+async fn registering_checks_the_name_the_schemas_the_action_set_and_the_types() {
     let (world, stored, _) = registered().await;
     let checker = StaticTypeChecker::default();
     assert!(matches!(
@@ -486,13 +489,13 @@ async fn registering_checks_the_name_the_schemas_the_toolset_and_the_types() {
         Err(RegisterError::Schema { which, .. }) if which == "output"
     ));
     let mut elsewhere = register("triage", schemas());
-    elsewhere.toolset = Digest::of(b"unknown");
+    elsewhere.action_set = Digest::of(b"unknown");
     assert!(matches!(
         world
             .edge
             .register_workflow(elsewhere, &checker, &kit())
             .await,
-        Err(RegisterError::ToolsetNotFound(_))
+        Err(RegisterError::ActionSetNotFound(_))
     ));
     let mut broken = register("triage", schemas());
     broken.script = Script::new("syntax error here");
@@ -544,7 +547,7 @@ async fn registering_checks_the_name_the_schemas_the_toolset_and_the_types() {
 
 #[tokio::test]
 async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
-    let (mut world, stored, toolset) = registered().await;
+    let (mut world, stored, action_set) = registered().await;
     let scope = BTreeMap::from([("conversation".to_owned(), "c-1".to_owned())]);
     let in_scope = |scope: &BTreeMap<String, String>| {
         let mut start = of_version(&stored, local(), json!({ "repo": "acme/api" }));
@@ -559,7 +562,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
         .await
         .unwrap()
         .run;
-    let mut ad_hoc = StartRun::new(Script::new("triage"), child_toolset(), json!({}));
+    let mut ad_hoc = StartRun::new(Script::new("triage"), child_action_set(), json!({}));
     ad_hoc.metadata.labels = scope.clone();
     let ad_hoc = world.start(ad_hoc).await.unwrap().run;
     let unknown: rewind_core::RunId = "0193a5c4-0000-7000-8000-00000000abcd".parse().unwrap();
@@ -568,7 +571,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
     let signal = |target: rewind_core::RunId| {
         let mut request = StartRun::new(
             Script::new("signaller"),
-            toolset.clone(),
+            action_set.clone(),
             json!({ "target": target.to_string() }),
         );
         request.metadata.scope = scope.clone();
@@ -608,7 +611,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
     // A start may add labels, never contradict the scope.
     let mut conflicting = StartRun::new(
         Script::new("starter"),
-        toolset.clone(),
+        action_set.clone(),
         json!({ "labels": { "conversation": "c-2" } }),
     );
     conflicting.metadata.scope = scope.clone();
@@ -623,7 +626,7 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
 
     // A version saved without the scope's labels is not started from a scoped run: it may attach
     // the organization's secrets of other labels.
-    let mut scoped = StartRun::new(Script::new("starter"), toolset.clone(), json!({}));
+    let mut scoped = StartRun::new(Script::new("starter"), action_set.clone(), json!({}));
     scoped.metadata.scope = scope.clone();
     scoped.metadata.labels = scope.clone();
     let run = world.run(scoped).await;
@@ -638,12 +641,12 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
 
 #[tokio::test]
 async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
-    let (mut world, stored, toolset) = registered().await;
+    let (mut world, stored, action_set) = registered().await;
     let alice = NamespaceName::new("alice").unwrap();
     let bob = NamespaceName::new("bob").unwrap();
 
     // A run a script starts acts for the same end user as the script.
-    let mut parent = start_parent(&toolset, json!({}));
+    let mut parent = start_parent(&action_set, json!({}));
     parent.namespace = alice.clone();
     let parent = world.run(parent).await;
     let child = child_of(&mut world, &parent).await;
@@ -665,7 +668,7 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
     let signal = |namespace: &NamespaceName| {
         let mut request = StartRun::new(
             Script::new("signaller"),
-            toolset.clone(),
+            action_set.clone(),
             json!({ "target": bobs.id.to_string() }),
         );
         request.namespace = namespace.clone();
@@ -693,8 +696,8 @@ async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
         "workflows.triage.start" => Ok(json!({ "closed": 7 })),
         other => panic!("unexpected call of {other}"),
     });
-    let (mut world, _, toolset) = registered_with(dispatcher).await;
-    let mut request = StartRun::new(Script::new("starter"), toolset, json!({}));
+    let (mut world, _, action_set) = registered_with(dispatcher).await;
+    let mut request = StartRun::new(Script::new("starter"), action_set, json!({}));
     request.mode = RunMode::Mock;
     let parent = world.run(request).await;
     assert_eq!(status(&mut world, &parent).await, RunStatus::Completed);
@@ -729,10 +732,10 @@ async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
 
 #[tokio::test]
 async fn a_fork_receives_the_end_of_the_runs_its_copied_history_started() {
-    let (mut world, _, toolset) = registered().await;
+    let (mut world, _, action_set) = registered().await;
     let parent = world
         .run(start_parent(
-            &toolset,
+            &action_set,
             json!({ "fail_after_start": true, "detached": true }),
         ))
         .await;

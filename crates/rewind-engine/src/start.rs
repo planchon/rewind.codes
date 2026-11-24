@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use rewind_core::{JsonValue, RunMode, Script, Toolset};
+use rewind_core::{ActionSet, JsonValue, RunMode, Script};
 
 use crate::attachments::{AttachRights, RefusedAttachments};
 use crate::ports::{
@@ -23,15 +23,15 @@ pub struct StartRun {
     /// The end user the run acts for (`archi/06-storage-and-scale.md`, "Namespaces").
     pub namespace: NamespaceName,
     pub script: Script,
-    pub toolset: Toolset,
-    /// The declarations generated from the toolset, stored with it.
+    pub action_set: ActionSet,
+    /// The declarations generated from the action set, stored with it.
     pub declarations: ToolDeclarations,
     pub input: JsonValue,
     pub mode: RunMode,
     /// The run's TTL; the node's default TTL when `None`, bounded by its namespace's.
     pub ttl: Option<Duration>,
     /// Its `secrets` are the request's attachments (`archi/04-tools.md`, "Secrets"), checked
-    /// against the toolset, the secrets that exist and `attach`.
+    /// against the action set, the secrets that exist and `attach`.
     pub metadata: RunMetadata,
     /// A retried request with the same key returns the same run instead of starting another.
     pub idempotency_key: Option<String>,
@@ -42,13 +42,13 @@ pub struct StartRun {
 impl StartRun {
     /// A live run of the tenant `local`, in its namespace `local`, with no declarations, TTL,
     /// metadata, idempotency key nor attachment.
-    pub fn new(script: Script, toolset: Toolset, input: JsonValue) -> Self {
+    pub fn new(script: Script, action_set: ActionSet, input: JsonValue) -> Self {
         Self {
             tenant: TenantId::local(),
             namespace: NamespaceName::new(NamespaceName::LOCAL)
                 .unwrap_or_else(|_| NamespaceName::migrated()),
             script,
-            toolset,
+            action_set,
             declarations: ToolDeclarations::default(),
             input,
             mode: RunMode::Live,
@@ -66,7 +66,7 @@ pub enum StartError {
     /// default export… The message is written to be read by the model that wrote the script.
     #[error("the script is invalid: {0}")]
     InvalidScript(InvalidScript),
-    /// The script does not type-check against the sandbox lib and the toolset's declarations:
+    /// The script does not type-check against the sandbox lib and the action set's declarations:
     /// at least one diagnostic is an error. Every diagnostic is given, warnings included.
     #[error("the script does not type-check: {}", first_error(.0))]
     TypeErrors(Vec<Diagnostic>),
@@ -81,7 +81,7 @@ pub enum StartError {
     #[error("the input is {size} bytes as canonical JSON, above the limit of {max} bytes")]
     InputTooLarge { size: usize, max: usize },
     /// A text to store (the script, a label, the idempotency key, the trace context, the
-    /// toolset's declarations) holds a NUL character.
+    /// action set's declarations) holds a NUL character.
     #[error(transparent)]
     NulCharacter(#[from] NulCharacter),
     #[error("the executor supports no determinism epoch")]

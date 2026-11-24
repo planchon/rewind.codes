@@ -118,7 +118,7 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         .unwrap();
     assert_eq!(
         orgs.content[0].as_text().unwrap().text,
-        "You reach one organization: the tools act in it without `org`.\n- id local: you may read runs and record tests, check, test, run and retry scripts, signal and cancel runs, read toolsets and workflows, list namespaces."
+        "You reach one organization: the tools act in it without `org`.\n- id local: you may read runs and record tests, check, test, run and retry scripts, signal and cancel runs, read action sets and workflows, list namespaces."
     );
 
     let checked = client
@@ -163,7 +163,7 @@ async fn rewind_mcp_serves_the_agent_tools_against_the_embedded_server() {
         checks[0].1.script,
         "/** Count to one */\nexport default async () => 1;"
     );
-    assert_eq!(checks[0].1.toolset, None);
+    assert_eq!(checks[0].1.action_set, None);
     assert_eq!(checks[1].0.as_deref(), Some("bob"));
 
     client.cancel().await.unwrap();

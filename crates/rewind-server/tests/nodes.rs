@@ -19,11 +19,11 @@ use clap::Parser;
 use futures_util::StreamExt;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
+use rewind_api::action_sets::{CreateActionSet, HostTool};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::ChangeEvent;
 use rewind_api::runs::StartRun;
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
-use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_server::{Running, ServerArgs};
 use serde_json::json;
 use support::{ADMIN_KEY, Postgres, TaskWorker, eventually, wait};
@@ -243,9 +243,9 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
 
     // A host task of a run started at a, handed on a stream held at b, answered at a.
     let worker = b.key(BuiltInRole::Worker).await;
-    let toolset = a
+    let action_set = a
         .client(&key, "end-user-0")
-        .create_toolset(&CreateToolset {
+        .create_action_set(&CreateActionSet {
             host: vec![HostTool {
                 name: "ask_user".into(),
                 description: "Ask the user".into(),
@@ -257,14 +257,14 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
                 output_schema: None,
                 policy: None,
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
     let mut stream = TaskWorker::open(
         &Client::remote(&b.url, Some(&worker)).unwrap(),
         &TaskStreamQuery {
-            toolset: Some(toolset.id.clone()),
+            action_set: Some(action_set.id.clone()),
             worker: Some("worker-at-b".into()),
             ..TaskStreamQuery::default()
         },
@@ -277,7 +277,7 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
         .unwrap();
     for namespace in ["end-user-3", "end-user-6"] {
         let mut request = start(ASK, json!({}));
-        request.toolset = Some(toolset.id.clone());
+        request.action_set = Some(action_set.id.clone());
         let run = a
             .client(&key, namespace)
             .start_run(&request, None)

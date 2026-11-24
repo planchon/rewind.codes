@@ -194,7 +194,7 @@ fn header_pairs() -> Value {
     })
 }
 
-/// The input schema of the `http` tool, as a toolset pins it.
+/// The input schema of the `http` tool, as an action set pins it.
 pub fn http_input_schema() -> Value {
     json!({
         "type": "object",
@@ -210,7 +210,7 @@ pub fn http_input_schema() -> Value {
     })
 }
 
-/// The output schema of the `http` tool, as a toolset pins it.
+/// The output schema of the `http` tool, as an action set pins it.
 pub fn http_output_schema() -> Value {
     json!({
         "type": "object",

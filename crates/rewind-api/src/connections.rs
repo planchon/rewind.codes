@@ -23,8 +23,8 @@ pub const CONNECTION_PREFIX: &str = "cn_";
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Access {
-    /// `runs:read`, `toolsets:read`, `namespaces:read`, `secrets:read`: follow runs, read
-    /// toolsets, namespaces and the names of secrets.
+    /// `runs:read`, `actions:read`, `namespaces:read`, `secrets:read`: follow runs, read
+    /// action sets, namespaces and the names of secrets.
     Read,
     /// `read`, and `runs:start`, `runs:control` and `secrets:use`: check, test and start
     /// scripts with the secrets they attach, signal and cancel runs.
@@ -52,7 +52,7 @@ impl Access {
 
 const READ: [Permission; 4] = [
     Permission::RunsRead,
-    Permission::ToolsetsRead,
+    Permission::ActionsRead,
     Permission::NamespacesRead,
     Permission::SecretsRead,
 ];
@@ -61,7 +61,7 @@ const RUN: [Permission; 7] = [
     Permission::RunsRead,
     Permission::RunsStart,
     Permission::RunsControl,
-    Permission::ToolsetsRead,
+    Permission::ActionsRead,
     Permission::NamespacesRead,
     Permission::SecretsRead,
     Permission::SecretsUse,

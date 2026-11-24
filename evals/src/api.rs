@@ -11,12 +11,15 @@
 //!
 //! The world answers what the agent tools ask, and refuses with a problem what it cannot answer
 //! as the server would: a run list filtered otherwise than by labels and status, a record query
-//! other than a status, a toolset registered otherwise than from a base.
+//! other than a status, an action set registered otherwise than from a base.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration as StdDuration;
 
 use rewind_agent_tools::{Api, ApiError};
+use rewind_api::action_sets::{
+    ActionSet, CreateActionSet, SearchQuery, ToolMatch, ToolSearchResults,
+};
 use rewind_api::common::{Duration, RunStatus as ApiRunStatus, timestamp};
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -28,7 +31,6 @@ use rewind_api::secrets::SecretList;
 use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
 };
-use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolMatch, ToolSearchResults, Toolset};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTest, RecordedTests, SkippedRun, Workflow,
     WorkflowVersions,
@@ -41,8 +43,9 @@ use rewind_core::{
 use rewind_engine::edge::{EdgeError, RecordingError};
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunRef, StoreError, StoredToolset,
-    StoredWorkflow, TenantId, ToolDeclarations, TraceContext, TypeChecker, WorkflowDeclarations,
+    CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunRef, StoreError,
+    StoredActionSet, StoredWorkflow, TenantId, ToolDeclarations, TraceContext, TypeChecker,
+    WorkflowDeclarations,
 };
 use rewind_engine::suites::{
     DEFAULT_RECORDED, MAX_RECORDED, MAX_RECORDING_CANDIDATES, SuiteChanges, SuiteError,
@@ -215,8 +218,8 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::Invalid(_) | RegisterError::Schema { .. } => {
             problem(ProblemType::InvalidWorkflow, error.to_string())
         }
-        RegisterError::ToolsetNotFound(digest) => not_found(format!(
-            "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
+        RegisterError::ActionSetNotFound(digest) => not_found(format!(
+            "no action set {digest} for this tenant: register it with POST /v1/action-sets"
         )),
         RegisterError::InvalidScript(invalid) => start_error(StartError::InvalidScript(invalid)),
         RegisterError::TypeErrors(diagnostics) => start_error(StartError::TypeErrors(diagnostics)),
@@ -363,10 +366,10 @@ fn label_filters(filters: &[String]) -> Result<BTreeMap<String, String>, ApiErro
         .collect()
 }
 
-/// The tools matching a query, best first, as `GET /v1/toolsets/{id}/search` ranks them: each
+/// The tools matching a query, best first, as `GET /v1/action-sets/{id}/search` ranks them: each
 /// word of the query found in a tool's name counts two, in its description one; the workflows
-/// the toolset pins as `workflows.<name>`. `None` when the query has no word.
-pub fn search(stored: &StoredToolset, query: &str, limit: usize) -> Option<Vec<ToolMatch>> {
+/// the action set pins as `workflows.<name>`. `None` when the query has no word.
+pub fn search(stored: &StoredActionSet, query: &str, limit: usize) -> Option<Vec<ToolMatch>> {
     let words: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|word| !word.is_empty())
@@ -375,9 +378,9 @@ pub fn search(stored: &StoredToolset, query: &str, limit: usize) -> Option<Vec<T
     if words.is_empty() {
         return None;
     }
-    let generated = rewind_codegen::generate(&stored.toolset, &BTreeMap::new());
+    let generated = rewind_codegen::generate(&stored.action_set, &BTreeMap::new());
     let candidates: Vec<(String, String)> = stored
-        .toolset
+        .action_set
         .tools()
         .iter()
         .map(|tool| {
@@ -386,7 +389,7 @@ pub fn search(stored: &StoredToolset, query: &str, limit: usize) -> Option<Vec<T
                 tool.description.clone().unwrap_or_default(),
             )
         })
-        .chain(stored.toolset.workflows().iter().map(|workflow| {
+        .chain(stored.action_set.workflows().iter().map(|workflow| {
             (
                 format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name),
                 workflow.description.clone().unwrap_or_default(),
@@ -475,11 +478,11 @@ impl World {
         Ok(labels)
     }
 
-    /// A toolset of the tenant by its id, or the default one (the built-in `webhook` only).
-    async fn stored_toolset(&self, id: Option<&str>) -> Result<StoredToolset, ApiError> {
+    /// An action set of the tenant by its id, or the default one (the built-in `webhook` only).
+    async fn stored_action_set(&self, id: Option<&str>) -> Result<StoredActionSet, ApiError> {
         let tenant = TenantId::local();
         let Some(id) = id else {
-            let toolset = rewind_core::Toolset::new(
+            let action_set = rewind_core::ActionSet::new(
                 [],
                 [rewind_core::Tool::new(
                     "webhook",
@@ -487,10 +490,10 @@ impl World {
                     rewind_runtime::builtins::webhook_input_schema(),
                 )],
             )
-            .map_err(|error| fault(WorldError::Toolset(error.to_string())))?;
-            let declarations = self.register_toolset(&toolset).await.map_err(fault)?;
-            return Ok(StoredToolset {
-                toolset,
+            .map_err(|error| fault(WorldError::ActionSet(error.to_string())))?;
+            let declarations = self.register_action_set(&action_set).await.map_err(fault)?;
+            return Ok(StoredActionSet {
+                action_set,
                 declarations: ToolDeclarations {
                     typescript: declarations.typescript,
                     prompt: declarations.prompt,
@@ -499,16 +502,16 @@ impl World {
         };
         let digest = Digest::from_hex(id).map_err(|_| {
             not_found(format!(
-                "no toolset {id:?}: a toolset's id is the digest POST /v1/toolsets returned"
+                "no action set {id:?}: an action set's id is the digest POST /v1/action-sets returned"
             ))
         })?;
         self.catalog()
-            .get_toolset(&tenant, digest)
+            .get_action_set(&tenant, digest)
             .await
             .map_err(catalog_error)?
             .ok_or_else(|| {
                 not_found(format!(
-                    "no toolset {id} for this tenant: register it with POST /v1/toolsets"
+                    "no action set {id} for this tenant: register it with POST /v1/action-sets"
                 ))
             })
     }
@@ -605,22 +608,22 @@ impl World {
         if tests.is_empty() {
             return Ok(());
         }
-        let toolset = catalog
-            .get_toolset(tenant, stored.workflow.toolset())
+        let action_set = catalog
+            .get_action_set(tenant, stored.workflow.action_set())
             .await
             .map_err(catalog_error)?
             .ok_or_else(|| {
-                fault(WorldError::Toolset(format!(
-                    "the toolset of {} is not stored",
+                fault(WorldError::ActionSet(format!(
+                    "the action set of {} is not stored",
                     stored.workflow
                 )))
             })?
-            .toolset;
+            .action_set;
         let reports = self
             .run_suite(
                 &Subject {
                     script,
-                    toolset: &toolset,
+                    action_set: &action_set,
                     interface: Some(stored.workflow.schemas()),
                 },
                 &tests,
@@ -671,7 +674,7 @@ impl Api for World {
     ) -> Result<Run, ApiError> {
         if start.workflow.is_some() {
             return Err(invalid(
-                "the evals' world starts a script with its toolset, not a workflow by name: \
+                "the evals' world starts a script with its action set, not a workflow by name: \
                  scripts start workflows from rewind:workflows",
             ));
         }
@@ -679,10 +682,10 @@ impl Api for World {
             return Err(invalid("the evals' world attaches no secrets"));
         }
         let labels = self.within(start.labels.0.clone())?;
-        let stored = self.stored_toolset(start.toolset.as_deref()).await?;
+        let stored = self.stored_action_set(start.action_set.as_deref()).await?;
         let mut request = rewind_engine::StartRun::new(
             Script::new(start.script.clone()),
-            stored.toolset,
+            stored.action_set,
             start.input.clone(),
         );
         request.declarations = stored.declarations;
@@ -869,9 +872,9 @@ impl Api for World {
 
     async fn check(&self, check: &CheckRequest) -> Result<CheckResult, ApiError> {
         use rewind_engine::ports::ScriptExecutor as _;
-        let stored = self.stored_toolset(check.toolset.as_deref()).await?;
+        let stored = self.stored_action_set(check.action_set.as_deref()).await?;
         let script = Script::new(check.script.clone());
-        if let Err(invalid) = self.plane.executor.compile(&script, &stored.toolset) {
+        if let Err(invalid) = self.plane.executor.compile(&script, &stored.action_set) {
             return Ok(CheckResult {
                 ok: false,
                 diagnostics: vec![view::invalid_script_diagnostic(&invalid)],
@@ -895,13 +898,13 @@ impl Api for World {
             return Err(invalid("the evals' world tests a script: give `script`"));
         };
         let script = Script::new(script.clone());
-        // The toolset given; the version's only when none is.
-        let toolset = match (&test.toolset, &version) {
+        // The action set given; the version's only when none is.
+        let action_set = match (&test.action_set, &version) {
             (None, Some(version)) => {
-                let digest = version.workflow.toolset().to_hex();
-                self.stored_toolset(Some(&digest)).await?
+                let digest = version.workflow.action_set().to_hex();
+                self.stored_action_set(Some(&digest)).await?
             }
-            (given, _) => self.stored_toolset(given.as_deref()).await?,
+            (given, _) => self.stored_action_set(given.as_deref()).await?,
         };
         let suites = self.edge.suites(test_format());
         let mut tests = Vec::new();
@@ -923,7 +926,7 @@ impl Api for World {
             .run_suite(
                 &Subject {
                     script: &script,
-                    toolset: &toolset.toolset,
+                    action_set: &action_set.action_set,
                     interface,
                 },
                 &tests,
@@ -1022,43 +1025,43 @@ impl Api for World {
         Ok(ApiTest::from_core(&loaded, encode_cassette))
     }
 
-    async fn create_toolset(&self, toolset: &CreateToolset) -> Result<Toolset, ApiError> {
-        let Some(base) = &toolset.base else {
+    async fn create_action_set(&self, action_set: &CreateActionSet) -> Result<ActionSet, ApiError> {
+        let Some(base) = &action_set.base else {
             return Err(problem(
-                ProblemType::InvalidToolset,
-                "the evals' world derives toolsets from a base only: its fake servers are \
+                ProblemType::InvalidActionSet,
+                "the evals' world derives action sets from a base only: its fake servers are \
                  registered when it starts",
             ));
         };
-        if !toolset.mcp.is_empty() || !toolset.host.is_empty() || toolset.http.is_some() {
+        if !action_set.mcp.is_empty() || !action_set.host.is_empty() || action_set.http.is_some() {
             return Err(problem(
-                ProblemType::InvalidToolset,
-                "a toolset derived from a base keeps its servers and tools: give only workflows \
+                ProblemType::InvalidActionSet,
+                "an action set derived from a base keeps its servers and tools: give only workflows \
                  with base",
             ));
         }
-        if !toolset.secrets.is_empty() || !toolset.apis.is_empty() {
+        if !action_set.secrets.is_empty() || !action_set.apis.is_empty() {
             return Err(invalid(
                 "the evals' world takes no secrets and no APIs: its servers are MCP servers",
             ));
         }
-        let base = self.stored_toolset(Some(base)).await?.toolset;
+        let base = self.stored_action_set(Some(base)).await?.action_set;
         let mut pinned: BTreeMap<String, rewind_core::PinnedWorkflow> = base
             .workflows()
             .iter()
             .map(|workflow| (workflow.name.clone(), workflow.clone()))
             .collect();
-        for reference in &toolset.workflows {
+        for reference in &action_set.workflows {
             let stored = self.resolve(reference).await?;
             let workflow = stored.workflow.pinned();
             pinned.insert(workflow.name.clone(), workflow);
         }
         let derived = base
             .with_workflows(pinned.into_values())
-            .map_err(|error| problem(ProblemType::InvalidToolset, error.to_string()))?;
-        let declarations = self.register_toolset(&derived).await.map_err(fault)?;
-        Ok(view::toolset(&StoredToolset {
-            toolset: derived,
+            .map_err(|error| problem(ProblemType::InvalidActionSet, error.to_string()))?;
+        let declarations = self.register_action_set(&derived).await.map_err(fault)?;
+        Ok(view::action_set(&StoredActionSet {
+            action_set: derived,
             declarations: ToolDeclarations {
                 typescript: declarations.typescript,
                 prompt: declarations.prompt,
@@ -1068,10 +1071,10 @@ impl Api for World {
 
     async fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> Result<ToolSearchResults, ApiError> {
-        let stored = self.stored_toolset(Some(toolset)).await?;
+        let stored = self.stored_action_set(Some(action_set)).await?;
         let limit = usize::try_from(query.limit.unwrap_or(10).clamp(1, 100)).unwrap_or(10);
         let tools = search(&stored, &query.query, limit)
             .ok_or_else(|| invalid("query: give at least one word to look for"))?;
@@ -1079,10 +1082,10 @@ impl Api for World {
     }
 
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
-        let toolset = Digest::from_hex(&workflow.toolset).map_err(|_| {
+        let action_set = Digest::from_hex(&workflow.action_set).map_err(|_| {
             not_found(format!(
-                "no toolset {:?}: a toolset's id is the digest POST /v1/toolsets returned",
-                workflow.toolset
+                "no action set {:?}: an action set's id is the digest POST /v1/action-sets returned",
+                workflow.action_set
             ))
         })?;
         let parent = match &workflow.parent {
@@ -1144,7 +1147,7 @@ impl Api for World {
                     name: workflow.name.clone(),
                     description: workflow.description.clone(),
                     script: Script::new(workflow.script.clone()),
-                    toolset,
+                    action_set,
                     schemas,
                     labels: self.labels.clone(),
                     secrets: Default::default(),

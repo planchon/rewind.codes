@@ -3,9 +3,9 @@ use std::future::Future;
 
 use rewind_core::Script;
 
-/// What `rewind-codegen` generated from a pinned toolset, stored with it: the declarations of
+/// What `rewind-codegen` generated from a pinned action set, stored with it: the declarations of
 /// `rewind:tools` for the type-checker, and their compact rendering for the model's prompt
-/// (`archi/04-tools.md`, "Toolsets and code generation").
+/// (`archi/04-tools.md`, "Action sets and code generation").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ToolDeclarations {
     /// `rewind-tools.d.ts`.
@@ -94,7 +94,7 @@ pub enum CheckerError {
     Internal(String),
 }
 
-/// Type-checks a script against the sandbox lib and a toolset's declarations, in strict mode,
+/// Type-checks a script against the sandbox lib and an action set's declarations, in strict mode,
 /// before anything runs (`archi/04-tools.md`, "Type-checking").
 ///
 /// Deterministic: the same script and declarations give the same diagnostics, in the order of

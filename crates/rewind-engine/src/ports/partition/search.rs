@@ -72,7 +72,7 @@ impl IndexedSummary {
                 .get(key)
                 .is_some_and(|value| values.iter().any(|matcher| matcher.matches(value))),
             Predicate::Script(prefixes) => hex_prefix(&summary.script, prefixes),
-            Predicate::Toolset(prefixes) => hex_prefix(&summary.toolset, prefixes),
+            Predicate::ActionSet(prefixes) => hex_prefix(&summary.action_set, prefixes),
             Predicate::Tool(matchers) => self
                 .tools
                 .iter()

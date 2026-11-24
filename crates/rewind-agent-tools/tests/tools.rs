@@ -1,5 +1,5 @@
 //! The SDK's set over a fake API: what each tool sends to `/v1`, how a refusal the model can fix
-//! becomes a result with `is_error` and a fault an error, the labels' scope, and the toolset
+//! becomes a result with `is_error` and a fault an error, the labels' scope, and the action set
 //! `save_workflow` derives.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use rewind_agent_tools::{
     AgentError, AgentOptions, AgentTools, Api, ApiError, HandleOptions, ScriptVerdict,
 };
+use rewind_api::action_sets::{ActionSet, CreateActionSet, SearchQuery, ToolSearchResults};
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -19,7 +20,6 @@ use rewind_api::runs::{
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
-use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -40,7 +40,7 @@ fn sha256(text: &str) -> String {
 fn run(id: &str, labels: Value, script: &str, status: &str) -> Run {
     serde_json::from_value(json!({
         "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
-        "status": status, "script": script, "toolset": "t",
+        "status": status, "script": script, "actionSet": "t",
         "epoch": 1, "mode": "live", "labels": labels, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
         "expiresAt": "2026-12-19T10:00:00Z",
@@ -60,7 +60,7 @@ struct Seen {
 #[derive(Debug, Default)]
 struct State {
     seen: Mutex<Vec<Seen>>,
-    toolsets: Mutex<u32>,
+    action_sets: Mutex<u32>,
 }
 
 /// The fake API: what it saw, shared with the test.
@@ -252,9 +252,9 @@ impl Api for Fake {
         Err(ApiError::fault("unused"))
     }
 
-    async fn create_toolset(&self, toolset: &CreateToolset) -> Result<Toolset, ApiError> {
-        self.saw("create_toolset", toolset, None);
-        let mut count = self.0.toolsets.lock().unwrap();
+    async fn create_action_set(&self, action_set: &CreateActionSet) -> Result<ActionSet, ApiError> {
+        self.saw("create_action_set", action_set, None);
+        let mut count = self.0.action_sets.lock().unwrap();
         *count += 1;
         Ok(serde_json::from_value(json!({
             "id": format!("derived-{count}"),
@@ -266,12 +266,12 @@ impl Api for Fake {
 
     async fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> Result<ToolSearchResults, ApiError> {
         self.saw(
             "search_tools",
-            json!({ "toolset": toolset, "query": query.query }),
+            json!({ "action_set": action_set, "query": query.query }),
             None,
         );
         Ok(ToolSearchResults { tools: Vec::new() })
@@ -281,7 +281,7 @@ impl Api for Fake {
         self.saw("create_workflow", workflow, None);
         Ok(serde_json::from_value(json!({
             "name": workflow.name, "version": "9f2c4e1a07b3".repeat(5) + "9f2c", "number": 1,
-            "toolset": workflow.toolset,
+            "actionSet": workflow.action_set,
             "script": sha256(&workflow.script), "input": workflow.input, "output": workflow.output,
             "signals": {}, "tests": [], "retired": [], "updated": [],
             "labels": { "agent": "triage" }, "createdAt": "2026-11-19T10:00:00Z",
@@ -343,10 +343,10 @@ fn secrets(references: &[(&str, Option<&str>)]) -> SecretList {
     SecretList { secrets }
 }
 
-fn tools(toolset: Option<&str>) -> (AgentTools<Fake>, Fake) {
+fn tools(action_set: Option<&str>) -> (AgentTools<Fake>, Fake) {
     let fake = Fake::default();
     let options = AgentOptions {
-        toolset: toolset.map(str::to_owned),
+        action_set: action_set.map(str::to_owned),
         labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
         ..AgentOptions::default()
     };
@@ -361,7 +361,7 @@ fn call(id: &str) -> HandleOptions {
 }
 
 #[tokio::test]
-async fn run_script_starts_the_run_with_the_agent_s_toolset_labels_wait_and_key() {
+async fn run_script_starts_the_run_with_the_agent_s_action_set_labels_wait_and_key() {
     let (tools, fake) = tools(Some("ts1"));
     let result = tools
         .handle(
@@ -384,7 +384,7 @@ async fn run_script_starts_the_run_with_the_agent_s_toolset_labels_wait_and_key(
     assert_eq!(
         seen[0].body,
         json!({
-            "script": CODE, "toolset": "ts1", "input": {}, "wait": "2m",
+            "script": CODE, "actionSet": "ts1", "input": {}, "wait": "2m",
             "labels": { "agent": "triage" }
         })
     );
@@ -532,7 +532,7 @@ async fn a_key_that_answers_another_script_s_run_is_the_harness_s_fault() {
 }
 
 #[tokio::test]
-async fn each_saved_workflow_derives_the_toolset_the_next_calls_use() {
+async fn each_saved_workflow_derives_the_action_set_the_next_calls_use() {
     let (tools, fake) = tools(Some("ts1"));
     let workflow = json!({
         "name": "triage", "description": "Triage issues.", "code": CODE,
@@ -543,13 +543,13 @@ async fn each_saved_workflow_derives_the_toolset_the_next_calls_use() {
         .await
         .unwrap();
     assert!(!saved.is_error, "{}", saved.content);
-    assert_eq!(saved.toolset.unwrap().id, "derived-1");
-    assert_eq!(tools.toolset().as_deref(), Some("derived-1"));
+    assert_eq!(saved.action_set.unwrap().id, "derived-1");
+    assert_eq!(tools.action_set().as_deref(), Some("derived-1"));
     tools
         .handle("save_workflow", &workflow, &call("c2"))
         .await
         .unwrap();
-    assert_eq!(tools.toolset().as_deref(), Some("derived-2"));
+    assert_eq!(tools.action_set().as_deref(), Some("derived-2"));
     tools
         .handle("search_tools", &json!({ "query": "triage" }), &call("c3"))
         .await
@@ -557,7 +557,7 @@ async fn each_saved_workflow_derives_the_toolset_the_next_calls_use() {
     let seen = fake.seen();
     let derivations: Vec<&Value> = seen
         .iter()
-        .filter(|seen| seen.operation == "create_toolset")
+        .filter(|seen| seen.operation == "create_action_set")
         .map(|seen| &seen.body)
         .collect();
     let version = format!("triage@{}9f2c", "9f2c4e1a07b3".repeat(5));
@@ -571,12 +571,12 @@ async fn each_saved_workflow_derives_the_toolset_the_next_calls_use() {
         .filter(|seen| seen.operation == "create_workflow")
         .map(|seen| &seen.body)
         .collect();
-    assert_eq!(created[1]["toolset"], "derived-1");
-    assert_eq!(seen.last().unwrap().body["toolset"], "derived-2");
+    assert_eq!(created[1]["actionSet"], "derived-1");
+    assert_eq!(seen.last().unwrap().body["action_set"], "derived-2");
 }
 
 #[tokio::test]
-async fn the_tools_are_those_given_and_some_need_a_toolset() {
+async fn the_tools_are_those_given_and_some_need_an_action_set() {
     let (without, _) = tools(None);
     let names: Vec<&str> = without.definitions().iter().map(|tool| tool.name).collect();
     assert_eq!(
@@ -605,7 +605,7 @@ async fn the_tools_are_those_given_and_some_need_a_toolset() {
         },
     )
     .unwrap_err();
-    assert_eq!(needs.to_string(), "search_tools needs a toolset");
+    assert_eq!(needs.to_string(), "search_tools needs an action set");
     let unknown = AgentTools::new(
         Fake::default(),
         AgentOptions {

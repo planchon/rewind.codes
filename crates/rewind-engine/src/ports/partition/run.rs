@@ -52,7 +52,7 @@ pub struct RunHead {
     /// more when another run of its namespace shares them. Frozen when the run is created.
     pub suffix_len: u8,
     pub script: Digest,
-    pub toolset: Digest,
+    pub action_set: Digest,
     pub status: RunStatus,
     /// The determinism epoch of `run_started`: which executors may run it.
     pub epoch: Epoch,

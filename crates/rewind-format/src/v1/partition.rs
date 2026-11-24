@@ -37,7 +37,7 @@ pub struct RunHead {
     #[serde(with = "with::digest")]
     pub script: Digest,
     #[serde(with = "with::digest")]
-    pub toolset: Digest,
+    pub action_set: Digest,
     pub status: Status,
     pub epoch: u32,
     pub attempt: u32,
@@ -222,7 +222,7 @@ pub struct Task {
     pub run: RunId,
     pub seq: u32,
     #[serde(with = "with::digest")]
-    pub toolset: Digest,
+    pub action_set: Digest,
     pub tool: String,
     #[serde(with = "with::route")]
     pub route: ToolRoute,
@@ -390,7 +390,7 @@ pub struct Summary {
     pub script: Digest,
     pub headline: String,
     #[serde(with = "with::digest")]
-    pub toolset: Digest,
+    pub action_set: Digest,
     pub status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
@@ -979,10 +979,10 @@ mod with {
     use serde::de::{Deserializer, Error as _};
     use serde::ser::Serializer;
 
+    use crate::v1::action_set::{PolicyV1, policy_dto, policy_from_dto};
     use crate::v1::events::{
         CanonicalJson, EventV1, PayloadV1, digest as parse_digest, hex as to_hex,
     };
-    use crate::v1::toolset::{PolicyV1, policy_dto, policy_from_dto};
 
     pub(super) mod digest {
         use super::*;
@@ -1142,7 +1142,7 @@ mod with {
         }
     }
 
-    /// A task's route, as a toolset writes it, and the workflows' built-ins:
+    /// A task's route, as an action set writes it, and the workflows' built-ins:
     /// `{"type":"builtin","builtin":"workflow","workflow":"triage","op":"start"}`.
     #[derive(Serialize, Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

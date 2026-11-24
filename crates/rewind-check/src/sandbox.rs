@@ -11,7 +11,7 @@ use serde_json::Value;
 const REWIND_D_TS: &str = include_str!("../../rewind-runtime/lib/rewind.d.ts");
 /// The sandbox's globals beyond ECMAScript.
 const GLOBALS_D_TS: &str = include_str!("../../rewind-runtime/lib/globals.d.ts");
-/// `fetch`: only for a toolset that enables the `http` tool.
+/// `fetch`: only for an action set that enables the `http` tool.
 const FETCH_D_TS: &str = include_str!("../../rewind-runtime/lib/fetch.d.ts");
 /// tsgo's options: strict, the ECMAScript lib of the sandbox, every `*.ts` of the directory.
 const TSCONFIG_JSON: &str = include_str!("../../rewind-runtime/lib/tsconfig.json");
@@ -20,16 +20,16 @@ const GLOBALS_JSON: &str = include_str!("../../rewind-runtime/lib/globals.json")
 
 /// Where the script is written, and the name diagnostics give it.
 pub(crate) const SCRIPT: &str = "script.ts";
-/// Where the toolset's declarations are written.
+/// Where the action set's declarations are written.
 pub(crate) const TOOLS: &str = "rewind-tools.d.ts";
-/// The declaration file of `fetch`, as the toolset's declarations reference it.
+/// The declaration file of `fetch`, as the action set's declarations reference it.
 pub(crate) const FETCH: &str = "fetch.d.ts";
 /// Where a workflow's own declarations are written: its signals.
 pub(crate) const WORKFLOW: &str = "rewind-workflow.d.ts";
 /// Where a workflow's entry is written: its default export against its schemas.
 pub(crate) const ENTRY: &str = "entry.ts";
 
-/// The files written next to the script and the toolset's declarations, by name.
+/// The files written next to the script and the action set's declarations, by name.
 pub(crate) fn files(http_tool: bool) -> Vec<(&'static str, &'static str)> {
     let mut files = vec![
         ("tsconfig.json", TSCONFIG_JSON),

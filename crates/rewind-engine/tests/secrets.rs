@@ -10,9 +10,9 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Attachments, Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus, Script,
-    SecretName, SecretPlacement, SecretRef, Seq, Tool, ToolAuth, ToolFailure, ToolFailureKind,
-    ToolRoute, Toolset, WorkflowSchemas,
+    ActionSet, Attachments, Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus,
+    Script, SecretName, SecretPlacement, SecretRef, Seq, Tool, ToolAuth, ToolFailure,
+    ToolFailureKind, ToolRoute, WorkflowSchemas,
 };
 use rewind_engine::StartWorkflow;
 use rewind_engine::adapters::StaticTypeChecker;
@@ -35,7 +35,7 @@ use support::{FakeExecutor, FakeRun, RecordingDispatcher, kit};
 
 /// `github` takes a secret as a bearer token, `linear` in `X-Api-Key`, `dax` checks Rewind's
 /// signature, and `ask_user` is a host tool.
-fn toolset() -> Toolset {
+fn action_set() -> ActionSet {
     let server = |name: &str, auth: ToolAuth| {
         let mut server = McpServer::new(
             name,
@@ -55,7 +55,7 @@ fn toolset() -> Toolset {
             json!({}),
         )
     };
-    Toolset::new(
+    ActionSet::new(
         [
             server("github", ToolAuth::Secret(SecretPlacement::bearer())),
             server(
@@ -165,7 +165,7 @@ fn start(
     secrets: &[(&str, &str)],
     rights: &RightsTo,
 ) -> StartRun {
-    let mut request = StartRun::new(Script::new(program), toolset(), json!({ "tool": tool }));
+    let mut request = StartRun::new(Script::new(program), action_set(), json!({ "tool": tool }));
     request.namespace = namespace.clone();
     request.metadata.secrets = attaching(secrets);
     request.attach = rights.rights();
@@ -758,7 +758,7 @@ fn save(secrets: &[(&str, &str)], rights: &RightsTo) -> RegisterWorkflow {
         name: "triage".into(),
         description: None,
         script: Script::new("caller"),
-        toolset: toolset().digest(),
+        action_set: action_set().digest(),
         schemas: WorkflowSchemas {
             input: json!({ "type": "object" }),
             output: json!({}),
@@ -772,13 +772,13 @@ fn save(secrets: &[(&str, &str)], rights: &RightsTo) -> RegisterWorkflow {
     }
 }
 
-/// A world whose catalog holds the toolset the versions are saved over.
+/// A world whose catalog holds the action set the versions are saved over.
 async fn saving() -> World {
     let world = world().await;
     world
         .plane
         .catalog
-        .put_toolset(&tenant(), &toolset(), &ToolDeclarations::default())
+        .put_action_set(&tenant(), &action_set(), &ToolDeclarations::default())
         .await
         .unwrap();
     world

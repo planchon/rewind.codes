@@ -70,7 +70,7 @@ fn run(id: &str) -> Run {
         quarantine: None,
         script: "aa".repeat(32),
         script_title: None,
-        toolset: "bb".repeat(32),
+        action_set: "bb".repeat(32),
         epoch: 1,
         mode: RunMode::Live,
         labels: Labels::from_iter([("agent", "triage")]),
@@ -183,7 +183,7 @@ fn app(log: Log) -> Router {
                 assert_eq!(headers.get(header::ACCEPT).unwrap(), "text/event-stream");
                 assert_eq!(
                     query.as_deref(),
-                    Some("slots=4&tools=ask_user&tools=approve&toolset=ab&worker=w-1")
+                    Some("actionSet=ab&slots=4&tools=ask_user&tools=approve&worker=w-1")
                 );
                 let task = json!({
                     "token": "tk_1", "id": "task_1", "runId": "r1", "namespace": "alice",
@@ -357,7 +357,7 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
 async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
     let (client, _) = serve_tcp().await;
     let query = TaskStreamQuery {
-        toolset: Some("ab".into()),
+        action_set: Some("ab".into()),
         tools: vec!["ask_user".into(), "approve".into()],
         slots: Some(4),
         worker: Some("w-1".into()),

@@ -7,7 +7,7 @@
 // source of non-determinism deterministic, installs the web-standard globals of deno_web,
 // and leaves the hooks Rust drives the script with in `globalThis.__rewindHooks`. Every instance
 // starts from that snapshot. Rust takes the hooks, then calls init(config) with what belongs to
-// the run (its id, its start, its seed, whether the toolset has the http tool); init removes the
+// the run (its id, its start, its seed, whether the action set has the http tool); init removes the
 // ambient capabilities, `Deno`, `__bootstrap` and the hooks from the global object before any
 // module is loaded. The `rewind` modules get their hooks through a global that
 // `rewind:internal` deletes before any user code runs.
@@ -1071,7 +1071,7 @@
   }
 
   // ---------------------------------------------------------------------------------------
-  // fetch: a call of the built-in `http` tool, present only when the toolset enables it
+  // fetch: a call of the built-in `http` tool, present only when the action set enables it
   // (archi/04-tools.md, "The http tool and egress"). The request and the response cross the
   // boundary as JSON, in the format of the tool `rewind-mcp` implements (archi/08-decisions.md):
   //

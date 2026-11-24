@@ -137,7 +137,7 @@ declare module "rewind" {
   }
 
   /**
-   * A workflow the run's toolset pins, imported from `rewind:workflows`: its input `I`, its
+   * A workflow the run's action set pins, imported from `rewind:workflows`: its input `I`, its
    * output `O` and its signals `S`.
    */
   export interface Workflow<I, O, S> {

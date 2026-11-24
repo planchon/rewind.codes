@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 use std::sync::{Mutex, MutexGuard};
 
-use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 
 use crate::adapters::ControlPlaneChanges;
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
     DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle,
-    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    StoredActionSet, StoredScript, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
     Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
 };
 
@@ -28,7 +28,7 @@ struct State {
     scripts: BTreeMap<(TenantId, Digest), StoredScript>,
     /// The titles people gave scripts.
     titles: BTreeMap<(TenantId, Digest), ScriptTitle>,
-    toolsets: BTreeMap<(TenantId, Digest), StoredToolset>,
+    action_sets: BTreeMap<(TenantId, Digest), StoredActionSet>,
     /// Workflow versions, with the order they were stored in.
     workflows: BTreeMap<(TenantId, Digest), (u64, StoredWorkflow)>,
     next_workflow: u64,
@@ -206,43 +206,46 @@ impl CatalogStore for MemoryCatalog {
             .collect())
     }
 
-    async fn put_toolset(
+    async fn put_action_set(
         &self,
         tenant: &TenantId,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: &ToolDeclarations,
     ) -> Result<(), CatalogError> {
         let mut state = self.lock()?;
         state
-            .toolsets
-            .entry((tenant.clone(), toolset.digest()))
-            .or_insert_with(|| StoredToolset {
-                toolset: toolset.clone(),
+            .action_sets
+            .entry((tenant.clone(), action_set.digest()))
+            .or_insert_with(|| StoredActionSet {
+                action_set: action_set.clone(),
                 declarations: declarations.clone(),
             });
-        self.send(ControlPlaneChange::Toolset {
+        self.send(ControlPlaneChange::ActionSet {
             tenant: tenant.clone(),
-            digest: toolset.digest(),
+            digest: action_set.digest(),
         });
         Ok(())
     }
 
-    async fn get_toolset(
+    async fn get_action_set(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<StoredToolset>, CatalogError> {
+    ) -> Result<Option<StoredActionSet>, CatalogError> {
         Ok(self
             .lock()?
-            .toolsets
+            .action_sets
             .get(&(tenant.clone(), digest))
             .cloned())
     }
 
-    async fn list_toolsets(&self, tenant: &TenantId) -> Result<Vec<StoredToolset>, CatalogError> {
+    async fn list_action_sets(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Vec<StoredActionSet>, CatalogError> {
         Ok(self
             .lock()?
-            .toolsets
+            .action_sets
             .iter()
             .filter(|((owner, _), _)| owner == tenant)
             .map(|(_, stored)| stored.clone())

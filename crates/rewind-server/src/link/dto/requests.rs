@@ -868,14 +868,14 @@ pub struct SlotRequest {
     pub limit: u32,
 }
 
-/// `{"partition":3,"epoch":7,"task":{…},"toolset":"<hex>","grace":{"secs":60,"nanos":0}}`.
+/// `{"partition":3,"epoch":7,"task":{…},"action_set":"<hex>","grace":{"secs":60,"nanos":0}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostTaskOffer {
     pub partition: u16,
     pub epoch: u64,
     pub task: HostTask,
-    pub toolset: Hex,
+    pub action_set: Hex,
     pub grace: Duration,
 }
 
@@ -901,7 +901,7 @@ pub struct HostTask {
 }
 
 /// An SDK stream opened at an edge: `{"stream":"…","worker":"…","node":"node-a",
-/// "namespace":…,"labels":{…},"toolset":"<hex>","tools":[…],"slots":4}`.
+/// "namespace":…,"labels":{…},"action_set":"<hex>","tools":[…],"slots":4}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamAttach {
@@ -913,7 +913,7 @@ pub struct StreamAttach {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<Hex>,
+    pub action_set: Option<Hex>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub tools: BTreeSet<String>,
     pub slots: u32,
@@ -997,7 +997,7 @@ impl From<&link::StreamAttach> for StreamAttach {
             node: attach.node.to_string(),
             namespace: attach.namespace.as_ref().map(ToString::to_string),
             labels: attach.labels.clone(),
-            toolset: attach.toolset.map(Hex),
+            action_set: attach.action_set.map(Hex),
             tools: attach.tools.clone(),
             slots: attach.slots,
         }
@@ -1014,7 +1014,7 @@ impl TryFrom<StreamAttach> for link::StreamAttach {
             node: node(attach.node)?,
             namespace: attach.namespace.map(namespace).transpose()?,
             labels: attach.labels,
-            toolset: attach.toolset.map(|hex| hex.0),
+            action_set: attach.action_set.map(|hex| hex.0),
             tools: attach.tools,
             slots: attach.slots,
         })
@@ -1059,7 +1059,7 @@ impl From<&link::OrgRequest> for OrgRequest {
                 partition: offer.partition.get(),
                 epoch: offer.epoch.0,
                 task: (&offer.task).into(),
-                toolset: Hex(offer.toolset),
+                action_set: Hex(offer.action_set),
                 grace: offer.grace,
             })),
             R::HostTaskDone { task, gone } => OrgRequest::HostTaskDone {
@@ -1114,7 +1114,7 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
                 partition: PartitionId::new(offer.partition),
                 epoch: engine::PartitionEpoch(offer.epoch),
                 task: offer.task.try_into()?,
-                toolset: offer.toolset.0,
+                action_set: offer.action_set.0,
                 grace: offer.grace,
             })),
             OrgRequest::HostTaskDone { task, gone } => R::HostTaskDone {

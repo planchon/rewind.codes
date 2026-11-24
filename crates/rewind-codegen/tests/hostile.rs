@@ -11,13 +11,13 @@ use std::time::Duration;
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
 use rewind_codegen::{Declarations, generate};
-use rewind_core::{McpServer, McpTransport, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, McpServer, McpTransport, Tool, ToolRoute};
 use serde_json::{Map, Value, json};
 
 /// Far more than any case takes, even in a debug build on a busy machine.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// The declarations of a toolset whose tool `crm.find` takes `input`, generated within
+/// The declarations of an action set whose tool `crm.find` takes `input`, generated within
 /// [`PATIENCE`], and checked as TypeScript.
 fn generate_for(input: Value) -> Declarations {
     generate_for_tools(vec![("find".to_owned(), input)])
@@ -40,10 +40,10 @@ fn generate_for_tools(tools: Vec<(String, Value)>) -> Declarations {
             input,
         )
     });
-    let toolset = Toolset::new([server], tools).unwrap();
+    let action_set = ActionSet::new([server], tools).unwrap();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(generate(&toolset, &BTreeMap::new()));
+        let _ = sender.send(generate(&action_set, &BTreeMap::new()));
     });
     let declarations = receiver
         .recv_timeout(PATIENCE)

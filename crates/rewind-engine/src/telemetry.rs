@@ -757,7 +757,10 @@ impl<'t, 'a> Derivation<'t, 'a> {
         let record = self.run.head;
         let mut attributes = self.run.base_attributes();
         attributes.insert("rewind.script".into(), string(&record.script.to_hex()));
-        attributes.insert("rewind.toolset".into(), string(&record.toolset.to_hex()));
+        attributes.insert(
+            "rewind.action_set".into(),
+            string(&record.action_set.to_hex()),
+        );
         for (key, value) in &record.metadata.labels {
             if self.run.config.exported_labels.contains(key) {
                 attributes.insert(format!("rewind.label.{key}"), string(value));
@@ -819,7 +822,7 @@ mod tests {
             origin: "script".into(),
             suffix_len: 12,
             script: Digest::of(b"s"),
-            toolset: Digest::of(b"t"),
+            action_set: Digest::of(b"t"),
             status: rewind_core::RunStatus::Active,
             epoch: rewind_core::Epoch(1),
             attempt: crate::ports::Attempt::FIRST,
@@ -900,7 +903,7 @@ mod tests {
     fn history(mode: RunMode, events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
         let started = Event::Lifecycle(Lifecycle::RunStarted(rewind_core::RunStarted {
             script: Digest::of(b"s"),
-            toolset: Digest::of(b"t"),
+            action_set: Digest::of(b"t"),
             input: Payload::Value(serde_json::json!({})),
             seed: rewind_core::Seed::from_bytes([0; 32]),
             epoch: rewind_core::Epoch(1),

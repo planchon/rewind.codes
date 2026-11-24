@@ -10,13 +10,13 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_api::access::{BuiltInRole, CreateApiKey, OPERATOR, Permission};
+use rewind_api::action_sets::{CreateActionSet, HostTool};
 use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
-use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_core::Timestamp;
@@ -73,8 +73,8 @@ fn create(tenant: Option<&str>, name: &str, role: &str, labels: &[(&str, &str)])
 /// A representative request of each group of 07's table, each requiring one permission.
 #[derive(Clone, Copy, Debug)]
 enum Call {
-    ListToolsets,
-    CreateToolset,
+    ListActionSets,
+    CreateActionSet,
     ListWorkflows,
     Check,
     ListRuns,
@@ -95,8 +95,8 @@ enum Call {
 }
 
 const CALLS: [Call; 19] = [
-    Call::ListToolsets,
-    Call::CreateToolset,
+    Call::ListActionSets,
+    Call::CreateActionSet,
     Call::ListWorkflows,
     Call::Check,
     Call::ListRuns,
@@ -131,8 +131,8 @@ impl Call {
     /// The permission of 07's table.
     fn permission(self) -> Permission {
         match self {
-            Call::ListToolsets | Call::ListWorkflows => Permission::ToolsetsRead,
-            Call::CreateToolset => Permission::ToolsetsWrite,
+            Call::ListActionSets | Call::ListWorkflows => Permission::ActionsRead,
+            Call::CreateActionSet => Permission::ActionsWrite,
             Call::SetScriptTitle => Permission::ScriptsWrite,
             Call::Check | Call::ForkRun => Permission::RunsStart,
             Call::ListRuns | Call::ListScripts | Call::ToolStats => Permission::RunsRead,
@@ -149,17 +149,19 @@ impl Call {
     }
 
     /// Sends the request. Allowed, each answers without changing anything that matters here:
-    /// unknown ids are not found, and the empty toolset is registered once.
+    /// unknown ids are not found, and the empty action set is registered once.
     async fn on(self, client: &Client) -> (u16, String) {
         match self {
-            Call::ListToolsets => outcome(client.list_toolsets().await),
-            Call::CreateToolset => outcome(client.create_toolset(&CreateToolset::default()).await),
+            Call::ListActionSets => outcome(client.list_action_sets().await),
+            Call::CreateActionSet => {
+                outcome(client.create_action_set(&CreateActionSet::default()).await)
+            }
             Call::ListWorkflows => outcome(client.list_workflows(&WorkflowQuery::default()).await),
             Call::Check => outcome(
                 client
                     .check(&CheckRequest {
                         script: "export default async function main() {}".into(),
-                        toolset: Some("unknown".into()),
+                        action_set: Some("unknown".into()),
                     })
                     .await,
             ),
@@ -361,7 +363,7 @@ async fn keys_are_given_within_what_their_creator_holds() {
 
     // A role of the tenant gives only what it holds, and takes away only that.
     let key_admin = server.key_with("acme", "key-admin", &[]).await;
-    for (role, lacking) in [("reader", "`toolsets:read`"), ("worker", "`tasks:work`")] {
+    for (role, lacking) in [("reader", "`actions:read`"), ("worker", "`tasks:work`")] {
         let refused = problem(
             key_admin
                 .create_api_key(&create(None, role, role, &[]))
@@ -481,14 +483,14 @@ async fn a_key_limited_to_labels_does_not_administer() {
 
 /// A worker whose key is limited to labels claims the host-tool tasks of the runs carrying them
 /// only, and cannot answer another scope's task: one tenant's environments (`env=dev`,
-/// `env=prod`) register the same toolset, and each one's worker serves its own runs.
+/// `env=prod`) register the same action set, and each one's worker serves its own runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_key_limited_to_labels_claims_the_tasks_of_its_runs_only() {
     let server = TestServer::start(&[]).await;
-    let toolset = server
+    let action_set = server
         .key(BuiltInRole::Harness, &[])
         .await
-        .create_toolset(&CreateToolset {
+        .create_action_set(&CreateActionSet {
             host: vec![HostTool {
                 name: "ask_user".into(),
                 description: "Asks the user.".into(),
@@ -496,7 +498,7 @@ async fn a_key_limited_to_labels_claims_the_tasks_of_its_runs_only() {
                 output_schema: Some(serde_json::json!({ "type": "string" })),
                 policy: None,
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
@@ -507,7 +509,7 @@ export default async function main() {
 }
 "#,
     );
-    asking.toolset = Some(toolset.id.clone());
+    asking.action_set = Some(action_set.id.clone());
     let dev_harness = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
     let dev_run = dev_harness.start_run(&asking, None).await.unwrap();
     let prod_run = server
@@ -520,7 +522,7 @@ export default async function main() {
     let dev = server.key(BuiltInRole::Worker, &[("env", "dev")]).await;
     let prod = server.key(BuiltInRole::Worker, &[("env", "prod")]).await;
     let query = TaskStreamQuery {
-        toolset: Some(toolset.id.clone()),
+        action_set: Some(action_set.id.clone()),
         tools: vec!["ask_user".into()],
         slots: Some(10),
         ..TaskStreamQuery::default()

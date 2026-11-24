@@ -14,6 +14,9 @@ use axum::response::{IntoResponse, Response};
 use rewind_agent_tools::definitions::MCP_TOOLS;
 use rewind_agent_tools::{Api, ApiError, McpApi, Organization};
 use rewind_api::access::Permission;
+use rewind_api::action_sets::{
+    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+};
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -24,7 +27,6 @@ use rewind_api::runs::{
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
 use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
-use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
     CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowVersions,
 };
@@ -39,7 +41,7 @@ use serde_json::{Value, json};
 /// A connection's access `read` (`archi/06-storage-and-scale.md`, "Connections").
 const READ: [Permission; 4] = [
     Permission::RunsRead,
-    Permission::ToolsetsRead,
+    Permission::ActionsRead,
     Permission::NamespacesRead,
     Permission::SecretsRead,
 ];
@@ -47,7 +49,7 @@ const READ: [Permission; 4] = [
 /// A connection's access `run`.
 const RUN: [Permission; 7] = [
     Permission::RunsRead,
-    Permission::ToolsetsRead,
+    Permission::ActionsRead,
     Permission::NamespacesRead,
     Permission::SecretsRead,
     Permission::RunsStart,
@@ -70,7 +72,7 @@ type Log = Arc<Mutex<Vec<String>>>;
 fn run(id: &str, output: Value) -> Run {
     serde_json::from_value(json!({
         "id": id, "handle": format!("alice/script/{id}"), "namespace": "alice",
-        "status": "completed", "script": "s", "toolset": "t",
+        "status": "completed", "script": "s", "actionSet": "t",
         "epoch": 1, "mode": "live", "labels": { "via": "claude" }, "traceId": "0", "historyLen": 3,
         "createdAt": "2026-11-19T10:00:00Z", "updatedAt": "2026-11-19T10:00:01Z",
         "endedAt": "2026-11-19T10:00:01Z", "expiresAt": "2026-12-19T10:00:00Z",
@@ -110,7 +112,7 @@ impl Api for FakeApi {
         let output = if start.script.contains("big") {
             json!("x".repeat(300_000))
         } else {
-            json!({ "ok": true, "toolset": start.toolset, "wait": start.wait })
+            json!({ "ok": true, "actionSet": start.action_set, "wait": start.wait })
         };
         Ok(run("r1", output))
     }
@@ -178,8 +180,8 @@ impl Api for FakeApi {
 
     async fn check(&self, check: &CheckRequest) -> Result<CheckResult, ApiError> {
         self.saw(&format!(
-            "check toolset={}",
-            check.toolset.as_deref().unwrap_or("-")
+            "check action_set={}",
+            check.action_set.as_deref().unwrap_or("-")
         ));
         Ok(CheckResult {
             ok: true,
@@ -203,17 +205,20 @@ impl Api for FakeApi {
         Err(unused("get_test"))
     }
 
-    async fn create_toolset(&self, _toolset: &CreateToolset) -> Result<Toolset, ApiError> {
-        Err(unused("create_toolset"))
+    async fn create_action_set(
+        &self,
+        _action_set: &CreateActionSet,
+    ) -> Result<ActionSet, ApiError> {
+        Err(unused("create_action_set"))
     }
 
     async fn search_tools(
         &self,
-        toolset: &str,
+        action_set: &str,
         query: &SearchQuery,
     ) -> Result<ToolSearchResults, ApiError> {
         self.saw(&format!(
-            "search_tools toolset={toolset} query={}",
+            "search_tools action_set={action_set} query={}",
             query.query
         ));
         Ok(ToolSearchResults { tools: Vec::new() })
@@ -276,10 +281,10 @@ impl McpApi for FakeApi {
         .unwrap())
     }
 
-    async fn list_toolsets(&self) -> Result<ToolsetList, ApiError> {
-        self.saw("list_toolsets");
+    async fn list_action_sets(&self) -> Result<ActionSetList, ApiError> {
+        self.saw("list_action_sets");
         Ok(serde_json::from_value(json!({
-            "toolsets": [{
+            "actionSets": [{
                 "id": "9f2c".repeat(16),
                 "servers": [{ "name": "github", "transport": "http", "tools": 2 }],
                 "tools": ["github.list_issues", "github.close_issue"]
@@ -373,7 +378,7 @@ async fn the_tools_listed_are_those_one_organization_of_the_caller_allows() {
         [
             "list_orgs",
             "list_namespaces",
-            "list_toolsets",
+            "list_action_sets",
             "search_tools",
             "list_secrets",
             "get_run",
@@ -452,7 +457,7 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
     for step in [
         "list_orgs",
         "list_namespaces",
-        "list_toolsets",
+        "list_action_sets",
         "search_tools",
         "list_secrets",
         "check_script",
@@ -488,7 +493,7 @@ async fn list_secrets_names_what_a_run_may_attach_in_the_namespace_given() {
 async fn the_organization_is_one_by_default_and_named_by_id_or_name_otherwise() {
     let (one, log) = FakeConnector::new(vec![organization("org_1", Some("Acme"), &RUN)]);
     let client = client(one).await;
-    let listed = call(&client, "list_toolsets", json!({})).await;
+    let listed = call(&client, "list_action_sets", json!({})).await;
     assert_eq!(listed.is_error, Some(false));
     assert!(
         text(&listed).contains(&"9f2c".repeat(16)),
@@ -497,7 +502,7 @@ async fn the_organization_is_one_by_default_and_named_by_id_or_name_otherwise() 
     );
     assert_eq!(
         log.lock().unwrap().last().unwrap(),
-        "list_toolsets org=org_1 ns=-"
+        "list_action_sets org=org_1 ns=-"
     );
 
     let (several, log) = FakeConnector::new(vec![
@@ -575,7 +580,7 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
     let ran = call(
         &client,
         "run_script",
-        json!({ "org": "Globex", "namespace": "alice", "toolset": "ts1", "code": "export default async () => 1;" }),
+        json!({ "org": "Globex", "namespace": "alice", "action_set": "ts1", "code": "export default async () => 1;" }),
     )
     .await;
     assert_eq!(ran.is_error, Some(false), "{}", text(&ran));
@@ -584,9 +589,13 @@ async fn a_tool_needs_its_permission_in_the_organization_of_the_call() {
         "{}",
         text(&ran)
     );
-    // The default wait of the MCP set, and the call's toolset.
+    // The default wait of the MCP set, and the call's action set.
     assert!(text(&ran).contains("\"wait\":\"30s\""), "{}", text(&ran));
-    assert!(text(&ran).contains("\"toolset\":\"ts1\""), "{}", text(&ran));
+    assert!(
+        text(&ran).contains("\"actionSet\":\"ts1\""),
+        "{}",
+        text(&ran)
+    );
     assert_eq!(log.lock().unwrap()[0], "start_run org=org_2 ns=alice");
 }
 
@@ -630,12 +639,15 @@ async fn checking_testing_and_running_need_a_namespace() {
     .await;
     assert_eq!(checked.is_error, Some(false));
     assert_eq!(text(&checked), "The script type-checks.");
-    assert_eq!(log.lock().unwrap()[0], "check toolset=- org=org_1 ns=alice");
+    assert_eq!(
+        log.lock().unwrap()[0],
+        "check action_set=- org=org_1 ns=alice"
+    );
 
     let search = call(&client, "search_tools", json!({ "query": "issues" })).await;
     assert_eq!(
         text(&search),
-        "search_tools: `toolset` must be a non-empty string: a toolset's id, as list_toolsets gives it."
+        "search_tools: `action_set` must be a non-empty string: an action set's id, as list_action_sets gives it."
     );
 }
 

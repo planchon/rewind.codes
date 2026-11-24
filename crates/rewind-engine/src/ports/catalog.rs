@@ -1,7 +1,7 @@
 //! The `CatalogStore` port: the control plane's catalog (`archi/07-code-architecture.md`,
 //! "`CatalogStore`"; `archi/06-storage-and-scale.md`, "The control plane").
 //!
-//! Scripts, toolsets and workflow versions by digest, the index of tests and the suite of each
+//! Scripts, action sets and workflow versions by digest, the index of tests and the suite of each
 //! version; tenants; namespaces, with their partition, display name, exceptions and erasure;
 //! subscriptions. It is written at the pace of people, and every write sends its
 //! [`ControlPlaneChange`](crate::ports::cluster::ControlPlaneChange) in the same transaction, which
@@ -12,12 +12,12 @@ use std::future::Future;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 
 use crate::ports::checker::ToolDeclarations;
 use crate::ports::executor::CompiledScript;
 use crate::ports::journal::{
-    ScriptTitle, StoredScript, StoredToolset, StoredWorkflow, TestRecord, WorkflowFilter,
+    ScriptTitle, StoredActionSet, StoredScript, StoredWorkflow, TestRecord, WorkflowFilter,
 };
 use crate::ports::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
@@ -80,9 +80,9 @@ pub struct NamespacePage {
 /// The contract, checked by the conformance suite (feature `conformance`, module
 /// `conformance::catalog`):
 ///
-/// - **Tenants.** Every key starts with the tenant: a script, a toolset, a version, a test, a
+/// - **Tenants.** Every key starts with the tenant: a script, an action set, a version, a test, a
 ///   namespace or a subscription of one tenant is never visible to another.
-/// - **Content.** Scripts and toolsets are stored by digest, and a second put changes nothing.
+/// - **Content.** Scripts and action sets are stored by digest, and a second put changes nothing.
 ///   Only scripts that compile are stored.
 /// - **Titles.** `set_script_title` gives a stored script the title and description a person
 ///   wrote, or removes them, and answers `false` for a script the tenant does not have;
@@ -108,14 +108,14 @@ pub struct NamespacePage {
 ///   `delete_namespace` marks it; `namespaces_to_erase` lists the marked ones, the oldest mark
 ///   first; `drop_namespace` removes a marked one, once its partition holds nothing of it.
 /// - **Changes.** Every write sends what it changed as a `ControlPlaneChange`, in the same
-///   transaction: a script, a toolset, a workflow version, a test, a subscription, a tenant, a
+///   transaction: a script, an action set, a workflow version, a test, a subscription, a tenant, a
 ///   namespace.
 /// - **Time.** The catalog never reads a clock: every method that depends on time takes `now`.
 ///
 /// [`namespace_partition`]: crate::ports::partition::namespace_partition
 pub trait CatalogStore: Send + Sync {
     // ---------------------------------------------------------------------------------------
-    // Scripts and toolsets
+    // Scripts and action sets
 
     /// Stores a script and its compiled form. Idempotent by digest: a second put changes
     /// nothing.
@@ -149,26 +149,26 @@ pub trait CatalogStore: Send + Sync {
         scripts: &[Digest],
     ) -> impl Future<Output = Result<Vec<(Digest, ScriptTitle)>, CatalogError>> + Send;
 
-    /// Stores a pinned toolset and its declarations. Idempotent by digest: a second put changes
+    /// Stores a pinned action set and its declarations. Idempotent by digest: a second put changes
     /// nothing.
-    fn put_toolset(
+    fn put_action_set(
         &self,
         tenant: &TenantId,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: &ToolDeclarations,
     ) -> impl Future<Output = Result<(), CatalogError>> + Send;
 
-    fn get_toolset(
+    fn get_action_set(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> impl Future<Output = Result<Option<StoredToolset>, CatalogError>> + Send;
+    ) -> impl Future<Output = Result<Option<StoredActionSet>, CatalogError>> + Send;
 
-    /// The tenant's toolsets, by digest.
-    fn list_toolsets(
+    /// The tenant's action sets, by digest.
+    fn list_action_sets(
         &self,
         tenant: &TenantId,
-    ) -> impl Future<Output = Result<Vec<StoredToolset>, CatalogError>> + Send;
+    ) -> impl Future<Output = Result<Vec<StoredActionSet>, CatalogError>> + Send;
 
     // ---------------------------------------------------------------------------------------
     // Workflows

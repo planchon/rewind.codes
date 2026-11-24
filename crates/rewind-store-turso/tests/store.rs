@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::path::Path;
 
-use rewind_core::{RunId, Script, SecretName, Timestamp, Toolset, Workflow, WorkflowSchemas};
+use rewind_core::{ActionSet, RunId, Script, SecretName, Timestamp, Workflow, WorkflowSchemas};
 use rewind_engine::ports::{
     CatalogStore, CompiledScript, NamespaceName, NamespaceWrite, NewSecret, Secret, SecretError,
     SecretId, SecretReader, SecretStore, Tenant, TenantId, ToolDeclarations,
@@ -68,7 +68,7 @@ async fn a_newer_schema_is_refused() {
 }
 
 /// The catalog of an embedded server is the same once it opens the file again: its tenant, its
-/// namespace in its partition, its script, toolset and workflow.
+/// namespace in its partition, its script, action set and workflow.
 #[tokio::test]
 async fn the_catalog_survives_a_restart() {
     let dir = TempDir::new().expect("temporary directory");
@@ -77,12 +77,12 @@ async fn the_catalog_survives_a_restart() {
     let alice = NamespaceName::new("alice").expect("namespace");
     let partitions = NonZeroU16::MIN;
     let script = Script::new("export default async () => 1;");
-    let toolset = Toolset::default();
+    let action_set = ActionSet::default();
     let workflow = Workflow::new(
         "triage",
         None,
         script.digest(),
-        toolset.digest(),
+        action_set.digest(),
         WorkflowSchemas {
             input: json!({ "type": "object" }),
             output: json!({}),
@@ -112,9 +112,9 @@ async fn the_catalog_survives_a_restart() {
             .await
             .expect("put_script");
         catalog
-            .put_toolset(&tenant, &toolset, &ToolDeclarations::default())
+            .put_action_set(&tenant, &action_set, &ToolDeclarations::default())
             .await
-            .expect("put_toolset");
+            .expect("put_action_set");
         catalog
             .put_workflow(&tenant, &workflow, T0)
             .await
@@ -144,9 +144,9 @@ async fn the_catalog_survives_a_restart() {
     );
     assert!(
         catalog
-            .get_toolset(&tenant, toolset.digest())
+            .get_action_set(&tenant, action_set.digest())
             .await
-            .expect("get_toolset")
+            .expect("get_action_set")
             .is_some()
     );
     assert_eq!(

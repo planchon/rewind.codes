@@ -9,8 +9,8 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ERASED_TEST_REASON, Expectations, ExpectedCall, RunStatus, Script, Test, TestOrigin,
-    TestSignal, ToolOutcome, ToolRule, Toolset, WorkflowSchemas,
+    ActionSet, ERASED_TEST_REASON, Expectations, ExpectedCall, RunStatus, Script, Test, TestOrigin,
+    TestSignal, ToolOutcome, ToolRule, WorkflowSchemas,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::{RecordFrom, RecordingError};
@@ -60,8 +60,8 @@ fn programs() -> FakeExecutor {
         )
 }
 
-fn toolset() -> Toolset {
-    Toolset::from_host_tools(["github.close_issue", "slack.post"]).unwrap()
+fn action_set() -> ActionSet {
+    ActionSet::from_host_tools(["github.close_issue", "slack.post"]).unwrap()
 }
 
 fn schemas() -> WorkflowSchemas {
@@ -78,7 +78,7 @@ fn save(script: &str, suite: SuiteChanges) -> RegisterWorkflow {
         name: "triage".into(),
         description: None,
         script: Script::new(script),
-        toolset: toolset().digest(),
+        action_set: action_set().digest(),
         schemas: schemas(),
         labels: BTreeMap::new(),
         secrets: Default::default(),
@@ -114,7 +114,11 @@ async fn setup() -> World {
     world
         .plane
         .catalog
-        .put_toolset(&TenantId::local(), &toolset(), &ToolDeclarations::default())
+        .put_action_set(
+            &TenantId::local(),
+            &action_set(),
+            &ToolDeclarations::default(),
+        )
         .await
         .unwrap();
     world
@@ -642,16 +646,20 @@ async fn recording_keeps_the_newest_run_of_each_path() {
 
 /// The workflow `closer`, saved without tests over the tools `a` and `b`.
 async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow {
-    let toolset = Toolset::from_host_tools(["a", "b", "cleanup"]).unwrap();
+    let action_set = ActionSet::from_host_tools(["a", "b", "cleanup"]).unwrap();
     world
         .plane
         .catalog
-        .put_toolset(&TenantId::local(), &toolset, &ToolDeclarations::default())
+        .put_action_set(
+            &TenantId::local(),
+            &action_set,
+            &ToolDeclarations::default(),
+        )
         .await
         .unwrap();
     let mut save = save("closer", SuiteChanges::default());
     save.name = "closer".into();
-    save.toolset = toolset.digest();
+    save.action_set = action_set.digest();
     save.schemas = WorkflowSchemas {
         input: json!({ "type": "object" }),
         output: json!({}),

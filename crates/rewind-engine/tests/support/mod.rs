@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_core::{
-    Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId, Script, ScriptError, Seq,
-    Timestamp, ToolFailure, Toolset,
+    ActionSet, Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId, Script,
+    ScriptError, Seq, Timestamp, ToolFailure,
 };
 use rewind_engine::StartRun;
 use rewind_engine::ports::{
@@ -34,7 +34,7 @@ pub const CALL_CPU: Duration = Duration::from_millis(2);
 pub fn request(name: &str, input: JsonValue) -> StartRun {
     StartRun::new(
         Script::new(name),
-        Toolset::from_host_tools(["a", "b", "cleanup"]).unwrap(),
+        ActionSet::from_host_tools(["a", "b", "cleanup"]).unwrap(),
         input,
     )
 }
@@ -229,7 +229,7 @@ impl ScriptExecutor for FakeExecutor {
     fn compile(
         &self,
         script: &Script,
-        _toolset: &Toolset,
+        _action_set: &ActionSet,
     ) -> Result<CompiledScript, InvalidScript> {
         if script.source().starts_with("syntax error") {
             return Err(InvalidScript {

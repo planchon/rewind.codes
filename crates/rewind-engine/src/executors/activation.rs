@@ -188,7 +188,7 @@ async fn work<P: Plane>(
         payloads,
         parent,
         script,
-        toolset,
+        action_set,
         purpose,
         tasks,
     } = request;
@@ -247,7 +247,15 @@ async fn work<P: Plane>(
             return Ok((ActivationResult::Miss, None));
         };
         return give_up(
-            plane, config, &source, head, inbox, history, &toolset, &script, &tasks,
+            plane,
+            config,
+            &source,
+            head,
+            inbox,
+            history,
+            &action_set,
+            &script,
+            &tasks,
         )
         .await
         .map(|result| (result, None));
@@ -278,7 +286,7 @@ async fn work<P: Plane>(
                 let input = ReplayInput {
                     run: &run,
                     compiled: Ok(&script.compiled),
-                    toolset: &toolset.toolset,
+                    action_set: &action_set.action_set,
                     history: &history,
                 };
                 match replay::replay(plane.executor(), &source, input).await {
@@ -386,7 +394,7 @@ async fn work<P: Plane>(
                         parent: link,
                         started,
                         compiled: &script.compiled,
-                        toolset: &toolset.toolset,
+                        action_set: &action_set.action_set,
                     };
                     instance = start_fork(&with, clock, &mut batch, source_of_fork, parent_history)
                         .await?;
@@ -399,7 +407,7 @@ async fn work<P: Plane>(
                 let start = StartScript {
                     run_id,
                     compiled: script.compiled.clone(),
-                    toolset: toolset.toolset.clone(),
+                    action_set: action_set.action_set.clone(),
                     input,
                     seed: started.seed,
                     epoch: started.epoch,
@@ -471,7 +479,7 @@ async fn work<P: Plane>(
             consumed,
             released,
             copied: &copied,
-            toolset: &toolset.toolset,
+            action_set: &action_set.action_set,
             headline: &crate::projector::headline(script.script.source()),
             tasks: &tasks,
             cpu: tally.total(),
@@ -509,7 +517,7 @@ struct CommitOf<'a> {
     consumed: Vec<u64>,
     released: bool,
     copied: &'a BTreeMap<Digest, BlobOwner>,
-    toolset: &'a rewind_core::Toolset,
+    action_set: &'a rewind_core::ActionSet,
     headline: &'a str,
     tasks: &'a [crate::ports::TaskRecord],
     cpu: Duration,
@@ -534,7 +542,7 @@ async fn commit<P: Plane, B: BlobStore>(
         consumed,
         released,
         copied,
-        toolset,
+        action_set,
         headline,
         tasks,
         cpu,
@@ -557,7 +565,7 @@ async fn commit<P: Plane, B: BlobStore>(
         copied,
     )
     .await?;
-    let (new_tasks, timers) = derive::effects_of(head, history, from, state, toolset, now)
+    let (new_tasks, timers) = derive::effects_of(head, history, from, state, action_set, now)
         .map_err(|tool| EngineError::UnknownTool {
             run_id: run.id,
             tool,
@@ -578,7 +586,7 @@ async fn commit<P: Plane, B: BlobStore>(
         headline,
         history,
         state,
-        toolset,
+        action_set,
         &by_seq,
         previous,
     );
@@ -597,7 +605,8 @@ async fn commit<P: Plane, B: BlobStore>(
         before,
         after: state,
     };
-    let projections = derive::projections_of(&next, new, toolset, &all_records, &config.telemetry);
+    let projections =
+        derive::projections_of(&next, new, action_set, &all_records, &config.telemetry);
     let measurements = derive::measurements_of(&next, new, &all_records, &config.telemetry);
     let children = if state.is_terminal() || first_of_fork {
         derive::children_of(history)
@@ -736,7 +745,7 @@ async fn give_up<P: Plane, B: BlobStore>(
     head: RunHead,
     inbox: Vec<crate::ports::InboxItem>,
     mut history: Vec<HistoryEntry>,
-    toolset: &crate::ports::StoredToolset,
+    action_set: &crate::ports::StoredActionSet,
     script: &crate::ports::StoredScript,
     tasks: &[crate::ports::TaskRecord],
 ) -> Result<ActivationResult, EngineError> {
@@ -800,7 +809,7 @@ async fn give_up<P: Plane, B: BlobStore>(
             consumed: inbox.iter().map(|item| item.id).collect(),
             released: false,
             copied: &BTreeMap::new(),
-            toolset: &toolset.toolset,
+            action_set: &action_set.action_set,
             headline: &crate::projector::headline(script.script.source()),
             tasks,
             cpu: Duration::ZERO,

@@ -22,7 +22,7 @@ pub enum CheckError {
     /// configuration.
     #[error("tsgo failed ({status}): {output}")]
     Failed { status: String, output: String },
-    /// The toolset's declarations or the sandbox lib do not type-check by themselves: a fault
+    /// The action set's declarations or the sandbox lib do not type-check by themselves: a fault
     /// of the platform, not of the script.
     #[error("the declarations do not type-check: {0}")]
     Declarations(String),

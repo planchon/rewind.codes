@@ -41,7 +41,7 @@ pub(crate) enum Answers {
     /// A public server, a stdio server, or any server of the embedded server.
     Quoted,
     /// A server reached at an address only the operator's allow-list lets through: a tenant
-    /// must not read an internal service through the messages of a toolset that points at it.
+    /// must not read an internal service through the messages of an action set that points at it.
     Withheld,
 }
 
@@ -83,7 +83,7 @@ impl Failure {
         }
     }
 
-    /// The error of a discovery, for the harness developer who registers the toolset.
+    /// The error of a discovery, for the harness developer who registers the action set.
     pub(crate) fn into_error(self, server: &str) -> McpError {
         let server = server.to_owned();
         match self {

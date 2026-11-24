@@ -31,10 +31,10 @@ pub enum Permission {
     RunsQuarantine,
     #[serde(rename = "runs:delete")]
     RunsDelete,
-    #[serde(rename = "toolsets:read")]
-    ToolsetsRead,
-    #[serde(rename = "toolsets:write")]
-    ToolsetsWrite,
+    #[serde(rename = "actions:read")]
+    ActionsRead,
+    #[serde(rename = "actions:write")]
+    ActionsWrite,
     #[serde(rename = "scripts:write")]
     ScriptsWrite,
     #[serde(rename = "secrets:read")]
@@ -83,8 +83,8 @@ impl Permission {
         Permission::RunsControl,
         Permission::RunsQuarantine,
         Permission::RunsDelete,
-        Permission::ToolsetsRead,
-        Permission::ToolsetsWrite,
+        Permission::ActionsRead,
+        Permission::ActionsWrite,
         Permission::ScriptsWrite,
         Permission::SecretsRead,
         Permission::SecretsWrite,
@@ -114,7 +114,7 @@ impl Permission {
         Permission::RunsControl,
         Permission::RunsQuarantine,
         Permission::RunsDelete,
-        Permission::ToolsetsRead,
+        Permission::ActionsRead,
         Permission::SecretsRead,
         Permission::SecretsWrite,
         Permission::SecretsUse,
@@ -127,7 +127,7 @@ impl Permission {
         Permission::RunsRead,
         Permission::RunsStart,
         Permission::RunsControl,
-        Permission::ToolsetsRead,
+        Permission::ActionsRead,
     ];
 
     /// Whether an end user's token may hold this permission.
@@ -143,8 +143,8 @@ impl Permission {
             Permission::RunsControl => "runs:control",
             Permission::RunsQuarantine => "runs:quarantine",
             Permission::RunsDelete => "runs:delete",
-            Permission::ToolsetsRead => "toolsets:read",
-            Permission::ToolsetsWrite => "toolsets:write",
+            Permission::ActionsRead => "actions:read",
+            Permission::ActionsWrite => "actions:write",
             Permission::ScriptsWrite => "scripts:write",
             Permission::SecretsRead => "secrets:read",
             Permission::SecretsWrite => "secrets:write",
@@ -186,10 +186,10 @@ impl Permission {
             Permission::RunsControl => "Send signals to runs and cancel them.",
             Permission::RunsQuarantine => "Release a quarantined run, or give it up.",
             Permission::RunsDelete => "Erase a run, its payloads included.",
-            Permission::ToolsetsRead => {
-                "List toolsets and workflows, read their declarations and search their tools."
+            Permission::ActionsRead => {
+                "List action sets and workflows, read their declarations and search their tools."
             }
-            Permission::ToolsetsWrite => "Register a toolset, and save a workflow.",
+            Permission::ActionsWrite => "Register an action set, and save a workflow.",
             Permission::ScriptsWrite => {
                 "Give a script a title and a description for the organization, or remove them."
             }
@@ -253,7 +253,7 @@ impl FromStr for Permission {
 pub enum BuiltInRole {
     /// Every permission: the creator of an organization.
     Owner,
-    /// Everything about runs, toolsets, tasks and subscriptions, and reading the members and
+    /// Everything about runs, action sets, tasks and subscriptions, and reading the members and
     /// roles: a harness and its agent tools.
     Harness,
     /// Only the host-tool tasks: a harness's SDK worker.
@@ -276,8 +276,8 @@ const HARNESS: [Permission; 20] = [
     Permission::RunsControl,
     Permission::RunsQuarantine,
     Permission::RunsDelete,
-    Permission::ToolsetsRead,
-    Permission::ToolsetsWrite,
+    Permission::ActionsRead,
+    Permission::ActionsWrite,
     Permission::ScriptsWrite,
     Permission::SecretsRead,
     Permission::SecretsWrite,
@@ -297,7 +297,7 @@ const WORKER: [Permission; 1] = [Permission::TasksWork];
 
 const READER: [Permission; 7] = [
     Permission::RunsRead,
-    Permission::ToolsetsRead,
+    Permission::ActionsRead,
     Permission::SecretsRead,
     Permission::SubscriptionsRead,
     Permission::MembersRead,
@@ -330,12 +330,12 @@ impl BuiltInRole {
         match self {
             BuiltInRole::Owner => "Every permission: administers the organization.",
             BuiltInRole::Harness => {
-                "Runs, toolsets, secrets, tasks and subscriptions, and reading the members \
+                "Runs, action sets, secrets, tasks and subscriptions, and reading the members \
                  and roles: a harness and its agent tools."
             }
             BuiltInRole::Worker => "Only the host-tool tasks: a harness's SDK worker.",
             BuiltInRole::Reader => {
-                "Reading runs, toolsets, subscriptions, members and roles: a dashboard."
+                "Reading runs, action sets, subscriptions, members and roles: a dashboard."
             }
         }
     }
@@ -604,8 +604,8 @@ mod tests {
                 "runs:control",
                 "runs:quarantine",
                 "runs:delete",
-                "toolsets:read",
-                "toolsets:write",
+                "actions:read",
+                "actions:write",
                 "scripts:write",
                 "secrets:read",
                 "secrets:write",
@@ -626,7 +626,7 @@ mod tests {
             names(BuiltInRole::Reader.permissions()),
             [
                 "runs:read",
-                "toolsets:read",
+                "actions:read",
                 "secrets:read",
                 "subscriptions:read",
                 "members:read",
@@ -644,7 +644,7 @@ mod tests {
     /// its tenant, `harness` everything of its tenant but the administration, `worker` the
     /// host-tool tasks, the administration only `admin`, now `operator`. The permissions of
     /// namespaces came after: `harness` manages its end users, `reader` reads them; and so did
-    /// `scripts:write`, which `harness` holds with `toolsets:write`.
+    /// `scripts:write`, which `harness` holds with `actions:write`.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Former {
         Read,
@@ -656,7 +656,7 @@ mod tests {
     fn former(permission: Permission) -> Former {
         match permission {
             Permission::RunsRead
-            | Permission::ToolsetsRead
+            | Permission::ActionsRead
             | Permission::SecretsRead
             | Permission::SubscriptionsRead
             | Permission::MembersRead
@@ -666,7 +666,7 @@ mod tests {
             | Permission::RunsControl
             | Permission::RunsQuarantine
             | Permission::RunsDelete
-            | Permission::ToolsetsWrite
+            | Permission::ActionsWrite
             | Permission::ScriptsWrite
             | Permission::SecretsWrite
             | Permission::SecretsUse
@@ -717,7 +717,7 @@ mod tests {
                 "runs:control",
                 "runs:quarantine",
                 "runs:delete",
-                "toolsets:read",
+                "actions:read",
                 "secrets:read",
                 "secrets:write",
                 "secrets:use",
@@ -727,7 +727,7 @@ mod tests {
         );
         assert!(Permission::TOKEN_DEFAULT.iter().all(|p| p.in_token()));
         for never in [
-            Permission::ToolsetsWrite,
+            Permission::ActionsWrite,
             Permission::ScriptsWrite,
             Permission::SubscriptionsWrite,
             Permission::NamespacesRead,

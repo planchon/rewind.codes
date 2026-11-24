@@ -315,7 +315,7 @@ mod tests {
             quarantine: None,
             script: "s".into(),
             script_title: None,
-            toolset: "t".into(),
+            action_set: "t".into(),
             epoch: 1,
             mode: RunMode::Live,
             labels: Labels::new(),

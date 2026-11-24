@@ -52,7 +52,7 @@ pub enum Event {
     #[serde(rename_all = "camelCase")]
     RunStarted {
         script: String,
-        toolset: String,
+        action_set: String,
         input: Payload,
         epoch: u32,
         expires_at: Timestamp,
@@ -166,7 +166,7 @@ impl Event {
         match event {
             rewind_core::Event::Lifecycle(Lifecycle::RunStarted(started)) => Event::RunStarted {
                 script: started.script.to_hex(),
-                toolset: started.toolset.to_hex(),
+                action_set: started.action_set.to_hex(),
                 input: payload(&started.input),
                 epoch: started.epoch.0,
                 expires_at: timestamp(started.expires_at),
@@ -526,7 +526,7 @@ mod tests {
             "quarantined": false,
             "script": "ab",
             "headline": "// x",
-            "toolset": "cd",
+            "actionSet": "cd",
             "labels": {},
             "startedAt": "2026-11-09T10:00:00Z",
             "lastActivityAt": "2026-11-09T10:00:01Z",

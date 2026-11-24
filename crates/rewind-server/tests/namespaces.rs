@@ -18,6 +18,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rewind_api::access::{BuiltInRole, Permission, PutRole};
+use rewind_api::action_sets::{CreateActionSet, HostTool};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::EventsQuery;
 use rewind_api::namespaces::{
@@ -31,7 +32,6 @@ use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
-use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{ADMIN_KEY, TestServer, eventually, wait};
@@ -383,8 +383,8 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
 async fn a_token_claims_the_tasks_of_its_namespace_only() {
     let server = TestServer::in_memory(&[]).await;
     let customer = server.tenant_key("acme", "harness").await;
-    let toolset = customer
-        .create_toolset(&CreateToolset {
+    let action_set = customer
+        .create_action_set(&CreateActionSet {
             host: vec![HostTool {
                 name: "ask_user".into(),
                 description: "Asks the user.".into(),
@@ -396,12 +396,12 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
                 output_schema: Some(json!({ "type": "string" })),
                 policy: None,
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
     let mut asking = StartRun::new(ASK);
-    asking.toolset = Some(toolset.id.clone());
+    asking.action_set = Some(action_set.id.clone());
     let bobs = customer
         .with_namespace(ns("bob"))
         .start_run(&asking, None)
@@ -418,7 +418,7 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
     };
     let alice = server.bare(&token(&customer, "alice", &worker).await);
     let query = TaskStreamQuery {
-        toolset: Some(toolset.id.clone()),
+        action_set: Some(action_set.id.clone()),
         tools: vec!["ask_user".into()],
         slots: Some(10),
         ..TaskStreamQuery::default()
@@ -473,7 +473,7 @@ async fn the_customer_names_the_namespace_of_its_requests() {
     );
     let check = CheckRequest {
         script: SHORT.into(),
-        toolset: None,
+        action_set: None,
     };
     assert_eq!(
         refused(customer.check(&check).await),
@@ -594,7 +594,7 @@ async fn quotas_refuse_what_they_bound() {
         alice
             .check(&CheckRequest {
                 script: SIGNAL.into(),
-                toolset: None,
+                action_set: None,
             })
             .await
             .unwrap_err(),

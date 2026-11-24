@@ -8,7 +8,7 @@
 //! world is driven: a run's `wait`, a server's webhook, a signal sent by the world after a delay,
 //! a timer.
 //!
-//! The agent's toolset is registered as `POST /v1/toolsets` registers it, so that workflows are
+//! The agent's action set is registered as `POST /v1/action-sets` registers it, so that workflows are
 //! saved with it; workflows are saved and run as the server saves and runs them, at the node's
 //! edge, with the agent's labels as the labels of the key that saves them.
 
@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use rewind_check::TsgoChecker;
 use rewind_core::{
-    Builtin, Command, Completion, Digest, Event, HistoryEntry, McpServer, McpTransport,
+    ActionSet, Builtin, Command, Completion, Digest, Event, HistoryEntry, McpServer, McpTransport,
     RetiredTest, RunId, RunOutcome, RunState, RunStatus, Script, Seq, Timestamp, Tool, ToolRoute,
-    Toolset, UpdatedTest,
+    UpdatedTest,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -104,7 +104,7 @@ pub struct ProductionRun {
 pub struct WorldSpec {
     /// Fake servers by name ([`fake::SERVERS`]).
     pub servers: Vec<&'static str>,
-    /// The toolset has the built-in `webhook`.
+    /// The action set has the built-in `webhook`.
     pub webhook: bool,
     pub reactions: Vec<Reaction>,
     /// Started after the conversation, in order, each driven until it ends.
@@ -119,8 +119,8 @@ pub enum WorldError {
     Serve(#[from] std::io::Error),
     #[error("cannot list the tools of {server}: {message}")]
     Discovery { server: String, message: String },
-    #[error("invalid toolset: {0}")]
-    Toolset(String),
+    #[error("invalid action set: {0}")]
+    ActionSet(String),
     #[error("the sandbox cannot start: {0}")]
     Sandbox(String),
     #[error(transparent)]
@@ -189,8 +189,8 @@ pub struct World {
     pub config: NodeConfig,
     pub clock: SharedClock,
     pub servers: Vec<Running>,
-    /// The pinned toolset the agent's scripts import from `rewind:tools`.
-    pub toolset: Toolset,
+    /// The pinned action set the agent's scripts import from `rewind:tools`.
+    pub action_set: ActionSet,
     /// What codegen generated for it.
     pub declarations: rewind_codegen::Declarations,
     pub checker: Arc<TsgoChecker>,
@@ -209,7 +209,7 @@ impl std::fmt::Debug for World {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("World")
             .field("servers", &self.servers)
-            .field("toolset", &self.toolset.digest())
+            .field("action_set", &self.action_set.digest())
             .finish_non_exhaustive()
     }
 }
@@ -228,7 +228,7 @@ fn drive_error(error: DriveError) -> WorldError {
 }
 
 impl World {
-    /// Serves the fake servers, pins their tools as `POST /v1/toolsets` does (discovery through
+    /// Serves the fake servers, pins their tools as `POST /v1/action-sets` does (discovery through
     /// `McpDispatcher`), generates the declarations, and wires the run plane at [`T0`].
     pub async fn new(
         spec: &WorldSpec,
@@ -275,8 +275,8 @@ impl World {
                 rewind_runtime::builtins::webhook_input_schema(),
             ));
         }
-        let toolset = Toolset::new(pinned_servers, tools)
-            .map_err(|err| WorldError::Toolset(err.to_string()))?;
+        let action_set = ActionSet::new(pinned_servers, tools)
+            .map_err(|err| WorldError::ActionSet(err.to_string()))?;
 
         let executor = V8Executor::new(SandboxLimits::default())
             .map_err(|err| WorldError::Sandbox(err.to_string()))?;
@@ -309,14 +309,14 @@ impl World {
             .map_err(drive_error)?;
         driver.run_until_idle().await.map_err(drive_error)?;
         let edge = Edge::new(Arc::clone(&plane), config.clone());
-        let declarations = register_toolset(&plane.catalog, &toolset).await?;
+        let declarations = register_action_set(&plane.catalog, &action_set).await?;
         Ok(Self {
             plane,
             edge,
             config,
             clock,
             servers,
-            toolset,
+            action_set,
             declarations,
             checker,
             labels,
@@ -334,16 +334,16 @@ impl World {
         &self.plane.catalog
     }
 
-    /// Registers a toolset as `POST /v1/toolsets` does: its declarations generated, then stored
-    /// with it. A toolset registered again changes nothing.
-    pub async fn register_toolset(
+    /// Registers an action set as `POST /v1/action-sets` does: its declarations generated, then stored
+    /// with it. An action set registered again changes nothing.
+    pub async fn register_action_set(
         &self,
-        toolset: &Toolset,
+        action_set: &ActionSet,
     ) -> Result<rewind_codegen::Declarations, WorldError> {
-        register_toolset(self.catalog(), toolset).await
+        register_action_set(self.catalog(), action_set).await
     }
 
-    /// The declarations stored with the toolset, as the engine and the checker take them.
+    /// The declarations stored with the action set, as the engine and the checker take them.
     pub fn tool_declarations(&self) -> ToolDeclarations {
         ToolDeclarations {
             typescript: self.declarations.typescript.clone(),
@@ -363,19 +363,19 @@ impl World {
     /// Starts a run of the agent: with its labels, live, in virtual time. The caller has
     /// type-checked the script.
     pub fn start_request(&self, script: Script, input: Value) -> StartRun {
-        self.start_request_on(script, &self.toolset, self.tool_declarations(), input)
+        self.start_request_on(script, &self.action_set, self.tool_declarations(), input)
     }
 
-    /// [`start_request`](Self::start_request), with another toolset: one derived from the
+    /// [`start_request`](Self::start_request), with another action set: one derived from the
     /// world's.
     pub fn start_request_on(
         &self,
         script: Script,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         declarations: ToolDeclarations,
         input: Value,
     ) -> StartRun {
-        let mut request = StartRun::new(script, toolset.clone(), input);
+        let mut request = StartRun::new(script, action_set.clone(), input);
         request.declarations = declarations;
         request.metadata.labels = self.labels.clone();
         request
@@ -625,7 +625,7 @@ impl World {
                     name: workflow.name().to_owned(),
                     version: workflow.version(),
                     parent: workflow.suite().parent,
-                    toolset: workflow.toolset(),
+                    action_set: workflow.action_set(),
                     script: catalog
                         .get_script(&tenant, workflow.script())
                         .await?
@@ -967,8 +967,8 @@ pub struct WorkflowReport {
     pub version: Digest,
     /// The version it derives from.
     pub parent: Option<Digest>,
-    /// The toolset its runs call.
-    pub toolset: Digest,
+    /// The action set its runs call.
+    pub action_set: Digest,
     /// Its script's source.
     pub script: String,
     /// The tests of its suite, in its order, each loaded.
@@ -992,16 +992,16 @@ pub fn test_format() -> TestFormat {
     }
 }
 
-/// Stores a toolset with the declarations codegen generates for it.
-async fn register_toolset(
+/// Stores an action set with the declarations codegen generates for it.
+async fn register_action_set(
     catalog: &MemoryCatalog,
-    toolset: &Toolset,
+    action_set: &ActionSet,
 ) -> Result<rewind_codegen::Declarations, WorldError> {
-    let declarations = rewind_codegen::generate(toolset, &BTreeMap::new());
+    let declarations = rewind_codegen::generate(action_set, &BTreeMap::new());
     catalog
-        .put_toolset(
+        .put_action_set(
             &TenantId::local(),
-            toolset,
+            action_set,
             &ToolDeclarations {
                 typescript: declarations.typescript.clone(),
                 prompt: declarations.prompt.clone(),

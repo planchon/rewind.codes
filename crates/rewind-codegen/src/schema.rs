@@ -1,4 +1,4 @@
-//! Our JSON Schema → TypeScript converter (`archi/04-tools.md`, "Toolsets and code
+//! Our JSON Schema → TypeScript converter (`archi/04-tools.md`, "Action sets and code
 //! generation"): no maintained crate does it.
 //!
 //! It covers what tool schemas use: `type` (one or several), objects with `properties`,

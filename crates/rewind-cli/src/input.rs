@@ -1,4 +1,4 @@
-//! Reading what the user gives: files, JSON values, labels, toolset references.
+//! Reading what the user gives: files, JSON values, labels, action set references.
 
 use std::path::{Path, PathBuf};
 
@@ -52,31 +52,31 @@ fn split_label(pair: &str) -> Result<(&str, &str), CliError> {
         .ok_or_else(|| CliError::usage(format!("a label is key=value, not {pair:?}")))
 }
 
-/// What `--toolset` names.
+/// What `--action-set` names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ToolsetRef {
-    /// A registered toolset: its digest, 64 lowercase hex digits.
+pub(crate) enum ActionSetRef {
+    /// A registered action set: its digest, 64 lowercase hex digits.
     Id(String),
-    /// A toolset file: `POST /v1/toolsets`'s body.
+    /// An action set file: `POST /v1/action-sets`'s body.
     File(PathBuf),
 }
 
-impl ToolsetRef {
+impl ActionSetRef {
     /// A digest is an id; anything else is a file, which must exist.
     pub(crate) fn parse(text: &str) -> Result<Self, CliError> {
         let path = Path::new(text);
         if path.exists() {
-            return Ok(ToolsetRef::File(path.to_owned()));
+            return Ok(ActionSetRef::File(path.to_owned()));
         }
         if text.len() == 64
             && text
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
-            return Ok(ToolsetRef::Id(text.to_owned()));
+            return Ok(ActionSetRef::Id(text.to_owned()));
         }
         Err(CliError::usage(format!(
-            "--toolset {text}: no such file, and not the id of a toolset (64 hex digits)"
+            "--action-set {text}: no such file, and not the id of an action set (64 hex digits)"
         )))
     }
 }
@@ -133,16 +133,19 @@ mod tests {
     }
 
     #[test]
-    fn a_toolset_is_an_id_or_a_file() {
+    fn an_action_set_is_an_id_or_a_file() {
         let id = "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4";
-        assert_eq!(ToolsetRef::parse(id).unwrap(), ToolsetRef::Id(id.into()));
+        assert_eq!(
+            ActionSetRef::parse(id).unwrap(),
+            ActionSetRef::Id(id.into())
+        );
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("toolset.json");
+        let path = dir.path().join("action_set.json");
         std::fs::write(&path, "{}").unwrap();
         assert_eq!(
-            ToolsetRef::parse(path.to_str().unwrap()).unwrap(),
-            ToolsetRef::File(path)
+            ActionSetRef::parse(path.to_str().unwrap()).unwrap(),
+            ActionSetRef::File(path)
         );
-        assert!(ToolsetRef::parse("missing.json").is_err());
+        assert!(ActionSetRef::parse("missing.json").is_err());
     }
 }

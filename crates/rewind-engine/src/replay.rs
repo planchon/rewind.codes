@@ -10,7 +10,8 @@
 use tracing::Instrument as _;
 
 use rewind_core::{
-    AbortReason, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor, Replayed, Toolset,
+    AbortReason, ActionSet, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor,
+    Replayed,
 };
 
 pub use crate::payloads::PayloadSource;
@@ -44,7 +45,7 @@ pub struct ReplayInput<'a> {
     pub run: &'a RunRef,
     /// The script as compiled, or why it does not compile.
     pub compiled: Result<&'a CompiledScript, &'a InvalidScript>,
-    pub toolset: &'a Toolset,
+    pub action_set: &'a ActionSet,
     pub history: &'a [HistoryEntry],
 }
 
@@ -122,7 +123,7 @@ where
     let start = StartScript {
         run_id: input.run.id,
         compiled,
-        toolset: input.toolset.clone(),
+        action_set: input.action_set.clone(),
         input: payloads::load(payloads, tenant, &started.input).await?,
         seed: started.seed,
         epoch: started.epoch,

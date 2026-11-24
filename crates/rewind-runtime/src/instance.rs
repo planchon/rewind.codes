@@ -31,13 +31,13 @@ impl Instance {
             glue,
             start.compiled.javascript.clone(),
             start.compiled.source_map.clone().into_bytes(),
-            (glue.tools)(&start.toolset),
-            (glue.workflows)(&start.toolset),
+            (glue.tools)(&start.action_set),
+            (glue.workflows)(&start.action_set),
         ));
         let state = ExecState::new(
             start.run_id,
             &start.seed,
-            start.toolset.clone(),
+            start.action_set.clone(),
             start.started_at,
         );
         let (mut isolate, hooks) = Isolate::new(glue, limits, loader, state)?;

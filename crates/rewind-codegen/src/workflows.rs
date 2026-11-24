@@ -1,7 +1,7 @@
-//! The declarations of workflows (`archi/04-tools.md`, "Toolsets and code generation" and
+//! The declarations of workflows (`archi/04-tools.md`, "Action sets and code generation" and
 //! "Type-checking").
 //!
-//! For the workflows a toolset pins, `rewind-tools.d.ts` declares `rewind:workflows`:
+//! For the workflows an action set pins, `rewind-tools.d.ts` declares `rewind:workflows`:
 //!
 //! ```ts
 //! declare module "rewind:workflows" {
@@ -95,7 +95,7 @@ impl Interface {
     }
 }
 
-/// The module `rewind:workflows` for these workflows: one export each. Empty for a toolset
+/// The module `rewind:workflows` for these workflows: one export each. Empty for an action set
 /// that pins none, so that the module exists and exports nothing.
 pub(crate) fn module(workflows: &[PinnedWorkflow]) -> String {
     let mut out = String::from("declare module \"rewind:workflows\" {\n");
@@ -246,7 +246,7 @@ fn summary(description: Option<&str>) -> Option<String> {
 }
 
 /// What a workflow's own script is checked against when it is registered, besides its
-/// toolset's declarations.
+/// action set's declarations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkflowDeclarations {
     /// `rewind-workflow.d.ts`: the `Signals` of the `rewind` module, and the named types of the
@@ -307,7 +307,7 @@ mod tests {
             "triage",
             Some("Triage the stale issues of a repository, after approval.".into()),
             Digest::of(b"script"),
-            Digest::of(b"toolset"),
+            Digest::of(b"action_set"),
             WorkflowSchemas {
                 input: json!({
                     "type": "object",

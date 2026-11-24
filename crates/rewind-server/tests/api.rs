@@ -14,6 +14,7 @@ use axum::body::Bytes;
 use axum::http::HeaderMap;
 use futures_util::StreamExt;
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::{CreateActionSet, HostTool, ToolPolicy};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
@@ -25,7 +26,6 @@ use rewind_api::scripts::{CheckRequest, ScriptFilter};
 use rewind_api::tasks::{
     CompleteTask, DeferTask, FailTask, RejectTask, TaskState, TaskStreamQuery,
 };
-use rewind_api::toolsets::{CreateToolset, HostTool, ToolPolicy};
 use rewind_api::webhooks::{
     CreateSubscription, SignedHeaders, WebhookEvent, WebhookEventType, WebhookSecret,
 };
@@ -77,8 +77,8 @@ fn start(script: &str) -> StartRun {
     StartRun::new(script)
 }
 
-fn ask_toolset(policy: ToolPolicy) -> CreateToolset {
-    CreateToolset {
+fn ask_action_set(policy: ToolPolicy) -> CreateActionSet {
+    CreateActionSet {
         host: vec![HostTool {
             name: "ask_user".into(),
             description: "Ask the end user a question and return their answer.".into(),
@@ -90,7 +90,7 @@ fn ask_toolset(policy: ToolPolicy) -> CreateToolset {
             output_schema: None,
             policy: Some(policy),
         }],
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     }
 }
 
@@ -190,7 +190,7 @@ async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skippe
     let checked = harness
         .check(&CheckRequest {
             script: script.into(),
-            toolset: None,
+            action_set: None,
         })
         .await
         .unwrap();
@@ -222,36 +222,39 @@ async fn host_tools_are_handed_on_a_stream_and_answered() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let worker = server.key(BuiltInRole::Worker, &[]).await;
-    let toolset = harness
-        .create_toolset(&ask_toolset(ToolPolicy {
+    let action_set = harness
+        .create_action_set(&ask_action_set(ToolPolicy {
             heartbeat_timeout: Some("5s".parse().unwrap()),
             ..ToolPolicy::default()
         }))
         .await
         .unwrap();
-    assert!(toolset.tools.iter().any(|tool| tool.name == "webhook"));
-    assert_eq!(harness.list_toolsets().await.unwrap().toolsets.len(), 1);
+    assert!(action_set.tools.iter().any(|tool| tool.name == "webhook"));
+    assert_eq!(
+        harness.list_action_sets().await.unwrap().action_sets.len(),
+        1
+    );
 
     assert!(
-        toolset
+        action_set
             .declarations
             .dts
             .contains("export function ask_user"),
         "{}",
-        toolset.declarations.dts
+        action_set.declarations.dts
     );
     let mut wrong = start(&ASK.replace("\"ready?\"", "42"));
-    wrong.toolset = Some(toolset.id.clone());
+    wrong.action_set = Some(action_set.id.clone());
     let refused = problem(harness.start_run(&wrong, None).await.unwrap_err());
     assert_eq!(refused.kind(), Some(ProblemType::InvalidScript));
     assert_eq!(refused.diagnostics[0].code, "TS2322", "{refused}");
 
     let mut request = start(ASK);
-    request.toolset = Some(toolset.id.clone());
+    request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
 
     let query = TaskStreamQuery {
-        toolset: Some(toolset.id.clone()),
+        action_set: Some(action_set.id.clone()),
         tools: vec!["ask_user".into()],
         slots: Some(1),
         worker: Some("worker-1".into()),
@@ -354,8 +357,8 @@ async fn a_run_failed_by_an_uncaught_tool_error_names_the_call() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let worker = server.key(BuiltInRole::Worker, &[]).await;
-    let toolset = harness
-        .create_toolset(&ask_toolset(ToolPolicy::default()))
+    let action_set = harness
+        .create_action_set(&ask_action_set(ToolPolicy::default()))
         .await
         .unwrap();
     // The first failure is caught; the second is not.
@@ -369,10 +372,10 @@ export default async function main() {
 }
 "#;
     let mut request = start(script);
-    request.toolset = Some(toolset.id.clone());
+    request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
     let query = TaskStreamQuery {
-        toolset: Some(toolset.id.clone()),
+        action_set: Some(action_set.id.clone()),
         tools: vec!["ask_user".into()],
         ..TaskStreamQuery::default()
     };
@@ -409,15 +412,15 @@ export default async function main() {
 async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&ask_toolset(ToolPolicy {
+    let action_set = harness
+        .create_action_set(&ask_action_set(ToolPolicy {
             approval: Some(true),
             ..ToolPolicy::default()
         }))
         .await
         .unwrap();
     let mut request = start(ASK);
-    request.toolset = Some(toolset.id.clone());
+    request.action_set = Some(action_set.id.clone());
 
     // Rejected: the call fails with a ToolError, and the run fails.
     let run = harness.start_run(&request, None).await.unwrap();
@@ -1035,24 +1038,24 @@ async fn the_server_serves_its_dashboard_and_says_what_it_is() {
 async fn the_http_tool_is_pinned_with_its_allow_list_only() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&CreateToolset {
-            http: Some(rewind_api::toolsets::HttpTool {
+    let action_set = harness
+        .create_action_set(&CreateActionSet {
+            http: Some(rewind_api::action_sets::HttpTool {
                 allow: vec!["api.example.com".into()],
                 policy: None,
             }),
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
-    let names: Vec<&str> = toolset
+    let names: Vec<&str> = action_set
         .tools
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
     assert_eq!(names, ["http", "webhook"]);
     assert!(
-        toolset
+        action_set
             .declarations
             .dts
             .starts_with(rewind_check::HTTP_TOOL_REFERENCE),
@@ -1061,7 +1064,7 @@ async fn the_http_tool_is_pinned_with_its_allow_list_only() {
     let checked = harness
         .check(&CheckRequest {
             script: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
-            toolset: Some(toolset.id.clone()),
+            action_set: Some(action_set.id.clone()),
         })
         .await
         .unwrap();
@@ -1069,24 +1072,24 @@ async fn the_http_tool_is_pinned_with_its_allow_list_only() {
     let without = harness
         .check(&CheckRequest {
             script: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
-            toolset: None,
+            action_set: None,
         })
         .await
         .unwrap();
     assert!(!without.ok, "no http tool, no fetch");
     let empty = problem(
         harness
-            .create_toolset(&CreateToolset {
-                http: Some(rewind_api::toolsets::HttpTool {
+            .create_action_set(&CreateActionSet {
+                http: Some(rewind_api::action_sets::HttpTool {
                     allow: Vec::new(),
                     policy: None,
                 }),
-                ..CreateToolset::default()
+                ..CreateActionSet::default()
             })
             .await
             .unwrap_err(),
     );
-    assert_eq!(empty.kind(), Some(ProblemType::InvalidToolset));
+    assert_eq!(empty.kind(), Some(ProblemType::InvalidActionSet));
     server.stop().await;
 }
 
@@ -1186,12 +1189,12 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
 async fn host_tool_failures_are_bounded_like_results() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    let toolset = harness
-        .create_toolset(&ask_toolset(ToolPolicy::default()))
+    let action_set = harness
+        .create_action_set(&ask_action_set(ToolPolicy::default()))
         .await
         .unwrap();
     let mut request = start(ASK);
-    request.toolset = Some(toolset.id.clone());
+    request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
     let task = TaskWorker::open(&harness, &TaskStreamQuery::default())
         .await
@@ -1245,13 +1248,13 @@ async fn host_tool_failures_are_bounded_like_results() {
 
     // A rejection's message is a failure's message.
     let approved = harness
-        .create_toolset(&ask_toolset(ToolPolicy {
+        .create_action_set(&ask_action_set(ToolPolicy {
             approval: Some(true),
             ..ToolPolicy::default()
         }))
         .await
         .unwrap();
-    request.toolset = Some(approved.id.clone());
+    request.action_set = Some(approved.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
     let task_id = eventually(|| async {
         let state = harness.get_run(&run.id, None).await.unwrap();
@@ -1387,9 +1390,9 @@ async fn text_with_a_nul_character_is_refused_with_400() {
     let mut source = start(&format!("{SLEEP}// \u{0}\n"));
     source.input = json!({ "ms": 1 });
     invalid(harness.start_run(&source, None).await.unwrap_err());
-    let mut toolset = ask_toolset(ToolPolicy::default());
-    toolset.host[0].description = "Ask the end user\u{0}".into();
-    invalid(harness.create_toolset(&toolset).await.unwrap_err());
+    let mut action_set = ask_action_set(ToolPolicy::default());
+    action_set.host[0].description = "Ask the end user\u{0}".into();
+    invalid(harness.create_action_set(&action_set).await.unwrap_err());
     let subscription = CreateSubscription {
         url: "https://hooks.example.com/rewind".into(),
         events: vec![WebhookEventType::RunCompleted],
@@ -1464,15 +1467,15 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
     done.input = json!({ "ms": 10 });
     done.wait = wait("20s");
     let done = harness.start_run(&done, None).await.unwrap();
-    let toolset = harness
-        .create_toolset(&ask_toolset(ToolPolicy {
+    let action_set = harness
+        .create_action_set(&ask_action_set(ToolPolicy {
             approval: Some(true),
             ..ToolPolicy::default()
         }))
         .await
         .unwrap();
     let mut asking = start(ASK);
-    asking.toolset = Some(toolset.id.clone());
+    asking.action_set = Some(action_set.id.clone());
     let asking = harness.start_run(&asking, None).await.unwrap();
 
     // Once every run is found.

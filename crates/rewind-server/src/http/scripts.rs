@@ -14,7 +14,7 @@ use crate::app::App;
 use crate::auth::Caller;
 use crate::error::{ApiError, diagnostic, invalid_script_diagnostic};
 use crate::extract::Body;
-use crate::http::toolsets;
+use crate::http::action_sets;
 
 /// The limits a script checked or tested in the request's namespace passes, as a start would:
 /// its namespace's (its exceptions over the tenant's defaults) and the tenant's ceiling. The
@@ -54,13 +54,13 @@ pub(super) async fn check(
 ) -> Result<Json<CheckResult>, ApiError> {
     caller.require(Permission::RunsStart)?;
     let bounds = bounds(&app, &caller).await?;
-    let stored = match &request.toolset {
-        Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
-        None => app.default_toolset(&caller.tenant).await?,
+    let stored = match &request.action_set {
+        Some(id) => action_sets::stored(&app, &caller.tenant, id).await?,
+        None => app.default_action_set(&caller.tenant).await?,
     };
     let script = Script::new(request.script);
     check_lines(&script, &bounds)?;
-    if let Err(invalid) = app.plane.executor.compile(&script, &stored.toolset) {
+    if let Err(invalid) = app.plane.executor.compile(&script, &stored.action_set) {
         return Ok(Json(CheckResult {
             ok: false,
             diagnostics: vec![invalid_script_diagnostic(&invalid)],

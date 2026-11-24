@@ -13,6 +13,7 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use rewind_api::action_sets::{ActionSet, CreateActionSet, Declarations};
 use rewind_api::admin::ServerInfo;
 use rewind_api::common::{Callsite, Labels, Payload, RunMode, RunStatus, Timestamp};
 use rewind_api::problem::{self, Problem, ProblemType};
@@ -21,11 +22,10 @@ use rewind_api::runs::{
     Trace, TraceFormat, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
-use rewind_api::toolsets::{CreateToolset, Declarations, Toolset};
 use rewind_cli::{Console, Exit};
 use serde_json::{Value, json};
 
-const TOOLSET_ID: &str = "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4";
+const ACTION_SET_ID: &str = "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4";
 
 /// What the stand-in server saw and holds.
 #[derive(Debug, Default)]
@@ -65,7 +65,7 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         quarantine: None,
         script: "aa".repeat(32),
         script_title: None,
-        toolset: "bb".repeat(32),
+        action_set: "bb".repeat(32),
         epoch: 1,
         mode: RunMode::Live,
         labels: Labels::new(),
@@ -369,7 +369,7 @@ async fn list(
             script: run.script.clone(),
             script_title: run.script_title.clone(),
             headline: "export default async () => 1;".into(),
-            toolset: run.toolset.clone(),
+            action_set: run.action_set.clone(),
             labels: run.labels.clone(),
             started_at: run.created_at,
             ended_at: run.ended_at,
@@ -440,15 +440,15 @@ async fn journal(
     axum::Json(serde_json::from_str::<Value>(&text).unwrap()).into_response()
 }
 
-async fn create_toolset(
+async fn create_action_set(
     State(stub): State<Shared>,
     headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Response {
-    see(&stub, "toolset", &headers, BTreeMap::new(), body.clone());
-    let _: CreateToolset = serde_json::from_value(body).unwrap();
-    axum::Json(Toolset {
-        id: TOOLSET_ID.into(),
+    see(&stub, "action_set", &headers, BTreeMap::new(), body.clone());
+    let _: CreateActionSet = serde_json::from_value(body).unwrap();
+    axum::Json(ActionSet {
+        id: ACTION_SET_ID.into(),
         servers: Vec::new(),
         apis: Vec::new(),
         tools: Vec::new(),
@@ -469,7 +469,7 @@ async fn check(
 ) -> Response {
     see(&stub, "check", &headers, BTreeMap::new(), body.clone());
     let request: CheckRequest = serde_json::from_value(body).unwrap();
-    assert_eq!(request.toolset.as_deref(), Some(TOOLSET_ID));
+    assert_eq!(request.action_set.as_deref(), Some(ACTION_SET_ID));
     axum::Json(CheckResult {
         ok: true,
         diagnostics: Vec::new(),
@@ -503,7 +503,7 @@ fn app(stub: Shared) -> Router {
         .route("/v1/runs/{id}/trace", get(trace))
         .route("/v1/runs/{id}/release", post(release))
         .route("/v1/runs/{id}/journal", get(journal))
-        .route("/v1/toolsets", post(create_toolset))
+        .route("/v1/action-sets", post(create_action_set))
         .route("/v1/check", post(check))
         .with_state(stub)
 }
@@ -680,35 +680,45 @@ async fn a_refused_script_exits_65_with_its_diagnostics() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_toolset_file_is_registered_before_the_run() {
+async fn an_action_set_file_is_registered_before_the_run() {
     let server = Embedded::start().await;
     let script = server.write("hello.ts", "export default async () => 1;\n");
-    let toolset = server.write(
-        "toolset.json",
+    let action_set = server.write(
+        "action_set.json",
         r#"{"host": [{"name": "ask_user", "description": "Ask.", "inputSchema": {"type": "object"}}]}"#,
     );
     let (exit, _, _) = server
         .rewind(&[
             "run",
             script.to_str().unwrap(),
-            "--toolset",
-            toolset.to_str().unwrap(),
+            "--action-set",
+            action_set.to_str().unwrap(),
         ])
         .await;
     assert_eq!(exit, Exit::Success);
     let requests = server.requests();
-    assert_eq!(requests[0].what, "toolset");
+    assert_eq!(requests[0].what, "action_set");
     assert_eq!(requests[1].what, "start");
-    assert_eq!(requests[1].body["toolset"], TOOLSET_ID);
+    assert_eq!(requests[1].body["actionSet"], ACTION_SET_ID);
 
     let (exit, _, err) = server
-        .rewind(&["run", script.to_str().unwrap(), "--toolset", "missing.json"])
+        .rewind(&[
+            "run",
+            script.to_str().unwrap(),
+            "--action-set",
+            "missing.json",
+        ])
         .await;
     assert_eq!(exit, Exit::Usage, "{err}");
 
-    // A registered toolset lives on the server: the server checks the script against it.
+    // A registered action set lives on the server: the server checks the script against it.
     let (exit, out, _) = server
-        .rewind(&["check", script.to_str().unwrap(), "--toolset", TOOLSET_ID])
+        .rewind(&[
+            "check",
+            script.to_str().unwrap(),
+            "--action-set",
+            ACTION_SET_ID,
+        ])
         .await;
     assert_eq!(exit, Exit::Success);
     assert!(out.contains("no problems"), "{out}");

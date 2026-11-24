@@ -30,7 +30,7 @@ pub enum ProblemType {
     /// names it), or its allowed labels do not cover the request; a member without a grant in
     /// the organization.
     Forbidden,
-    /// 404: no such run, toolset, workflow, script, task, payload, subscription, API key, role,
+    /// 404: no such run, action set, workflow, script, task, payload, subscription, API key, role,
     /// member or invitation (for this tenant).
     NotFound,
     /// 409: a signal or a cancellation sent to a run that has ended.
@@ -54,9 +54,9 @@ pub enum ProblemType {
     UnsupportedMediaType,
     /// 422: the script was refused before any run exists; `diagnostics` says why.
     InvalidScript,
-    /// 422: the toolset was refused: an invalid schema, a duplicate tool name, or a transport
+    /// 422: the action set was refused: an invalid schema, a duplicate tool name, or a transport
     /// this server does not allow.
-    InvalidToolset,
+    InvalidActionSet,
     /// 422: the workflow was refused: its name, a signal's name, or a schema that cannot be
     /// used. A script that does not check is `invalid-script`.
     InvalidWorkflow,
@@ -85,8 +85,8 @@ pub enum ProblemType {
     QuotaExceeded,
     /// 500: a fault of the platform.
     Internal,
-    /// 502: an MCP server of the toolset cannot be reached, or answered with an error.
-    ToolsetUnavailable,
+    /// 502: an MCP server of the action set cannot be reached, or answered with an error.
+    ActionSetUnavailable,
     /// 502: the identity provider (WorkOS) cannot be reached, or answered with an error.
     IdentityUnavailable,
     /// 503: the server cannot serve the request now (stopping, or its store is unreachable).
@@ -110,7 +110,7 @@ impl ProblemType {
         ProblemType::PayloadTooLarge,
         ProblemType::UnsupportedMediaType,
         ProblemType::InvalidScript,
-        ProblemType::InvalidToolset,
+        ProblemType::InvalidActionSet,
         ProblemType::InvalidWorkflow,
         ProblemType::InvalidInput,
         ProblemType::InvalidTest,
@@ -120,7 +120,7 @@ impl ProblemType {
         ProblemType::SecretRequired,
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
-        ProblemType::ToolsetUnavailable,
+        ProblemType::ActionSetUnavailable,
         ProblemType::IdentityUnavailable,
         ProblemType::Unavailable,
     ];
@@ -143,7 +143,7 @@ impl ProblemType {
             ProblemType::PayloadTooLarge => "urn:rewind:problem:payload-too-large",
             ProblemType::UnsupportedMediaType => "urn:rewind:problem:unsupported-media-type",
             ProblemType::InvalidScript => "urn:rewind:problem:invalid-script",
-            ProblemType::InvalidToolset => "urn:rewind:problem:invalid-toolset",
+            ProblemType::InvalidActionSet => "urn:rewind:problem:invalid-action-set",
             ProblemType::InvalidWorkflow => "urn:rewind:problem:invalid-workflow",
             ProblemType::InvalidTest => "urn:rewind:problem:invalid-test",
             ProblemType::TestsFailed => "urn:rewind:problem:tests-failed",
@@ -153,7 +153,7 @@ impl ProblemType {
             ProblemType::SecretRequired => "urn:rewind:problem:secret-required",
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
             ProblemType::Internal => "urn:rewind:problem:internal",
-            ProblemType::ToolsetUnavailable => "urn:rewind:problem:toolset-unavailable",
+            ProblemType::ActionSetUnavailable => "urn:rewind:problem:action-set-unavailable",
             ProblemType::IdentityUnavailable => "urn:rewind:problem:identity-unavailable",
             ProblemType::Unavailable => "urn:rewind:problem:unavailable",
         }
@@ -176,7 +176,7 @@ impl ProblemType {
             ProblemType::PayloadTooLarge => 413,
             ProblemType::UnsupportedMediaType => 415,
             ProblemType::InvalidScript
-            | ProblemType::InvalidToolset
+            | ProblemType::InvalidActionSet
             | ProblemType::InvalidWorkflow
             | ProblemType::InvalidTest
             | ProblemType::TestsFailed
@@ -186,7 +186,7 @@ impl ProblemType {
             | ProblemType::SecretRequired => 422,
             ProblemType::QuotaExceeded => 429,
             ProblemType::Internal => 500,
-            ProblemType::ToolsetUnavailable | ProblemType::IdentityUnavailable => 502,
+            ProblemType::ActionSetUnavailable | ProblemType::IdentityUnavailable => 502,
             ProblemType::Unavailable => 503,
         }
     }
@@ -209,7 +209,7 @@ impl ProblemType {
             ProblemType::PayloadTooLarge => "Payload too large",
             ProblemType::UnsupportedMediaType => "Unsupported media type",
             ProblemType::InvalidScript => "The script was refused",
-            ProblemType::InvalidToolset => "The toolset was refused",
+            ProblemType::InvalidActionSet => "The action set was refused",
             ProblemType::InvalidWorkflow => "The workflow was refused",
             ProblemType::InvalidTest => "The test was refused",
             ProblemType::TestsFailed => "Tests did not pass",
@@ -219,7 +219,7 @@ impl ProblemType {
             ProblemType::SecretRequired => "A secret is missing or cannot be attached",
             ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",
-            ProblemType::ToolsetUnavailable => "A server of the toolset is unavailable",
+            ProblemType::ActionSetUnavailable => "A server of the action set is unavailable",
             ProblemType::IdentityUnavailable => "The identity provider is unavailable",
             ProblemType::Unavailable => "Service unavailable",
         }

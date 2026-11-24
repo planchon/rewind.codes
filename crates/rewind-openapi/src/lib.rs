@@ -16,7 +16,7 @@
 //!   `408`/`429`/`5xx` transient, another status a `ToolError`).
 //!
 //! The document is read as JSON values (`serde_json::Value`), not through an OpenAPI crate: none
-//! maintained reads both 3.0 and 3.1, and a toolset needs only paths, parameters, bodies,
+//! maintained reads both 3.0 and 3.1, and an action set needs only paths, parameters, bodies,
 //! responses, security schemes and `$ref`, whose schemas it pins as JSON Schema
 //! (`archi/08-decisions.md`).
 

@@ -33,7 +33,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::scenario::Step;
 use crate::tools::{Answer, ScenarioTools};
-use crate::{Case, Live, Recorded, T0, attachments, executor, scenario_toolset};
+use crate::{Case, Live, Recorded, T0, attachments, executor, scenario_action_set};
 
 /// The ids and seeds of a scenario's entropy, drawn in order: a run of the one partition has
 /// the version 7 id the committed journal holds.
@@ -169,7 +169,7 @@ impl World {
             node: self.at.clone(),
             namespace: None,
             labels: BTreeMap::new(),
-            toolset: None,
+            action_set: None,
             tools: BTreeSet::new(),
             slots: 100,
         };
@@ -286,7 +286,7 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     register_workflows(case, &world).await?;
     let mut request = StartRun::new(
         case.script.clone(),
-        case.toolset(),
+        case.action_set(),
         case.scenario.input.clone(),
     );
     request.metadata.secrets = attachments(&case.scenario.secrets)?;
@@ -446,17 +446,17 @@ async fn put_secrets(case: &Case, world: &World) -> Result<(), String> {
     Ok(())
 }
 
-/// Stores the scenario's workflows in the catalog, with the scenario's tools as their toolset.
+/// Stores the scenario's workflows in the catalog, with the scenario's tools as their action set.
 /// Their suites are empty: nothing gates them.
 async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
     if case.scenario.workflows.is_empty() {
         return Ok(());
     }
     let tenant = TenantId::local();
-    let toolset = scenario_toolset(&case.scenario)?;
+    let action_set = scenario_action_set(&case.scenario)?;
     let catalog = &world.plane.catalog;
     catalog
-        .put_toolset(&tenant, &toolset, &ToolDeclarations::default())
+        .put_action_set(&tenant, &action_set, &ToolDeclarations::default())
         .await
         .map_err(fail)?;
     for workflow in case.workflows()? {
@@ -465,7 +465,7 @@ async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
         let compiled = world
             .plane
             .executor
-            .compile(script, &toolset)
+            .compile(script, &action_set)
             .map_err(|err| format!("workflow {name}: {err}"))?;
         catalog
             .put_script(&tenant, script, &compiled)

@@ -1,5 +1,5 @@
-//! The pinned toolset document, v1 (`archi/02-journal.md`, "Stored format v1";
-//! `archi/04-tools.md`, "Toolsets and code generation").
+//! The pinned action set document, v1 (`archi/02-journal.md`, "Stored format v1";
+//! `archi/04-tools.md`, "Action sets and code generation").
 //!
 //! ```json
 //! {"servers":[{"concurrency":8,"name":"github","transport":{"type":"http","url":"https://…"}}],
@@ -11,13 +11,13 @@
 //! ```
 //!
 //! The document is written in its canonical form (RFC 8785, on one line), so its bytes hash to
-//! the toolset's digest. Routes are `{"type":"mcp","server":…}`, `{"type":"host"}` (with a
+//! the action set's digest. Routes are `{"type":"mcp","server":…}`, `{"type":"host"}` (with a
 //! `group` for a grouped host tool), `{"type":"builtin","builtin":"http","allowed_hosts":[…]}`
 //! and `{"type":"builtin","builtin":"webhook"}`; transports `{"type":"http","url":…}` and
 //! `{"type":"stdio","command":…,"args":[…],"env":{…}}`. Optional fields are omitted when
 //! absent: `description`, `schemas.output`, `policy.execution_timeout_ms`, `route.group`.
 //!
-//! A toolset that pins workflows also has `"workflows":[{"name":"triage","version":"<sha-256>",
+//! An action set that pins workflows also has `"workflows":[{"name":"triage","version":"<sha-256>",
 //! "description":…,"schemas":{"input":…,"output":…,"signals":{"approval":…}}}]`; one that pins
 //! none has no `workflows`. The workflows' built-ins are derived from them, never written.
 //!
@@ -27,7 +27,7 @@
 //! `"encoding":"base64"` for HTTP basic; `format` left out for the value alone) or
 //! `{"type":"secret","env":"GITHUB_TOKEN"}`. Never a value.
 //!
-//! A toolset with APIs has `"apis":[{"base_url":"https://api.example.com","concurrency":8,
+//! An action set with APIs has `"apis":[{"base_url":"https://api.example.com","concurrency":8,
 //! "name":"dax","auth":…}]`; one without has no `apis`. An API tool's route is
 //! `{"type":"api","api":"dax"}`, and it has an `"operation":{"body":true,
 //! "idempotency_key":false,"method":"post","parameters":[{"in":"path","name":"id"}],
@@ -35,7 +35,7 @@
 //!
 //! The workflow version document (the `workflows` table) is
 //! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"script":"<sha-256>",
-//! "toolset":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
+//! "action_set":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
 //! `labels`, the scope of a grant limited to labels it was saved under, is omitted when empty:
 //! a version saved tenant-wide keeps the document it had before versions carried labels. So is
 //! `secrets`, its attachments (`{"github":"ns/github","zendesk":"org/zendesk"}`): a version
@@ -45,17 +45,17 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Api, ApiOperation, ApiParameter, Attachments, Builtin, Digest, HttpMethod, Interruption,
-    McpServer, McpTransport, ParameterLocation, PinnedWorkflow, RetiredTest, SecretEncoding,
-    SecretPlacement, SecretRef, Suite, SuiteTest, Tool, ToolAuth, ToolPolicy, ToolRoute, Toolset,
-    UpdatedTest, Workflow, WorkflowSchemas,
+    ActionSet, Api, ApiOperation, ApiParameter, Attachments, Builtin, Digest, HttpMethod,
+    Interruption, McpServer, McpTransport, ParameterLocation, PinnedWorkflow, RetiredTest,
+    SecretEncoding, SecretPlacement, SecretRef, Suite, SuiteTest, Tool, ToolAuth, ToolPolicy,
+    ToolRoute, UpdatedTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ToolsetV1 {
+struct ActionSetV1 {
     servers: Vec<ServerV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     apis: Vec<ApiV1>,
@@ -89,7 +89,7 @@ struct WorkflowV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     script: String,
-    toolset: String,
+    action_set: String,
     schemas: WorkflowSchemasV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent: Option<String>,
@@ -295,14 +295,14 @@ enum InterruptionV1 {
 }
 
 /// The document as a JSON value, `"v"` included. The caller writes it in canonical form.
-pub(crate) fn toolset_document(toolset: &Toolset) -> Value {
-    let dto = ToolsetV1 {
-        servers: toolset.servers().iter().map(server_dto).collect(),
-        apis: toolset.apis().iter().map(api_dto).collect(),
-        tools: toolset.tools().iter().map(tool_dto).collect(),
-        workflows: toolset.workflows().iter().map(pinned_dto).collect(),
+pub(crate) fn action_set_document(action_set: &ActionSet) -> Value {
+    let dto = ActionSetV1 {
+        servers: action_set.servers().iter().map(server_dto).collect(),
+        apis: action_set.apis().iter().map(api_dto).collect(),
+        tools: action_set.tools().iter().map(tool_dto).collect(),
+        workflows: action_set.workflows().iter().map(pinned_dto).collect(),
     };
-    let mut document = serde_json::to_value(dto).expect("toolset DTOs always serialize");
+    let mut document = serde_json::to_value(dto).expect("action set DTOs always serialize");
     if let Value::Object(fields) = &mut document {
         fields.insert("v".into(), Value::from(crate::VERSION));
     }
@@ -310,8 +310,8 @@ pub(crate) fn toolset_document(toolset: &Toolset) -> Value {
 }
 
 /// Decodes the fields of a v1 document, its version already taken out.
-pub(crate) fn decode_toolset(document: Value) -> Result<Toolset, String> {
-    let dto: ToolsetV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
+pub(crate) fn decode_action_set(document: Value) -> Result<ActionSet, String> {
+    let dto: ActionSetV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
     let servers = dto
         .servers
         .into_iter()
@@ -360,8 +360,8 @@ pub(crate) fn decode_toolset(document: Value) -> Result<Toolset, String> {
             })
         })
         .collect::<Result<Vec<PinnedWorkflow>, String>>()?;
-    Toolset::from_parts(servers, apis, tools)
-        .and_then(|toolset| toolset.with_workflows(workflows))
+    ActionSet::from_parts(servers, apis, tools)
+        .and_then(|action_set| action_set.with_workflows(workflows))
         .map_err(|err| err.to_string())
 }
 
@@ -373,7 +373,7 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
         name: workflow.name().to_owned(),
         description: workflow.description().map(str::to_owned),
         script: workflow.script().to_hex(),
-        toolset: workflow.toolset().to_hex(),
+        action_set: workflow.action_set().to_hex(),
         schemas: schemas_dto(workflow.schemas()),
         parent: suite.parent.map(|parent| parent.to_hex()),
         tests: suite
@@ -472,7 +472,7 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
         dto.name,
         dto.description,
         digest(&dto.script, "\"script\"")?,
-        digest(&dto.toolset, "\"toolset\"")?,
+        digest(&dto.action_set, "\"action_set\"")?,
         schemas_from_dto(dto.schemas),
     )
     .and_then(|workflow| workflow.with_suite(suite))
@@ -671,7 +671,9 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
             allowed_hosts: None,
         },
         ToolRoute::Builtin(Builtin::Workflow { .. }) => {
-            unreachable!("a toolset declares no workflow built-in: they come from its workflows")
+            unreachable!(
+                "an action set declares no workflow built-in: they come from its workflows"
+            )
         }
     };
     let policy = &tool.policy;
@@ -688,7 +690,7 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
     }
 }
 
-/// A tool's policy as the toolset document and a tool task write it.
+/// A tool's policy as the action set document and a tool task write it.
 pub(crate) fn policy_dto(policy: &ToolPolicy) -> PolicyV1 {
     PolicyV1 {
         on_interruption: match policy.on_interruption {

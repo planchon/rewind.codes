@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use crate::ports::TraceContext;
 
-/// What the declarations generated from a toolset are made of, as errors name them.
-pub const TOOLSET_TEXT: &str = "the toolset's descriptions or schemas";
+/// What the declarations generated from an action set are made of, as errors name them.
+pub const ACTION_SET_TEXT: &str = "the action set's descriptions or schemas";
 
 /// A text to store holds a NUL character. The name says which text, for the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

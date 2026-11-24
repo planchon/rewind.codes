@@ -328,7 +328,7 @@ async fn a_keys_stream_closes_once_the_key_or_its_right_is_gone() {
     still_open(&mut stream).await;
     let narrowed = PutRole {
         description: "no longer follows the runs".into(),
-        permissions: vec![Permission::ToolsetsRead],
+        permissions: vec![Permission::ActionsRead],
     };
     server.admin.put_role("watcher", &narrowed).await.unwrap();
     closes(

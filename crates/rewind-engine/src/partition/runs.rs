@@ -648,7 +648,7 @@ impl<P: Plane> Owner<P> {
             origin,
             suffix_len,
             script: started.script,
-            toolset: started.toolset,
+            action_set: started.action_set,
             status: RunStatus::Pending,
             epoch: started.epoch,
             attempt: Attempt::FIRST,
@@ -2006,19 +2006,19 @@ async fn seal_attempt<P: Plane>(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("script {} not found", head.script))?;
-    let toolset = plane
+    let action_set = plane
         .catalog()
-        .get_toolset(&run.tenant, head.toolset)
+        .get_action_set(&run.tenant, head.action_set)
         .await
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("toolset {} not found", head.toolset))?;
+        .ok_or_else(|| format!("action set {} not found", head.action_set))?;
     plane
         .archive()
         .put(&crate::ports::SealedAttempt {
             run: run.clone(),
             attempt: head.attempt,
             script: script.script,
-            toolset: toolset.toolset,
+            action_set: action_set.action_set,
             entries,
         })
         .await

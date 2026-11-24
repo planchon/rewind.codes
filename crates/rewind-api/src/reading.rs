@@ -23,9 +23,9 @@ pub struct ToolStatsFilter {
     /// Only the tools whose name starts with this (`github.`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
-    /// Only calls of runs of this toolset.
+    /// Only calls of runs of this action set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
+    pub action_set: Option<String>,
     /// Only this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,

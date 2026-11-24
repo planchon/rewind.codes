@@ -426,9 +426,9 @@ pub(super) async fn tools(
 ) -> Result<Json<ToolStatsPage>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let scope = scope(&caller, filter.q.as_deref())?;
-    if filter.toolset.is_some() {
+    if filter.action_set.is_some() {
         return Err(ApiError::invalid(
-            "toolset: tool statistics are per tool, without a per-toolset breakdown",
+            "action set: tool statistics are per tool, without a per-action-set breakdown",
         ));
     }
     for text in [&filter.prefix, &filter.tool].into_iter().flatten() {

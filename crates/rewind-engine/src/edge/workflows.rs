@@ -12,7 +12,7 @@
 //! Everything a save reads and writes is the control plane's: no partition takes part. The suite
 //! runs in the driver, on this process's executor ([`Edge::run_tests`]).
 
-use rewind_core::{Attachments, Script, Toolset, Workflow};
+use rewind_core::{ActionSet, Attachments, Script, Workflow};
 
 use super::Edge;
 use crate::attachments::{self, AttachRights, AttachmentCheck};
@@ -38,8 +38,8 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Checks a workflow and stores it as a new version: its name and signals, its schemas, its
-    /// script against its toolset (the checks at start), its attachments, then tsgo against
-    /// the toolset's and its own declarations; then the gate: its suite, composed from its
+    /// script against its action set (the checks at start), its attachments, then tsgo against
+    /// the action set's and its own declarations; then the gate: its suite, composed from its
     /// parent's, runs against it, and the version is stored only if every test passes. Saving
     /// a version again under the same labels changes nothing; under other labels, it is another
     /// version, carrying them.
@@ -59,7 +59,7 @@ impl<P: Plane> Edge<P> {
             request.name,
             request.description,
             request.script.digest(),
-            request.toolset,
+            request.action_set,
             request.schemas,
         )?
         .with_labels(request.labels)
@@ -84,19 +84,19 @@ impl<P: Plane> Edge<P> {
         let tenant = request.tenant;
         let catalog = self.plane.catalog();
         let stored = catalog
-            .get_toolset(&tenant, request.toolset)
+            .get_action_set(&tenant, request.action_set)
             .await
             .map_err(StoreError::from)?
-            .ok_or(RegisterError::ToolsetNotFound(request.toolset))?;
+            .ok_or(RegisterError::ActionSetNotFound(request.action_set))?;
         let compiled = self
             .plane
             .executor()
-            .compile(&request.script, &stored.toolset)
+            .compile(&request.script, &stored.action_set)
             .map_err(RegisterError::InvalidScript)?;
         self.check_saved_attachments(
             &tenant,
             &request.script,
-            &stored.toolset,
+            &stored.action_set,
             workflow.secrets(),
             &request.attach,
         )
@@ -170,7 +170,7 @@ impl<P: Plane> Edge<P> {
                 kit.loader,
                 &Subject {
                     script: &request.script,
-                    toolset: &stored.toolset,
+                    action_set: &stored.action_set,
                     interface: Some(workflow.schemas()),
                 },
                 &composed.tests,
@@ -237,7 +237,7 @@ impl<P: Plane> Edge<P> {
             .is_ok_and(|made| made.version() == latest.version()))
     }
 
-    /// Refuses the attachments of a version to save that do not fit its toolset and its script,
+    /// Refuses the attachments of a version to save that do not fit its action set and its script,
     /// or that the saver may not attach: an organization's secret must exist and be theirs to
     /// attach; an `ns/` secret is checked by its name only, since no namespace is known yet
     /// (`archi/04-tools.md`, "Secrets": a workflow version is the permission).
@@ -245,18 +245,18 @@ impl<P: Plane> Edge<P> {
         &self,
         tenant: &TenantId,
         script: &Script,
-        toolset: &Toolset,
+        action_set: &ActionSet,
         secrets: &Attachments,
         rights: &AttachRights,
     ) -> Result<(), RegisterError> {
-        if secrets.is_empty() && toolset.taking_secrets().next().is_none() {
+        if secrets.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
         let imports = self.plane.executor().tool_imports(script);
         let check = AttachmentCheck {
             tenant,
             namespace: None,
-            toolset,
+            action_set,
             imports: imports.as_ref(),
             attachments: secrets,
             rights,

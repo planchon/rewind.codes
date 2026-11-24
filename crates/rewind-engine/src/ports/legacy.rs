@@ -45,7 +45,7 @@ pub struct LegacyRun {
     pub origin: String,
     pub suffix_len: u8,
     pub script: Digest,
-    pub toolset: Digest,
+    pub action_set: Digest,
     /// The determinism epoch of its `run_started`.
     pub epoch: Epoch,
     /// The deadline of its `run_started`.
@@ -91,7 +91,7 @@ pub enum LegacyHistory {
     Archived(Digest),
 }
 
-/// A tool task of a run, as its row states it; its route and policy are the pinned toolset's.
+/// A tool task of a run, as its row states it; its route and policy are the pinned action set's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LegacyTask {
     pub seq: Seq,

@@ -35,6 +35,115 @@
         ],
         "type": "string"
       },
+      "ActionSet": {
+        "description": "A registered action set, as pinned.",
+        "properties": {
+          "apis": {
+            "description": "Its APIs, sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/ApiSummary"
+            },
+            "type": "array"
+          },
+          "declarations": {
+            "$ref": "#/components/schemas/Declarations"
+          },
+          "id": {
+            "description": "The digest of the pinned action set (SHA-256, lowercase hex). Runs record it.",
+            "type": "string"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/ServerSummary"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "description": "The operations of its APIs left out at registration: a body other than JSON, a cookie\nparameter. Only in the answer of the registration.",
+            "items": {
+              "$ref": "#/components/schemas/SkippedOperation"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "description": "Every tool a script of this action set can call, sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/Tool"
+            },
+            "type": "array"
+          },
+          "workflows": {
+            "description": "The workflows its scripts may start, sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/PinnedWorkflow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "servers",
+          "tools",
+          "declarations"
+        ],
+        "type": "object"
+      },
+      "ActionSetList": {
+        "description": "`GET /v1/action-sets`: the action sets registered by the tenant, by id.",
+        "properties": {
+          "actionSets": {
+            "items": {
+              "$ref": "#/components/schemas/ActionSetSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "actionSets"
+        ],
+        "type": "object"
+      },
+      "ActionSetSummary": {
+        "description": "A registered action set, without its schemas and declarations.",
+        "properties": {
+          "apis": {
+            "description": "Its APIs, sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/ApiSummary"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/ServerSummary"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "description": "The names of its tools, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workflows": {
+            "description": "The names of the workflows it pins, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "servers",
+          "tools"
+        ],
+        "type": "object"
+      },
       "Api": {
         "additionalProperties": false,
         "description": "An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, \"API tools\"). Each\noperation is a tool: its input the path, query and header parameters by name and the JSON\nbody under `body`; its output the schema of its first `2xx` JSON response.",
@@ -174,7 +283,7 @@
         "type": "object"
       },
       "ApiSummary": {
-        "description": "An API of a toolset, as pinned.",
+        "description": "An API of an action set, as pinned.",
         "properties": {
           "auth": {
             "oneOf": [
@@ -249,7 +358,7 @@
         "type": "string"
       },
       "Auth": {
-        "description": "How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,\n\"Authenticating calls\"). Part of the pinned toolset; never a value.",
+        "description": "How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,\n\"Authenticating calls\"). Part of the pinned action set; never a value.",
         "oneOf": [
           {
             "description": "Nothing: a public server. For an API, overrides its document's security requirement.\n(A struct variant, so that unknown fields are refused.)",
@@ -656,18 +765,18 @@
       },
       "CheckRequest": {
         "additionalProperties": false,
-        "description": "`POST /v1/check`: type-checks a script against the sandbox lib and a toolset's\ndeclarations, in strict mode, before anything runs.",
+        "description": "`POST /v1/check`: type-checks a script against the sandbox lib and an action set's\ndeclarations, in strict mode, before anything runs.",
         "properties": {
-          "script": {
-            "description": "The TypeScript source: a single ES module whose default export is the entry point.",
-            "type": "string"
-          },
-          "toolset": {
-            "description": "The toolset whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty.",
+          "actionSet": {
+            "description": "The action set whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty.",
             "type": [
               "string",
               "null"
             ]
+          },
+          "script": {
+            "description": "The TypeScript source: a single ES module whose default export is the entry point.",
+            "type": "string"
           }
         },
         "required": [
@@ -1120,6 +1229,105 @@
         ],
         "type": "object"
       },
+      "CreateActionSet": {
+        "additionalProperties": false,
+        "description": "`POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` tool, with a policy per\ntool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI\ndocuments, and pins their schemas. The action set is content-addressed: registering the same\naction set twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
+        "example": {
+          "apis": [
+            {
+              "auth": {
+                "type": "rewind"
+              },
+              "name": "crm",
+              "openapi": "https://api.example.com/openapi.json"
+            }
+          ],
+          "host": [
+            {
+              "description": "Ask the end user a question and return their answer.",
+              "inputSchema": {
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "question"
+                ],
+                "type": "object"
+              },
+              "name": "ask_user",
+              "policy": {
+                "onInterruption": "at_most_once"
+              }
+            }
+          ],
+          "mcp": [
+            {
+              "auth": {
+                "format": "Bearer {secret}",
+                "header": "Authorization",
+                "type": "secret"
+              },
+              "name": "github",
+              "url": "https://mcp.example.com/github"
+            }
+          ]
+        },
+        "properties": {
+          "apis": {
+            "description": "APIs described by OpenAPI documents: one tool per operation, named\n`<api>.<operationId>`, called by Rewind.",
+            "items": {
+              "$ref": "#/components/schemas/Api"
+            },
+            "type": "array"
+          },
+          "base": {
+            "description": "Derives the action set from a registered one: its servers, tools and workflows are kept as\npinned, without listing the servers again; `workflows` adds workflows or pins them again.\n`mcp`, `host` and `http` must then be empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.tool` puts the tool in the `group` namespace of `rewind:tools`.",
+            "items": {
+              "$ref": "#/components/schemas/HostTool"
+            },
+            "type": "array"
+          },
+          "http": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HttpTool",
+                "description": "Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mcp": {
+            "description": "MCP servers. Their tools are called by Rewind and named `<server>.<tool>`.",
+            "items": {
+              "$ref": "#/components/schemas/McpServer"
+            },
+            "type": "array"
+          },
+          "secrets": {
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "The organization's secrets that list the tools of the MCP servers whose `auth` takes one,\nby server: `{ \"github\": \"org/github\" }`. Only `org/` secrets; no run keeps them, and they\nare not part of the action set's id. Requires `secrets:use`."
+          },
+          "workflows": {
+            "description": "The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest\nversion, `triage@<version>` or `triage@v12` one version. The versions are pinned: the\naction set's scripts are checked against them, and start them, for their whole life.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "CreateApiKey": {
         "additionalProperties": false,
         "description": "`POST /v1/api-keys`: a key `rewind_sk_…`, with its grant. Keys are stored hashed: the key\nitself is only in the answer. Creating a key needs every permission of its role.",
@@ -1269,109 +1477,11 @@
         ],
         "type": "object"
       },
-      "CreateToolset": {
-        "additionalProperties": false,
-        "description": "`POST /v1/toolsets`: MCP servers, APIs, host tools and the `http` tool, with a policy per\ntool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI\ndocuments, and pins their schemas. The toolset is content-addressed: registering the same\ntoolset twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
-        "example": {
-          "apis": [
-            {
-              "auth": {
-                "type": "rewind"
-              },
-              "name": "crm",
-              "openapi": "https://api.example.com/openapi.json"
-            }
-          ],
-          "host": [
-            {
-              "description": "Ask the end user a question and return their answer.",
-              "inputSchema": {
-                "properties": {
-                  "question": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "question"
-                ],
-                "type": "object"
-              },
-              "name": "ask_user",
-              "policy": {
-                "onInterruption": "at_most_once"
-              }
-            }
-          ],
-          "mcp": [
-            {
-              "auth": {
-                "format": "Bearer {secret}",
-                "header": "Authorization",
-                "type": "secret"
-              },
-              "name": "github",
-              "url": "https://mcp.example.com/github"
-            }
-          ]
-        },
-        "properties": {
-          "apis": {
-            "description": "APIs described by OpenAPI documents: one tool per operation, named\n`<api>.<operationId>`, called by Rewind.",
-            "items": {
-              "$ref": "#/components/schemas/Api"
-            },
-            "type": "array"
-          },
-          "base": {
-            "description": "Derives the toolset from a registered one: its servers, tools and workflows are kept as\npinned, without listing the servers again; `workflows` adds workflows or pins them again.\n`mcp`, `host` and `http` must then be empty.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "host": {
-            "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.tool` puts the tool in the `group` namespace of `rewind:tools`.",
-            "items": {
-              "$ref": "#/components/schemas/HostTool"
-            },
-            "type": "array"
-          },
-          "http": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/HttpTool",
-                "description": "Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "mcp": {
-            "description": "MCP servers. Their tools are called by Rewind and named `<server>.<tool>`.",
-            "items": {
-              "$ref": "#/components/schemas/McpServer"
-            },
-            "type": "array"
-          },
-          "secrets": {
-            "$ref": "#/components/schemas/BTreeMap",
-            "description": "The organization's secrets that list the tools of the MCP servers whose `auth` takes one,\nby server: `{ \"github\": \"org/github\" }`. Only `org/` secrets; no run keeps them, and they\nare not part of the toolset's id. Requires `secrets:use`."
-          },
-          "workflows": {
-            "description": "The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest\nversion, `triage@<version>` or `triage@v12` one version. The versions are pinned: the\ntoolset's scripts are checked against them, and start them, for their whole life.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object"
-      },
       "CreateWorkflow": {
         "additionalProperties": false,
-        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked\nagainst its toolset and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain under the same labels returns the version saved first (200): the labels of a key limited\nto labels are part of the version, so such a key saves a version of its own.",
+        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked\nagainst its action set and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain under the same labels returns the version saved first (200): the labels of a key limited\nto labels are part of the version, so such a key saves a version of its own.",
         "example": {
+          "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
           "description": "Triage the stale issues of a repository, after approval.",
           "input": {
             "properties": {
@@ -1409,10 +1519,13 @@
               ],
               "type": "object"
             }
-          },
-          "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4"
+          }
         },
         "properties": {
+          "actionSet": {
+            "description": "The id of the action set its runs call, already registered.",
+            "type": "string"
+          },
           "description": {
             "description": "Shown to the model in the declarations.",
             "type": [
@@ -1465,10 +1578,6 @@
             },
             "type": "array"
           },
-          "toolset": {
-            "description": "The id of the toolset its runs call, already registered.",
-            "type": "string"
-          },
           "update": {
             "description": "Inherited tests replaced, each with a reason: their state or result is out of date.",
             "items": {
@@ -1479,7 +1588,7 @@
         },
         "required": [
           "name",
-          "toolset",
+          "actionSet",
           "script",
           "input",
           "output"
@@ -1489,6 +1598,9 @@
       "CredentialsExpired": {
         "description": "A call parked because its server refused the secret or the signature (`refused`), or\nbecause the secret the run attached no longer exists (`missing`, nothing was sent). Put the\nsecret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,\nfor a refused signature, approve the call once the server accepts the key: the call is then\nsent again with the same idempotency key.",
         "properties": {
+          "actionSet": {
+            "type": "string"
+          },
           "labels": {
             "$ref": "#/components/schemas/Labels"
           },
@@ -1529,9 +1641,6 @@
           },
           "tool": {
             "type": "string"
-          },
-          "toolset": {
-            "type": "string"
           }
         },
         "required": [
@@ -1541,7 +1650,7 @@
           "taskId",
           "seq",
           "tool",
-          "toolset",
+          "actionSet",
           "reason",
           "message"
         ],
@@ -1606,10 +1715,10 @@
         "type": "string"
       },
       "Declarations": {
-        "description": "The toolset's declarations, generated by `rewind-codegen`.",
+        "description": "The action set's declarations, generated by `rewind-codegen`.",
         "properties": {
           "dts": {
-            "description": "`rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the\n`rewind:workflows` module when the toolset pins workflows.",
+            "description": "`rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the\n`rewind:workflows` module when the action set pins workflows.",
             "type": "string"
           },
           "prompt": {
@@ -1816,6 +1925,9 @@
           {
             "description": "The run's first entry. The seed is left out: it is only in the exported journal.",
             "properties": {
+              "actionSet": {
+                "type": "string"
+              },
               "epoch": {
                 "format": "int32",
                 "minimum": 0,
@@ -1834,9 +1946,6 @@
               "script": {
                 "type": "string"
               },
-              "toolset": {
-                "type": "string"
-              },
               "type": {
                 "enum": [
                   "run_started"
@@ -1846,7 +1955,7 @@
             },
             "required": [
               "script",
-              "toolset",
+              "actionSet",
               "input",
               "epoch",
               "expiresAt",
@@ -3121,7 +3230,7 @@
         "type": "object"
       },
       "LastRead": {
-        "description": "The last read of a secret: by which run, of which namespace, when. A toolset's registration\nreads an organization's secret to list the tools of the MCP server it is attached for, before\nany run exists: such a read names neither run nor namespace.",
+        "description": "The last read of a secret: by which run, of which namespace, when. An action set's registration\nreads an organization's secret to list the tools of the MCP server it is attached for, before\nany run exists: such a read names neither run nor namespace.",
         "properties": {
           "at": {
             "format": "date-time",
@@ -3131,7 +3240,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/NamespaceName",
-                "description": "The namespace of that run; `null` for a toolset's registration."
+                "description": "The namespace of that run; `null` for an action set's registration."
               },
               {
                 "type": "null"
@@ -3139,7 +3248,7 @@
             ]
           },
           "run": {
-            "description": "The run that read it; `null` for a toolset's registration.",
+            "description": "The run that read it; `null` for an action set's registration.",
             "type": [
               "string",
               "null"
@@ -3825,8 +3934,8 @@
           "runs:control",
           "runs:quarantine",
           "runs:delete",
-          "toolsets:read",
-          "toolsets:write",
+          "actions:read",
+          "actions:write",
           "scripts:write",
           "secrets:read",
           "secrets:write",
@@ -3881,7 +3990,7 @@
         "type": "object"
       },
       "PinnedWorkflow": {
-        "description": "A workflow a toolset pins.",
+        "description": "A workflow an action set pins.",
         "properties": {
           "description": {
             "type": [
@@ -4899,6 +5008,10 @@
               }
             ]
           },
+          "actionSet": {
+            "description": "Digest of the pinned action set.",
+            "type": "string"
+          },
           "attempts": {
             "description": "How many times each tool call was sent, by seq, for the calls sent more than once: a\ncall retried after a transient failure, or sent again after its worker or dispatcher\ndied. Attempts live in the tool tasks, not in the journal: the read model keeps them.",
             "items": {
@@ -5044,10 +5157,6 @@
           "status": {
             "$ref": "#/components/schemas/RunStatus"
           },
-          "toolset": {
-            "description": "Digest of the pinned toolset.",
-            "type": "string"
-          },
           "traceId": {
             "description": "The OpenTelemetry trace the run belongs to: the caller's if it gave a `traceparent`,\nelse derived from the run id. 32 hex digits.",
             "type": "string"
@@ -5081,7 +5190,7 @@
           "namespace",
           "status",
           "script",
-          "toolset",
+          "actionSet",
           "epoch",
           "mode",
           "labels",
@@ -5317,6 +5426,9 @@
       "RunSummary": {
         "description": "A run in a list, from the read model.",
         "properties": {
+          "actionSet": {
+            "type": "string"
+          },
           "endedAt": {
             "format": "date-time",
             "type": [
@@ -5425,9 +5537,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "toolset": {
-            "type": "string"
-          },
           "waitingFor": {
             "description": "With `active`: what the run waits for.",
             "items": {
@@ -5459,7 +5568,7 @@
           "quarantined",
           "script",
           "headline",
-          "toolset",
+          "actionSet",
           "labels",
           "startedAt",
           "lastActivityAt",
@@ -6278,6 +6387,7 @@
         "additionalProperties": false,
         "description": "`POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a\nscript that cannot run is refused (`invalid-script`) before any run exists.\n\nWith the `Idempotency-Key` header, a request repeated with the same key returns the run the\nfirst one started, instead of starting a second one.",
         "example": {
+          "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
           "input": {
             "repo": "acme/api"
           },
@@ -6289,10 +6399,16 @@
           "secrets": {
             "github": "ns/github"
           },
-          "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
           "wait": "30s"
         },
         "properties": {
+          "actionSet": {
+            "description": "The action set the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "check": {
             "description": "Type-check the script before starting it. `true` by default.",
             "type": [
@@ -6314,13 +6430,6 @@
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
             "description": "The secrets the run reads, by MCP server or API: `{ \"github\": \"ns/github\", \"zendesk\":\n\"org/zendesk\" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).\nRequired for each server the script imports whose `auth` takes a secret; checked against\nthe caller's rights (`secret-required`). A run of a `workflow` gives none: its version's\nare read."
-          },
-          "toolset": {
-            "description": "The toolset the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.",
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "traceparent": {
             "description": "W3C trace context of the caller (typically the LLM call that wrote the script): the run\nappears under it in the caller's trace.",
@@ -6358,7 +6467,7 @@
             ]
           },
           "workflow": {
-            "description": "Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version\nor `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one\nversion. Its input is checked against the workflow's input schema (`invalid-input`); the\nscript is not checked again.",
+            "description": "Instead of `script` and `actionSet`: a run of this workflow, `triage` for its latest version\nor `triage@<version>` (12 hex digits at least) or `triage@v12` (its number) for one\nversion. Its input is checked against the workflow's input schema (`invalid-input`); the\nscript is not checked again.",
             "type": [
               "string",
               "null"
@@ -6763,7 +6872,7 @@
       },
       "TestRequest": {
         "additionalProperties": false,
-        "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the script; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected script, or the version on a new toolset.",
+        "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the script; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected script, or the version on a new action set.",
         "example": {
           "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
           "tests": [
@@ -6793,6 +6902,13 @@
           ]
         },
         "properties": {
+          "actionSet": {
+            "description": "The action set the script imports from `rewind:tools`. With `workflow`, the version's own\nwhen absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "script": {
             "description": "The TypeScript source. With `workflow`, the version's own when absent.",
             "type": [
@@ -6805,13 +6921,6 @@
               "$ref": "#/components/schemas/TestInput"
             },
             "type": "array"
-          },
-          "toolset": {
-            "description": "The toolset the script imports from `rewind:tools`. With `workflow`, the version's own\nwhen absent.",
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "workflow": {
             "description": "A workflow, `triage` (its latest version), `triage@<version>` or `triage@v12`: its suite\nruns too.",
@@ -7332,7 +7441,7 @@
       },
       "ToolPolicy": {
         "additionalProperties": false,
-        "description": "A tool's policy, pinned in the toolset (`archi/04-tools.md`, \"Policies\"). Every field is\noptional: what is not given takes its default.",
+        "description": "A tool's policy, pinned in the action set (`archi/04-tools.md`, \"Policies\"). Every field is\noptional: what is not given takes its default.",
         "properties": {
           "approval": {
             "description": "The call waits for the harness's approval (`POST /v1/tasks/{id}/approve`) before it is\nsent. Off by default.",
@@ -7438,8 +7547,12 @@
         ]
       },
       "ToolSchemaChanged": {
-        "description": "A call parked because the tool no longer matches its pinned schema\n(`archi/04-tools.md`, \"When a toolset changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\ntoolset; `message` says what changed.",
+        "description": "A call parked because the tool no longer matches its pinned schema\n(`archi/04-tools.md`, \"When an action set changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\naction set; `message` says what changed.",
         "properties": {
+          "actionSet": {
+            "description": "The run's action set, where the pinned schema is.",
+            "type": "string"
+          },
           "labels": {
             "$ref": "#/components/schemas/Labels"
           },
@@ -7471,10 +7584,6 @@
           },
           "tool": {
             "type": "string"
-          },
-          "toolset": {
-            "description": "The run's toolset, where the pinned schema is.",
-            "type": "string"
           }
         },
         "required": [
@@ -7484,7 +7593,7 @@
           "taskId",
           "seq",
           "tool",
-          "toolset",
+          "actionSet",
           "message"
         ],
         "type": "object"
@@ -7575,115 +7684,6 @@
         "required": [
           "since",
           "until",
-          "tools"
-        ],
-        "type": "object"
-      },
-      "Toolset": {
-        "description": "A registered toolset, as pinned.",
-        "properties": {
-          "apis": {
-            "description": "Its APIs, sorted by name.",
-            "items": {
-              "$ref": "#/components/schemas/ApiSummary"
-            },
-            "type": "array"
-          },
-          "declarations": {
-            "$ref": "#/components/schemas/Declarations"
-          },
-          "id": {
-            "description": "The digest of the pinned toolset (SHA-256, lowercase hex). Runs record it.",
-            "type": "string"
-          },
-          "servers": {
-            "items": {
-              "$ref": "#/components/schemas/ServerSummary"
-            },
-            "type": "array"
-          },
-          "skipped": {
-            "description": "The operations of its APIs left out at registration: a body other than JSON, a cookie\nparameter. Only in the answer of the registration.",
-            "items": {
-              "$ref": "#/components/schemas/SkippedOperation"
-            },
-            "type": "array"
-          },
-          "tools": {
-            "description": "Every tool a script of this toolset can call, sorted by name.",
-            "items": {
-              "$ref": "#/components/schemas/Tool"
-            },
-            "type": "array"
-          },
-          "workflows": {
-            "description": "The workflows its scripts may start, sorted by name.",
-            "items": {
-              "$ref": "#/components/schemas/PinnedWorkflow"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "servers",
-          "tools",
-          "declarations"
-        ],
-        "type": "object"
-      },
-      "ToolsetList": {
-        "description": "`GET /v1/toolsets`: the toolsets registered by the tenant, by id.",
-        "properties": {
-          "toolsets": {
-            "items": {
-              "$ref": "#/components/schemas/ToolsetSummary"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "toolsets"
-        ],
-        "type": "object"
-      },
-      "ToolsetSummary": {
-        "description": "A registered toolset, without its schemas and declarations.",
-        "properties": {
-          "apis": {
-            "description": "Its APIs, sorted by name.",
-            "items": {
-              "$ref": "#/components/schemas/ApiSummary"
-            },
-            "type": "array"
-          },
-          "id": {
-            "type": "string"
-          },
-          "servers": {
-            "items": {
-              "$ref": "#/components/schemas/ServerSummary"
-            },
-            "type": "array"
-          },
-          "tools": {
-            "description": "The names of its tools, sorted.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "workflows": {
-            "description": "The names of the workflows it pins, sorted.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "servers",
           "tools"
         ],
         "type": "object"
@@ -8267,6 +8267,10 @@
       "Workflow": {
         "description": "A version of a workflow: immutable, identified by its digest.",
         "properties": {
+          "actionSet": {
+            "description": "The id of the action set its runs call.",
+            "type": "string"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -8332,10 +8336,6 @@
             },
             "type": "array"
           },
-          "toolset": {
-            "description": "The id of the toolset its runs call.",
-            "type": "string"
-          },
           "updated": {
             "items": {
               "$ref": "#/components/schemas/UpdatedTest"
@@ -8351,7 +8351,7 @@
           "name",
           "version",
           "number",
-          "toolset",
+          "actionSet",
           "script",
           "input",
           "output",
@@ -8497,7 +8497,7 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
+    "description": "The HTTP API /v1 of Rewind: action sets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
@@ -9935,6 +9935,446 @@
         ]
       }
     },
+    "/v1/action-sets": {
+      "get": {
+        "description": "The action sets the tenant registered, by id, with their servers and tool names.",
+        "operationId": "listActionSets",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionSetList"
+                }
+              }
+            },
+            "description": "Every action set of the tenant."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the action sets",
+        "tags": [
+          "action-sets"
+        ]
+      },
+      "post": {
+        "description": "Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents\n(one tool per operation), pins their schemas, policies and `auth`, and returns the\naction set with its declarations, for the model's prompt, and the API operations it left\nout. Content-addressed: registering the same action set again returns it (200). `secrets`\nattaches organization's secrets to list the tools of an MCP server that needs one\n(`secrets:use`). Requires `actions:write`.",
+        "operationId": "createActionSet",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateActionSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionSet"
+                }
+              }
+            },
+            "description": "Already registered."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionSet"
+                }
+              }
+            },
+            "description": "Registered."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-action-set`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An MCP server or an OpenAPI document's URL cannot be reached (`action-set-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Register and pin an action set",
+        "tags": [
+          "action-sets"
+        ]
+      }
+    },
+    "/v1/action-sets/{id}/declarations": {
+      "get": {
+        "operationId": "getActionSetDeclarations",
+        "parameters": [
+          {
+            "description": "The action set's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`dts` by default.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "dts",
+                "prompt"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeclarationsText"
+                }
+              }
+            },
+            "description": "The declarations in the requested format."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such action set."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "The action set's declarations",
+        "tags": [
+          "action-sets"
+        ]
+      }
+    },
+    "/v1/action-sets/{id}/search": {
+      "get": {
+        "description": "For action sets too large for the prompt: the declarations of the tools matching a query.",
+        "operationId": "searchTools",
+        "parameters": [
+          {
+            "description": "The action set's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Words to look for in tool names and descriptions.",
+            "in": "query",
+            "name": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many tools (10 by default).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolSearchResults"
+                }
+              }
+            },
+            "description": "The matching tools, best first."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such action set."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Search the action set's tools (`search_tools`)",
+        "tags": [
+          "action-sets"
+        ]
+      }
+    },
     "/v1/api-keys": {
       "get": {
         "description": "The tenant's keys, without their secret, each with its role and allowed labels.\nRequires `api_keys:read`.",
@@ -10298,7 +10738,7 @@
     },
     "/v1/check": {
       "post": {
-        "description": "Against the sandbox lib and the toolset's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs.",
+        "description": "Against the sandbox lib and the action set's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs.",
         "operationId": "checkScript",
         "parameters": [
           {
@@ -10382,7 +10822,7 @@
                 }
               }
             },
-            "description": "No such toolset."
+            "description": "No such action set."
           },
           "500": {
             "content": {
@@ -15191,7 +15631,7 @@
                 }
               }
             },
-            "description": "No such toolset."
+            "description": "No such action set."
           },
           "409": {
             "content": {
@@ -18203,13 +18643,13 @@
     },
     "/v1/tasks/stream": {
       "get": {
-        "description": "The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "description": "The tasks of the host tools it names (`actionSet`, `tools`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
         "operationId": "streamTasks",
         "parameters": [
           {
-            "description": "The toolset whose host tools this worker executes: only the tasks of runs of this toolset.\nWithout it, the tasks of the tools named in `tools`, whatever the toolset of their run (a\ntoolset derived from another, as saving a workflow does, keeps its host tools' names).",
+            "description": "The action set whose host tools this worker executes: only the tasks of runs of this action set.\nWithout it, the tasks of the tools named in `tools`, whatever the action set of their run (a\naction set derived from another, as saving a workflow does, keeps its host tools' names).",
             "in": "query",
-            "name": "toolset",
+            "name": "actionSet",
             "required": false,
             "schema": {
               "type": "string"
@@ -18225,7 +18665,7 @@
             }
           },
           {
-            "description": "Only these tools. Repeat for several. All the host tools of `toolset` when absent, every\nhost tool without `toolset` either.",
+            "description": "Only these tools. Repeat for several. All the host tools of `actionSet` when absent, every\nhost tool without `actionSet` either.",
             "in": "query",
             "name": "tools",
             "required": false,
@@ -18324,7 +18764,7 @@
                 }
               }
             },
-            "description": "No such toolset."
+            "description": "No such action set."
           },
           "500": {
             "content": {
@@ -18957,7 +19397,7 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\ntool is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or toolset. Served by a server with the worker role.",
+        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\ntool is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or action set. Served by a server with the worker role.",
         "operationId": "testScript",
         "parameters": [
           {
@@ -19041,7 +19481,7 @@
                 }
               }
             },
-            "description": "No such toolset, workflow or stored test."
+            "description": "No such action set, workflow or stored test."
           },
           "422": {
             "content": {
@@ -19310,9 +19750,9 @@
             }
           },
           {
-            "description": "Only calls of runs of this toolset.",
+            "description": "Only calls of runs of this action set.",
             "in": "query",
-            "name": "toolset",
+            "name": "actionSet",
             "required": false,
             "schema": {
               "type": "string"
@@ -19431,446 +19871,6 @@
         "summary": "Latency, errors and retries per tool",
         "tags": [
           "reading"
-        ]
-      }
-    },
-    "/v1/toolsets": {
-      "get": {
-        "description": "The toolsets the tenant registered, by id, with their servers and tool names.",
-        "operationId": "listToolsets",
-        "parameters": [
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ToolsetList"
-                }
-              }
-            },
-            "description": "Every toolset of the tenant."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "List the toolsets",
-        "tags": [
-          "toolsets"
-        ]
-      },
-      "post": {
-        "description": "Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents\n(one tool per operation), pins their schemas, policies and `auth`, and returns the\ntoolset with its declarations, for the model's prompt, and the API operations it left\nout. Content-addressed: registering the same toolset again returns it (200). `secrets`\nattaches organization's secrets to list the tools of an MCP server that needs one\n(`secrets:use`). Requires `toolsets:write`.",
-        "operationId": "createToolset",
-        "parameters": [
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateToolset"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Toolset"
-                }
-              }
-            },
-            "description": "Already registered."
-          },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Toolset"
-                }
-              }
-            },
-            "description": "Registered."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-toolset`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "502": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "An MCP server or an OpenAPI document's URL cannot be reached (`toolset-unavailable`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Register and pin a toolset",
-        "tags": [
-          "toolsets"
-        ]
-      }
-    },
-    "/v1/toolsets/{id}/declarations": {
-      "get": {
-        "operationId": "getToolsetDeclarations",
-        "parameters": [
-          {
-            "description": "The toolset's id.",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "`dts` by default.",
-            "in": "query",
-            "name": "format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "dts",
-                "prompt"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeclarationsText"
-                }
-              }
-            },
-            "description": "The declarations in the requested format."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such toolset."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "The toolset's declarations",
-        "tags": [
-          "toolsets"
-        ]
-      }
-    },
-    "/v1/toolsets/{id}/search": {
-      "get": {
-        "description": "For toolsets too large for the prompt: the declarations of the tools matching a query.",
-        "operationId": "searchTools",
-        "parameters": [
-          {
-            "description": "The toolset's id.",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Words to look for in tool names and descriptions.",
-            "in": "query",
-            "name": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "At most this many tools (10 by default).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ToolSearchResults"
-                }
-              }
-            },
-            "description": "The matching tools, best first."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such toolset."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Search the toolset's tools (`search_tools`)",
-        "tags": [
-          "toolsets"
         ]
       }
     },
@@ -20079,7 +20079,7 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's script against its toolset and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the script's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
+        "description": "Checks the workflow's script against its action set and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the script's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
         "operationId": "createWorkflow",
         "parameters": [
           {
@@ -20161,7 +20161,7 @@
                 }
               }
             },
-            "description": "No such toolset, or parent."
+            "description": "No such action set, or parent."
           },
           "422": {
             "content": {
@@ -20427,8 +20427,8 @@
   ],
   "tags": [
     {
-      "description": "Register and pin toolsets: their MCP servers, their APIs from OpenAPI documents and how each authenticates its calls; their declarations.",
-      "name": "toolsets"
+      "description": "Register and pin action sets: their MCP servers, their APIs from OpenAPI documents and how each authenticates its calls; their declarations.",
+      "name": "action-sets"
     },
     {
       "description": "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal.",

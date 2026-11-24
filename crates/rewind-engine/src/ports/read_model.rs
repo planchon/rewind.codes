@@ -175,7 +175,7 @@ pub struct RunSummary {
     pub suffix_len: u8,
     pub script: Digest,
     pub headline: String,
-    pub toolset: Digest,
+    pub action_set: Digest,
     /// `pending` until its first activation commits, then `active` until a terminal entry.
     pub status: RunStatus,
     pub mode: Option<RunMode>,
@@ -300,8 +300,8 @@ pub enum Predicate {
     },
     /// The script's digest, in lowercase hexadecimal, starts with one of these.
     Script(Vec<String>),
-    /// The toolset's digest, in lowercase hexadecimal, starts with one of these.
-    Toolset(Vec<String>),
+    /// The action set's digest, in lowercase hexadecimal, starts with one of these.
+    ActionSet(Vec<String>),
     /// The run scheduled at least one call to a tool one of these matches.
     Tool(Vec<TextMatch>),
     /// The run ended with an error (or abort kind) named in `names`, or at least one of its

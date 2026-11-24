@@ -5,7 +5,7 @@
 //!                                           or the secret <name> of the run's own namespace
 //! Attachments   { <server or API>: SecretRef }   a run's, a fork's, a workflow version's
 //! ToolAuth      none | rewind | secret(SecretPlacement)   how a server's or an API's calls
-//!                                                         authenticate, pinned in the toolset
+//!                                                         authenticate, pinned in the action set
 //! SecretPlacement  header(name, format?, encoding) | env(variable)
 //! ```
 //!
@@ -153,7 +153,7 @@ pub struct InvalidSecretRef(pub String);
 /// (`archi/04-tools.md`, "Secrets"). Given in the request that gives the script, never in the
 /// script; a workflow version carries its own in its document.
 ///
-/// The keys are not checked against a toolset here: whether each names a server that takes a
+/// The keys are not checked against an action set here: whether each names a server that takes a
 /// secret, and whether every such server the script imports has one, is checked when a run
 /// starts or a version is saved.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -210,7 +210,7 @@ impl From<BTreeMap<String, SecretRef>> for Attachments {
 }
 
 /// How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,
-/// "Authenticating calls"). Part of the pinned toolset, and so of its digest; never a value.
+/// "Authenticating calls"). Part of the pinned action set, and so of its digest; never a value.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ToolAuth {
     /// Nothing: a public server. Left out of the pinned document.

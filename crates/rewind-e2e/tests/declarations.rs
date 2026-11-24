@@ -1,6 +1,6 @@
-//! The contract between codegen, the checker and the runtime (`archi/04-tools.md`, "Toolsets
+//! The contract between codegen, the checker and the runtime (`archi/04-tools.md`, "Action sets
 //! and code generation" and "Type-checking"): the `rewind-tools.d.ts` that `rewind-codegen` writes
-//! for a pinned toolset makes `rewind-check` accept what the runtime runs and refuse what it
+//! for a pinned action set makes `rewind-check` accept what the runtime runs and refuse what it
 //! refuses.
 
 #![allow(clippy::unwrap_used)]
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use rewind_check::TsgoChecker;
-use rewind_core::{Builtin, McpServer, McpTransport, Script, Tool, ToolRoute, Toolset};
+use rewind_core::{ActionSet, Builtin, McpServer, McpTransport, Script, Tool, ToolRoute};
 use rewind_engine::ports::{Diagnostic, DiagnosticSource, ScriptExecutor};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
@@ -24,9 +24,9 @@ static EXECUTOR: LazyLock<V8Executor> = LazyLock::new(|| {
     V8Executor::new(SandboxLimits::default()).expect("TZ=UTC (see .cargo/config.toml)")
 });
 
-/// A toolset with an MCP server (tools with and without an output schema, with and without
+/// An action set with an MCP server (tools with and without an output schema, with and without
 /// required arguments), a host tool, and the built-ins as they are pinned.
-fn toolset(http_tool: bool) -> Toolset {
+fn action_set(http_tool: bool) -> ActionSet {
     let server = McpServer::new(
         "crm",
         McpTransport::Http {
@@ -77,12 +77,12 @@ fn toolset(http_tool: bool) -> Toolset {
     if http_tool {
         tools.push(rewind_mcp::http_tool(vec!["api.example.com".into()]));
     }
-    Toolset::new([server], tools).unwrap()
+    ActionSet::new([server], tools).unwrap()
 }
 
-/// What the checker says of a script, against the declarations codegen writes for the toolset.
-async fn check(source: &str, toolset: &Toolset) -> Vec<Diagnostic> {
-    let declarations = rewind_codegen::generate(toolset, &BTreeMap::new());
+/// What the checker says of a script, against the declarations codegen writes for the action set.
+async fn check(source: &str, action_set: &ActionSet) -> Vec<Diagnostic> {
+    let declarations = rewind_codegen::generate(action_set, &BTreeMap::new());
     CHECKER
         .check_source(source, &declarations.typescript)
         .await
@@ -90,9 +90,9 @@ async fn check(source: &str, toolset: &Toolset) -> Vec<Diagnostic> {
 }
 
 /// What the runtime says of a script when a run starts.
-fn compile(source: &str, toolset: &Toolset) -> Result<(), String> {
+fn compile(source: &str, action_set: &ActionSet) -> Result<(), String> {
     EXECUTOR
-        .compile(&Script::new(source), toolset)
+        .compile(&Script::new(source), action_set)
         .map(|_| ())
         .map_err(|invalid| invalid.message)
 }
@@ -129,16 +129,16 @@ export default async function main() {
 
 #[tokio::test]
 async fn a_good_script_checks_and_starts() {
-    let toolset = toolset(true);
-    assert_eq!(summary(&check(GOOD, &toolset).await), []);
-    assert_eq!(compile(GOOD, &toolset), Ok(()));
+    let action_set = action_set(true);
+    assert_eq!(summary(&check(GOOD, &action_set).await), []);
+    assert_eq!(compile(GOOD, &action_set), Ok(()));
 }
 
 #[tokio::test]
 async fn args_of_the_wrong_type_are_refused() {
     let script = GOOD.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
     assert_eq!(
-        summary(&check(&script, &toolset(true)).await),
+        summary(&check(&script, &action_set(true)).await),
         [(
             "TS2322".into(),
             "Type 'number' is not assignable to type 'string'.".into()
@@ -148,7 +148,7 @@ async fn args_of_the_wrong_type_are_refused() {
 
 #[tokio::test]
 async fn fetch_needs_the_http_tool() {
-    let diagnostics = check(GOOD, &toolset(false)).await;
+    let diagnostics = check(GOOD, &action_set(false)).await;
     assert_eq!(
         summary(&diagnostics),
         [(
@@ -162,9 +162,9 @@ async fn fetch_needs_the_http_tool() {
 #[tokio::test]
 async fn built_ins_are_not_in_rewind_tools_for_either() {
     let script = "import { http, webhook } from \"rewind:tools\";\n\nexport default async function main() {\n  return [http, webhook];\n}\n";
-    let toolset = toolset(true);
+    let action_set = action_set(true);
     assert_eq!(
-        summary(&check(script, &toolset).await),
+        summary(&check(script, &action_set).await),
         [
             (
                 "TS2305".into(),
@@ -176,7 +176,7 @@ async fn built_ins_are_not_in_rewind_tools_for_either() {
             ),
         ]
     );
-    let refused = compile(script, &toolset).unwrap_err();
+    let refused = compile(script, &action_set).unwrap_err();
     assert!(
         refused.starts_with("\"rewind:tools\" has no export named \"http\""),
         "{refused}"
@@ -189,8 +189,8 @@ async fn types_are_imported_as_types_for_both() {
         "import { crm, ask_user } from \"rewind:tools\";\nimport type { ToolContent } from \"rewind:tools\";",
         "import { crm, ask_user, ToolContent } from \"rewind:tools\";",
     );
-    let toolset = toolset(true);
-    let diagnostics = summary(&check(&script, &toolset).await);
+    let action_set = action_set(true);
+    let diagnostics = summary(&check(&script, &action_set).await);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].0, "TS1484");
     assert!(
@@ -199,7 +199,7 @@ async fn types_are_imported_as_types_for_both() {
             .starts_with("'ToolContent' is a type and must be imported using a type-only import"),
         "{diagnostics:?}"
     );
-    let refused = compile(&script, &toolset).unwrap_err();
+    let refused = compile(&script, &action_set).unwrap_err();
     assert!(
         refused.starts_with("\"rewind:tools\" has no export named \"ToolContent\""),
         "{refused}"
@@ -240,9 +240,9 @@ async fn the_golden_declarations_of_codegen_check() {
     );
 }
 
-/// A toolset in which `name` is a server, a host-tool group or a host tool without a group,
+/// An action set in which `name` is a server, a host-tool group or a host tool without a group,
 /// each tool taking `{ q: string }` and returning `{ id: string }`; and a script that calls it.
-fn named(name: &str) -> Vec<(Toolset, String)> {
+fn named(name: &str) -> Vec<(ActionSet, String)> {
     let input = json!({
         "type": "object",
         "properties": { "q": { "type": "string" } },
@@ -279,23 +279,23 @@ fn named(name: &str) -> Vec<(Toolset, String)> {
     };
     vec![
         (
-            Toolset::new([server], [tool(format!("{name}.find"), mcp)]).unwrap(),
+            ActionSet::new([server], [tool(format!("{name}.find"), mcp)]).unwrap(),
             call(name, "tools.find"),
         ),
         (
-            Toolset::new([], [tool(format!("{name}.ask"), group)]).unwrap(),
+            ActionSet::new([], [tool(format!("{name}.ask"), group)]).unwrap(),
             call(name, "tools.ask"),
         ),
         (
-            Toolset::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]).unwrap(),
+            ActionSet::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]).unwrap(),
             call(name, "tools"),
         ),
     ]
 }
 
 /// Names that are keywords somewhere, globals, or the declarations' own types, but not
-/// reserved words: a toolset takes them, the checker accepts a script that imports them, and
-/// the runtime starts it. The reserved words are refused by the toolset (`rewind-core`).
+/// reserved words: an action set takes them, the checker accepts a script that imports them, and
+/// the runtime starts it. The reserved words are refused by the action set (`rewind-core`).
 #[tokio::test]
 async fn names_that_are_not_reserved_words_check_and_start() {
     for name in [
@@ -315,10 +315,10 @@ async fn names_that_are_not_reserved_words_check_and_start() {
         "ToolContent",
         "Promise",
     ] {
-        for (toolset, script) in named(name) {
-            let diagnostics = summary(&check(&script, &toolset).await);
+        for (action_set, script) in named(name) {
+            let diagnostics = summary(&check(&script, &action_set).await);
             assert_eq!(diagnostics, [], "{name}:\n{script}");
-            assert_eq!(compile(&script, &toolset), Ok(()), "{name}:\n{script}");
+            assert_eq!(compile(&script, &action_set), Ok(()), "{name}:\n{script}");
         }
     }
 }
@@ -331,7 +331,7 @@ fn triage() -> rewind_core::Workflow {
         "triage",
         Some("Triage the stale issues of a repository.".into()),
         Script::new(TRIAGE).digest(),
-        toolset(false).digest(),
+        action_set(false).digest(),
         rewind_core::WorkflowSchemas {
             input: json!({
                 "type": "object",
@@ -384,13 +384,15 @@ export default async function main(input: { repos: string[] }) {
 
 #[tokio::test]
 async fn a_script_that_starts_a_pinned_workflow_checks_and_starts() {
-    let toolset = toolset(false).with_workflows([triage().pinned()]).unwrap();
-    assert_eq!(summary(&check(PARENT, &toolset).await), []);
-    assert_eq!(compile(PARENT, &toolset), Ok(()));
+    let action_set = action_set(false)
+        .with_workflows([triage().pinned()])
+        .unwrap();
+    assert_eq!(summary(&check(PARENT, &action_set).await), []);
+    assert_eq!(compile(PARENT, &action_set), Ok(()));
 
     let wrong = PARENT.replace("triage.start({ repo }", "triage.start({ repo: 1 }");
     assert_eq!(
-        summary(&check(&wrong, &toolset).await),
+        summary(&check(&wrong, &action_set).await),
         [(
             "TS2322".into(),
             "Type 'number' is not assignable to type 'string'.".into()
@@ -399,9 +401,9 @@ async fn a_script_that_starts_a_pinned_workflow_checks_and_starts() {
 }
 
 #[tokio::test]
-async fn a_workflow_the_toolset_does_not_pin_is_refused_by_both() {
-    let toolset = toolset(false);
-    let diagnostics = summary(&check(PARENT, &toolset).await);
+async fn a_workflow_the_action_set_does_not_pin_is_refused_by_both() {
+    let action_set = action_set(false);
+    let diagnostics = summary(&check(PARENT, &action_set).await);
     assert_eq!(
         diagnostics[0],
         (
@@ -409,7 +411,7 @@ async fn a_workflow_the_toolset_does_not_pin_is_refused_by_both() {
             "Module '\"rewind:workflows\"' has no exported member 'triage'.".into()
         )
     );
-    let refused = compile(PARENT, &toolset).unwrap_err();
+    let refused = compile(PARENT, &action_set).unwrap_err();
     assert!(
         refused.starts_with("\"rewind:workflows\" has no export named \"triage\""),
         "{refused}"
@@ -420,7 +422,7 @@ async fn a_workflow_the_toolset_does_not_pin_is_refused_by_both() {
 async fn a_workflow_s_script_is_checked_against_its_own_schemas() {
     let workflow = triage();
     let own = rewind_codegen::workflow_declarations("triage", workflow.schemas());
-    let declarations = rewind_codegen::generate(&toolset(false), &BTreeMap::new());
+    let declarations = rewind_codegen::generate(&action_set(false), &BTreeMap::new());
     let check_workflow = |source: String| {
         let own = own.clone();
         let declarations = declarations.typescript.clone();

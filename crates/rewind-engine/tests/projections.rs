@@ -10,9 +10,9 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch,
-    Event, HistoryEntry, Lifecycle, McpServer, McpTransport, RunMode, RunStarted, RunStatus,
-    ScriptError, Seed, Seq, Timestamp, Tool, ToolRoute, Toolset,
+    AbortKind, AbortReason, ActionSet, Annotation, Callsite, CancelReason, Command, Completion,
+    Digest, Epoch, Event, HistoryEntry, Lifecycle, McpServer, McpTransport, RunMode, RunStarted,
+    RunStatus, ScriptError, Seed, Seq, Timestamp, Tool, ToolRoute,
 };
 use rewind_engine::failures;
 use rewind_engine::plane::NodeConfig;
@@ -133,7 +133,7 @@ fn history(events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
 fn run_started() -> Event {
     Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
         script: Digest::of(b"script"),
-        toolset: Digest::of(b"toolset"),
+        action_set: Digest::of(b"action_set"),
         input: json!({}).into(),
         seed: Seed::from_bytes([0; 32]),
         epoch: Epoch(1),
@@ -173,7 +173,7 @@ fn awaited(name: &str, timeout: Option<u32>, callsite: Option<Callsite>) -> Even
 }
 
 /// `github.get_issue`, an MCP tool (behind an approval or not), and `ask_user`, a host tool.
-fn gated_toolset(approval: bool) -> Toolset {
+fn gated_action_set(approval: bool) -> ActionSet {
     let server = McpServer::new(
         "github",
         McpTransport::Http {
@@ -189,7 +189,7 @@ fn gated_toolset(approval: bool) -> Toolset {
     );
     issue.policy.approval = approval;
     let ask = Tool::new("ask_user", ToolRoute::Host { group: None }, json!({}));
-    Toolset::new([server], [issue, ask]).unwrap()
+    ActionSet::new([server], [issue, ask]).unwrap()
 }
 
 fn wait(
@@ -237,7 +237,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
             }),
         ),
     ]);
-    let toolset = gated_toolset(false);
+    let action_set = gated_action_set(false);
     let calls = [
         wait(
             WaitKind::Call,
@@ -274,7 +274,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
     );
     let review = wait(WaitKind::Signal, None, Some("review"), 40, None, None);
     assert_eq!(
-        run_snapshot(&entries[..9], Some(&toolset)),
+        run_snapshot(&entries[..9], Some(&action_set)),
         RunSnapshot {
             history_len: 9,
             status: RunStatus::Active,
@@ -290,7 +290,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
         },
         "by since, then kind: the signal's timeout is its wait's end, not a timer of its own"
     );
-    // Without the toolset, a host tool's call is a call.
+    // Without the action set, a host tool's call is a call.
     let kinds: Vec<(WaitKind, Option<Seq>)> = run_snapshot(&entries[..9], None)
         .waits
         .iter()
@@ -305,15 +305,15 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
     );
     // The timeout fired: the signal's wait is over.
     assert_eq!(
-        run_snapshot(&entries[..10], Some(&toolset)).waits,
+        run_snapshot(&entries[..10], Some(&action_set)).waits,
         [calls[0].clone(), calls[1].clone(), sleep.clone(), review]
     );
     // The signal came.
-    let last = run_snapshot(&entries, Some(&toolset));
+    let last = run_snapshot(&entries, Some(&action_set));
     assert_eq!(last.history_len, 11);
     assert_eq!(last.waits, [calls[0].clone(), calls[1].clone(), sleep]);
     // A history that cannot be folded stops before the entry that breaks it.
-    let broken = run_snapshot(&entries[1..], Some(&toolset));
+    let broken = run_snapshot(&entries[1..], Some(&action_set));
     assert_eq!(
         (broken.history_len, broken.status, broken.waits.len()),
         (0, RunStatus::Pending, 0)
@@ -366,7 +366,7 @@ fn a_snapshot_tells_how_the_run_ended() {
             })),
         ),
     ]);
-    let snapshot = run_snapshot(&aborted, Some(&gated_toolset(false)));
+    let snapshot = run_snapshot(&aborted, Some(&gated_action_set(false)));
     assert_eq!(snapshot.status, RunStatus::Aborted);
     assert!(snapshot.waits.is_empty(), "an ended run waits for nothing");
     let signature = "limit_exceeded: the script used <n> ms of CPU time";

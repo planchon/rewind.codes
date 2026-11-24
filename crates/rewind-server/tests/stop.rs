@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_api::access::BuiltInRole;
+use rewind_api::action_sets::{CreateActionSet, McpServer, OnInterruption, ToolPolicy};
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
-use rewind_api::toolsets::{CreateToolset, McpServer, OnInterruption, ToolPolicy};
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
@@ -122,15 +122,15 @@ async fn a_call_in_flight_at_a_stop_is_sent_again_by_the_next_owner() {
                 on_interruption: Some(OnInterruption::Retry),
                 ..ToolPolicy::default()
             };
-            let toolset = harness
-                .create_toolset(&CreateToolset {
+            let action_set = harness
+                .create_action_set(&CreateActionSet {
                     mcp: vec![McpServer {
                         name: "fixture".into(),
                         url: Some(url),
                         policies: BTreeMap::from([("slow".to_owned(), policy)]),
                         ..McpServer::default()
                     }],
-                    ..CreateToolset::default()
+                    ..CreateActionSet::default()
                 })
                 .await
                 .unwrap();
@@ -142,7 +142,7 @@ export default async function main() {
 }
 "#,
             );
-            start.toolset = Some(toolset.id);
+            start.action_set = Some(action_set.id);
             let run = harness.start_run(&start, None).await.unwrap();
 
             // The server stops while the MCP server works on the call.

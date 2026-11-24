@@ -1,5 +1,5 @@
 {
-  "description": "The global names a script can reach, as the type-checker declares them (archi/01-product.md, 'What exists in the sandbox'). The isolate's globals must be exactly ecmascript + sandbox, plus httpTool when the toolset enables the http tool. A change here goes with a new determinism epoch.",
+  "description": "The global names a script can reach, as the type-checker declares them (archi/01-product.md, 'What exists in the sandbox'). The isolate's globals must be exactly ecmascript + sandbox, plus httpTool when the action set enables the http tool. A change here goes with a new determinism epoch.",
   "ecmascript": [
     "AggregateError",
     "Array",
@@ -95,7 +95,7 @@
   ],
   "absent": {
     "Buffer": "There is no Buffer: use TextEncoder and TextDecoder for text, atob and btoa for base64, and Uint8Array for bytes.",
-    "fetch": "fetch exists only when the toolset enables the http tool, and only for the hosts it allows. Call the tools of \"rewind:tools\" instead.",
+    "fetch": "fetch exists only when the action set enables the http tool, and only for the hosts it allows. Call the tools of \"rewind:tools\" instead.",
     "process": "There is no process and no environment: pass values through the run's input, the argument of main.",
     "require": "Scripts are ES modules: import { … } from \"rewind:tools\", \"rewind:workflows\" or \"rewind\". Nothing else can be imported."
   }

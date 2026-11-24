@@ -11,7 +11,7 @@ use rewind_engine::ports::{
     CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
 };
 
-/// The `rewind-tools.d.ts` of a toolset with two MCP servers and a host tool.
+/// The `rewind-tools.d.ts` of an action set with two MCP servers and a host tool.
 const TOOLS: &str = r##"declare module "rewind:tools" {
   export namespace github {
     export interface Issue {
@@ -509,7 +509,7 @@ async fn checks_are_deterministic_and_run_in_parallel() {
 }
 
 #[tokio::test]
-async fn the_port_checks_a_script_against_a_toolsets_declarations() {
+async fn the_port_checks_a_script_against_an_action_sets_declarations() {
     let declarations = ToolDeclarations {
         typescript: TOOLS.to_owned(),
         prompt: String::new(),
@@ -644,7 +644,7 @@ async fn the_diagnostics_of_a_script_are_bounded() {
 // -------------------------------------------------------------------------------------------
 // Workflows: the declarations `rewind-codegen` writes for them
 
-/// `rewind:workflows` for a toolset that pins `triage`.
+/// `rewind:workflows` for an action set that pins `triage`.
 const WORKFLOWS: &str = r##"
 declare module "rewind:workflows" {
   import type { Workflow } from "rewind";
@@ -711,7 +711,7 @@ async fn a_script_starts_and_signals_workflows_with_types() {
 }
 
 #[tokio::test]
-async fn a_toolset_without_workflows_declares_an_empty_module() {
+async fn an_action_set_without_workflows_declares_an_empty_module() {
     let found = summary(&check(PARENT).await);
     assert!(
         found

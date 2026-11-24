@@ -4,9 +4,9 @@ use reqwest::Url;
 
 use crate::Error;
 
-pub const TOOLSETS: &str = "/v1/toolsets";
-pub const TOOLSET_DECLARATIONS: &str = "/v1/toolsets/{id}/declarations";
-pub const TOOLSET_SEARCH: &str = "/v1/toolsets/{id}/search";
+pub const ACTION_SETS: &str = "/v1/action-sets";
+pub const ACTION_SET_DECLARATIONS: &str = "/v1/action-sets/{id}/declarations";
+pub const ACTION_SET_SEARCH: &str = "/v1/action-sets/{id}/search";
 
 pub const WORKFLOWS: &str = "/v1/workflows";
 pub const WORKFLOW: &str = "/v1/workflows/{name}";
@@ -126,10 +126,10 @@ pub const MCP: &str = "/mcp";
 
 /// Every operation of the API: its method and its path.
 pub const OPERATIONS: [(&str, &str); 114] = [
-    ("POST", TOOLSETS),
-    ("GET", TOOLSETS),
-    ("GET", TOOLSET_DECLARATIONS),
-    ("GET", TOOLSET_SEARCH),
+    ("POST", ACTION_SETS),
+    ("GET", ACTION_SETS),
+    ("GET", ACTION_SET_DECLARATIONS),
+    ("GET", ACTION_SET_SEARCH),
     ("POST", WORKFLOWS),
     ("GET", WORKFLOWS),
     ("GET", WORKFLOW),

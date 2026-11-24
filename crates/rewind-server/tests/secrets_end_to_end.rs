@@ -41,12 +41,12 @@ use axum::http::request::Parts;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use clap::Parser;
+use rewind_api::action_sets::{Api, Auth, CreateActionSet, McpServer, OpenApiDocument};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::runs::{Run, RunFilter, StartRun, Waiting};
 use rewind_api::secrets::{AttachmentProblemKind, PutSecret};
 use rewind_api::tasks::{ParkedReason, TaskState};
-use rewind_api::toolsets::{Api, Auth, CreateToolset, McpServer, OpenApiDocument};
 use rewind_api::webhooks::{
     CreateSubscription, CredentialsExpired, CredentialsExpiredReason, WebhookEvent,
     WebhookEventType,
@@ -678,10 +678,10 @@ fn attachments(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The toolset of an MCP server `github` that takes a secret in `Authorization`, listed with
+/// The action set of an MCP server `github` that takes a secret in `Authorization`, listed with
 /// `listing` attached.
-fn github_toolset(url: &str, listing: Option<&str>) -> CreateToolset {
-    CreateToolset {
+fn github_action_set(url: &str, listing: Option<&str>) -> CreateActionSet {
+    CreateActionSet {
         mcp: vec![McpServer {
             name: "github".into(),
             url: Some(url.to_owned()),
@@ -696,7 +696,7 @@ fn github_toolset(url: &str, listing: Option<&str>) -> CreateToolset {
         secrets: listing
             .map(|secret| attachments(&[("github", secret)]))
             .unwrap_or_default(),
-        ..CreateToolset::default()
+        ..CreateActionSet::default()
     }
 }
 
@@ -712,12 +712,12 @@ async fn start(
     client: &Client,
     namespace: &str,
     script: &str,
-    toolset: &str,
+    action_set: &str,
     secrets: &[(&str, &str)],
     labels: &[(&str, &str)],
 ) -> Result<Run, rewind_api::Error> {
     let mut request = StartRun::new(script);
-    request.toolset = Some(toolset.to_owned());
+    request.action_set = Some(action_set.to_owned());
     request.secrets = attachments(secrets);
     request.labels = labels.iter().copied().collect();
     request.wait = wait("60s");
@@ -814,7 +814,7 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
         "/v1/runs".to_owned(),
         "/v1/runs/stats".to_owned(),
         "/v1/secrets".to_owned(),
-        "/v1/toolsets".to_owned(),
+        "/v1/action-sets".to_owned(),
         "/v1/scripts".to_owned(),
         "/v1/tools/stats".to_owned(),
         "/v1/subscriptions".to_owned(),
@@ -917,11 +917,11 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
     // Listed without a secret: the server refuses, and the refusal says to attach one.
     let refused = problem(
         customer
-            .create_toolset(&github_toolset(&url, None))
+            .create_action_set(&github_action_set(&url, None))
             .await
             .unwrap_err(),
     );
-    assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
+    assert_eq!(refused.kind(), Some(ProblemType::ActionSetUnavailable));
     assert!(
         refused
             .detail
@@ -939,7 +939,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
     // A secret that does not exist yet.
     let unknown = problem(
         customer
-            .create_toolset(&github_toolset(&url, Some("org/github-listing")))
+            .create_action_set(&github_action_set(&url, Some("org/github-listing")))
             .await
             .unwrap_err(),
     );
@@ -965,12 +965,12 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         .put_secret("github", &value(&organization))
         .await
         .unwrap();
-    let toolset = customer
-        .create_toolset(&github_toolset(&url, Some("org/github-listing")))
+    let action_set = customer
+        .create_action_set(&github_action_set(&url, Some("org/github-listing")))
         .await
         .unwrap();
     assert_eq!(
-        toolset
+        action_set
             .tools
             .iter()
             .map(|tool| tool.name.as_str())
@@ -1011,7 +1011,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             &customer,
             user,
             WHOAMI,
-            &toolset.id,
+            &action_set.id,
             &[("github", "ns/github")],
             &[],
         )
@@ -1049,7 +1049,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
     // Nothing attached: refused before any run exists, naming what may be attached.
     let before = runs_in(&customer, "alice").await;
     let missing = problem(
-        start(&customer, "alice", WHOAMI, &toolset.id, &[], &[])
+        start(&customer, "alice", WHOAMI, &action_set.id, &[], &[])
             .await
             .unwrap_err(),
     );
@@ -1079,7 +1079,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             &customer,
             "carol",
             WHOAMI,
-            &toolset.id,
+            &action_set.id,
             &[("github", "ns/github")],
             &[],
         )
@@ -1149,8 +1149,8 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
         .put_secret("github-listing", &value(&listing))
         .await
         .unwrap();
-    let toolset = customer
-        .create_toolset(&github_toolset(&url, Some("org/github-listing")))
+    let action_set = customer
+        .create_action_set(&github_action_set(&url, Some("org/github-listing")))
         .await
         .unwrap();
     customer
@@ -1159,7 +1159,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
         .unwrap();
     let alice = customer.with_namespace(ns("alice"));
     let mut request = StartRun::new(THREE_CALLS);
-    request.toolset = Some(toolset.id.clone());
+    request.action_set = Some(action_set.id.clone());
     request.secrets = attachments(&[("github", "ns/github")]);
     let run = alice.start_run(&request, None).await.unwrap();
     waits_for(&alice, &run.id, "go").await;
@@ -1309,15 +1309,15 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
     let owner = server.tenant_key("acme", "owner").await;
     outside.subscribe(&customer).await;
 
-    let toolset = customer
-        .create_toolset(&CreateToolset {
+    let action_set = customer
+        .create_action_set(&CreateActionSet {
             mcp: vec![McpServer {
                 name: "crm".into(),
                 url: Some(url.clone()),
                 auth: Some(Auth::Rewind {}),
                 ..McpServer::default()
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
@@ -1336,7 +1336,7 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
     assert!(keys.keys[0].retired_at.is_none());
 
     let prod = [("env", "prod"), ("team", "support")];
-    let run = start(&customer, "alice", CRM, &toolset.id, &[], &prod)
+    let run = start(&customer, "alice", CRM, &action_set.id, &[], &prod)
         .await
         .unwrap();
     assert_eq!(
@@ -1413,7 +1413,7 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
             .collect::<Vec<_>>(),
         [(rotated.kid.clone(), false), (first_kid.clone(), true)]
     );
-    let bob = start(&customer, "bob", CRM, &toolset.id, &[], &prod)
+    let bob = start(&customer, "bob", CRM, &action_set.id, &[], &prod)
         .await
         .unwrap();
     assert_eq!(output(&bob), json!({ "user": "bob" }));
@@ -1428,7 +1428,7 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
     // A run of another environment: the server refuses its signature, the call is parked, and
     // once the server takes it, the harness approves it and it is sent with the same key.
     let mut request = StartRun::new(CRM);
-    request.toolset = Some(toolset.id.clone());
+    request.action_set = Some(action_set.id.clone());
     request.labels = [("env", "dev")].into_iter().collect();
     let carol = customer.with_namespace(ns("carol"));
     let dev = carol.start_run(&request, None).await.unwrap();
@@ -1559,7 +1559,7 @@ async fn a_signed_api_learns_the_end_user_from_the_signature() {
 
     let client = Client::embedded(&socket).unwrap();
     let registered = client
-        .create_toolset(&CreateToolset {
+        .create_action_set(&CreateActionSet {
             apis: vec![Api {
                 name: "notes".into(),
                 openapi: OpenApiDocument::Document(signed_api_document(&base)),
@@ -1569,7 +1569,7 @@ async fn a_signed_api_learns_the_end_user_from_the_signature() {
                 concurrency: None,
                 policies: BTreeMap::new(),
             }],
-            ..CreateToolset::default()
+            ..CreateActionSet::default()
         })
         .await
         .unwrap();
@@ -1675,7 +1675,7 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
     // Its listing: the production secret is unknown to it.
     let listing = problem(
         limited
-            .create_toolset(&github_toolset(&url, Some("org/github-prod")))
+            .create_action_set(&github_action_set(&url, Some("org/github-prod")))
             .await
             .unwrap_err(),
     );
@@ -1688,8 +1688,8 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
     );
     assert_eq!(listing.attachments[0].attachable, ["org/github-dev"]);
     left.problems.push(listing);
-    let toolset = limited
-        .create_toolset(&github_toolset(&url, Some("org/github-dev")))
+    let action_set = limited
+        .create_action_set(&github_action_set(&url, Some("org/github-dev")))
         .await
         .unwrap();
 
@@ -1699,7 +1699,7 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
             &limited,
             "alice",
             WHOAMI,
-            &toolset.id,
+            &action_set.id,
             &[("github", "org/github-prod")],
             &[],
         )
@@ -1732,7 +1732,7 @@ async fn labels_bound_what_a_key_attaches(server: &TestServer, outside: &Outside
         &limited,
         "alice",
         WHOAMI,
-        &toolset.id,
+        &action_set.id,
         &[("github", "org/github-dev")],
         &[],
     )

@@ -10,7 +10,7 @@
 //! - the web-standard globals (`URL`, `TextEncoder`, `structuredClone`…) come from `deno_web`;
 //! - every interaction with the outside world is a command with a `seq`: a tool call, whose
 //!   args are checked against the tool's pinned schema first, `webhook(name)`, `fetch` when
-//!   the toolset has the `http` tool, a timer;
+//!   the action set has the `http` tool, a timer;
 //! - the script's terminal command follows the rules of "How a script ends": it waits for
 //!   the tool calls in flight, an unhandled rejection fails the run, and a script that nothing
 //!   can wake fails with `DeadlockError`.
