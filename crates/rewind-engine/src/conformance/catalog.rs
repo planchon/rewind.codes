@@ -22,7 +22,7 @@ use crate::ports::{
     ActionDeclarations, CatalogError, CatalogStore, Cluster, CompiledCode, ControlPlaneChange,
     DeleteNamespace, DisplayName, DropNamespace, NamespaceName, NamespaceWrite, NodeId, NodeInfo,
     Quotas, ScriptTitle, Secret, Subscription, TEST_GRACE, Tenant, TenantId, TestRecord,
-    WebhookEventType, WorkflowFilter, namespace_partition,
+    WebhookType, WorkflowFilter, namespace_partition,
 };
 
 /// Runs every check, each on a new catalog and its cluster.
@@ -772,7 +772,7 @@ fn subscription(tenant: TenantId, id: &str, url: &str) -> Subscription {
         id: id.into(),
         url: url.into(),
         secret: Secret::new("whsec_1"),
-        events: BTreeSet::from([WebhookEventType::RunCompleted]),
+        types: BTreeSet::from([WebhookType::RunCompleted]),
         labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
     }
 }

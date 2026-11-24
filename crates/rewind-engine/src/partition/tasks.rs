@@ -32,9 +32,9 @@ use crate::ports::link::{
 };
 use crate::ports::partition::{Change, home_partition};
 use crate::ports::{
-    CredentialsExpiredReason, Dispatched, DueTimer, ParkKind, ParkReason, Projection, RunRef,
-    SecretId, TaskChange, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, TimerChange,
-    TimerKind, Trigger, Watcher, WebhookEvent, WebhookEventKind, deferred_timeout_failure,
+    Dispatched, DueTimer, ParkKind, ParkReason, Projection, RunRef, SecretExpiredReason, SecretId,
+    TaskChange, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, TimerChange, TimerKind,
+    Trigger, Watcher, Webhook, WebhookKind, deferred_timeout_failure,
 };
 use crate::tasks::calls::{
     CallDone, CallMsg, CallOutcome, CallWork, ChildStart, asked_wait, interrupted,
@@ -698,10 +698,10 @@ impl<P: Plane> Owner<P> {
         task: &TaskRef,
         record: &TaskRecord,
         reason: &ParkReason,
-    ) -> Option<WebhookEvent> {
+    ) -> Option<Webhook> {
         let slot = self.slot(task.run.id)?;
         let (seq, action, message) = (task.seq, record.task.action.clone(), reason.message.clone());
-        let credentials_expired = |reason| WebhookEventKind::CredentialsExpired {
+        let secret_expired = |reason| WebhookKind::SecretExpired {
             seq,
             action: action.clone(),
             message: message.clone(),
@@ -714,15 +714,15 @@ impl<P: Plane> Owner<P> {
                 .cloned(),
         };
         let kind = match reason.kind {
-            ParkKind::SchemaChanged => WebhookEventKind::ActionSchemaChanged {
+            ParkKind::SchemaChanged => WebhookKind::ActionSchemaChanged {
                 seq,
                 action: action.clone(),
                 message: message.clone(),
             },
-            ParkKind::CredentialsRefused => credentials_expired(CredentialsExpiredReason::Refused),
-            ParkKind::SecretMissing => credentials_expired(CredentialsExpiredReason::Missing),
+            ParkKind::CredentialsRefused => secret_expired(SecretExpiredReason::Refused),
+            ParkKind::SecretMissing => secret_expired(SecretExpiredReason::Missing),
         };
-        Some(WebhookEvent {
+        Some(Webhook {
             id: format!("{}/{}/{}", task.run.id, seq.0, record.task.delivery),
             tenant: task.run.tenant.clone(),
             namespace: Some(slot.head.namespace.clone()),

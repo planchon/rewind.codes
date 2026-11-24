@@ -99,11 +99,11 @@ pub enum ParkKind {
     /// the call is sent against the new schema: the task's `schema_change_approved` is set.
     SchemaChanged,
     /// The server answered 401 to the attached secret or to the signature
-    /// (`credentials.expired`, reason `refused`). The secret put again, or the harness's
+    /// (`secret.expired`, reason `refused`). The secret put again, or the harness's
     /// approval, makes the task ready again.
     CredentialsRefused,
     /// The secret the run attached for the server no longer exists: parked by the engine before
-    /// anything was sent (`credentials.expired`, reason `missing`). The secret put again makes
+    /// anything was sent (`secret.expired`, reason `missing`). The secret put again makes
     /// the task ready again.
     SecretMissing,
 }

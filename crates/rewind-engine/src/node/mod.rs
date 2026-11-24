@@ -31,7 +31,7 @@ use crate::partition::{Owner, OwnerMsg};
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    Changed, EdgeNotice, NodeReply, NodeRequest, OrgRequest, StreamAttach, StreamEvent, StreamId,
+    Changed, EdgeNotice, NodeReply, NodeRequest, OrgRequest, StreamAttach, StreamId, StreamMessage,
     SubscriptionKey,
 };
 use crate::ports::{
@@ -89,7 +89,7 @@ pub struct Node<P: Plane, M: Membership + 'static> {
     pub(crate) calls: Calls<P>,
     epochs: BTreeSet<Epoch>,
     subscriptions: BTreeMap<SubscriptionKey, Vec<UnboundedSender<Changed>>>,
-    streams: BTreeMap<StreamId, (TenantId, StreamAttach, UnboundedSender<StreamEvent>)>,
+    streams: BTreeMap<StreamId, (TenantId, StreamAttach, UnboundedSender<StreamMessage>)>,
     /// The membership ended: the node opens no partition any more.
     lost: bool,
     /// The partitions whose owner found them opened by another node, while the node reads the
@@ -369,8 +369,8 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             },
             NodeRequest::Edge(notice) => {
                 let (stream, event) = match *notice {
-                    EdgeNotice::HandOut { stream, task } => (stream, StreamEvent::Task(task)),
-                    EdgeNotice::Gone { stream, token } => (stream, StreamEvent::Gone(token)),
+                    EdgeNotice::HandOut { stream, task } => (stream, StreamMessage::Task(task)),
+                    EdgeNotice::Gone { stream, token } => (stream, StreamMessage::Gone(token)),
                     EdgeNotice::Reopened { partition } => {
                         let mut effects = vec![Effect::Reply(reply, NodeReply::Done)];
                         effects.extend(self.attach_again(partition));
@@ -381,8 +381,8 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 let mut effects = vec![Effect::Reply(reply, NodeReply::Done)];
                 let tenant = match (&event, self.streams.get(&stream)) {
                     (_, Some((tenant, _, _))) => Some(tenant.clone()),
-                    (StreamEvent::Task(task), None) => Some(task.task.run.tenant.clone()),
-                    (StreamEvent::Gone(_), None) => None,
+                    (StreamMessage::Task(task), None) => Some(task.task.run.tenant.clone()),
+                    (StreamMessage::Gone(_), None) => None,
                 };
                 let delivered = self
                     .streams
@@ -733,7 +733,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         &mut self,
         tenant: TenantId,
         attach: StreamAttach,
-        sink: UnboundedSender<StreamEvent>,
+        sink: UnboundedSender<StreamMessage>,
     ) -> Vec<Effect<P>> {
         self.streams.insert(
             attach.stream.clone(),

@@ -2,7 +2,7 @@
 //! projector"; `archi/06-storage-and-scale.md`, "The outbox").
 //!
 //! An event is written in the batch of the fact that causes it. Once the batch is durable, its
-//! projection consumes it: the spans and logs go to the `SpanExporter`, a lifecycle webhook or a
+//! projection consumes it: the spans and logs go to the `SpanExporter`, a webhook or a
 //! `quota.alert` to the tenant's subscriptions through the `WebhookSender`. A later batch removes
 //! the event once it is exported or delivered. A failed delivery's next try is a timer of the
 //! wheel; after the last try the event is given up. Recovery hands the consumers what is left.
@@ -17,7 +17,7 @@ use crate::plane::Plane;
 use crate::ports::partition::Change;
 use crate::ports::{
     CatalogStore, DueTimer, OutboxChange, OutboxEntry, OutboxId, Projection, SpanExporter,
-    TimerChange, TimerKind, WebhookEvent, WebhookSender,
+    TimerChange, TimerKind, Webhook, WebhookSender,
 };
 
 impl<P: Plane> Owner<P> {
@@ -120,7 +120,7 @@ async fn export<P: Plane>(
 
 /// Sends an event to every subscription of its tenant that takes it; fails if one delivery
 /// failed, for the whole event to be tried again (receivers deduplicate by its id).
-async fn deliver<P: Plane>(plane: &P, event: &WebhookEvent) -> Result<(), String> {
+async fn deliver<P: Plane>(plane: &P, event: &Webhook) -> Result<(), String> {
     let subscriptions = plane
         .catalog()
         .subscriptions(&event.tenant)

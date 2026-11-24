@@ -39,7 +39,7 @@ use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
     ActivationRequest, ActivationResult, Changed, NodeReply, NodeRequest, PartitionReply,
-    PartitionRequest, StreamAttach, StreamEvent, StreamId, SubscriptionKey,
+    PartitionRequest, StreamAttach, StreamId, StreamMessage, SubscriptionKey,
 };
 use crate::ports::{Clock, ClusterError, LinkError, NodeId, NodeLink, TenantId, VirtualTime};
 use crate::tasks::Backoff;
@@ -56,7 +56,7 @@ enum Input<P: Plane> {
     ),
     Activation(Box<ActivationRequest>, oneshot::Sender<ActivationResult>),
     Subscribe(SubscriptionKey, Option<u64>, UnboundedSender<Changed>),
-    Attach(TenantId, StreamAttach, UnboundedSender<StreamEvent>),
+    Attach(TenantId, StreamAttach, UnboundedSender<StreamMessage>),
     Detach(StreamId),
     /// Hand the partitions over and stop.
     Stop(oneshot::Sender<()>),
@@ -135,7 +135,7 @@ impl<P: Plane> NodeHandle<P> {
         &self,
         tenant: TenantId,
         attach: StreamAttach,
-    ) -> Result<UnboundedReceiver<StreamEvent>, LinkError> {
+    ) -> Result<UnboundedReceiver<StreamMessage>, LinkError> {
         let (sink, tasks) = unbounded_channel();
         self.inputs
             .send(Input::Attach(tenant, attach, sink))

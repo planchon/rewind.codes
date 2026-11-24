@@ -10,18 +10,18 @@
 
 use std::collections::BTreeMap;
 
-use crate::ports::{QuotaAlert, WebhookEvent, WebhookEventKind};
+use crate::ports::{QuotaAlert, Webhook, WebhookKind};
 
 /// The event a quota alert is sent as: `quota.alert`, named by the alert's key, about the
 /// namespace (none for the tenant's ceiling) and no run, without labels.
-pub fn quota_alert_event(alert: &QuotaAlert) -> WebhookEvent {
-    WebhookEvent {
+pub fn quota_alert_event(alert: &QuotaAlert) -> Webhook {
+    Webhook {
         id: alert.key.event_id(),
         tenant: alert.key.tenant.clone(),
         namespace: alert.key.namespace.clone(),
         run: None,
         labels: BTreeMap::new(),
         occurred_at: alert.raised_at,
-        kind: WebhookEventKind::QuotaAlert(alert.clone()),
+        kind: WebhookKind::QuotaAlert(alert.clone()),
     }
 }

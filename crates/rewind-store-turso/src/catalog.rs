@@ -968,7 +968,7 @@ impl CatalogStore for TursoCatalog {
                 text(subscription.id.as_str()),
                 text(subscription.url.as_str()),
                 text(subscription.secret.expose()),
-                text(encode_event_types(&subscription.events)),
+                text(encode_event_types(&subscription.types)),
                 text(encode_labels(&subscription.labels)),
             ],
         )
@@ -997,7 +997,7 @@ impl CatalogStore for TursoCatalog {
                     id: row.text(0)?,
                     url: row.text(1)?,
                     secret: Secret::new(row.text(2)?),
-                    events: decode_event_types(&row.text(3)?)?,
+                    types: decode_event_types(&row.text(3)?)?,
                     labels: decode_labels(&row.text(4)?)?,
                 })
             })

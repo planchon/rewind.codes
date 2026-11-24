@@ -15,7 +15,7 @@ use axum::routing::{get, post};
 use futures_util::StreamExt;
 use rewind_api::calls::{CallGone, CallStreamMessage, CallStreamQuery, CompleteCall};
 use rewind_api::common::{Labels, Payload, RunMode, RunStatus, Timestamp};
-use rewind_api::events::{EventsQuery, StreamEvent};
+use rewind_api::events::{EventsQuery, StreamMessage};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{Run, RunFilter, StartRun};
@@ -330,7 +330,7 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
         follow: Some(true),
         from: Some(1),
     };
-    let events: Vec<StreamEvent> = client
+    let events: Vec<StreamMessage> = client
         .run_events("r1", &query)
         .await
         .unwrap()
@@ -339,7 +339,7 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
         .await;
     assert_eq!(events.len(), 2);
     match &events[0] {
-        StreamEvent::Event(entry) => {
+        StreamMessage::Event(entry) => {
             assert_eq!(entry.idx, 1);
             assert_eq!(entry.event.name(), "timer_fired");
         }
@@ -347,7 +347,7 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
     }
     assert_eq!(
         events[1],
-        StreamEvent::End {
+        StreamMessage::End {
             status: RunStatus::Completed
         }
     );

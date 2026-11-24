@@ -33,7 +33,7 @@ use crate::partition::OwnerMsg;
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::cluster::Membership;
 use crate::ports::link::{
-    ActivationResult, Changed, NodeReply, NodeRequest, StreamAttach, StreamEvent, StreamId,
+    ActivationResult, Changed, NodeReply, NodeRequest, StreamAttach, StreamId, StreamMessage,
     SubscriptionKey,
 };
 use crate::ports::{
@@ -725,7 +725,7 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
         at: &NodeId,
         tenant: crate::ports::TenantId,
         attach: StreamAttach,
-    ) -> Option<UnboundedReceiver<StreamEvent>> {
+    ) -> Option<UnboundedReceiver<StreamMessage>> {
         let (sink, tasks) = unbounded();
         let effects = self
             .nodes

@@ -134,6 +134,6 @@ pub use telemetry::{
 };
 pub use tenancy::{InvalidTenant, Retention, RunRef, Tenant, TenantId};
 pub use webhooks::{
-    CredentialsExpiredReason, Subscription, WebhookError, WebhookEvent, WebhookEventKind,
-    WebhookEventType, WebhookSender,
+    SecretExpiredReason, Subscription, Webhook, WebhookError, WebhookKind, WebhookSender,
+    WebhookType,
 };

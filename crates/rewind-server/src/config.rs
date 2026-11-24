@@ -270,7 +270,7 @@ pub struct ServerArgs {
     )]
     pub allow_internal_addresses: Vec<String>,
 
-    /// Send lifecycle webhooks to private, loopback and link-local addresses too, over
+    /// Send webhooks to private, loopback and link-local addresses too, over
     /// `http://` or `https://`: for a harness on the same trusted network. Without it, a server
     /// sends them only to `https://` URLs with public addresses. The embedded server always
     /// does.
@@ -561,7 +561,7 @@ pub(crate) struct Config {
     /// The internal hosts and networks of `--allow-internal-addresses`: MCP servers, APIs, and the
     /// metadata documents of OAuth clients, may be there.
     pub(crate) internal_hosts: InternalAllowList,
-    /// Lifecycle webhooks may go to the private network, over `http://` too.
+    /// Webhooks may go to the private network, over `http://` too.
     pub(crate) allow_private_webhooks: bool,
     /// `Some(true)`: switch to virtual time; `Some(false)`: to real time; `None`: as the store
     /// says.

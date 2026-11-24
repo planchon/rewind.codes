@@ -14,15 +14,14 @@ use std::time::Duration;
 
 use rewind_core::{Event, Lifecycle, Seq, Timestamp};
 use rewind_engine::ports::{
-    ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, CredentialsExpiredReason,
-    DueTimer, Ending, FailureCounts, ForkSource, Gauges, InboxItem, IndexedSummary, LatestRun,
-    LogRecord, Month, NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind,
-    ParkReason, PartitionError, PayloadRecord, Projection, Quarantine, QuarantineKind,
-    QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef,
-    RunSummary, RunWorkflow, ScriptCounts, SignalUrlTarget, Sketch, Span, SpanId, SpanKind,
-    SpanStatus, StartedBy, TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold,
-    TimerKind, TraceContext, TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent,
-    WebhookEventKind,
+    ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, DueTimer, Ending,
+    FailureCounts, ForkSource, Gauges, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
+    NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind, ParkReason, PartitionError,
+    PayloadRecord, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
+    QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow,
+    ScriptCounts, SecretExpiredReason, SignalUrlTarget, Sketch, Span, SpanId, SpanKind, SpanStatus,
+    StartedBy, TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold, TimerKind,
+    TraceContext, TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind,
 };
 use rewind_format::partition as record;
 
@@ -986,8 +985,8 @@ pub fn alert_of(record: record::QuotaAlert) -> Result<QuotaAlert, PartitionError
     })
 }
 
-fn webhook_event_record(event: &WebhookEvent) -> record::WebhookEvent {
-    record::WebhookEvent {
+fn webhook_record(event: &Webhook) -> record::Webhook {
+    record::Webhook {
         id: event.id.clone(),
         tenant: event.tenant.to_string(),
         namespace: event.namespace.as_ref().map(ToString::to_string),
@@ -995,20 +994,20 @@ fn webhook_event_record(event: &WebhookEvent) -> record::WebhookEvent {
         labels: event.labels.clone(),
         occurred_at: event.occurred_at.0,
         kind: match &event.kind {
-            WebhookEventKind::RunCompleted { output } => record::WebhookKind::RunCompleted {
+            WebhookKind::RunCompleted { output } => record::WebhookKind::RunCompleted {
                 output: output.clone(),
             },
-            WebhookEventKind::RunFailed { status, error } => record::WebhookKind::RunFailed {
+            WebhookKind::RunFailed { status, error } => record::WebhookKind::RunFailed {
                 status: (*status).into(),
                 error: error.clone(),
             },
-            WebhookEventKind::RunSuspended { waiting_for } => record::WebhookKind::RunSuspended {
+            WebhookKind::RunWaiting { waiting_for } => record::WebhookKind::RunWaiting {
                 waiting_for: waiting_for.clone(),
             },
-            WebhookEventKind::RunQuarantined { reason } => record::WebhookKind::RunQuarantined {
+            WebhookKind::RunQuarantined { reason } => record::WebhookKind::RunQuarantined {
                 reason: reason.clone(),
             },
-            WebhookEventKind::ActionSchemaChanged {
+            WebhookKind::ActionSchemaChanged {
                 seq,
                 action,
                 message,
@@ -1017,31 +1016,31 @@ fn webhook_event_record(event: &WebhookEvent) -> record::WebhookEvent {
                 action: action.clone(),
                 message: message.clone(),
             },
-            WebhookEventKind::CredentialsExpired {
+            WebhookKind::SecretExpired {
                 seq,
                 action,
                 message,
                 reason,
                 secret,
-            } => record::WebhookKind::CredentialsExpired {
+            } => record::WebhookKind::SecretExpired {
                 seq: seq.0,
                 action: action.clone(),
                 message: message.clone(),
                 reason: match reason {
-                    CredentialsExpiredReason::Refused => record::CredentialsReason::Refused,
-                    CredentialsExpiredReason::Missing => record::CredentialsReason::Missing,
+                    SecretExpiredReason::Refused => record::SecretExpiredReason::Refused,
+                    SecretExpiredReason::Missing => record::SecretExpiredReason::Missing,
                 },
                 secret: secret.clone(),
             },
-            WebhookEventKind::QuotaAlert(alert) => record::WebhookKind::QuotaAlert {
+            WebhookKind::QuotaAlert(alert) => record::WebhookKind::QuotaAlert {
                 alert: alert_record(alert),
             },
         },
     }
 }
 
-fn webhook_event_of(record: record::WebhookEvent) -> Result<WebhookEvent, PartitionError> {
-    Ok(WebhookEvent {
+fn webhook_of(record: record::Webhook) -> Result<Webhook, PartitionError> {
+    Ok(Webhook {
         id: record.id,
         tenant: tenant(record.tenant)?,
         namespace: record.namespace.map(namespace).transpose()?,
@@ -1049,47 +1048,43 @@ fn webhook_event_of(record: record::WebhookEvent) -> Result<WebhookEvent, Partit
         labels: record.labels,
         occurred_at: Timestamp(record.occurred_at),
         kind: match record.kind {
-            record::WebhookKind::RunCompleted { output } => {
-                WebhookEventKind::RunCompleted { output }
-            }
-            record::WebhookKind::RunFailed { status, error } => WebhookEventKind::RunFailed {
+            record::WebhookKind::RunCompleted { output } => WebhookKind::RunCompleted { output },
+            record::WebhookKind::RunFailed { status, error } => WebhookKind::RunFailed {
                 status: status.into(),
                 error,
             },
-            record::WebhookKind::RunSuspended { waiting_for } => {
-                WebhookEventKind::RunSuspended { waiting_for }
+            record::WebhookKind::RunWaiting { waiting_for } => {
+                WebhookKind::RunWaiting { waiting_for }
             }
             record::WebhookKind::RunQuarantined { reason } => {
-                WebhookEventKind::RunQuarantined { reason }
+                WebhookKind::RunQuarantined { reason }
             }
             record::WebhookKind::ActionSchemaChanged {
                 seq,
                 action,
                 message,
-            } => WebhookEventKind::ActionSchemaChanged {
+            } => WebhookKind::ActionSchemaChanged {
                 seq: Seq(seq),
                 action,
                 message,
             },
-            record::WebhookKind::CredentialsExpired {
+            record::WebhookKind::SecretExpired {
                 seq,
                 action,
                 message,
                 reason,
                 secret,
-            } => WebhookEventKind::CredentialsExpired {
+            } => WebhookKind::SecretExpired {
                 seq: Seq(seq),
                 action,
                 message,
                 reason: match reason {
-                    record::CredentialsReason::Refused => CredentialsExpiredReason::Refused,
-                    record::CredentialsReason::Missing => CredentialsExpiredReason::Missing,
+                    record::SecretExpiredReason::Refused => SecretExpiredReason::Refused,
+                    record::SecretExpiredReason::Missing => SecretExpiredReason::Missing,
                 },
                 secret,
             },
-            record::WebhookKind::QuotaAlert { alert } => {
-                WebhookEventKind::QuotaAlert(alert_of(alert)?)
-            }
+            record::WebhookKind::QuotaAlert { alert } => WebhookKind::QuotaAlert(alert_of(alert)?),
         },
     })
 }
@@ -1111,7 +1106,7 @@ pub fn projection_record(projection: &Projection) -> record::Projection {
             logs: logs.iter().map(log_record).collect(),
         },
         Projection::Webhooks(event) => record::Projection::Webhooks {
-            event: webhook_event_record(event),
+            webhook: webhook_record(event),
         },
         Projection::QuotaAlert(alert) => record::Projection::QuotaAlert {
             alert: alert_record(alert),
@@ -1134,7 +1129,7 @@ pub fn projection_of(record: record::Projection) -> Result<Projection, Partition
             spans: spans.into_iter().map(span_of).collect(),
             logs: logs.into_iter().map(log_of).collect(),
         },
-        record::Projection::Webhooks { event } => Projection::Webhooks(webhook_event_of(event)?),
+        record::Projection::Webhooks { webhook } => Projection::Webhooks(webhook_of(webhook)?),
         record::Projection::QuotaAlert { alert } => Projection::QuotaAlert(alert_of(alert)?),
     })
 }

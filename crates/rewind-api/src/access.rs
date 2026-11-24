@@ -203,8 +203,8 @@ impl Permission {
                 "Hold a call stream of harness calls, and defer, complete or fail them."
             }
             Permission::CallsApprove => "Approve or reject a call that waits for the harness.",
-            Permission::SubscriptionsRead => "List the lifecycle webhooks.",
-            Permission::SubscriptionsWrite => "Create and delete lifecycle webhooks.",
+            Permission::SubscriptionsRead => "List the webhooks.",
+            Permission::SubscriptionsWrite => "Create and delete webhooks.",
             Permission::MembersRead => "List the members, their grants and the invitations.",
             Permission::MembersInvite => "Invite people, and resend and revoke invitations.",
             Permission::MembersManage => "Change a member's grant, and remove a member.",

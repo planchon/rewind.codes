@@ -19,13 +19,11 @@ use utoipa::{Modify, OpenApi};
 
 use crate::auth::SESSION_COOKIE;
 use crate::calls::CallStreamMessage;
-use crate::events::{ChangeEvent, StreamEvent};
+use crate::events::{Change, StreamMessage};
 use crate::namespaces::{QuotaKind, QuotaScope, SignedTokenClaims};
 use crate::oauth::OAuthError;
 use crate::problem::{self, Problem, QuotaReached};
-use crate::webhooks::{
-    WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, WebhookEvent, WebhookEventType,
-};
+use crate::webhooks::{WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, Webhook, WebhookType};
 
 /// The API's document.
 #[derive(Debug, OpenApi)]
@@ -175,11 +173,11 @@ use crate::webhooks::{
         QuotaKind,
         QuotaReached,
         QuotaScope,
-        StreamEvent,
-        ChangeEvent,
+        StreamMessage,
+        Change,
         CallStreamMessage,
-        WebhookEvent,
-        WebhookEventType,
+        Webhook,
+        WebhookType,
         SignedTokenClaims,
         OAuthError
     )),
@@ -191,7 +189,7 @@ use crate::webhooks::{
         (name = "checks", description = "Type-check code, and run tests as test runs, in virtual time."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
         (name = "calls", description = "Harness calls: handed to the harness's SDK worker on its call stream, answered by their token, approved or rejected by the harness."),
-        (name = "webhooks", description = "Signal URLs that become signals, and subscriptions to signed lifecycle events."),
+        (name = "webhooks", description = "Signal URLs that become signals, and subscriptions to signed webhooks."),
         (name = "reading", description = "The workflows executed on the platform, action statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
@@ -456,7 +454,7 @@ pub(crate) fn problem_response(description: &str) -> RefOr<utoipa::openapi::resp
 /// The outbound webhooks: one event per event type, each a POST to the subscription's URL.
 fn webhooks_paths() -> PathsBuilder {
     let mut paths = PathsBuilder::new();
-    for kind in WebhookEventType::ALL {
+    for kind in WebhookType::ALL {
         let header = |name: &str, description: &str| {
             ParameterBuilder::new()
                 .name(name)
@@ -496,7 +494,7 @@ fn webhooks_paths() -> PathsBuilder {
                     .content(
                         "application/json",
                         ContentBuilder::new()
-                            .schema(Some(Ref::from_schema_name("WebhookEvent")))
+                            .schema(Some(Ref::from_schema_name("Webhook")))
                             .build(),
                     )
                     .required(Some(Required::True))
@@ -535,7 +533,7 @@ mod operations {
         Connection, ConnectionList, Consent, ConsentAnswer, ConsentQuery, ConsentRedirect,
         UpdateConnection,
     };
-    use crate::events::{ChangeEvent, EventsQuery, HistoryEvent, StreamEvent};
+    use crate::events::{Change, EventsQuery, HistoryEvent, StreamMessage};
     use crate::namespaces::{
         CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
         NamespaceListQuery, NamespaceNames, NamespacePatch, NamespaceQuery, PutCeiling,
@@ -915,7 +913,7 @@ mod operations {
 
     /// Stream the run's history (server-sent events)
     ///
-    /// Each event's `data` is a `StreamEvent`: the committed events from `from`, then, with
+    /// Each event's `data` is a `StreamMessage`: the committed events from `from`, then, with
     /// `follow=1`, each new event as it is committed, and `end` when the run has ended.
     #[utoipa::path(
         get, path = "/v1/runs/{id}/events", tag = "runs", operation_id = "streamRunEvents",
@@ -925,7 +923,7 @@ mod operations {
             ("Last-Event-ID" = Option<String>, Header, description = "Resume after this event: the same as `from` set to it plus one."),
         ),
         responses(
-            (status = 200, description = "A stream of server-sent events; each `data` is a `StreamEvent`.", body = StreamEvent, content_type = "text/event-stream"),
+            (status = 200, description = "A stream of server-sent events; each `data` is a `StreamEvent`.", body = StreamMessage, content_type = "text/event-stream"),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -937,7 +935,7 @@ mod operations {
     /// plane, as the caller may see them: an end user's token its namespace's, a key or a member
     /// with `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them
     /// all. A run the caller cannot open never shows, not even its id. Each event's `event` field
-    /// names it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the
+    /// names it and its `data` is a `Change`: `run`, with the run's summary as it is now, the
     /// same object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's
     /// owner once its batch is durable (a deleted run is not announced); `script`, `workflow`,
     /// `secret`, `namespace` and `connection`, naming what changed in the control plane, whose
@@ -952,7 +950,7 @@ mod operations {
     #[utoipa::path(
         get, path = "/v1/changes", tag = "runs", operation_id = "streamChanges",
         responses(
-            (status = 200, description = "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
+            (status = 200, description = "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = Change, content_type = "text/event-stream"),
             (status = 401, description = "No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it.", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -1174,7 +1172,7 @@ mod operations {
     )]
     pub(super) fn post_hook() {}
 
-    /// Subscribe to lifecycle events
+    /// Subscribe to webhooks
     ///
     /// The answer holds the signing secret, once.
     #[utoipa::path(
@@ -1736,7 +1734,7 @@ mod operations {
 
     /// Delete an organization's secret
     ///
-    /// The next call of a run that attaches it is parked (`credentials.expired`, reason
+    /// The next call of a run that attaches it is parked (`secret.expired`, reason
     /// `missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires
     /// `secrets:write`.
     #[utoipa::path(
@@ -2344,7 +2342,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), count, "operation ids are unique");
         let webhooks = document["webhooks"].as_object().unwrap();
-        assert_eq!(webhooks.len(), WebhookEventType::ALL.len());
+        assert_eq!(webhooks.len(), WebhookType::ALL.len());
     }
 
     /// Generators refuse a document with a dangling reference.

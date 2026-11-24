@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use rewind_api::access::{BuiltInRole, CreateApiKey, Permission, PutRole};
 use rewind_api::common::{Labels, RunStatus};
-use rewind_api::events::ChangeEvent;
+use rewind_api::events::Change;
 use rewind_api::namespaces::{CreateToken, NamespaceName};
 use rewind_api::organization::CreateOrganization;
 use rewind_api::runs::{RunSummary, StartRun};
@@ -36,7 +36,7 @@ fn waiting(marker: &str, labels: &[(&str, &str)]) -> StartRun {
 }
 
 /// The next event of a stream, within 30 s.
-async fn next(stream: &mut ChangeStream) -> ChangeEvent {
+async fn next(stream: &mut ChangeStream) -> Change {
     tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await
         .expect("an event within 30 s")
@@ -53,7 +53,7 @@ async fn until(
 ) -> Vec<RunSummary> {
     let mut seen = Vec::new();
     loop {
-        if let ChangeEvent::Run(run) = next(stream).await {
+        if let Change::Run(run) = next(stream).await {
             let done = run.id == id && holds(&run);
             seen.push(*run);
             if done {

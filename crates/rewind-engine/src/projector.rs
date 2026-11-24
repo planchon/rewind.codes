@@ -1,9 +1,9 @@
 //! What a run's committed events project (`archi/05-testing-and-observability.md`, "The
-//! projector", "Read model"): its summary in the run index, and its lifecycle events.
+//! projector", "Read model"): its summary in the run index, and its webhooks.
 //!
 //! An activation derives them from the run's history as the batch that commits its events
 //! does (`executors::derive`): the summary is written in the same batch, and what leaves the
-//! partition (spans and logs, lifecycle webhooks) goes through its outbox
+//! partition (spans and logs, webhooks) goes through its outbox
 //! (`archi/06-storage-and-scale.md`, "The outbox").
 //!
 //! A run's snapshot is folded from its history ([`RunState`]):
@@ -17,7 +17,7 @@
 //! - a failure or an abort gives the run's [`Ending`](crate::ports::Ending), its signature and
 //!   fingerprint ([`failures`]).
 //!
-//! Lifecycle events carry a deterministic id for receivers to deduplicate: `{run}/{index}` of
+//! Webhooks carry a deterministic id for receivers to deduplicate: `{run}/{index}` of
 //! the event they are projected from.
 
 use std::collections::BTreeSet;
@@ -28,11 +28,11 @@ use rewind_core::{
 };
 
 use crate::failures;
-use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, WebhookEvent, WebhookEventKind};
+use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, Webhook, WebhookKind};
 
-/// The lifecycle events of the events from `from` to the end of `history`, which leave the
+/// The webhooks of the events from `from` to the end of `history`, which leave the
 /// run in `state`: the run's end (`run.completed`, `run.failed`), or, when the range leaves the
-/// run waiting for the outside world only (signals, harness actions), `run.suspended`. Each is
+/// run waiting for the outside world only (signals, harness actions), `run.waiting`. Each is
 /// named by the index of the event it is projected from.
 pub(crate) fn lifecycle_events(
     head: &RunHead,
@@ -40,8 +40,8 @@ pub(crate) fn lifecycle_events(
     history: &[HistoryEvent],
     from: usize,
     state: &RunState,
-) -> Vec<WebhookEvent> {
-    let event = |index: u64, occurred_at: Timestamp, kind: WebhookEventKind| WebhookEvent {
+) -> Vec<Webhook> {
+    let event = |index: u64, occurred_at: Timestamp, kind: WebhookKind| Webhook {
         id: format!("{}/{index}", head.run.id),
         tenant: head.run.tenant.clone(),
         namespace: Some(head.namespace.clone()),
@@ -58,10 +58,10 @@ pub(crate) fn lifecycle_events(
     }
     let ended = history[from..].iter().find_map(|entry| {
         let kind = match &entry.event {
-            Event::Command(Command::CompleteRun { output }) => WebhookEventKind::RunCompleted {
+            Event::Command(Command::CompleteRun { output }) => WebhookKind::RunCompleted {
                 output: output.clone(),
             },
-            Event::Command(Command::FailRun { error }) => WebhookEventKind::RunFailed {
+            Event::Command(Command::FailRun { error }) => WebhookKind::RunFailed {
                 status: if error.name == ErrorInfo::CANCELLED {
                     RunStatus::Cancelled
                 } else {
@@ -69,7 +69,7 @@ pub(crate) fn lifecycle_events(
                 },
                 error: format!("{}: {}", error.name, error.message),
             },
-            Event::Lifecycle(Lifecycle::RunAborted(reason)) => WebhookEventKind::RunFailed {
+            Event::Lifecycle(Lifecycle::RunAborted(reason)) => WebhookKind::RunFailed {
                 status: RunStatus::Aborted,
                 error: reason.to_string(),
             },
@@ -87,7 +87,7 @@ pub(crate) fn lifecycle_events(
     vec![event(
         last.index,
         last.recorded_at,
-        WebhookEventKind::RunSuspended { waiting_for },
+        WebhookKind::RunWaiting { waiting_for },
     )]
 }
 

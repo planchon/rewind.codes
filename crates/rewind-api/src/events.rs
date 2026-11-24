@@ -279,12 +279,12 @@ pub struct EventsQuery {
     pub from: Option<u64>,
 }
 
-/// One event of the stream. On the wire, each is a server-sent event whose `event` field is
+/// One message of the stream. On the wire, each is a server-sent event whose `event` field is
 /// the `type` below, whose `data` is this JSON object, and, for an event, whose `id` is the
 /// event's `idx`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum StreamEvent {
+pub enum StreamMessage {
     /// A committed event of the history. Payload values above 256 KiB are left out.
     Event(Box<HistoryEvent>),
     /// The last event of a stream: the run has ended, or, without `follow`, every event
@@ -292,20 +292,20 @@ pub enum StreamEvent {
     End { status: RunStatus },
 }
 
-impl StreamEvent {
+impl StreamMessage {
     /// The SSE `event` field.
     pub fn sse_event(&self) -> &'static str {
         match self {
-            StreamEvent::Event(_) => "event",
-            StreamEvent::End { .. } => "end",
+            StreamMessage::Event(_) => "event",
+            StreamMessage::End { .. } => "end",
         }
     }
 
     /// The SSE `id` field: the event's index.
     pub fn sse_id(&self) -> Option<String> {
         match self {
-            StreamEvent::Event(entry) => Some(entry.idx.to_string()),
-            StreamEvent::End { .. } => None,
+            StreamMessage::Event(entry) => Some(entry.idx.to_string()),
+            StreamMessage::End { .. } => None,
         }
     }
 }
@@ -313,7 +313,7 @@ impl StreamEvent {
 // -------------------------------------------------------------------------------------------
 // The change stream
 
-/// One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
+/// One change of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
 /// whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
 /// summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
 /// durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
@@ -323,7 +323,7 @@ impl StreamEvent {
 /// the server writes a comment line (`:`) at least every 15 seconds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
-pub enum ChangeEvent {
+pub enum Change {
     /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
     Run(Box<RunSummary>),
     /// `script`: the organization's runs ran a code for the first time, or a person gave it a
@@ -395,18 +395,18 @@ pub struct ConnectionChanged {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Resync {}
 
-impl ChangeEvent {
+impl Change {
     /// The SSE `event` field: `run`, `script`, `workflow`, `secret`, `namespace`, `connection`
     /// or `resync`.
     pub fn sse_event(&self) -> &'static str {
         match self {
-            ChangeEvent::Run(_) => "run",
-            ChangeEvent::Script(_) => "script",
-            ChangeEvent::Workflow(_) => "workflow",
-            ChangeEvent::Secret(_) => "secret",
-            ChangeEvent::Namespace(_) => "namespace",
-            ChangeEvent::Connection(_) => "connection",
-            ChangeEvent::Resync(_) => "resync",
+            Change::Run(_) => "run",
+            Change::Script(_) => "script",
+            Change::Workflow(_) => "workflow",
+            Change::Secret(_) => "secret",
+            Change::Namespace(_) => "namespace",
+            Change::Connection(_) => "connection",
+            Change::Resync(_) => "resync",
         }
     }
 
@@ -414,13 +414,13 @@ impl ChangeEvent {
     /// does not know, which a client skips.
     pub fn from_sse(event: &str, data: &str) -> Result<Option<Self>, serde_json::Error> {
         Ok(match event {
-            "run" => Some(ChangeEvent::Run(Box::new(serde_json::from_str(data)?))),
-            "script" => Some(ChangeEvent::Script(serde_json::from_str(data)?)),
-            "workflow" => Some(ChangeEvent::Workflow(serde_json::from_str(data)?)),
-            "secret" => Some(ChangeEvent::Secret(serde_json::from_str(data)?)),
-            "namespace" => Some(ChangeEvent::Namespace(serde_json::from_str(data)?)),
-            "connection" => Some(ChangeEvent::Connection(serde_json::from_str(data)?)),
-            "resync" => Some(ChangeEvent::Resync(Resync {})),
+            "run" => Some(Change::Run(Box::new(serde_json::from_str(data)?))),
+            "script" => Some(Change::Script(serde_json::from_str(data)?)),
+            "workflow" => Some(Change::Workflow(serde_json::from_str(data)?)),
+            "secret" => Some(Change::Secret(serde_json::from_str(data)?)),
+            "namespace" => Some(Change::Namespace(serde_json::from_str(data)?)),
+            "connection" => Some(Change::Connection(serde_json::from_str(data)?)),
+            "resync" => Some(Change::Resync(Resync {})),
             _ => None,
         })
     }
@@ -484,7 +484,7 @@ mod tests {
                 output: json!({ "closed": 3 }).into(),
             }),
         };
-        let event = StreamEvent::Event(Box::new(HistoryEvent::from_core(&entry, view)));
+        let event = StreamMessage::Event(Box::new(HistoryEvent::from_core(&entry, view)));
         assert_eq!(event.sse_event(), "event");
         assert_eq!(event.sse_id().as_deref(), Some("4"));
         let written = serde_json::to_value(&event).unwrap();
@@ -493,11 +493,11 @@ mod tests {
         assert_eq!(written["event"]["type"], "complete_run");
         assert_eq!(written["event"]["output"]["value"], json!({ "closed": 3 }));
         assert_eq!(
-            serde_json::from_value::<StreamEvent>(written).unwrap(),
+            serde_json::from_value::<StreamMessage>(written).unwrap(),
             event
         );
 
-        let end = StreamEvent::End {
+        let end = StreamMessage::End {
             status: RunStatus::Completed,
         };
         assert_eq!(
@@ -517,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn a_change_event_is_the_summary_itself_or_an_empty_object() {
+    fn a_change_is_the_summary_itself_or_an_empty_object() {
         let summary: RunSummary = serde_json::from_value(json!({
             "id": "0193a5c4-0000-7000-8000-000000000001",
             "handle": "alice/script/06bqx3k9f2mt",
@@ -535,7 +535,7 @@ mod tests {
             "historyLen": 1
         }))
         .unwrap();
-        let run = ChangeEvent::Run(Box::new(summary.clone()));
+        let run = Change::Run(Box::new(summary.clone()));
         assert_eq!(run.sse_event(), "run");
         let data = serde_json::to_string(&run).unwrap();
         assert_eq!(
@@ -543,14 +543,14 @@ mod tests {
             serde_json::to_value(&summary).unwrap(),
             "the data is the summary, untagged"
         );
-        assert_eq!(ChangeEvent::from_sse("run", &data).unwrap(), Some(run));
+        assert_eq!(Change::from_sse("run", &data).unwrap(), Some(run));
 
-        let resync = ChangeEvent::Resync(Resync {});
+        let resync = Change::Resync(Resync {});
         assert_eq!(resync.sse_event(), "resync");
         assert_eq!(serde_json::to_string(&resync).unwrap(), "{}");
-        assert_eq!(ChangeEvent::from_sse("resync", "{}").unwrap(), Some(resync));
-        assert_eq!(ChangeEvent::from_sse("later", "{}").unwrap(), None);
-        assert!(ChangeEvent::from_sse("run", "{}").is_err());
+        assert_eq!(Change::from_sse("resync", "{}").unwrap(), Some(resync));
+        assert_eq!(Change::from_sse("later", "{}").unwrap(), None);
+        assert!(Change::from_sse("run", "{}").is_err());
     }
 
     #[test]
@@ -559,14 +559,14 @@ mod tests {
             (
                 "script",
                 json!({ "digest": "ab" }),
-                ChangeEvent::Script(ScriptChanged {
+                Change::Script(ScriptChanged {
                     digest: "ab".into(),
                 }),
             ),
             (
                 "workflow",
                 json!({ "name": "triage", "version": "cd" }),
-                ChangeEvent::Workflow(WorkflowChanged {
+                Change::Workflow(WorkflowChanged {
                     name: "triage".into(),
                     version: "cd".into(),
                 }),
@@ -574,7 +574,7 @@ mod tests {
             (
                 "secret",
                 json!({ "name": "github", "namespace": "alice" }),
-                ChangeEvent::Secret(SecretChanged {
+                Change::Secret(SecretChanged {
                     name: "github".into(),
                     namespace: Some("alice".parse().unwrap()),
                 }),
@@ -582,7 +582,7 @@ mod tests {
             (
                 "secret",
                 json!({ "name": "github" }),
-                ChangeEvent::Secret(SecretChanged {
+                Change::Secret(SecretChanged {
                     name: "github".into(),
                     namespace: None,
                 }),
@@ -590,19 +590,19 @@ mod tests {
             (
                 "namespace",
                 json!({ "name": "alice" }),
-                ChangeEvent::Namespace(NamespaceChanged {
+                Change::Namespace(NamespaceChanged {
                     name: Some("alice".parse().unwrap()),
                 }),
             ),
             (
                 "namespace",
                 json!({}),
-                ChangeEvent::Namespace(NamespaceChanged { name: None }),
+                Change::Namespace(NamespaceChanged { name: None }),
             ),
             (
                 "connection",
                 json!({ "id": "conn_1" }),
-                ChangeEvent::Connection(ConnectionChanged {
+                Change::Connection(ConnectionChanged {
                     id: "conn_1".into(),
                 }),
             ),
@@ -611,12 +611,12 @@ mod tests {
             assert_eq!(event.sse_event(), name);
             assert_eq!(serde_json::to_value(&event).unwrap(), data, "{name}");
             assert_eq!(
-                ChangeEvent::from_sse(name, &data.to_string()).unwrap(),
+                Change::from_sse(name, &data.to_string()).unwrap(),
                 Some(event),
                 "{name}"
             );
         }
-        assert!(ChangeEvent::from_sse("script", "{}").is_err());
-        assert!(ChangeEvent::from_sse("connection", "{}").is_err());
+        assert!(Change::from_sse("script", "{}").is_err());
+        assert!(Change::from_sse("connection", "{}").is_err());
     }
 }

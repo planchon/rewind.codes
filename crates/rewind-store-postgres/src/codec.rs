@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{JsonValue, canonical_json};
-use rewind_engine::ports::WebhookEventType;
+use rewind_engine::ports::WebhookType;
 use serde_json::{Map, Value};
 
 use crate::Error;
@@ -46,7 +46,7 @@ pub(crate) fn decode_labels(json: &str) -> Result<BTreeMap<String, String>, Erro
 // -------------------------------------------------------------------------------------------
 // Webhook subscriptions
 
-pub(crate) fn encode_event_types(events: &BTreeSet<WebhookEventType>) -> String {
+pub(crate) fn encode_event_types(events: &BTreeSet<WebhookType>) -> String {
     let names: Vec<Value> = events
         .iter()
         .map(|event| Value::String(event.as_str().to_owned()))
@@ -54,7 +54,7 @@ pub(crate) fn encode_event_types(events: &BTreeSet<WebhookEventType>) -> String 
     canonical_json(&Value::Array(names))
 }
 
-pub(crate) fn decode_event_types(json: &str) -> Result<BTreeSet<WebhookEventType>, Error> {
+pub(crate) fn decode_event_types(json: &str) -> Result<BTreeSet<WebhookType>, Error> {
     let Value::Array(names) = decode_value(json)? else {
         return Err(Error::Corrupt(format!("webhook events {json:?}")));
     };
@@ -62,7 +62,7 @@ pub(crate) fn decode_event_types(json: &str) -> Result<BTreeSet<WebhookEventType
         .iter()
         .map(|name| {
             let name = name.as_str().unwrap_or_default();
-            WebhookEventType::ALL
+            WebhookType::ALL
                 .into_iter()
                 .find(|event| event.as_str() == name)
                 .ok_or_else(|| corrupt("webhook event", name))
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn event_types_round_trip() {
-        let events: BTreeSet<WebhookEventType> = WebhookEventType::ALL.into_iter().collect();
+        let events: BTreeSet<WebhookType> = WebhookType::ALL.into_iter().collect();
         assert_eq!(decode_event_types(&encode_event_types(&events)), Ok(events));
         assert!(decode_event_types("[\"run.paused\"]").is_err());
     }

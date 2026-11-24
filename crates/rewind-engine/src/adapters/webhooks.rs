@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::ports::{Subscription, WebhookError, WebhookEvent, WebhookSender};
+use crate::ports::{Subscription, Webhook, WebhookError, WebhookSender};
 
 /// `WebhookSender` in memory: records every delivery instead of sending it, for tests and test
 /// mode. Clones share their deliveries. A URL marked with [`refuse`](Self::refuse) refuses
@@ -13,7 +13,7 @@ pub struct MemoryWebhooks {
 
 #[derive(Debug, Default)]
 struct State {
-    deliveries: Vec<(Subscription, WebhookEvent)>,
+    deliveries: Vec<(Subscription, Webhook)>,
     refused: BTreeSet<String>,
 }
 
@@ -23,7 +23,7 @@ impl MemoryWebhooks {
     }
 
     /// Every delivery so far, in order.
-    pub fn deliveries(&self) -> Vec<(Subscription, WebhookEvent)> {
+    pub fn deliveries(&self) -> Vec<(Subscription, Webhook)> {
         self.lock()
             .map(|state| state.deliveries.clone())
             .unwrap_or_default()
@@ -45,11 +45,7 @@ impl MemoryWebhooks {
 }
 
 impl WebhookSender for MemoryWebhooks {
-    async fn send(
-        &self,
-        subscription: &Subscription,
-        event: &WebhookEvent,
-    ) -> Result<(), WebhookError> {
+    async fn send(&self, subscription: &Subscription, event: &Webhook) -> Result<(), WebhookError> {
         let mut state = self.lock()?;
         if state.refused.contains(&subscription.url) {
             return Err(WebhookError::Delivery {

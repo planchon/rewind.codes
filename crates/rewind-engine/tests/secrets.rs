@@ -19,10 +19,10 @@ use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::attachments::{AttachRights, AttachmentProblem, RefusedAttachments};
 use rewind_engine::plane::NodeConfig;
 use rewind_engine::ports::{
-    ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, CredentialsExpiredReason, Day,
-    Delivery, Dispatched, NamespaceName, NewSecret, Page, ParkKind, PutSecret, RunOrder, RunQuery,
-    RunRef, Scope, Secret, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription,
-    TaskState, TenantId, WebhookEventKind, WorkflowDeclarations,
+    ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, Day, Delivery, Dispatched,
+    NamespaceName, NewSecret, Page, ParkKind, PutSecret, RunOrder, RunQuery, RunRef, Scope, Secret,
+    SecretExpiredReason, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription,
+    TaskState, TenantId, WebhookKind, WorkflowDeclarations,
 };
 use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{ForkError, ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun};
@@ -538,7 +538,7 @@ async fn a_secret_deleted_mid_run_parks_the_call_until_it_is_put_again() {
             id: "sub".into(),
             url: "https://harness.example.com/hooks".into(),
             secret: Secret::new("whsec_test"),
-            events: Default::default(),
+            types: Default::default(),
             labels: BTreeMap::new(),
         })
         .await
@@ -590,14 +590,14 @@ async fn a_secret_deleted_mid_run_parks_the_call_until_it_is_put_again() {
     let expired: Vec<_> = deliveries
         .iter()
         .filter_map(|(_, event)| match &event.kind {
-            WebhookEventKind::CredentialsExpired { reason, secret, .. } => Some((reason, secret)),
+            WebhookKind::SecretExpired { reason, secret, .. } => Some((reason, secret)),
             _ => None,
         })
         .collect();
     let [(reason, secret)] = expired.as_slice() else {
-        panic!("one credentials.expired: {deliveries:?}");
+        panic!("one secret.expired: {deliveries:?}");
     };
-    assert_eq!(**reason, CredentialsExpiredReason::Missing);
+    assert_eq!(**reason, SecretExpiredReason::Missing);
     assert_eq!(secret.as_ref(), Some(&secret_ref("ns/github")));
     assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
 

@@ -8,7 +8,7 @@ use rewind_engine::adapters::{
     MemorySecrets, MemorySpanExporter, MemoryWebhooks,
 };
 use rewind_engine::conformance;
-use rewind_engine::ports::{Secret, Subscription, TenantId, WebhookEventType};
+use rewind_engine::ports::{Secret, Subscription, TenantId, WebhookType};
 
 #[tokio::test]
 async fn memory_catalog_conforms() {
@@ -70,17 +70,17 @@ impl conformance::webhooks::Receiver for MemoryReceiver {
             id: id.to_owned(),
             url,
             secret: Secret::new("whsec_test"),
-            events: BTreeSet::new(),
+            types: BTreeSet::new(),
             labels: BTreeMap::new(),
         }
     }
 
-    async fn received(&self, id: &str) -> Vec<(String, WebhookEventType)> {
+    async fn received(&self, id: &str) -> Vec<(String, WebhookType)> {
         self.0
             .deliveries()
             .into_iter()
             .filter(|(subscription, _)| subscription.id == id)
-            .map(|(_, event)| (event.id, event.kind.event_type()))
+            .map(|(_, event)| (event.id, event.kind.webhook_type()))
             .collect()
     }
 }

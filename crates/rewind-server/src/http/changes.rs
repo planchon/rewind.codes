@@ -18,7 +18,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use rewind_api::access::Permission;
 use rewind_api::events::{
-    ChangeEvent, ConnectionChanged, NamespaceChanged, Resync, ScriptChanged, SecretChanged,
+    Change, ConnectionChanged, NamespaceChanged, Resync, ScriptChanged, SecretChanged,
     WorkflowChanged,
 };
 use rewind_core::Digest;
@@ -157,7 +157,7 @@ impl Follow {
         };
         let mut shown = search::summary(&summary);
         shown.script_title = title;
-        let event = ChangeEvent::Run(Box::new(shown));
+        let event = Change::Run(Box::new(shown));
         self.pending.push_back(sse(&event));
     }
 
@@ -173,7 +173,7 @@ impl Follow {
         }
         let event = match change {
             ControlPlaneChange::Script { tenant: of, digest } if of == tenant && unscoped => {
-                Some(ChangeEvent::Script(ScriptChanged {
+                Some(Change::Script(ScriptChanged {
                     digest: digest.to_hex(),
                 }))
             }
@@ -190,7 +190,7 @@ impl Follow {
                     _ => false,
                 };
                 labels_seen.then(|| {
-                    ChangeEvent::Workflow(WorkflowChanged {
+                    Change::Workflow(WorkflowChanged {
                         name,
                         version: version.to_hex(),
                     })
@@ -215,7 +215,7 @@ impl Follow {
                     }
                 };
                 seen.then(|| {
-                    ChangeEvent::Secret(SecretChanged {
+                    Change::Secret(SecretChanged {
                         name: secret.name.to_string(),
                         namespace: match &secret.namespace {
                             SecretNamespace::Namespace(namespace) => {
@@ -228,18 +228,18 @@ impl Follow {
             }
             ControlPlaneChange::Namespace { tenant: of, name } if of == tenant => {
                 caller.reaches(&name).then(|| {
-                    ChangeEvent::Namespace(NamespaceChanged {
+                    Change::Namespace(NamespaceChanged {
                         name: Some(crate::views::namespace(&name)),
                     })
                 })
             }
             ControlPlaneChange::Tenant { tenant: of } if of == tenant => {
-                Some(ChangeEvent::Namespace(NamespaceChanged { name: None }))
+                Some(Change::Namespace(NamespaceChanged { name: None }))
             }
             ControlPlaneChange::Connection { id }
                 if caller.require(Permission::MembersRead).is_ok() =>
             {
-                Some(ChangeEvent::Connection(ConnectionChanged { id }))
+                Some(Change::Connection(ConnectionChanged { id }))
             }
             _ => None,
         };
@@ -249,11 +249,11 @@ impl Follow {
     }
 }
 
-fn sse(event: &ChangeEvent) -> Event {
+fn sse(event: &Change) -> Event {
     let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_owned());
     Event::default().event(event.sse_event()).data(data)
 }
 
 fn resync() -> Event {
-    sse(&ChangeEvent::Resync(Resync {}))
+    sse(&Change::Resync(Resync {}))
 }

@@ -19,7 +19,7 @@ use rewind_api::calls::{
     CallState, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
 };
 use rewind_api::common::{Labels, RunStatus};
-use rewind_api::events::{Event, EventsQuery, StreamEvent};
+use rewind_api::events::{Event, EventsQuery, StreamMessage};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
     CancelRun, ExportAs, FailureQuery, ForkRun, RunFilter, RunSort, RunStatsQuery, StartRun,
@@ -27,7 +27,7 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
 use rewind_api::webhooks::{
-    CreateSubscription, SignedHeaders, WebhookEvent, WebhookEventType, WebhookSecret,
+    CreateSubscription, SignedHeaders, Webhook, WebhookSecret, WebhookType,
 };
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
@@ -656,7 +656,7 @@ async fn a_subscriber_that_never_answers_holds_up_no_other_run() {
     stranger
         .create_subscription(&CreateSubscription {
             url,
-            events: Vec::new(),
+            types: Vec::new(),
             labels: Labels::new(),
         })
         .await
@@ -692,7 +692,7 @@ async fn a_subscriber_that_never_answers_holds_up_no_other_run() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
+async fn webhooks_are_signed_and_filtered_by_labels() {
     // The receivers listen on 127.0.0.1.
     let server = TestServer::start(&["--allow-private-webhooks"]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
@@ -700,10 +700,7 @@ async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
     let subscription = harness
         .create_subscription(&CreateSubscription {
             url,
-            events: vec![
-                WebhookEventType::RunCompleted,
-                WebhookEventType::RunCancelled,
-            ],
+            types: vec![WebhookType::RunCompleted, WebhookType::RunCancelled],
             labels: Labels::from_iter([("conversation", "c-1")]),
         })
         .await
@@ -742,7 +739,7 @@ async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
     let event = secret
         .verify(&signed, body, jiff::Timestamp::now())
         .unwrap();
-    let WebhookEvent::RunCompleted { data, .. } = event else {
+    let Webhook::RunCompleted { data, .. } = event else {
         panic!("expected run.completed");
     };
     assert_eq!(data.run.id, run.id);
@@ -776,8 +773,8 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
         .unwrap()
     {
         match event.unwrap() {
-            StreamEvent::Event(entry) => names.push(entry.event.name()),
-            StreamEvent::End { status } => end = Some(status),
+            StreamMessage::Event(entry) => names.push(entry.event.name()),
+            StreamMessage::End { status } => end = Some(status),
         }
     }
     assert_eq!(end, Some(RunStatus::Completed));
@@ -804,7 +801,7 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
         .unwrap();
     let mut count = 0;
     while let Some(event) = rest.next().await {
-        if let StreamEvent::Event(entry) = event.unwrap() {
+        if let StreamMessage::Event(entry) = event.unwrap() {
             assert!(entry.idx >= 3);
             count += 1;
         }
@@ -1309,7 +1306,7 @@ async fn a_deployed_server_sends_no_webhook_to_the_private_network() {
         let harness = harness.clone();
         let request = CreateSubscription {
             url: url.into(),
-            events: Vec::new(),
+            types: Vec::new(),
             labels: Labels::new(),
         };
         async move { harness.create_subscription(&request).await }
@@ -1351,7 +1348,7 @@ async fn a_deployed_server_sends_no_webhook_to_the_private_network() {
     harness
         .create_subscription(&CreateSubscription {
             url: "http://127.0.0.1:8080/hook".into(),
-            events: Vec::new(),
+            types: Vec::new(),
             labels: Labels::new(),
         })
         .await
@@ -1397,7 +1394,7 @@ async fn text_with_a_nul_character_is_refused_with_400() {
     invalid(harness.create_action_set(&action_set).await.unwrap_err());
     let subscription = CreateSubscription {
         url: "https://hooks.example.com/rewind".into(),
-        events: vec![WebhookEventType::RunCompleted],
+        types: vec![WebhookType::RunCompleted],
         labels: Labels::from_iter([("conversation", "\u{0}")]),
     };
     invalid(

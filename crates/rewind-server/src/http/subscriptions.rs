@@ -1,4 +1,4 @@
-//! Subscriptions to lifecycle webhooks (`POST`, `GET`, `DELETE /v1/subscriptions`).
+//! Subscriptions to webhooks (`POST`, `GET`, `DELETE /v1/subscriptions`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use rewind_api::access::Permission;
 use rewind_api::common::Labels;
 use rewind_api::webhooks::{
-    CreateSubscription, Subscription as ApiSubscription, SubscriptionList, WebhookEventType,
-    WebhookSecret,
+    CreateSubscription, Subscription as ApiSubscription, SubscriptionList, WebhookSecret,
+    WebhookType,
 };
 use rewind_core::RunId;
 use rewind_engine::adapters::SystemEntropy;
@@ -53,7 +53,7 @@ pub(super) async fn create(
         id,
         url: request.url,
         secret: Secret::new(secret.expose()),
-        events: request.events.iter().map(|kind| port_type(*kind)).collect(),
+        types: request.types.iter().map(|kind| port_type(*kind)).collect(),
         labels,
     };
     app.store.put_subscription(&subscription).await?;
@@ -99,31 +99,31 @@ pub(super) async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn port_type(kind: WebhookEventType) -> rewind_engine::ports::WebhookEventType {
-    use rewind_engine::ports::WebhookEventType as Port;
+fn port_type(kind: WebhookType) -> rewind_engine::ports::WebhookType {
+    use rewind_engine::ports::WebhookType as Port;
     match kind {
-        WebhookEventType::RunCompleted => Port::RunCompleted,
-        WebhookEventType::RunFailed => Port::RunFailed,
-        WebhookEventType::RunCancelled => Port::RunCancelled,
-        WebhookEventType::RunAborted => Port::RunAborted,
-        WebhookEventType::RunSuspended => Port::RunSuspended,
-        WebhookEventType::RunQuarantined => Port::RunQuarantined,
-        WebhookEventType::ActionSchemaChanged => Port::ActionSchemaChanged,
-        WebhookEventType::CredentialsExpired => Port::CredentialsExpired,
-        WebhookEventType::QuotaAlert => Port::QuotaAlert,
+        WebhookType::RunCompleted => Port::RunCompleted,
+        WebhookType::RunFailed => Port::RunFailed,
+        WebhookType::RunCancelled => Port::RunCancelled,
+        WebhookType::RunAborted => Port::RunAborted,
+        WebhookType::RunWaiting => Port::RunWaiting,
+        WebhookType::RunQuarantined => Port::RunQuarantined,
+        WebhookType::ActionSchemaChanged => Port::ActionSchemaChanged,
+        WebhookType::SecretExpired => Port::SecretExpired,
+        WebhookType::QuotaAlert => Port::QuotaAlert,
     }
 }
 
-fn api_type(kind: rewind_engine::ports::WebhookEventType) -> WebhookEventType {
-    WebhookEventType::ALL
+fn api_type(kind: rewind_engine::ports::WebhookType) -> WebhookType {
+    WebhookType::ALL
         .into_iter()
         .find(|api| api.as_str() == kind.as_str())
-        .unwrap_or(WebhookEventType::RunFailed)
+        .unwrap_or(WebhookType::RunFailed)
 }
 
 fn view(subscription: &Subscription) -> ApiSubscription {
-    let events: BTreeSet<WebhookEventType> = subscription
-        .events
+    let events: BTreeSet<WebhookType> = subscription
+        .types
         .iter()
         .map(|kind| api_type(*kind))
         .collect();
@@ -143,7 +143,7 @@ fn view(subscription: &Subscription) -> ApiSubscription {
     ApiSubscription {
         id: subscription.id.clone(),
         url: subscription.url.clone(),
-        events: events.into_iter().collect(),
+        types: events.into_iter().collect(),
         labels: Labels::from(subscription.labels.clone()),
         created_at,
         secret: None,

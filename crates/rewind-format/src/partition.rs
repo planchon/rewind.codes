@@ -21,13 +21,13 @@ use serde_json::{Map, Value};
 use crate::{FormatError, VERSION};
 
 pub use crate::v1::partition::{
-    ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending,
-    FailureCounts, FailureKind, ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
-    Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
-    QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, RunCounts, RunHead, RunWorkflow,
-    ScriptCounts, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey,
-    StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
-    TraceContext, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind,
+    ActionCounts, Admission, Attribute, Callsite, Counters, Ending, FailureCounts, FailureKind,
+    ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log, Metadata, Mode,
+    Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
+    QuarantineNote, QuotaAlert, QuotaKind, RunCounts, RunHead, RunWorkflow, ScriptCounts,
+    SecretExpiredReason, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus,
+    StartKey, StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
+    TraceContext, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind,
 };
 
 /// A partition record: what [`encode`] writes and [`decode`] reads.

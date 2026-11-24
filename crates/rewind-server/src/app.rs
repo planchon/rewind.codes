@@ -45,7 +45,7 @@ use crate::wiring::link::ServerLink;
 use crate::wiring::telemetry::Exporter;
 use crate::wiring::webhooks::{HttpWebhooks, ServerRender, WebhookEgress};
 
-/// The sender of lifecycle webhooks: one attempt per delivery, the next a timer of the owner.
+/// The sender of webhooks: one attempt per delivery, the next a timer of the owner.
 pub(crate) type Webhooks = HttpWebhooks<ServerRender>;
 
 /// The ports of this node.
@@ -87,7 +87,7 @@ pub(crate) struct Settings {
     pub(crate) allow_stdio: bool,
     /// The URL clients reach this server at, without a trailing `/`.
     pub(crate) public_url: Option<String>,
-    /// Where lifecycle webhooks may go.
+    /// Where webhooks may go.
     pub(crate) webhook_egress: WebhookEgress,
 }
 

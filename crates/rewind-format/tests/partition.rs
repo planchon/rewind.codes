@@ -18,13 +18,13 @@ use rewind_core::{
 };
 use rewind_format::FormatError;
 use rewind_format::partition::{
-    ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending,
-    FailureCounts, FailureKind, ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
-    Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
-    QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow,
-    ScriptCounts, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus, StartKey,
-    StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
-    TraceContext, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind, decode, encode,
+    ActionCounts, Admission, Attribute, Callsite, Counters, Ending, FailureCounts, FailureKind,
+    ForkSource, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log, Metadata, Mode,
+    Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
+    QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow, ScriptCounts,
+    SecretExpiredReason, Shape, SignalKey, SignalUrlToken, Sketch, Span, SpanKind, SpanStatus,
+    StartKey, StartedBy, Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind,
+    TraceContext, Wait, WaitKind, WaitingFor, Watcher, Webhook, WebhookKind, decode, encode,
 };
 use serde_json::json;
 
@@ -358,18 +358,18 @@ fn outbox_webhooks() -> Outbox {
         tenant: "acme".into(),
         run: Some(run(1)),
         projection: Projection::Webhooks {
-            event: WebhookEvent {
+            webhook: Webhook {
                 id: format!("{}/2/1", run(1)),
                 tenant: "acme".into(),
                 namespace: Some("alice".into()),
                 run: Some(run(1)),
                 labels: BTreeMap::from([("agent".into(), "triage".into())]),
                 occurred_at: T0 + 5,
-                kind: WebhookKind::CredentialsExpired {
+                kind: WebhookKind::SecretExpired {
                     seq: 2,
                     action: "github.close_issue".into(),
                     message: "401".into(),
-                    reason: CredentialsReason::Refused,
+                    reason: SecretExpiredReason::Refused,
                     secret: Some(SecretRef::parse("org/github").unwrap()),
                 },
             },
@@ -542,7 +542,7 @@ fn every_variant_round_trips() {
             status: Status::Aborted,
             error: "limit".into(),
         },
-        WebhookKind::RunSuspended {
+        WebhookKind::RunWaiting {
             waiting_for: vec!["signal \"approval\"".into()],
         },
         WebhookKind::RunQuarantined { reason: "x".into() },
@@ -551,22 +551,22 @@ fn every_variant_round_trips() {
             action: "t".into(),
             message: "m".into(),
         },
-        WebhookKind::CredentialsExpired {
+        WebhookKind::SecretExpired {
             seq: 1,
             action: "t".into(),
             message: "m".into(),
-            reason: CredentialsReason::Missing,
+            reason: SecretExpiredReason::Missing,
             secret: None,
         },
         WebhookKind::QuotaAlert { alert: alert() },
     ];
     for kind in webhooks {
-        let Projection::Webhooks { mut event } = outbox_webhooks().projection else {
+        let Projection::Webhooks { mut webhook } = outbox_webhooks().projection else {
             unreachable!()
         };
-        event.kind = kind;
+        webhook.kind = kind;
         let record = Outbox {
-            projection: Projection::Webhooks { event },
+            projection: Projection::Webhooks { webhook },
             ..outbox_webhooks()
         };
         assert_eq!(decode::<Outbox>(&encode(&record)).unwrap(), record);

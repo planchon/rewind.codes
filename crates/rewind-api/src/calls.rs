@@ -215,10 +215,10 @@ pub enum ParkedReason {
     /// `action.schema_changed`): approve to continue against the new schema, or reject.
     SchemaChanged,
     /// The server answered 401 to the secret or to the signature (webhook
-    /// `credentials.expired`, reason `refused`): put the secret again, or approve once the
+    /// `secret.expired`, reason `refused`): put the secret again, or approve once the
     /// server accepts the key.
     CredentialsRefused,
-    /// The secret the run attached no longer exists (webhook `credentials.expired`, reason
+    /// The secret the run attached no longer exists (webhook `secret.expired`, reason
     /// `missing`): put it again.
     SecretMissing,
 }

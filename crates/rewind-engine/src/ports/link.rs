@@ -525,7 +525,7 @@ pub enum EdgeNotice {
     clippy::large_enum_variant,
     reason = "an event is moved once, to its stream: its size does not matter"
 )]
-pub enum StreamEvent {
+pub enum StreamMessage {
     /// A harness task handed on the stream.
     Task(HarnessTask),
     /// The task handed with this token no longer waits for an answer.

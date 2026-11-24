@@ -998,7 +998,7 @@ async fn webhooks_and_spans_leave_through_the_outbox() {
             id: "sub-1".into(),
             url: "https://harness.example.com/hooks".into(),
             secret: rewind_engine::ports::Secret::new("whsec".to_owned()),
-            events: Default::default(),
+            types: Default::default(),
             labels: BTreeMap::new(),
         })
         .await
@@ -1009,7 +1009,7 @@ async fn webhooks_and_spans_leave_through_the_outbox() {
     let delivered = world.plane.webhooks.deliveries();
     assert!(
         delivered.iter().any(|(_, event)| event.run == Some(run.id)
-            && event.kind.event_type().as_str() == "run.completed"),
+            && event.kind.webhook_type().as_str() == "run.completed"),
         "{delivered:?}"
     );
     let spans = world.plane.spans.spans();
@@ -1022,7 +1022,7 @@ fn subscription(url: &str) -> rewind_engine::ports::Subscription {
         id: format!("sub-{url}"),
         url: url.into(),
         secret: rewind_engine::ports::Secret::new("whsec".to_owned()),
-        events: Default::default(),
+        types: Default::default(),
         labels: BTreeMap::new(),
     }
 }
@@ -1165,7 +1165,7 @@ async fn a_quota_crossed_raises_its_alert_once_through_the_outbox() {
         .webhooks
         .deliveries()
         .into_iter()
-        .filter(|(_, event)| event.kind.event_type().as_str() == "quota.alert")
+        .filter(|(_, event)| event.kind.webhook_type().as_str() == "quota.alert")
         .map(|(_, event)| event.id)
         .collect();
     assert_eq!(alerts.len(), 2, "80 % and 100 %, once each: {alerts:?}");
@@ -1504,7 +1504,7 @@ async fn cpu_over_its_quota_raises_alerts_and_refuses_nothing() {
             .deliveries()
             .into_iter()
             .filter(|(_, event)| {
-                event.kind.event_type().as_str() == "quota.alert"
+                event.kind.webhook_type().as_str() == "quota.alert"
                     && event.id.contains(":cpu_per_month:")
             })
             .map(|(_, event)| event.id)
@@ -1587,7 +1587,7 @@ async fn a_call_parked_by_a_schema_change_is_sent_once_the_harness_approves_it()
             .webhooks
             .deliveries()
             .iter()
-            .any(|(_, event)| event.kind.event_type().as_str() == "action.schema_changed"),
+            .any(|(_, event)| event.kind.webhook_type().as_str() == "action.schema_changed"),
         "the harness is told"
     );
 

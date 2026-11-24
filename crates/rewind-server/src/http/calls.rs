@@ -31,7 +31,7 @@ use rewind_api::calls::{
 use rewind_core::canonical_json;
 use rewind_engine::ports::TaskToken;
 use rewind_engine::ports::link::{
-    HarnessFailure, HarnessTask, StreamAttach, StreamEvent, StreamId,
+    HarnessFailure, HarnessTask, StreamAttach, StreamId, StreamMessage,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -150,7 +150,7 @@ struct Held {
     attached: Attached,
     /// A stream held open keeps the embedded server from stopping on idle.
     _busy: Busy,
-    tasks: UnboundedReceiver<StreamEvent>,
+    tasks: UnboundedReceiver<StreamMessage>,
 }
 
 impl Held {
@@ -158,8 +158,8 @@ impl Held {
         tokio::select! {
             () = self.rights.lost() => None,
             event = self.tasks.recv() => event.map(|event| match event {
-                StreamEvent::Task(task) => sse(&CallStreamMessage::Call(Box::new(handed(task)))),
-                StreamEvent::Gone(token) => sse(&CallStreamMessage::Gone(CallGone { token: token.0 })),
+                StreamMessage::Task(task) => sse(&CallStreamMessage::Call(Box::new(handed(task)))),
+                StreamMessage::Gone(token) => sse(&CallStreamMessage::Gone(CallGone { token: token.0 })),
             }),
         }
     }

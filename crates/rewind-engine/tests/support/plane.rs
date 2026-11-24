@@ -15,7 +15,7 @@ use rewind_engine::adapters::{
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
-use rewind_engine::ports::link::{HarnessFailure, HarnessTask, RunView, StreamEvent};
+use rewind_engine::ports::link::{HarnessFailure, HarnessTask, RunView, StreamMessage};
 use rewind_engine::ports::{
     CallTask, Clock, Created, Enqueued, NodeId, PartitionStore, RunRef, TaskRef, TaskToken,
     TenantId,
@@ -52,7 +52,7 @@ pub struct World<S: PartitionStore<Log: 'static> + 'static = MemoryPartitions> {
 }
 
 /// What an SDK stream receives.
-pub type Stream = tokio::sync::mpsc::UnboundedReceiver<StreamEvent>;
+pub type Stream = tokio::sync::mpsc::UnboundedReceiver<StreamMessage>;
 
 /// What a stream received since it was last read: the tasks handed, and the tokens of those
 /// gone.
@@ -61,8 +61,8 @@ pub fn received(stream: &mut Stream) -> (Vec<HarnessTask>, Vec<TaskToken>) {
     let mut gone = Vec::new();
     for event in TestDriver::<MemoryPartitions>::drain(stream) {
         match event {
-            StreamEvent::Task(task) => tasks.push(task),
-            StreamEvent::Gone(token) => gone.push(token),
+            StreamMessage::Task(task) => tasks.push(task),
+            StreamMessage::Gone(token) => gone.push(token),
         }
     }
     (tasks, gone)

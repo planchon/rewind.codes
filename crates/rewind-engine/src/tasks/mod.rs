@@ -28,7 +28,7 @@
 //!   tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]), and its texts are
 //!   taken out of the answer ([`redacted`]): never in the history.
 //! - **Parked tasks.** A schema change, a 401 or a missing secret parks the task and sends
-//!   `action.schema_changed` or `credentials.expired` (reason `refused` or `missing`) to the
+//!   `action.schema_changed` or `secret.expired` (reason `refused` or `missing`) to the
 //!   tenant's subscriptions. Approved after a schema change, the call goes on against the new
 //!   schema; the secret put again makes it ready again; rejected, it fails with an `ActionError`.
 //!

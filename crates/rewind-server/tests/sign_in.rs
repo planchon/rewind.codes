@@ -13,7 +13,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use rewind_api::access::Permission;
 use rewind_api::auth::{AuthState, OAUTH_COOKIE, SESSION_COOKIE};
-use rewind_api::events::{EventsQuery, StreamEvent};
+use rewind_api::events::{EventsQuery, StreamMessage};
 use rewind_api::organization::{CreateOrganization, Principal};
 use rewind_api::runs::{RunFilter, StartRun};
 use rewind_api::{Client, Problem, ProblemType};
@@ -525,7 +525,7 @@ async fn an_event_stream_opened_with_an_access_token_ends_at_its_expiry() {
         .expect("the stream ends")
     {
         assert!(
-            !matches!(event.unwrap(), StreamEvent::End { .. }),
+            !matches!(event.unwrap(), StreamMessage::End { .. }),
             "the run still waits for its signal"
         );
     }

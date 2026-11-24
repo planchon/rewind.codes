@@ -32,7 +32,7 @@ pub const RUN_EXPORT: &str = "/v1/runs/{id}/export";
 pub const RUN_RELEASE: &str = "/v1/runs/{id}/release";
 pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
 /// What changes in the organization, its runs and its control plane, as server-sent events
-/// (`crate::events::ChangeEvent`).
+/// (`crate::events::Change`).
 pub const CHANGES: &str = "/v1/changes";
 
 /// The harness calls handed to a worker, as server-sent events

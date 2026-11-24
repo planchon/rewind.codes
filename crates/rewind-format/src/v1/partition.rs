@@ -633,7 +633,7 @@ pub struct Outbox {
     pub projection: Projection,
 }
 
-/// `{"type":"otel","spans":[…],"logs":[…]}`, `{"type":"webhooks","event":{…}}` or
+/// `{"type":"otel","spans":[…],"logs":[…]}`, `{"type":"webhooks","webhook":{…}}` or
 /// `{"type":"quota_alert","alert":{…}}`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -645,7 +645,7 @@ pub enum Projection {
         logs: Vec<Log>,
     },
     Webhooks {
-        event: WebhookEvent,
+        webhook: Webhook,
     },
     QuotaAlert {
         alert: QuotaAlert,
@@ -718,10 +718,10 @@ pub struct Log {
     pub attributes: BTreeMap<String, Attribute>,
 }
 
-/// A lifecycle event of a run, or a quota alert, for the tenant's subscriptions.
+/// A webhook of a run, or a quota alert, for the tenant's subscriptions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WebhookEvent {
+pub struct Webhook {
     pub id: String,
     pub tenant: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -749,7 +749,7 @@ pub enum WebhookKind {
         status: Status,
         error: String,
     },
-    RunSuspended {
+    RunWaiting {
         waiting_for: Vec<String>,
     },
     RunQuarantined {
@@ -760,11 +760,11 @@ pub enum WebhookKind {
         action: String,
         message: String,
     },
-    CredentialsExpired {
+    SecretExpired {
         seq: u32,
         action: String,
         message: String,
-        reason: CredentialsReason,
+        reason: SecretExpiredReason,
         /// `org/<name>` or `ns/<name>`.
         #[serde(
             default,
@@ -780,7 +780,7 @@ pub enum WebhookKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CredentialsReason {
+pub enum SecretExpiredReason {
     Refused,
     Missing,
 }

@@ -14,9 +14,8 @@ use serde_json::json;
 
 use super::{T0, tenant};
 use crate::ports::{
-    CredentialsExpiredReason, Month, NamespaceName, QuotaAlert, QuotaAlertKey, QuotaKind,
-    Subscription, TenantId, Threshold, WebhookError, WebhookEvent, WebhookEventKind,
-    WebhookEventType, WebhookSender,
+    Month, NamespaceName, QuotaAlert, QuotaAlertKey, QuotaKind, SecretExpiredReason, Subscription,
+    TenantId, Threshold, Webhook, WebhookError, WebhookKind, WebhookSender, WebhookType,
 };
 
 /// The receiving side of a sender under test.
@@ -27,7 +26,7 @@ pub trait Receiver: Send + Sync {
 
     /// What the receiver accepted for the subscription `id`, in order: each event's id and kind,
     /// as the receiver read them.
-    fn received(&self, id: &str) -> impl Future<Output = Vec<(String, WebhookEventType)>> + Send;
+    fn received(&self, id: &str) -> impl Future<Output = Vec<(String, WebhookType)>> + Send;
 }
 
 /// Runs every check, each on a new sender and receiver.
@@ -49,9 +48,9 @@ pub async fn run_all<S: WebhookSender, R: Receiver>(new: impl Fn() -> (S, R)) {
     }
 }
 
-fn event(tenant: &TenantId, n: u128, index: u64, kind: WebhookEventKind) -> WebhookEvent {
+fn event(tenant: &TenantId, n: u128, index: u64, kind: WebhookKind) -> Webhook {
     let run = RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0000_0000 | n);
-    WebhookEvent {
+    Webhook {
         id: format!("{run}/{index}"),
         tenant: tenant.clone(),
         namespace: Some(NamespaceName::new("alice").expect("valid")),
@@ -62,8 +61,8 @@ fn event(tenant: &TenantId, n: u128, index: u64, kind: WebhookEventKind) -> Webh
     }
 }
 
-fn completed() -> WebhookEventKind {
-    WebhookEventKind::RunCompleted {
+fn completed() -> WebhookKind {
+    WebhookKind::RunCompleted {
         output: Payload::Value(json!({ "closed": 3 })),
     }
 }
@@ -80,7 +79,7 @@ pub async fn deliveries_reach_their_subscription_only<S: WebhookSender, R: Recei
         &acme,
         2,
         7,
-        WebhookEventKind::RunSuspended {
+        WebhookKind::RunWaiting {
             waiting_for: vec!["signal \"approval\"".into()],
         },
     );
@@ -88,11 +87,11 @@ pub async fn deliveries_reach_their_subscription_only<S: WebhookSender, R: Recei
     sender.send(&second, &b).await.expect("send");
     assert_eq!(
         receiver.received("first").await,
-        [(a.id.clone(), WebhookEventType::RunCompleted)]
+        [(a.id.clone(), WebhookType::RunCompleted)]
     );
     assert_eq!(
         receiver.received("second").await,
-        [(b.id.clone(), WebhookEventType::RunSuspended)]
+        [(b.id.clone(), WebhookType::RunWaiting)]
     );
 }
 
@@ -108,8 +107,8 @@ pub async fn a_repeated_delivery_keeps_its_id<S: WebhookSender, R: Receiver>(
     assert_eq!(
         receiver.received("repeat").await,
         [
-            (a.id.clone(), WebhookEventType::RunCompleted),
-            (a.id.clone(), WebhookEventType::RunCompleted)
+            (a.id.clone(), WebhookType::RunCompleted),
+            (a.id.clone(), WebhookType::RunCompleted)
         ],
         "a receiver deduplicates on the id"
     );
@@ -121,7 +120,7 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
 ) {
     let acme = tenant("acme");
     let subscription = receiver.subscription(&acme, "kinds", true);
-    let failed = |status, error: &str| WebhookEventKind::RunFailed {
+    let failed = |status, error: &str| WebhookKind::RunFailed {
         status,
         error: error.into(),
     };
@@ -133,25 +132,25 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
             "CancelledError: the run was cancelled",
         ),
         failed(RunStatus::Aborted, "limit_exceeded: CPU time"),
-        WebhookEventKind::RunSuspended {
+        WebhookKind::RunWaiting {
             waiting_for: vec!["action ask_user #1".into()],
         },
-        WebhookEventKind::RunQuarantined {
+        WebhookKind::RunQuarantined {
             reason: "event 1 is call #1 a({}), but the code emitted b({})".into(),
         },
-        WebhookEventKind::ActionSchemaChanged {
+        WebhookKind::ActionSchemaChanged {
             seq: Seq(2),
             action: "github.close_issue".into(),
             message: "the action's input schema refuses the call's arguments".into(),
         },
-        WebhookEventKind::CredentialsExpired {
+        WebhookKind::SecretExpired {
             seq: Seq(3),
             action: "github.list_issues".into(),
             message: "401 Unauthorized".into(),
-            reason: CredentialsExpiredReason::Refused,
+            reason: SecretExpiredReason::Refused,
             secret: Some(SecretRef::parse("ns/github").expect("valid")),
         },
-        WebhookEventKind::QuotaAlert(QuotaAlert {
+        WebhookKind::QuotaAlert(QuotaAlert {
             key: QuotaAlertKey {
                 tenant: acme.clone(),
                 namespace: Some(NamespaceName::new("alice").expect("valid")),
@@ -168,17 +167,17 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
     let mut expected = Vec::new();
     for (n, kind) in kinds.into_iter().enumerate() {
         let mut event = event(&acme, 10 + n as u128, n as u64, kind);
-        if let WebhookEventKind::QuotaAlert(alert) = &event.kind {
+        if let WebhookKind::QuotaAlert(alert) = &event.kind {
             // About a namespace, not a run; no labels.
             event.id = alert.key.event_id();
             event.run = None;
             event.labels = BTreeMap::new();
         }
         sender.send(&subscription, &event).await.expect("send");
-        expected.push((event.id.clone(), event.kind.event_type()));
+        expected.push((event.id.clone(), event.kind.webhook_type()));
     }
-    let types: Vec<WebhookEventType> = expected.iter().map(|(_, kind)| *kind).collect();
-    assert_eq!(types, WebhookEventType::ALL, "one event of each kind");
+    let types: Vec<WebhookType> = expected.iter().map(|(_, kind)| *kind).collect();
+    assert_eq!(types, WebhookType::ALL, "one event of each kind");
     assert_eq!(receiver.received("kinds").await, expected);
 }
 

@@ -11,7 +11,7 @@ use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use rewind_api::access::Permission;
-use rewind_api::events::{EventsQuery, StreamEvent};
+use rewind_api::events::{EventsQuery, StreamMessage};
 use rewind_api::headers::LAST_EVENT_ID;
 use rewind_core::{HistoryEvent, RunStatus};
 use rewind_engine::ports::RunRef;
@@ -172,20 +172,20 @@ impl Tail {
             }
             self.next = entry.idx + 1;
             self.pending
-                .push_back(sse(&StreamEvent::Event(Box::new(entry))));
+                .push_back(sse(&StreamMessage::Event(Box::new(entry))));
         }
         Ok(())
     }
 
     fn end(&mut self, status: RunStatus) {
-        self.pending.push_back(sse(&StreamEvent::End {
+        self.pending.push_back(sse(&StreamMessage::End {
             status: status.into(),
         }));
         self.done = true;
     }
 }
 
-fn sse(event: &StreamEvent) -> Event {
+fn sse(event: &StreamMessage) -> Event {
     let data = serde_json::to_string(event).unwrap_or_default();
     let mut sse = Event::default().event(event.sse_event()).data(data);
     if let Some(id) = event.sse_id() {

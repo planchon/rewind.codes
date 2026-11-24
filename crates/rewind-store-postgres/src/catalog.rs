@@ -1161,7 +1161,7 @@ impl CatalogStore for PostgresCatalog {
         .bind(subscription.id.as_str())
         .bind(subscription.url.as_str())
         .bind(subscription.secret.expose())
-        .bind(encode_event_types(&subscription.events))
+        .bind(encode_event_types(&subscription.types))
         .bind(encode_labels(&subscription.labels))
         .execute(&mut *tx)
         .await
@@ -1192,7 +1192,7 @@ impl CatalogStore for PostgresCatalog {
                     id: row.text(0)?,
                     url: row.text(1)?,
                     secret: Secret::new(row.text(2)?),
-                    events: decode_event_types(&row.text(3)?)?,
+                    types: decode_event_types(&row.text(3)?)?,
                     labels: decode_labels(&row.text(4)?)?,
                 })
             })

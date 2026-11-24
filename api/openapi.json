@@ -1093,8 +1093,8 @@
         },
         "type": "object"
       },
-      "ChangeEvent": {
-        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
+      "Change": {
+        "description": "One change of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/RunSummary",
@@ -1756,18 +1756,18 @@
       },
       "CreateSubscription": {
         "additionalProperties": false,
-        "description": "`POST /v1/subscriptions`: send these lifecycle events to `url`.",
+        "description": "`POST /v1/subscriptions`: send these webhooks to `url`.",
         "properties": {
-          "events": {
-            "description": "The events to send. Every event when empty.",
-            "items": {
-              "$ref": "#/components/schemas/WebhookEventType"
-            },
-            "type": "array"
-          },
           "labels": {
             "$ref": "#/components/schemas/Labels",
-            "description": "Only events about runs carrying these labels. A key limited to labels can only\nsubscribe within them."
+            "description": "Only webhooks about runs carrying these labels. A key limited to labels can only\nsubscribe within them."
+          },
+          "types": {
+            "description": "The types of webhooks to send. Every type when empty.",
+            "items": {
+              "$ref": "#/components/schemas/WebhookType"
+            },
+            "type": "array"
           },
           "url": {
             "description": "An HTTPS URL of the harness.",
@@ -1957,75 +1957,6 @@
           "output"
         ],
         "type": "object"
-      },
-      "CredentialsExpired": {
-        "description": "A call parked because its server refused the secret or the signature (`refused`), or\nbecause the secret the run attached no longer exists (`missing`, nothing was sent). Put the\nsecret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,\nfor a refused signature, approve the call once the server accepts the key: the call is then\nsent again with the same idempotency key.",
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "actionSet": {
-            "type": "string"
-          },
-          "callId": {
-            "type": "string"
-          },
-          "labels": {
-            "$ref": "#/components/schemas/Labels"
-          },
-          "message": {
-            "description": "What the server answered, or which secret is missing.",
-            "type": "string"
-          },
-          "namespace": {
-            "$ref": "#/components/schemas/NamespaceName"
-          },
-          "reason": {
-            "$ref": "#/components/schemas/CredentialsExpiredReason"
-          },
-          "runId": {
-            "type": "string"
-          },
-          "secret": {
-            "description": "The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);\nabsent for a signed call.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "seq": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "server": {
-            "description": "The action's MCP server or API.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "runId",
-          "namespace",
-          "labels",
-          "callId",
-          "seq",
-          "action",
-          "actionSet",
-          "reason",
-          "message"
-        ],
-        "type": "object"
-      },
-      "CredentialsExpiredReason": {
-        "description": "Why a call waits in `credentials.expired`.",
-        "enum": [
-          "refused",
-          "missing"
-        ],
-        "type": "string"
       },
       "DailyReads": {
         "description": "The reads of a secret on one day (UTC).",
@@ -5676,18 +5607,6 @@
         ],
         "type": "object"
       },
-      "RunEvent": {
-        "description": "The run an event is about, in the state the event left it in.",
-        "properties": {
-          "run": {
-            "$ref": "#/components/schemas/Run"
-          }
-        },
-        "required": [
-          "run"
-        ],
-        "type": "object"
-      },
       "RunMode": {
         "description": "`live`: actions are really called and time is real. `test`: actions are answered by cassettes\nand handlers, and time is virtual.",
         "enum": [
@@ -6008,6 +5927,18 @@
         ],
         "type": "object"
       },
+      "RunWebhook": {
+        "description": "The run an event is about, in the state the event left it in.",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/Run"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
       "RunWorkflow": {
         "description": "The workflow a run executes.",
         "properties": {
@@ -6309,6 +6240,75 @@
         "enum": [
           "plain",
           "base64"
+        ],
+        "type": "string"
+      },
+      "SecretExpired": {
+        "description": "A call parked because its server refused the secret or the signature (`refused`), or\nbecause the secret the run attached no longer exists (`missing`, nothing was sent). Put the\nsecret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,\nfor a refused signature, approve the call once the server accepts the key: the call is then\nsent again with the same idempotency key.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actionSet": {
+            "type": "string"
+          },
+          "callId": {
+            "type": "string"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "message": {
+            "description": "What the server answered, or which secret is missing.",
+            "type": "string"
+          },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SecretExpiredReason"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "secret": {
+            "description": "The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);\nabsent for a signed call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "server": {
+            "description": "The action's MCP server or API.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "namespace",
+          "labels",
+          "callId",
+          "seq",
+          "action",
+          "actionSet",
+          "reason",
+          "message"
+        ],
+        "type": "object"
+      },
+      "SecretExpiredReason": {
+        "description": "Why a call waits in `secret.expired`.",
+        "enum": [
+          "refused",
+          "missing"
         ],
         "type": "string"
       },
@@ -6904,8 +6904,8 @@
         ],
         "type": "object"
       },
-      "StreamEvent": {
-        "description": "One event of the stream. On the wire, each is a server-sent event whose `event` field is\nthe `type` below, whose `data` is this JSON object, and, for an event, whose `id` is the\nevent's `idx`.",
+      "StreamMessage": {
+        "description": "One message of the stream. On the wire, each is a server-sent event whose `event` field is\nthe `type` below, whose `data` is this JSON object, and, for an event, whose `id` is the\nevent's `idx`.",
         "oneOf": [
           {
             "allOf": [
@@ -6957,12 +6957,6 @@
             "format": "date-time",
             "type": "string"
           },
-          "events": {
-            "items": {
-              "$ref": "#/components/schemas/WebhookEventType"
-            },
-            "type": "array"
-          },
           "id": {
             "type": "string"
           },
@@ -6976,6 +6970,12 @@
               "null"
             ]
           },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookType"
+            },
+            "type": "array"
+          },
           "url": {
             "type": "string"
           }
@@ -6983,7 +6983,7 @@
         "required": [
           "id",
           "url",
-          "events",
+          "types",
           "labels",
           "createdAt"
         ],
@@ -7986,14 +7986,14 @@
         ],
         "type": "object"
       },
-      "WebhookEvent": {
+      "Webhook": {
         "description": "The body of an outbound webhook: `{ \"type\", \"timestamp\", \"data\" }`, as Standard Webhooks\nrecommends. The delivery's id is the `webhook-id` header; a retried delivery keeps it.",
         "oneOf": [
           {
             "description": "The run completed: `data.run.output` holds what `main` returned.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/RunEvent"
+                "$ref": "#/components/schemas/RunWebhook"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8017,7 +8017,7 @@
             "description": "The code failed: `data.run.error` says how.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/RunEvent"
+                "$ref": "#/components/schemas/RunWebhook"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8041,7 +8041,7 @@
             "description": "The run ended `cancelled`.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/RunEvent"
+                "$ref": "#/components/schemas/RunWebhook"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8065,7 +8065,7 @@
             "description": "The host ended the run: `data.run.abort` says why.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/RunEvent"
+                "$ref": "#/components/schemas/RunWebhook"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8089,7 +8089,7 @@
             "description": "An activation left the run waiting for something other than its calls in flight:\na signal, a timer, or a call that waits for the harness. `data.run.waitingFor` says\nwhat.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/RunEvent"
+                "$ref": "#/components/schemas/RunWebhook"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8097,7 +8097,7 @@
               },
               "type": {
                 "enum": [
-                  "run.suspended"
+                  "run.waiting"
                 ],
                 "type": "string"
               }
@@ -8113,7 +8113,7 @@
             "description": "The run was quarantined: `data.run.quarantine` says why. Release it or give it up.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/RunEvent"
+                "$ref": "#/components/schemas/RunWebhook"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8161,7 +8161,7 @@
             "description": "A call was parked because the server refused the secret or the signature (401), or\nbecause the secret the run attached no longer exists.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/CredentialsExpired"
+                "$ref": "#/components/schemas/SecretExpired"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8169,7 +8169,7 @@
               },
               "type": {
                 "enum": [
-                  "credentials.expired"
+                  "secret.expired"
                 ],
                 "type": "string"
               }
@@ -8207,17 +8207,17 @@
           }
         ]
       },
-      "WebhookEventType": {
-        "description": "The kinds of lifecycle events.",
+      "WebhookType": {
+        "description": "The types of webhooks.",
         "enum": [
           "run.completed",
           "run.failed",
           "run.cancelled",
           "run.aborted",
-          "run.suspended",
+          "run.waiting",
           "run.quarantined",
           "action.schema_changed",
-          "credentials.expired",
+          "secret.expired",
           "quota.alert"
         ],
         "type": "string"
@@ -11506,7 +11506,7 @@
     },
     "/v1/changes": {
       "get": {
-        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `script`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
+        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `Change`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `script`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
         "operationId": "streamChanges",
         "parameters": [
           {
@@ -11533,7 +11533,7 @@
             "content": {
               "text/event-stream": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChangeEvent"
+                  "$ref": "#/components/schemas/Change"
                 }
               }
             },
@@ -17203,7 +17203,7 @@
     },
     "/v1/runs/{id}/events": {
       "get": {
-        "description": "Each event's `data` is a `StreamEvent`: the committed events from `from`, then, with\n`follow=1`, each new event as it is committed, and `end` when the run has ended.",
+        "description": "Each event's `data` is a `StreamMessage`: the committed events from `from`, then, with\n`follow=1`, each new event as it is committed, and `end` when the run has ended.",
         "operationId": "streamRunEvents",
         "parameters": [
           {
@@ -17271,7 +17271,7 @@
             "content": {
               "text/event-stream": {
                 "schema": {
-                  "$ref": "#/components/schemas/StreamEvent"
+                  "$ref": "#/components/schemas/StreamMessage"
                 }
               }
             },
@@ -18758,7 +18758,7 @@
     },
     "/v1/secrets/{name}": {
       "delete": {
-        "description": "The next call of a run that attaches it is parked (`credentials.expired`, reason\n`missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires\n`secrets:write`.",
+        "description": "The next call of a run that attaches it is parked (`secret.expired`, reason\n`missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires\n`secrets:write`.",
         "operationId": "deleteSecret",
         "parameters": [
           {
@@ -19389,7 +19389,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Subscribe to lifecycle events",
+        "summary": "Subscribe to webhooks",
         "tags": [
           "webhooks"
         ]
@@ -20393,7 +20393,7 @@
       "name": "calls"
     },
     {
-      "description": "Signal URLs that become signals, and subscriptions to signed lifecycle events.",
+      "description": "Signal URLs that become signals, and subscriptions to signed webhooks.",
       "name": "webhooks"
     },
     {
@@ -20471,7 +20471,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20483,60 +20483,6 @@
           }
         },
         "summary": "The lifecycle event `action.schema_changed`",
-        "tags": [
-          "webhooks"
-        ]
-      }
-    },
-    "credentials.expired": {
-      "post": {
-        "description": "Sent to every subscription to `credentials.expired` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
-        "operationId": "webhook_credentials_expired",
-        "parameters": [
-          {
-            "description": "The delivery's id; a retried delivery keeps it.",
-            "in": "header",
-            "name": "webhook-id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "When the delivery was signed, in seconds since the Unix epoch.",
-            "in": "header",
-            "name": "webhook-timestamp",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "`v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{body}>`, space-separated while a secret is rotated.",
-            "in": "header",
-            "name": "webhook-signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "2XX": {
-            "description": "Received."
-          }
-        },
-        "summary": "The lifecycle event `credentials.expired`",
         "tags": [
           "webhooks"
         ]
@@ -20579,7 +20525,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20633,7 +20579,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20687,7 +20633,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20741,7 +20687,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20795,7 +20741,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20849,7 +20795,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20866,10 +20812,10 @@
         ]
       }
     },
-    "run.suspended": {
+    "run.waiting": {
       "post": {
-        "description": "Sent to every subscription to `run.suspended` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
-        "operationId": "webhook_run_suspended",
+        "description": "Sent to every subscription to `run.waiting` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
+        "operationId": "webhook_run_waiting",
         "parameters": [
           {
             "description": "The delivery's id; a retried delivery keeps it.",
@@ -20903,7 +20849,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
+                "$ref": "#/components/schemas/Webhook"
               }
             }
           },
@@ -20914,7 +20860,61 @@
             "description": "Received."
           }
         },
-        "summary": "The lifecycle event `run.suspended`",
+        "summary": "The lifecycle event `run.waiting`",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "secret.expired": {
+      "post": {
+        "description": "Sent to every subscription to `secret.expired` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
+        "operationId": "webhook_secret_expired",
+        "parameters": [
+          {
+            "description": "The delivery's id; a retried delivery keeps it.",
+            "in": "header",
+            "name": "webhook-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "When the delivery was signed, in seconds since the Unix epoch.",
+            "in": "header",
+            "name": "webhook-timestamp",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{body}>`, space-separated while a secret is rotated.",
+            "in": "header",
+            "name": "webhook-signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Webhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        },
+        "summary": "The lifecycle event `secret.expired`",
         "tags": [
           "webhooks"
         ]

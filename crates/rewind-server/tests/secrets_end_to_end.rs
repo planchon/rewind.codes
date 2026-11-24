@@ -10,7 +10,7 @@
 //!   against the keys the Rewind server publishes at `/organizations/{tenant}/jwks.json`, and
 //!   learn the end user from `sub`; a replaced key still verifies; a signature the server refuses
 //!   parks the call until the harness approves it;
-//! - a secret deleted mid-run parks the call (`credentials.expired`, `missing`), a 401 parks it
+//! - a secret deleted mid-run parks the call (`secret.expired`, `missing`), a 401 parks it
 //!   too (`refused`), and putting the secret again sends it with the same idempotency key;
 //! - a key limited to `env=dev` neither sees nor attaches the organization's `env=prod` secrets,
 //!   and never writes a namespace's;
@@ -48,8 +48,7 @@ use rewind_api::namespaces::NamespaceName;
 use rewind_api::runs::{Run, RunFilter, StartRun, Waiting};
 use rewind_api::secrets::{AttachmentProblemKind, PutSecret};
 use rewind_api::webhooks::{
-    CreateSubscription, CredentialsExpired, CredentialsExpiredReason, WebhookEvent,
-    WebhookEventType,
+    CreateSubscription, SecretExpired, SecretExpiredReason, Webhook, WebhookType,
 };
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_outbound::{Expected, verify};
@@ -142,7 +141,7 @@ impl Collector {
     }
 }
 
-/// A receiver of lifecycle webhooks: each delivery's body.
+/// A receiver of webhooks: each delivery's body.
 #[derive(Clone, Default)]
 struct Hooks(Arc<Mutex<Vec<String>>>);
 
@@ -151,14 +150,12 @@ impl Hooks {
         self.0.lock().unwrap().clone()
     }
 
-    /// The `credentials.expired` deliveries about `run`.
-    fn expired(&self, run: &str) -> Vec<CredentialsExpired> {
+    /// The `secret.expired` deliveries about `run`.
+    fn expired(&self, run: &str) -> Vec<SecretExpired> {
         self.bodies()
             .iter()
-            .filter_map(|body| match serde_json::from_str::<WebhookEvent>(body) {
-                Ok(WebhookEvent::CredentialsExpired { data, .. }) if data.run_id == run => {
-                    Some(data)
-                }
+            .filter_map(|body| match serde_json::from_str::<Webhook>(body) {
+                Ok(Webhook::SecretExpired { data, .. }) if data.run_id == run => Some(data),
                 _ => None,
             })
             .collect()
@@ -245,12 +242,12 @@ impl Outside {
         .await
     }
 
-    /// Subscribes `client`'s tenant to `credentials.expired`.
+    /// Subscribes `client`'s tenant to `secret.expired`.
     async fn subscribe(&self, client: &Client) {
         client
             .create_subscription(&CreateSubscription {
                 url: self.hooks_url.clone(),
-                events: vec![WebhookEventType::CredentialsExpired],
+                types: vec![WebhookType::SecretExpired],
                 labels: Labels::new(),
             })
             .await
@@ -1187,7 +1184,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
             hook.call_id.as_str()
         ),
         (
-            CredentialsExpiredReason::Missing,
+            SecretExpiredReason::Missing,
             Some("ns/github"),
             Some("github"),
             seq,
@@ -1236,7 +1233,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
             .hooks
             .expired(&run.id)
             .into_iter()
-            .find(|hook| hook.reason == CredentialsExpiredReason::Refused)
+            .find(|hook| hook.reason == SecretExpiredReason::Refused)
     })
     .await;
     assert_eq!(
@@ -1441,7 +1438,7 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
     let hook = eventually(|| async { outside.hooks.expired(&dev.id).into_iter().next() }).await;
     assert_eq!(
         (hook.reason, hook.secret, hook.server.as_deref()),
-        (CredentialsExpiredReason::Refused, None, Some("crm"))
+        (SecretExpiredReason::Refused, None, Some("crm"))
     );
     crm.require_labels(&[]);
     customer.approve_call(&task).await.unwrap();

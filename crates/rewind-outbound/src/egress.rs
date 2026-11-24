@@ -12,7 +12,7 @@
 //!
 //! [`Egress`] holds them, for every request a deployment sends where a tenant says: the `http`
 //! action's (whose allow-list `rewind-mcp` checks first), the MCP servers' and the APIs', the
-//! OpenAPI documents' and the lifecycle webhooks'. For MCP servers and APIs, an operator may let
+//! OpenAPI documents' and the webhooks'. For MCP servers and APIs, an operator may let
 //! some internal hosts and networks through ([`InternalAllowList`], `--allow-internal-addresses`).
 
 use std::error::Error;

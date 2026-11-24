@@ -15,7 +15,7 @@
 //!   node, and the listener that serves a node's side, authenticated by the cluster's secret.
 //! - The dashboard's sign-in `/auth`, through WorkOS (`rewind-workos`), with its sealed
 //!   cookies; a member's first grant in an organization.
-//! - Outbound lifecycle webhooks, signed following Standard Webhooks, never to the private
+//! - Outbound webhooks, signed following Standard Webhooks, never to the private
 //!   network of a deployed server: the sender of the owners' outboxes.
 //! - The embedded server of a `.rewind/` directory: one node, one partition, its lock, its unix
 //!   socket, its idle stop (`embedded`).

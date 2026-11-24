@@ -24,16 +24,16 @@ use rewind_engine::ports::link::{
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
     ActionCounts, ActionDeclarations, Attempt, AttributeValue, CallTask, CompiledCode,
-    CounterDelta, Counters, Created, CredentialsExpiredReason, Day, DayUsage, DueTimer, Ending,
-    Enqueued, FailureCounts, ForkSource, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun,
-    LogRecord, Month, NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason,
-    PartitionEpoch, PayloadRecord, Predicate, Projection, Quarantine, QuarantineKind,
-    QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range,
-    RunCounts, RunHead, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope,
-    ScriptCounts, SealedAttempt, SearchCursor, Sketch, Span, SpanId, SpanKind, SpanStatus,
-    StartedBy, StoredActionSet, StoredCode, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken,
-    TenantId, Term, TextMatch, Threshold, TimerChange, TimerKind, TraceContext, TraceId, Trigger,
-    Usage, Wait, WaitKind, WaitingFor, WebhookEvent, WebhookEventKind, Window,
+    CounterDelta, Counters, Created, Day, DayUsage, DueTimer, Ending, Enqueued, FailureCounts,
+    ForkSource, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
+    NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionEpoch,
+    PayloadRecord, Predicate, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
+    QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range, RunCounts, RunHead, RunMetadata,
+    RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, ScriptCounts, SealedAttempt,
+    SearchCursor, SecretExpiredReason, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy,
+    StoredActionSet, StoredCode, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken, TenantId,
+    Term, TextMatch, Threshold, TimerChange, TimerKind, TraceContext, TraceId, Trigger, Usage,
+    Wait, WaitKind, WaitingFor, Webhook, WebhookKind, Window,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -555,18 +555,18 @@ fn projections() -> Vec<Projection> {
                 attributes,
             }],
         },
-        Projection::Webhooks(WebhookEvent {
+        Projection::Webhooks(Webhook {
             id: format!("{}/5", run_id(1)),
             tenant: acme(),
             namespace: Some(user()),
             run: Some(run_id(1)),
             labels: labels(),
             occurred_at: at(32),
-            kind: WebhookEventKind::CredentialsExpired {
+            kind: WebhookKind::SecretExpired {
                 seq: Seq(2),
                 action: "srv.a".into(),
                 message: "401".into(),
-                reason: CredentialsExpiredReason::Refused,
+                reason: SecretExpiredReason::Refused,
                 secret: Some(SecretRef::parse("ns/github").unwrap()),
             },
         }),

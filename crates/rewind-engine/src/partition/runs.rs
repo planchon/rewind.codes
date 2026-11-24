@@ -1258,14 +1258,14 @@ impl<P: Plane> Owner<P> {
         let Some(slot) = self.slot(run.id) else {
             return;
         };
-        let event = crate::ports::WebhookEvent {
+        let event = crate::ports::Webhook {
             id: format!("{}/quarantined/{}", run.id, quarantine.since.0),
             tenant: run.tenant.clone(),
             namespace: Some(slot.head.namespace.clone()),
             run: Some(run.id),
             labels: slot.head.metadata.labels.clone(),
             occurred_at: quarantine.since,
-            kind: crate::ports::WebhookEventKind::RunQuarantined {
+            kind: crate::ports::WebhookKind::RunQuarantined {
                 reason: quarantine.reason.clone(),
             },
         };

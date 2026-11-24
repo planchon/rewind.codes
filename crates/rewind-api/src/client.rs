@@ -27,7 +27,7 @@ use crate::calls::{
     CallStreamMessage, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
 };
 use crate::common::Duration;
-use crate::events::{ChangeEvent, EventsQuery, HistoryEvent, StreamEvent};
+use crate::events::{Change, EventsQuery, HistoryEvent, StreamMessage};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
 use crate::namespaces::{
     CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
@@ -383,7 +383,7 @@ impl Client {
                 match item {
                     // A comment, a keep-alive, a `retry:` only: nothing to read.
                     Ok(sse) => sse.data.map(|data| {
-                        serde_json::from_str::<StreamEvent>(&data).map_err(|error| {
+                        serde_json::from_str::<StreamMessage>(&data).map_err(|error| {
                             Error::Decode(format!("invalid event of the stream: {error}"))
                         })
                     }),
@@ -406,7 +406,7 @@ impl Client {
             .request(Method::GET, routes::CHANGES, &[])?
             .header(ACCEPT, "text/event-stream");
         let inner = self
-            .named_events(request, "change stream", ChangeEvent::from_sse)
+            .named_events(request, "change stream", Change::from_sse)
             .await?;
         Ok(ChangeStream { inner })
     }
@@ -1194,7 +1194,7 @@ fn query_pairs(query: &impl Serialize) -> Result<Vec<(String, String)>, Error> {
 
 /// The events of `GET /v1/runs/{id}/events`, until the server ends the stream.
 pub struct EventStream {
-    inner: Pin<Box<dyn Stream<Item = Result<StreamEvent, Error>> + Send>>,
+    inner: Pin<Box<dyn Stream<Item = Result<StreamMessage, Error>> + Send>>,
 }
 
 impl fmt::Debug for EventStream {
@@ -1204,7 +1204,7 @@ impl fmt::Debug for EventStream {
 }
 
 impl Stream for EventStream {
-    type Item = Result<StreamEvent, Error>;
+    type Item = Result<StreamMessage, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
@@ -1213,7 +1213,7 @@ impl Stream for EventStream {
 
 /// The events of `GET /v1/changes`, until the server ends the stream.
 pub struct ChangeStream {
-    inner: Pin<Box<dyn Stream<Item = Result<ChangeEvent, Error>> + Send>>,
+    inner: Pin<Box<dyn Stream<Item = Result<Change, Error>> + Send>>,
 }
 
 impl fmt::Debug for ChangeStream {
@@ -1223,7 +1223,7 @@ impl fmt::Debug for ChangeStream {
 }
 
 impl Stream for ChangeStream {
-    type Item = Result<ChangeEvent, Error>;
+    type Item = Result<Change, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)

@@ -22,7 +22,7 @@ use rewind_engine::adapters::{
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::Edge;
 use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
-use rewind_engine::ports::link::{HarnessFailure, StreamAttach, StreamEvent, StreamId};
+use rewind_engine::ports::link::{HarnessFailure, StreamAttach, StreamId, StreamMessage};
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, Clock, CodeExecutor, Entropy, NamespaceName, NewSecret,
     NodeId, ParkKind, Predicate, RunOrder, RunQuery, RunRef, Scope, Secret, SecretId, SecretStore,
@@ -71,7 +71,7 @@ type CorpusPlane = Wiring<
 /// A harness's worker: the SDK stream it holds.
 struct Worker {
     stream: StreamId,
-    events: UnboundedReceiver<StreamEvent>,
+    events: UnboundedReceiver<StreamMessage>,
     generation: u32,
 }
 
@@ -219,8 +219,8 @@ impl World {
         let tasks: Vec<_> = Driver::<CorpusPlane, MemoryCluster>::drain(&mut worker.events)
             .into_iter()
             .filter_map(|event| match event {
-                StreamEvent::Task(task) => Some(task),
-                StreamEvent::Gone(_) => None,
+                StreamMessage::Task(task) => Some(task),
+                StreamMessage::Gone(_) => None,
             })
             .collect();
         let tenant = TenantId::local();

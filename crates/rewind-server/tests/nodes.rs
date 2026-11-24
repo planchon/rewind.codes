@@ -22,7 +22,7 @@ use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::{Labels, RunStatus};
-use rewind_api::events::ChangeEvent;
+use rewind_api::events::Change;
 use rewind_api::runs::StartRun;
 use rewind_server::{Running, ServerArgs};
 use serde_json::json;
@@ -308,7 +308,7 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
                 .expect("a change within 30 s")
                 .expect("the stream stays open")
                 .unwrap();
-            if let ChangeEvent::Run(summary) = event
+            if let Change::Run(summary) = event
                 && summary.id == run.id
                 && summary.status == RunStatus::Completed
             {

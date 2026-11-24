@@ -8,7 +8,7 @@ use rewind_core::{Digest, RunId, Timestamp};
 use crate::ports::namespaces::{NamespaceName, QuotaAlert};
 use crate::ports::telemetry::{LogRecord, Span};
 use crate::ports::tenancy::TenantId;
-use crate::ports::webhooks::WebhookEvent;
+use crate::ports::webhooks::Webhook;
 
 /// An outbox entry, numbered by the owner: unique in its partition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -40,8 +40,8 @@ pub enum Projection {
         spans: Vec<Span>,
         logs: Vec<LogRecord>,
     },
-    /// A lifecycle event for the tenant's subscriptions, through the `WebhookSender`.
-    Webhooks(WebhookEvent),
+    /// A webhook for the tenant's subscriptions, through the `WebhookSender`.
+    Webhooks(Webhook),
     /// A quota threshold crossed, sent to the subscriptions as `quota.alert`.
     QuotaAlert(QuotaAlert),
 }

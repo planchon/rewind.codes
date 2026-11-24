@@ -40,6 +40,6 @@ fn the_document_is_valid_json_and_openapi_3_1() {
         serde_json::from_str(&rewind_api::openapi::to_json()).unwrap();
     assert_eq!(document["openapi"], "3.1.0");
     assert!(document["components"]["schemas"]["Problem"].is_object());
-    assert!(document["components"]["schemas"]["StreamEvent"].is_object());
-    assert!(document["components"]["schemas"]["WebhookEvent"].is_object());
+    assert!(document["components"]["schemas"]["StreamMessage"].is_object());
+    assert!(document["components"]["schemas"]["Webhook"].is_object());
 }

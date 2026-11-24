@@ -1,7 +1,7 @@
-//! Outbound lifecycle webhooks: the HTTP adapter of the `WebhookSender` port
+//! Outbound webhooks: the HTTP adapter of the `WebhookSender` port
 //! (`archi/07-code-architecture.md`, "The other ports").
 //!
-//! Each delivery is a `POST` of the API's `WebhookEvent` (`{type, timestamp, data}`), signed
+//! Each delivery is a `POST` of the API's `Webhook` (`{type, timestamp, data}`), signed
 //! following Standard Webhooks with the subscription's secret: `webhook-id` (the event's
 //! deterministic id, the same on every retry), `webhook-timestamp` and `webhook-signature`.
 //! The sender makes one attempt per delivery, of at most [`DELIVERY_TIMEOUT`]: the owner of the
@@ -20,12 +20,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::Url;
 use rewind_api::common::{Labels, timestamp};
 use rewind_api::webhooks::{
-    ActionSchemaChanged, CredentialsExpired, RunEvent, WEBHOOK_ID, WEBHOOK_SIGNATURE,
+    ActionSchemaChanged, RunWebhook, SecretExpired, WEBHOOK_ID, WEBHOOK_SIGNATURE,
     WEBHOOK_TIMESTAMP, WebhookSecret,
 };
 use rewind_engine::ports::{
-    CredentialsExpiredReason, RunRef, Subscription, TaskRef, WebhookError, WebhookEvent,
-    WebhookEventKind, WebhookSender,
+    RunRef, SecretExpiredReason, Subscription, TaskRef, Webhook, WebhookError, WebhookKind,
+    WebhookSender,
 };
 use rewind_outbound::{Egress, NameResolver, SystemResolver};
 
@@ -38,7 +38,7 @@ pub(crate) const DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How the reason of a refused address ends.
 const REFUSAL: &str = "webhooks are not sent there";
 
-/// Where lifecycle webhooks may go.
+/// Where webhooks may go.
 #[derive(Debug, Clone)]
 pub(crate) enum WebhookEgress {
     /// A deployed server: `https://` URLs whose addresses are public, checked when a
@@ -102,7 +102,7 @@ pub(crate) trait Render: Send + Sync {
     fn render(
         &self,
         subscription: &Subscription,
-        event: &WebhookEvent,
+        event: &Webhook,
     ) -> impl Future<Output = Result<Vec<u8>, WebhookError>> + Send;
 }
 
@@ -134,11 +134,7 @@ impl<R> HttpWebhooks<R> {
 impl<R: Render> WebhookSender for HttpWebhooks<R> {
     /// One delivery: a failure (a network error, the timeout, a 408, 429 or 5xx, another 4xx, a
     /// redirect, a refused address) is an error the owner tries again later.
-    async fn send(
-        &self,
-        subscription: &Subscription,
-        event: &WebhookEvent,
-    ) -> Result<(), WebhookError> {
+    async fn send(&self, subscription: &Subscription, event: &Webhook) -> Result<(), WebhookError> {
         let failed = |message: String| WebhookError::Delivery {
             url: subscription.url.clone(),
             message,
@@ -177,7 +173,7 @@ impl<R: Render> WebhookSender for HttpWebhooks<R> {
     }
 }
 
-/// Renders events as the API's `WebhookEvent`, with the run's state read from its owner when the
+/// Renders events as the API's `Webhook`, with the run's state read from its owner when the
 /// delivery is sent.
 #[derive(Debug, Clone)]
 pub(crate) struct ServerRender {
@@ -189,15 +185,15 @@ impl Render for ServerRender {
     async fn render(
         &self,
         _subscription: &Subscription,
-        event: &WebhookEvent,
+        event: &Webhook,
     ) -> Result<Vec<u8>, WebhookError> {
         let failed = |message: String| WebhookError::Delivery {
             url: String::new(),
             message,
         };
         let at = timestamp(event.occurred_at);
-        if let WebhookEventKind::QuotaAlert(alert) = &event.kind {
-            let body = rewind_api::webhooks::WebhookEvent::QuotaAlert {
+        if let WebhookKind::QuotaAlert(alert) = &event.kind {
+            let body = rewind_api::webhooks::Webhook::QuotaAlert {
                 timestamp: at,
                 data: crate::views::quota_alert(alert),
             };
@@ -225,11 +221,11 @@ impl Render for ServerRender {
             })
         };
         let body = match &event.kind {
-            WebhookEventKind::ActionSchemaChanged {
+            WebhookKind::ActionSchemaChanged {
                 seq,
                 action,
                 message,
-            } => rewind_api::webhooks::WebhookEvent::ActionSchemaChanged {
+            } => rewind_api::webhooks::Webhook::ActionSchemaChanged {
                 timestamp: at,
                 data: ActionSchemaChanged {
                     run_id: run.id.to_string(),
@@ -243,15 +239,15 @@ impl Render for ServerRender {
                     message: message.clone(),
                 },
             },
-            WebhookEventKind::CredentialsExpired {
+            WebhookKind::SecretExpired {
                 seq,
                 action,
                 message,
                 reason,
                 secret,
-            } => rewind_api::webhooks::WebhookEvent::CredentialsExpired {
+            } => rewind_api::webhooks::Webhook::SecretExpired {
                 timestamp: at,
-                data: CredentialsExpired {
+                data: SecretExpired {
                     run_id: run.id.to_string(),
                     namespace: crate::views::namespace(&record.namespace),
                     labels: Labels::from(event.labels.clone()),
@@ -261,11 +257,11 @@ impl Render for ServerRender {
                     server: mcp_server(&app, record, action).await,
                     action_set: record.action_set.to_hex(),
                     reason: match reason {
-                        CredentialsExpiredReason::Refused => {
-                            rewind_api::webhooks::CredentialsExpiredReason::Refused
+                        SecretExpiredReason::Refused => {
+                            rewind_api::webhooks::SecretExpiredReason::Refused
                         }
-                        CredentialsExpiredReason::Missing => {
-                            rewind_api::webhooks::CredentialsExpiredReason::Missing
+                        SecretExpiredReason::Missing => {
+                            rewind_api::webhooks::SecretExpiredReason::Missing
                         }
                     },
                     secret: secret.as_ref().map(ToString::to_string),
@@ -273,16 +269,16 @@ impl Render for ServerRender {
                 },
             },
             kind => {
-                let data = RunEvent {
+                let data = RunWebhook {
                     run: app
                         .views()
                         .run(&view)
                         .await
                         .map_err(|error| failed(error.0.detail.clone()))?,
                 };
-                use rewind_api::webhooks::WebhookEvent as Api;
-                use rewind_engine::ports::WebhookEventType as Type;
-                match kind.event_type() {
+                use rewind_api::webhooks::Webhook as Api;
+                use rewind_engine::ports::WebhookType as Type;
+                match kind.webhook_type() {
                     Type::RunCompleted => Api::RunCompleted {
                         timestamp: at,
                         data,
@@ -299,7 +295,7 @@ impl Render for ServerRender {
                         timestamp: at,
                         data,
                     },
-                    Type::RunSuspended => Api::RunSuspended {
+                    Type::RunWaiting => Api::RunWaiting {
                         timestamp: at,
                         data,
                     },
@@ -346,8 +342,8 @@ mod tests {
     use rewind_api::webhooks::{SignedHeaders, WebhookSecret};
     use rewind_engine::conformance::webhooks::{Receiver, run_all};
     use rewind_engine::ports::{
-        Secret, Subscription, TenantId, WebhookError, WebhookEvent, WebhookEventKind,
-        WebhookEventType, WebhookSender,
+        Secret, Subscription, TenantId, Webhook, WebhookError, WebhookKind, WebhookSender,
+        WebhookType,
     };
 
     use super::{HttpWebhooks, Render, WebhookEgress};
@@ -360,11 +356,11 @@ mod tests {
         async fn render(
             &self,
             _subscription: &Subscription,
-            event: &WebhookEvent,
+            event: &Webhook,
         ) -> Result<Vec<u8>, WebhookError> {
             Ok(serde_json::to_vec(&serde_json::json!({
                 "id": event.id,
-                "type": event.kind.event_type().as_str(),
+                "type": event.kind.webhook_type().as_str(),
             }))
             .unwrap_or_default())
         }
@@ -375,14 +371,14 @@ mod tests {
     struct HttpReceiver {
         base: String,
         secrets: Arc<Mutex<BTreeMap<String, WebhookSecret>>>,
-        received: Arc<Mutex<Vec<(String, String, WebhookEventType)>>>,
+        received: Arc<Mutex<Vec<(String, String, WebhookType)>>>,
     }
 
     impl HttpReceiver {
         /// Called inside the runtime: binds synchronously, serves on a task.
         fn start() -> Self {
             let secrets: Arc<Mutex<BTreeMap<String, WebhookSecret>>> = Arc::default();
-            let received: Arc<Mutex<Vec<(String, String, WebhookEventType)>>> = Arc::default();
+            let received: Arc<Mutex<Vec<(String, String, WebhookType)>>> = Arc::default();
             let (keys, kept) = (secrets.clone(), received.clone());
             let app = axum::Router::new()
                 .route(
@@ -424,7 +420,7 @@ mod tests {
                                 else {
                                     return StatusCode::BAD_REQUEST;
                                 };
-                                let kind = WebhookEventType::ALL
+                                let kind = WebhookType::ALL
                                     .into_iter()
                                     .find(|kind| value["type"] == kind.as_str());
                                 match (kind, value["id"].as_str()) {
@@ -473,12 +469,12 @@ mod tests {
                 id: id.to_owned(),
                 url: format!("{}/{path}/{id}", self.base),
                 secret: Secret::new(secret.expose()),
-                events: BTreeSet::new(),
+                types: BTreeSet::new(),
                 labels: BTreeMap::new(),
             }
         }
 
-        async fn received(&self, id: &str) -> Vec<(String, WebhookEventType)> {
+        async fn received(&self, id: &str) -> Vec<(String, WebhookType)> {
             self.received
                 .lock()
                 .map(|received| {
@@ -582,20 +578,20 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{error}"))
                     .expose(),
             ),
-            events: BTreeSet::new(),
+            types: BTreeSet::new(),
             labels: BTreeMap::new(),
         }
     }
 
-    fn event() -> WebhookEvent {
-        WebhookEvent {
+    fn event() -> Webhook {
+        Webhook {
             id: "r/1".into(),
             tenant: TenantId::local(),
             namespace: None,
             run: Some(rewind_core::RunId::from_u128(1)),
             labels: BTreeMap::new(),
             occurred_at: rewind_core::Timestamp(0),
-            kind: WebhookEventKind::RunQuarantined { reason: "x".into() },
+            kind: WebhookKind::RunQuarantined { reason: "x".into() },
         }
     }
 

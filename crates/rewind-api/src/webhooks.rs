@@ -4,7 +4,7 @@
 //!   code. Anything posted there becomes a signal on the run. No API key: the token is the
 //!   credential.
 //! - **Outbound**: the harness subscribes (`POST /v1/subscriptions`) and receives lifecycle
-//!   events ([`WebhookEvent`]), signed with HMAC-SHA256 following the Standard Webhooks
+//!   events ([`Webhook`]), signed with HMAC-SHA256 following the Standard Webhooks
 //!   specification (<https://www.standardwebhooks.com>): headers `webhook-id`,
 //!   `webhook-timestamp` and `webhook-signature`, and a secret `whsec_…`. Any Standard Webhooks
 //!   library verifies them; [`WebhookSecret::verify`] does in Rust.
@@ -34,16 +34,16 @@ pub const DELIVERY_ID_HEADERS: [&str; 3] = ["Idempotency-Key", "webhook-id", "X-
 // -------------------------------------------------------------------------------------------
 // Subscriptions
 
-/// `POST /v1/subscriptions`: send these lifecycle events to `url`.
+/// `POST /v1/subscriptions`: send these webhooks to `url`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSubscription {
     /// An HTTPS URL of the harness.
     pub url: String,
-    /// The events to send. Every event when empty.
+    /// The types of webhooks to send. Every type when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub events: Vec<WebhookEventType>,
-    /// Only events about runs carrying these labels. A key limited to labels can only
+    pub types: Vec<WebhookType>,
+    /// Only webhooks about runs carrying these labels. A key limited to labels can only
     /// subscribe within them.
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
     pub labels: Labels,
@@ -54,7 +54,7 @@ pub struct CreateSubscription {
 pub struct Subscription {
     pub id: String,
     pub url: String,
-    pub events: Vec<WebhookEventType>,
+    pub types: Vec<WebhookType>,
     pub labels: Labels,
     pub created_at: Timestamp,
     /// The signing secret, `whsec_…`. Only in the answer to `POST /v1/subscriptions`: keep it.
@@ -72,11 +72,11 @@ pub struct SubscriptionList {
 // -------------------------------------------------------------------------------------------
 // Outbound events
 
-/// The kinds of lifecycle events.
+/// The types of webhooks.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema,
 )]
-pub enum WebhookEventType {
+pub enum WebhookType {
     #[serde(rename = "run.completed")]
     RunCompleted,
     #[serde(rename = "run.failed")]
@@ -85,47 +85,47 @@ pub enum WebhookEventType {
     RunCancelled,
     #[serde(rename = "run.aborted")]
     RunAborted,
-    #[serde(rename = "run.suspended")]
-    RunSuspended,
+    #[serde(rename = "run.waiting")]
+    RunWaiting,
     #[serde(rename = "run.quarantined")]
     RunQuarantined,
     #[serde(rename = "action.schema_changed")]
     ActionSchemaChanged,
-    #[serde(rename = "credentials.expired")]
-    CredentialsExpired,
+    #[serde(rename = "secret.expired")]
+    SecretExpired,
     #[serde(rename = "quota.alert")]
     QuotaAlert,
 }
 
-impl WebhookEventType {
-    pub const ALL: [WebhookEventType; 9] = [
-        WebhookEventType::RunCompleted,
-        WebhookEventType::RunFailed,
-        WebhookEventType::RunCancelled,
-        WebhookEventType::RunAborted,
-        WebhookEventType::RunSuspended,
-        WebhookEventType::RunQuarantined,
-        WebhookEventType::ActionSchemaChanged,
-        WebhookEventType::CredentialsExpired,
-        WebhookEventType::QuotaAlert,
+impl WebhookType {
+    pub const ALL: [WebhookType; 9] = [
+        WebhookType::RunCompleted,
+        WebhookType::RunFailed,
+        WebhookType::RunCancelled,
+        WebhookType::RunAborted,
+        WebhookType::RunWaiting,
+        WebhookType::RunQuarantined,
+        WebhookType::ActionSchemaChanged,
+        WebhookType::SecretExpired,
+        WebhookType::QuotaAlert,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            WebhookEventType::RunCompleted => "run.completed",
-            WebhookEventType::RunFailed => "run.failed",
-            WebhookEventType::RunCancelled => "run.cancelled",
-            WebhookEventType::RunAborted => "run.aborted",
-            WebhookEventType::RunSuspended => "run.suspended",
-            WebhookEventType::RunQuarantined => "run.quarantined",
-            WebhookEventType::ActionSchemaChanged => "action.schema_changed",
-            WebhookEventType::CredentialsExpired => "credentials.expired",
-            WebhookEventType::QuotaAlert => "quota.alert",
+            WebhookType::RunCompleted => "run.completed",
+            WebhookType::RunFailed => "run.failed",
+            WebhookType::RunCancelled => "run.cancelled",
+            WebhookType::RunAborted => "run.aborted",
+            WebhookType::RunWaiting => "run.waiting",
+            WebhookType::RunQuarantined => "run.quarantined",
+            WebhookType::ActionSchemaChanged => "action.schema_changed",
+            WebhookType::SecretExpired => "secret.expired",
+            WebhookType::QuotaAlert => "quota.alert",
         }
     }
 }
 
-impl fmt::Display for WebhookEventType {
+impl fmt::Display for WebhookType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -135,44 +135,44 @@ impl fmt::Display for WebhookEventType {
 /// recommends. The delivery's id is the `webhook-id` header; a retried delivery keeps it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type")]
-pub enum WebhookEvent {
+pub enum Webhook {
     /// The run completed: `data.run.output` holds what `main` returned.
     #[serde(rename = "run.completed")]
     RunCompleted {
         timestamp: Timestamp,
-        data: RunEvent,
+        data: RunWebhook,
     },
     /// The code failed: `data.run.error` says how.
     #[serde(rename = "run.failed")]
     RunFailed {
         timestamp: Timestamp,
-        data: RunEvent,
+        data: RunWebhook,
     },
     /// The run ended `cancelled`.
     #[serde(rename = "run.cancelled")]
     RunCancelled {
         timestamp: Timestamp,
-        data: RunEvent,
+        data: RunWebhook,
     },
     /// The host ended the run: `data.run.abort` says why.
     #[serde(rename = "run.aborted")]
     RunAborted {
         timestamp: Timestamp,
-        data: RunEvent,
+        data: RunWebhook,
     },
     /// An activation left the run waiting for something other than its calls in flight:
     /// a signal, a timer, or a call that waits for the harness. `data.run.waitingFor` says
     /// what.
-    #[serde(rename = "run.suspended")]
-    RunSuspended {
+    #[serde(rename = "run.waiting")]
+    RunWaiting {
         timestamp: Timestamp,
-        data: RunEvent,
+        data: RunWebhook,
     },
     /// The run was quarantined: `data.run.quarantine` says why. Release it or give it up.
     #[serde(rename = "run.quarantined")]
     RunQuarantined {
         timestamp: Timestamp,
-        data: RunEvent,
+        data: RunWebhook,
     },
     /// A call was parked because the server's schema of the action changed during the run.
     #[serde(rename = "action.schema_changed")]
@@ -182,10 +182,10 @@ pub enum WebhookEvent {
     },
     /// A call was parked because the server refused the secret or the signature (401), or
     /// because the secret the run attached no longer exists.
-    #[serde(rename = "credentials.expired")]
-    CredentialsExpired {
+    #[serde(rename = "secret.expired")]
+    SecretExpired {
         timestamp: Timestamp,
-        data: CredentialsExpired,
+        data: SecretExpired,
     },
     /// A namespace, or the tenant (`namespace` null), crossed 80 % or 100 % of a limit; for
     /// `active_runs`, a first refusal of the month. Sent once per namespace, quota, month and
@@ -197,32 +197,32 @@ pub enum WebhookEvent {
     },
 }
 
-impl WebhookEvent {
-    pub fn event_type(&self) -> WebhookEventType {
+impl Webhook {
+    pub fn webhook_type(&self) -> WebhookType {
         match self {
-            WebhookEvent::RunCompleted { .. } => WebhookEventType::RunCompleted,
-            WebhookEvent::RunFailed { .. } => WebhookEventType::RunFailed,
-            WebhookEvent::RunCancelled { .. } => WebhookEventType::RunCancelled,
-            WebhookEvent::RunAborted { .. } => WebhookEventType::RunAborted,
-            WebhookEvent::RunSuspended { .. } => WebhookEventType::RunSuspended,
-            WebhookEvent::RunQuarantined { .. } => WebhookEventType::RunQuarantined,
-            WebhookEvent::ActionSchemaChanged { .. } => WebhookEventType::ActionSchemaChanged,
-            WebhookEvent::CredentialsExpired { .. } => WebhookEventType::CredentialsExpired,
-            WebhookEvent::QuotaAlert { .. } => WebhookEventType::QuotaAlert,
+            Webhook::RunCompleted { .. } => WebhookType::RunCompleted,
+            Webhook::RunFailed { .. } => WebhookType::RunFailed,
+            Webhook::RunCancelled { .. } => WebhookType::RunCancelled,
+            Webhook::RunAborted { .. } => WebhookType::RunAborted,
+            Webhook::RunWaiting { .. } => WebhookType::RunWaiting,
+            Webhook::RunQuarantined { .. } => WebhookType::RunQuarantined,
+            Webhook::ActionSchemaChanged { .. } => WebhookType::ActionSchemaChanged,
+            Webhook::SecretExpired { .. } => WebhookType::SecretExpired,
+            Webhook::QuotaAlert { .. } => WebhookType::QuotaAlert,
         }
     }
 
     pub fn timestamp(&self) -> Timestamp {
         match self {
-            WebhookEvent::RunCompleted { timestamp, .. }
-            | WebhookEvent::RunFailed { timestamp, .. }
-            | WebhookEvent::RunCancelled { timestamp, .. }
-            | WebhookEvent::RunAborted { timestamp, .. }
-            | WebhookEvent::RunSuspended { timestamp, .. }
-            | WebhookEvent::RunQuarantined { timestamp, .. }
-            | WebhookEvent::ActionSchemaChanged { timestamp, .. }
-            | WebhookEvent::CredentialsExpired { timestamp, .. }
-            | WebhookEvent::QuotaAlert { timestamp, .. } => *timestamp,
+            Webhook::RunCompleted { timestamp, .. }
+            | Webhook::RunFailed { timestamp, .. }
+            | Webhook::RunCancelled { timestamp, .. }
+            | Webhook::RunAborted { timestamp, .. }
+            | Webhook::RunWaiting { timestamp, .. }
+            | Webhook::RunQuarantined { timestamp, .. }
+            | Webhook::ActionSchemaChanged { timestamp, .. }
+            | Webhook::SecretExpired { timestamp, .. }
+            | Webhook::QuotaAlert { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -230,7 +230,7 @@ impl WebhookEvent {
 /// The run an event is about, in the state the event left it in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct RunEvent {
+pub struct RunWebhook {
     pub run: Run,
 }
 
@@ -266,7 +266,7 @@ pub struct ActionSchemaChanged {
 /// sent again with the same idempotency key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CredentialsExpired {
+pub struct SecretExpired {
     pub run_id: String,
     pub namespace: NamespaceName,
     pub labels: Labels,
@@ -277,7 +277,7 @@ pub struct CredentialsExpired {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
     pub action_set: String,
-    pub reason: CredentialsExpiredReason,
+    pub reason: SecretExpiredReason,
     /// The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);
     /// absent for a signed call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,10 +286,10 @@ pub struct CredentialsExpired {
     pub message: String,
 }
 
-/// Why a call waits in `credentials.expired`.
+/// Why a call waits in `secret.expired`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum CredentialsExpiredReason {
+pub enum SecretExpiredReason {
     /// The server answered 401 to the secret or to the signature.
     Refused,
     /// The secret the run attached no longer exists: nothing was sent.
@@ -359,7 +359,7 @@ impl WebhookSecret {
         headers: &SignedHeaders<'_>,
         body: &[u8],
         now: Timestamp,
-    ) -> Result<WebhookEvent, Error> {
+    ) -> Result<Webhook, Error> {
         let timestamp: i64 = headers.timestamp.trim().parse().map_err(|_| {
             Error::Signature(format!(
                 "invalid {WEBHOOK_TIMESTAMP}: {:?}",
@@ -444,7 +444,7 @@ mod tests {
 
     fn event_body() -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "type": "credentials.expired",
+            "type": "secret.expired",
             "timestamp": "2026-11-09T10:02:11Z",
             "data": {
                 "runId": "r1", "namespace": "alice", "labels": {}, "callId": "t1", "seq": 2,
@@ -483,7 +483,7 @@ mod tests {
             signature: &format!("v1,b2xkIHNpZ25hdHVyZQ== {signature}"),
         };
         let event = secret.verify(&headers, &body, now).unwrap();
-        assert_eq!(event.event_type(), WebhookEventType::CredentialsExpired);
+        assert_eq!(event.webhook_type(), WebhookType::SecretExpired);
 
         // Another secret, another id, a changed body, an old delivery: refused.
         let other = WebhookSecret::from_bytes([8u8; 32]).unwrap();
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn event_types_are_written_with_dots() {
-        for kind in WebhookEventType::ALL {
+        for kind in WebhookType::ALL {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(kind.as_str()));
         }
     }
