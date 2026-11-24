@@ -505,7 +505,7 @@ impl Client {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Host-tool tasks
+    // Harness tasks
 
     /// `GET /v1/tasks/stream`: the tasks handed to this worker as they become ready, until the
     /// server ends the stream or the connection drops. The open stream is the liveness of the

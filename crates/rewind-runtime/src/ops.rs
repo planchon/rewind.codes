@@ -713,7 +713,7 @@ mod tests {
     fn state_with(schema: Value) -> ExecState {
         let action = Action::new(
             "github.list_issues",
-            ActionRoute::Host {
+            ActionRoute::Harness {
                 group: Some("github".into()),
             },
             schema,

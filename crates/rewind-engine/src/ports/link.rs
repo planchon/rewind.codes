@@ -4,10 +4,10 @@
 //!
 //! ```text
 //!  edge ── Partition(PartitionRequest) ──────────► owner of the partition    (start, signal, …, reads)
-//!  owner ─ Organization(OrgRequest) ─────────────► organization actor        (admission, counts, slots, host tasks)
+//!  owner ─ Organization(OrgRequest) ─────────────► organization actor        (admission, counts, slots, harness tasks)
 //!  edge ── Organization(Attach / Detach) ────────► organization actor        (an SDK stream opened or closed)
 //!  org ─── Owner(OwnerNotice) ───────────────────► owner of a run            (slot granted, stream lost, counts wanted)
-//!  org ─── Edge(EdgeNotice::HandOut) ────────────► edge holding the stream   (a host task, with its token)
+//!  org ─── Edge(EdgeNotice::HandOut) ────────────► edge holding the stream   (a harness task, with its token)
 //!  edge ── subscribe(SubscriptionKey, from) ─────► owner                     (a stream of Changed)
 //!  owner ─ activate(ActivationRequest) ──────────► node of the run's epoch   (a remote executor)
 //! ```
@@ -106,7 +106,7 @@ pub enum NodeRequest {
         partition: PartitionId,
         notice: Box<OwnerNotice>,
     },
-    /// To the edge of a node: a host task handed on an SDK stream it holds.
+    /// To the edge of a node: a harness task handed on an SDK stream it holds.
     Edge(Box<EdgeNotice>),
 }
 
@@ -185,7 +185,7 @@ pub enum PartitionRequest {
     GiveUp { run: RunRef },
     /// Erases a run now (`DELETE /v1/runs/{id}`): answered `Done(existed)`.
     Erase { run: RunRef },
-    /// A host tool's handler, or the handler of a deferred call, answers through its token:
+    /// A harness action's handler, or the handler of a deferred call, answers through its token:
     /// answered `Answered`. The token names the run; `tenant` is the caller's.
     Answer {
         tenant: TenantId,
@@ -321,7 +321,7 @@ pub enum TaskAnswer {
     /// `POST /v1/tasks/{token}/complete`.
     Complete(JsonValue),
     /// `POST /v1/tasks/{token}/fail`.
-    Fail(HostFailure),
+    Fail(HarnessFailure),
     /// `POST /v1/tasks/{token}/defer`: answered later through the same token, within its
     /// timeout (bounded by the action's execution timeout and the run's deadline).
     Defer { timeout: Option<Duration> },
@@ -329,7 +329,7 @@ pub enum TaskAnswer {
 
 /// A failure reported by a handler.
 #[derive(Clone, Debug, PartialEq)]
-pub struct HostFailure {
+pub struct HarnessFailure {
     /// The message of the `ActionError`, written for the model.
     pub message: String,
     pub data: Option<JsonValue>,
@@ -364,12 +364,12 @@ pub enum OrgRequest {
     Slot(SlotRequest),
     /// The call that held a slot is done: answered `Done`.
     SlotFreed { task: TaskRef, server: String },
-    /// A host task to hand to an SDK stream: answered `Done`.
-    HostTask(Box<HostTaskOffer>),
-    /// A host task is answered, or no longer exists: its stream's slot is free. `gone`: it was
+    /// A harness task to hand to an SDK stream: answered `Done`.
+    HarnessTask(Box<HarnessTaskOffer>),
+    /// A harness task is answered, or no longer exists: its stream's slot is free. `gone`: it was
     /// not answered through the stream it was handed on (its run ended, its call timed out or
     /// was cancelled), and the stream hears it. Answered `Done`.
-    HostTaskDone { task: TaskRef, gone: bool },
+    HarnessTaskDone { task: TaskRef, gone: bool },
     /// An SDK stream opened at an edge: answered `Done`.
     Attach(StreamAttach),
     /// An SDK stream closed: its tasks wait for its worker for their grace. Answered `Done`.
@@ -428,21 +428,21 @@ pub struct SlotRequest {
     pub limit: u32,
 }
 
-/// A host task handed to SDK streams: which streams may take it, and the token of this
+/// A harness task handed to SDK streams: which streams may take it, and the token of this
 /// hand-out.
 #[derive(Clone, Debug, PartialEq)]
-pub struct HostTaskOffer {
+pub struct HarnessTaskOffer {
     pub partition: PartitionId,
     pub epoch: PartitionEpoch,
-    pub task: HostTask,
+    pub task: HarnessTask,
     pub action_set: Digest,
     /// The grace a stream that closes gets to come back before the task is handed again.
     pub grace: Duration,
 }
 
-/// A host-tool call as an SDK worker receives it.
+/// A harness call as an SDK worker receives it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct HostTask {
+pub struct HarnessTask {
     /// The token of this hand-out: it names the run, and changes with each hand-out.
     pub token: TaskToken,
     pub task: TaskRef,
@@ -479,7 +479,7 @@ pub struct StreamAttach {
     /// The tasks of the runs carrying all of these labels only. Empty: every run.
     pub labels: BTreeMap<String, String>,
     pub action_set: Option<Digest>,
-    /// Empty: every host tool.
+    /// Empty: every harness action.
     pub actions: BTreeSet<String>,
     /// Tasks it holds at once.
     pub slots: u32,
@@ -490,7 +490,7 @@ pub struct StreamAttach {
 pub enum OwnerNotice {
     /// The call may be sent.
     SlotGranted { task: TaskRef },
-    /// These host tasks were handed on a stream that closed and did not come back within its
+    /// These harness tasks were handed on a stream that closed and did not come back within its
     /// grace: each is interrupted (attempt + 1, or `outcome_unknown` under `at_most_once`).
     StreamLost { tasks: Vec<(TaskRef, TaskToken)> },
     /// A new organization actor asks for the counts of the tenant's namespaces.
@@ -505,8 +505,8 @@ pub enum OwnerNotice {
     reason = "a notice is boxed in its request, and moved once: its size does not matter"
 )]
 pub enum EdgeNotice {
-    /// A host task handed on the stream.
-    HandOut { stream: StreamId, task: HostTask },
+    /// A harness task handed on the stream.
+    HandOut { stream: StreamId, task: HarnessTask },
     /// A task handed on the stream no longer waits for its handler's answer, under this token:
     /// its run ended, its call timed out or was cancelled, or it was handed out again. Its slot
     /// on the stream is free.
@@ -524,8 +524,8 @@ pub enum EdgeNotice {
     reason = "an event is moved once, to its stream: its size does not matter"
 )]
 pub enum StreamEvent {
-    /// A host task handed on the stream.
-    Task(HostTask),
+    /// A harness task handed on the stream.
+    Task(HarnessTask),
     /// The task handed with this token no longer waits for an answer.
     Gone(TaskToken),
 }

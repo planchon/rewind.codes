@@ -200,7 +200,7 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's actions: host tools, MCP actions, and the built-ins `http` and `webhook`, with
+    /// The scenario's actions: harness actions, MCP actions, and the built-ins `http` and `webhook`, with
     /// the pinned schemas of `schemas` and `output_schemas` and the policies of `policies` (the
     /// default otherwise). In mock mode every call goes to the scenario's responses, whatever
     /// its route.
@@ -272,7 +272,7 @@ impl Case {
     }
 }
 
-/// The scenario's actions: host tools, the actions of its MCP servers, and the built-ins: `http`
+/// The scenario's actions: harness actions, the actions of its MCP servers, and the built-ins: `http`
 /// as `rewind_mcp::http_action` pins it, `webhook` with the schema of `rewind_runtime::builtins`.
 /// `schemas` pins the input schema of some actions, `output_schemas` the output schema of some
 /// MCP actions, and `policies` changes the default policy of some. The responses of `http` and of
@@ -351,7 +351,7 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
             }
             _ => Action::new(
                 name.clone(),
-                ActionRoute::Host {
+                ActionRoute::Harness {
                     group: name.split_once('.').map(|(group, _)| group.to_owned()),
                 },
                 Value::Object(serde_json::Map::new()),

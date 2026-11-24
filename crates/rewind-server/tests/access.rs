@@ -10,7 +10,7 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_api::access::{BuiltInRole, CreateApiKey, OPERATOR, Permission};
-use rewind_api::action_sets::{CreateActionSet, HostTool};
+use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ActionStatsFilter;
@@ -481,7 +481,7 @@ async fn a_key_limited_to_labels_does_not_administer() {
     server.stop().await;
 }
 
-/// A worker whose key is limited to labels claims the host-tool tasks of the runs carrying them
+/// A worker whose key is limited to labels claims the harness tasks of the runs carrying them
 /// only, and cannot answer another scope's task: one tenant's environments (`env=dev`,
 /// `env=prod`) register the same action set, and each one's worker serves its own runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -491,7 +491,7 @@ async fn a_key_limited_to_labels_claims_the_tasks_of_its_runs_only() {
         .key(BuiltInRole::Harness, &[])
         .await
         .create_action_set(&CreateActionSet {
-            host: vec![HostTool {
+            harness: vec![HarnessAction {
                 name: "ask_user".into(),
                 description: "Asks the user.".into(),
                 input_schema: serde_json::json!({ "type": "object" }),

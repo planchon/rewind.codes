@@ -16,7 +16,7 @@ use rewind_core::{
     McpServer, McpTransport, PartitionId, RunStatus,
 };
 use rewind_engine::edge::EdgeError;
-use rewind_engine::plane::HostTools;
+use rewind_engine::plane::HarnessActions;
 use rewind_engine::ports::link::{
     NodeReply, NodeRequest, OwnerNotice, PartitionReply, PartitionRequest, Refusal, SignalAtOwner,
     StreamAttach, StreamId,
@@ -71,7 +71,7 @@ fn waiter() -> FakeExecutor {
     )
 }
 
-fn drain(stream: &mut support::plane::Stream) -> Vec<rewind_engine::ports::link::HostTask> {
+fn drain(stream: &mut support::plane::Stream) -> Vec<rewind_engine::ports::link::HarnessTask> {
     support::plane::received(stream).0
 }
 
@@ -419,7 +419,7 @@ async fn a_node_that_does_not_run_the_run_s_epoch_sends_its_activations_to_one_t
     );
 }
 
-fn host_call(policy: Interruption) -> rewind_engine::StartRun {
+fn harness_call(policy: Interruption) -> rewind_engine::StartRun {
     let mut request = request("host", json!({}));
     let mut actions: Vec<Action> = request.action_set.actions().to_vec();
     for action in &mut actions {
@@ -453,9 +453,9 @@ fn host() -> FakeExecutor {
 /// Two nodes: the stream at one, the organization actor and the run wherever they land.
 async fn streams_world() -> (World, NodeId) {
     let mut a = config("node-a", 2);
-    a.host_tools = HostTools::Streams;
+    a.harness_actions = HarnessActions::Streams;
     let mut b = config("node-b", 2);
-    b.host_tools = HostTools::Streams;
+    b.harness_actions = HarnessActions::Streams;
     let world = World::with(host(), RecordingDispatcher::echo(), 2, &[a, b]).await;
     (world, node("node-b"))
 }
@@ -481,7 +481,7 @@ async fn a_stream_that_comes_back_within_its_grace_keeps_its_tasks() {
         .attach_stream(&edge, TenantId::local(), attach("s1", "worker-1", &edge))
         .unwrap();
     world.settle().await;
-    let run = world.run(host_call(Interruption::Retry)).await;
+    let run = world.run(harness_call(Interruption::Retry)).await;
     let handed = drain(&mut first);
     assert_eq!(handed.len(), 1);
 
@@ -517,8 +517,8 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
         .attach_stream(&edge, TenantId::local(), attach("s1", "worker-1", &edge))
         .unwrap();
     world.settle().await;
-    let retried = world.run(host_call(Interruption::Retry)).await;
-    let at_most_once = world.run(host_call(Interruption::AtMostOnce)).await;
+    let retried = world.run(harness_call(Interruption::Retry)).await;
+    let at_most_once = world.run(harness_call(Interruption::AtMostOnce)).await;
     let handed = drain(&mut first);
     assert_eq!(handed.len(), 2);
 
@@ -585,7 +585,7 @@ async fn a_stream_at_a_node_that_dies_has_its_tasks_handed_again_after_the_grace
         .attach_stream(&dying, TenantId::local(), attach("s1", "worker-1", &dying))
         .unwrap();
     world.settle().await;
-    let run = world.run(host_call(Interruption::Retry)).await;
+    let run = world.run(harness_call(Interruption::Retry)).await;
     let handed = drain(&mut first);
     assert_eq!(handed.len(), 1);
 

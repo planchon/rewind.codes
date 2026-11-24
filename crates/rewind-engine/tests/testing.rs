@@ -46,7 +46,7 @@ fn script() -> Script {
 }
 
 fn action_set() -> ActionSet {
-    ActionSet::from_host_tools(["a", "b"]).unwrap()
+    ActionSet::from_harness_actions(["a", "b"]).unwrap()
 }
 
 /// `a` answers `{ ok: true }`; `approval` comes once the run is blocked.

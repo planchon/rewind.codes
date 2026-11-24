@@ -11,7 +11,7 @@ use rewind_engine::ports::{
     ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
 };
 
-/// The `rewind-actions.d.ts` of an action set with two MCP servers and a host tool.
+/// The `rewind-actions.d.ts` of an action set with two MCP servers and a harness action.
 const ACTIONS: &str = r##"declare module "rewind:actions" {
   export namespace github {
     export interface Issue {

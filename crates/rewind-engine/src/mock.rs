@@ -362,7 +362,7 @@ mod tests {
             namespace: NamespaceName::new(NamespaceName::LOCAL).unwrap(),
             labels: Default::default(),
             seq: Seq(seq),
-            action: Action::new(action, ActionRoute::Host { group: None }, json!({})),
+            action: Action::new(action, ActionRoute::Harness { group: None }, json!({})),
             server: None,
             api: None,
             args,

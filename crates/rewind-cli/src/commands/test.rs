@@ -20,7 +20,7 @@
 //! `world.cassette` given as a string, and `world.mocks` as the name of a `.ts` or `.js` file,
 //! are read from files relative to the tests file. The tests run in this process, the actions'
 //! static responses of `rewind.actions.json` tried last, against the action set file `--action-set`
-//! names, or else the actions the tests answer, as host tools. They run on the server (embedded
+//! names, or else the actions the tests answer, as harness actions. They run on the server (embedded
 //! or remote, `POST /v1/test`) when they need what it holds: a workflow's suite (`--workflow`)
 //! or an action set registered there (`--action-set <id>`).
 

@@ -34,7 +34,7 @@ use support::{FakeExecutor, FakeRun, RecordingDispatcher, kit};
 // Helpers
 
 /// `github` takes a secret as a bearer token, `linear` in `X-Api-Key`, `dax` checks Rewind's
-/// signature, and `ask_user` is a host tool.
+/// signature, and `ask_user` is a harness action.
 fn action_set() -> ActionSet {
     let server = |name: &str, auth: ActionAuth| {
         let mut server = McpServer::new(
@@ -68,7 +68,7 @@ fn action_set() -> ActionSet {
             action("github.get_issue", "github"),
             action("linear.search", "linear"),
             action("dax.ask", "dax"),
-            Action::new("ask_user", ActionRoute::Host { group: None }, json!({})),
+            Action::new("ask_user", ActionRoute::Harness { group: None }, json!({})),
         ],
     )
     .unwrap()
@@ -337,7 +337,7 @@ async fn an_attachment_names_a_server_taking_a_secret_and_a_secret_that_exists()
                 server: "nowhere".into()
             },
         ],
-        "a host tool, a signed server and an unknown name take no secret"
+        "a harness action, a signed server and an unknown name take no secret"
     );
     assert_eq!(refused.attachable, [secret_ref("org/github")]);
     assert_eq!(runs(&mut world).await, 0, "no run exists");

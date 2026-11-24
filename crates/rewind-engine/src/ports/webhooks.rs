@@ -47,7 +47,7 @@ pub enum WebhookEventType {
     RunCancelled,
     /// The host ended the run.
     RunAborted,
-    /// The run waits for the outside world: a signal, a host tool, an approval.
+    /// The run waits for the outside world: a signal, a harness action, an approval.
     RunSuspended,
     /// The run is set aside (`archi/03-execution.md`, "Non-determinism and quarantine").
     RunQuarantined,

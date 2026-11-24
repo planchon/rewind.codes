@@ -200,7 +200,7 @@ impl Permission {
             Permission::SecretsWrite => "Put and delete secrets.",
             Permission::SecretsUse => "Attach an organization's secret to a run or a workflow.",
             Permission::TasksWork => {
-                "Hold a task stream of host-tool tasks, and defer, complete or fail them."
+                "Hold a task stream of harness tasks, and defer, complete or fail them."
             }
             Permission::TasksApprove => "Approve or reject a parked task.",
             Permission::SubscriptionsRead => "List the lifecycle webhooks.",
@@ -256,7 +256,7 @@ pub enum BuiltInRole {
     /// Everything about runs, action sets, tasks and subscriptions, and reading the members and
     /// roles: a harness and its agent tools.
     Harness,
-    /// Only the host-tool tasks: a harness's SDK worker.
+    /// Only the harness tasks: a harness's SDK worker.
     Worker,
     /// Only reading.
     Reader,
@@ -333,7 +333,7 @@ impl BuiltInRole {
                 "Runs, action sets, secrets, tasks and subscriptions, and reading the members \
                  and roles: a harness and its agent tools."
             }
-            BuiltInRole::Worker => "Only the host-tool tasks: a harness's SDK worker.",
+            BuiltInRole::Worker => "Only the harness tasks: a harness's SDK worker.",
             BuiltInRole::Reader => {
                 "Reading runs, action sets, subscriptions, members and roles: a dashboard."
             }
@@ -642,7 +642,7 @@ mod tests {
 
     /// What the key roles allowed before roles became data: `reader` the reading endpoints of
     /// its tenant, `harness` everything of its tenant but the administration, `worker` the
-    /// host-tool tasks, the administration only `admin`, now `operator`. The permissions of
+    /// harness tasks, the administration only `admin`, now `operator`. The permissions of
     /// namespaces came after: `harness` manages its end users, `reader` reads them; and so did
     /// `scripts:write`, which `harness` holds with `actions:write`.
     #[derive(Clone, Copy, PartialEq, Eq)]

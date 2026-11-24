@@ -19,7 +19,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
-use rewind_api::action_sets::{CreateActionSet, HostTool};
+use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::ChangeEvent;
 use rewind_api::runs::StartRun;
@@ -241,12 +241,12 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
         );
     }
 
-    // A host task of a run started at a, handed on a stream held at b, answered at a.
+    // A harness task of a run started at a, handed on a stream held at b, answered at a.
     let worker = b.key(BuiltInRole::Worker).await;
     let action_set = a
         .client(&key, "end-user-0")
         .create_action_set(&CreateActionSet {
-            host: vec![HostTool {
+            harness: vec![HarnessAction {
                 name: "ask_user".into(),
                 description: "Ask the user".into(),
                 input_schema: json!({

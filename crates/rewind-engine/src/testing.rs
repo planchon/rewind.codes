@@ -11,7 +11,7 @@
 //!
 //! A test runs on a run plane of its own, stepped by the [`Driver`]: one node holding one
 //! partition, wired with in-memory adapters, a virtual clock started at the test's start and an
-//! entropy giving the test's seed; host tools are dispatched to the test's world as every other
+//! entropy giving the test's seed; harness actions are dispatched to the test's world as every other
 //! call. Its result is a function of the script, the action set, the test and the epoch. The
 //! script under test is a parameter ([`Subject`]).
 //! TypeScript mock handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
@@ -38,7 +38,7 @@ use crate::adapters::{
 use crate::driver::{DriveError, Driver, PlaneClock, Steps};
 use crate::edge::Edge;
 use crate::mock::{MockDispatcher, Mocks, NoMocks};
-use crate::plane::{HostTools, NodeConfig, Wiring};
+use crate::plane::{HarnessActions, NodeConfig, Wiring};
 use crate::ports::{ActionDispatcher, Enqueued, Entropy, NodeId, QuarantineKind, ScriptExecutor};
 use crate::schema::{Refused, Validator};
 use crate::start::{StartError, StartRun};
@@ -603,7 +603,7 @@ where
         });
         let node = NodeId::new("test").map_err(unavailable)?;
         let mut config = NodeConfig::new(node.clone(), NonZeroU16::MIN);
-        config.host_tools = HostTools::Dispatched;
+        config.harness_actions = HarnessActions::Dispatched;
         // Every timer of the run is held by the wheel: none is read again.
         config.horizon = Duration::from_secs(100 * 365 * 86_400);
         let mut driver = Driver::new(
@@ -672,7 +672,7 @@ mod tests {
     fn action_set() -> ActionSet {
         let mut list = Action::new(
             "github.list_issues",
-            ActionRoute::Host {
+            ActionRoute::Harness {
                 group: Some("github".into()),
             },
             json!({ "type": "object", "properties": { "state": { "type": "string" } } }),

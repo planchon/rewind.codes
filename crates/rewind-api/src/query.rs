@@ -136,13 +136,13 @@ pub enum WaitKind {
     Timer,
     /// A call Rewind sends itself.
     Call,
-    /// A host tool's call, answered by the harness's worker.
-    Host,
+    /// A harness action's call, answered by the harness's worker.
+    Harness,
     /// A call under the `approval` policy, not approved yet.
     Approval,
     /// A call parked by a schema change, a refused call or a missing secret.
     Parked,
-    /// A host tool's call whose handler answers later.
+    /// A harness action's call whose handler answers later.
     Deferred,
 }
 
@@ -151,7 +151,7 @@ impl WaitKind {
         WaitKind::Signal,
         WaitKind::Timer,
         WaitKind::Call,
-        WaitKind::Host,
+        WaitKind::Harness,
         WaitKind::Approval,
         WaitKind::Parked,
         WaitKind::Deferred,
@@ -162,7 +162,7 @@ impl WaitKind {
             WaitKind::Signal => "signal",
             WaitKind::Timer => "timer",
             WaitKind::Call => "call",
-            WaitKind::Host => "host",
+            WaitKind::Harness => "harness",
             WaitKind::Approval => "approval",
             WaitKind::Parked => "parked",
             WaitKind::Deferred => "deferred",
@@ -432,7 +432,7 @@ const WAITS: [(&str, WaitKind); 7] = [
     ("signal", WaitKind::Signal),
     ("timer", WaitKind::Timer),
     ("call", WaitKind::Call),
-    ("host", WaitKind::Host),
+    ("harness", WaitKind::Harness),
     ("approval", WaitKind::Approval),
     ("parked", WaitKind::Parked),
     ("deferred", WaitKind::Deferred),
@@ -1036,7 +1036,7 @@ mod tests {
         assert!(
             error("waiting:soon")
                 .message
-                .contains("signal, timer, call, host, approval, parked, deferred")
+                .contains("signal, timer, call, harness, approval, parked, deferred")
         );
         assert!(error("ab\"c\"").message.contains("quote inside a word"));
         assert!(error("ab\"c").message.contains("not closed"));

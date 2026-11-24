@@ -193,7 +193,7 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
         "another tenant does not see it"
     );
 
-    let action_set = ActionSet::from_host_tools(["a", "b"]).expect("action set");
+    let action_set = ActionSet::from_harness_actions(["a", "b"]).expect("action set");
     let declarations = ActionDeclarations {
         typescript: "declare module \"rewind:actions\" {}".into(),
         prompt: "a() · b()".into(),
@@ -220,7 +220,7 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
             .expect("get_action_set"),
         None
     );
-    let second = ActionSet::from_host_tools(["c"]).expect("action set");
+    let second = ActionSet::from_harness_actions(["c"]).expect("action set");
     for tenant in [acme(), other] {
         catalog
             .put_action_set(&tenant, &second, &ActionDeclarations::default())
@@ -1340,7 +1340,7 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
         },
         "a title removed"
     );
-    let action_set = ActionSet::from_host_tools(["a"]).expect("action set");
+    let action_set = ActionSet::from_harness_actions(["a"]).expect("action set");
     catalog
         .put_action_set(&acme(), &action_set, &ActionDeclarations::default())
         .await

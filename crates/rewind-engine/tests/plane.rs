@@ -18,9 +18,9 @@ use rewind_core::{
     Event, Interruption, Lifecycle, RunStatus, Seq, Timestamp,
 };
 use rewind_engine::edge::EdgeError;
-use rewind_engine::plane::HostTools;
+use rewind_engine::plane::HarnessActions;
 use rewind_engine::ports::link::{
-    HostFailure, NodeReply, NodeRequest, PartitionRequest, Refusal, StreamAttach, StreamId,
+    HarnessFailure, NodeReply, NodeRequest, PartitionRequest, Refusal, StreamAttach, StreamId,
 };
 use rewind_engine::ports::{
     BlobStore, CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind,
@@ -560,7 +560,7 @@ async fn failing_activations_are_tried_again_by_a_timer_then_quarantined() {
 #[tokio::test]
 async fn a_call_under_approval_waits_for_the_harness() {
     let mut world = World::new(one_call(), RecordingDispatcher::echo()).await;
-    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Host { group: None });
+    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Harness { group: None });
     policy.approval = true;
     let approved = world
         .run(with_policy(request("one_call", json!({})), policy))
@@ -650,7 +650,7 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
         })
     });
     let mut world = World::new(one_call(), dispatcher).await;
-    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Host { group: None });
+    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Harness { group: None });
     policy.on_interruption = Interruption::AtMostOnce;
     let run = world
         .run(with_policy(request("one_call", json!({})), policy))
@@ -685,7 +685,7 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
 
     // A deferred call that nobody answers fails at its deadline, bounded by its execution
     // timeout.
-    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Host { group: None });
+    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Harness { group: None });
     policy.execution_timeout = Some(Duration::from_secs(60));
     let late = world
         .run(with_policy(request("one_call", json!({})), policy))
@@ -706,7 +706,7 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
 #[tokio::test]
 async fn a_stream_attached_before_its_home_partition_is_opened_again_is_still_handed_tasks() {
     let mut node = config("node-a", 1);
-    node.host_tools = HostTools::Streams;
+    node.harness_actions = HarnessActions::Streams;
     let store = Interleaved::new();
     let mut world = World::over(
         store.clone(),
@@ -760,9 +760,9 @@ async fn a_stream_attached_before_its_home_partition_is_opened_again_is_still_ha
 }
 
 #[tokio::test]
-async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token() {
+async fn harness_tasks_are_handed_to_sdk_streams_and_answered_through_their_token() {
     let mut node = config("node-a", 1);
-    node.host_tools = HostTools::Streams;
+    node.harness_actions = HarnessActions::Streams;
     let mut world = World::with(one_call(), RecordingDispatcher::echo(), 1, &[node]).await;
     let at = world.at.clone();
     let mut stream = world
@@ -791,7 +791,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
     assert_eq!(task.idempotency_key, format!("{}/1", run.id));
     assert!(
         world.plane.dispatcher.calls().is_empty(),
-        "a host tool is not dispatched"
+        "a harness action is not dispatched"
     );
     world
         .complete(&task.token, json!({ "from": "harness" }))
@@ -806,7 +806,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
     world
         .fail(
             &first[0].token,
-            HostFailure {
+            HarnessFailure {
                 message: "try later".into(),
                 data: None,
                 retryable: true,
@@ -846,7 +846,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
 #[tokio::test]
 async fn tasks_in_flight_read_claimed() {
     let mut node = config("node-a", 1);
-    node.host_tools = HostTools::Streams;
+    node.harness_actions = HarnessActions::Streams;
     let mut world = World::with(one_call(), RecordingDispatcher::echo(), 1, &[node]).await;
     let at = world.at.clone();
     // Recorded `ready`, it is in flight once its owner handed it to the organization actor for

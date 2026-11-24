@@ -367,7 +367,7 @@ fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
         WaitingFor::Signal => WaitKind::Signal,
         WaitingFor::Timer => WaitKind::Timer,
         WaitingFor::Call => WaitKind::Call,
-        WaitingFor::Host => WaitKind::Host,
+        WaitingFor::Harness => WaitKind::Harness,
         WaitingFor::Approval => WaitKind::Approval,
         WaitingFor::Parked => WaitKind::Parked,
         WaitingFor::Deferred => WaitKind::Deferred,
@@ -647,7 +647,7 @@ pub fn action_set(
                 route: match action.route {
                     ActionRoute::Mcp { .. } => Route::Mcp,
                     ActionRoute::Api { .. } => Route::Api,
-                    ActionRoute::Host { .. } => Route::Host,
+                    ActionRoute::Harness { .. } => Route::Harness,
                     ActionRoute::Builtin(_) => Route::Builtin,
                 },
                 server: match &action.route {

@@ -143,7 +143,7 @@ pub fn sampled(trace: TraceId, config: &TelemetryConfig) -> bool {
     draw * 1_000_000 < u128::from(config.sampled_per_million) << 56
 }
 
-/// The trace context a call carries to its server (`_meta`) or host-tool handler: the run's
+/// The trace context a call carries to its server (`_meta`) or harness handler: the run's
 /// trace, with the call span `H(run, seq)` as parent.
 pub fn call_trace_context(
     run: RunId,

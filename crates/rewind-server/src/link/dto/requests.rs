@@ -343,7 +343,7 @@ pub struct SignalAtOwner {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskAnswer {
     Complete(JsonValue),
-    Fail(HostFailure),
+    Fail(HarnessFailure),
     Defer {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<Duration>,
@@ -353,7 +353,7 @@ pub enum TaskAnswer {
 /// `{"message":"…","data":…,"retryable":false}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HostFailure {
+pub struct HarnessFailure {
     pub message: String,
     #[serde(
         default,
@@ -421,7 +421,7 @@ impl From<&link::PartitionRequest> for PartitionRequest {
                 token: token.0.clone(),
                 answer: match answer {
                     link::TaskAnswer::Complete(value) => TaskAnswer::Complete(value.clone()),
-                    link::TaskAnswer::Fail(failure) => TaskAnswer::Fail(HostFailure {
+                    link::TaskAnswer::Fail(failure) => TaskAnswer::Fail(HarnessFailure {
                         message: failure.message.clone(),
                         data: failure.data.clone(),
                         retryable: failure.retryable,
@@ -547,7 +547,7 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
                 token: engine::TaskToken(token),
                 answer: match answer {
                     TaskAnswer::Complete(value) => link::TaskAnswer::Complete(value),
-                    TaskAnswer::Fail(failure) => link::TaskAnswer::Fail(link::HostFailure {
+                    TaskAnswer::Fail(failure) => link::TaskAnswer::Fail(link::HarnessFailure {
                         message: failure.message,
                         data: failure.data,
                         retryable: failure.retryable,
@@ -812,7 +812,7 @@ impl TryFrom<PartitionReply> for link::PartitionReply {
 // The organization actor
 
 /// `{"admit":{…}}`, `{"counts":{…}}`, `{"slot":{…}}`, `{"slot_freed":{…}}`,
-/// `{"host_task":{…}}`, `{"host_task_done":{…}}`, `{"attach":{…}}` or `{"detach":{…}}`.
+/// `{"harness_task":{…}}`, `{"harness_task_done":{…}}`, `{"attach":{…}}` or `{"detach":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum OrgRequest {
@@ -820,8 +820,8 @@ pub enum OrgRequest {
     Counts(CountsReport),
     Slot(SlotRequest),
     SlotFreed { task: TaskRef, server: String },
-    HostTask(Box<HostTaskOffer>),
-    HostTaskDone { task: TaskRef, gone: bool },
+    HarnessTask(Box<HarnessTaskOffer>),
+    HarnessTaskDone { task: TaskRef, gone: bool },
     Attach(StreamAttach),
     Detach { stream: String },
 }
@@ -871,20 +871,20 @@ pub struct SlotRequest {
 /// `{"partition":3,"epoch":7,"task":{…},"action_set":"<hex>","grace":{"secs":60,"nanos":0}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HostTaskOffer {
+pub struct HarnessTaskOffer {
     pub partition: u16,
     pub epoch: u64,
-    pub task: HostTask,
+    pub task: HarnessTask,
     pub action_set: Hex,
     pub grace: Duration,
 }
 
-/// A host-tool call as an SDK worker receives it: `{"token":"rewind_tk_…","task":{…},
+/// A harness call as an SDK worker receives it: `{"token":"rewind_tk_…","task":{…},
 /// "namespace":"user-1","action":"…","args":…,"idempotency_key":"…","attempt":1,
 /// "execution_timeout":{…},"labels":{…},"trace_context":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HostTask {
+pub struct HarnessTask {
     pub token: String,
     pub task: TaskRef,
     pub namespace: String,
@@ -944,8 +944,8 @@ impl TryFrom<OrgReply> for link::OrgReply {
     }
 }
 
-impl From<&link::HostTask> for HostTask {
-    fn from(task: &link::HostTask) -> Self {
+impl From<&link::HarnessTask> for HarnessTask {
+    fn from(task: &link::HarnessTask) -> Self {
         Self {
             token: task.token.0.clone(),
             task: (&task.task).into(),
@@ -967,11 +967,11 @@ impl From<&link::HostTask> for HostTask {
     }
 }
 
-impl TryFrom<HostTask> for link::HostTask {
+impl TryFrom<HarnessTask> for link::HarnessTask {
     type Error = Invalid;
 
-    fn try_from(task: HostTask) -> Result<Self, Invalid> {
-        Ok(link::HostTask {
+    fn try_from(task: HarnessTask) -> Result<Self, Invalid> {
+        Ok(link::HarnessTask {
             token: engine::TaskToken(task.token),
             task: task.task.try_into()?,
             namespace: namespace(task.namespace)?,
@@ -1055,14 +1055,14 @@ impl From<&link::OrgRequest> for OrgRequest {
                 task: task.into(),
                 server: server.clone(),
             },
-            R::HostTask(offer) => OrgRequest::HostTask(Box::new(HostTaskOffer {
+            R::HarnessTask(offer) => OrgRequest::HarnessTask(Box::new(HarnessTaskOffer {
                 partition: offer.partition.get(),
                 epoch: offer.epoch.0,
                 task: (&offer.task).into(),
                 action_set: Hex(offer.action_set),
                 grace: offer.grace,
             })),
-            R::HostTaskDone { task, gone } => OrgRequest::HostTaskDone {
+            R::HarnessTaskDone { task, gone } => OrgRequest::HarnessTaskDone {
                 task: task.into(),
                 gone: *gone,
             },
@@ -1110,14 +1110,14 @@ impl TryFrom<OrgRequest> for link::OrgRequest {
                 task: task.try_into()?,
                 server,
             },
-            OrgRequest::HostTask(offer) => R::HostTask(Box::new(link::HostTaskOffer {
+            OrgRequest::HarnessTask(offer) => R::HarnessTask(Box::new(link::HarnessTaskOffer {
                 partition: PartitionId::new(offer.partition),
                 epoch: engine::PartitionEpoch(offer.epoch),
                 task: offer.task.try_into()?,
                 action_set: offer.action_set.0,
                 grace: offer.grace,
             })),
-            OrgRequest::HostTaskDone { task, gone } => R::HostTaskDone {
+            OrgRequest::HarnessTaskDone { task, gone } => R::HarnessTaskDone {
                 task: task.try_into()?,
                 gone,
             },
@@ -1143,7 +1143,7 @@ pub enum OwnerNotice {
     CountsWanted { tenant: String },
 }
 
-/// A host task handed on a stream that did not come back, and the token of that hand-out.
+/// A harness task handed on a stream that did not come back, and the token of that hand-out.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LostTask {
@@ -1199,9 +1199,17 @@ impl TryFrom<OwnerNotice> for link::OwnerNotice {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum EdgeNotice {
-    HandOut { stream: String, task: Box<HostTask> },
-    Gone { stream: String, token: String },
-    Reopened { partition: u16 },
+    HandOut {
+        stream: String,
+        task: Box<HarnessTask>,
+    },
+    Gone {
+        stream: String,
+        token: String,
+    },
+    Reopened {
+        partition: u16,
+    },
 }
 
 impl From<&link::EdgeNotice> for EdgeNotice {

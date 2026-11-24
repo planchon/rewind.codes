@@ -34,7 +34,7 @@ pub const CALL_CPU: Duration = Duration::from_millis(2);
 pub fn request(name: &str, input: JsonValue) -> StartRun {
     StartRun::new(
         Script::new(name),
-        ActionSet::from_host_tools(["a", "b", "cleanup"]).unwrap(),
+        ActionSet::from_harness_actions(["a", "b", "cleanup"]).unwrap(),
         input,
     )
 }

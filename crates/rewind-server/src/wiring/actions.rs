@@ -7,7 +7,7 @@
 //! | MCP actions | `rewind-mcp`'s `McpDispatcher`: stdio and streamable HTTP, connections pooled; HTTP servers only where the configuration's `ActionEgress` lets it go |
 //! | API actions | `rewind-openapi`'s `ApiDispatcher`: APIs only where the same `ActionEgress` lets it go |
 //! | Built-ins | `rewind-mcp`'s `HttpAction` for `http`, with its egress rules; `webhook` is answered by the engine |
-//! | Host tools | none: the harness's worker claims them (`GET /v1/tasks`) |
+//! | Harness actions | none: the harness's worker claims them (`GET /v1/tasks`) |
 //!
 //! The declarations (`rewind-actions.d.ts`, the prompt rendering, each action's) come from
 //! `rewind-codegen`.

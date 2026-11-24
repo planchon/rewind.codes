@@ -10,7 +10,7 @@
 //!   "servers": ["github"],
 //!   "actions": [
 //!     { "name": "github.list_issues", "route": "mcp", "description": "…", "input": {…}, "output": {…} },
-//!     { "name": "ask_user", "route": "host", "input": {…} },
+//!     { "name": "ask_user", "route": "harness", "input": {…} },
 //!     { "name": "http", "route": "http", "hosts": ["api.example.com"] },
 //!     { "name": "webhook", "route": "webhook" }
 //!   ],
@@ -67,7 +67,7 @@ fn load(case: &Path) -> (ActionSet, BTreeMap<String, Shape>) {
                 "mcp" => ActionRoute::Mcp {
                     server: name.split_once('.').unwrap().0.to_owned(),
                 },
-                "host" => ActionRoute::Host {
+                "harness" => ActionRoute::Harness {
                     group: name.split_once('.').map(|(group, _)| group.to_owned()),
                 },
                 "http" => ActionRoute::Builtin(Builtin::Http {

@@ -417,7 +417,7 @@ pub(crate) enum ExportFormat {
 pub(crate) enum ActionSetsCommand {
     /// Register and pin an action set file; print its id.
     Add {
-        /// MCP servers, host tools and the http action, as `POST /v1/action-sets` takes them.
+        /// MCP servers, harness actions and the http action, as `POST /v1/action-sets` takes them.
         file: PathBuf,
     },
     /// The declarations of a registered action set.

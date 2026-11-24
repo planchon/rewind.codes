@@ -1,4 +1,4 @@
-//! Names that become identifiers of `rewind:actions`: a server, a host-tool group and a host tool
+//! Names that become identifiers of `rewind:actions`: a server, a group of harness actions and a harness action
 //! without a group are declared as `export const`, `export namespace` and `export function`.
 //! Every such name an action set accepts must give declarations that parse; the reserved words of
 //! JavaScript, which would not, are refused by the action set itself (`rewind_core::RESERVED_WORDS`).
@@ -65,7 +65,7 @@ const OTHER_NAMES: &[&str] = &[
     "github",
 ];
 
-/// An action set in which `name` is declared as a server, as a host-tool group, or as a host tool
+/// An action set in which `name` is declared as a server, as a group of harness actions, or as a harness action
 /// without a group; each action takes a string and returns an object.
 fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3] {
     let input = json!({
@@ -100,14 +100,17 @@ fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3
             [],
             [action(
                 format!("{name}.ask"),
-                ActionRoute::Host {
+                ActionRoute::Harness {
                     group: Some(name.to_owned()),
                 },
             )],
         ),
         ActionSet::new(
             [],
-            [action(name.to_owned(), ActionRoute::Host { group: None })],
+            [action(
+                name.to_owned(),
+                ActionRoute::Harness { group: None },
+            )],
         ),
     ]
 }

@@ -10,7 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Duration;
 
-/// `POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` action, with a policy per
+/// `POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy per
 /// action. Registering connects to the MCP servers and lists their actions, reads the APIs' OpenAPI
 /// documents, and pins their schemas. The action set is content-addressed: registering the same
 /// action set twice gives the same id. It holds no secret: a run attaches its secrets when it
@@ -24,7 +24,7 @@ use crate::common::Duration;
         "auth": { "type": "secret", "header": "Authorization", "format": "Bearer {secret}" }
     }],
     "apis": [{ "name": "crm", "openapi": "https://api.example.com/openapi.json", "auth": { "type": "rewind" } }],
-    "host": [{
+    "harness": [{
         "name": "ask_user",
         "description": "Ask the end user a question and return their answer.",
         "inputSchema": {
@@ -43,10 +43,10 @@ pub struct CreateActionSet {
     /// `<api>.<operationId>`, called by Rewind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<Api>,
-    /// Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
+    /// Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
     /// name `group.action` puts the action in the `group` namespace of `rewind:actions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub host: Vec<HostTool>,
+    pub harness: Vec<HarnessAction>,
     /// Enables the built-in `http` action, and `fetch` in scripts, for these hosts only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http: Option<HttpAction>,
@@ -62,7 +62,7 @@ pub struct CreateActionSet {
     pub workflows: Vec<String>,
     /// Derives the action set from a registered one: its servers, actions and workflows are kept as
     /// pinned, without listing the servers again; `workflows` adds workflows or pins them again.
-    /// `mcp`, `host` and `http` must then be empty.
+    /// `mcp`, `harness` and `http` must then be empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
 }
@@ -252,7 +252,7 @@ pub enum SecretEncoding {
 /// A function of the harness, called by scripts and executed by the harness's SDK worker.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostTool {
+pub struct HarnessAction {
     /// `group.action` puts the action in a group, the namespace `rewind:actions` exports it under. The
     /// group, and a name without a dot, may not be a reserved word of JavaScript.
     pub name: String,
@@ -295,7 +295,7 @@ pub struct ActionPolicy {
     /// How long one attempt may take. 5 minutes by default for MCP actions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Duration>,
-    /// The grace after a stream closes: how long a host task handed on a stream that closed
+    /// The grace after a stream closes: how long a harness task handed on a stream that closed
     /// waits for its worker to come back before it is handed again, as attempt + 1. 60 seconds
     /// by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -441,7 +441,7 @@ pub enum Route {
     /// The dispatcher of Rewind, as an HTTP client of an API.
     Api,
     /// The harness's SDK worker.
-    Host,
+    Harness,
     /// The dispatcher of Rewind: `http` and `webhook`.
     Builtin,
 }
@@ -533,7 +533,7 @@ mod tests {
     fn the_action_set_of_the_product_overview_reads() {
         let action_set: CreateActionSet = serde_json::from_value(json!({
             "mcp": [{ "name": "github", "url": "https://mcp.example.com/github" }],
-            "host": [{
+            "harness": [{
                 "name": "ask_user",
                 "description": "Ask the end user a question and return their answer.",
                 "inputSchema": { "type": "object" },
@@ -542,7 +542,7 @@ mod tests {
             "http": { "allow": ["api.example.com"] }
         }))
         .unwrap();
-        let policy = action_set.host[0].policy.unwrap();
+        let policy = action_set.harness[0].policy.unwrap();
         assert_eq!(policy.on_interruption, Some(OnInterruption::AtMostOnce));
         assert_eq!(policy.heartbeat_timeout.unwrap().as_millis(), 120_000);
         assert!(

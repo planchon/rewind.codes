@@ -3,7 +3,7 @@
 //! embedded `.rewind/`, kept as fixtures (`tests/fixtures/`). The command runs twice, the second
 //! time moving nothing; then a server on the result reads every run back as the tables held it,
 //! named by the handle they gave it, and lets the live ones go on: a timer fires, signals and a
-//! webhook end them, a workflow run's end reaches its starter, host tasks in flight are handed
+//! webhook end them, a workflow run's end reaches its starter, harness tasks in flight are handed
 //! again. The fixtures are as a build of schema version 12 (Postgres) and 10 (Turso) left them:
 //! the server runs the migrations that give runs their handles, then those of the run plane.
 
@@ -217,7 +217,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
     let parent = ended(client, PARENT).await;
     assert_eq!(status(&parent), RunStatus::Failed, "{parent:?}");
 
-    // The host tasks in flight, a deferred call among them, are handed again.
+    // The harness tasks in flight, a deferred call among them, are handed again.
     let mut worker = TaskWorker::open(
         client,
         &TaskStreamQuery {

@@ -12,7 +12,7 @@
 mod support;
 
 use rewind_api::access::{BuiltInRole, Permission};
-use rewind_api::action_sets::{CreateActionSet, HostTool};
+use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::common::Labels;
 use rewind_api::namespaces::{CreateToken, NamespaceName};
 use rewind_api::runs::StartRun;
@@ -343,7 +343,7 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
     let customer = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = customer
         .create_action_set(&CreateActionSet {
-            host: vec![HostTool {
+            harness: vec![HarnessAction {
                 name: "ask_user".into(),
                 description: "Asks the user.".into(),
                 input_schema: json!({ "type": "object" }),

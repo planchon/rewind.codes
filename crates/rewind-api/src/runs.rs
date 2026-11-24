@@ -599,7 +599,7 @@ pub struct WaitCounts {
     pub signal: u64,
     pub timer: u64,
     pub call: u64,
-    pub host: u64,
+    pub harness: u64,
     pub approval: u64,
     pub parked: u64,
     pub deferred: u64,

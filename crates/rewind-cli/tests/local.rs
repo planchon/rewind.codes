@@ -102,7 +102,7 @@ async fn check_reads_an_action_set_file() {
         dir.path(),
         "action_set.json",
         &json!({
-            "host": [{
+            "harness": [{
                 "name": "ask_user",
                 "description": "Ask the end user a question.",
                 "inputSchema": {
@@ -484,7 +484,7 @@ async fn the_corpus_replays_through_the_cli() {
 /// The corpus cases whose actions and steps a scenario of `rewind test` can express run through
 /// `rewind test`, and meet their expectations: status, output, error, calls, abort, refused start.
 /// The others need what only the corpus harness drives (approvals, virtual time moved by hand,
-/// a host worker, limits, forks, MCP servers, `http` hosts, idempotency keys, transient
+/// a harness worker, limits, forks, MCP servers, `http` hosts, idempotency keys, transient
 /// failures, workflows registered before the run): they are listed, so that the selection
 /// cannot shrink silently.
 #[tokio::test]

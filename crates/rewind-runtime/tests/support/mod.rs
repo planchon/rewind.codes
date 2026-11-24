@@ -2,7 +2,7 @@
 //! holding the one partition, over the engine's memory adapters, with the V8 executor and a
 //! test's dispatcher, stepped by the engine's driver in virtual time from [`T0`].
 //!
-//! Host tools go to the dispatcher, as in mock mode: the tests' dispatchers answer every action.
+//! Harness actions go to the dispatcher, as in mock mode: the tests' dispatchers answer every action.
 
 #![allow(dead_code, unreachable_pub, clippy::unwrap_used)]
 
@@ -18,7 +18,7 @@ use rewind_engine::adapters::{
 };
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::{Edge, EdgeError};
-use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
+use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{
     ActionDispatcher, Clock, Enqueued, NodeId, Page, Predicate, RunOrder, RunQuery, RunRef,
@@ -81,7 +81,7 @@ impl<D: ActionDispatcher + 'static> World<D> {
             entropy: SeededEntropy::new(seed),
         });
         let mut config = NodeConfig::new(NodeId::new("runtime").unwrap(), NonZeroU16::MIN);
-        config.host_tools = HostTools::Dispatched;
+        config.harness_actions = HarnessActions::Dispatched;
         config.horizon = Duration::from_secs(100 * 365 * 86_400);
         configure(&mut config);
         let mut driver = Driver::new(cluster, Arc::new(PlaneClock(Arc::clone(&plane))));

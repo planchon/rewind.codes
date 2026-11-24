@@ -26,7 +26,7 @@ fn run(tenant_name: &str) -> RunRef {
 
 fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
     let script = Script::new("export default async (input) => input");
-    let action_set = ActionSet::from_host_tools(["github.close_issue"]).expect("action set");
+    let action_set = ActionSet::from_harness_actions(["github.close_issue"]).expect("action set");
     SealedAttempt {
         run: run.clone(),
         attempt,

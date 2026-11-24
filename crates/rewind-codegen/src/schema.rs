@@ -43,8 +43,8 @@ pub(crate) const MAX_DEFINITIONS: usize = 512;
 
 use crate::ty::{Doc, Object, Property, Tuple, Ty};
 
-/// The named types of one namespace of `rewind:actions`: an MCP server, a host-tool group, or a
-/// bare host tool. Its actions' schemas share them.
+/// The named types of one namespace of `rewind:actions`: an MCP server, a group of harness actions, or a
+/// bare harness action. Its actions' schemas share them.
 #[derive(Debug, Default)]
 pub(crate) struct Scope {
     pub(crate) declarations: Vec<Declaration>,

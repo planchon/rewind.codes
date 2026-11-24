@@ -1,4 +1,4 @@
-//! Host-tool tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
+//! Harness tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
 //! they become ready, and answers each through its token; the harness approves or rejects the
 //! calls that wait for it (`archi/04-tools.md`, "Call lifecycle").
 //!
@@ -30,7 +30,9 @@ use rewind_api::tasks::{
 };
 use rewind_core::canonical_json;
 use rewind_engine::ports::TaskToken;
-use rewind_engine::ports::link::{HostFailure, HostTask, StreamAttach, StreamEvent, StreamId};
+use rewind_engine::ports::link::{
+    HarnessFailure, HarnessTask, StreamAttach, StreamEvent, StreamId,
+};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::app::{App, Node};
@@ -53,7 +55,7 @@ const FAILURE_LIMIT: usize = 64 * 1024;
 const SLOTS: u32 = 1;
 const MAX_SLOTS: u32 = 100;
 
-/// `GET /v1/tasks/stream`: the host-tool tasks handed to this worker as they become ready.
+/// `GET /v1/tasks/stream`: the harness tasks handed to this worker as they become ready.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -164,7 +166,7 @@ impl Held {
 }
 
 /// A task as the SDK worker receives it.
-fn handed(task: HostTask) -> HandedTask {
+fn handed(task: HarnessTask) -> HandedTask {
     HandedTask {
         token: task.token.0,
         id: task_id(&task.task),
@@ -243,7 +245,7 @@ pub(super) async fn fail(
 ) -> Result<StatusCode, ApiError> {
     caller.require(Permission::TasksWork)?;
     check_failure_size(&request.message, request.data.as_ref())?;
-    let failure = HostFailure {
+    let failure = HarnessFailure {
         message: request.message,
         data: request.data,
         retryable: request.retryable,

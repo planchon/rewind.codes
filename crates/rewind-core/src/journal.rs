@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn a_document_holds_the_script_and_action_set_its_run_started_with() {
         let script = Script::new("export default () => 1");
-        let action_set = ActionSet::from_host_tools(["a"]).unwrap();
+        let action_set = ActionSet::from_harness_actions(["a"]).unwrap();
         assert_eq!(document(&script, &action_set).check(), Ok(()));
 
         let mut other_script = document(&script, &action_set);

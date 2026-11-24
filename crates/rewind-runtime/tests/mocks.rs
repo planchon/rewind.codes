@@ -76,7 +76,7 @@ fn call(action: &str, args: Value) -> Call {
         namespace: NamespaceName::new(NamespaceName::LOCAL).unwrap(),
         labels: Default::default(),
         seq: Seq(3),
-        action: Action::new(action, ActionRoute::Host { group: None }, json!({})),
+        action: Action::new(action, ActionRoute::Harness { group: None }, json!({})),
         server: None,
         api: None,
         args,
@@ -272,7 +272,8 @@ async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
     )
     .await;
     let action_set =
-        ActionSet::from_host_tools(["github.get_issue", "github.close_issue", "fails"]).unwrap();
+        ActionSet::from_harness_actions(["github.get_issue", "github.close_issue", "fails"])
+            .unwrap();
     let mut request = StartRun::new(
         Script::new(
             r#"

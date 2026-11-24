@@ -12,7 +12,7 @@
 //!
 //! The JSON Schema → TypeScript converter is ours: no maintained crate exists.
 //! When an action declares no `outputSchema`, its result type comes from the shapes observed in
-//! recorded results, when there are some, marked `@observed`: for a host tool, the result's
+//! recorded results, when there are some, marked `@observed`: for a harness action, the result's
 //! shape; for an MCP action, which returns its content, the shape of its `structuredContent`.
 //!
 //! `rewind-actions.d.ts` always declares the module `rewind:actions` (`declare module "rewind:actions" { … }`),
@@ -74,7 +74,7 @@ pub struct ActionDeclaration {
 /// recorded results of its actions, by action name (`ReadModel::observed_shapes`); they type the
 /// results of the actions that declare no output schema.
 ///
-/// A bare host tool whose name is not an identifier cannot be imported from `rewind:actions`: it is
+/// A bare harness action whose name is not an identifier cannot be imported from `rewind:actions`: it is
 /// left out, as the runtime leaves it out of the module.
 pub fn generate(action_set: &ActionSet, observed: &BTreeMap<String, Shape>) -> Declarations {
     let exports = model::exports(action_set, observed);

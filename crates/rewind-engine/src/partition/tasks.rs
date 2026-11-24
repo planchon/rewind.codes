@@ -5,7 +5,7 @@
 //! ```text
 //! ready ─ per-run limit ─┬─ MCP, API: a slot of the organization ─ SlotGranted ─► call executor
 //!                        ├─ built-ins, mock mode ───────────────────────────────► call executor
-//!                        └─ host tool: prepared, then offered to the organization ─► an SDK stream
+//!                        └─ harness action: prepared, then offered to the organization ─► an SDK stream
 //! outcome ─► done (a completion in the inbox), ready after a backoff (attempt + 1), deferred
 //!            with a deadline, parked; then the slot is freed
 //! ```
@@ -25,10 +25,10 @@ use crate::executors::derive;
 use crate::node::message::{Effect, Message, ReplyTo, Target};
 use crate::partition::commit::{After, Unit};
 use crate::partition::{Ask, Flight, Owner, OwnerMsg, tokens};
-use crate::plane::{HostTools, Plane};
+use crate::plane::{HarnessActions, Plane};
 use crate::ports::PartitionLog as _;
 use crate::ports::link::{
-    Decision, HostFailure, HostTaskOffer, NodeRequest, OrgRequest, PartitionReply, Refusal,
+    Decision, HarnessFailure, HarnessTaskOffer, NodeRequest, OrgRequest, PartitionReply, Refusal,
     SlotRequest, TaskAnswer,
 };
 use crate::ports::partition::{Change, home_partition};
@@ -88,8 +88,8 @@ impl<P: Plane> Owner<P> {
             self.flights.insert(task.clone(), Flight::Waiting);
             return;
         }
-        let host = matches!(record.task.route, ActionRoute::Host { .. })
-            && self.config.host_tools == HostTools::Streams;
+        let host = matches!(record.task.route, ActionRoute::Harness { .. })
+            && self.config.harness_actions == HarnessActions::Streams;
         let server = match &record.task.route {
             ActionRoute::Mcp { server } => Some(server.clone()),
             ActionRoute::Api { api } => Some(api.clone()),
@@ -280,7 +280,7 @@ impl<P: Plane> Owner<P> {
                     to: Target::Home(tenant.clone()),
                     request: NodeRequest::Organization {
                         tenant: tenant.clone(),
-                        request: Box::new(OrgRequest::HostTaskDone {
+                        request: Box::new(OrgRequest::HarnessTaskDone {
                             task: task.clone(),
                             gone,
                         }),
@@ -398,7 +398,7 @@ impl<P: Plane> Owner<P> {
                 }
                 (dispatched, _) => self.dispatched(&task, record, dispatched),
             },
-            CallOutcome::HostReady(host) => {
+            CallOutcome::HarnessReady(host) => {
                 if self.flights.get(&task) != Some(&Flight::Preparing) {
                     return;
                 }
@@ -411,7 +411,7 @@ impl<P: Plane> Owner<P> {
                     Target::Home(tenant.clone()),
                     NodeRequest::Organization {
                         tenant,
-                        request: Box::new(OrgRequest::HostTask(Box::new(HostTaskOffer {
+                        request: Box::new(OrgRequest::HarnessTask(Box::new(HarnessTaskOffer {
                             partition: self.partition,
                             epoch: self.epoch,
                             task: *host,
@@ -659,7 +659,7 @@ impl<P: Plane> Owner<P> {
                     to: Target::Home(tenant.clone()),
                     request: NodeRequest::Organization {
                         tenant,
-                        request: Box::new(OrgRequest::HostTaskDone {
+                        request: Box::new(OrgRequest::HarnessTaskDone {
                             task: task.clone(),
                             gone: matches!(flight, Flight::Handed { .. }),
                         }),
@@ -913,7 +913,7 @@ impl<P: Plane> Owner<P> {
                 unit.then(After::Reply(reply, PartitionReply::Answered(Ok(()))));
                 self.push(unit);
             }
-            TaskAnswer::Fail(HostFailure {
+            TaskAnswer::Fail(HarnessFailure {
                 message,
                 data,
                 retryable,
@@ -1007,7 +1007,7 @@ impl<P: Plane> Owner<P> {
         }
     }
 
-    /// A host task handed on a stream that closed and did not come back within its grace: sent
+    /// A harness task handed on a stream that closed and did not come back within its grace: sent
     /// again with attempt + 1 under `retry`, failed `outcome_unknown` under `at_most_once` or
     /// past the maximum of attempts.
     pub(crate) fn lost(&mut self, task: &TaskRef, token: &TaskToken) {

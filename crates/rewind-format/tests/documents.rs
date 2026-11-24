@@ -71,13 +71,13 @@ fn action_set() -> ActionSet {
     let read_file = Action::new("files.read", mcp("files"), json!({ "type": "object" }));
     let mut ask_user = Action::new(
         "harness.ask_user",
-        ActionRoute::Host {
+        ActionRoute::Harness {
             group: Some("harness".into()),
         },
         json!({ "type": "object", "properties": { "question": { "type": "string" } } }),
     );
     ask_user.policy.concurrency = 1;
-    let notify = Action::new("notify", ActionRoute::Host { group: None }, json!({}));
+    let notify = Action::new("notify", ActionRoute::Harness { group: None }, json!({}));
     let http = Action::new(
         "http",
         ActionRoute::Builtin(Builtin::Http {
@@ -151,7 +151,7 @@ fn an_action_set_document_hashes_to_the_action_set_digest() {
     assert_eq!(Digest::of(ACTION_SET.as_bytes()), action_set().digest());
     for action_set in [
         ActionSet::empty(),
-        ActionSet::from_host_tools(["a", "g.b"]).unwrap(),
+        ActionSet::from_harness_actions(["a", "g.b"]).unwrap(),
         action_set(),
     ] {
         assert_eq!(
@@ -168,12 +168,12 @@ fn an_action_set_document_hashes_to_the_action_set_digest() {
 #[test]
 fn an_action_set_document_may_list_actions_in_any_order() {
     let reordered = r#"{"v":1,"actions":[
-        {"name":"b","route":{"type":"host"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}},
-        {"name":"a","route":{"type":"host"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}
+        {"name":"b","route":{"type":"harness"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}},
+        {"name":"a","route":{"type":"harness"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}
     ],"servers":[]}"#;
     assert_eq!(
         decode_action_set(reordered).unwrap(),
-        ActionSet::from_host_tools(["a", "b"]).unwrap()
+        ActionSet::from_harness_actions(["a", "b"]).unwrap()
     );
 }
 
@@ -230,7 +230,7 @@ fn rejects_what_v1_does_not_define() {
         action(r#"{"type":"teleport"}"#, ""),
         action(r#"{"type":"builtin","builtin":"webhook","allowed_hosts":["a"]}"#, ""),
         action(r#"{"type":"builtin","builtin":"http"}"#, ""),
-        action(r#"{"type":"host","group":"g"}"#, ""),
+        action(r#"{"type":"harness","group":"g"}"#, ""),
         action(r#"{"type":"mcp","server":"github"}"#, ""),
         r#"{"v":1,"servers":[],"actions":[],"extra":[]}"#.to_owned(),
         r#"{"v":1,"servers":[]}"#.to_owned(),
@@ -334,7 +334,7 @@ fn action_set_with_workflows() -> ActionSet {
         },
     )
     .unwrap();
-    ActionSet::from_host_tools(["notify"])
+    ActionSet::from_harness_actions(["notify"])
         .unwrap()
         .with_workflows([workflow().pinned(), digest.pinned()])
         .unwrap()

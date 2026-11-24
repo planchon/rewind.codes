@@ -160,7 +160,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "The grace after a stream closes: how long a host task handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
+                "description": "The grace after a stream closes: how long a harness task handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
               },
               {
                 "type": "null"
@@ -1581,7 +1581,7 @@
       },
       "CreateActionSet": {
         "additionalProperties": false,
-        "description": "`POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` action, with a policy per\naction. Registering connects to the MCP servers and lists their actions, reads the APIs' OpenAPI\ndocuments, and pins their schemas. The action set is content-addressed: registering the same\naction set twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
+        "description": "`POST /v1/action-sets`: MCP servers, APIs, harness actions and the `http` action, with a policy per\naction. Registering connects to the MCP servers and lists their actions, reads the APIs' OpenAPI\ndocuments, and pins their schemas. The action set is content-addressed: registering the same\naction set twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
         "example": {
           "apis": [
             {
@@ -1592,7 +1592,7 @@
               "openapi": "https://api.example.com/openapi.json"
             }
           ],
-          "host": [
+          "harness": [
             {
               "description": "Ask the end user a question and return their answer.",
               "inputSchema": {
@@ -1633,16 +1633,16 @@
             "type": "array"
           },
           "base": {
-            "description": "Derives the action set from a registered one: its servers, actions and workflows are kept as\npinned, without listing the servers again; `workflows` adds workflows or pins them again.\n`mcp`, `host` and `http` must then be empty.",
+            "description": "Derives the action set from a registered one: its servers, actions and workflows are kept as\npinned, without listing the servers again; `workflows` adds workflows or pins them again.\n`mcp`, `harness` and `http` must then be empty.",
             "type": [
               "string",
               "null"
             ]
           },
-          "host": {
-            "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.action` puts the action in the `group` namespace of `rewind:actions`.",
+          "harness": {
+            "description": "Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.action` puts the action in the `group` namespace of `rewind:actions`.",
             "items": {
-              "$ref": "#/components/schemas/HostTool"
+              "$ref": "#/components/schemas/HarnessAction"
             },
             "type": "array"
           },
@@ -3193,7 +3193,7 @@
         "type": "object"
       },
       "HandedTask": {
-        "description": "A host-tool call handed to a worker on its task stream. The worker answers it by its token,\nwith `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it\nworks.",
+        "description": "A harness call handed to a worker on its task stream. The worker answers it by its token,\nwith `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it\nworks.",
         "properties": {
           "action": {
             "type": "string"
@@ -3232,7 +3232,7 @@
             "type": "integer"
           },
           "timeoutMs": {
-            "description": "The action's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the action has none, the default of host tools: the run's TTL bounds it.",
+            "description": "The action's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the action has none, the default of harness actions: the run's TTL bounds it.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -3272,7 +3272,7 @@
         ],
         "type": "object"
       },
-      "HostTool": {
+      "HarnessAction": {
         "additionalProperties": false,
         "description": "A function of the harness, called by scripts and executed by the harness's SDK worker.",
         "properties": {
@@ -5314,7 +5314,7 @@
         "enum": [
           "mcp",
           "api",
-          "host",
+          "harness",
           "builtin"
         ],
         "type": "string"
@@ -7825,7 +7825,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "host": {
+          "harness": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -7850,7 +7850,7 @@
           "signal",
           "timer",
           "call",
-          "host",
+          "harness",
           "approval",
           "parked",
           "deferred"
@@ -7863,7 +7863,7 @@
           "signal",
           "timer",
           "call",
-          "host",
+          "harness",
           "approval",
           "parked",
           "deferred"
@@ -8497,7 +8497,7 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: action sets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
+    "description": "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
@@ -18791,11 +18791,11 @@
     },
     "/v1/tasks/stream": {
       "get": {
-        "description": "The tasks of the host tools it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "description": "The tasks of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
         "operationId": "streamTasks",
         "parameters": [
           {
-            "description": "The action set whose host tools this worker executes: only the tasks of runs of this action set.\nWithout it, the tasks of the actions named in `actions`, whatever the action set of their run (an\naction set derived from another, as saving a workflow does, keeps its host tools' names).",
+            "description": "The action set whose harness actions this worker executes: only the tasks of runs of this action set.\nWithout it, the tasks of the actions named in `actions`, whatever the action set of their run (an\naction set derived from another, as saving a workflow does, keeps its harness actions' names).",
             "in": "query",
             "name": "actionSet",
             "required": false,
@@ -18813,7 +18813,7 @@
             }
           },
           {
-            "description": "Only these actions. Repeat for several. All the host tools of `actionSet` when absent, every\nhost tool without `actionSet` either.",
+            "description": "Only these actions. Repeat for several. All the harness actions of `actionSet` when absent, every\nharness action without `actionSet` either.",
             "in": "query",
             "name": "actions",
             "required": false,
@@ -18935,7 +18935,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Follow the host-tool tasks handed to this worker (server-sent events)",
+        "summary": "Follow the harness tasks handed to this worker (server-sent events)",
         "tags": [
           "tasks"
         ]
@@ -20443,7 +20443,7 @@
       "name": "runs"
     },
     {
-      "description": "Host-tool tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness.",
+      "description": "Harness tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness.",
       "name": "tasks"
     },
     {

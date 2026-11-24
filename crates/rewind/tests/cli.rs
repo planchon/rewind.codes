@@ -486,7 +486,7 @@ fn the_corpus_journals_replay_through_the_binary() {
 }
 
 /// The corpus cases run live on the embedded server, in virtual time, through `rewind run`, when
-/// their actions are host tools this test can answer as the harness's worker (values, echoed
+/// their actions are harness actions this test can answer as the harness's worker (values, echoed
 /// arguments, failures, sequences of them) and they take no steps: their status, output,
 /// error, abort or refused start are the corpus's.
 #[test]
@@ -558,7 +558,7 @@ fn the_corpus_runs_live_on_the_embedded_server() {
                 .collect();
             let file = project.write(
                 &format!("{}.action_set.json", name.replace('/', "_")),
-                &json!({ "host": host }).to_string(),
+                &json!({ "harness": host }).to_string(),
             );
             let (code, registered) = project.json(&["action-sets", "add", file.to_str().unwrap()]);
             assert_eq!(code, 0, "{name}: {registered}");
@@ -666,7 +666,7 @@ fn answerable(response: &Value) -> bool {
     }
 }
 
-/// The harness's worker: claims the host-tool tasks of `action_set` and answers them from the
+/// The harness's worker: claims the harness tasks of `action_set` and answers them from the
 /// case's responses, until the `rewind run` in `child` ends.
 fn work(
     project: &Project,
@@ -741,11 +741,11 @@ fn work(
 #[test]
 fn a_recorded_run_is_tested_and_its_failure_forked() {
     let project = Project::new();
-    // A host tool: the harness's worker answers it. This test is the worker.
+    // A harness action: the harness's worker answers it. This test is the worker.
     project.write(
         "action_set.json",
         &json!({
-            "host": [{
+            "harness": [{
                 "name": "github.list_issues",
                 "description": "List the issues of a repository.",
                 "inputSchema": { "type": "object" }
@@ -775,7 +775,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     assert_eq!(run["waitingFor"][0]["kind"], "call", "{run}");
 
     // The harness's worker answers through the API: claim the task and complete it.
-    complete_host_task(
+    complete_harness_task(
         &project,
         run["actionSet"].as_str().unwrap(),
         json!([{ "number": 4 }]),
@@ -886,9 +886,9 @@ impl Tasks {
     }
 }
 
-/// Takes the one host-tool task of the embedded server and completes it, as an SDK worker
+/// Takes the one harness task of the embedded server and completes it, as an SDK worker
 /// would, over the server's socket.
-fn complete_host_task(project: &Project, action_set: &str, result: Value) {
+fn complete_harness_task(project: &Project, action_set: &str, result: Value) {
     let socket = project.state().join("server.sock");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

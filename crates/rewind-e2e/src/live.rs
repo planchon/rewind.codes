@@ -3,7 +3,7 @@
 //!
 //! One node holds the one partition of the deployment, over the memory adapters, with the V8
 //! executor and the scenario's actions, in virtual time from [`T0`]. A harness's
-//! worker is an SDK stream at the node's edge: it is handed the host tasks and answers them
+//! worker is an SDK stream at the node's edge: it is handed the harness tasks and answers them
 //! through their token; a worker that crashes closes its stream, and another worker opens one.
 //! The entropy draws the scenario's ids and seeds in order, whatever the partition, so a case's
 //! run has the id its committed journal holds.
@@ -21,8 +21,8 @@ use rewind_engine::adapters::{
 };
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::Edge;
-use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
-use rewind_engine::ports::link::{HostFailure, StreamAttach, StreamEvent, StreamId};
+use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
+use rewind_engine::ports::link::{HarnessFailure, StreamAttach, StreamEvent, StreamId};
 use rewind_engine::ports::{
     ActionDeclarations, CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind,
     Predicate, RunOrder, RunQuery, RunRef, Scope, ScriptExecutor, Secret, SecretId, SecretStore,
@@ -108,10 +108,10 @@ fn node_config(case: &Case) -> Result<NodeConfig, String> {
     if case.scenario.auth.values().any(|auth| auth == "rewind") {
         config.public_url = Some("https://rewind.example.com".into());
     }
-    config.host_tools = if case.scenario.host_worker {
-        HostTools::Streams
+    config.harness_actions = if case.scenario.harness_worker {
+        HarnessActions::Streams
     } else {
-        HostTools::Dispatched
+        HarnessActions::Dispatched
     };
     config.reversed_calls = case.scenario.action_order == crate::scenario::ActionOrder::Reversed;
     Ok(config)
@@ -150,7 +150,7 @@ impl World {
             at,
             worker: None,
         };
-        if case.scenario.host_worker {
+        if case.scenario.harness_worker {
             world.open_stream();
         }
         Ok(world)
@@ -226,7 +226,7 @@ impl World {
         let tenant = TenantId::local();
         let mut crashed = false;
         for task in &tasks {
-            let failed = |failure: rewind_core::ActionFailure, retryable| HostFailure {
+            let failed = |failure: rewind_core::ActionFailure, retryable| HarnessFailure {
                 message: failure.message,
                 data: failure.data,
                 retryable,
@@ -254,7 +254,7 @@ impl World {
                 }
                 Answer::Unauthorized(_) => {
                     return Err(format!(
-                        "{}: a host tool's worker cannot answer $unauthorized; only a dispatched \
+                        "{}: a harness action's worker cannot answer $unauthorized; only a dispatched \
                          call is parked",
                         task.action
                     ));

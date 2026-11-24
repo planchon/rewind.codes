@@ -352,7 +352,7 @@ async fn end<L: PartitionLog>(log: &L, run: &RunRef) {
 }
 
 fn task(run: &RunRef, seq: u32, state: TaskState) -> TaskRecord {
-    let route = ActionRoute::Host { group: None };
+    let route = ActionRoute::Harness { group: None };
     TaskRecord {
         task: CallTask {
             task: TaskRef {

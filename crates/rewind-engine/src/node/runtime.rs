@@ -127,7 +127,7 @@ impl<P: Plane> NodeHandle<P> {
         Ok(Changes(changes))
     }
 
-    /// An SDK stream opened at this edge: the host tasks it is handed, and those that no longer
+    /// An SDK stream opened at this edge: the harness tasks it is handed, and those that no longer
     /// wait for an answer, arrive on the receiver.
     /// Dropping the receiver does not close the stream: [`detach_stream`](Self::detach_stream)
     /// does, once the response it feeds ends.

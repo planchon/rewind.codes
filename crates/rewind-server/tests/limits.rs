@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use rewind_api::Client;
 use rewind_api::access::BuiltInRole;
-use rewind_api::action_sets::{CreateActionSet, HostTool};
+use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::common::{AbortKind, RunStatus};
 use rewind_api::runs::{JournalExport, Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
@@ -223,7 +223,7 @@ async fn payloads_are_bounded_to_8_mib() {
     let worker = server.key(BuiltInRole::Worker, &[]).await;
     let too_large = Value::String("x".repeat(MAX_PAYLOAD));
 
-    // The API refuses a payload it is given: input, signal, a host tool's result.
+    // The API refuses a payload it is given: input, signal, a harness action's result.
     let mut refused = start("export default async function main() {}");
     refused.input = json!({ "blob": too_large });
     let problem_of = problem(harness.start_run(&refused, None).await.unwrap_err());
@@ -232,7 +232,7 @@ async fn payloads_are_bounded_to_8_mib() {
 
     let action_set = harness
         .create_action_set(&CreateActionSet {
-            host: vec![HostTool {
+            harness: vec![HarnessAction {
                 name: "store.put".into(),
                 description: "Stores a value.".into(),
                 input_schema: json!({ "type": "object" }),

@@ -197,7 +197,7 @@
     },
     {
       "name": "ask_user",
-      "route": "host",
+      "route": "harness",
       "description": "Ask the end user a question and return their answer.",
       "input": {
         "type": "object",
@@ -219,7 +219,7 @@
     },
     {
       "name": "harness.notify",
-      "route": "host",
+      "route": "harness",
       "description": "Send a notification to the team.",
       "input": {
         "type": "object",
@@ -249,12 +249,12 @@
     },
     {
       "name": "harness.log",
-      "route": "host",
+      "route": "harness",
       "input": {}
     },
     {
       "name": "not-importable",
-      "route": "host",
+      "route": "harness",
       "input": {}
     },
     {

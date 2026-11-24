@@ -16,9 +16,10 @@ use rewind_core::{
 use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
     ActivationRequest, ActivationResult, Admit, Changed, Committed, CountsReport, Decision,
-    EdgeNotice, HostFailure, HostTask, HostTaskOffer, NodeReply, NodeRequest, OrgReply, OrgRequest,
-    OwnerNotice, ParentHistory, PartitionReply, PartitionRequest, Purpose, Refusal, RunView,
-    SignalAtOwner, SlotRequest, StartAtOwner, StreamAttach, StreamId, SubscriptionKey, TaskAnswer,
+    EdgeNotice, HarnessFailure, HarnessTask, HarnessTaskOffer, NodeReply, NodeRequest, OrgReply,
+    OrgRequest, OwnerNotice, ParentHistory, PartitionReply, PartitionRequest, Purpose, Refusal,
+    RunView, SignalAtOwner, SlotRequest, StartAtOwner, StreamAttach, StreamId, SubscriptionKey,
+    TaskAnswer,
 };
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
@@ -167,7 +168,7 @@ fn waits() -> Vec<Wait> {
             task: Some(TaskPhase::Approval),
         },
         Wait {
-            kind: WaitKind::Host,
+            kind: WaitKind::Harness,
             seq: Some(Seq(7)),
             name: Some("ask".into()),
             since: at(4),
@@ -376,7 +377,7 @@ fn tasks() -> Vec<TaskRecord> {
                     server: "srv".into(),
                 }
             } else {
-                ActionRoute::Host {
+                ActionRoute::Harness {
                     group: Some("crm".into()),
                 }
             };
@@ -612,11 +613,11 @@ fn activation() -> Activation {
 }
 
 fn action_set() -> ActionSet {
-    ActionSet::from_host_tools(["ask", "crm.find"]).unwrap()
+    ActionSet::from_harness_actions(["ask", "crm.find"]).unwrap()
 }
 
-fn host_task() -> HostTask {
-    HostTask {
+fn harness_task() -> HarnessTask {
+    HarnessTask {
         token: TaskToken(format!("rewind_tk_{}_00ff", run_id(1))),
         task: task_ref(1, 2),
         namespace: user(),
@@ -751,13 +752,13 @@ fn every_partition_request() -> Vec<PartitionRequest> {
         PartitionRequest::Erase { run: run(1) },
         PartitionRequest::Answer {
             tenant: acme(),
-            token: host_task().token,
+            token: harness_task().token,
             answer: TaskAnswer::Complete(json!({ "answer": 42 })),
         },
         PartitionRequest::Answer {
             tenant: acme(),
-            token: host_task().token,
-            answer: TaskAnswer::Fail(HostFailure {
+            token: harness_task().token,
+            answer: TaskAnswer::Fail(HarnessFailure {
                 message: "no".into(),
                 data: Some(json!(null)),
                 retryable: true,
@@ -765,7 +766,7 @@ fn every_partition_request() -> Vec<PartitionRequest> {
         },
         PartitionRequest::Answer {
             tenant: acme(),
-            token: host_task().token,
+            token: harness_task().token,
             answer: TaskAnswer::Defer {
                 timeout: Some(Duration::from_secs(3_600)),
             },
@@ -1010,18 +1011,18 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             task: task_ref(1, 2),
             server: "srv".into(),
         },
-        OrgRequest::HostTask(Box::new(HostTaskOffer {
+        OrgRequest::HarnessTask(Box::new(HarnessTaskOffer {
             partition: PartitionId::new(3),
             epoch: PartitionEpoch(7),
-            task: host_task(),
+            task: harness_task(),
             action_set: digest("action_set"),
             grace: Duration::from_secs(60),
         })),
-        OrgRequest::HostTaskDone {
+        OrgRequest::HarnessTaskDone {
             task: task_ref(1, 2),
             gone: false,
         },
-        OrgRequest::HostTaskDone {
+        OrgRequest::HarnessTaskDone {
             task: task_ref(1, 3),
             gone: true,
         },
@@ -1050,7 +1051,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             task: task_ref(1, 2),
         },
         OwnerNotice::StreamLost {
-            tasks: vec![(task_ref(1, 2), host_task().token)],
+            tasks: vec![(task_ref(1, 2), harness_task().token)],
         },
         OwnerNotice::CountsWanted { tenant: acme() },
     ];
@@ -1062,11 +1063,11 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
     }
     round_trip::<_, super::NodeRequest>(&NodeRequest::Edge(Box::new(EdgeNotice::HandOut {
         stream: StreamId("stream-1".into()),
-        task: host_task(),
+        task: harness_task(),
     })));
     round_trip::<_, super::NodeRequest>(&NodeRequest::Edge(Box::new(EdgeNotice::Gone {
         stream: StreamId("stream-1".into()),
-        token: host_task().token,
+        token: harness_task().token,
     })));
     round_trip::<_, super::NodeRequest>(&NodeRequest::Edge(Box::new(EdgeNotice::Reopened {
         partition: PartitionId::new(7),

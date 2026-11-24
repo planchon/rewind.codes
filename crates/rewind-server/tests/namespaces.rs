@@ -18,7 +18,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rewind_api::access::{BuiltInRole, Permission, PutRole};
-use rewind_api::action_sets::{CreateActionSet, HostTool};
+use rewind_api::action_sets::{CreateActionSet, HarnessAction};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::EventsQuery;
 use rewind_api::namespaces::{
@@ -44,7 +44,7 @@ export default async function main() {
 }
 "#;
 
-/// A run that asks the harness's host tool.
+/// A run that asks the harness's harness action.
 const ASK: &str = r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   return { answer: await ask_user({ question: "ready?" }) };
@@ -388,7 +388,7 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
     let customer = server.tenant_key("acme", "harness").await;
     let action_set = customer
         .create_action_set(&CreateActionSet {
-            host: vec![HostTool {
+            harness: vec![HarnessAction {
                 name: "ask_user".into(),
                 description: "Asks the user.".into(),
                 input_schema: json!({

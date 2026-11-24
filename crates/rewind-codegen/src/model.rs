@@ -1,5 +1,5 @@
 //! The action set as `rewind:actions` exports it: one namespace per group (an MCP server, an API or a
-//! host-tool group), one function per bare host tool, and the type of each action's args and
+//! group of harness actions), one function per bare harness action, and the type of each action's args and
 //! result.
 
 use std::collections::BTreeMap;
@@ -44,7 +44,7 @@ pub(crate) struct Signature<'a> {
 }
 
 /// The exports of an action set, sorted by name, built-ins left out: scripts reach them through
-/// `fetch` and `webhook` from `rewind`. A bare host tool whose name is not an identifier cannot be
+/// `fetch` and `webhook` from `rewind`. A bare harness action whose name is not an identifier cannot be
 /// imported, and is left out too.
 pub(crate) fn exports<'a>(
     action_set: &'a ActionSet,
@@ -161,7 +161,7 @@ impl Export<'_> {
         let host = self
             .actions
             .iter()
-            .all(|signature| matches!(signature.action.route, ActionRoute::Host { .. }));
+            .all(|signature| matches!(signature.action.route, ActionRoute::Harness { .. }));
         if mcp {
             format!("Actions of the MCP server `{}`.", self.name)
         } else if host {

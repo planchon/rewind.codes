@@ -167,7 +167,7 @@ pub enum WaitKind {
     Signal,
     Timer,
     Call,
-    Host,
+    Harness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -609,7 +609,7 @@ pub enum WaitingFor {
     Signal,
     Timer,
     Call,
-    Host,
+    Harness,
     Approval,
     Parked,
     Deferred,
@@ -1155,7 +1155,7 @@ mod with {
         Api {
             api: String,
         },
-        Host {
+        Harness {
             #[serde(default, skip_serializing_if = "Option::is_none")]
             group: Option<String>,
         },
@@ -1204,7 +1204,7 @@ mod with {
                     server: server.clone(),
                 },
                 ActionRoute::Api { api } => RouteV1::Api { api: api.clone() },
-                ActionRoute::Host { group } => RouteV1::Host {
+                ActionRoute::Harness { group } => RouteV1::Harness {
                     group: group.clone(),
                 },
                 ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => {
@@ -1232,7 +1232,7 @@ mod with {
             Ok(match RouteV1::deserialize(d)? {
                 RouteV1::Mcp { server } => ActionRoute::Mcp { server },
                 RouteV1::Api { api } => ActionRoute::Api { api },
-                RouteV1::Host { group } => ActionRoute::Host { group },
+                RouteV1::Harness { group } => ActionRoute::Harness { group },
                 RouteV1::Builtin {
                     builtin: BuiltinV1::Http,
                     allowed_hosts: Some(allowed_hosts),

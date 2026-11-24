@@ -172,7 +172,7 @@ fn awaited(name: &str, timeout: Option<u32>, callsite: Option<Callsite>) -> Even
     })
 }
 
-/// `github.get_issue`, an MCP action (behind an approval or not), and `ask_user`, a host tool.
+/// `github.get_issue`, an MCP action (behind an approval or not), and `ask_user`, a harness action.
 fn gated_action_set(approval: bool) -> ActionSet {
     let server = McpServer::new(
         "github",
@@ -188,7 +188,7 @@ fn gated_action_set(approval: bool) -> ActionSet {
         json!({}),
     );
     issue.policy.approval = approval;
-    let ask = Action::new("ask_user", ActionRoute::Host { group: None }, json!({}));
+    let ask = Action::new("ask_user", ActionRoute::Harness { group: None }, json!({}));
     ActionSet::new([server], [issue, ask]).unwrap()
 }
 
@@ -248,7 +248,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
             at_line(3, 1),
         ),
         wait(
-            WaitKind::Host,
+            WaitKind::Harness,
             Some(1),
             Some("ask_user"),
             0,
@@ -290,7 +290,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
         },
         "by since, then kind: the signal's timeout is its wait's end, not a timer of its own"
     );
-    // Without the action set, a host tool's call is a call.
+    // Without the action set, a harness action's call is a call.
     let kinds: Vec<(WaitKind, Option<Seq>)> = run_snapshot(&entries[..9], None)
         .waits
         .iter()

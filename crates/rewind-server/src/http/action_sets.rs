@@ -3,7 +3,7 @@
 //!
 //! Registering connects to the MCP servers and lists their actions, and reads the APIs' OpenAPI
 //! documents; each server's and API's `auth` is pinned with it; the harness's policies, its
-//! host tools and the `http` built-in (with its allow-list) are added, and so is the `webhook`
+//! harness actions and the `http` built-in (with its allow-list) are added, and so is the `webhook`
 //! built-in, always: every script may call `webhook()`. The pinned action set is content-addressed,
 //! so registering the same action set again gives the same id. It holds no secret.
 
@@ -56,7 +56,7 @@ pub(super) async fn create(
         Some(base) => {
             if !request.mcp.is_empty()
                 || !request.apis.is_empty()
-                || !request.host.is_empty()
+                || !request.harness.is_empty()
                 || request.http.is_some()
             {
                 return Err(invalid_action_set(
@@ -303,7 +303,7 @@ fn invalid_action_set(detail: impl Into<String>) -> ApiError {
 }
 
 /// Pins an action set: discovery of its MCP servers, its APIs' operations, the harness's policies,
-/// host tools and built-ins. The operations of its APIs left out are answered beside it.
+/// harness actions and built-ins. The operations of its APIs left out are answered beside it.
 async fn pin(
     app: &App,
     caller: &Caller,
@@ -393,37 +393,41 @@ async fn pin(
         }
         servers.push(pinned);
     }
-    for host in request.host {
-        if !host.input_schema.is_object() {
+    for harness in request.harness {
+        if !harness.input_schema.is_object() {
             return Err(invalid_action_set(format!(
-                "host tool {}: inputSchema must be a JSON Schema object",
-                host.name
+                "harness action {}: inputSchema must be a JSON Schema object",
+                harness.name
             )));
         }
         // The harness writes these schemas: one that cannot be compiled is refused here, rather
         // than refusing every call of the action later (an MCP server's own schemas are taken as
         // listed, `archi/08-decisions.md`).
         let schemas = [
-            Some(("inputSchema", &host.input_schema)),
-            host.output_schema
+            Some(("inputSchema", &harness.input_schema)),
+            harness
+                .output_schema
                 .as_ref()
                 .map(|schema| ("outputSchema", schema)),
         ];
         for (field, schema) in schemas.into_iter().flatten() {
             if let Some(error) = rewind_engine::schema::Validator::compile(schema).unusable() {
                 return Err(invalid_action_set(format!(
-                    "host tool {}: {field} is not a usable JSON Schema: {error}",
-                    host.name
+                    "harness action {}: {field} is not a usable JSON Schema: {error}",
+                    harness.name
                 )));
             }
         }
-        let group = host.name.split_once('.').map(|(group, _)| group.to_owned());
-        let route = ActionRoute::Host { group };
-        let mut action = Action::new(host.name.clone(), route.clone(), host.input_schema);
-        action.description = Some(host.description);
-        action.output_schema = host.output_schema;
-        if let Some(policy) = host.policy {
-            action.policy = policy_of(&route, policy, &host.name)?;
+        let group = harness
+            .name
+            .split_once('.')
+            .map(|(group, _)| group.to_owned());
+        let route = ActionRoute::Harness { group };
+        let mut action = Action::new(harness.name.clone(), route.clone(), harness.input_schema);
+        action.description = Some(harness.description);
+        action.output_schema = harness.output_schema;
+        if let Some(policy) = harness.policy {
+            action.policy = policy_of(&route, policy, &harness.name)?;
         }
         actions.push(action);
     }
@@ -782,7 +786,7 @@ pub(crate) fn view(stored: &StoredActionSet) -> ApiActionSet {
                 route: match action.route {
                     ActionRoute::Mcp { .. } => Route::Mcp,
                     ActionRoute::Api { .. } => Route::Api,
-                    ActionRoute::Host { .. } => Route::Host,
+                    ActionRoute::Harness { .. } => Route::Harness,
                     ActionRoute::Builtin(_) => Route::Builtin,
                 },
                 server: match &action.route {

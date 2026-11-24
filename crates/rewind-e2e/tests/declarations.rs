@@ -25,7 +25,7 @@ static EXECUTOR: LazyLock<V8Executor> = LazyLock::new(|| {
 });
 
 /// An action set with an MCP server (actions with and without an output schema, with and without
-/// required arguments), a host tool, and the built-ins as they are pinned.
+/// required arguments), a harness action, and the built-ins as they are pinned.
 fn action_set(http_action: bool) -> ActionSet {
     let server = McpServer::new(
         "crm",
@@ -61,7 +61,7 @@ fn action_set(http_action: bool) -> ActionSet {
     }));
     let ask_user = Action::new(
         "ask_user",
-        ActionRoute::Host { group: None },
+        ActionRoute::Harness { group: None },
         json!({
             "type": "object",
             "properties": { "question": { "type": "string" } },
@@ -288,7 +288,7 @@ async fn the_golden_declarations_of_codegen_check() {
     );
 }
 
-/// An action set in which `name` is a server, a host-tool group or a host tool without a group,
+/// An action set in which `name` is a server, a group of harness actions or a harness action without a group,
 /// each action taking `{ q: string }` and returning `{ id: string }`; and a script that calls it.
 fn named(name: &str) -> Vec<(ActionSet, String)> {
     let input = json!({
@@ -322,7 +322,7 @@ fn named(name: &str) -> Vec<(ActionSet, String)> {
     let mcp = ActionRoute::Mcp {
         server: name.to_owned(),
     };
-    let group = ActionRoute::Host {
+    let group = ActionRoute::Harness {
         group: Some(name.to_owned()),
     };
     vec![
@@ -337,7 +337,10 @@ fn named(name: &str) -> Vec<(ActionSet, String)> {
         (
             ActionSet::new(
                 [],
-                [action(name.to_owned(), ActionRoute::Host { group: None })],
+                [action(
+                    name.to_owned(),
+                    ActionRoute::Harness { group: None },
+                )],
             )
             .unwrap(),
             call(name, "actions"),

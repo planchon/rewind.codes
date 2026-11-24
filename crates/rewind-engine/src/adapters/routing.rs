@@ -10,7 +10,7 @@ use crate::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 /// | MCP actions | `mcp`: `rewind-mcp`, or mocks |
 /// | API actions | `api`: `rewind-openapi`'s `ApiDispatcher`, or mocks |
 /// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpAction`, or mocks |
-/// | Host tools | `host`: mocks, in mock mode only. Outside it, host tools are handed to the SDK workers' streams and never dispatched |
+/// | Harness actions | `harness`: mocks, in mock mode only. Outside it, harness actions are handed to the SDK workers' streams and never dispatched |
 ///
 /// [`Unrouted`] stands for a route without a dispatcher. A call's [`CallAuth`] goes only to the
 /// dispatcher of its route.
@@ -19,16 +19,16 @@ pub struct RoutingDispatcher<M, A, B, H> {
     pub mcp: M,
     pub api: A,
     pub builtins: B,
-    pub host: H,
+    pub harness: H,
 }
 
 impl<M, A, B, H> RoutingDispatcher<M, A, B, H> {
-    pub fn new(mcp: M, api: A, builtins: B, host: H) -> Self {
+    pub fn new(mcp: M, api: A, builtins: B, harness: H) -> Self {
         Self {
             mcp,
             api,
             builtins,
-            host,
+            harness,
         }
     }
 }
@@ -45,7 +45,7 @@ where
             ActionRoute::Mcp { .. } => self.mcp.dispatch(call, auth).await,
             ActionRoute::Api { .. } => self.api.dispatch(call, auth).await,
             ActionRoute::Builtin(_) => self.builtins.dispatch(call, auth).await,
-            ActionRoute::Host { .. } => self.host.dispatch(call, auth).await,
+            ActionRoute::Harness { .. } => self.harness.dispatch(call, auth).await,
         }
     }
 }
@@ -61,7 +61,7 @@ impl ActionDispatcher for Unrouted {
             ActionRoute::Mcp { .. } => "MCP actions",
             ActionRoute::Api { .. } => "API actions",
             ActionRoute::Builtin(_) => "built-in actions",
-            ActionRoute::Host { .. } => "host tools",
+            ActionRoute::Harness { .. } => "harness actions",
         };
         Dispatched::Failed(ActionFailure {
             kind: ActionFailureKind::Unavailable,
@@ -136,7 +136,7 @@ mod tests {
                 ..Named::default()
             },
             Named {
-                name: "host",
+                name: "harness",
                 ..Named::default()
             },
         );
@@ -168,7 +168,10 @@ mod tests {
                 ),
                 "builtins",
             ),
-            (call(ActionRoute::Host { group: None }, "ask_user"), "host"),
+            (
+                call(ActionRoute::Harness { group: None }, "ask_user"),
+                "harness",
+            ),
         ];
         for (call, expected) in answered {
             let auth = if expected == "mcp" {
@@ -193,7 +196,7 @@ mod tests {
         let router = RoutingDispatcher::new(Unrouted, Unrouted, Unrouted, Unrouted);
         let Dispatched::Failed(failure) = router
             .dispatch(
-                call(ActionRoute::Host { group: None }, "ask_user"),
+                call(ActionRoute::Harness { group: None }, "ask_user"),
                 CallAuth::None,
             )
             .await
@@ -203,7 +206,7 @@ mod tests {
         assert_eq!(failure.kind, ActionFailureKind::Unavailable);
         assert_eq!(
             failure.message,
-            "ask_user cannot be called: this server dispatches no host tools"
+            "ask_user cannot be called: this server dispatches no harness actions"
         );
     }
 }

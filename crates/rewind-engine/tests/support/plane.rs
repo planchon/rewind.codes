@@ -14,8 +14,8 @@ use rewind_engine::adapters::{
 };
 use rewind_engine::driver::{Driver, PlaneClock};
 use rewind_engine::edge::{Edge, EdgeError};
-use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
-use rewind_engine::ports::link::{HostFailure, HostTask, RunView, StreamEvent};
+use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
+use rewind_engine::ports::link::{HarnessFailure, HarnessTask, RunView, StreamEvent};
 use rewind_engine::ports::{
     CallTask, Clock, Created, Enqueued, NodeId, PartitionStore, RunRef, TaskRef, TaskToken,
     TenantId,
@@ -56,7 +56,7 @@ pub type Stream = tokio::sync::mpsc::UnboundedReceiver<StreamEvent>;
 
 /// What a stream received since it was last read: the tasks handed, and the tokens of those
 /// gone.
-pub fn received(stream: &mut Stream) -> (Vec<HostTask>, Vec<TaskToken>) {
+pub fn received(stream: &mut Stream) -> (Vec<HarnessTask>, Vec<TaskToken>) {
     let mut tasks = Vec::new();
     let mut gone = Vec::new();
     for event in TestDriver::<MemoryPartitions>::drain(stream) {
@@ -69,7 +69,7 @@ pub fn received(stream: &mut Stream) -> (Vec<HostTask>, Vec<TaskToken>) {
 }
 
 /// The tasks a stream was handed since it was last read; none of its tasks is gone.
-pub fn handed(stream: &mut Stream) -> Vec<HostTask> {
+pub fn handed(stream: &mut Stream) -> Vec<HarnessTask> {
     let (tasks, gone) = received(stream);
     assert!(gone.is_empty(), "no task is gone: {gone:?}");
     tasks
@@ -79,11 +79,11 @@ pub fn node(id: &str) -> NodeId {
     NodeId::new(id).unwrap()
 }
 
-/// The configuration of a node of the tests: host tools dispatched as in mock mode, a horizon
+/// The configuration of a node of the tests: harness actions dispatched as in mock mode, a horizon
 /// past every timer.
 pub fn config(id: &str, partitions: u16) -> NodeConfig {
     let mut config = NodeConfig::new(node(id), NonZeroU16::new(partitions).unwrap());
-    config.host_tools = HostTools::Dispatched;
+    config.harness_actions = HarnessActions::Dispatched;
     config.horizon = Duration::from_secs(100 * 365 * 86_400);
     config
 }
@@ -284,7 +284,11 @@ impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
             .await
     }
 
-    pub async fn fail(&mut self, token: &TaskToken, failure: HostFailure) -> Result<(), EdgeError> {
+    pub async fn fail(
+        &mut self,
+        token: &TaskToken,
+        failure: HarnessFailure,
+    ) -> Result<(), EdgeError> {
         let mut gateway = self.driver.gateway(&self.at);
         self.edge
             .fail_task(&mut gateway, &TenantId::local(), token, failure)

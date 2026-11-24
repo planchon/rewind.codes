@@ -11,8 +11,8 @@
 //! ```
 //!
 //! The document is written in its canonical form (RFC 8785, on one line), so its bytes hash to
-//! the action set's digest. Routes are `{"type":"mcp","server":…}`, `{"type":"host"}` (with a
-//! `group` for a grouped host tool), `{"type":"builtin","builtin":"http","allowed_hosts":[…]}`
+//! the action set's digest. Routes are `{"type":"mcp","server":…}`, `{"type":"harness"}` (with a
+//! `group` for a grouped harness action), `{"type":"builtin","builtin":"http","allowed_hosts":[…]}`
 //! and `{"type":"builtin","builtin":"webhook"}`; transports `{"type":"http","url":…}` and
 //! `{"type":"stdio","command":…,"args":[…],"env":{…}}`. Optional fields are omitted when
 //! absent: `description`, `schemas.output`, `policy.execution_timeout_ms`, `route.group`.
@@ -250,7 +250,7 @@ enum RouteV1 {
     Api {
         api: String,
     },
-    Host {
+    Harness {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<String>,
     },
@@ -659,7 +659,7 @@ fn action_dto(action: &Action) -> ActionV1 {
             server: server.clone(),
         },
         ActionRoute::Api { api } => RouteV1::Api { api: api.clone() },
-        ActionRoute::Host { group } => RouteV1::Host {
+        ActionRoute::Harness { group } => RouteV1::Harness {
             group: group.clone(),
         },
         ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => RouteV1::Builtin {
@@ -721,7 +721,7 @@ fn action_from_dto(dto: ActionV1) -> Result<Action, String> {
     let route = match dto.route {
         RouteV1::Mcp { server } => ActionRoute::Mcp { server },
         RouteV1::Api { api } => ActionRoute::Api { api },
-        RouteV1::Host { group } => ActionRoute::Host { group },
+        RouteV1::Harness { group } => ActionRoute::Harness { group },
         RouteV1::Builtin {
             builtin: BuiltinV1::Http,
             allowed_hosts: Some(allowed_hosts),

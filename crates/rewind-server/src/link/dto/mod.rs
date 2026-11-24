@@ -45,10 +45,10 @@ pub use activations::{
     ParentHistory, Purpose, SealedAttempt, StoredActionSet, StoredScript, TimerChange,
 };
 pub use requests::{
-    Admit, Changed, Counted, CountsReport, Created, Decision, EdgeNotice, Enqueued, HostFailure,
-    HostTask, HostTaskOffer, LostTask, NodeReply, NodeRequest, OrgReply, OrgRequest, OwnerNotice,
-    PartitionReply, PartitionRequest, Refusal, SignalAtOwner, SlotRequest, StartAtOwner,
-    StreamAttach, Subscribe, SubscriptionKey, TaskAnswer,
+    Admit, Changed, Counted, CountsReport, Created, Decision, EdgeNotice, Enqueued, HarnessFailure,
+    HarnessTask, HarnessTaskOffer, LostTask, NodeReply, NodeRequest, OrgReply, OrgRequest,
+    OwnerNotice, PartitionReply, PartitionRequest, Refusal, SignalAtOwner, SlotRequest,
+    StartAtOwner, StreamAttach, Subscribe, SubscriptionKey, TaskAnswer,
 };
 pub use values::{
     Bound, Counters, DayUsage, Found, Month, Page, Predicate, QuotaExceeded, QuotaKind, QuotaScope,

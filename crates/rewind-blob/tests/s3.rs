@@ -122,14 +122,14 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
         run: run.clone(),
         attempt: Attempt::FIRST,
         script: Script::new("export default () => 1"),
-        action_set: ActionSet::from_host_tools(["a"]).expect("action set"),
+        action_set: ActionSet::from_harness_actions(["a"]).expect("action set"),
         entries: vec![rewind_core::HistoryEntry {
             index: 0,
             recorded_at: rewind_core::Timestamp(1),
             event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(
                 rewind_core::RunStarted {
                     script: Script::new("export default () => 1").digest(),
-                    action_set: ActionSet::from_host_tools(["a"])
+                    action_set: ActionSet::from_harness_actions(["a"])
                         .expect("action set")
                         .digest(),
                     input: json!({}).into(),

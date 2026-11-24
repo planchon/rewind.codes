@@ -1,6 +1,6 @@
 {
   "description": "The harness's worker dies while it builds a report: under the retry policy the call is handed out again, with the same idempotency key, and the script only sees its answer.",
-  "host_worker": true,
+  "harness_worker": true,
   "actions": {
     "reports.build": { "$sequence": [{ "$crash": true }, { "pages": 12 }] }
   },

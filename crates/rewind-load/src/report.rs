@@ -53,7 +53,7 @@ pub(crate) struct Report {
     pub(crate) elapsed_s: f64,
     /// Runs that ended, per second of `elapsed_s`.
     pub(crate) runs_per_s: f64,
-    /// Calls that reached the fake MCP server or the host-tool worker, per second.
+    /// Calls that reached the fake MCP server or the harness's worker, per second.
     pub(crate) calls_per_s: f64,
     /// Runs by final status (`completed`, `failed`…, or `unfinished`).
     pub(crate) statuses: BTreeMap<String, usize>,
@@ -74,7 +74,7 @@ pub(crate) struct Latencies {
     /// From the start's answer to the run's first call at the MCP server: the first
     /// activation.
     pub(crate) first_call: Percentiles,
-    /// From a host tool's result being accepted to the run's next call at the MCP server:
+    /// From a harness action's result being accepted to the run's next call at the MCP server:
     /// one activation and the dispatch of its call.
     pub(crate) activation: Percentiles,
     /// From the start's request to the run's end as observed through the API.

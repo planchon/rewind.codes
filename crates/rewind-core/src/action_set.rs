@@ -14,7 +14,7 @@
 //! ├── apis:      Api { name, base_url, auth, concurrency }
 //! ├── actions:     Action { name, route, operation?, description?, input_schema, output_schema?,
 //! │                     policy }
-//! │                     route  = mcp(server) | api(api) | host(group?)
+//! │                     route  = mcp(server) | api(api) | harness(group?)
 //! │                              | builtin(http(allowed_hosts) | webhook)
 //! │                     operation (API actions only) = { method, path, parameters, body,
 //! │                                                    idempotency_key }
@@ -28,7 +28,7 @@
 //!
 //! An action is named as its server defines it, behind its group: `github.list_issues` for the
 //! action `list_issues` of the MCP server `github`, `dax.createMeasure` for the operation
-//! `createMeasure` of the API `dax`, `harness.ask_user` or `ask_user` for a host tool, `http` and
+//! `createMeasure` of the API `dax`, `harness.ask_user` or `ask_user` for a harness action, `http` and
 //! `webhook` for the built-ins. The group is what `rewind:actions` exports. The group `workflows`
 //! is reserved for the workflows' built-ins; `rewind:workflows` exports one name per pinned
 //! workflow.
@@ -285,12 +285,12 @@ impl Action {
     }
 
     /// The group `rewind:actions` exports the action under, its name's prefix: its MCP server, its
-    /// API or its host-tool group. `None` for a bare host tool and for the built-ins.
+    /// API or its group of harness actions. `None` for a bare harness action and for the built-ins.
     pub fn group(&self) -> Option<&str> {
         match &self.route {
             ActionRoute::Mcp { server } => Some(server),
             ActionRoute::Api { api } => Some(api),
-            ActionRoute::Host { group } => group.as_deref(),
+            ActionRoute::Harness { group } => group.as_deref(),
             ActionRoute::Builtin(_) => None,
         }
     }
@@ -316,15 +316,15 @@ pub enum ActionRoute {
     /// A built-in, called by the dispatcher of Rewind.
     Builtin(Builtin),
     /// A function of the harness, executed by its SDK worker, which claims the task through
-    /// `GET /v1/tasks`. A grouped host tool is named `{group}.{action}`.
-    Host { group: Option<String> },
+    /// `GET /v1/tasks`. A grouped harness action is named `{group}.{action}`.
+    Harness { group: Option<String> },
 }
 
 impl ActionRoute {
-    /// Whether Rewind calls the action itself: MCP actions, API actions and built-ins. Host tools are
+    /// Whether Rewind calls the action itself: MCP actions, API actions and built-ins. Harness actions are
     /// claimed by the harness's worker instead.
     pub fn is_dispatched(&self) -> bool {
-        !matches!(self, ActionRoute::Host { .. })
+        !matches!(self, ActionRoute::Harness { .. })
     }
 
     /// The MCP server or the API the action belongs to, whose `auth` its calls carry.
@@ -332,7 +332,7 @@ impl ActionRoute {
         match self {
             ActionRoute::Mcp { server } => Some(server),
             ActionRoute::Api { api } => Some(api),
-            ActionRoute::Builtin(_) | ActionRoute::Host { .. } => None,
+            ActionRoute::Builtin(_) | ActionRoute::Harness { .. } => None,
         }
     }
 }
@@ -411,13 +411,13 @@ impl ActionPolicy {
     pub const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 
     /// The default policy of a route: `retry`, no approval, 16 calls in flight per run, a
-    /// heartbeat timeout of 60 s, and an execution timeout of 5 min except for host tools.
+    /// heartbeat timeout of 60 s, and an execution timeout of 5 min except for harness actions.
     pub fn default_for(route: &ActionRoute) -> Self {
         Self {
             on_interruption: Interruption::Retry,
             approval: false,
             execution_timeout: match route {
-                ActionRoute::Host { .. } => None,
+                ActionRoute::Harness { .. } => None,
                 ActionRoute::Mcp { .. } | ActionRoute::Api { .. } | ActionRoute::Builtin(_) => {
                     Some(Self::DEFAULT_EXECUTION_TIMEOUT)
                 }
@@ -593,16 +593,16 @@ impl ActionSet {
         Self::default()
     }
 
-    /// Host tools with these names, the default policy, and an input schema that accepts any
+    /// Harness actions with these names, the default policy, and an input schema that accepts any
     /// value: what mock mode and tests use when the action set does not matter. A name
-    /// `group.action` puts the action in the host-tool group `group`. Duplicates are ignored.
-    pub fn from_host_tools<S: Into<String>>(
+    /// `group.action` puts the action in the group of harness actions `group`. Duplicates are ignored.
+    pub fn from_harness_actions<S: Into<String>>(
         names: impl IntoIterator<Item = S>,
     ) -> Result<Self, ActionSetError> {
         let names: BTreeSet<String> = names.into_iter().map(Into::into).collect();
         let actions = names.into_iter().map(|name| {
             let group = name.split_once('.').map(|(group, _)| group.to_owned());
-            Action::new(name, ActionRoute::Host { group }, json!({}))
+            Action::new(name, ActionRoute::Harness { group }, json!({}))
         });
         Self::new([], actions)
     }
@@ -899,7 +899,7 @@ fn check_action(
             };
             check_operation(operation).map_err(invalid)?;
         }
-        ActionRoute::Host { group: Some(group) } => {
+        ActionRoute::Harness { group: Some(group) } => {
             if !is_identifier(group) {
                 return Err(invalid(format!(
                     "its group {group:?} is not an identifier (letters, digits, _ and $)"
@@ -918,17 +918,17 @@ fn check_action(
             }
             in_group(name, group).ok_or_else(|| misplaced(format!("{group}.<action>")))?;
         }
-        ActionRoute::Host { group: None } => {
+        ActionRoute::Harness { group: None } => {
             if name.contains('.') {
                 let group = name.split('.').next().unwrap_or_default();
                 return Err(misplaced(format!(
-                    "without a dot, or be put in the host-tool group {group:?}"
+                    "without a dot, or be put in the group of harness actions {group:?}"
                 )));
             }
             if is_reserved(name) {
                 return Err(invalid(
                     "its name is a reserved word of JavaScript: scripts could not import it, \
-                     unless it is put in a host-tool group"
+                     unless it is put in a group of harness actions"
                         .into(),
                 ));
             }
@@ -956,7 +956,7 @@ fn check_action(
     }
     if matches!(
         action.route,
-        ActionRoute::Mcp { .. } | ActionRoute::Api { .. } | ActionRoute::Host { .. }
+        ActionRoute::Mcp { .. } | ActionRoute::Api { .. } | ActionRoute::Harness { .. }
     ) && matches!(name, "http" | "webhook")
     {
         return Err(misplaced("as the built-in, with the built-in route".into()));
@@ -1040,7 +1040,7 @@ fn in_group<'a>(name: &'a str, group: &str) -> Option<&'a str> {
         .filter(|local| !local.is_empty())
 }
 
-/// An ECMAScript identifier name in ASCII. What `rewind:actions` exports a group or a host tool
+/// An ECMAScript identifier name in ASCII. What `rewind:actions` exports a group or a harness action
 /// as must also not be a [reserved word](RESERVED_WORDS).
 pub(crate) fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
@@ -1183,8 +1183,8 @@ fn action_json(action: &Action) -> Value {
     let route = match &action.route {
         ActionRoute::Mcp { server } => json!({ "type": "mcp", "server": server }),
         ActionRoute::Api { api } => json!({ "type": "api", "api": api }),
-        ActionRoute::Host { group: None } => json!({ "type": "host" }),
-        ActionRoute::Host { group: Some(group) } => json!({ "type": "host", "group": group }),
+        ActionRoute::Harness { group: None } => json!({ "type": "harness" }),
+        ActionRoute::Harness { group: Some(group) } => json!({ "type": "harness", "group": group }),
         ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => {
             json!({ "type": "builtin", "builtin": "http", "allowed_hosts": allowed_hosts })
         }
@@ -1291,13 +1291,13 @@ mod tests {
             ActionSet::empty().digest(),
             Digest::of(br#"{"actions":[],"servers":[],"v":1}"#)
         );
-        let host = ActionSet::from_host_tools(["ask_user"]).unwrap();
+        let host = ActionSet::from_harness_actions(["ask_user"]).unwrap();
         assert_eq!(
             host.digest(),
             Digest::of(
                 concat!(
                     r#"{"actions":[{"name":"ask_user","policy":{"approval":false,"concurrency":16,"#,
-                    r#""heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"type":"host"},"#,
+                    r#""heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"type":"harness"},"#,
                     r#""schemas":{"input":{}}}],"servers":[],"v":1}"#
                 )
                 .as_bytes()
@@ -1345,26 +1345,26 @@ mod tests {
         assert_eq!(mcp.concurrency, 16);
         assert_eq!(mcp.on_interruption, Interruption::Retry);
         assert!(!mcp.approval);
-        let host = ActionPolicy::default_for(&ActionRoute::Host { group: None });
+        let host = ActionPolicy::default_for(&ActionRoute::Harness { group: None });
         assert_eq!(host.execution_timeout, None);
         assert_eq!(github().concurrency, 8);
     }
 
     #[test]
-    fn host_tools_get_their_group_from_their_name() {
+    fn harness_actions_get_their_group_from_their_name() {
         let action_set =
-            ActionSet::from_host_tools(["harness.ask_user", "notify", "notify"]).unwrap();
+            ActionSet::from_harness_actions(["harness.ask_user", "notify", "notify"]).unwrap();
         assert_eq!(action_set.actions().len(), 2);
         let grouped = action_set.action("harness.ask_user").unwrap();
         assert_eq!(
             grouped.route,
-            ActionRoute::Host {
+            ActionRoute::Harness {
                 group: Some("harness".into())
             }
         );
         assert_eq!(grouped.local_name(), "ask_user");
         assert_eq!(action_set.action("notify").unwrap().group(), None);
-        assert!(!ActionRoute::Host { group: None }.is_dispatched());
+        assert!(!ActionRoute::Harness { group: None }.is_dispatched());
         assert!(ActionRoute::Builtin(Builtin::Webhook).is_dispatched());
     }
 
@@ -1396,7 +1396,7 @@ mod tests {
             ActionSet::new([], [misnamed]),
             Err(ActionSetError::MisplacedAction { .. })
         ));
-        let impostor = Action::new("webhook", ActionRoute::Host { group: None }, json!({}));
+        let impostor = Action::new("webhook", ActionRoute::Harness { group: None }, json!({}));
         assert!(matches!(
             ActionSet::new([], [impostor]),
             Err(ActionSetError::MisplacedAction { .. })
@@ -1446,7 +1446,7 @@ mod tests {
             err(vec![idle], vec![]),
             ActionSetError::InvalidServer { .. }
         ));
-        let dotted = Action::new("a.b", ActionRoute::Host { group: None }, json!({}));
+        let dotted = Action::new("a.b", ActionRoute::Harness { group: None }, json!({}));
         assert!(matches!(
             err(vec![], vec![dotted]),
             ActionSetError::MisplacedAction { .. }
@@ -1468,7 +1468,7 @@ mod tests {
                 vec![],
                 vec![Action::new(
                     "",
-                    ActionRoute::Host { group: None },
+                    ActionRoute::Harness { group: None },
                     json!({})
                 )]
             ),
@@ -1485,8 +1485,8 @@ mod tests {
         )
     }
 
-    /// An action set where `name` becomes an identifier of `rewind:actions`: as a server, as a host-tool
-    /// group, and as a host tool without a group.
+    /// An action set where `name` becomes an identifier of `rewind:actions`: as a server, as a harness
+    /// group, and as a harness action without a group.
     fn as_identifier(name: &str) -> [Result<ActionSet, ActionSetError>; 3] {
         let action = Action::new(
             format!("{name}.find"),
@@ -1497,12 +1497,12 @@ mod tests {
         );
         let grouped = Action::new(
             format!("{name}.ask"),
-            ActionRoute::Host {
+            ActionRoute::Harness {
                 group: Some(name.to_owned()),
             },
             json!({}),
         );
-        let bare = Action::new(name, ActionRoute::Host { group: None }, json!({}));
+        let bare = Action::new(name, ActionRoute::Harness { group: None }, json!({}));
         [
             ActionSet::new([server(name)], [action]),
             ActionSet::new([], [grouped]),
@@ -1602,8 +1602,8 @@ mod tests {
                 assert!(action_set.is_ok(), "{name}: {action_set:?}");
             }
         }
-        // A host tool whose name is no identifier at all stays out of `rewind:actions`, as before.
-        let dashed = Action::new("ask-user", ActionRoute::Host { group: None }, json!({}));
+        // A harness action whose name is no identifier at all stays out of `rewind:actions`, as before.
+        let dashed = Action::new("ask-user", ActionRoute::Harness { group: None }, json!({}));
         assert!(ActionSet::new([], [dashed]).is_ok());
     }
 
@@ -1676,7 +1676,7 @@ mod tests {
         ));
         let grouped = Action::new(
             "workflows.ask",
-            ActionRoute::Host {
+            ActionRoute::Harness {
                 group: Some("workflows".into()),
             },
             json!({}),

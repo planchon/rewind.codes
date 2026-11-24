@@ -40,7 +40,7 @@ fn script() -> Script {
 }
 
 fn action_set() -> ActionSet {
-    ActionSet::from_host_tools(["github.close_issue"]).expect("action set")
+    ActionSet::from_harness_actions(["github.close_issue"]).expect("action set")
 }
 
 fn sealed(run: &RunRef, attempt: Attempt, logs: u64) -> SealedAttempt {

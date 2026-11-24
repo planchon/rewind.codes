@@ -685,7 +685,7 @@ async fn an_action_set_file_is_registered_before_the_run() {
     let script = server.write("hello.ts", "export default async () => 1;\n");
     let action_set = server.write(
         "action_set.json",
-        r#"{"host": [{"name": "ask_user", "description": "Ask.", "inputSchema": {"type": "object"}}]}"#,
+        r#"{"harness": [{"name": "ask_user", "description": "Ask.", "inputSchema": {"type": "object"}}]}"#,
     );
     let (exit, _, _) = server
         .rewind(&[

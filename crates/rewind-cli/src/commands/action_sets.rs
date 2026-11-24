@@ -34,7 +34,7 @@ pub(super) async fn action_sets(
                     let route = match action.route {
                         Route::Mcp => format!("mcp {}", action.server.as_deref().unwrap_or("")),
                         Route::Api => format!("api {}", action.api.as_deref().unwrap_or("")),
-                        Route::Host => "host".to_owned(),
+                        Route::Harness => "harness".to_owned(),
                         Route::Builtin => "built-in".to_owned(),
                     };
                     let description = action.description.lines().next().unwrap_or("").to_owned();

@@ -35,7 +35,7 @@ pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
 /// (`crate::events::ChangeEvent`).
 pub const CHANGES: &str = "/v1/changes";
 
-/// The host-tool tasks handed to a worker, as server-sent events
+/// The harness tasks handed to a worker, as server-sent events
 /// (`crate::tasks::TaskStreamEvent`).
 pub const TASK_STREAM: &str = "/v1/tasks/stream";
 pub const TASK_DEFER: &str = "/v1/tasks/{token}/defer";

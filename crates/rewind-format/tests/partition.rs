@@ -481,8 +481,8 @@ fn every_variant_round_trips() {
             server: "github".into(),
         },
         ActionRoute::Api { api: "dax".into() },
-        ActionRoute::Host { group: None },
-        ActionRoute::Host {
+        ActionRoute::Harness { group: None },
+        ActionRoute::Harness {
             group: Some("ui".into()),
         },
         ActionRoute::Builtin(Builtin::Webhook),
@@ -666,7 +666,7 @@ fn every_variant_round_trips() {
                     task: None,
                 },
                 Wait {
-                    kind: WaitKind::Host,
+                    kind: WaitKind::Harness,
                     task: Some(TaskPhase::Deferred),
                     ..wait()
                 },
@@ -740,7 +740,7 @@ fn every_variant_round_trips() {
             WaitingFor::Signal,
             WaitingFor::Timer,
             WaitingFor::Call,
-            WaitingFor::Host,
+            WaitingFor::Harness,
             WaitingFor::Approval,
             WaitingFor::Parked,
             WaitingFor::Deferred,

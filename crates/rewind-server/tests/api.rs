@@ -1,5 +1,5 @@
 //! The API `/v1` end to end over HTTP, on Turso: runs, idempotency, type-checking at start,
-//! exports, host-tool tasks, approvals, signals, inbound and outbound webhooks, the event
+//! exports, harness tasks, approvals, signals, inbound and outbound webhooks, the event
 //! stream, quotas, keys, roles and label scopes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -14,7 +14,7 @@ use axum::body::Bytes;
 use axum::http::HeaderMap;
 use futures_util::StreamExt;
 use rewind_api::access::BuiltInRole;
-use rewind_api::action_sets::{ActionPolicy, CreateActionSet, HostTool};
+use rewind_api::action_sets::{ActionPolicy, CreateActionSet, HarnessAction};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
@@ -79,7 +79,7 @@ fn start(script: &str) -> StartRun {
 
 fn ask_action_set(policy: ActionPolicy) -> CreateActionSet {
     CreateActionSet {
-        host: vec![HostTool {
+        harness: vec![HarnessAction {
             name: "ask_user".into(),
             description: "Ask the end user a question and return their answer.".into(),
             input_schema: json!({
@@ -218,7 +218,7 @@ async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skippe
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn host_tools_are_handed_on_a_stream_and_answered() {
+async fn harness_actions_are_handed_on_a_stream_and_answered() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let worker = server.key(BuiltInRole::Worker, &[]).await;
@@ -272,7 +272,7 @@ async fn host_tools_are_handed_on_a_stream_and_answered() {
     assert_eq!(task.idempotency_key, format!("{}/1", run.id));
     assert_eq!(
         task.timeout_ms, None,
-        "a host tool has no execution timeout"
+        "a harness action has no execution timeout"
     );
 
     // Deferred, then answered later through the same token.
@@ -1191,7 +1191,7 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn host_tool_failures_are_bounded_like_results() {
+async fn harness_action_failures_are_bounded_like_results() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = harness
@@ -1396,7 +1396,7 @@ async fn text_with_a_nul_character_is_refused_with_400() {
     source.input = json!({ "ms": 1 });
     invalid(harness.start_run(&source, None).await.unwrap_err());
     let mut action_set = ask_action_set(ActionPolicy::default());
-    action_set.host[0].description = "Ask the end user\u{0}".into();
+    action_set.harness[0].description = "Ask the end user\u{0}".into();
     invalid(harness.create_action_set(&action_set).await.unwrap_err());
     let subscription = CreateSubscription {
         url: "https://hooks.example.com/rewind".into(),

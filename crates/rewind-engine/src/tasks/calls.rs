@@ -7,12 +7,12 @@
 //! outcome to the owner, which commits it:
 //!
 //! ```text
-//! Dispatch ─► job: prepare ─┬─ MCP, API, `http`, host tools in mock mode ─► dispatcher ─► Dispatched
+//! Dispatch ─► job: prepare ─┬─ MCP, API, `http`, harness actions in mock mode ─► dispatcher ─► Dispatched
 //!                           ├─ `webhook` (live) ─────────────────────────────────────────► Webhook
 //!                           ├─ `workflows.<name>.start` (live) ─ checks, the child's start ► Child
 //!                           ├─ `workflows.<name>.signal` (live) ─ checks ────────────────► Signal
 //!                           ├─ `workflows.<name>.start` (mock) ─ the mocks' answer, the end ► MockStart
-//!                           └─ a host tool for an SDK stream ─ the hand-out ─────────────► HostReady
+//!                           └─ a harness action for an SDK stream ─ the hand-out ─────────────► HarnessReady
 //! ```
 //!
 //! Nothing is written here: what a call became reaches the owner as a [`CallDone`].
@@ -35,7 +35,7 @@ use crate::fork::left_without_outcome;
 use crate::node::message::{Effect, JobClass, Message, job_of};
 use crate::partition::OwnerMsg;
 use crate::plane::{LogOf, NodeConfig, Plane};
-use crate::ports::link::{HostTask, StartAtOwner};
+use crate::ports::link::{HarnessTask, StartAtOwner};
 use crate::ports::{
     ActionDispatcher, BlobOwner, Call, CallAuth, CallClaims, CatalogStore, Clock, Dispatched,
     Entropy, ParkKind, ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata, RunRef,
@@ -71,7 +71,7 @@ pub(crate) struct CallWork<P: Plane> {
     pub(crate) head: RunHead,
     pub(crate) mode: Option<RunMode>,
     pub(crate) token: TaskToken,
-    /// A host tool for an SDK stream: prepare its hand-out, send nothing.
+    /// A harness action for an SDK stream: prepare its hand-out, send nothing.
     pub(crate) hand_out: bool,
 }
 
@@ -105,8 +105,8 @@ pub(crate) enum CallOutcome {
         dispatched: Dispatched,
         end: Option<(RunId, JsonValue)>,
     },
-    /// A host task ready to be handed to an SDK stream.
-    HostReady(Box<HostTask>),
+    /// A harness task ready to be handed to an SDK stream.
+    HarnessReady(Box<HarnessTask>),
 }
 
 /// A workflow run a call starts.
@@ -281,7 +281,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         tracing::Span::current().record("traceparent", context.traceparent.as_str());
     }
     if hand_out {
-        return CallOutcome::HostReady(Box::new(HostTask {
+        return CallOutcome::HarnessReady(Box::new(HarnessTask {
             token,
             task: record.task.clone(),
             namespace: head.namespace.clone(),
@@ -297,7 +297,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
     let (server, api) = match &action.route {
         ActionRoute::Mcp { server } => (action_set.server(server).cloned(), None),
         ActionRoute::Api { api } => (None, action_set.api(api).cloned()),
-        ActionRoute::Builtin(_) | ActionRoute::Host { .. } => (None, None),
+        ActionRoute::Builtin(_) | ActionRoute::Harness { .. } => (None, None),
     };
     let auth = server
         .as_ref()

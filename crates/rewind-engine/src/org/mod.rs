@@ -12,12 +12,12 @@
 //!   month and threshold, with an outbox entry that sends `quota.alert`.
 //! - **Slots.** The calls in flight of each MCP server or API across the organization, granted
 //!   in the order they are asked for.
-//! - **Host tasks.** The SDK streams attached at the edges, and the host tasks they hold. A
+//! - **Harness tasks.** The SDK streams attached at the edges, and the harness tasks they hold. A
 //!   stream that closes keeps its tasks for their grace; its worker opening a stream again takes
 //!   them back, otherwise their owners interrupt them.
 //!
 //! Everything but the admissions and the alerts lives in memory: owners send their slots and
-//! host tasks again when the actor moves, and the edges their streams.
+//! harness tasks again when the actor moves, and the edges their streams.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -31,8 +31,8 @@ use crate::node::message::{Effect, Message, ReplyTo, Target, job};
 use crate::partition::OwnerMsg;
 use crate::plane::Plane;
 use crate::ports::link::{
-    Admit, CountsReport, EdgeNotice, HostTaskOffer, NodeReply, NodeRequest, OrgReply, OrgRequest,
-    OwnerNotice, Refusal, SlotRequest, StreamAttach, StreamId,
+    Admit, CountsReport, EdgeNotice, HarnessTaskOffer, NodeReply, NodeRequest, OrgReply,
+    OrgRequest, OwnerNotice, Refusal, SlotRequest, StreamAttach, StreamId,
 };
 use crate::ports::{
     Admission, CatalogStore, Gauges, Month, NamespaceName, OrganizationState, PartitionEpoch,
@@ -143,8 +143,8 @@ pub(crate) struct OrgActor<P: Plane> {
     /// The admissions waiting for limits to be read, by namespace.
     waiting: BTreeMap<NamespaceName, Vec<(Admit, ReplyTo)>>,
     servers: BTreeMap<String, Server>,
-    offers: VecDeque<HostTaskOffer>,
-    handed: BTreeMap<TaskRef, (StreamId, HostTaskOffer)>,
+    offers: VecDeque<HarnessTaskOffer>,
+    handed: BTreeMap<TaskRef, (StreamId, HarnessTaskOffer)>,
     streams: BTreeMap<StreamId, Stream>,
 }
 
@@ -279,7 +279,7 @@ impl<P: Plane> OrgActor<P> {
                 done(out, reply);
                 self.free(&server, &task, out);
             }
-            OrgRequest::HostTask(offer) => {
+            OrgRequest::HarnessTask(offer) => {
                 done(out, reply);
                 let task = offer.task.task.clone();
                 // An owner that sends a task again (a new owner, a new attempt) replaces it: the
@@ -289,7 +289,7 @@ impl<P: Plane> OrgActor<P> {
                 self.offers.push_back(*offer);
                 self.hand_out(out);
             }
-            OrgRequest::HostTaskDone { task, gone } => {
+            OrgRequest::HarnessTaskDone { task, gone } => {
                 done(out, reply);
                 self.offers.retain(|queued| queued.task.task != task);
                 self.release(&task, gone, out);
@@ -622,7 +622,7 @@ impl<P: Plane> OrgActor<P> {
     }
 
     /// Releases what an earlier owner of a partition held: its admissions not reported, its
-    /// slots, its host tasks.
+    /// slots, its harness tasks.
     fn release_owner(
         &mut self,
         partition: PartitionId,
@@ -791,7 +791,7 @@ impl<P: Plane> OrgActor<P> {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Host tasks and SDK streams
+    // Harness tasks and SDK streams
 
     fn attach(&mut self, attach: StreamAttach) {
         // The worker of a stream that closed comes back within its grace: it keeps its tasks.
@@ -953,7 +953,7 @@ impl<P: Plane> OrgActor<P> {
 }
 
 /// Whether a stream may be handed a task: its namespace, its labels, its action set, its actions.
-fn takes(stream: &StreamAttach, offer: &HostTaskOffer) -> bool {
+fn takes(stream: &StreamAttach, offer: &HarnessTaskOffer) -> bool {
     let task = &offer.task;
     stream
         .namespace

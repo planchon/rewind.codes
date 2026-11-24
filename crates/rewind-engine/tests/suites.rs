@@ -61,7 +61,7 @@ fn programs() -> FakeExecutor {
 }
 
 fn action_set() -> ActionSet {
-    ActionSet::from_host_tools(["github.close_issue", "slack.post"]).unwrap()
+    ActionSet::from_harness_actions(["github.close_issue", "slack.post"]).unwrap()
 }
 
 fn schemas() -> WorkflowSchemas {
@@ -646,7 +646,7 @@ async fn recording_keeps_the_newest_run_of_each_path() {
 
 /// The workflow `closer`, saved without tests over the actions `a` and `b`.
 async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow {
-    let action_set = ActionSet::from_host_tools(["a", "b", "cleanup"]).unwrap();
+    let action_set = ActionSet::from_harness_actions(["a", "b", "cleanup"]).unwrap();
     world
         .plane
         .catalog

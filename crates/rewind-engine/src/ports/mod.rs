@@ -34,7 +34,7 @@
 //! a summary are in `read_model` (`archi/05-testing-and-observability.md`, "Read model"): both
 //! are re-exported here. The modules [`catalog`], [`partition`], [`archive`], [`cluster`] and
 //! [`link`] are public: the names they share with other modules ([`partition::CreateRun`],
-//! [`partition::Activation`], [`cluster::Membership`], [`link::HostTask`]) are read through
+//! [`partition::Activation`], [`cluster::Membership`], [`link::HarnessTask`]) are read through
 //! them; every other name is also re-exported here. The ports of `rewind server migrate-runs`
 //! are read through [`legacy`] alone, and have no suite: the migration's tests load a database
 //! the journal store filled. A span exporter and a

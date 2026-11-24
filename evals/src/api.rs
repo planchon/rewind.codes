@@ -1034,7 +1034,8 @@ impl Api for World {
                  registered when it starts",
             ));
         };
-        if !action_set.mcp.is_empty() || !action_set.host.is_empty() || action_set.http.is_some() {
+        if !action_set.mcp.is_empty() || !action_set.harness.is_empty() || action_set.http.is_some()
+        {
             return Err(problem(
                 ProblemType::InvalidActionSet,
                 "an action set derived from a base keeps its servers and actions: give only workflows \

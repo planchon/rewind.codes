@@ -102,7 +102,7 @@ async fn harness_with(
     // `triage`'s version in the catalog, its suite empty: nothing gates it.
     let tenant = TenantId::local();
     let catalog = &world.plane.catalog;
-    let child_action_set = ActionSet::from_host_tools(["notify"]).unwrap();
+    let child_action_set = ActionSet::from_harness_actions(["notify"]).unwrap();
     catalog
         .put_action_set(&tenant, &child_action_set, &ActionDeclarations::default())
         .await
@@ -129,7 +129,7 @@ async fn harness_with(
         .put_workflow(&tenant, &workflow, world.now())
         .await
         .unwrap();
-    let action_set = ActionSet::from_host_tools(["notify"])
+    let action_set = ActionSet::from_harness_actions(["notify"])
         .unwrap()
         .with_workflows([stored.workflow.pinned()])
         .unwrap();

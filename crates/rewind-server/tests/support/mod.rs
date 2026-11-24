@@ -530,7 +530,7 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         assert!(detail.contains("NUL character"), "{detail}");
     };
 
-    // Tokens: a webhook's URL, a host-tool task's hand-out.
+    // Tokens: a webhook's URL, a harness task's hand-out.
     not_found(
         harness
             .post_hook("hook\u{0}token", &json!({ "ok": true }), None)

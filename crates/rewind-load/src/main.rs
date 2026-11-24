@@ -68,9 +68,9 @@ struct RunArgs {
     #[arg(long, default_value_t = 100)]
     concurrency: usize,
 
-    /// Workers answering the host tool, each on a task stream of 16 slots.
+    /// Workers answering the harness action, each on a task stream of 16 slots.
     #[arg(long, default_value_t = 8)]
-    host_workers: usize,
+    harness_workers: usize,
 
     /// The durable sleep of each run.
     #[arg(long, default_value = "1s")]
@@ -190,7 +190,7 @@ async fn run(args: RunArgs) -> Result<bool, Error> {
     let settings = load::Settings {
         runs: args.runs,
         concurrency: args.concurrency,
-        host_workers: args.host_workers,
+        harness_workers: args.harness_workers,
         sleep: args.sleep.clone(),
         payload_bytes: args.payload_bytes,
         mcp_url,

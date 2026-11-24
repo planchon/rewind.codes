@@ -1,7 +1,7 @@
 {
   "description": "The harness's worker dies while it charges: an at_most_once action is not called again, and the script gets an ActionError whose outcome is unknown, which it checks with another call.",
   "input": { "amount": 100 },
-  "host_worker": true,
+  "harness_worker": true,
   "actions": {
     "payments.charge": { "$crash": true },
     "payments.status": { "charged": true }

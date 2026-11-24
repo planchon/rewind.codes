@@ -131,7 +131,7 @@ pub enum Dispatched {
 }
 
 /// Executes calls outside the sandbox: MCP servers, APIs and built-ins, or mocks in mock
-/// mode (`archi/07-code-architecture.md`, "The other ports"). Host tools have no dispatcher:
+/// mode (`archi/07-code-architecture.md`, "The other ports"). Harness actions have no dispatcher:
 /// their tasks are handed to the SDK workers' streams.
 ///
 /// `dispatch(call, auth)`: `auth` is what the engine resolved from the server's `auth`: nothing,

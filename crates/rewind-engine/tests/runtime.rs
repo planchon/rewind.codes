@@ -18,7 +18,7 @@ use rewind_engine::adapters::{
 };
 use rewind_engine::edge::Edge;
 use rewind_engine::node::runtime::{self, NodeHandle};
-use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
+use rewind_engine::plane::{HarnessActions, NodeConfig, Wiring};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::link::{NodeRequest, OrgRequest, SubscriptionKey};
 use rewind_engine::ports::{
@@ -64,7 +64,7 @@ async fn node(
     id: &str,
 ) -> (NodeHandle<RealPlane>, NodeConfig) {
     let mut config = NodeConfig::new(NodeId::new(id).unwrap(), NonZeroU16::new(4).unwrap());
-    config.host_tools = HostTools::Dispatched;
+    config.harness_actions = HarnessActions::Dispatched;
     let membership = cluster
         .join(NodeInfo {
             id: config.node.clone(),
@@ -243,7 +243,7 @@ async fn a_stop_is_answered_once_the_partitions_are_handed_over() {
     let link = Arc::new(LocalLink::new());
     let (a, _) = node(&plane, &cluster, &link, "node-a").await;
     let mut config = NodeConfig::new(NodeId::new("node-b").unwrap(), NonZeroU16::new(4).unwrap());
-    config.host_tools = HostTools::Dispatched;
+    config.harness_actions = HarnessActions::Dispatched;
     let joined = cluster
         .join(NodeInfo {
             id: config.node.clone(),

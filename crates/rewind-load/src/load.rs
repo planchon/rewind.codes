@@ -1,7 +1,7 @@
-//! One load: the action set, the script, the runs driven through the API, the host-tool worker,
+//! One load: the action set, the script, the runs driven through the API, the harness's worker,
 //! and the checks once every run has ended.
 //!
-//! Each run makes an MCP call (`fake.echo`), a host-tool call (`host.square`, answered by this
+//! Each run makes an MCP call (`fake.echo`), a harness call (`host.square`, answered by this
 //! process through `GET /v1/tasks`), an MCP call that fails transiently once and is retried
 //! (`fake.flaky`), a durable sleep, then reads a signal sent right after its start (sent twice
 //! with one idempotency key) and waits for a second one that never comes (a timer).
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt as _;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
-use rewind_api::action_sets::{CreateActionSet, HostTool, McpServer};
+use rewind_api::action_sets::{CreateActionSet, HarnessAction, McpServer};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::NamespaceName;
@@ -69,7 +69,7 @@ fn expected_output(n: usize, pad: usize) -> Value {
 pub(crate) struct Settings {
     pub(crate) runs: usize,
     pub(crate) concurrency: usize,
-    pub(crate) host_workers: usize,
+    pub(crate) harness_workers: usize,
     /// The durable sleep of each run, such as `1s`.
     pub(crate) sleep: String,
     /// The size of the padding each run's input carries, echoed by `fake.echo`: above 1 KiB
@@ -91,12 +91,12 @@ pub(crate) struct Thresholds {
     pub(crate) max_p99_activation: Option<Duration>,
 }
 
-/// What the host-tool worker saw.
+/// What the harness's worker saw.
 #[derive(Debug, Default)]
-struct HostRecord {
+struct HarnessRecord {
     /// Hand-outs by run and seq.
     handed: HashMap<(String, u32), u32>,
-    /// When the result of each run's host call was accepted.
+    /// When the result of each run's harness call was accepted.
     answered: HashMap<String, Instant>,
 }
 
@@ -170,16 +170,16 @@ pub(crate) async fn run(
         deadline: Instant::now() + settings.timeout,
     });
 
-    let host = Arc::new(Mutex::new(HostRecord::default()));
+    let host = Arc::new(Mutex::new(HarnessRecord::default()));
     let errors = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
     let workers_stop = CancellationToken::new();
-    let workers: Vec<_> = (0..settings.host_workers.max(1))
+    let workers: Vec<_> = (0..settings.harness_workers.max(1))
         .map(|index| {
-            tokio::spawn(host_worker(
+            tokio::spawn(harness_worker(
                 worker.clone(),
                 TaskStreamQuery {
                     action_set: Some(action_set.id.clone()),
-                    slots: Some(HOST_SLOTS),
+                    slots: Some(HARNESS_SLOTS),
                     worker: Some(format!("{id}-host-{index}")),
                     ..TaskStreamQuery::default()
                 },
@@ -294,7 +294,7 @@ fn action_set(mcp_url: &str) -> CreateActionSet {
             url: Some(mcp_url.to_owned()),
             ..McpServer::default()
         }],
-        host: vec![HostTool {
+        harness: vec![HarnessAction {
             name: "host.square".into(),
             description: "Squares a number, in the harness.".into(),
             input_schema: json!({
@@ -347,19 +347,19 @@ fn thresholds(report: &mut Report, thresholds: &Thresholds) {
     }
 }
 
-/// The tasks a host worker holds at once.
-const HOST_SLOTS: u32 = 16;
+/// The tasks a harness worker holds at once.
+const HARNESS_SLOTS: u32 = 16;
 
-/// How long a host worker waits before it opens its stream again.
+/// How long a harness worker waits before it opens its stream again.
 const STREAM_BACKOFF: Duration = Duration::from_millis(200);
 
 /// Answers `host.square` on a task stream until stopped: the tasks handed to the worker as
 /// they become ready, `query.slots` at once. A stream that fails or ends is opened again with the
 /// same worker id, after a backoff: the tasks handed on it stay this worker's.
-async fn host_worker(
+async fn harness_worker(
     worker: Client,
     query: TaskStreamQuery,
-    record: Arc<Mutex<HostRecord>>,
+    record: Arc<Mutex<HarnessRecord>>,
     errors: Arc<Mutex<BTreeMap<String, usize>>>,
     stop: CancellationToken,
 ) {
@@ -407,7 +407,7 @@ async fn host_worker(
 async fn answer(
     worker: &Client,
     task: rewind_api::tasks::HandedTask,
-    record: &Mutex<HostRecord>,
+    record: &Mutex<HarnessRecord>,
     error: &impl Fn(String),
 ) {
     *record
@@ -598,11 +598,11 @@ fn status_name(status: RunStatus) -> &'static str {
 ///
 /// - every run completed, with its expected output;
 /// - each call reached its action as many times as its failures call for, never more: `echo`
-///   and the host call once, `flaky` twice (its transient failure, then the retry). A run's
+///   and the harness call once, `flaky` twice (its transient failure, then the retry). A run's
 ///   attempts live in its call tasks, which its end clears (`archi/04-tools.md`): the load
 ///   knows them from its actions;
 /// - every call belongs to a run of this load and carries an idempotency key.
-fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &HostRecord) {
+fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &HarnessRecord) {
     let mut start = Vec::new();
     let mut first_call = Vec::new();
     let mut activation = Vec::new();
@@ -644,7 +644,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
     }
     for (run, _) in host.handed.keys() {
         if !runs.contains_key(run.as_str()) {
-            report.violation(format!("a host task of run {run}, not one of this load"));
+            report.violation(format!("a harness task of run {run}, not one of this load"));
         }
     }
 
@@ -697,20 +697,20 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
                 outcome.n
             ));
         }
-        let host_calls: Vec<(u32, u32)> = host
+        let harness_calls: Vec<(u32, u32)> = host
             .handed
             .iter()
             .filter(|((handed, _), _)| handed == run)
             .map(|((_, seq), count)| (*seq, *count))
             .collect();
-        if host_calls.len() != 1 {
+        if harness_calls.len() != 1 {
             report.violation(format!(
-                "run {run} (n={}): {} host calls, expected one",
+                "run {run} (n={}): {} harness calls, expected one",
                 outcome.n,
-                host_calls.len()
+                harness_calls.len()
             ));
         }
-        for (seq, count) in host_calls {
+        for (seq, count) in harness_calls {
             if count != 1 {
                 report.violation(format!(
                     "run {run} (n={}): host.square #{seq} was handed out {count} times, expected \
@@ -802,7 +802,7 @@ mod tests {
         let server = FakeServer::default();
         calls(&server, "r1/1", "echo", 1);
         calls(&server, "r1/3", "flaky", 2);
-        let mut host = HostRecord::default();
+        let mut host = HarnessRecord::default();
         host.handed.insert(("r1".into(), 2), 1);
         let outcomes = [completed("r1", 1)];
         let mut report = Report {
@@ -849,7 +849,7 @@ mod tests {
         calls(&server, "r1/1", "echo", 2);
         calls(&server, "r1/3", "flaky", 2);
         calls(&server, "other/1", "echo", 1);
-        let mut host = HostRecord::default();
+        let mut host = HarnessRecord::default();
         host.handed.insert(("r1".into(), 2), 2);
         let outcomes = [completed("r1", 1)];
         let mut report = Report {

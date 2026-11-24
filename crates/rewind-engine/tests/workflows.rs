@@ -60,9 +60,9 @@ fn run_id(result: &JsonValue) -> String {
     result["runId"].as_str().unwrap().to_owned()
 }
 
-/// The child action set: one host tool.
+/// The child action set: one harness action.
 fn child_action_set() -> ActionSet {
-    ActionSet::from_host_tools(["notify"]).unwrap()
+    ActionSet::from_harness_actions(["notify"]).unwrap()
 }
 
 fn schemas() -> WorkflowSchemas {
@@ -205,7 +205,7 @@ async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkf
         )
         .await
         .unwrap();
-    let action_set = ActionSet::from_host_tools(["notify"])
+    let action_set = ActionSet::from_harness_actions(["notify"])
         .unwrap()
         .with_workflows([stored.workflow.pinned()])
         .unwrap();

@@ -4,7 +4,7 @@
 //! An action set file is the body of `POST /v1/action-sets` (`CreateActionSet`), pinned as a server pins
 //! it: the actions of each MCP server are discovered by connecting to it (`rewind-mcp`), each with
 //! its `auth`; the operations of each API are read from its OpenAPI document (`rewind-openapi`);
-//! host tools and the `http` action are taken as written, the `webhook` built-in is always there.
+//! harness actions and the `http` action are taken as written, the `webhook` built-in is always there.
 //! As the embedded server, the CLI reaches any address, and APIs over `http` too. It holds no
 //! signing key: a server whose `auth` is `rewind` is listed without a signature.
 
@@ -54,16 +54,19 @@ pub(crate) async fn pin(create: &CreateActionSet) -> Result<ActionSet, String> {
         discovery.close();
         pinned?;
     }
-    for host in &create.host {
-        let group = host.name.split_once('.').map(|(group, _)| group.to_owned());
+    for harness in &create.harness {
+        let group = harness
+            .name
+            .split_once('.')
+            .map(|(group, _)| group.to_owned());
         let mut action = Action::new(
-            host.name.clone(),
-            ActionRoute::Host { group },
-            host.input_schema.clone(),
+            harness.name.clone(),
+            ActionRoute::Harness { group },
+            harness.input_schema.clone(),
         );
-        action.description = Some(host.description.clone());
-        action.output_schema = host.output_schema.clone();
-        apply(&mut action.policy, host.policy.as_ref());
+        action.description = Some(harness.description.clone());
+        action.output_schema = harness.output_schema.clone();
+        apply(&mut action.policy, harness.policy.as_ref());
         actions.push(action);
     }
     if let Some(http) = &create.http {
@@ -242,7 +245,7 @@ fn webhook() -> Action {
     )
 }
 
-/// The action set of a scenario that names none: a host tool for each action its mocks answer (a
+/// The action set of a scenario that names none: a harness action for each action its mocks answer (a
 /// name `group.action` puts it in a group), and `webhook`. In mock mode every call goes to the
 /// mocks, whatever its route. The `http` action needs its allow-list: a scenario whose mocks
 /// answer it names an action set file.
@@ -258,7 +261,7 @@ pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<ActionSet, CliError> 
         .filter(|name| name.as_str() != "webhook")
         .map(|name| {
             let group = name.split_once('.').map(|(group, _)| group.to_owned());
-            Action::new(name.clone(), ActionRoute::Host { group }, json!({}))
+            Action::new(name.clone(), ActionRoute::Harness { group }, json!({}))
         })
         .collect();
     actions.push(webhook());
@@ -268,7 +271,7 @@ pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<ActionSet, CliError> 
 
 #[cfg(test)]
 mod tests {
-    use rewind_api::action_sets::{Api as ApiDeclared, HostTool, HttpAction};
+    use rewind_api::action_sets::{Api as ApiDeclared, HarnessAction, HttpAction};
 
     use super::*;
 
@@ -322,14 +325,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_tools_and_http_are_pinned_as_written() {
+    async fn harness_actions_and_http_are_pinned_as_written() {
         let create = CreateActionSet {
             secrets: std::collections::BTreeMap::new(),
             apis: Vec::new(),
             workflows: Vec::new(),
             base: None,
             mcp: Vec::new(),
-            host: vec![HostTool {
+            harness: vec![HarnessAction {
                 name: "crm.ask_user".into(),
                 description: "Ask the user.".into(),
                 input_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
@@ -356,7 +359,7 @@ mod tests {
         let ask = &action_set.actions()[0];
         assert_eq!(
             ask.route,
-            ActionRoute::Host {
+            ActionRoute::Harness {
                 group: Some("crm".into())
             }
         );
@@ -375,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn the_mocked_tools_are_host_tools() {
+    fn the_mocked_actions_are_harness_actions() {
         let mut names: BTreeSet<String> = ["github.list_issues", "ask_user", "webhook"]
             .into_iter()
             .map(String::from)
@@ -389,11 +392,14 @@ mod tests {
         assert_eq!(routes.len(), 3);
         assert!(matches!(
             routes[0],
-            ("ask_user", ActionRoute::Host { group: None })
+            ("ask_user", ActionRoute::Harness { group: None })
         ));
         assert!(matches!(
             routes[1],
-            ("github.list_issues", ActionRoute::Host { group: Some(_) })
+            (
+                "github.list_issues",
+                ActionRoute::Harness { group: Some(_) }
+            )
         ));
         assert!(matches!(
             routes[2].1,

@@ -32,7 +32,7 @@ use crate::webhooks::{
 #[openapi(
     info(
         title = "Rewind API",
-        description = "The HTTP API /v1 of Rewind: action sets, scripts, runs, host-tool tasks, \
+        description = "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness tasks, \
             webhooks, reading, the organization, access, namespaces and the server; and `/auth`, \
             the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
             (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
@@ -190,7 +190,7 @@ use crate::webhooks::{
         (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
-        (name = "tasks", description = "Host-tool tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness."),
+        (name = "tasks", description = "Harness tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
         (name = "reading", description = "The scripts executed on the platform, action statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
@@ -1055,11 +1055,11 @@ mod operations {
     pub(super) fn give_up_run() {}
 
     // ---------------------------------------------------------------------------------------
-    // Host-tool tasks
+    // Harness tasks
 
-    /// Follow the host-tool tasks handed to this worker (server-sent events)
+    /// Follow the harness tasks handed to this worker (server-sent events)
     ///
-    /// The tasks of the host tools it names (`actionSet`, `actions`), as they become ready, among
+    /// The tasks of the harness actions it names (`actionSet`, `actions`), as they become ready, among
     /// the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
     /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
     /// `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with

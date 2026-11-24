@@ -74,7 +74,7 @@ pub(crate) fn latest() -> &'static Glue {
 }
 
 /// The actions of an action set as `rewind:actions` exposes them in epoch 1, from their routes: one
-/// object per group (an MCP server, an API or a host-tool group), and the host tools without a group by name.
+/// object per group (an MCP server, an API or a group of harness actions), and the harness actions without a group by name.
 /// The built-ins are not exported: scripts reach them through `fetch` and `webhook`.
 struct ActionExportsV1<'a> {
     groups: BTreeMap<&'a str, Vec<&'a Action>>,
@@ -116,8 +116,8 @@ fn caller(action: &Action) -> &'static str {
     }
 }
 
-/// `rewind:actions` for epoch 1: one frozen object per group (an MCP server, an API or a host-tool group), and
-/// one function per host tool without a group. Action names are kept as the server defines them;
+/// `rewind:actions` for epoch 1: one frozen object per group (an MCP server, an API or a group of harness actions), and
+/// one function per harness action without a group. Action names are kept as the server defines them;
 /// a name that is not an identifier is still reachable with brackets (`github["close-issue"]`).
 fn actions_module_v1(action_set: &ActionSet) -> String {
     let ActionExportsV1 { groups, bare } = ActionExportsV1::of(action_set);
@@ -197,8 +197,12 @@ mod tests {
     #[test]
     fn generates_groups_and_bare_actions() {
         let module = actions_module_v1(
-            &ActionSet::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
-                .unwrap(),
+            &ActionSet::from_harness_actions([
+                "github.list_issues",
+                "github.close-issue",
+                "ask_user",
+            ])
+            .unwrap(),
         );
         assert_eq!(
             module,
@@ -212,8 +216,12 @@ mod tests {
              export const ask_user = (args) => call(\"ask_user\", args);\n"
         );
         let exports: Vec<String> = action_exports_v1(
-            &ActionSet::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
-                .unwrap(),
+            &ActionSet::from_harness_actions([
+                "github.list_issues",
+                "github.close-issue",
+                "ask_user",
+            ])
+            .unwrap(),
         )
         .into_iter()
         .collect();

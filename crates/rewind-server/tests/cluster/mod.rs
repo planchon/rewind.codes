@@ -27,7 +27,7 @@ use rewind_engine::adapters::{
 use rewind_engine::edge::{Edge, Gateway as _};
 use rewind_engine::node::rendezvous;
 use rewind_engine::node::runtime::{self, NodeHandle};
-use rewind_engine::plane::{HostTools, NodeConfig, Plane, Wiring};
+use rewind_engine::plane::{HarnessActions, NodeConfig, Plane, Wiring};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::link::{
     Changed, PartitionReply, PartitionRequest, RunView, SubscriptionKey,
@@ -159,7 +159,7 @@ pub fn config(id: &str, partitions: u16) -> NodeConfig {
         NodeId::new(id).unwrap(),
         NonZeroU16::new(partitions).unwrap(),
     );
-    config.host_tools = HostTools::Dispatched;
+    config.harness_actions = HarnessActions::Dispatched;
     config
 }
 

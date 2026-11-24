@@ -58,7 +58,7 @@ pub(crate) fn summary_of(
         Vec::new()
     };
     for wait in &mut waits {
-        if matches!(wait.kind, WaitKind::Call | WaitKind::Host)
+        if matches!(wait.kind, WaitKind::Call | WaitKind::Harness)
             && let Some(seq) = wait.seq
         {
             wait.task = tasks.get(&seq).map(phase_of);
@@ -618,7 +618,7 @@ pub(crate) fn with_phases(
     phases: &BTreeMap<Seq, TaskPhase>,
 ) -> IndexedSummary {
     for wait in &mut summary.summary.waits {
-        if matches!(wait.kind, WaitKind::Call | WaitKind::Host)
+        if matches!(wait.kind, WaitKind::Call | WaitKind::Harness)
             && let Some(seq) = wait.seq
         {
             wait.task = phases.get(&seq).copied();
@@ -665,7 +665,7 @@ mod tests {
         }
     }
 
-    /// `ask` is a host tool, `github.get` a server's.
+    /// `ask` is a harness action, `github.get` a server's.
     fn action_set() -> ActionSet {
         let server = McpServer::new(
             "github",
@@ -680,7 +680,7 @@ mod tests {
             },
             json!({}),
         );
-        let ask = Action::new("ask", ActionRoute::Host { group: None }, json!({}));
+        let ask = Action::new("ask", ActionRoute::Harness { group: None }, json!({}));
         ActionSet::new([server], [get, ask]).unwrap()
     }
 

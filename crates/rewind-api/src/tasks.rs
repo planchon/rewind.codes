@@ -1,4 +1,4 @@
-//! Host-tool tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
+//! Harness tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
 //! they become ready, and the harness answers the tasks that wait for it (`archi/04-tools.md`,
 //! "Call lifecycle").
 //!
@@ -16,7 +16,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::common::{Duration, Labels};
 use crate::namespaces::NamespaceName;
 
-/// `GET /v1/tasks/stream`: the host-tool tasks handed to this worker as they become ready, as
+/// `GET /v1/tasks/stream`: the harness tasks handed to this worker as they become ready, as
 /// server-sent events ([`TaskStreamEvent`]). A worker is handed only the tasks of the runs its
 /// key or token sees: an end user's namespace, a grant's labels.
 ///
@@ -29,9 +29,9 @@ use crate::namespaces::NamespaceName;
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStreamQuery {
-    /// The action set whose host tools this worker executes: only the tasks of runs of this action set.
+    /// The action set whose harness actions this worker executes: only the tasks of runs of this action set.
     /// Without it, the tasks of the actions named in `actions`, whatever the action set of their run (an
-    /// action set derived from another, as saving a workflow does, keeps its host tools' names).
+    /// action set derived from another, as saving a workflow does, keeps its harness actions' names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
     /// Only the tasks of runs of this namespace. An end user's token is limited to its own: it
@@ -40,8 +40,8 @@ pub struct TaskStreamQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub namespace: Option<NamespaceName>,
-    /// Only these actions. Repeat for several. All the host tools of `actionSet` when absent, every
-    /// host tool without `actionSet` either.
+    /// Only these actions. Repeat for several. All the harness actions of `actionSet` when absent, every
+    /// harness action without `actionSet` either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
     /// At most this many tasks in flight on this stream: handed, and neither completed, failed,
@@ -58,7 +58,7 @@ pub struct TaskStreamQuery {
     pub worker: Option<String>,
 }
 
-/// A host-tool call handed to a worker on its task stream. The worker answers it by its token,
+/// A harness call handed to a worker on its task stream. The worker answers it by its token,
 /// with `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it
 /// works.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -83,7 +83,7 @@ pub struct HandedTask {
     /// and did not come back within its grace.
     pub attempt: u32,
     /// The action's execution timeout, in milliseconds: past it, the call is not waited for any
-    /// more. Absent when the action has none, the default of host tools: the run's TTL bounds it.
+    /// more. Absent when the action has none, the default of harness actions: the run's TTL bounds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     /// The run's labels.
@@ -194,7 +194,7 @@ pub enum TaskState {
     Ready,
     /// An attempt is in flight.
     Claimed,
-    /// A host tool's handler will answer later.
+    /// A harness action's handler will answer later.
     Deferred,
     /// Waits for the harness: the action's schema changed, its server refused the call, or the
     /// secret the run attached no longer exists.

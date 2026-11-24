@@ -44,7 +44,7 @@ use crate::checks::{self, BoundsError};
 use crate::fork::{ForkError, ForkRun};
 use crate::plane::{NodeConfig, Plane};
 use crate::ports::link::{
-    Decision, HostFailure, NodeReply, PartitionReply, PartitionRequest, Refusal, RunView,
+    Decision, HarnessFailure, NodeReply, PartitionReply, PartitionRequest, Refusal, RunView,
     SignalAtOwner, StartAtOwner, TaskAnswer,
 };
 use crate::ports::{
@@ -779,7 +779,7 @@ impl<P: Plane> Edge<P> {
         gateway: &mut G,
         tenant: &TenantId,
         token: &TaskToken,
-        failure: HostFailure,
+        failure: HarnessFailure,
     ) -> Result<(), EdgeError> {
         self.answer(gateway, tenant, token, TaskAnswer::Fail(failure))
             .await

@@ -40,7 +40,7 @@ const ATTRIBUTE_PREFIX: &str = "rewind.";
 const DURATION_SUFFIX: &str = ".duration";
 
 /// Bucket boundaries of durations, in seconds: from 1 ms (an activation of a cached instance) to
-/// a day (a host tool waiting for a person).
+/// a day (a harness action waiting for a person).
 const DURATION_BOUNDARIES: [f64; 20] = [
     0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
     300.0, 900.0, 3_600.0, 21_600.0, 86_400.0,

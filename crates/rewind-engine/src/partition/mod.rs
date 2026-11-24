@@ -183,7 +183,7 @@ pub(crate) enum Internal {
     Queue(RunRef),
     /// Send the task on its way if it is ready.
     Dispatch(TaskRef),
-    /// A host task handed on a stream that did not come back: interrupt it.
+    /// A harness task handed on a stream that did not come back: interrupt it.
     Lost {
         task: TaskRef,
         token: crate::ports::TaskToken,

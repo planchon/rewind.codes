@@ -1,5 +1,5 @@
 //! What the call executor and the owner make of a call, in the driver (`archi/04-tools.md`,
-//! "Retries", "Host tools", "Webhooks"): the wait a server asks for before a retry, a result
+//! "Retries", "Harness actions", "Webhooks"): the wait a server asks for before a retry, a result
 //! above the payload limit, and the `webhook` built-in.
 
 #![allow(clippy::unwrap_used)]
@@ -15,7 +15,7 @@ use rewind_core::{
 };
 use rewind_engine::StartRun;
 use rewind_engine::edge::EdgeError;
-use rewind_engine::plane::{HostTools, NodeConfig};
+use rewind_engine::plane::{HarnessActions, NodeConfig};
 use rewind_engine::ports::link::{Refusal, StreamAttach, StreamId};
 use rewind_engine::ports::{Delivery, Dispatched, RunRef, TenantId};
 use serde_json::json;
@@ -48,7 +48,7 @@ fn caller() -> FakeExecutor {
     )
 }
 
-/// An MCP server `github` with the action `github.get_issue`, the host tool `ask_user` and the
+/// An MCP server `github` with the action `github.get_issue`, the harness action `ask_user` and the
 /// `webhook` built-in.
 fn action_set() -> ActionSet {
     let server = McpServer::new(
@@ -64,7 +64,7 @@ fn action_set() -> ActionSet {
         },
         json!({}),
     );
-    let ask = Action::new("ask_user", ActionRoute::Host { group: None }, json!({}));
+    let ask = Action::new("ask_user", ActionRoute::Harness { group: None }, json!({}));
     let webhook = Action::new("webhook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
     ActionSet::new([server], [issue, ask, webhook]).unwrap()
 }
@@ -140,7 +140,7 @@ async fn a_result_above_the_payload_limit_is_refused() {
     let answer = big.clone();
     let mut node = config("node-a", 1);
     node.limits.max_payload_bytes = 300;
-    node.host_tools = HostTools::Streams;
+    node.harness_actions = HarnessActions::Streams;
     let mut world = World::with(
         caller(),
         RecordingDispatcher::new(move |_| Ok(answer.clone())),
@@ -157,7 +157,7 @@ async fn a_result_above_the_payload_limit_is_refused() {
         })
     );
 
-    // A host task's answer above the limit is refused; the task still waits for one.
+    // A harness task's answer above the limit is refused; the task still waits for one.
     let at = world.at.clone();
     let mut stream = world
         .driver

@@ -53,13 +53,13 @@ impl Wait {
     /// (approval, parked, deferred) names the wait; otherwise its kind does.
     pub fn waiting_for(&self) -> WaitingFor {
         match (self.kind, self.task) {
-            (WaitKind::Call | WaitKind::Host, Some(TaskPhase::Approval)) => WaitingFor::Approval,
-            (WaitKind::Call | WaitKind::Host, Some(TaskPhase::Parked)) => WaitingFor::Parked,
-            (WaitKind::Call | WaitKind::Host, Some(TaskPhase::Deferred)) => WaitingFor::Deferred,
+            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Approval)) => WaitingFor::Approval,
+            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Parked)) => WaitingFor::Parked,
+            (WaitKind::Call | WaitKind::Harness, Some(TaskPhase::Deferred)) => WaitingFor::Deferred,
             (WaitKind::Signal, _) => WaitingFor::Signal,
             (WaitKind::Timer, _) => WaitingFor::Timer,
             (WaitKind::Call, _) => WaitingFor::Call,
-            (WaitKind::Host, _) => WaitingFor::Host,
+            (WaitKind::Harness, _) => WaitingFor::Harness,
         }
     }
 }
@@ -72,8 +72,8 @@ pub enum WaitKind {
     Timer,
     /// A call Rewind sends itself (MCP actions, built-ins).
     Call,
-    /// A host tool's call, answered by an SDK worker through its stream.
-    Host,
+    /// A harness action's call, answered by an SDK worker through its stream.
+    Harness,
 }
 
 /// What a waiting run waits for, as the query language and the statistics name it.
@@ -82,12 +82,12 @@ pub enum WaitingFor {
     Signal,
     Timer,
     Call,
-    Host,
+    Harness,
     /// A call under the `approval` policy, not approved yet.
     Approval,
     /// A call parked by a schema change, a refused call or a missing secret.
     Parked,
-    /// A host tool's call whose handler answers later.
+    /// A harness action's call whose handler answers later.
     Deferred,
 }
 
@@ -96,7 +96,7 @@ impl WaitingFor {
         WaitingFor::Signal,
         WaitingFor::Timer,
         WaitingFor::Call,
-        WaitingFor::Host,
+        WaitingFor::Harness,
         WaitingFor::Approval,
         WaitingFor::Parked,
         WaitingFor::Deferred,
@@ -107,7 +107,7 @@ impl WaitingFor {
             WaitingFor::Signal => "signal",
             WaitingFor::Timer => "timer",
             WaitingFor::Call => "call",
-            WaitingFor::Host => "host",
+            WaitingFor::Harness => "harness",
             WaitingFor::Approval => "approval",
             WaitingFor::Parked => "parked",
             WaitingFor::Deferred => "deferred",
@@ -141,7 +141,7 @@ pub enum TaskPhase {
     Ready,
     /// An attempt is in flight.
     Claimed,
-    /// A host tool's handler answers later.
+    /// A harness action's handler answers later.
     Deferred,
     /// Waits for the harness after a schema change, a refused call or a missing secret.
     Parked,

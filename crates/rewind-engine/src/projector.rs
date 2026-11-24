@@ -11,7 +11,7 @@
 //! - a signal awaited with an empty mailbox is a `signal` wait since its `signal_awaited`, until
 //!   its timeout timer's due time; that timer is not a wait of its own;
 //! - a pending timer is a `timer` wait since its `start_timer`, until its due time;
-//! - a pending call is a `host` wait when the pinned action set routes its action to the host, a
+//! - a pending call is a `harness` wait when the pinned action set routes its action to the harness, a
 //!   `call` wait otherwise, since its `schedule_call`;
 //! - waits are ordered by `since`, then kind, then seq and name;
 //! - a failure or an abort gives the run's [`Ending`](crate::ports::Ending), its signature and
@@ -32,7 +32,7 @@ use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, WebhookEvent, WebhookEv
 
 /// The lifecycle events of the entries from `from` to the end of `history`, which leave the
 /// run in `state`: the run's end (`run.completed`, `run.failed`), or, when the range leaves the
-/// run waiting for the outside world only (signals, host tools), `run.suspended`. Each is named
+/// run waiting for the outside world only (signals, harness actions), `run.suspended`. Each is named
 /// by the index of the entry it is projected from.
 pub(crate) fn lifecycle_events(
     head: &RunHead,
@@ -91,7 +91,7 @@ pub(crate) fn lifecycle_events(
     )]
 }
 
-/// What a run that has not ended waits for from the outside world: signals and host tools.
+/// What a run that has not ended waits for from the outside world: signals and harness actions.
 /// Empty when it is still running something of its own: a call Rewind dispatches.
 fn waiting_for(state: &RunState, action_set: Option<&ActionSet>) -> Vec<String> {
     let route = |action: &str| {
@@ -106,7 +106,7 @@ fn waiting_for(state: &RunState, action_set: Option<&ActionSet>) -> Vec<String> 
         .collect();
     for (seq, action) in state.pending_calls() {
         match route(action) {
-            Some(ActionRoute::Host { .. }) => waiting.push(format!("action {action} {seq}")),
+            Some(ActionRoute::Harness { .. }) => waiting.push(format!("action {action} {seq}")),
             _ => return Vec::new(),
         }
     }
@@ -125,7 +125,7 @@ pub fn headline(source: &str) -> String {
 
 /// The snapshot of a run, folded from its history (see the [module](self)): its status and
 /// mode, what it waits for while active, and how it ended. The pinned action set tells the calls
-/// of host tools from the calls Rewind sends; without it, every call is a `call`. A history that
+/// of harness actions from the calls Rewind sends; without it, every call is a `call`. A history that
 /// cannot be folded past an entry gives the snapshot of the entries before it.
 pub fn run_snapshot(history: &[HistoryEntry], action_set: Option<&ActionSet>) -> RunSnapshot {
     let mut state = RunState::new();
@@ -233,9 +233,13 @@ pub(crate) fn waits(
         };
         let host = action_set
             .and_then(|action_set| action_set.action(action))
-            .is_some_and(|action| matches!(action.route, ActionRoute::Host { .. }));
+            .is_some_and(|action| matches!(action.route, ActionRoute::Harness { .. }));
         waits.push(Wait {
-            kind: if host { WaitKind::Host } else { WaitKind::Call },
+            kind: if host {
+                WaitKind::Harness
+            } else {
+                WaitKind::Call
+            },
             seq: Some(*seq),
             name: Some(action.clone()),
             since,

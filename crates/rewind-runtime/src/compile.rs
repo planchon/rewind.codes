@@ -442,7 +442,8 @@ mod tests {
     use crate::epochs::EPOCHS;
 
     fn check(source: &str) -> Result<CompiledScript, InvalidScript> {
-        let action_set = ActionSet::from_host_tools(["github.list_issues", "ask_user"]).unwrap();
+        let action_set =
+            ActionSet::from_harness_actions(["github.list_issues", "ask_user"]).unwrap();
         let glue = EPOCHS.last().expect("an epoch");
         compile(&Script::new(source), &action_set, glue)
     }

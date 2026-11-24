@@ -15,7 +15,7 @@ pub struct Scenario {
     #[serde(default = "empty_object")]
     pub input: Value,
     /// The action set, and how each action answers (see [`crate::actions::ScenarioActions`]). An action is a
-    /// host tool (`group.action` puts it in a group), except `http` and `webhook`, the built-ins,
+    /// harness action (`group.action` puts it in a group), except `http` and `webhook`, the built-ins,
     /// and the actions of `mcp_servers`.
     #[serde(default)]
     pub actions: BTreeMap<String, Value>,
@@ -46,11 +46,11 @@ pub struct Scenario {
     /// The policies that differ from the default, by action.
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
-    /// The actions are host tools answered by a harness's worker, handed their tasks on an SDK
+    /// The actions are harness actions answered by a harness's worker, handed their tasks on an SDK
     /// stream and answering through their tokens, instead of mocks called by the engine. A
     /// `$crash` response is a worker that dies with the call: its stream closes.
     #[serde(default)]
-    pub host_worker: bool,
+    pub harness_worker: bool,
     /// The run is live rather than in mock mode: its actions still answer from `actions`, but the
     /// engine serves its built-ins itself, so the runs of `workflows` it starts really run.
     #[serde(default)]

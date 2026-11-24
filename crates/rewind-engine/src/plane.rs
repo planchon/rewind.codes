@@ -137,9 +137,9 @@ where
     }
 }
 
-/// Where the tasks of host tools go.
+/// Where the tasks of harness actions go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HostTools {
+pub enum HarnessActions {
     /// To the SDK streams of the harness, through the organization actor: a server.
     #[default]
     Streams,
@@ -209,7 +209,7 @@ pub struct NodeConfig {
     pub activation_retry: Duration,
     /// A webhook delivery is tried this many times, then given up.
     pub webhook_attempts: u32,
-    pub host_tools: HostTools,
+    pub harness_actions: HarnessActions,
     /// The calls an activation schedules are sent latest first: tests exercise completions that
     /// arrive out of order under `Promise.all`. Off by default.
     pub reversed_calls: bool,
@@ -243,7 +243,7 @@ impl NodeConfig {
             horizon: Duration::from_secs(3_600),
             activation_retry: Duration::from_secs(30),
             webhook_attempts: 8,
-            host_tools: HostTools::Streams,
+            harness_actions: HarnessActions::Streams,
             reversed_calls: false,
             epochs: None,
         }
